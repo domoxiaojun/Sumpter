@@ -27,6 +27,10 @@ lockfile 重新生成。
 - `crates/sumpter-engine/src/boundary.rs`：共享引擎与平台能力的最小接口。
 - `adapters/linux/sumpter-linux-adapter/src/platform.rs`、`adapters/macos/sumpter-macos-adapter/src/platform.rs`：平台策略实现。
 
+## 跨平台 UI 对齐约定
+
+Linux 与 macOS 对应页面尽量保持对齐：信息层级、字段命名、状态语义和主要交互一致；仅在平台原生控件或布局需要时保留差异。新增或调整页面时，先对照另一端已确认的交互，再补充平台特有适配。
+
 ## 历史/对照文档
 
 - `upstream/engine-unification-plan.md`：重构前的单一引擎并行迁移记录。

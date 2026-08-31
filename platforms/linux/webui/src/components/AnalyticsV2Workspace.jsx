@@ -797,76 +797,113 @@ function DimensionBlock({
 }
 
 function storageStatePresentation(storage) {
-  const state = String(storage?.state || '').toLowerCase();
-  const pending = storage?.pendingEvents == null ? null : safeNumber(storage.pendingEvents);
-  if (state === 'backpressure' || (pending != null && pending > 0)) {
-    return { label: '写入积压', kind: 'warning', detail: '有记录正在等待写入' };
-  }
+  const state = String(storage?.state || '').trim().toLowerCase();
+  const missingIndexes = Array.isArray(storage?.missingIndexes) ? storage.missingIndexes : [];
   if (state === 'error' || state === 'failed' || state === 'unavailable') {
     return { label: '需要关注', kind: 'critical', detail: '数据存储暂时不可用' };
   }
+  if (state === 'backpressure') {
+    return { label: '需要关注', kind: 'warning', detail: '有记录正在等待写入' };
+  }
+  if (state === 'degraded' || storage?.hourlyRollupFailed === true || missingIndexes.length > 0) {
+    return { label: '需要关注', kind: 'warning', detail: '统计存储需要检查' };
+  }
+  if (storage && (
+    storage.projectionIndexesReady === false
+    || storage.projectionBackfillComplete === false
+    || storage.hourlyRollupComplete === false
+  )) {
+    return { label: '正在整理', kind: 'warning', detail: '统计索引或聚合正在整理' };
+  }
   if (state === 'ready' || storage?.backend === 'sqlite') {
-    return { label: 'SQLite 就绪', kind: 'good', detail: storage?.lastError ? `最近一次写入异常：${storage.lastError}` : '统计记录正在本机 SQLite 保存' };
+    return { label: '统计已就绪', kind: 'good', detail: storage?.lastError ? `最近一次写入异常：${storage.lastError}` : '统计记录正在本机 SQLite 保存' };
   }
   return { label: '读取中', kind: 'muted', detail: '正在读取存储状态' };
 }
 
-function StorageManagementCard({ storage, retention, loading, error, expanded, onToggle, onRetry }) {
+function StorageTechnicalDetails({ storage }) {
+  if (!storage) return null;
+  const databaseBytes = storage.databaseBytes ?? storage.dbBytes;
+  const effectiveBytes = storage.liveBytes ?? databaseBytes;
+  const walBytes = storage.walBytes;
+  const missingIndexes = Array.isArray(storage.missingIndexes) ? storage.missingIndexes : null;
+  const count = (value) => value == null ? '—' : numberWithComma(value);
+  const hourlyRollup = storage.hourlyRollupComplete == null
+    ? '—'
+    : storage.hourlyRollupComplete === false
+      ? `待处理 ${count(storage.hourlyRollupDirtyBuckets)} 个桶`
+      : storage.hourlyRollupMaxSeq == null ? '已完成' : `完成至 #${count(storage.hourlyRollupMaxSeq)}`;
+  return (
+    <details className="runtime-v2-storage-technical-details">
+      <summary>
+        <span>技术详情</span>
+        <span className="runtime-v2-storage-technical-summary-meta">版本、文件与聚合状态</span>
+      </summary>
+      <dl className="runtime-v2-storage-technical-grid">
+        <div><dt>Schema / 投影</dt><dd>v{storage.schemaVersion ?? '—'} / v{storage.projectionVersion ?? '—'}</dd></div>
+        <div><dt>数据库文件 / 有效占用</dt><dd>{databaseBytes == null ? '—' : formatBytes(databaseBytes)} / {effectiveBytes == null ? '—' : formatBytes(effectiveBytes)}</dd></div>
+        <div><dt>WAL / 空闲页</dt><dd>{walBytes == null ? '—' : formatBytes(walBytes)} / {storage.freelistBytes == null ? '—' : formatBytes(storage.freelistBytes)}</dd></div>
+        <div><dt>用户删除</dt><dd>{count(storage.userDeletedEvents)} 条事件 / {count(storage.userDeletedRequests)} 个请求</dd></div>
+        <div><dt>小时聚合</dt><dd>{hourlyRollup}</dd></div>
+        <div><dt>缺失索引</dt><dd>{missingIndexes == null ? '—' : missingIndexes.length ? missingIndexes.join(', ') : '无'}</dd></div>
+      </dl>
+    </details>
+  );
+}
+
+function StorageManagementCard({ storage, retention, loading, error, onOpen, onRetry }) {
   const pending = storage?.pendingEvents == null ? null : safeNumber(storage.pendingEvents);
+  const pendingBytes = storage?.pendingBytes == null ? null : safeNumber(storage.pendingBytes);
   const databaseBytes = storage?.databaseBytes ?? storage?.dbBytes;
-  const walBytes = storage?.walBytes;
   const retainedEvents = storage?.retainedEvents ?? storage?.eventCount;
   const storageLimitBytes = retention?.storageLimitBytes ?? storage?.retention?.storageLimitBytes;
   // Retention is enforced against liveBytes. Older daemons may not expose it,
   // so keep the previous database-size field as a display fallback.
   const effectiveBytes = storage?.liveBytes ?? databaseBytes;
-  const fileBytesLabel = databaseBytes == null ? '—' : formatBytes(databaseBytes);
-  const walBytesLabel = walBytes == null ? '—' : formatBytes(walBytes);
   const capacityExceeded = storageLimitBytes != null
     && effectiveBytes != null
     && effectiveBytes >= Number(storageLimitBytes);
+  const hasPending = (pending != null && pending > 0) || (pendingBytes != null && pendingBytes > 0);
   const presentation = error
     ? { label: '读取失败', kind: 'warning', detail: '存储状态读取失败，保留上一份数据' }
     : capacityExceeded
-      ? { label: '已达存储上限', kind: 'warning', detail: '最旧的已完成数据会自动轮换' }
+      ? { label: '需要关注', kind: 'warning', detail: '已达到存储上限，最旧的已完成数据会自动轮换' }
       : storageStatePresentation(storage);
   return (
-    <section className={`runtime-v2-storage-management${expanded ? ' is-expanded' : ''}`} aria-labelledby="runtime-v2-storage-management-heading" data-storage-management>
+    <section className="runtime-v2-storage-management" aria-labelledby="runtime-v2-storage-management-heading" data-storage-management>
       <div className="runtime-v2-storage-management-icon" aria-hidden="true"><Icon name="database" size={22} /></div>
       <div className="runtime-v2-storage-management-copy">
         <div className="runtime-v2-storage-management-title">
-          <h3 id="runtime-v2-storage-management-heading">SQLite 概览</h3>
+          <h3 id="runtime-v2-storage-management-heading">运行统计存储</h3>
           <StatusBadge text={presentation.label} kind={presentation.kind} />
         </div>
-        <p>{presentation.detail} · 存储上限按有效占用计算；轮换后 SQLite 文件可能不会立即缩小，需要真正回收空间时请使用“重置并新建数据库”。{storageLimitBytes != null ? `当前存储上限 ${formatBytes(storageLimitBytes)}。` : '当前不限制容量。'}</p>
+        <p>{presentation.detail} · 查看当前占用与事件保留情况；需要调整上限或执行清理时打开存储设置。</p>
         {storage?.legacyRetentionDetected && (
           <div className="runtime-v2-retention-warning" role="alert">
             检测到旧版本的自动清理设置。它们已不再生效，也不会自动迁移；手动清理只删除事件，需使用“重置并新建数据库”移除旧字段。
           </div>
         )}
         <div className="runtime-v2-storage-management-metrics" aria-label="数据存储摘要">
-          <span><strong>{retainedEvents == null ? '—' : numberWithComma(retainedEvents)}</strong><small>已保存事件</small></span>
-          <span className={capacityExceeded ? 'is-warning' : ''}><strong>{effectiveBytes == null ? '—' : formatBytes(effectiveBytes)}</strong><small>有效占用 · 文件 {fileBytesLabel} · WAL {walBytesLabel}</small></span>
-          <span className={capacityExceeded ? 'is-warning' : ''}><strong>{storageLimitBytes == null ? '不限制' : formatBytes(storageLimitBytes)}</strong><small>存储上限</small></span>
-          <span className={pending != null && pending > 0 ? 'is-warning' : ''}><strong>{pending == null ? '—' : numberWithComma(pending)}</strong><small>待写入</small></span>
-          <span><strong>{storageLimitBytes == null ? '仅手动清理' : '自动轮换'}</strong><small>清理方式</small></span>
+          <span className={capacityExceeded ? 'is-warning' : ''}><strong>{effectiveBytes == null ? '—' : formatBytes(effectiveBytes)}</strong><small>有效占用</small></span>
+          <span><strong>{retainedEvents == null ? '—' : numberWithComma(retainedEvents)}</strong><small>保留事件</small></span>
+          <span><strong>{storageLimitBytes == null ? '仅手动清理' : '自动轮换'}</strong><small>{storageLimitBytes == null ? '未设置上限' : '已设置上限 · 在设置中调整'}</small></span>
+          {hasPending && <span className="is-warning"><strong>{pending == null ? '—' : numberWithComma(pending)}</strong><small>待写入{pendingBytes == null ? '' : ` · ${formatBytes(pendingBytes)}`}</small></span>}
         </div>
+        <StorageTechnicalDetails storage={storage} />
       </div>
       <div className="runtime-v2-storage-management-actions">
         {!storage && loading && <span className="runtime-v2-storage-management-loading" role="status">读取中…</span>}
-        {!storage && !loading && onRetry && <button type="button" className="btn btn-ghost btn-sm" onClick={onRetry}>重试</button>}
+        {onRetry && <button type="button" className="btn btn-ghost btn-sm" onClick={onRetry} disabled={loading}>{loading ? '读取中…' : '刷新'}</button>}
         <button
           type="button"
-          className={`btn ${expanded ? 'btn-secondary' : 'btn-primary'}`}
-          aria-expanded={expanded}
-          aria-controls="runtime-v2-storage-settings"
-          onClick={onToggle}
+          className="btn btn-primary"
+          onClick={onOpen}
         >
-          <Icon name={expanded ? 'close' : 'edit'} size={15} />
-          {expanded ? '收起设置' : '存储设置'}
+          <Icon name="edit" size={15} />
+          存储设置…
         </button>
       </div>
-      {error && <div className="runtime-v2-storage-management-error" role="status">{runtimeV2ErrorMessage(error)}</div>}
+      {error && <div className="runtime-v2-storage-management-error" role="alert">{runtimeV2ErrorMessage(error)}</div>}
     </section>
   );
 }
@@ -931,6 +968,7 @@ function OverviewPanel({
   storageError,
   storageSettingsOpen,
   onOpenStorage,
+  onCloseStorage,
   onRetryStorage,
   onUpdateRetention,
   onManualCleanup,
@@ -982,15 +1020,15 @@ function OverviewPanel({
         retention={storageRetention}
         loading={storageLoading}
         error={storageError}
-        expanded={storageSettingsOpen}
-        onToggle={onOpenStorage}
+        onOpen={onOpenStorage}
         onRetry={onRetryStorage}
       />
-      {storageSettingsOpen && <StoragePanel
+      {storageSettingsOpen && <StorageSettingsDialog
         storage={effectiveStorage}
         retention={storageRetention}
         loading={storageLoading}
         error={storageError}
+        onClose={onCloseStorage}
         onRetry={onRetryStorage}
         onUpdateRetention={onUpdateRetention}
         onManualCleanup={onManualCleanup}
@@ -1058,15 +1096,100 @@ function OverviewPanel({
   );
 }
 
+function StorageSettingsDialog({ storage, retention, loading, error, onClose, onRetry, onUpdateRetention, onManualCleanup, onRecreateDatabase }) {
+  const dialogRef = useRef(null);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined;
+    const previousFocus = document.activeElement;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose?.();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = [...(dialogRef.current?.querySelectorAll(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+      ) || [])].filter((element) => element.offsetParent !== null);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    const focus = () => dialogRef.current?.querySelector('input, button')?.focus();
+    const frame = typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'
+      ? window.requestAnimationFrame(focus)
+      : globalThis.setTimeout(focus, 0);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      if (typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') window.cancelAnimationFrame(frame);
+      else globalThis.clearTimeout(frame);
+      if (previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus({ preventScroll: true });
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      className="modal-overlay runtime-v2-storage-modal"
+      onClick={(event) => { if (event.target === event.currentTarget) onClose?.(); }}
+    >
+      <section
+        ref={dialogRef}
+        className="modal-dialog runtime-v2-storage-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="runtime-v2-storage-dialog-heading"
+        aria-describedby="runtime-v2-storage-dialog-description"
+      >
+        <header className="modal-header runtime-v2-storage-dialog-header">
+          <div>
+            <h2 id="runtime-v2-storage-dialog-heading">运行统计存储设置</h2>
+            <p id="runtime-v2-storage-dialog-description">调整存储上限，或执行需要明确确认的统计维护操作。</p>
+          </div>
+          <button type="button" className="btn-icon" onClick={onClose} aria-label="关闭存储设置">
+            <Icon name="close" size={16} />
+          </button>
+        </header>
+        <div className="modal-body runtime-v2-storage-dialog-body">
+          <StoragePanel
+            storage={storage}
+            retention={retention}
+            loading={loading}
+            error={error}
+            onRetry={onRetry}
+            onUpdateRetention={onUpdateRetention}
+            onManualCleanup={onManualCleanup}
+            onRecreateDatabase={onRecreateDatabase}
+          />
+        </div>
+        <footer className="modal-footer runtime-v2-storage-dialog-footer">
+          <button type="button" className="btn btn-secondary" onClick={onClose}>完成</button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
 function StoragePanel({ storage, retention, loading, error, onRetry, onUpdateRetention, onManualCleanup, onRecreateDatabase }) {
   const activeRetention = retention || storage?.retention;
   const storageLimitBytes = activeRetention?.storageLimitBytes;
   const databaseBytes = storage?.databaseBytes ?? storage?.dbBytes;
-  const walBytes = storage?.walBytes;
   // Keep the UI's quota indicator aligned with the daemon's live-byte limit.
   const effectiveBytes = storage?.liveBytes ?? databaseBytes;
-  const fileBytesLabel = databaseBytes == null ? '—' : formatBytes(databaseBytes);
-  const walBytesLabel = walBytes == null ? '—' : formatBytes(walBytes);
+  const retainedEvents = storage?.retainedEvents ?? storage?.eventCount;
+  const pendingEvents = storage?.pendingEvents == null ? null : safeNumber(storage.pendingEvents);
+  const pendingBytes = storage?.pendingBytes == null ? null : safeNumber(storage.pendingBytes);
+  const usedPercent = storageLimitBytes != null && effectiveBytes != null
+    ? Math.min(100, Math.round((Number(effectiveBytes) / Math.max(1, Number(storageLimitBytes))) * 100))
+    : null;
   const [storageLimitMB, setStorageLimitMB] = useState('');
   const [storageLimitDirty, setStorageLimitDirty] = useState(false);
   const [savingStorageLimit, setSavingStorageLimit] = useState(false);
@@ -1077,7 +1200,24 @@ function StoragePanel({ storage, retention, loading, error, onRetry, onUpdateRet
       setStorageLimitMB(bytes == null ? '' : String(Math.max(1, Math.round(Number(bytes) / 1048576))));
     }
   }, [activeRetention?.storageLimitBytes, storageLimitDirty]);
-  const saveStorageLimit = () => {
+  const persistStorageLimit = async (storageLimit) => {
+    if (!activeRetention || !onUpdateRetention) return;
+    setStorageLimitError('');
+    setSavingStorageLimit(true);
+    try {
+      await onUpdateRetention({
+        expectedRevision: activeRetention.revision,
+        storageLimitBytes: storageLimit,
+      });
+      setStorageLimitDirty(false);
+    } catch (nextError) {
+      setStorageLimitError(nextError?.message || '存储设置保存失败');
+    } finally {
+      setSavingStorageLimit(false);
+    }
+  };
+  const saveStorageLimit = async (event) => {
+    event?.preventDefault();
     if (!activeRetention || !onUpdateRetention) return;
     const value = storageLimitMB.trim();
     const megabytes = value === '' ? null : Number(value);
@@ -1085,39 +1225,36 @@ function StoragePanel({ storage, retention, loading, error, onRetry, onUpdateRet
       setStorageLimitError('请输入至少 1 MB 的整数');
       return;
     }
-    setStorageLimitError('');
-    setSavingStorageLimit(true);
-    onUpdateRetention({
-      expectedRevision: activeRetention.revision,
-      storageLimitBytes: megabytes == null ? null : megabytes * 1048576,
-    });
+    await persistStorageLimit(megabytes == null ? null : megabytes * 1048576);
+  };
+  const disableStorageLimit = () => {
+    setStorageLimitMB('');
     setStorageLimitDirty(false);
-    window.setTimeout(() => setSavingStorageLimit(false), 350);
+    persistStorageLimit(null);
   };
   return (
-    <section id="runtime-v2-storage-settings" className="runtime-v2-panel runtime-v2-storage-settings-panel" aria-labelledby="runtime-v2-storage-heading">
-      <div className="runtime-v2-panel-header"><div><h2 id="runtime-v2-storage-heading">SQLite 存储设置</h2><p>存储上限按有效占用计算；达到上限后自动轮换最旧的已完成数据，进行中的请求不会删除。轮换不会立即缩小数据库文件；需要真正回收空间时请使用“重置并新建数据库”。仍可随时手动清理全部统计。</p></div></div>
+    <div className="runtime-v2-storage-panel-content">
+      <p className="runtime-v2-storage-dialog-copy">上限按有效占用计算；达到上限后自动轮换最旧的已完成请求，新的请求继续写入；进行中的请求不会删除。轮换不会立即缩小数据库文件，需要真正回收空间时请使用“重置并新建数据库”。留空表示不限制容量。</p>
       <PanelMessage error={error} onRetry={onRetry} />
       {loading && !storage ? <LoadingLine text="正在读取存储状态…" /> : storage ? (
         <>
-          <div className="runtime-v2-metrics-grid runtime-v2-storage-metrics">
-            <Metric label="已保留事件" value={numberWithComma(storage.retainedEvents)} detail={`完成 ${numberWithComma(storage.completedEvents)} · 进行中 ${numberWithComma(storage.inFlightEvents)}`} />
-            <Metric label="有效占用" value={effectiveBytes == null ? '—' : formatBytes(effectiveBytes)} detail={`文件 ${fileBytesLabel} · WAL ${walBytesLabel}`} />
-            <Metric label="用户已删除" value={numberWithComma(storage.userDeletedEvents)} detail={`请求 ${numberWithComma(storage.userDeletedRequests)}`} />
-            <Metric label="待写入" value={storage.pendingEvents == null ? '—' : numberWithComma(storage.pendingEvents)} detail={storage.pendingBytes == null ? (storage.pendingEvents == null ? '暂未提供队列状态' : '队列正常') : formatBytes(storage.pendingBytes)} tone={storage.pendingEvents > 0 ? 'runtime-v2-warning' : ''} />
-          </div>
           <div className="runtime-v2-storage-limit-editor">
-            <div>
+            <div className="runtime-v2-storage-limit-heading">
               <strong>存储上限</strong>
-              <p>达到上限后自动轮换最旧的已完成请求，新的请求继续写入。{storageLimitBytes != null && effectiveBytes != null ? `当前有效占用 ${Math.min(100, Math.round((effectiveBytes / Number(storageLimitBytes)) * 100))}%。` : ''}</p>
+              <span>{storageLimitBytes == null ? '不限制' : `当前 ${formatBytes(storageLimitBytes)}`} · 已用 {effectiveBytes == null ? '—' : formatBytes(effectiveBytes)}{usedPercent == null ? '' : ` · ${usedPercent}%`}</span>
             </div>
-            <div className="runtime-v2-storage-limit-controls">
-              <label><span className="sr-only">存储上限（MB）</span><input className="form-input" inputMode="numeric" pattern="[0-9]*" value={storageLimitMB} onChange={(event) => { setStorageLimitMB(event.target.value.replace(/[^0-9]/g, '')); setStorageLimitDirty(true); }} placeholder="例如 1024" /></label>
+            <form className="runtime-v2-storage-limit-controls" onSubmit={saveStorageLimit}>
+              <label htmlFor="runtime-v2-storage-limit-mb">上限（MB）</label>
+              <input id="runtime-v2-storage-limit-mb" className="form-input" inputMode="numeric" pattern="[0-9]*" value={storageLimitMB} onChange={(event) => { setStorageLimitMB(event.target.value.replace(/[^0-9]/g, '')); setStorageLimitDirty(true); }} placeholder="例如 1024" />
               <span aria-hidden="true">MB</span>
-              <button type="button" className="btn btn-secondary" onClick={saveStorageLimit} disabled={savingStorageLimit}>{savingStorageLimit ? '保存中…' : '保存存储上限'}</button>
-              <button type="button" className="btn btn-ghost" onClick={() => { setStorageLimitMB(''); setStorageLimitDirty(false); onUpdateRetention?.({ expectedRevision: activeRetention.revision, storageLimitBytes: null }); }} disabled={savingStorageLimit || activeRetention?.storageLimitBytes == null}>关闭上限</button>
-            </div>
+              <button type="submit" className="btn btn-secondary" disabled={savingStorageLimit || !activeRetention}>{savingStorageLimit ? '保存中…' : '保存存储上限'}</button>
+              <button type="button" className="btn btn-ghost" onClick={disableStorageLimit} disabled={savingStorageLimit || activeRetention?.storageLimitBytes == null}>关闭上限</button>
+            </form>
             {storageLimitError && <div className="runtime-v2-storage-limit-error" role="alert">{storageLimitError}</div>}
+          </div>
+          <div className="runtime-v2-storage-dialog-context" aria-label="当前存储上下文">
+            <span>保留事件 <strong>{retainedEvents == null ? '—' : numberWithComma(retainedEvents)}</strong></span>
+            {pendingEvents != null && pendingEvents > 0 && <span className="is-warning">待写入 <strong>{numberWithComma(pendingEvents)}{pendingBytes == null ? '' : ` · ${formatBytes(pendingBytes)}`}</strong></span>}
           </div>
           <div className="runtime-v2-storage-grid">
             <div className="runtime-v2-subpanel runtime-v2-manual-cleanup-panel">
@@ -1136,7 +1273,7 @@ function StoragePanel({ storage, retention, loading, error, onRetry, onUpdateRet
           </div>
         </>
       ) : <div className="runtime-v2-empty">暂无存储状态</div>}
-    </section>
+    </div>
   );
 }
 
@@ -1396,7 +1533,7 @@ function ExportPanel({ addToast, filters = {} }) {
   );
 }
 
-export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, onRecreateDatabase, openExportSignal = 0, analyticsFilters = {}, analyticsRange = 'today', onAnalyticsRangeChange, facets = null, analyticsRefreshSignal = 0, legacyAnalytics = null, summaryStorage = null, config = null }) {
+export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, onRecreateDatabase, openExportSignal = 0, analyticsFilters = {}, analyticsRange = 'today', onAnalyticsRangeChange, facets = null, analyticsRefreshSignal = 0, onProjectSelectionChange, projectSelectionResetSignal = 0, legacyAnalytics = null, summaryStorage = null, config = null }) {
   const [section, setSection] = useState('overview');
   const sectionTabRefs = useRef([]);
   const [range, setRange] = useState(analyticsRange || 'today');
@@ -1419,6 +1556,8 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
   // A project row is a local drill-down, not a replacement for the global
   // project filter. It only narrows the session projection below the tables.
   const [selectedProject, setSelectedProject] = useState(null);
+  const previousSelectedProjectRef = useRef(null);
+  const skipNextClearedProjectReloadRef = useRef(false);
   const [storage, setStorage] = useState(null);
   const [retention, setRetention] = useState(null);
   const [pricing, setPricing] = useState(null);
@@ -1528,7 +1667,16 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
       const sort = snapshot?.sort || 'last_seen';
       const order = snapshot?.order || 'desc';
       const queryFilters = kind === 'session' && selectedProject
-        ? { ...activeFilters, projectID: selectedProject.key, project: selectedProject.name }
+        ? {
+          ...activeFilters,
+          // The row key is the stable project_id for identified projects.
+          // Do not also send the display name: the API treats both fields as
+          // independent predicates, which needlessly slows the query and can
+          // exclude rows whose name changed. Synthetic unidentified rows have
+          // no project_id, so they must use the display-name predicate.
+          projectID: selectedProject.key === 'unidentified_project' ? '' : selectedProject.key,
+          project: selectedProject.key === 'unidentified_project' ? selectedProject.name : '',
+        }
         : activeFilters;
       const value = await api.getRuntimeDimensions(kind, {
         page, pageSize: nextPageSize, search, sort, order,
@@ -1546,7 +1694,11 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
       if (isRuntimeSnapshotError(error) && snapshot) {
         try {
           const queryFilters = kind === 'session' && selectedProject
-            ? { ...activeFilters, projectID: selectedProject.key, project: selectedProject.name }
+            ? {
+              ...activeFilters,
+              projectID: selectedProject.key === 'unidentified_project' ? '' : selectedProject.key,
+              project: selectedProject.key === 'unidentified_project' ? selectedProject.name : '',
+            }
             : activeFilters;
           const value = await api.getRuntimeDimensions(kind, { page: 1, pageSize: nextPageSize, search, sort: 'last_seen', order: 'desc', filters: queryFilters }, { signal: request.controller.signal });
           const normalized = normalizeRuntimePagedResult(value, { page: 1, pageSize: nextPageSize });
@@ -1625,6 +1777,13 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     setErrors(null);
     setDiagnostics(null);
     setDimensions({ endpoint: null, project: null, session: null });
+    if (selectedProject) {
+      // The filter-change path below reloads all dimensions, including the
+      // unfiltered session table. Avoid scheduling a second session request
+      // when the local drill-down is cleared as part of that same change.
+      skipNextClearedProjectReloadRef.current = true;
+      onProjectSelectionChange?.(null);
+    }
     setSelectedProject(null);
     setTrendError(null);
     setErrorsError(null);
@@ -1637,9 +1796,33 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
   }, [activeQueryKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!selectedProject || !['overview', 'tokens'].includes(section)) return;
-    loadDimension('session', 1, dimensions.session?.pageSize || pageSize, dimensionSearch.session || '', dimensions.session);
+    const previousSelectedProject = previousSelectedProjectRef.current;
+    previousSelectedProjectRef.current = selectedProject;
+    if (!['overview', 'tokens'].includes(section) || (!selectedProject && !previousSelectedProject)) return;
+    if (!selectedProject && skipNextClearedProjectReloadRef.current) {
+      skipNextClearedProjectReloadRef.current = false;
+      return;
+    }
+    // Let the selected row/title paint before starting the potentially costly
+    // session aggregation. This keeps the click responsive on large SQLite
+    // histories while retaining the latest-wins abort behavior in
+    // `loadDimension`.
+    const schedule = typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'
+      ? (callback) => window.requestAnimationFrame(callback)
+      : (callback) => globalThis.setTimeout(callback, 0);
+    const cancel = typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function'
+      ? (handle) => window.cancelAnimationFrame(handle)
+      : (handle) => globalThis.clearTimeout(handle);
+    const handle = schedule(() => {
+      loadDimension('session', 1, dimensions.session?.pageSize || pageSize, dimensionSearch.session || '', dimensions.session);
+    });
+    return () => cancel(handle);
   }, [selectedProject]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (projectSelectionResetSignal <= 0 || !selectedProject) return;
+    setSelectedProject(null);
+  }, [projectSelectionResetSignal]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     // AppContext refreshes only the cheap summary/facet layer on its timer.
@@ -1702,6 +1885,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     else if (['endpoint', 'project', 'session'].includes(kind)) loadDimension(kind, 1, next, dimensionSearch[kind] || '', null);
   };
   const retryTrends = useCallback(() => loadTrends(range), [loadTrends, range]);
+  const closeStorageSettings = useCallback(() => setShowStorageSettings(false), []);
   const moveSection = (current, direction) => {
     const index = SECTIONS.findIndex((item) => item.id === current);
     if (index < 0) return;
@@ -1721,7 +1905,11 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
       setRetention((current) => ({ ...(current || {}), ...value }));
       setStorage((current) => (current ? { ...current, retention: { ...(current.retention || {}), ...value } } : current));
       addToast?.(payload.storageLimitBytes == null ? '已关闭存储上限，之后请手动清理统计' : '存储上限已保存，旧数据会自动轮换', 'success');
-    } catch (error) { setStorageError(error); addToast?.(`存储设置更新失败：${error.message}`, 'error'); }
+    } catch (error) {
+      setStorageError(error);
+      addToast?.(`存储设置更新失败：${error.message}`, 'error');
+      throw error;
+    }
   };
   const exportSession = async (sessionID) => {
     const value = String(sessionID || '').trim();
@@ -1790,14 +1978,16 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
   const selectProject = useCallback((row) => {
     const key = String(row?.key || '').trim();
     if (!key) return;
-    setSelectedProject({ key, name: String(row?.name || key) });
-  }, []);
+    const next = { key, name: String(row?.name || key) };
+    skipNextClearedProjectReloadRef.current = false;
+    setSelectedProject(next);
+    onProjectSelectionChange?.(next);
+  }, [onProjectSelectionChange]);
   const clearSelectedProject = useCallback(() => {
+    skipNextClearedProjectReloadRef.current = false;
     setSelectedProject(null);
-    if (['overview', 'tokens'].includes(section)) {
-      loadDimension('session', 1, dimensions.session?.pageSize || pageSize, dimensionSearch.session || '', dimensions.session);
-    }
-  }, [dimensionSearch.session, dimensions.session, loadDimension, pageSize, section]);
+    onProjectSelectionChange?.(null);
+  }, [onProjectSelectionChange]);
 
   return (
     <section className="runtime-v2-workspace" aria-label="统计详情">
@@ -1836,7 +2026,8 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
           storageError={storageError}
           storageSettingsOpen={showStorageSettings}
           onRetry={() => loadTrends(range)}
-          onOpenStorage={() => setShowStorageSettings((value) => !value)}
+          onOpenStorage={() => setShowStorageSettings(true)}
+          onCloseStorage={closeStorageSettings}
           onRetryStorage={() => loadStorage({ includeRetention: showStorageSettings })}
           onUpdateRetention={updateStorageRetention}
           onManualCleanup={onManualCleanup}

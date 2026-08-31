@@ -2353,11 +2353,11 @@ html[data-theme="light"] .brand-title {
   align-items: start;
   gap: var(--space-4);
   min-width: 0;
-  padding: var(--space-4);
-  border: 1px solid color-mix(in srgb, var(--primary) 42%, var(--border-medium));
+  padding: var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--primary) 28%, var(--border-medium));
   border-radius: var(--radius-lg);
-  background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 10%, var(--bg-surface-elevated)), var(--bg-surface-elevated));
-  box-shadow: 0 8px 24px color-mix(in srgb, var(--primary) 8%, transparent);
+  background: color-mix(in srgb, var(--bg-surface-elevated) 92%, var(--primary));
+  box-shadow: none;
 }
 
 .runtime-v2-storage-management.is-expanded {
@@ -2378,7 +2378,7 @@ html[data-theme="light"] .brand-title {
 
 .runtime-v2-storage-management-copy {
   display: grid;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
 }
 
@@ -2399,15 +2399,15 @@ html[data-theme="light"] .brand-title {
   margin: 0;
   color: var(--text-secondary);
   font-size: 0.8rem;
-  line-height: 1.45;
+  line-height: 1.4;
   overflow-wrap: anywhere;
 }
 
 .runtime-v2-storage-management-metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(110px, 1fr));
+  grid-template-columns: repeat(3, minmax(130px, 1fr));
   gap: var(--space-3);
-  margin-top: var(--space-2);
+  margin-top: var(--space-1);
 }
 
 .runtime-v2-storage-management-metrics span {
@@ -3083,6 +3083,183 @@ html[data-theme="light"] .brand-title {
 
 .runtime-v2-storage-note p + p {
   margin-top: var(--space-3);
+}
+
+/* Keep implementation details available without making them compete with the
+   storage summary.  The native disclosure is keyboard-operable and remains
+   closed until someone needs version, file, or index diagnostics. */
+.runtime-v2-storage-technical-details {
+  margin-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.runtime-v2-storage-technical-details > summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-height: 44px;
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.runtime-v2-storage-technical-details > summary:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.runtime-v2-storage-technical-summary-meta {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 400;
+}
+
+.runtime-v2-storage-technical-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+  padding: 0 0 var(--space-2);
+}
+
+.runtime-v2-storage-technical-grid > div {
+  display: grid;
+  grid-template-columns: minmax(112px, max-content) minmax(0, 1fr);
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 6px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-subtle) 70%, transparent);
+}
+
+.runtime-v2-storage-technical-grid dt {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.runtime-v2-storage-technical-grid dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.runtime-v2-storage-modal {
+  z-index: 105;
+}
+
+.runtime-v2-storage-dialog {
+  max-width: 760px;
+}
+
+.runtime-v2-storage-dialog-header {
+  align-items: flex-start;
+  gap: var(--space-4);
+}
+
+.runtime-v2-storage-dialog-header h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 1.08rem;
+}
+
+.runtime-v2-storage-dialog-header p,
+.runtime-v2-storage-dialog-copy {
+  margin: 5px 0 0;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.runtime-v2-storage-dialog-body {
+  gap: var(--space-3);
+}
+
+.runtime-v2-storage-panel-content {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.runtime-v2-storage-limit-editor {
+  display: grid;
+  align-items: start;
+  gap: var(--space-3);
+  margin-top: 0;
+  padding: var(--space-4);
+  border-color: var(--border-medium);
+  background: color-mix(in srgb, var(--bg-surface) 84%, var(--primary) 6%);
+}
+
+.runtime-v2-storage-limit-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.runtime-v2-storage-limit-heading > span {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+}
+
+.runtime-v2-storage-limit-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.runtime-v2-storage-limit-controls > label {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.runtime-v2-storage-limit-controls > .form-input {
+  width: min(180px, 100%);
+  min-height: 44px;
+}
+
+.runtime-v2-storage-limit-controls > .btn {
+  min-height: 44px;
+}
+
+.runtime-v2-storage-dialog-context {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  background: var(--bg-surface-glass);
+}
+
+.runtime-v2-storage-dialog-context strong {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.runtime-v2-storage-dialog-context .is-warning,
+.runtime-v2-storage-dialog-context .is-warning strong {
+  color: var(--status-warning);
+}
+
+.runtime-v2-storage-dialog-footer .btn {
+  min-width: 88px;
+  min-height: 44px;
 }
 
 .runtime-v2-pricing-panel {
@@ -6646,4 +6823,84 @@ button.responsive-data-card {
    the duplicate margin keeps title-to-panel rhythm fluid at every width. */
 .page-stack > .page-header {
   margin-bottom: 0;
+}
+
+/* Storage summary/dialog parity overrides.  Keep the compact card readable at
+   tablet widths and let the settings dialog become a full-width sheet on a
+   phone without introducing a second horizontal scroll surface. */
+.modal-dialog.runtime-v2-storage-dialog {
+  max-width: min(760px, 100%);
+}
+
+.modal-dialog.runtime-v2-storage-dialog .runtime-v2-storage-dialog-header {
+  align-items: flex-start;
+  gap: var(--space-4);
+}
+
+.modal-dialog.runtime-v2-storage-dialog .runtime-v2-storage-dialog-body {
+  gap: var(--space-3);
+}
+
+@media (max-width: 700px) {
+  .runtime-v2-storage-management-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .runtime-v2-storage-technical-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .runtime-v2-storage-dialog {
+    max-height: min(92dvh, 860px);
+  }
+
+  .runtime-v2-storage-dialog-body {
+    padding: var(--space-4);
+  }
+
+  .runtime-v2-storage-limit-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .runtime-v2-storage-limit-controls > label {
+    grid-column: 1 / -1;
+  }
+
+  .runtime-v2-storage-limit-controls > .form-input {
+    width: 100%;
+  }
+
+  .runtime-v2-storage-limit-controls > .btn {
+    width: 100%;
+  }
+
+  .runtime-v2-storage-limit-controls > .btn-secondary {
+    grid-column: 1 / -1;
+  }
+
+  .runtime-v2-storage-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 360px) {
+  .runtime-v2-storage-management-metrics {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .runtime-v2-storage-management-actions,
+  .runtime-v2-storage-management-actions .btn {
+    width: 100%;
+  }
+
+  .runtime-v2-storage-management-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .runtime-v2-storage-limit-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }

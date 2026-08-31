@@ -65,8 +65,10 @@ test('Statistics keeps every optional filter visible, ordered by scan priority, 
   assert.doesNotMatch(componentStyles, /\.analytics-v3-filter-grid:not\(\.is-open\) > :not\(\.analytics-v3-range\)\s*\{\s*display: none;/);
   assert.match(componentStyles, /\.analytics-v3-segmented\s*\{[\s\S]*?grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/);
   assert.match(analyticsSource, /data-storage-management/);
-  assert.match(analyticsSource, /SQLite 概览/);
+  assert.match(analyticsSource, /运行统计存储/);
+  assert.match(analyticsSource, /<details className="runtime-v2-storage-technical-details">/);
   assert.match(componentStyles, /\.runtime-v2-storage-management\s*\{[\s\S]*?grid-template-columns: auto minmax\(0, 1fr\) auto;/);
+  assert.match(componentStyles, /\.modal-dialog\.runtime-v2-storage-dialog\s*\{[\s\S]*?max-width: min\(760px, 100%\);/);
   assert.match(componentStyles, /@media \(max-width: 700px\)[\s\S]*?\.runtime-v2-storage-management\s*\{[\s\S]*?grid-template-columns: auto minmax\(0, 1fr\);/);
 });
 
