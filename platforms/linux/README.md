@@ -1,8 +1,11 @@
-# Sumpter Linux Rust 版（kekulvd）
+# Sumpter Linux（发布包二进制仍名为 `kekulvd`）
 
-在源码 monorepo 中，Linux 版复用根 `crates/` 的共享代理核心，以 standalone daemon 形式提供 Anthropic 兼容
-代理、扁平 Provider 入口、分流规则、pinned IP、failover、统计，以及与桌面 UI 信息架构对齐的
-本机 Web 管理界面。
+本文有两种阅读上下文：
+
+1. **源码 monorepo**：本文件位于 `platforms/linux/README.md`。Rust 真源是仓库根 workspace 的 `sumpter-core` / `sumpter-runtime` / `sumpter-engine` 与 `sumpterd-linux`。
+2. **独立发布包**：发布阶段把 `platforms/linux/` 提升为包根。包内二进制名为 `kekulvd`，配置目录、systemd 单元和环境变量仍使用历史名 `kekulv`。
+
+Linux 版以 standalone daemon 提供多协议代理、扁平 Provider 入口、分流规则、pinned IP、failover、统计，以及与桌面 UI 信息架构对齐的本机 Web 管理界面。
 
 Linux 专属边界：
 
@@ -16,13 +19,11 @@ Linux 专属边界：
 
 ## 验证状态
 
-> 时效：这段是 2026-08-10 开发迁移时的验证边界，**不是安装步骤**。用户安装看「自动安装、升级与卸载」。
+> 用户安装看「自动安装、升级与卸载」。下面是维护者边界，不是安装步骤。
 
-2026-08-10 这一批迁移**不在本机编译或测试 Rust workspace，也不在本机构建 Docker 镜像**。
-GitHub Actions 负责 Rust fmt/check/test、双架构 Release 与多架构 GHCR 镜像；提交后的
-Actions 结果才是该提交的构建证据。Gemini WebUI 构建/契约测试、Shell 语法/ShellCheck 与安装器的隔离
-事务自测已经覆盖 user 与 system 两种布局，但都不能替代真实 Linux systemd、真实二进制或代理
-流量验收。正式交付前仍须按本文「构建与验收」在目标 Linux 环境补齐验证。
+源码树的 Rust 门禁在**仓库根**运行：`cargo fmt` / `check` / `test` / `clippy`，覆盖共享 crate、Linux adapter 和 `sumpterd-linux`。WebUI 在 `platforms/linux/webui/` 跑 `npm ci`、契约测试和生产构建。
+
+`platforms/linux/scripts/cross-build.sh`、`assemble-shared-tree.sh` 和 `release-preflight.sh` 仍按**独立 Linux 发布树**查找 `crates/`、`kekulvd`、`kekulv-core` 等输入，不能当成根 workspace 已经通过的证据。本机交叉构建、GHCR 镜像和真实 systemd 流量必须在目标 Linux 上按本文后半的「原生构建与打包」「真机冒烟」补齐。
 
 ## 部署包结构
 
@@ -54,13 +55,13 @@ kekulv-linux-<arch>/
 
 ## GitHub Actions 与发布资产
 
-本仓库按**独立仓库根目录**组织，工作流位于 `.github/workflows/`。如果把它继续放在更大
-monorepo 的子目录里，GitHub 不会发现这里的工作流；此时必须把工作流移到仓库根目录并同步调整路径。
+这些 workflow 是 **Linux 发布输入**，位于源码树的 `platforms/linux/.github/workflows/`。当前 monorepo 根目录没有 `.github/`，GitHub 不会发现子目录里的 workflow。要在这个仓库跑 CI / Release，必须把工作流提升到仓库根并改路径；或者在发布阶段把 `platforms/linux/` 当成独立包根。macOS 打包不走这里，本机测试 DMG 用仓库根 `scripts/build-macos-dmg.sh`。
 
-- `ci.yml`：pull request 或手动触发；使用 Rust 1.88.0 执行 fmt/check/test，并运行 Gemini WebUI 的 `npm ci`、契约测试与生产构建。普通 push 不会自动消耗 CI 额度。
+包根视角下的工作流：
+
+- `ci.yml`：pull request 或手动触发；Rust 1.88.0 的 fmt/check/test，以及 WebUI 的 `npm ci`、契约测试与生产构建。普通 push 不会自动消耗 CI 额度。
 - `release.yml`：手动触发只生成 Actions artifact；推送 `v*` tag 时同时创建 GitHub Release。
 - `container.yml`：pull request 只构建不推送；手动触发只构建二进制；推送 `v*` tag 时发布 amd64/arm64 GHCR manifest。
-- `macos-release.yml`：已有统一 `v*` tag 的 macOS DMG、Sparkle ZIP、签名 appcast 和 checksum；也可手动指定已有 tag。
 
 Release 固定提供：
 
@@ -72,9 +73,9 @@ SHA256SUMS
 
 所有第三方 Actions 固定到完整 commit SHA；Release 发布 job 才有 `contents:write`，容器发布 job
 才有 `packages:write`。源码仓库为 [`domoxiaojun/sumpter`](https://github.com/domoxiaojun/sumpter)，
-可以设为私有；面向用户的二进制分发由下文的静态镜像承担。本项目采用 [MIT License](LICENSE)，
-Cargo workspace 与仓库根目录的 `LICENSE` 保持一致。
-推送与 `kekulvd` Cargo 版本一致的 `v<version>` tag 会创建 GitHub Release；许可证不是 GitHub
+可以设为私有；面向用户的二进制分发由下文的静态镜像承担。许可证是 MIT，发布包内见本目录
+[LICENSE](LICENSE)；源码树的 Cargo workspace 也声明 `license = "MIT"`。
+推送与 Cargo workspace 版本一致的 `v<version>` tag 会创建 GitHub Release；许可证不是 GitHub
 Release 的技术前置条件，但它明确下游可获得的使用权。
 
 ## 自动安装、升级与卸载
@@ -225,7 +226,7 @@ install -m 600 ./config.example.json "$config_base/kekulv/config.json"
 地址和 secret 后再启用。`config.json` 含明文 secret，权限必须保持 0600。
 
 > 旧 Linux Swift 版的 `keys.json` 不会自动迁移。配置目录只有 `keys.json` 时，新 daemon
-> 必须报错并非零退出，且不能改写原文件。请先备份旧文件，再人工转换为 v5 `config.json`；
+> 必须报错并非零退出，且不能改写原文件。请先备份旧文件，再人工转换为 schema v6 `config.json`；
 > 不要通过删除旧文件来掩盖未完成的转换。
 
 ## 启动与连接
@@ -484,7 +485,7 @@ root 管理且禁用。
 
 ```bash
 git clone https://github.com/domoxiaojun/sumpter.git
-cd kekulv
+cd sumpter/platforms/linux   # 发布包解压后则已经在包根，不必再 cd
 
 mkdir -p config          # 运行数据，无需 chown
 umask 077
@@ -626,7 +627,7 @@ TargetFormat 自动保留 Anthropic 原生 `web_search`、为 OpenAI Chat 使用
 
 Responses WebSocket、Realtime / Live、Videos、Files 和 `/v1/models` 尚未接入；其中视频还
 涉及创建后的查询、下载和凭据绑定，不能按普通 HTTP body 透传冒充支持。更完整的使用说明见
-根目录 [`USAGE.md`](USAGE.md#4-协议与路径)。
+同目录 [`USAGE.md`](USAGE.md#4-协议与路径)（源码树里对应仓库根 `USAGE.md`）。
 
 想让 Web Admin 的「项目 Token 排行」按项目区分 Claude Code 请求（默认全堆在「未识别项目」），
 在**跑 CC 的机器**上运行 `scripts/cc-project-attribution.sh install`。Web Admin 的**安全**页
@@ -634,6 +635,8 @@ Responses WebSocket、Realtime / Live、Videos、Files 和 `/v1/models` 尚未�
 陷阱、回退命令。细节与原理见 [`USAGE.md` §8](USAGE.md#8-让-claude-code-按项目统计可选)。
 
 ## 原生构建与打包
+
+下列脚本以 **Linux 发布树** 为根（包根有自己的 `Cargo.toml`、`crates/` 和 `kekulvd`）。在当前 monorepo 里直接 `cd platforms/linux && ./scripts/cross-build.sh` **不会**构建根 workspace 的 `sumpterd-linux`。发布链适配完成前，先按仓库根 `docs/architecture.md` 做 Cargo 验证；交叉编译与打 tar.gz 仍要有一份组装好的发布树。
 
 不依赖 Docker 的双架构 musl 脚本需要人工准备：
 

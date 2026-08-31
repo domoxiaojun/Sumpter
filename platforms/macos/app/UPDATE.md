@@ -53,73 +53,29 @@ export SPARKLE_DOWNLOAD_URL_PREFIX="https://github.com/domoxiaojun/sumpter/relea
 
 建议每个版本同时发布 DMG、Sparkle zip、appcast.xml 和人工核对用的 `macOS-SHA256SUMS`。Sparkle 自身的 Ed25519 签名不能被普通 checksum 取代。
 
-## GitHub 在线发布流程
+## 本机构建与正式分发
 
-发布仓库（`domoxiaojun/sumpter`）里 `.github/workflows/macos-release.yml` 与 Linux 的
-`release.yml` 监听同一个 `v*` tag，所以一个 tag 同时出两个平台的产物。工作流构建前会校验
-源码 monorepo 使用根 `Cargo.toml`；独立发布树则使用 `macos/Cargo.toml`。无论拓扑如何，
-macOS 版本、共享 workspace 版本与 tag 三者必须一致。
-
-先在仓库的 Settings → Secrets and variables → Actions 中配置：
-
-- `SPARKLE_PUBLIC_ED_KEY`：`generate_keys` 输出的公钥。
-- `SPARKLE_PRIVATE_KEY`：Sparkle 私钥；只放 GitHub Actions Secret，不提交仓库。
-- `CODESIGN_IDENTITY`：可选。没有 Apple Developer 账号时留空，工作流使用 Ad-hoc 签名。
-
-### 推送方式（不要直接推 monorepo）
-
-上游 monorepo 里平台输入位于 `platforms/linux/` 与 `platforms/macos/`，而发布仓库的**根就是 Linux 版**、
-macOS 挂在 `macos/` 子目录。**不要把整个 monorepo 直接推到发布仓库**，必须用合成提交把平台 tree 拼成发布仓库的形状：
+当前源码树就是 monorepo：Rust workspace 在仓库根，macOS 输入在 `platforms/macos/`。
+**本机测试包**用仓库根脚本，不要假设仓库根已经有 `.github/workflows/macos-release.yml`：
 
 ```bash
-cd <monorepo 根>
-set -euo pipefail
-VERSION="${VERSION:?请先设置 VERSION，例如 X.Y.Z}"
-TAG="v${VERSION}"
-git fetch --tags origin
-
-if git show-ref --verify --quiet "refs/tags/${TAG}" \
-  || git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
-  echo "tag 已存在：${TAG}" >&2
-  exit 1
-fi
-
-FINAL_ROOT=$(git rev-parse HEAD)
-LINUX_TREE=$(git rev-parse "${FINAL_ROOT}:platforms/linux")
-MACOS_TREE=$(git rev-parse "${FINAL_ROOT}:platforms/macos")
-PARENT=$(git rev-parse origin/main)
-
-RELEASE_TMP_DIR=$(mktemp -d)
-RELEASE_INDEX="${RELEASE_TMP_DIR}/index"
-trap 'rm -f "$RELEASE_INDEX" "$RELEASE_INDEX.lock"; rmdir "$RELEASE_TMP_DIR" 2>/dev/null || true' EXIT
-GIT_INDEX_FILE="$RELEASE_INDEX" git read-tree "$LINUX_TREE"
-GIT_INDEX_FILE="$RELEASE_INDEX" git read-tree --prefix=macos/ "$MACOS_TREE"
-RELEASE_TREE=$(GIT_INDEX_FILE="$RELEASE_INDEX" git write-tree)
-
-CANDIDATE=$(git commit-tree "$RELEASE_TREE" -p "$PARENT" -m "release: ${TAG}")
-git merge-base --is-ancestor "$PARENT" "$CANDIDATE"
-test "$(git rev-parse "${CANDIDATE}^{tree}")" = "$RELEASE_TREE"
-test "$(git rev-parse "${CANDIDATE}:macos")" = "$MACOS_TREE"
-
-git tag -a "$TAG" "$CANDIDATE" -m "release: ${TAG}"
-test "$(git cat-file -t "$TAG")" = tag
-git push --atomic origin \
-  "$CANDIDATE:refs/heads/main" \
-  "refs/tags/${TAG}"
-
-# CI 不监听 main/tag push，需要发布后显式触发。
-gh workflow run ci.yml --repo domoxiaojun/sumpter --ref main
+# 在 monorepo 根
+./scripts/build-macos-dmg.sh --clean
 ```
 
-版本 tag 会自动触发 Linux Release、Container 和 macOS Release；`ci.yml` 只监听 pull request 与
-手动触发，单独推 `main` 不会触发这四条工作流。以上 atomic push 保证远端分支与 annotated tag
-要么一起推进、要么都不推进。
+该脚本调用 `package-app.sh`，走根 `Cargo.toml` 构建 `sumpterd-macos`，默认 ad-hoc 签名，产物在
+`platforms/macos/app/dist/`。正式分发仍须 Developer ID、公证，以及下面的 Sparkle 密钥。
 
-macOS 工作流会构建 DMG、Sparkle zip、签名后的 `appcast.xml` 和 `macOS-SHA256SUMS`，创建或更新
-GitHub Release，并将稳定 feed 发布到 `macos-updates` 分支：
+Linux 的 GitHub Actions 输入在 `platforms/linux/.github/workflows/`。当前 monorepo 根没有
+`.github/`，GitHub 不会自动跑这些 workflow，也不能用旧的「发布仓库根 = Linux、macOS 挂在 `macos/`」
+合成提交流程来操作现在的源码树。把 CI 提升到仓库根、恢复 tag 发布链是单独的发布适配任务。
 
-```text
-https://raw.githubusercontent.com/domoxiaojun/sumpter/macos-updates/macos/appcast.xml
-```
+若自行托管 Sparkle feed，仍需要：
 
-因此 App 内的 `SPARKLE_FEED_URL` 不跟随版本变化。工作流需要仓库 `contents: write` 权限；首次运行会自动创建 `macos-updates` 分支。
+- `SPARKLE_PUBLIC_ED_KEY`：`generate_keys` 输出的公钥。
+- `SPARKLE_PRIVATE_KEY`：Sparkle 私钥；只放本机钥匙串或 CI Secret，不提交仓库。
+- `CODESIGN_IDENTITY`：正式包用 Developer ID 证书名称；省略时仅 Ad-hoc。
+
+`SPARKLE_FEED_URL` 应指向稳定地址，不跟随版本号变化。历史 feed 曾放在
+`https://raw.githubusercontent.com/domoxiaojun/sumpter/macos-updates/macos/appcast.xml`；
+在发布链恢复前，不要假设推 `v*` tag 就会自动更新它。

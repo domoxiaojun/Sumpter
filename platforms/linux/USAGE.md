@@ -48,6 +48,14 @@
 - `apiKey`、`authToken`、Admin 密码、Cookie、请求体和 raw 捕获都只留在本机受限文件中；文档、截图和 Issue 只放脱敏后的请求 ID、时间和错误阶段。
 - 项目归因脚本必须运行在**启动 Claude Code 的客户端机器**上，而不是远程 daemon 所在机器；每台客户端机器单独配置。
 
+### macOS 统一通知（Claude Code + Codex CLI）
+
+- macOS App 的「通知」页分别管理 Claude Code Hook 与 Codex CLI Stop Hook；两者都由 Sumpter 的 `/__notify` 接收并投递系统通知。
+- Codex 默认关闭。启用后 App 会在 `CODEX_HOME/hooks.json`（未设置时为 `~/.codex/hooks.json`）写入 `Stop` Hook，并把脚本放在同目录的 `hooks/sumpter-codex-notify.zsh`；脚本只转发 Stop JSON，最多等待 2 秒，Sumpter 未运行也不会阻断 Codex。
+- 启用时会直接移除 Codex 顶层 `config.toml` 中已知的 `SkyComputerUseClient … turn-ended` legacy `notify`，不生成备份、不自动恢复。无法安全识别的自定义 `notify` 会保留并显示冲突，需手动删除后再启用。
+- 写入后在 Codex CLI 执行 `/hooks` 并信任 Sumpter Hook；设置页只有收到一次真实 Codex SSE 通知后才显示「已验证」。通知使用固定安全文案，不包含 transcript、完整 prompt、`last_assistant_message` 或原始错误详情。
+- Linux daemon 不提供通知 Hook，也不提供 `/__notify`；上述统一通知仅适用于 macOS App。
+
 <!-- 由 scripts/sync-usage-docs.py 生成；请修改 docs/usage-onboarding.md 与 docs/usage-path-matrix.json 后同步。 -->
 
 <!-- END SUMPTER_CANONICAL_ONBOARDING -->
@@ -56,8 +64,9 @@
 格式和旧 `keys.json` 不会被读取，可留作人工转换的草稿。迁移会先创建带时间戳的
 `config.before-schema-v6-*.json` 原始备份，成功后才原子替换配置。
 
-发布仓库 [`domoxiaojun/sumpter`](https://github.com/domoxiaojun/sumpter) 的根就是本文件所在目录。
-源码 monorepo 里请改仓库根 `USAGE.md`，再同步到这里；独立发布包只维护本文件。
+本文是 Linux 发布包的使用指南。源码 monorepo 中它位于 `platforms/linux/USAGE.md`；发布阶段会把
+`platforms/linux/` 提升为包根，届时本文与同目录 `README.md` 位于发布包根目录。开箱模板的真源是
+仓库根 `docs/usage-onboarding.md`，由 `scripts/sync-usage-docs.py` 同步到仓库根 `USAGE.md` 和本文件。
 
 ## 文档怎么读
 

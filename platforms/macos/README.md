@@ -1,42 +1,48 @@
-# Sumpter macOS Rust sidecar
+# Sumpter macOS
 
-Sumpter 的 Rust 后端 sidecar:本地 Anthropic 兼容代理引擎,由 SwiftUI 菜单栏壳
-(`app/`)spawn 并通过 127.0.0.1 admin API 控制。共享引擎迁移记录见
-`../../docs/upstream/engine-unification-plan.md`，当前镜像计划见 `../../plan.md`。
+macOS 产品是 SwiftUI 菜单栏 App + Rust sidecar。App 源码在 `app/`；sidecar 由根 workspace 的 `sumpterd-macos` 提供，经 `adapters/macos` 注入平台边界，通过 `127.0.0.1` Admin API 与 App 通信。
 
-```bash
-cargo build --manifest-path ../../Cargo.toml -p sumpterd-macos  # debug 构建
-cargo test --manifest-path ../../Cargo.toml --workspace          # 全部测试
-cargo test --manifest-path ../../Cargo.toml -p sumpter-core      # 单个 crate
-cargo clippy --manifest-path ../../Cargo.toml --workspace --all-targets # lint
-```
+当前架构见 [`docs/architecture.md`](../../docs/architecture.md)。重构前的双端对照在 `docs/upstream/`，不是现行契约。
 
-工具链经 Homebrew 的 rustup 安装(keg-only),cargo/rustc 不在默认 PATH:
+## 构建
+
+工具链经 Homebrew 的 rustup 安装（keg-only）时，cargo / rustc 不在默认 PATH：
 
 ```bash
-export PATH="/opt/homebrew/opt/rustup/bin:$PATH"   # 或写进 ~/.zshrc
+export PATH="/opt/homebrew/opt/rustup/bin:$PATH"
+
+cargo build --manifest-path ../../Cargo.toml -p sumpterd-macos
+cargo test --manifest-path ../../Cargo.toml --workspace
+cargo test --manifest-path ../../Cargo.toml -p sumpter-core
+cargo clippy --manifest-path ../../Cargo.toml --workspace --all-targets -- -D warnings
 ```
+
+本机测试 DMG（仓库根）：
+
+```bash
+./scripts/build-macos-dmg.sh --clean
+```
+
+产物默认是 ad-hoc 签名的 `platforms/macos/app/dist/Sumpter-local.dmg`，不公证、不上传。正式分发见 [`app/UPDATE.md`](app/UPDATE.md)。首次打开被拦截见 [`app/INSTALL.txt`](app/INSTALL.txt)。
 
 ## 入站 API
 
-sidecar 支持 Claude `/v1/messages`，OpenAI Chat / Responses 的 Native Adapter 与安全
-Translator，以及 Images Generations / Edits、Legacy Completions、Claude Count Tokens、
-Responses Compact 与 Codex Alpha Search 独立 Adapter。Images 同时覆盖 OpenAI GPT Image 与
-Grok Image 参数，JSON 未知字段会保留，multipart 编辑不会重建上传体。Responses WebSocket、
-Realtime / Live、Videos、Files 仍不支持；完整路径、四态入口协议与迁移说明见根目录
-[`USAGE.md`](../../USAGE.md#4-协议与路径)。
+sidecar 支持 Claude `/v1/messages`，OpenAI Chat / Responses 的 Native Adapter 与安全 Translator，以及 Images Generations / Edits、Legacy Completions、Claude Count Tokens、Responses Compact 与 Codex Alpha Search。Images 同时覆盖 OpenAI GPT Image 与 Grok Image 参数，JSON 未知字段会保留，multipart 编辑不会重建上传体。Responses WebSocket、Realtime / Live、Videos、Files 仍不支持。完整路径与四态入口协议见根目录 [`USAGE.md`](../../USAGE.md#4-协议与路径)。
 
-想让「统计」页按项目区分 Claude Code 请求，在跑 CC 的机器上运行
-`cc-project-attribution.sh install`（配置器跨平台通用；打包后的 App 里在
-`Sumpter.app/Contents/Resources/`，源码构建则是仓库的 `platforms/linux/scripts/`）。
-App 的**安全**页有完整引导（当前状态、三步命令、平台差异、三个陷阱、回退），
-也能直接在 Finder 里定位脚本。原理见
-[`USAGE.md` §8](../../USAGE.md#8-让-claude-code-按项目统计可选)。
+想让「统计」页按项目区分 Claude Code 请求，在跑 CC 的机器上运行 `cc-project-attribution.sh install`。打包后的 App 里脚本在 `Sumpter.app/Contents/Resources/`，源码树则是 `platforms/linux/scripts/`。App 的**安全**页有完整引导。原理见 [`USAGE.md` §8](../../USAGE.md#8-让-claude-code-按项目统计可选)。
 
-## crate 分层(依赖单向向下)
+## 统一通知
 
-- `sumpter-core` — 纯逻辑:配置模型(schema v6,与 `platforms/linux/` 同源同语义)、
-  路由、粘性调度、访问控制、协议桥接纯函数。无网络无平台依赖。
-- `sumpter-engine` — tokio/axum/reqwest:入站服务、pinned-IP 出站、failover、
-  SSE relay、统计事件、admin API。
-- `sumpterd-macos` — 可执行入口:组装、进程生命周期(stdin EOF 随父进程退出)。
+通知设置同时支持 Claude Code 与 Codex CLI。Claude 使用 `~/.claude/settings.json` Hook；Codex 使用 `CODEX_HOME/hooks.json`（未设置时 `~/.codex/hooks.json`）的 `Stop` Hook，脚本位于 `hooks/sumpter-codex-notify.zsh`。Codex 默认关闭，写入后需在 Codex CLI 执行 `/hooks` 信任，收到真实 Stop SSE 后才会显示「已验证」。Codex 通知只使用 Sumpter 生成的固定安全文案，不转发 transcript、prompt、`last_assistant_message` 或原始错误详情。
+
+启用 Codex 通知时，App 会直接移除 `config.toml` 中已知的 `SkyComputerUseClient … turn-ended` legacy `notify`，不保留备份也不自动恢复；自定义或无法安全解析的 legacy 配置会保留并显示冲突。Claude 与 Codex 的通知线程按客户端来源隔离。Linux daemon 不提供通知 Hook 和 `/__notify`。
+
+## 分层
+
+依赖单向向下，与根 workspace 一致：
+
+- `sumpter-core` — 配置模型（schema v6）、路由、粘性调度、访问控制、协议桥接纯函数。无网络、无平台依赖。
+- `sumpter-runtime` — 共享 SQLite 事件存储与查询。
+- `sumpter-engine` — 入站服务、pinned-IP 出站、failover、SSE relay、统计事件。平台能力只通过 `PlatformBoundary` 注入。
+- `sumpter-macos-adapter` — control token、通知、reload、Admin facade、HTTP 组装。
+- `sumpterd-macos` — 可执行入口：组装、握手 JSON、stdin EOF 随父进程退出。

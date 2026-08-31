@@ -1,60 +1,61 @@
 # Sumpter 文档索引
 
-这里的 `upstream/` 是从历史源码快照复制的参考文档，文件内容保持原样，不是当前 API 契约。
-当前 Rust 代码使用根目录唯一 workspace；Linux/macOS 通过 adapter 注入平台能力。
+先读根 [`README.md`](../README.md) 了解产品与仓库地图，再按用途打开下面的文件。
 
-## 当前镜像布局
+`upstream/` 是历史源码快照，内容保持原样，**不是**当前 API 契约或目录约定。现行 Rust 代码只有根目录一份 workspace；Linux / macOS 通过 adapter 注入平台能力。
 
-- `crates/sumpter-core/`：纯逻辑层，配置、路由、调度、协议转换和事件契约。
-- `crates/sumpter-runtime/`：共享 SQLite worker、projection、rollup、查询和导出。
+## 先读这些
+
+| 你想做什么 | 读哪份 |
+|---|---|
+| 产品定位、仓库结构、开发命令 | 根 [`README.md`](../README.md) |
+| 安装、接 Claude/Codex、排错 | 根 [`USAGE.md`](../USAGE.md) |
+| 配置字段 | [`../platforms/macos/CONFIG.md`](../platforms/macos/CONFIG.md)（两端同一份 schema v6） |
+| 当前 Rust 分层与变更归属 | [`architecture.md`](architecture.md) |
+| 仓库协作规则 | [`../AGENTS.md`](../AGENTS.md) |
+
+## 源码布局
+
+- `crates/sumpter-core/`：配置、路由、调度、协议转换和事件契约。
+- `crates/sumpter-runtime/`：共享 SQLite worker、投影、rollup、查询和导出。
 - `crates/sumpter-engine/`：共享 HTTP 数据面、转发、重试、relay、回放和生命周期。
-- `adapters/linux/sumpter-linux-adapter/`：Linux 平台边界、Admin、server 和组合 wrapper。
-- `adapters/macos/sumpter-macos-adapter/`：macOS 平台边界、Admin、server 和组合 wrapper。
-- `apps/linux/sumpterd/`、`apps/macos/sumpterd/`：只负责启动参数、配置目录、监听和退出生命周期。
-- `platforms/macos/app/`：SwiftUI 壳、测试、Sparkle 清单和 DMG 打包脚本；业务逻辑未修改。
-- `platforms/linux/webui/`：WebUI 源码、测试、`package-lock.json`；`platforms/linux/web/` 是已构建静态资源。
-- `platforms/linux/scripts/`、`platforms/linux/deploy/`、`platforms/linux/.github/workflows/`：交叉构建、安装、服务和发布输入。
-- `scripts/sync-usage-docs.py`、`docs/usage-onboarding.md`、`docs/usage-path-matrix.json`：开箱文档的模板、路径矩阵和同步检查。
-- `SOURCE_COMMIT`：记录本次镜像所基于的源提交；源工作区的未提交改动也按当时文件内容复制。
+- `adapters/linux/sumpter-linux-adapter/`：Linux 平台边界、Admin、server。
+- `adapters/macos/sumpter-macos-adapter/`：macOS 平台边界、Admin、通知、sidecar server。
+- `apps/linux/sumpterd/`、`apps/macos/sumpterd/`：可执行入口；只做参数、配置目录、监听和生命周期。
+- `platforms/macos/app/`：SwiftUI 壳、测试、Sparkle 和 DMG 打包。
+- `platforms/linux/webui/`：WebUI 源码与测试；`platforms/linux/web/` 是已构建静态资源。
+- `platforms/linux/scripts/`、`platforms/linux/deploy/`、`platforms/linux/.github/workflows/`：Linux 安装、systemd 与发布输入。
+- `scripts/sync-usage-docs.py`、`docs/usage-onboarding.md`、`docs/usage-path-matrix.json`：开箱正文模板和同步检查。
 
-没有复制 `target/`、Swift `.build/`、`node_modules/` 或 DMG/ZIP 等生成物；依赖可按各目录的
-lockfile 重新生成。
+根 `Cargo.toml` 是唯一 Rust workspace。共享引擎与平台的最小接口是 `crates/sumpter-engine/src/boundary.rs`。
 
-## 当前架构优先阅读
+## 跨平台 UI 对齐
 
-- `architecture.md`：当前单一共享引擎、多端 adapter 的结构树、依赖方向和变更边界。
-- 根 `Cargo.toml`：唯一 Rust workspace 成员和共享依赖版本。
-- `crates/sumpter-engine/src/boundary.rs`：共享引擎与平台能力的最小接口。
-- `adapters/linux/sumpter-linux-adapter/src/platform.rs`、`adapters/macos/sumpter-macos-adapter/src/platform.rs`：平台策略实现。
+Linux 与 macOS 对应页面尽量对齐：信息层级、字段命名、状态语义和主要交互一致；仅在平台原生控件或布局需要时保留差异。新增或调整页面时，先对照另一端已确认的交互，再补平台特有适配。
 
-## 跨平台 UI 对齐约定
+用户可见品牌是 **Sumpter**。Linux 运行时目录、systemd 单元、发布包二进制 `kekulvd` 和部分协议 header（`X-Kekulv-*`、`KEKULV_*`）仍使用历史名 `kekulv`，属于兼容契约。
 
-Linux 与 macOS 对应页面尽量保持对齐：信息层级、字段命名、状态语义和主要交互一致；仅在平台原生控件或布局需要时保留差异。新增或调整页面时，先对照另一端已确认的交互，再补充平台特有适配。
+## 平台文档
 
-## 历史/对照文档
+- Linux 安装、systemd、Docker、Admin 反代：[`../platforms/linux/README.md`](../platforms/linux/README.md)
+- Linux 发布包内的使用指南：[`../platforms/linux/USAGE.md`](../platforms/linux/USAGE.md)
+- Linux Admin API：[`../platforms/linux/specs/admin-api.md`](../platforms/linux/specs/admin-api.md)
+- macOS sidecar 与本机构建：[`../platforms/macos/README.md`](../platforms/macos/README.md)
+- macOS 首次打开被拦截：[`../platforms/macos/app/INSTALL.txt`](../platforms/macos/app/INSTALL.txt)
+- macOS Sparkle 发布：[`../platforms/macos/app/UPDATE.md`](../platforms/macos/app/UPDATE.md)
+- Linux WebUI 构建：[`../platforms/linux/webui/README.md`](../platforms/linux/webui/README.md)
 
-- `upstream/engine-unification-plan.md`：重构前的单一引擎并行迁移记录。
-- `upstream/双端引擎架构分析.md`：重构前的双端差异与边界注入分析。
-- `upstream/macos/CONFIG.md`：schema v6 配置字段和 mapping 语义。
-- `upstream/macos/specs/spec-core.md`、`upstream/linux/specs/spec-core.md`：核心行为对照。
-- `upstream/linux/specs/runtime-analytics-v2.md`：SQLite 统计、分页、筛选和导出契约。
-- `upstream/linux/specs/seams.md`：core/runtime/engine 的组件边界。
-- `upstream/claude-code客户端的参数变量字段对应.md`、
-  `upstream/codex客户端的参数变量字段对应.md`：客户端请求与事件字段。
+涉及 Rust 数据面时以根 workspace、adapter 和测试为准，不要按 `platforms/linux/` 里尚未适配的发布脚本路径去猜 crate 名。
 
-## 平台集成参考
+## 历史对照（不要当现行契约）
 
-`platforms/linux/README.md`、`platforms/linux/USAGE.md`、`platforms/linux/specs/admin-api.md`、
-`platforms/macos/README.md`、`platforms/macos/CONFIG.md` 和根 `USAGE.md` 是现有开箱/构建入口；涉及 Rust 数据面时以根 workspace、
-adapter 和测试为准。`upstream/` 下的同名文件仅用于迁移对照。
+- [`upstream/README.md`](upstream/README.md)：重构前的双目录产品说明。
+- [`upstream/engine-unification-plan.md`](upstream/engine-unification-plan.md)：单一引擎并行迁移记录。
+- [`upstream/双端引擎架构分析.md`](upstream/双端引擎架构分析.md)、[`upstream/parity-ledger.md`](upstream/parity-ledger.md)：双端差异与对拍基线。
+- [`upstream/macos/CONFIG.md`](upstream/macos/CONFIG.md)：当时的 schema v6 字段说明；现行字段以 `platforms/macos/CONFIG.md` 为准。
+- [`upstream/linux/specs/`](upstream/linux/specs/)：当时的 core / engine / analytics / Admin 规格。
+- [`upstream/claude-code客户端的参数变量字段对应.md`](upstream/claude-code客户端的参数变量字段对应.md)、[`upstream/codex客户端的参数变量字段对应.md`](upstream/codex客户端的参数变量字段对应.md)：客户端请求与事件字段对照；文中的 `linux/crates/kekulv-*` 路径已过期。
+- [`code-review-2026-08-31.md`](code-review-2026-08-31.md)：架构搬迁前的风险审查。主体结论针对当时的双轨 legacy 入口，不要用来判断当前活动路径。
+- 根 [`plan.md`](../plan.md)：按轮次追加的工作日志，不是当前架构说明。
 
-## 迁移背景
-
-`upstream/parity-ledger.md` 是历史对拍基线，`upstream/双端引擎架构分析.md` 也包含旧裁定过程。
-它们可用于理解迁移背景，但不应替代当前源码和测试。
-
-## 本次未复制
-
-已排除平台缓存和生成物（`target/`、`.build/`、`dist*/`、`release/`、`node_modules/`、DMG/ZIP）、
-真实运行数据和密钥，以及 agent 工作规则和历史计划文档。Linux 的 Dockerfile/Compose 与发布
-workflow 作为构建输入保留，但本机验证不调用 Docker。
+`SOURCE_COMMIT` 只记录某次镜像所基于的源提交，不是 GitHub 默认分支的当前位置。

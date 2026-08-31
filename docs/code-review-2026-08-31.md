@@ -5,19 +5,17 @@
 用户指定仓库：https://github.com/domoxiaojun/sumpter  
 本地源码快照：SOURCE_COMMIT = c75905b1553ea40d790e6ff1f3fc43ced07830d5
 
-> 文档状态：本文主体记录的是架构搬迁前快照，文中的 `crates/kekulv-*`、
-> `linux/crates/*`、`macos/crates/*` 路径和“双轨默认入口”结论属于历史证据。
-> 2026-08-31 的架构整理已将当前 Rust 真源迁移到 `crates/sumpter-*`，平台实现迁移到
-> `adapters/`，入口迁移到 `apps/`。当前结构、依赖方向和验证命令以
-> [`architecture.md`](architecture.md) 为准；本文件保留作风险审查和迁移前对照，不要据此
-> 判断当前活动路径。
+> **历史文件。** 主体记录的是架构搬迁前快照：`crates/kekulv-*`、`linux/crates/*`、
+> `macos/crates/*` 和“双轨默认入口”都已过期。当前 Rust 真源在 `crates/sumpter-*`，平台实现在
+> `adapters/`，入口在 `apps/`。当前结构、依赖方向和验证命令以 [`architecture.md`](architecture.md)
+> 为准。下文「重构后校准」之后的章节全部是迁移前证据，不要用来判断活动路径。
 
 ## 重构后校准
 
 - 根 `Cargo.toml` 是唯一 Rust workspace，包含 7 个 package：3 个共享 crate、2 个平台 adapter、2 个 daemon/sidecar app。
 - Linux/macOS 默认入口都通过对应 adapter 构造共享 `sumpter-engine::Engine`；旧 legacy workspace 不在活动源码树中。
-- `platforms/linux/webui/`、`platforms/linux/web/`、`platforms/macos/app/`、部署脚本和协议兼容字段按用户边界保持不变；它们不应被本轮架构迁移的结果误认为已完成品牌迁移。
-- 已复核：`cargo fmt --all -- --check`、`cargo check --workspace --locked`、`cargo test --workspace --locked` 均通过。
+- 用户可见品牌已切到 Sumpter。Linux 配置目录、systemd 单元、发布包二进制 `kekulvd` 和 `X-Kekulv-*` / `KEKULV_*` 仍是兼容契约。
+- 已复核（整理当时）：`cargo fmt --all -- --check`、`cargo check --workspace --locked`、`cargo test --workspace --locked` 均通过。这些命令仍是根 workspace 门禁，不证明 Linux 交叉构建或正式 DMG 发布链已经恢复。
 
 ## 0. 迁移前快照结论
 

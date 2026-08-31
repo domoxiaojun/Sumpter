@@ -1,4 +1,6 @@
-# 当前执行计划
+# 执行记录（2026-08-31 起）
+
+本文是按轮次追加的工作日志，**不是**当前架构说明。当前结构以 [`docs/architecture.md`](docs/architecture.md) 为准，用户开箱以根 [`README.md`](README.md) 和 [`USAGE.md`](USAGE.md) 为准。下文出现的 `kekulv-core` / `linux/crates` 等名字属于当时任务描述，不要当作活动路径。
 
 - [x] ✅ 1. 盘点仓库结构、构建约束、依赖与当前工作区状态
 - [x] ✅ 2. 深读 `kekulv-core`：配置、路由、调度、协议桥接与错误/事件契约

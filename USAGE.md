@@ -48,6 +48,14 @@
 - `apiKey`、`authToken`、Admin 密码、Cookie、请求体和 raw 捕获都只留在本机受限文件中；文档、截图和 Issue 只放脱敏后的请求 ID、时间和错误阶段。
 - 项目归因脚本必须运行在**启动 Claude Code 的客户端机器**上，而不是远程 daemon 所在机器；每台客户端机器单独配置。
 
+### macOS 统一通知（Claude Code + Codex CLI）
+
+- macOS App 的「通知」页分别管理 Claude Code Hook 与 Codex CLI Stop Hook；两者都由 Sumpter 的 `/__notify` 接收并投递系统通知。
+- Codex 默认关闭。启用后 App 会在 `CODEX_HOME/hooks.json`（未设置时为 `~/.codex/hooks.json`）写入 `Stop` Hook，并把脚本放在同目录的 `hooks/sumpter-codex-notify.zsh`；脚本只转发 Stop JSON，最多等待 2 秒，Sumpter 未运行也不会阻断 Codex。
+- 启用时会直接移除 Codex 顶层 `config.toml` 中已知的 `SkyComputerUseClient … turn-ended` legacy `notify`，不生成备份、不自动恢复。无法安全识别的自定义 `notify` 会保留并显示冲突，需手动删除后再启用。
+- 写入后在 Codex CLI 执行 `/hooks` 并信任 Sumpter Hook；设置页只有收到一次真实 Codex SSE 通知后才显示「已验证」。通知使用固定安全文案，不包含 transcript、完整 prompt、`last_assistant_message` 或原始错误详情。
+- Linux daemon 不提供通知 Hook，也不提供 `/__notify`；上述统一通知仅适用于 macOS App。
+
 <!-- 由 scripts/sync-usage-docs.py 生成；请修改 docs/usage-onboarding.md 与 docs/usage-path-matrix.json 后同步。 -->
 
 <!-- END SUMPTER_CANONICAL_ONBOARDING -->
@@ -56,20 +64,21 @@
 格式和旧 `keys.json` 不会被读取，可留作人工转换的草稿。迁移会先创建带时间戳的
 `config.before-schema-v6-*.json` 原始备份，成功后才原子替换配置。
 
-发布仓库 [`domoxiaojun/sumpter`](https://github.com/domoxiaojun/sumpter) 会在发布阶段将
-`platforms/linux/` 的内容提升为发布根，所以 GitHub 上的指南仍位于发布仓库根目录；本
-monorepo 的 Linux 指南位于 [`platforms/linux/USAGE.md`](platforms/linux/USAGE.md)，改开箱模板时由
-`scripts/sync-usage-docs.py` 同步两份。
+源码仓库 [`domoxiaojun/sumpter`](https://github.com/domoxiaojun/sumpter) 是这份 monorepo。发布阶段会把
+`platforms/linux/` 提升为 Linux 发布包根，因此发布包里的指南位于包根；源码树里的 Linux 指南是
+[`platforms/linux/USAGE.md`](platforms/linux/USAGE.md)。改开箱模板时编辑 `docs/usage-onboarding.md`，
+由 `scripts/sync-usage-docs.py` 同步根 `USAGE.md` 与 Linux 那一份。
 
 ## 文档怎么读
 
 | 你想做什么 | 读哪份 |
 |---|---|
+| 产品定位与仓库地图 | [`README.md`](README.md) |
 | 开箱、接客户端、排错 | 本文 |
 | 每个配置字段的含义 | [`platforms/macos/CONFIG.md`](platforms/macos/CONFIG.md)（两端同一份 schema） |
 | Linux 安装、systemd、Docker、Admin 反代 | [`platforms/linux/README.md`](platforms/linux/README.md) |
 | macOS 首次打开被拦截 | [`platforms/macos/app/INSTALL.txt`](platforms/macos/app/INSTALL.txt) |
-| 改代码 / 发版 | 本镜像的 [`docs/README.md`](docs/README.md) 与 `platforms/`、`crates/`、`adapters/`、`apps/` 源码；agent 规则不随镜像复制 |
+| 改代码 / 架构 | [`docs/architecture.md`](docs/architecture.md)、[`AGENTS.md`](AGENTS.md) |
 
 Agent：只改**本机配置目录**里的 `config.json`，不要把填好 key 的文件提交进 git，不要读取后写进聊天记录。
 

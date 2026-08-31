@@ -1,6 +1,15 @@
-# Sumpter
+# 历史快照（不是当前仓库说明）
 
-本地分流代理：在 Claude Code / Codex 与多个上游之间做智能分流。本仓库只保留两套
+本文以及同目录其它文件是重构前源码树的副本，路径仍写 `macos/`、`linux/`、`kekulvd`。
+**当前**产品说明、目录和构建命令以仓库根 [`README.md`](../../README.md) 和
+[`docs/architecture.md`](../architecture.md) 为准。不要按下面的 `cd macos` / `cd linux`
+或 `kekulv` remote 流程操作现在的 monorepo。
+
+---
+
+# Sumpter（当时的产品说明）
+
+本地分流代理：在 Claude Code / Codex 与多个上游之间做智能分流。当时的仓库只保留两套
 Rust 产品。
 
 | 产品 | 目录 | 形态 | 产物 |

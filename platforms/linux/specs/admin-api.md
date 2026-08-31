@@ -1,7 +1,8 @@
 # Sumpter Linux Rust Admin API
 
-本文是 Linux WebUI 与 `kekulvd` 之间的唯一管理契约。配置格式为 `config.json`
-schema v6；自动迁移 schema v3/v4/v5，旧 Swift `keys.json` API 不再适用。
+本文是 Linux WebUI 与 daemon 之间的唯一管理契约。源码树可执行文件是 `sumpterd-linux`，
+发布包内二进制仍名为 `kekulvd`。配置格式为 `config.json` schema v6；自动迁移 schema v3/v4/v5，
+旧 Swift `keys.json` API 不再适用。
 
 ## 当前运行统计契约（runtime API v1，2026-08-22）
 
