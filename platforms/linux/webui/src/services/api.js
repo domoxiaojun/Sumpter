@@ -412,7 +412,7 @@ class ApiService {
     const headers = {
       Accept: 'application/json',
       ...(isWriteMethod(method) ? { 'Content-Type': 'application/json' } : {}),
-      ...(csrfToken ? { 'X-Kekulv-CSRF': csrfToken } : {}),
+      ...(csrfToken ? { 'X-Sumpter-CSRF': csrfToken } : {}),
       ...options.headers,
     };
 
@@ -428,7 +428,7 @@ class ApiService {
       ...(body == null ? {} : { body }),
     });
 
-    const csrfHeader = response.headers.get('X-Kekulv-CSRF');
+    const csrfHeader = response.headers.get('X-Sumpter-CSRF');
     if (csrfHeader) csrfToken = csrfHeader;
 
     const text = await response.text();
@@ -1213,7 +1213,7 @@ class ApiService {
         const error = new Error('会话不存在'); error.status = 404; error.code = 'session_not_found'; throw error;
       }
       return {
-        format: 'kekulv-session-export-v1',
+        format: 'sumpter-session-export-v1',
         exportedAt: Date.now() / 1000,
         sessionID,
         projects: session.projects || [],
@@ -1659,7 +1659,7 @@ class ApiService {
     const anchor = document.createElement('a');
     anchor.href = `/admin/api${path}`;
     anchor.rel = 'noopener';
-    anchor.download = `kekulv-diagnostic-${scope}-${privacy}-${Date.now()}.${format === 'jsonl' ? 'jsonl' : 'json'}`;
+    anchor.download = `sumpter-diagnostic-${scope}-${privacy}-${Date.now()}.${format === 'jsonl' ? 'jsonl' : 'json'}`;
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();

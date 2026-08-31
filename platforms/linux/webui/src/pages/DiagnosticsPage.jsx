@@ -355,7 +355,7 @@ export function DiagnosticsPage() {
 
   const copyCommand = (cmd) => copyWithToast(cmd, '日志命令', addToast);
 
-  const journalCmd = diag?.journalctlCommand || 'journalctl --user -u kekulv -n 200 --no-pager';
+  const journalCmd = diag?.journalctlCommand || 'journalctl --user -u sumpter -n 200 --no-pager';
 
   const selectedCaptureIndex = capture?.records?.find((record) => record.requestID === selectedCaptureID) || null;
   const captureStatus = capture?.enabled
@@ -482,7 +482,7 @@ export function DiagnosticsPage() {
     }
   };
 
-  // 捕获记录只带客户端声明的归因(X-Kekulv-*)。Codex 的结构化 workspace 不复制进捕获,
+  // 捕获记录只带客户端声明的归因(X-Sumpter-*)。Codex 的结构化 workspace 不复制进捕获,
   // 它在入站 Body 的 client_metadata 里,所以这里不能笼统写成「未识别项目」。
   const captureProject = clientDeclaredProject(captureDetail);
 
@@ -641,8 +641,8 @@ export function DiagnosticsPage() {
         </div>
 
         <div className="diagnostics-paths">
-          <div><span style={{ color: 'var(--text-muted)' }}>配置文件路径：</span><span className="mono-cell" style={{ color: 'var(--text-primary)' }}>{diag?.configPath || '~/.config/kekulv/config.json'}</span></div>
-          <div><span style={{ color: 'var(--text-muted)' }}>WebUI 静态根目录：</span><span className="mono-cell" style={{ color: 'var(--text-primary)' }}>{diag?.webRoot || '~/.local/share/kekulv/web'}</span></div>
+          <div><span style={{ color: 'var(--text-muted)' }}>配置文件路径：</span><span className="mono-cell" style={{ color: 'var(--text-primary)' }}>{diag?.configPath || '~/.config/sumpter/config.json'}</span></div>
+          <div><span style={{ color: 'var(--text-muted)' }}>WebUI 静态根目录：</span><span className="mono-cell" style={{ color: 'var(--text-primary)' }}>{diag?.webRoot || '~/.local/share/sumpter/web'}</span></div>
         </div>
       </div>
 

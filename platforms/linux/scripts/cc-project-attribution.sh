@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 为 Claude Code 配置项目归因:注入一个 claude() wrapper,按当前目录逐次设置
-# ANTHROPIC_CUSTOM_HEADERS(X-Kekulv-Project / -Workspace / -Git-Remote)。
+# ANTHROPIC_CUSTOM_HEADERS(X-Sumpter-Project / -Workspace / -Git-Remote)。
 #
 # 支持 macOS 与 Linux、zsh 与 bash。改动只有两处:一个独立 snippet 文件,
 # 以及 rc 文件里一段带标记的 source 行(装前自动备份,可一键还原)。
@@ -12,9 +12,9 @@
 #   --force           settings.json 里已写死该 header 时仍继续(装了也不会生效)
 set -euo pipefail
 
-MARK_BEGIN='# >>> kekulv cc-project-attribution >>>'
-MARK_END='# <<< kekulv cc-project-attribution <<<'
-SNIPPET_DEFAULT="${XDG_DATA_HOME:-$HOME/.local/share}/kekulv/cc-project-attribution.sh"
+MARK_BEGIN='# >>> sumpter cc-project-attribution >>>'
+MARK_END='# <<< sumpter cc-project-attribution <<<'
+SNIPPET_DEFAULT="${XDG_DATA_HOME:-$HOME/.local/share}/sumpter/cc-project-attribution.sh"
 SETTINGS="$HOME/.claude/settings.json"
 
 ACTION=install
@@ -42,7 +42,7 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-SNIPPET="${KEKULV_CC_SNIPPET:-$SNIPPET_DEFAULT}"
+SNIPPET="${SUMPTER_CC_SNIPPET:-$SNIPPET_DEFAULT}"
 
 # ---- shell 探测:$SHELL 决定哪个 rc 会被读,比脚本自身的 shell 可靠 ----
 detect_shell() {
@@ -87,7 +87,7 @@ strip_block() { # $1=rc  → stdout 去掉标记块后的内容
 # 备份名带 YYYYmmdd-HHMMSS,字典序即时间序,不需要按 mtime 排。
 list_backups() {
     find "$(dirname "$1")" -maxdepth 1 -type f \
-        -name "$(basename "$1").kekulv-bak-*" 2> /dev/null | sort -r
+        -name "$(basename "$1").sumpter-bak-*" 2> /dev/null | sort -r
 }
 
 newest_backup() {
@@ -115,7 +115,7 @@ fish_snippet_body() {
 # shell 弄坏。有问题请以 zsh/bash 版的行为为准自行调整。
 # 注意:不要把 ANTHROPIC_CUSTOM_HEADERS 写进 ~/.claude/settings.json 的 env,
 # 那会覆盖这里设的值且不做插值。
-function __kekulv_cc_is_ascii
+function __sumpter_cc_is_ascii
     string match -qr '^[ -~]+$' -- $argv[1]
 end
 
@@ -130,17 +130,17 @@ function claude
     end
 
     set -l hdrs
-    # 保留调用方已有的非 X-Kekulv-* 行
+    # 保留调用方已有的非 X-Sumpter-* 行
     if set -q ANTHROPIC_CUSTOM_HEADERS
         for line in (string split \n -- $ANTHROPIC_CUSTOM_HEADERS)
             test -z "$line"; and continue
-            string match -qir '^x-kekulv-' -- $line; and continue
+            string match -qir '^x-sumpter-' -- $line; and continue
             set -a hdrs $line
         end
     end
-    __kekulv_cc_is_ascii "$proj"; and set -a hdrs "X-Kekulv-Project: $proj"
-    __kekulv_cc_is_ascii "$dir"; and set -a hdrs "X-Kekulv-Workspace: $dir"
-    __kekulv_cc_is_ascii "$remote"; and set -a hdrs "X-Kekulv-Git-Remote: $remote"
+    __sumpter_cc_is_ascii "$proj"; and set -a hdrs "X-Sumpter-Project: $proj"
+    __sumpter_cc_is_ascii "$dir"; and set -a hdrs "X-Sumpter-Workspace: $dir"
+    __sumpter_cc_is_ascii "$remote"; and set -a hdrs "X-Sumpter-Git-Remote: $remote"
 
     if test (count $hdrs) -gt 0
         ANTHROPIC_CUSTOM_HEADERS=(string join \n -- $hdrs) command claude $argv
@@ -162,7 +162,7 @@ snippet_body() {
 
 # 值必须是纯 ASCII:Claude Code 见到非 ASCII 的 ANTHROPIC_CUSTOM_HEADERS 会
 # 直接报错退出(整个会话起不来),所以这里宁可不发也不能让它拒启。
-kekulv_cc_is_ascii() {
+sumpter_cc_is_ascii() {
     # 必须锁 C:bash 3.2 在 en_*.UTF-8 下把 [ -~] 按排序序求值,连 "abc" 都会被
     # 判成含非 ASCII 字符(守卫全程假阴性)。local 只在本函数内生效,不污染外层。
     local LC_ALL=C
@@ -173,9 +173,9 @@ kekulv_cc_is_ascii() {
     esac
 }
 
-kekulv_cc_headers() {
+sumpter_cc_headers() {
     local out="" line dir proj ws remote first_remote
-    # 合并而非覆盖:保留调用方已有的非 X-Kekulv-* 行
+    # 合并而非覆盖:保留调用方已有的非 X-Sumpter-* 行
     if [ -n "${ANTHROPIC_CUSTOM_HEADERS:-}" ]; then
         while IFS= read -r line; do
             [ -z "$line" ] && continue
@@ -183,9 +183,9 @@ kekulv_cc_headers() {
                 [Xx]-[Kk][Ee][Kk][Uu][Ll][Vv]-*) continue ;;
             esac
             out="${out}${line}"$'\n'
-        done <<KEKULV_EOF
+        done <<SUMPTER_EOF
 ${ANTHROPIC_CUSTOM_HEADERS}
-KEKULV_EOF
+SUMPTER_EOF
     fi
 
     # PWD 可能带尾随斜杠(父进程传入的 cwd 常见如此),不先剥掉的话 ${dir##*/}
@@ -209,22 +209,22 @@ KEKULV_EOF
         fi
     fi
 
-    kekulv_cc_is_ascii "$proj" && out="${out}X-Kekulv-Project: ${proj}"$'\n'
-    kekulv_cc_is_ascii "$ws" && out="${out}X-Kekulv-Workspace: ${ws}"$'\n'
-    kekulv_cc_is_ascii "$remote" && out="${out}X-Kekulv-Git-Remote: ${remote}"$'\n'
+    sumpter_cc_is_ascii "$proj" && out="${out}X-Sumpter-Project: ${proj}"$'\n'
+    sumpter_cc_is_ascii "$ws" && out="${out}X-Sumpter-Workspace: ${ws}"$'\n'
+    sumpter_cc_is_ascii "$remote" && out="${out}X-Sumpter-Git-Remote: ${remote}"$'\n'
 
     # 去掉尾随换行
     printf '%s' "${out%$'\n'}"
 }
 
 claude() {
-    local kekulv_hdrs
-    kekulv_hdrs="$(kekulv_cc_headers)"
-    if [ -n "$kekulv_hdrs" ]; then
-        ANTHROPIC_CUSTOM_HEADERS="$kekulv_hdrs" command claude "$@"
+    local sumpter_hdrs
+    sumpter_hdrs="$(sumpter_cc_headers)"
+    if [ -n "$sumpter_hdrs" ]; then
+        ANTHROPIC_CUSTOM_HEADERS="$sumpter_hdrs" command claude "$@"
     elif [ -n "${ANTHROPIC_CUSTOM_HEADERS:-}" ]; then
         # 过滤后什么都不剩(例如目录名非 ASCII 被跳过),而继承值里还留着旧的
-        # X-Kekulv-*:显式清除,不能把过期归因带给 CC。
+        # X-Sumpter-*:显式清除,不能把过期归因带给 CC。
         command env -u ANTHROPIC_CUSTOM_HEADERS claude "$@"
     else
         command claude "$@"
@@ -272,7 +272,7 @@ do_install() {
     info "snippet: $SNIPPET"
 
     if [ -f "$rc" ]; then
-        backup="$rc.kekulv-bak-$(date +%Y%m%d-%H%M%S)"
+        backup="$rc.sumpter-bak-$(date +%Y%m%d-%H%M%S)"
         run "cp -p \"$rc\" \"$backup\""
         info "已备份: $backup"
     else
@@ -326,13 +326,13 @@ do_restore() {
     kind="$(detect_shell)"
     rc="$(resolve_rc "$kind")"
     backup="$(newest_backup "$rc" || true)"
-    [ -n "$backup" ] || die "找不到 $rc 的备份（$rc.kekulv-bak-*）"
+    [ -n "$backup" ] || die "找不到 $rc 的备份（$rc.sumpter-bak-*）"
     info "还原: $backup → $rc"
     if [ "$DRY_RUN" -eq 1 ]; then
-        printf '  [dry-run] 先把当前 rc 存为 .kekulv-prerestore-*,再覆盖\n'
+        printf '  [dry-run] 先把当前 rc 存为 .sumpter-prerestore-*,再覆盖\n'
         return
     fi
-    [ -f "$rc" ] && cp -p "$rc" "$rc.kekulv-prerestore-$(date +%Y%m%d-%H%M%S)"
+    [ -f "$rc" ] && cp -p "$rc" "$rc.sumpter-prerestore-$(date +%Y%m%d-%H%M%S)"
     cat "$backup" > "$rc"
     info "已还原。snippet 未删除,如需一并清理请先跑 uninstall。"
 }

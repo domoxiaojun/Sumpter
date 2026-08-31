@@ -20,7 +20,7 @@ pub const DEFAULT_ADMIN_USERNAME: &str = "kkl";
 const CREDENTIAL_FILE_VERSION: u32 = 1;
 const MAX_CREDENTIAL_FILE_BYTES: u64 = 16 * 1024;
 const MAX_SESSIONS: usize = 64;
-const SESSION_COOKIE_NAME: &str = "kekulv_admin_session";
+const SESSION_COOKIE_NAME: &str = "sumpter_admin_session";
 const SESSION_TTL_SECONDS: u64 = 24 * 60 * 60;
 
 #[derive(Clone)]
@@ -234,7 +234,7 @@ impl AdminAuth {
 
     pub fn accepts_csrf(&self, headers: &HeaderMap, session: &AuthenticatedSession) -> bool {
         headers
-            .get("x-kekulv-csrf")
+            .get("x-sumpter-csrf")
             .and_then(|value| value.to_str().ok())
             .is_some_and(|value| constant_time_eq(value.as_bytes(), session.csrf_token.as_bytes()))
     }
@@ -534,7 +534,7 @@ mod tests {
 
     fn temp_path(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
-            "kekulv-admin-auth-{label}-{}-{}",
+            "sumpter-admin-auth-{label}-{}-{}",
             std::process::id(),
             rand::random::<u64>()
         ))

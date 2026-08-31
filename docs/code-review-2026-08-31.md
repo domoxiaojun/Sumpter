@@ -14,7 +14,7 @@
 
 - 根 `Cargo.toml` 是唯一 Rust workspace，包含 7 个 package：3 个共享 crate、2 个平台 adapter、2 个 daemon/sidecar app。
 - Linux/macOS 默认入口都通过对应 adapter 构造共享 `sumpter-engine::Engine`；旧 legacy workspace 不在活动源码树中。
-- 用户可见品牌已切到 Sumpter。Linux 配置目录、systemd 单元、发布包二进制 `kekulvd` 和 `X-Kekulv-*` / `KEKULV_*` 仍是兼容契约。
+- 用户可见品牌和 Linux 运行时名字后来已硬切到 Sumpter（配置目录、单元、`sumpterd`、`X-Sumpter-*` / `SUMPTER_*`）。下文主体仍是搬迁前证据。
 - 已复核（整理当时）：`cargo fmt --all -- --check`、`cargo check --workspace --locked`、`cargo test --workspace --locked` 均通过。这些命令仍是根 workspace 门禁，不证明 Linux 交叉构建或正式 DMG 发布链已经恢复。
 
 ## 0. 迁移前快照结论

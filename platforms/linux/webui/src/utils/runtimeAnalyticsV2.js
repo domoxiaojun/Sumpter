@@ -1,7 +1,7 @@
 export const RUNTIME_DEFAULT_PAGE_SIZE = 10;
 export const RUNTIME_EVENT_PAGE_SIZES = Object.freeze([RUNTIME_DEFAULT_PAGE_SIZE, 25, 50, 100, 200]);
-export const RUNTIME_EVENT_PAGE_SIZE_STORAGE_KEY = 'kekulv-runtime-event-page-size';
-export const RUNTIME_ANALYTICS_PAGE_SIZE_STORAGE_KEY = 'kekulv-runtime-analytics-page-size';
+export const RUNTIME_EVENT_PAGE_SIZE_STORAGE_KEY = 'sumpter-runtime-event-page-size';
+export const RUNTIME_ANALYTICS_PAGE_SIZE_STORAGE_KEY = 'sumpter-runtime-analytics-page-size';
 
 // Runtime timestamps use Apple's epoch (seconds since 2001-01-01), while the
 // browser's Date uses the Unix epoch.  Keep the conversion here so the

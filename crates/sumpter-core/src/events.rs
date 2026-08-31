@@ -319,7 +319,7 @@ pub struct CodexCompactionMetadata {
     pub strategy: Option<String>,
 }
 
-/// 客户端自己声明的项目归因，来自入站 `X-Kekulv-*` header。
+/// 客户端自己声明的项目归因，来自入站 `X-Sumpter-*` header。
 ///
 /// 用途是给 Claude Code 之类**不上行 workspace 结构**的客户端补项目维度：CC 的
 /// `cwd`/`workspace.project_dir` 只存在于 statusLine/hook 的 stdin JSON，不进请求体也不进
@@ -359,8 +359,8 @@ impl ClientDeclaredMetadata {
         // redacted/conflict 报告，所以就地丢弃。
         let mut state = CodexMetadataParseState::default();
 
-        let project_raw = Self::clean_header(headers, "x-kekulv-project", &mut state);
-        let workspace_raw = Self::clean_header(headers, "x-kekulv-workspace", &mut state);
+        let project_raw = Self::clean_header(headers, "x-sumpter-project", &mut state);
+        let workspace_raw = Self::clean_header(headers, "x-sumpter-workspace", &mut state);
         let project = project_raw
             .as_deref()
             .and_then(|raw| bounded_nonempty(raw, CODEX_METADATA_MAX_LABEL_BYTES, &mut state));
@@ -373,7 +373,7 @@ impl ClientDeclaredMetadata {
         let source_workspace = workspace_raw.as_deref().and_then(|raw| {
             source_bounded_nonempty(raw, CODEX_METADATA_MAX_SOURCE_PATH_BYTES, &mut state)
         });
-        let git_remote = Self::clean_header(headers, "x-kekulv-git-remote", &mut state)
+        let git_remote = Self::clean_header(headers, "x-sumpter-git-remote", &mut state)
             .and_then(|raw| sanitize_remote_url(&raw, &mut state));
 
         if project.is_none()
@@ -1937,7 +1937,7 @@ pub struct DiagnosticRequestCapture {
     pub effective_model: String,
     #[serde(rename = "featureRuleID", alias = "featureRuleId")]
     pub feature_rule_id: Option<String>,
-    /// 客户端 `X-Kekulv-*` 声明的项目归因(与事件里同一份,已脱敏、有界)。捕获里带上,
+    /// 客户端 `X-Sumpter-*` 声明的项目归因(与事件里同一份,已脱敏、有界)。捕获里带上,
     /// 排障时不必再去 inbound_headers 里翻这三个 header。Codex 的结构化 workspace 不复制
     /// 进来:它在 inbound_body 的 client_metadata 里,体积不可控。
     #[serde(rename = "clientDeclared", default, skip_serializing_if = "is_none")]
@@ -1997,7 +1997,7 @@ pub struct RuntimeEvent {
     /// Codex 入站线程/回合/子代理元数据；旧 stats.json 没有时保持 None。
     #[serde(rename = "codexMetadata", default, skip_serializing_if = "is_none")]
     pub codex_metadata: Option<CodexMetadata>,
-    /// 客户端自己用 `X-Kekulv-*` header 声明的项目归因；未配置或旧事件为 None。
+    /// 客户端自己用 `X-Sumpter-*` header 声明的项目归因；未配置或旧事件为 None。
     /// 可信度低于 `codex_metadata`，归因时只作兜底。
     #[serde(rename = "clientDeclared", default, skip_serializing_if = "is_none")]
     pub client_declared: Option<ClientDeclaredMetadata>,
@@ -2734,13 +2734,13 @@ mod tests {
     #[test]
     fn client_declared_metadata_sanitizes_paths_and_rejects_unusable_values() {
         let headers = vec![
-            ("X-Kekulv-Project".into(), "  automode-proxy  ".into()),
+            ("X-Sumpter-Project".into(), "  automode-proxy  ".into()),
             (
-                "x-kekulv-workspace".into(),
+                "x-sumpter-workspace".into(),
                 "/Users/kkl/.claude/automode-proxy".into(),
             ),
             (
-                "x-kekulv-git-remote".into(),
+                "x-sumpter-git-remote".into(),
                 "https://user:token@github.com/domoxiaojun/sumpter.git?ref=main".into(),
             ),
         ];
@@ -2760,9 +2760,9 @@ mod tests {
 
         // 空值、纯空白、含控制字符一律丢弃该字段。
         let bad = vec![
-            ("x-kekulv-project".into(), "   ".into()),
-            ("x-kekulv-workspace".into(), "ok\u{7}bell".into()),
-            ("x-kekulv-git-remote".into(), String::new()),
+            ("x-sumpter-project".into(), "   ".into()),
+            ("x-sumpter-workspace".into(), "ok\u{7}bell".into()),
+            ("x-sumpter-git-remote".into(), String::new()),
         ];
         assert!(ClientDeclaredMetadata::from_headers(&bad).is_none());
 
@@ -2770,7 +2770,7 @@ mod tests {
         assert!(ClientDeclaredMetadata::from_headers(&[]).is_none());
 
         // 超长 project 被截断而不是整体丢弃。
-        let long = vec![("x-kekulv-project".into(), "p".repeat(4096))];
+        let long = vec![("x-sumpter-project".into(), "p".repeat(4096))];
         let truncated = ClientDeclaredMetadata::from_headers(&long).expect("declared");
         assert_eq!(
             truncated.project.as_deref().map(str::len),

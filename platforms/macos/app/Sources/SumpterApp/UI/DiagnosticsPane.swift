@@ -1585,7 +1585,7 @@ struct DiagnosticsPane: View {
         }, text: text)
     }
 
-    /// 捕获记录只带客户端用 `X-Kekulv-*` 声明的归因;Codex 的结构化 workspace 没有复制
+    /// 捕获记录只带客户端用 `X-Sumpter-*` 声明的归因;Codex 的结构化 workspace 没有复制
     /// 进捕获(它在入站 Body 的 client_metadata 里),所以没声明时不能笼统写「未识别项目」。
     private func captureProjectLine(_ declared: ClientDeclaredMetadata?) -> String {
         guard let context = RuntimeEventPresentation.projectContext(
@@ -1697,7 +1697,7 @@ struct DiagnosticsPane: View {
 
     private func exportJSON(_ data: Data, requestID: String) {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "kekulv-diagnostic-\(requestID).json"
+        panel.nameFieldStringValue = "sumpter-diagnostic-\(requestID).json"
         if panel.runModal() == .OK, let url = panel.url {
             do {
                 try data.write(to: url, options: .atomic)

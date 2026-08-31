@@ -1,7 +1,7 @@
 # Sumpter Linux Rust Admin API
 
 本文是 Linux WebUI 与 daemon 之间的唯一管理契约。源码树可执行文件是 `sumpterd-linux`，
-发布包内二进制仍名为 `kekulvd`。配置格式为 `config.json` schema v6；自动迁移 schema v3/v4/v5，
+发布包内二进制仍名为 `sumpterd`。配置格式为 `config.json` schema v6；自动迁移 schema v3/v4/v5，
 旧 Swift `keys.json` API 不再适用。
 
 ## 当前运行统计契约（runtime API v1，2026-08-22）
@@ -54,10 +54,10 @@ reset 也只清理 SQLite。Linux 旧 `GET /admin/api/runtime` 与
   `processedTotalTokens`、`observedRequests`。
 - `projects`、`sessions`：与其它维度行相同的请求统计及上述 Token 字段。项目名有**两个来源，
   可信度不同**：①脱敏 Codex workspace 的本地目录名（客户端结构化采集，优先），仅在本地路径缺失时
-  使用 Git remote 名作为降级值；②客户端用入站 `X-Kekulv-Project` / `X-Kekulv-Workspace` /
-  `X-Kekulv-Git-Remote` header **自称**的归因，只在①缺位时生效，`projectSource` 记
+  使用 Git remote 名作为降级值；②客户端用入站 `X-Sumpter-Project` / `X-Sumpter-Workspace` /
+  `X-Sumpter-Git-Remote` header **自称**的归因，只在①缺位时生效，`projectSource` 记
   `client_declared` 以区分可信度（Claude Code 不上行 workspace 结构，走这条）。两者都没有为
-  `unidentified_project`，多个 workspace 为 `multiple_workspaces`。这三个 `x-kekulv-*` 是入站
+  `unidentified_project`，多个 workspace 为 `multiple_workspaces`。这三个 `x-sumpter-*` 是入站
   专用，出站黑名单会剥离，绝不转发给上游。会话优先使用客户端事件
   顶层 `sessionID`（Claude Code 的 `x-claude-code-session-id`，也兼容 `session_id`/
   `session-id`），其次使用 Codex metadata 的 `sessionID`、`threadID`，都缺失时为
@@ -77,7 +77,7 @@ reset 也只清理 SQLite。Linux 旧 `GET /admin/api/runtime` 与
   单独计入待定，不会把待定误算成失败。
 
 会话删除禁止使用 `unidentified_session`，删除动作在 SQLite 事务内重算 counters、入口排行和
-Token usage，并递增 `resetGeneration`。导出格式为 `kekulv-session-export-v1`，只包含脱敏
+Token usage，并递增 `resetGeneration`。导出格式为 `sumpter-session-export-v1`，只包含脱敏
 RuntimeEvent 及其 requestID 关联的 upstream 尝试；不会删除或导出独立诊断捕获。
 
 Token 只从客户端完成事件的上游公开 usage 累计，`token_count` 计数查询不计入汇总，避免
@@ -102,10 +102,10 @@ SSE `/admin/api/events` 的运行事件统一为 `runtime-change`，SSE `id` 是
 - Admin listener **默认**绑定 `127.0.0.1:57879`。
 - 可通过 daemon 启动参数覆盖（**不**进入 `config.json`，SIGHUP 不改 Admin 绑定）：
   - `--admin-host <ip>` / `--admin-port <port>`
-  - 环境变量 `KEKULV_ADMIN_HOST` / `KEKULV_ADMIN_PORT`（适合 systemd `Environment=` 或 drop-in）
+  - 环境变量 `SUMPTER_ADMIN_HOST` / `SUMPTER_ADMIN_PORT`（适合 systemd `Environment=` 或 drop-in）
   - 优先级：CLI > 环境变量 > 默认
 - Admin 凭据默认读取 `<config-dir>/admin-password`；`--admin-password-file <path>` 或
-  `KEKULV_ADMIN_PASSWORD_FILE=<path>` 可覆盖，优先级为 CLI > 环境变量 > 默认路径。文件缺失时
+  `SUMPTER_ADMIN_PASSWORD_FILE=<path>` 可覆盖，优先级为 CLI > 环境变量 > 默认路径。文件缺失时
   daemon 拒绝启动，文件上限为 16 KiB。旧格式仍接受非空 UTF-8 单行密码（可有一个末尾
   LF/CRLF），初始用户名为 `kkl`；在安全页修改凭据后，文件会原子迁移为 v1 JSON，密码使用
   Argon2 哈希保存。SIGHUP 只重载 `config.json`，不重读 Admin 凭据文件。
@@ -129,8 +129,8 @@ SSE `/admin/api/events` 的运行事件统一为 `runtime-change`，SSE `id` 是
   浏览器管理的 HttpOnly Cookie 中。
 - 所有 POST/PUT/PATCH/DELETE 必须使用 `Content-Type: application/json`；无参数的启停、重载、
   reset、logout 也发送 `{}`，否则返回 415 `json_required`。登录后的写请求还必须发送当前
-  session 响应中的 `X-Kekulv-CSRF`，缺失或错误返回 403 `csrf_required`。
-- 推荐远程拓扑是 `浏览器 --HTTPS--> Nginx/OpenResty --HTTP loopback--> kekulvd`，鉴权只由
+  session 响应中的 `X-Sumpter-CSRF`，缺失或错误返回 403 `csrf_required`。
+- 推荐远程拓扑是 `浏览器 --HTTPS--> Nginx/OpenResty --HTTP loopback--> sumpterd`，鉴权只由
   daemon 做一层；不在反代重复配置登录挑战或其它登录页。
 - 错误统一为 JSON：`{"error":"code","message":"说明"}`。
 
@@ -163,7 +163,7 @@ Admin 与 proxy 是两个 listener：proxy 地址来自 `config.listener`，停�
 
 #### `POST /admin/api/auth/logout`
 
-需要当前会话、JSON `{}` 与 `X-Kekulv-CSRF`。成功撤销当前服务端会话、清理 Cookie，并返回
+需要当前会话、JSON `{}` 与 `X-Sumpter-CSRF`。成功撤销当前服务端会话、清理 Cookie，并返回
 `{"authenticated":false}`。
 
 #### `PUT /admin/api/auth/credentials`
@@ -428,7 +428,7 @@ SIGHUP 必须复用同一条 reload/rebind 路径。失败保持原运行配置�
 `endpointID` / `outboundURL` / `pinnedIP`）：索引是手写 JSON，详情是直接序列化
 `DiagnosticRequestCapture`，所以详情侧靠字段级 `rename` 保持一致——落到 serde 的 camelCase
 默认规则上会变成 `requestId`/`endpointId`，WebUI 与 macOS 侧都读不出来（`alias` 只为读回旧
-`diagnostic_capture.json`）。详情另有 `clientDeclared`（客户端 `X-Kekulv-*` 声明的项目归因，
+`diagnostic_capture.json`）。详情另有 `clientDeclared`（客户端 `X-Sumpter-*` 声明的项目归因，
 可选）；Codex 的结构化 workspace 不复制进捕获，仍只在入站 Body 的 `client_metadata` 里。
 
 捕获记录里不带 `poolID`：池概念只剩配置 schema、路由内部；捕获和新的事件 wire 都不再
@@ -443,13 +443,13 @@ Chunk、错误和完整 JSON。页面刷新不得自动请求详情；客户端�
 
 ### `GET /admin/api/autostart`
 
-返回固定 `kekulv.service` 的 systemd 状态：
+返回固定 `sumpter.service` 的 systemd 状态：
 
 ```json
 {
   "available": true,
   "enabled": false,
-  "unit": "kekulv.service",
+  "unit": "sumpter.service",
   "scope": "user",
   "controllable": true,
   "reason": null
@@ -457,15 +457,15 @@ Chunk、错误和完整 JSON。页面刷新不得自动请求详情；客户端�
 ```
 
 `scope=user` 时查询和控制 `systemctl --user`；`scope=system` 时查询 system manager，
-`controllable=false`，`reason` 提示使用 sudo。system service 的 daemon 以低权限 `kekulv`
+`controllable=false`，`reason` 提示使用 sudo。system service 的 daemon 以低权限 `sumpter`
 用户运行，不能因为 WebUI 而获得 systemd 管理权限。
 
 ### `PUT /admin/api/autostart`
 
-请求 `{"enabled":true|false}`。实现只允许操作固定 `kekulv.service`，不得接受任意 unit、
+请求 `{"enabled":true|false}`。实现只允许操作固定 `sumpter.service`，不得接受任意 unit、
 命令或路径。user scope 的 systemd 环境不可用或命令失败时返回 503
 `systemd_unavailable|systemd_failed`；随后可用 GET 重新读取状态。system scope 一律返回 403
-`systemd_system_root_required`，提示运行 `sudo systemctl enable|disable kekulv.service`；不得把
+`systemd_system_root_required`，提示运行 `sudo systemctl enable|disable sumpter.service`；不得把
 daemon 改为 root 来启用该接口。
 
 ## 5. 明确移除的旧接口

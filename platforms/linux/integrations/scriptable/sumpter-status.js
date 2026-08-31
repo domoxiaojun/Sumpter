@@ -12,10 +12,10 @@
 
 const SCRIPT_NAME = "Sumpter Linux Status";
 const API_PREFIX = "/admin/api";
-const SESSION_COOKIE_NAME = "kekulv_admin_session";
-const SETTINGS_KEY = "kekulv.scriptable.status.settings.v1";
-const PASSWORD_KEY = "kekulv.scriptable.status.password.v1";
-const COOKIE_KEY = "kekulv.scriptable.status.cookie.v1";
+const SESSION_COOKIE_NAME = "sumpter_admin_session";
+const SETTINGS_KEY = "sumpter.scriptable.status.settings.v1";
+const PASSWORD_KEY = "sumpter.scriptable.status.password.v1";
+const COOKIE_KEY = "sumpter.scriptable.status.cookie.v1";
 const REFRESH_MINUTES = 5;
 const REQUEST_TIMEOUT_SECONDS = 15;
 
@@ -287,7 +287,7 @@ function updateSessionCookie(response) {
   const headers = response?.headers || {};
   const entry = Object.entries(headers).find(([name]) => name.toLowerCase() === "set-cookie");
   if (!entry) return;
-  const match = String(entry[1]).match(/(?:^|[,\s])kekulv_admin_session=([^;]*)/i);
+  const match = String(entry[1]).match(/(?:^|[,\s])sumpter_admin_session=([^;]*)/i);
   if (match) storeCookieValue(match[1]);
 }
 

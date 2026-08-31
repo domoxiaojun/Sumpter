@@ -10,7 +10,7 @@ set -Eeuo pipefail
 umask 077
 
 DEFAULT_DOWNLOAD_BASE="https://sf.domob.org/kkl"
-DOWNLOAD_BASE="${KEKULV_DOWNLOAD_BASE:-$DEFAULT_DOWNLOAD_BASE}"
+DOWNLOAD_BASE="${SUMPTER_DOWNLOAD_BASE:-$DEFAULT_DOWNLOAD_BASE}"
 WORK_DIR=""
 INSTALL_ARGS=()
 
@@ -20,7 +20,7 @@ die() {
 }
 
 note() {
-    echo "[kekulv-bootstrap] $*"
+    echo "[sumpter-bootstrap] $*"
 }
 
 usage() {
@@ -29,9 +29,9 @@ usage() {
   bootstrap-install.sh [--base-url HTTPS_URL] [install.sh 选项...]
   bootstrap-install.sh [--base-url HTTPS_URL] -- [install.sh 选项...]
 
-从静态镜像下载当前 Linux 架构的 kekulv 发布包，再运行包内安装器。
+从静态镜像下载当前 Linux 架构的 sumpter 发布包，再运行包内安装器。
 默认镜像: https://sf.domob.org/kkl
-下载路径: <base-url>/kekulv-linux-<x86_64|aarch64>.tar.gz
+下载路径: <base-url>/sumpter-linux-<x86_64|aarch64>.tar.gz
 
 静态镜像由发布方手工更新，可能落后于 GitHub Release。需要指定仓库/版本时，
 请直接使用已解压 Release 包内的 scripts/install.sh --repo/--version，不要加在本脚本后。
@@ -44,10 +44,10 @@ usage() {
   --admin-password-file /absolute/path/admin-password
 
 示例:
-  bash kekulv-install.sh
-  sudo bash kekulv-install.sh
-  bash kekulv-install.sh --admin-password-file /absolute/path/admin-password
-  KEKULV_ADMIN_PASSWORD_FILE=/absolute/path/admin-password bash kekulv-install.sh
+  bash sumpter-install.sh
+  sudo bash sumpter-install.sh
+  bash sumpter-install.sh --admin-password-file /absolute/path/admin-password
+  SUMPTER_ADMIN_PASSWORD_FILE=/absolute/path/admin-password bash sumpter-install.sh
 
 注意: 此引导安装器按发布方要求不校验 SHA-256。它仍会拒绝路径穿越、
 符号链接和错误的发布包根目录，但 HTTPS 传输与镜像内容本身仍须由发布方负责。
@@ -56,8 +56,8 @@ Admin API/SSE 使用会话 Cookie；公网仍必须使用外层 HTTPS，推荐�
 
 密码安全:
   正常安装只显示密码文件路径，不会在终端回显密码内容。
-  首次登录前可用 cat ~/.config/kekulv/admin-password（user）或
-  sudo cat /var/lib/kekulv/admin-password（system）主动查看。WebUI 修改凭据后文件改为哈希 JSON。
+  首次登录前可用 cat ~/.config/sumpter/admin-password（user）或
+  sudo cat /var/lib/sumpter/admin-password（system）主动查看。WebUI 修改凭据后文件改为哈希 JSON。
   不要使用 bash -x、set -x 或其它 shell 跟踪方式运行安装器，以免调试输出泄露密码。
 EOF
 }
@@ -68,7 +68,7 @@ cleanup() {
     trap - EXIT
     if [[ -n "$WORK_DIR" ]]; then
         case "$WORK_DIR" in
-            "${TMPDIR:-/tmp}"/kekulv-bootstrap.*)
+            "${TMPDIR:-/tmp}"/sumpter-bootstrap.*)
                 if [[ -d "$WORK_DIR" && ! -L "$WORK_DIR" ]]; then
                     rm -rf -- "$WORK_DIR"
                 fi
@@ -166,9 +166,9 @@ validate_archive_paths() {
 }
 
 arch="$(detect_arch)"
-package_name="kekulv-linux-${arch}"
+package_name="sumpter-linux-${arch}"
 archive_url="$DOWNLOAD_BASE/${package_name}.tar.gz"
-WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/kekulv-bootstrap.XXXXXX")"
+WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sumpter-bootstrap.XXXXXX")"
 archive="$WORK_DIR/${package_name}.tar.gz"
 
 note "下载:$archive_url"
@@ -194,7 +194,7 @@ package_root="$WORK_DIR/extracted/$package_name"
 # unit 会把这条正常探测结果写到 stderr；只过滤这一条固定文案，保留安装器的
 # 其余诊断和原始退出码。
 filter_installer_stderr() {
-    sed '/^Failed to get unit file state for kekulv\.service: No such file or directory$/d' >&2
+    sed '/^Failed to get unit file state for sumpter\.service: No such file or directory$/d' >&2
 }
 
 display_release_changelog() {

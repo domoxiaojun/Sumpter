@@ -145,12 +145,12 @@ private struct SumpterWindowVisibleKey: EnvironmentKey {
 }
 
 extension EnvironmentValues {
-    var kekulvPalette: SumpterTheme.Palette {
+    var sumpterPalette: SumpterTheme.Palette {
         get { self[SumpterPaletteKey.self] }
         set { self[SumpterPaletteKey.self] = newValue }
     }
 
-    var kekulvWindowVisible: Bool {
+    var sumpterWindowVisible: Bool {
         get { self[SumpterWindowVisibleKey.self] }
         set { self[SumpterWindowVisibleKey.self] = newValue }
     }

@@ -3917,7 +3917,7 @@ impl Engine {
         });
 
         let mut builder = Response::builder();
-        builder = builder.header("x-kekulv-request-id", &request_id);
+        builder = builder.header("x-sumpter-request-id", &request_id);
         if client_json || (bridging && !client_stream) {
             // 任一方向的非流式协议桥都必须返回单个 JSON 对象。
             builder = builder
@@ -3932,7 +3932,7 @@ impl Engine {
             builder =
                 builder.status(StatusCode::from_u16(response.status).unwrap_or(StatusCode::OK));
             for (name, value) in &response.headers {
-                if is_hop_by_hop(name) || name == "content-length" || name == "x-kekulv-request-id"
+                if is_hop_by_hop(name) || name == "content-length" || name == "x-sumpter-request-id"
                 {
                     continue;
                 }
@@ -4126,7 +4126,7 @@ struct ClientMeta {
     /// 有界客户端会话标识，用于跨客户端的会话统计筛选。
     session_id: Option<String>,
     codex_metadata: Option<CodexMetadata>,
-    /// 客户端用 `X-Kekulv-*` 声明的项目归因；可信度低于 codex_metadata。
+    /// 客户端用 `X-Sumpter-*` 声明的项目归因；可信度低于 codex_metadata。
     client_declared: Option<ClientDeclaredMetadata>,
 }
 
@@ -5135,7 +5135,7 @@ fn proxy_failure_response(
     }
     let mut response = json_response(status, &Value::Object(body));
     if let Ok(value) = HeaderValue::from_str(request_id) {
-        response.headers_mut().insert("x-kekulv-request-id", value);
+        response.headers_mut().insert("x-sumpter-request-id", value);
     }
     response
 }

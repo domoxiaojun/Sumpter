@@ -33,7 +33,7 @@
 
 Linux 与 macOS 对应页面尽量对齐：信息层级、字段命名、状态语义和主要交互一致；仅在平台原生控件或布局需要时保留差异。新增或调整页面时，先对照另一端已确认的交互，再补平台特有适配。
 
-用户可见品牌是 **Sumpter**。Linux 运行时目录、systemd 单元、发布包二进制 `kekulvd` 和部分协议 header（`X-Kekulv-*`、`KEKULV_*`）仍使用历史名 `kekulv`，属于兼容契约。
+用户可见品牌和 Linux 运行时名字都是 **Sumpter**：配置目录 `~/.config/sumpter`、systemd 单元 `sumpter.service`、发布包二进制 `sumpterd`、header `X-Sumpter-*`、环境变量 `SUMPTER_*`。旧的 `kekulv` 名字不再识别。
 
 ## 平台文档
 
@@ -54,7 +54,7 @@ Linux 与 macOS 对应页面尽量对齐：信息层级、字段命名、状态�
 - [`upstream/双端引擎架构分析.md`](upstream/双端引擎架构分析.md)、[`upstream/parity-ledger.md`](upstream/parity-ledger.md)：双端差异与对拍基线。
 - [`upstream/macos/CONFIG.md`](upstream/macos/CONFIG.md)：当时的 schema v6 字段说明；现行字段以 `platforms/macos/CONFIG.md` 为准。
 - [`upstream/linux/specs/`](upstream/linux/specs/)：当时的 core / engine / analytics / Admin 规格。
-- [`upstream/claude-code客户端的参数变量字段对应.md`](upstream/claude-code客户端的参数变量字段对应.md)、[`upstream/codex客户端的参数变量字段对应.md`](upstream/codex客户端的参数变量字段对应.md)：客户端请求与事件字段对照；文中的 `linux/crates/kekulv-*` 路径已过期。
+- [`upstream/claude-code客户端的参数变量字段对应.md`](upstream/claude-code客户端的参数变量字段对应.md)、[`upstream/codex客户端的参数变量字段对应.md`](upstream/codex客户端的参数变量字段对应.md)：客户端请求与事件字段对照；文中的 `linux/crates/sumpter-*` 路径已过期。
 - [`code-review-2026-08-31.md`](code-review-2026-08-31.md)：架构搬迁前的风险审查。主体结论针对当时的双轨 legacy 入口，不要用来判断当前活动路径。
 - 根 [`plan.md`](../plan.md)：按轮次追加的工作日志，不是当前架构说明。
 

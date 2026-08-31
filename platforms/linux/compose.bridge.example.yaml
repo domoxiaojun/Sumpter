@@ -9,12 +9,12 @@
 # 警告：0.0.0.0 + 端口映射会让管理面网络可达；密码只能配合外层 HTTPS 使用。
 
 services:
-  kekulv:
-    image: ${KEKULV_IMAGE:-ghcr.io/domoxiaojun/sumpter:latest}
+  sumpter:
+    image: ${SUMPTER_IMAGE:-ghcr.io/domoxiaojun/sumpter:latest}
 
     ports:
-      - "${KEKULV_PROXY_PORT:-57878}:57878"
-      - "${KEKULV_ADMIN_PORT:-57879}:57879"
+      - "${SUMPTER_PROXY_PORT:-57878}:57878"
+      - "${SUMPTER_ADMIN_PORT:-57879}:57879"
 
     init: true
     user: "0:0"
@@ -24,12 +24,12 @@ services:
 
     environment:
       RUST_LOG: ${RUST_LOG:-info}
-      KEKULV_ADMIN_HOST: ${KEKULV_ADMIN_HOST:-0.0.0.0}
-      KEKULV_ADMIN_PORT: ${KEKULV_ADMIN_PORT:-57879}
+      SUMPTER_ADMIN_HOST: ${SUMPTER_ADMIN_HOST:-0.0.0.0}
+      SUMPTER_ADMIN_PORT: ${SUMPTER_ADMIN_PORT:-57879}
 
     volumes:
       - ./config:/config
-      # - ./web:/opt/kekulv/web:ro
+      # - ./web:/opt/sumpter/web:ro
 
     healthcheck:
       test:
@@ -41,7 +41,7 @@ services:
           "3",
           "-O",
           "/dev/null",
-          "http://127.0.0.1:${KEKULV_ADMIN_PORT:-57879}/healthz",
+          "http://127.0.0.1:${SUMPTER_ADMIN_PORT:-57879}/healthz",
         ]
       interval: 15s
       timeout: 4s

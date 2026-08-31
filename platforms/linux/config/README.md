@@ -10,7 +10,7 @@
   session_affinity.json   # 粘性会话归属 v2（自动维护，TTL 30 天）
   diagnostic_capture.json # 手动诊断捕获（默认停止，0600 原子写入）
   stats.json              # 旧版运行统计只读归档，新版本不读取或写入
-  kekulvd.pid             # 容器内 pid 文件（daemon 自己写，退出时清理）
+  sumpterd.pid             # 容器内 pid 文件（daemon 自己写，退出时清理）
 ```
 
 `admin-password` 不会自动生成：不创建它 daemon 会拒绝启动，也就登不进 WebUI。首登用户名

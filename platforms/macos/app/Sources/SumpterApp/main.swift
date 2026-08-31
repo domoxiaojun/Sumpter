@@ -2058,7 +2058,7 @@ final class AppModel: ObservableObject {
         guard !runtimeExportBusy, let admin else { return }
         let anchor = runtimeHistoryPage
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "kekulv-runtime-\(scope).\(format)"
+        panel.nameFieldStringValue = "sumpter-runtime-\(scope).\(format)"
         panel.message = privacy == "stored"
             ? "stored 仅包含 SQLite 已保存的运行字段，不含完整诊断捕获；可能包含敏感标识。"
             : "导出为脱敏统计字段。"
@@ -2311,7 +2311,7 @@ final class AppModel: ObservableObject {
         }
         let panel = NSSavePanel()
         let extensionName = format == "json" ? "json" : "jsonl"
-        panel.nameFieldStringValue = "kekulv-diagnostic-capture-\(privacy)-\(Int(Date().timeIntervalSince1970)).\(extensionName)"
+        panel.nameFieldStringValue = "sumpter-diagnostic-capture-\(privacy)-\(Int(Date().timeIntervalSince1970)).\(extensionName)"
         panel.message = privacy == "raw"
             ? "文件包含未脱敏请求、响应、Headers 和流式 Chunk；仅保存到可信位置。"
             : "服务端会按需生成脱敏快照；原始捕获文件不会加载到 App 内存。"
@@ -2600,7 +2600,7 @@ final class AppModel: ObservableObject {
             do {
                 let data = try await admin.exportRuntimeSession(sessionID: sessionID)
                 let panel = NSSavePanel()
-                panel.nameFieldStringValue = "kekulv-session-\(sessionID).json"
+                panel.nameFieldStringValue = "sumpter-session-\(sessionID).json"
                 if panel.runModal() == .OK, let url = panel.url {
                     try data.write(to: url, options: .atomic)
                     flash("会话 JSON 已导出")
@@ -3284,7 +3284,7 @@ final class AppModel: ObservableObject {
 
     private func presentMigrationNoticeIfNeeded(_ notice: ConfigMigrationNotice?) {
         guard let notice else { return }
-        let defaultsKey = "kekulv.configMigrationNotice.\(notice.id)"
+        let defaultsKey = "sumpter.configMigrationNotice.\(notice.id)"
         guard !UserDefaults.standard.bool(forKey: defaultsKey) else { return }
         UserDefaults.standard.set(true, forKey: defaultsKey)
         configMigrationNotice = notice
@@ -3403,7 +3403,7 @@ final class AppModel: ObservableObject {
     ) async {
         do {
             // 同会话通知按 session_id 堆叠(缺省退回事件类型);副标题带项目目录名。
-            let thread = sessionID ?? category ?? kind ?? "kekulv"
+            let thread = sessionID ?? category ?? kind ?? "sumpter"
             let subtitle = cwd.map { URL(fileURLWithPath: $0).lastPathComponent } ?? ""
             notificationAuthorizationStatus = try await NativeNotifier.shared.deliver(
                 title: title,
@@ -3752,7 +3752,7 @@ final class NativeNotifier: NSObject, UNUserNotificationCenterDelegate {
         title: String,
         message: String,
         subtitle: String = "",
-        threadIdentifier: String = "kekulv",
+        threadIdentifier: String = "sumpter",
         soundPreference: NotificationSoundPreference
     ) async throws -> NotificationAuthorizationState {
         var status = await authorizationStatus()
@@ -3787,7 +3787,7 @@ final class NativeNotifier: NSObject, UNUserNotificationCenterDelegate {
         }
 
         let request = UNNotificationRequest(
-            identifier: "kekulv-\(UUID().uuidString)",
+            identifier: "sumpter-\(UUID().uuidString)",
             content: content,
             trigger: nil
         )
@@ -4010,11 +4010,11 @@ enum ClaudeNotificationHooks {
     }
 
     private static func hookScriptURL() -> URL {
-        claudeDirectory().appendingPathComponent("kekulv-notify.sh")
+        claudeDirectory().appendingPathComponent("sumpter-notify.sh")
     }
 
     private static func backupURL() -> URL {
-        claudeDirectory().appendingPathComponent("settings.json.kekulv-backup")
+        claudeDirectory().appendingPathComponent("settings.json.sumpter-backup")
     }
 }
 

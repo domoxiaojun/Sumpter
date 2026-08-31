@@ -15,7 +15,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 FAKE_HOME="$WORK/home"
 RC="$FAKE_HOME/.zshrc"
-SNIP="$FAKE_HOME/.local/share/kekulv/cc-project-attribution.sh"
+SNIP="$FAKE_HOME/.local/share/sumpter/cc-project-attribution.sh"
 SEED='export SELFTEST_SENTINEL=1'
 
 pass=0
@@ -51,10 +51,10 @@ blocks() {
         printf '0'
         return
     }
-    grep -c '>>> kekulv cc-project-attribution >>>' "$RC" 2> /dev/null || true
+    grep -c '>>> sumpter cc-project-attribution >>>' "$RC" 2> /dev/null || true
 }
 backups() {
-    find "$FAKE_HOME" -maxdepth 1 -type f -name '.zshrc.kekulv-bak-*' | wc -l | tr -d ' '
+    find "$FAKE_HOME" -maxdepth 1 -type f -name '.zshrc.sumpter-bak-*' | wc -l | tr -d ' '
 }
 
 # 假 claude:把它实际收到的 ANTHROPIC_CUSTOM_HEADERS 原样打出来,
@@ -121,7 +121,7 @@ check 'T5 卸载保留备份' "$(backups)" 1
 # T6 settings.json 写死该键时必须拒装(否则装了永远不生效)
 reset_home
 mkdir -p "$FAKE_HOME/.claude"
-printf '{"env":{"ANTHROPIC_CUSTOM_HEADERS":"X-Kekulv-Project: pinned"}}\n' \
+printf '{"env":{"ANTHROPIC_CUSTOM_HEADERS":"X-Sumpter-Project: pinned"}}\n' \
     > "$FAKE_HOME/.claude/settings.json"
 if inst install --rc "$RC" > /dev/null 2>&1; then
     bad 'T6 应拒装但成功了'
@@ -206,7 +206,7 @@ mkdir -p "$ALTDIR"
 (
     cd "$ALTDIR"
     git init -q
-    git remote add kekulv https://example.invalid/alt.git
+    git remote add sumpter https://example.invalid/alt.git
 )
 PLAINDIR="$WORK/proj-plain"
 mkdir -p "$PLAINDIR"
@@ -214,7 +214,7 @@ CJKDIR="$WORK/中文项目"
 mkdir -p "$CJKDIR"
 
 # 待测 shell 可覆盖:CI 的 Linux runner 通常没有 zsh,只跑 bash 分支。
-IFS=' ' read -ra TEST_SHELLS <<< "${KEKULV_TEST_SHELLS:-/bin/bash /bin/zsh}"
+IFS=' ' read -ra TEST_SHELLS <<< "${SUMPTER_TEST_SHELLS:-/bin/bash /bin/zsh}"
 for sh in "${TEST_SHELLS[@]}"; do
     [ -x "$sh" ] || {
         ok "跳过 $sh(不存在)"
@@ -223,15 +223,15 @@ for sh in "${TEST_SHELLS[@]}"; do
     name="$(basename "$sh")"
 
     out="$(run_snip "$sh" "$GITDIR")"
-    check "[$name] git 仓库发 3 条" "$(printf '%s\n' "$out" | grep -c '^X-Kekulv-')" 3
+    check "[$name] git 仓库发 3 条" "$(printf '%s\n' "$out" | grep -c '^X-Sumpter-')" 3
     check "[$name] 项目名取目录末段" \
-        "$(printf '%s\n' "$out" | grep '^X-Kekulv-Project:')" 'X-Kekulv-Project: proj-git'
+        "$(printf '%s\n' "$out" | grep '^X-Sumpter-Project:')" 'X-Sumpter-Project: proj-git'
     check "[$name] git remote 正确" \
-        "$(printf '%s\n' "$out" | grep '^X-Kekulv-Git-Remote:')" \
-        'X-Kekulv-Git-Remote: https://example.invalid/probe.git'
+        "$(printf '%s\n' "$out" | grep '^X-Sumpter-Git-Remote:')" \
+        'X-Sumpter-Git-Remote: https://example.invalid/probe.git'
 
     out="$(run_snip "$sh" "$PLAINDIR")"
-    check "[$name] 非 git 目录发 2 条" "$(printf '%s\n' "$out" | grep -c '^X-Kekulv-')" 2
+    check "[$name] 非 git 目录发 2 条" "$(printf '%s\n' "$out" | grep -c '^X-Sumpter-')" 2
     check "[$name] 非 git 不发 Git-Remote" \
         "$(printf '%s\n' "$out" | grep -c 'Git-Remote' || true)" 0
 
@@ -247,26 +247,26 @@ for sh in "${TEST_SHELLS[@]}"; do
     # PWD 带尾随斜杠时项目名不能变空(实测踩到过:只发 workspace 不发 project)
     out="$(run_snip_pwd "$sh" "$GITDIR" "$GITDIR/")"
     check "[$name] 尾随斜杠仍取到项目名" \
-        "$(printf '%s\n' "$out" | grep '^X-Kekulv-Project:')" 'X-Kekulv-Project: proj-git'
+        "$(printf '%s\n' "$out" | grep '^X-Sumpter-Project:')" 'X-Sumpter-Project: proj-git'
     check "[$name] 尾随斜杠被规范化掉" \
-        "$(printf '%s\n' "$out" | grep '^X-Kekulv-Workspace:')" "X-Kekulv-Workspace: $GITDIR"
+        "$(printf '%s\n' "$out" | grep '^X-Sumpter-Workspace:')" "X-Sumpter-Workspace: $GITDIR"
 
     # 没有 origin 的仓库退回第一个 remote
     out="$(run_snip "$sh" "$ALTDIR")"
     check "[$name] 非 origin remote 也能取到" \
-        "$(printf '%s\n' "$out" | grep '^X-Kekulv-Git-Remote:')" \
-        'X-Kekulv-Git-Remote: https://example.invalid/alt.git'
+        "$(printf '%s\n' "$out" | grep '^X-Sumpter-Git-Remote:')" \
+        'X-Sumpter-Git-Remote: https://example.invalid/alt.git'
 
     # 非 ASCII 目录下也不能把继承的过期归因透传出去
-    out="$(run_snip "$sh" "$CJKDIR" 'X-Kekulv-Project: stale')"
+    out="$(run_snip "$sh" "$CJKDIR" 'X-Sumpter-Project: stale')"
     check "[$name] 中文目录+继承过期值 → 清除" "$out" ''
     out="$(run_snip "$sh" "$CJKDIR" 'X-Foo: keep-me')"
     check "[$name] 中文目录仍保留外部 header" "$out" 'X-Foo: keep-me'
 
-    # upsert:替换而非叠加已有的 X-Kekulv-*
-    out="$(run_snip "$sh" "$GITDIR" 'X-Kekulv-Project: stale')"
-    check "[$name] 旧 X-Kekulv 值被替换" "$(printf '%s\n' "$out" | grep -c 'stale' || true)" 0
-    check "[$name] Project 不重复" "$(printf '%s\n' "$out" | grep -c '^X-Kekulv-Project:')" 1
+    # upsert:替换而非叠加已有的 X-Sumpter-*
+    out="$(run_snip "$sh" "$GITDIR" 'X-Sumpter-Project: stale')"
+    check "[$name] 旧 X-Sumpter 值被替换" "$(printf '%s\n' "$out" | grep -c 'stale' || true)" 0
+    check "[$name] Project 不重复" "$(printf '%s\n' "$out" | grep -c '^X-Sumpter-Project:')" 1
 done
 
 printf '\n通过 %d,失败 %d\n' "$pass" "$fail"

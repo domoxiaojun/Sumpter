@@ -109,6 +109,6 @@ apps/<platform>/sumpterd → adapters/<platform> → sumpter-engine → sumpter-
 - **两端 UI 对齐**：同名页面的信息层级、字段命名、状态语义保持一致；只在原生控件/布局需要时留差异。改统计或运行页时先对照另一端。
 - **根 workspace 通过 ≠ 发布链通过**：`platforms/linux/scripts/{assemble-shared-tree,cross-build,release-preflight}.sh` 和 `platforms/linux/.github/workflows/` 仍带独立发布树假设（发布时把 `platforms/linux/` 提升为包根）；根目录没有 `.github/`，这些 workflow 不会自动跑。
 - **历史材料不是现行契约**：`docs/upstream/`（含旧 `kekulv-*` 路径）、`docs/code-review-2026-08-31.md`、`platforms/linux/CHANGELOG.md`。`plan.md` 和 `todos.md` 是按轮次追加的工作日志。
-- 品牌名从历史 `kekulv` 硬切到 `sumpter` 的工作正在进行（见 `todos.md`）：配置目录、systemd 单元、环境变量 `SUMPTER_*`、header `X-Sumpter-*`、导出格式标识都以 `sumpter` 为目标。不要重新引入 `kekulv`，也不要改 `docs/upstream/` 和 CHANGELOG 里的历史条目。
+- 运行时名字已硬切到 `sumpter`：配置目录、systemd 单元、发布包二进制 `sumpterd`、环境变量 `SUMPTER_*`、header `X-Sumpter-*`、导出格式 `sumpter-session-export-v1`。不要重新引入 `kekulv`，也不要改 `docs/upstream/` 和 CHANGELOG 里的历史条目。旧安装需卸载后重装。
 - 真实 `apiKey`、`authToken`、Admin 密码、Cookie、请求体和 raw 捕获不进 git / Issue / 聊天记录。`config.example.json` 只放 `enabled: false` 的合成入口和 `.invalid` 主机。不要在仓库里的 example 上原地填 key。
 - 用 bundled SQLite，不要为本地开发引入外部数据库。

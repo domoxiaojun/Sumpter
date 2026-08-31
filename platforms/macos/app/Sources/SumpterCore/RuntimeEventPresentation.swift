@@ -48,7 +48,7 @@ public enum RuntimeEventPresentation {
     /// Project attribution exists only on client requests. Upstream attempts and
     /// notifications must not be assigned to the synthetic unidentified bucket.
     ///
-    /// Codex 的结构化 workspace 优先于 `X-Kekulv-*` 声明:前者是客户端采集的,后者只是
+    /// Codex 的结构化 workspace 优先于 `X-Sumpter-*` 声明:前者是客户端采集的,后者只是
     /// 客户端自称的。这个优先级与 Linux WebUI `helpers.js:eventProjectContext` 和服务端
     /// `runtime_store` 的 analytics 归因一致,不要单独调。
     public static func projectContext(

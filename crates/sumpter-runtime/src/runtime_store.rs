@@ -322,7 +322,7 @@ pub struct RuntimeEventListItem {
     pub kind: String,
     #[serde(rename = "codexMetadata")]
     pub codex_metadata: Option<CodexMetadata>,
-    /// 客户端 `X-Kekulv-*` 声明的项目归因。投影必须带上:macOS App 只从这个列表
+    /// 客户端 `X-Sumpter-*` 声明的项目归因。投影必须带上:macOS App 只从这个列表
     /// 端点加载事件(单事件详情仅在选中时拉),字段缺了那边就恒显示「未识别项目」。
     #[serde(rename = "clientDeclared")]
     pub client_declared: Option<ClientDeclaredMetadata>,
@@ -4875,7 +4875,7 @@ fn export_session_json(connection: &Connection, session_id: &str) -> Result<Valu
         .map(|change| json!({"seq": change.seq, "changeSeq": change.change_seq, "event": change.event}))
         .collect::<Vec<_>>();
     Ok(json!({
-        "format": "kekulv-session-export-v1",
+        "format": "sumpter-session-export-v1",
         "exportedAt": now(),
         "sessionID": session_id,
         "projects": projects,
@@ -5904,7 +5904,7 @@ mod tests {
                 "workspaces": {
                     ".../demo/automode-proxy": {
                         "associatedRemoteURLs": {
-                            "origin": "https://github.com/example/kekulv.git"
+                            "origin": "https://github.com/example/sumpter.git"
                         }
                     }
                 }
@@ -6319,7 +6319,7 @@ mod tests {
             );
             value.session_id = Some(session.into());
             value.codex_metadata = serde_json::from_value(json!({
-                "workspaces": {".../automode-proxy": {"associatedRemoteURLs": {"origin": "https://github.com/example/kekulv.git"}}}
+                "workspaces": {".../automode-proxy": {"associatedRemoteURLs": {"origin": "https://github.com/example/sumpter.git"}}}
             })).ok();
             store.enqueue(value, RuntimeCounters::default()).unwrap();
         }

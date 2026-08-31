@@ -1,9 +1,9 @@
-# Sumpter Linux（发布包二进制仍名为 `kekulvd`）
+# Sumpter Linux（发布包二进制仍名为 `sumpterd`）
 
 本文有两种阅读上下文：
 
 1. **源码 monorepo**：本文件位于 `platforms/linux/README.md`。Rust 真源是仓库根 workspace 的 `sumpter-core` / `sumpter-runtime` / `sumpter-engine` 与 `sumpterd-linux`。
-2. **独立发布包**：发布阶段把 `platforms/linux/` 提升为包根。包内二进制名为 `kekulvd`，配置目录、systemd 单元和环境变量仍使用历史名 `kekulv`。
+2. **独立发布包**：发布阶段把 `platforms/linux/` 提升为包根。包内二进制名为 `sumpterd`，配置目录 `~/.config/sumpter` 或 `/var/lib/sumpter`，systemd 单元 `sumpter.service`，环境变量 `SUMPTER_*`。
 
 Linux 版以 standalone daemon 提供多协议代理、扁平 Provider 入口、分流规则、pinned IP、failover、统计，以及与桌面 UI 信息架构对齐的本机 Web 管理界面。
 
@@ -23,13 +23,13 @@ Linux 专属边界：
 
 源码树的 Rust 门禁在**仓库根**运行：`cargo fmt` / `check` / `test` / `clippy`，覆盖共享 crate、Linux adapter 和 `sumpterd-linux`。WebUI 在 `platforms/linux/webui/` 跑 `npm ci`、契约测试和生产构建。
 
-`platforms/linux/scripts/cross-build.sh`、`assemble-shared-tree.sh` 和 `release-preflight.sh` 仍按**独立 Linux 发布树**查找 `crates/`、`kekulvd`、`kekulv-core` 等输入，不能当成根 workspace 已经通过的证据。本机交叉构建、GHCR 镜像和真实 systemd 流量必须在目标 Linux 上按本文后半的「原生构建与打包」「真机冒烟」补齐。
+`platforms/linux/scripts/cross-build.sh`、`assemble-shared-tree.sh` 和 `release-preflight.sh` 仍按**独立 Linux 发布树**查找 `crates/`、`sumpterd`、`sumpter-core` 等输入，不能当成根 workspace 已经通过的证据。本机交叉构建、GHCR 镜像和真实 systemd 流量必须在目标 Linux 上按本文后半的「原生构建与打包」「真机冒烟」补齐。
 
 ## 部署包结构
 
 ```text
-kekulv-linux-<arch>/
-├── kekulvd
+sumpter-linux-<arch>/
+├── sumpterd
 ├── config.example.json
 ├── USAGE.md
 ├── web/
@@ -43,15 +43,15 @@ kekulv-linux-<arch>/
 │   ├── uninstall.sh
 │   └── cc-project-attribution.sh   # Claude Code 项目统计配置器(可选)
 ├── specs/admin-api.md
-├── kekulv.service
-├── kekulv-system.service
+├── sumpter.service
+├── sumpter-system.service
 ├── LICENSE
 ├── logs/
 └── README.md
 ```
 
 `arch` 为 `x86_64` 或 `aarch64`。目标产物是对应架构的静态 musl ELF；必须在目标 Linux
-机器用 `file ./kekulvd` 和 `scripts/smoke.sh` 复核，不能只凭交叉编译退出码判断。
+机器用 `file ./sumpterd` 和 `scripts/smoke.sh` 复核，不能只凭交叉编译退出码判断。
 
 ## GitHub Actions 与发布资产
 
@@ -66,8 +66,8 @@ kekulv-linux-<arch>/
 Release 固定提供：
 
 ```text
-kekulv-linux-x86_64.tar.gz
-kekulv-linux-aarch64.tar.gz
+sumpter-linux-x86_64.tar.gz
+sumpter-linux-aarch64.tar.gz
 SHA256SUMS
 ```
 
@@ -81,22 +81,22 @@ Release 的技术前置条件，但它明确下游可获得的使用权。
 ## 自动安装、升级与卸载
 
 安装器按调用身份选择 scope：普通用户安装为 systemd user 服务；root 或 `sudo` 安装为 system
-service，但 daemon 始终使用专用的低权限 `kekulv` 用户运行。源码仓库可以保持私有，发布包改由
+service，但 daemon 始终使用专用的低权限 `sumpter` 用户运行。源码仓库可以保持私有，发布包改由
 静态镜像 `https://sf.domob.org/kkl` 提供。镜像目录必须同时提供：
 
 ```text
-kekulv-install.sh
-kekulv-uninstall.sh
-kekulv-linux-x86_64.tar.gz
-kekulv-linux-aarch64.tar.gz
+sumpter-install.sh
+sumpter-uninstall.sh
+sumpter-linux-x86_64.tar.gz
+sumpter-linux-aarch64.tar.gz
 ```
 
 把仓库内的 `scripts/bootstrap-install.sh` 和 `scripts/bootstrap-uninstall.sh` 原样上传为镜像根目录的
-`kekulv-install.sh` 和 `kekulv-uninstall.sh` 后，普通用户使用下面命令安装最新包：
+`sumpter-install.sh` 和 `sumpter-uninstall.sh` 后，普通用户使用下面命令安装最新包：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fLo /tmp/kekulv-install.sh https://sf.domob.org/kkl/kekulv-install.sh
-bash /tmp/kekulv-install.sh
+curl --proto '=https' --tlsv1.2 -fLo /tmp/sumpter-install.sh https://sf.domob.org/kkl/sumpter-install.sh
+bash /tmp/sumpter-install.sh
 ```
 
 首次安装会在配置目录生成 0600 随机 `admin-password`，不在终端回显，升级与普通卸载都会保留。
@@ -105,24 +105,24 @@ bash /tmp/kekulv-install.sh
 HTTPS 反代通常无需改默认 loopback：
 
 ```bash
-bash /tmp/kekulv-install.sh --admin-password-file /absolute/path/admin-password
-bash /tmp/kekulv-install.sh --admin-host 0.0.0.0 --admin-port 57879 \
+bash /tmp/sumpter-install.sh --admin-password-file /absolute/path/admin-password
+bash /tmp/sumpter-install.sh --admin-host 0.0.0.0 --admin-port 57879 \
   --admin-password-file /absolute/path/admin-password
 # 或环境变量
-KEKULV_ADMIN_PASSWORD_FILE=/absolute/path/admin-password bash /tmp/kekulv-install.sh
+SUMPTER_ADMIN_PASSWORD_FILE=/absolute/path/admin-password bash /tmp/sumpter-install.sh
 ```
 
 如需先审查已下载的脚本，可在安装命令前单独运行下面这条非交互命令：
 
 ```bash
-sed -n '1,$p' /tmp/kekulv-install.sh
+sed -n '1,$p' /tmp/sumpter-install.sh
 ```
 
 引导安装器根据当前机器架构下载同名压缩包，不需要指定版本。root/system 安装使用同一份脚本，
 但必须明确通过 `sudo` 运行：
 
 ```bash
-sudo bash /tmp/kekulv-install.sh
+sudo bash /tmp/sumpter-install.sh
 ```
 
 静态镜像路径按你的要求**不校验 SHA-256**；它只校验 HTTPS、归档结构、路径与符号链接，并由包内
@@ -130,7 +130,7 @@ sudo bash /tmp/kekulv-install.sh
 内容真实性。**静态镜像需发布方手工替换**，可能落后于 GitHub Release。
 
 `--repo` / `--version` 只属于包内 `scripts/install.sh`（公开 GitHub Release + SHA-256），
-**不能**加在 `kekulv-install.sh` / `bootstrap-install.sh` 后面（已从静态镜像取包）。
+**不能**加在 `sumpter-install.sh` / `bootstrap-install.sh` 后面（已从静态镜像取包）。
 
 已手动下载并解压 Release 包时，普通用户直接在包内执行；root/system 则加 `sudo`：
 
@@ -145,53 +145,53 @@ sudo ./scripts/install.sh
 
 | 调用方式 | 程序 | 上一版本 | 配置/统计 | unit |
 | --- | --- | --- | --- | --- |
-| 普通用户 | `~/.local/share/kekulv` | `~/.local/share/kekulv.previous` | `~/.config/kekulv` | `~/.config/systemd/user/kekulv.service` |
-| root / sudo | `/opt/kekulv` | `/opt/kekulv.previous` | `/var/lib/kekulv` | `/etc/systemd/system/kekulv.service` |
+| 普通用户 | `~/.local/share/sumpter` | `~/.local/share/sumpter.previous` | `~/.config/sumpter` | `~/.config/systemd/user/sumpter.service` |
+| root / sudo | `/opt/sumpter` | `/opt/sumpter.previous` | `/var/lib/sumpter` | `/etc/systemd/system/sumpter.service` |
 
 首次登录前可在可信终端查看安装器生成的 Admin 密码（不要把输出贴到日志或聊天）。在安全页
 修改凭据后，该文件保存的是哈希 JSON，不能再用于回读明文密码：
 
 ```bash
-cat ~/.config/kekulv/admin-password                 # user 安装
-sudo cat /var/lib/kekulv/admin-password             # system 安装
+cat ~/.config/sumpter/admin-password                 # user 安装
+sudo cat /var/lib/sumpter/admin-password             # system 安装
 ```
 
 卸载默认保留配置。已安装包内的卸载器可直接运行：
 
 ```bash
-~/.local/share/kekulv/scripts/uninstall.sh
+~/.local/share/sumpter/scripts/uninstall.sh
 ```
 
 root/system 安装则运行：
 
 ```bash
-sudo /opt/kekulv/scripts/uninstall.sh
+sudo /opt/sumpter/scripts/uninstall.sh
 ```
 
 也可下载静态镜像的引导卸载器；它会按当前身份调用对应的包内卸载器。普通用户：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fLo /tmp/kekulv-uninstall.sh https://sf.domob.org/kkl/kekulv-uninstall.sh
-bash /tmp/kekulv-uninstall.sh
+curl --proto '=https' --tlsv1.2 -fLo /tmp/sumpter-uninstall.sh https://sf.domob.org/kkl/sumpter-uninstall.sh
+bash /tmp/sumpter-uninstall.sh
 ```
 
 root/system 安装：
 
 ```bash
-sudo bash /tmp/kekulv-uninstall.sh
+sudo bash /tmp/sumpter-uninstall.sh
 ```
 
 只有明确要永久删除 `config.json`、`runtime.sqlite3`、旧 `stats.json` 归档和其他运行数据时，才在所选卸载命令后加上
 `--purge`，例如：
 
 ```bash
-bash /tmp/kekulv-uninstall.sh --purge
+bash /tmp/sumpter-uninstall.sh --purge
 ```
 
 静态镜像引导安装器不依赖 GitHub 仓库可见性，适合源码私有、二进制公开分发。当前已确认
-`https://sf.domob.org/kkl/kekulv-linux-x86_64.tar.gz` 和
-`https://sf.domob.org/kkl/kekulv-linux-aarch64.tar.gz` 均可访问；还需上传引导脚本
-`kekulv-install.sh` 和 `kekulv-uninstall.sh` 后才能分享上面的安装和卸载命令。若改回
+`https://sf.domob.org/kkl/sumpter-linux-x86_64.tar.gz` 和
+`https://sf.domob.org/kkl/sumpter-linux-aarch64.tar.gz` 均可访问；还需上传引导脚本
+`sumpter-install.sh` 和 `sumpter-uninstall.sh` 后才能分享上面的安装和卸载命令。若改回
 `scripts/install.sh --repo domoxiaojun/sumpter`，该路径只支持 `github.com` 的公开 Release，并会下载
 `SHA256SUMS` 校验资产。
 
@@ -199,18 +199,18 @@ bash /tmp/kekulv-uninstall.sh --purge
 
 普通用户默认配置目录遵循 XDG：
 
-- 设置了 `XDG_CONFIG_HOME`：`$XDG_CONFIG_HOME/kekulv`
-- 否则：`~/.config/kekulv`
+- 设置了 `XDG_CONFIG_HOME`：`$XDG_CONFIG_HOME/sumpter`
+- 否则：`~/.config/sumpter`
 - 也可用 `--config-dir <dir>` 覆盖
 
-root/system service 的安装器显式传入 `/var/lib/kekulv`；不要在该路线把配置放进 root 的 HOME。
+root/system service 的安装器显式传入 `/var/lib/sumpter`；不要在该路线把配置放进 root 的 HOME。
 
 建议显式安装合成示例，再通过 WebUI 或编辑器填写真实入口：
 
 ```bash
 config_base="${XDG_CONFIG_HOME:-$HOME/.config}"
-install -d -m 700 "$config_base/kekulv"
-install -m 600 ./config.example.json "$config_base/kekulv/config.json"
+install -d -m 700 "$config_base/sumpter"
+install -m 600 ./config.example.json "$config_base/sumpter/config.json"
 ```
 
 > 不要用桌面/Rust 版本的 `config.toml` 内容覆盖这里的 `config.json`，也不要把它直接改名为
@@ -234,18 +234,18 @@ install -m 600 ./config.example.json "$config_base/kekulv/config.json"
 不使用安装器时，先在默认配置目录创建初始单行密码文件（输入不会回显）：
 
 ```bash
-install -d -m 700 ~/.config/kekulv
-read -rsp 'Admin password: ' KEKULV_NEW_ADMIN_PASSWORD
-printf '%s\n' "$KEKULV_NEW_ADMIN_PASSWORD" > ~/.config/kekulv/admin-password
-unset KEKULV_NEW_ADMIN_PASSWORD
+install -d -m 700 ~/.config/sumpter
+read -rsp 'Admin password: ' SUMPTER_NEW_ADMIN_PASSWORD
+printf '%s\n' "$SUMPTER_NEW_ADMIN_PASSWORD" > ~/.config/sumpter/admin-password
+unset SUMPTER_NEW_ADMIN_PASSWORD
 printf '\n'
-chmod 600 ~/.config/kekulv/admin-password
+chmod 600 ~/.config/sumpter/admin-password
 ```
 
 前台运行：
 
 ```bash
-./kekulvd
+./sumpterd
 ```
 
 后台运行：
@@ -259,16 +259,16 @@ chmod 600 ~/.config/kekulv/admin-password
 
 | 环境变量 | 默认 | 作用 |
 | --- | --- | --- |
-| `KEKULVD_BIN` | `../kekulvd` | daemon 路径 |
-| `KEKULVD_CONFIG_DIR` | XDG 默认 | 追加 `--config-dir` |
-| `KEKULVD_WEB_ROOT` | `../web` | Web 静态资源目录 |
-| `KEKULVD_PID_FILE` | `../kekulvd.pid` | start/stop 共用 pidfile |
-| `KEKULVD_LOG_DIR` | `../logs` | nohup 日志目录 |
-| `KEKULVD_START_TIMEOUT` | `15` | 启动等待秒数 |
-| `KEKULVD_STOP_TIMEOUT` | `15` | 优雅停止等待秒数 |
-| `KEKULV_ADMIN_HOST` | `127.0.0.1` | Admin 绑定地址（systemd `Environment=` 可用） |
-| `KEKULV_ADMIN_PORT` | `57879` | Admin 端口 |
-| `KEKULV_ADMIN_PASSWORD_FILE` | `<config-dir>/admin-password` | 高级 Admin 凭据文件路径覆盖 |
+| `SUMPTERD_BIN` | `../sumpterd` | daemon 路径 |
+| `SUMPTERD_CONFIG_DIR` | XDG 默认 | 追加 `--config-dir` |
+| `SUMPTERD_WEB_ROOT` | `../web` | Web 静态资源目录 |
+| `SUMPTERD_PID_FILE` | `../sumpterd.pid` | start/stop 共用 pidfile |
+| `SUMPTERD_LOG_DIR` | `../logs` | nohup 日志目录 |
+| `SUMPTERD_START_TIMEOUT` | `15` | 启动等待秒数 |
+| `SUMPTERD_STOP_TIMEOUT` | `15` | 优雅停止等待秒数 |
+| `SUMPTER_ADMIN_HOST` | `127.0.0.1` | Admin 绑定地址（systemd `Environment=` 可用） |
+| `SUMPTER_ADMIN_PORT` | `57879` | Admin 端口 |
+| `SUMPTER_ADMIN_PASSWORD_FILE` | `<config-dir>/admin-password` | 高级 Admin 凭据文件路径覆盖 |
 
 其它 daemon 参数可直接追加到 `start.sh`。daemon CLI：
 
@@ -330,33 +330,33 @@ ssh -L 57879:127.0.0.1:57879 user@server
 VPS 长期远程管理推荐：daemon 仍只监听 `127.0.0.1:57879`，daemon 自己管理登录会话，
 Nginx/OpenResty 只做 HTTPS 和转发。不要再在 Nginx 配第二层 `auth_basic`，也不要改写 Cookie；
 反代必须传递 `X-Forwarded-Proto $scheme`，让 HTTPS 会话 Cookie 带 `Secure`。可直接参考
-[`deploy/nginx-kekulv-admin.conf.example`](deploy/nginx-kekulv-admin.conf.example)。
+[`deploy/nginx-sumpter-admin.conf.example`](deploy/nginx-sumpter-admin.conf.example)。
 
 安装器已经创建默认密码文件，不需要 systemd drop-in。system 安装路径为
-`/var/lib/kekulv/admin-password`；查看时注意不要把内容复制到日志或聊天：
+`/var/lib/sumpter/admin-password`；查看时注意不要把内容复制到日志或聊天：
 
 ```bash
-sudo cat /var/lib/kekulv/admin-password
+sudo cat /var/lib/sumpter/admin-password
 ```
 
 正常修改用户名和密码应在 WebUI“安全”页完成，不需要重启。若忘记凭据，可在可信终端把文件
 覆盖为新的非空单行密码并重启；这会恢复初始用户名 `kkl`：
 
 ```bash
-sudoedit /var/lib/kekulv/admin-password
-sudo chown kekulv:kekulv /var/lib/kekulv/admin-password
-sudo chmod 600 /var/lib/kekulv/admin-password
-sudo systemctl restart kekulv.service
+sudoedit /var/lib/sumpter/admin-password
+sudo chown sumpter:sumpter /var/lib/sumpter/admin-password
+sudo chmod 600 /var/lib/sumpter/admin-password
+sudo systemctl restart sumpter.service
 ```
 
-user 安装路径为 `~/.config/kekulv/admin-password`，修改后执行
-`systemctl --user restart kekulv.service`。手动前台/包内脚本同样默认读取所选配置目录中的
+user 安装路径为 `~/.config/sumpter/admin-password`，修改后执行
+`systemctl --user restart sumpter.service`。手动前台/包内脚本同样默认读取所选配置目录中的
 `admin-password`；高级自定义路径才使用：
 
 ```bash
-./kekulvd --admin-password-file /absolute/path/admin-password ...
+./sumpterd --admin-password-file /absolute/path/admin-password ...
 # 或
-KEKULV_ADMIN_PASSWORD_FILE=/absolute/path/admin-password ./scripts/start.sh
+SUMPTER_ADMIN_PASSWORD_FILE=/absolute/path/admin-password ./scripts/start.sh
 ```
 
 Admin 公开 HTML、模块 JS、字体和图标以呈现登录页；未登录 API/SSE 返回普通 JSON 401，
@@ -383,12 +383,12 @@ loopback + HTTPS 反代更简单。
 - `/admin/` 静态登录壳公开；除 session/login 外，API 与 SSE 必须提供有效会话 Cookie。旧单行
   文件初始用户名为 `kkl`；安全页修改后保存 Argon2 哈希 JSON。默认文件缺失时 daemon 拒绝启动。
 - 会话 Cookie 为 HttpOnly、SameSite=Strict、24 小时有效；HTTPS 反代下带 Secure。写请求还需
-  `X-Kekulv-CSRF`，凭据修改会撤销全部旧会话。
+  `X-Sumpter-CSRF`，凭据修改会撤销全部旧会话。
 - `GET /healthz` 是唯一免鉴权入口，只返回 204 空响应，不暴露版本、配置或运行状态。
 - Admin 禁止 CORS，写请求都必须是 `application/json`，并保留 CSP、`nosniff`、
   `X-Frame-Options: DENY` 与 API `no-store`。
 - user scope 可操作固定的 systemd user unit；system scope 的 WebUI 只读显示 unit 状态，切换
-  自启动仍返回 403，必须由管理员执行 `sudo systemctl enable|disable kekulv.service`。
+  自启动仍返回 403，必须由管理员执行 `sudo systemctl enable|disable sumpter.service`。
 
 完整接口见 [`specs/admin-api.md`](specs/admin-api.md)。
 
@@ -396,29 +396,29 @@ loopback + HTTPS 反代更简单。
 
 编辑 `config.json` 后，根据启动方式选择对应入口：
 
-1. 通过 `scripts/start.sh` 启动且没有覆盖 `KEKULVD_PID_FILE`：在部署包根目录读取脚本自己的
-   `./kekulvd.pid`。
+1. 通过 `scripts/start.sh` 启动且没有覆盖 `SUMPTERD_PID_FILE`：在部署包根目录读取脚本自己的
+   `./sumpterd.pid`。
 
    ```bash
-   kill -HUP "$(head -n 1 ./kekulvd.pid)"
+   kill -HUP "$(head -n 1 ./sumpterd.pid)"
    ```
 
-   若设置过 `KEKULVD_PID_FILE`，必须改为读取那个明确路径。
+   若设置过 `SUMPTERD_PID_FILE`，必须改为读取那个明确路径。
 
-2. 直接运行 daemon：daemon 自身把 PID 写入 `<config-dir>/kekulvd.pid`。默认 XDG 配置目录可用：
+2. 直接运行 daemon：daemon 自身把 PID 写入 `<config-dir>/sumpterd.pid`。默认 XDG 配置目录可用：
 
    ```bash
-   kill -HUP "$(head -n 1 "${XDG_CONFIG_HOME:-$HOME/.config}/kekulv/kekulvd.pid")"
+   kill -HUP "$(head -n 1 "${XDG_CONFIG_HOME:-$HOME/.config}/sumpter/sumpterd.pid")"
    ```
 
-   使用过 `--config-dir <dir>` 时，应读取 `<dir>/kekulvd.pid`。`start.sh` 启动时 daemon 也会写这份
-   配置目录 PID，但脚本自己的 pidfile 仍由 `KEKULVD_PID_FILE` 独立决定。
+   使用过 `--config-dir <dir>` 时，应读取 `<dir>/sumpterd.pid`。`start.sh` 启动时 daemon 也会写这份
+   配置目录 PID，但脚本自己的 pidfile 仍由 `SUMPTERD_PID_FILE` 独立决定。
 
-3. 由 systemd unit 管理：不要依赖部署目录的 `./kekulvd.pid`，直接让对应 unit 执行 ExecReload。
+3. 由 systemd unit 管理：不要依赖部署目录的 `./sumpterd.pid`，直接让对应 unit 执行 ExecReload。
 
    ```bash
-   systemctl --user reload kekulv
-   sudo systemctl reload kekulv
+   systemctl --user reload sumpter
+   sudo systemctl reload sumpter
    ```
 
 也可调用 `POST /admin/api/reload`。上述入口使用同一条 reload 路径：先读取并验证完整 v6 配置，
@@ -427,28 +427,28 @@ loopback + HTTPS 反代更简单。
 
 ## systemd 服务 unit
 
-普通用户安装时，自动安装器会把 unit 放到 `~/.config/systemd/user/kekulv.service`：
+普通用户安装时，自动安装器会把 unit 放到 `~/.config/systemd/user/sumpter.service`：
 
 ```bash
-systemctl --user status kekulv
-journalctl --user -u kekulv -f
+systemctl --user status sumpter
+journalctl --user -u sumpter -f
 ```
 
-程序位于 `~/.local/share/kekulv`，配置位于 `~/.config/kekulv`。无桌面会话的服务器若需要
+程序位于 `~/.local/share/sumpter`，配置位于 `~/.config/sumpter`。无桌面会话的服务器若需要
 user unit 持续运行，`loginctl enable-linger` 涉及系统级状态，请由管理员审核后执行。
 
-root/system 安装时，unit 位于 `/etc/systemd/system/kekulv.service`，程序在 `/opt/kekulv`，配置在
-`/var/lib/kekulv`，daemon 以低权限 `kekulv` 用户运行：
+root/system 安装时，unit 位于 `/etc/systemd/system/sumpter.service`，程序在 `/opt/sumpter`，配置在
+`/var/lib/sumpter`，daemon 以低权限 `sumpter` 用户运行：
 
 ```bash
-sudo systemctl status kekulv
-sudo journalctl -u kekulv -f
-sudo systemctl enable --now kekulv
+sudo systemctl status sumpter
+sudo journalctl -u sumpter -f
+sudo systemctl enable --now sumpter
 ```
 
 unit 默认 Admin `127.0.0.1:57879`（可用 drop-in/`Environment=`/`ExecStart` 覆盖）、UMask 0077、
 `Restart=on-failure`、SIGHUP reload 和 SIGTERM 优雅停止。WebUI 的自启动开关只允许操作固定的
-`kekulv.service`；system scope 即使启用 Admin 密码也不会授予 daemon root 权限，开关显示为
+`sumpter.service`；system scope 即使启用 Admin 密码也不会授予 daemon root 权限，开关显示为
 root 管理且禁用。
 
 ## Fedora / RHEL 说明
@@ -457,8 +457,8 @@ root 管理且禁用。
 
 1. **SELinux**：从 `/tmp` 解压再用 `cp -a` 可能把 `tmp_t` 带进 `/opt`，导致 `status=203/EXEC`。
    安装器在 SELinux Enforcing/Permissive 下会 `cp --no-preserve=context` 并对安装树
-   `restorecon -RF`。若仍失败：`sudo restorecon -RF /opt/kekulv` 或
-   `sudo chcon -t bin_t /opt/kekulv/kekulvd`（需 `policycoreutils`）。
+   `restorecon -RF`。若仍失败：`sudo restorecon -RF /opt/sumpter` 或
+   `sudo chcon -t bin_t /opt/sumpter/sumpterd`（需 `policycoreutils`）。
 2. **user 服务 + SSH**：无桌面会话时 `systemctl --user` 常连不上 bus。可
    `loginctl enable-linger $USER` 后重登，或改用 `sudo` 装 system 服务。
 3. **nologin 路径**：安装器自动选择 `/usr/sbin/nologin` 或 `/sbin/nologin`。
@@ -495,7 +495,7 @@ docker compose up -d
 
 # 面板 http://127.0.0.1:57879/admin/
 docker compose ps
-docker compose logs -f kekulv
+docker compose logs -f sumpter
 ```
 
 目录布局：
@@ -526,8 +526,8 @@ docker compose up -d
 若要钉死某一版（可选）：
 
 ```bash
-export KEKULV_VERSION='<version>'
-export KEKULV_IMAGE="ghcr.io/domoxiaojun/sumpter:${KEKULV_VERSION}"
+export SUMPTER_VERSION='<version>'
+export SUMPTER_IMAGE="ghcr.io/domoxiaojun/sumpter:${SUMPTER_VERSION}"
 docker compose pull && docker compose up -d
 ```
 
@@ -546,7 +546,7 @@ echo "$GITHUB_TOKEN" | docker login ghcr.io -u YOUR_GITHUB_USER --password-stdin
 
 ### 自定义 Admin / bridge
 
-`compose.yaml` 已把 `KEKULV_ADMIN_HOST` / `KEKULV_ADMIN_PORT` 传入容器（默认 127.0.0.1:57879）。
+`compose.yaml` 已把 `SUMPTER_ADMIN_HOST` / `SUMPTER_ADMIN_PORT` 传入容器（默认 127.0.0.1:57879）。
 daemon 会按 `--config-dir /config` 自动读取 `./config/admin-password`，无需额外环境变量：
 
 ```bash
@@ -572,13 +572,13 @@ docker compose -f compose.yaml -f compose.build.example.yaml up -d --build
 ### 运维
 
 ```bash
-docker compose restart kekulv
-docker compose logs --tail=200 kekulv
+docker compose restart sumpter
+docker compose logs --tail=200 sumpter
 docker compose down          # 保留 ./config
 ```
 
 容器内无 systemd。为避免 chown，Compose 默认 `user: "0:0"` + host 网络，权限弱于
-systemd 的 `kekulv` 系统用户。Proxy 绑 `0.0.0.0` 须配 Token/CIDR；Admin 已强制密码，
+systemd 的 `sumpter` 系统用户。Proxy 绑 `0.0.0.0` 须配 Token/CIDR；Admin 已强制密码，
 但非 loopback 公网仍必须置于 HTTPS 之后。
 
 ## 配置中的重试语义
@@ -636,7 +636,7 @@ Responses WebSocket、Realtime / Live、Videos、Files 和 `/v1/models` 尚未�
 
 ## 原生构建与打包
 
-下列脚本以 **Linux 发布树** 为根（包根有自己的 `Cargo.toml`、`crates/` 和 `kekulvd`）。在当前 monorepo 里直接 `cd platforms/linux && ./scripts/cross-build.sh` **不会**构建根 workspace 的 `sumpterd-linux`。发布链适配完成前，先按仓库根 `docs/architecture.md` 做 Cargo 验证；交叉编译与打 tar.gz 仍要有一份组装好的发布树。
+下列脚本以 **Linux 发布树** 为根（包根有自己的 `Cargo.toml`、`crates/` 和 `sumpterd`）。在当前 monorepo 里直接 `cd platforms/linux && ./scripts/cross-build.sh` **不会**构建根 workspace 的 `sumpterd-linux`。发布链适配完成前，先按仓库根 `docs/architecture.md` 做 Cargo 验证；交叉编译与打 tar.gz 仍要有一份组装好的发布树。
 
 不依赖 Docker 的双架构 musl 脚本需要人工准备：
 
@@ -663,8 +663,8 @@ Responses WebSocket、Realtime / Live、Videos、Files 和 `/v1/models` 尚未�
 脚本（包括安装/卸载器）、systemd unit、README 和示例配置放入：
 
 ```text
-dist/kekulv-linux-x86_64/
-dist/kekulv-linux-aarch64/
+dist/sumpter-linux-x86_64/
+dist/sumpter-linux-aarch64/
 ```
 
 脚本不会自动安装任何工具；旧同名产物会改名为带时间戳的 `.prev-*` 目录，不会直接删除。
@@ -692,7 +692,7 @@ musl 兼容和真实上游请求必须另行验收。
 ## 常见问题
 
 - **提示存在旧 keys.json**：这是预期的硬阻断，不会自动迁移。备份后人工转换为 v3。
-- **Admin 连接失败**：默认 `127.0.0.1:57879`；若改过 `--admin-port` / `KEKULV_ADMIN_PORT`
+- **Admin 连接失败**：默认 `127.0.0.1:57879`；若改过 `--admin-port` / `SUMPTER_ADMIN_PORT`
   请用新端口。检查 daemon 日志和端口占用；proxy 57878 正常不代表 Admin 已启动。
 - **Admin API 返回 401**：会话不存在或已过期，刷新 `/admin/` 后重新登录。旧单行凭据初始
   用户名为 `kkl`；若曾在安全页修改过，以修改后的用户名为准。确认反代保留 Cookie，并传递

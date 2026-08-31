@@ -319,7 +319,7 @@ export function SecurityPage() {
               {autostart?.scope === 'system' ? 'systemd 系统级服务自启动' : 'systemd user 用户级服务开机自启动'}
             </strong>
             <span>
-              {autostart?.reason || autostart?.unit || 'kekulv.service'}
+              {autostart?.reason || autostart?.unit || 'sumpter.service'}
             </span>
           </div>
           <QuickToggle

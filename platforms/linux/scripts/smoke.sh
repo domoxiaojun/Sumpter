@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Rust kekulvd Linux 冒烟：临时 v3 配置、双 listener、内置登录 Admin、
+# Rust sumpterd Linux 冒烟：临时 v3 配置、双 listener、内置登录 Admin、
 # 禁用通知端点、SIGHUP、SIGTERM，以及旧 keys.json 拒绝启动。
-# 默认 Admin 57879；可用 KEKULV_SMOKE_ADMIN_PORT 覆盖（并传 --admin-port）。
+# 默认 Admin 57879；可用 SUMPTER_SMOKE_ADMIN_PORT 覆盖（并传 --admin-port）。
 set -euo pipefail
 umask 077
 
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="${KEKULVD_BIN:-$BASE_DIR/kekulvd}"
-WEB_ROOT="${KEKULVD_WEB_ROOT:-$BASE_DIR/web}"
-CONFIG_EXAMPLE="${KEKULVD_CONFIG_EXAMPLE:-$BASE_DIR/config.example.json}"
-PROXY_PORT="${KEKULVD_SMOKE_PROXY_PORT:-$((RANDOM % 1500 + 56000))}"
-ADMIN_PORT="${KEKULVD_SMOKE_ADMIN_PORT:-57879}"
+BIN="${SUMPTERD_BIN:-$BASE_DIR/sumpterd}"
+WEB_ROOT="${SUMPTERD_WEB_ROOT:-$BASE_DIR/web}"
+CONFIG_EXAMPLE="${SUMPTERD_CONFIG_EXAMPLE:-$BASE_DIR/config.example.json}"
+PROXY_PORT="${SUMPTERD_SMOKE_PROXY_PORT:-$((RANDOM % 1500 + 56000))}"
+ADMIN_PORT="${SUMPTERD_SMOKE_ADMIN_PORT:-57879}"
 PROXY_BASE="http://127.0.0.1:$PROXY_PORT"
 ADMIN_BASE="http://127.0.0.1:$ADMIN_PORT"
 ADMIN_USERNAME="kkl"
@@ -19,7 +19,7 @@ COOKIE_JAR=""
 ADMIN_CSRF=""
 
 [[ -x "$BIN" ]] || {
-    echo "[smoke] 失败:找不到可执行文件 $BIN(可用 KEKULVD_BIN 覆盖)" >&2
+    echo "[smoke] 失败:找不到可执行文件 $BIN(可用 SUMPTERD_BIN 覆盖)" >&2
     exit 1
 }
 [[ -f "$CONFIG_EXAMPLE" ]] || {
@@ -39,9 +39,9 @@ command -v jq >/dev/null 2>&1 || {
     exit 1
 }
 
-TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/kekulv-rust-smoke.XXXXXX")"
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sumpter-rust-smoke.XXXXXX")"
 CONFIG_DIR="$TMP_DIR/config"
-DAEMON_LOG="$TMP_DIR/kekulvd.log"
+DAEMON_LOG="$TMP_DIR/sumpterd.log"
 LEGACY_LOG="$TMP_DIR/legacy.log"
 DAEMON_PID=""
 FAILED=0
@@ -108,7 +108,7 @@ admin_write_status_of() {
     local body="${3-}"
     [[ -n "$body" ]] || body='{}'
     curl --noproxy '*' -sS -o /dev/null -w '%{http_code}' --max-time 5 \
-        -b "$COOKIE_JAR" -H 'Content-Type: application/json' -H "X-Kekulv-CSRF: $ADMIN_CSRF" \
+        -b "$COOKIE_JAR" -H 'Content-Type: application/json' -H "X-Sumpter-CSRF: $ADMIN_CSRF" \
         -X "$method" -d "$body" "$ADMIN_BASE$path" 2>/dev/null || true
 }
 

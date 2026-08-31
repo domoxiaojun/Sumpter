@@ -3,8 +3,8 @@
 set -Eeuo pipefail
 umask 077
 
-PROGRAM_NAME="kekulv"
-SERVICE_NAME="kekulv.service"
+PROGRAM_NAME="sumpter"
+SERVICE_NAME="sumpter.service"
 ADMIN_DROPIN_NAME="50-admin-listen.conf"
 DEFAULT_ADMIN_HOST="127.0.0.1"
 DEFAULT_ADMIN_PORT="57879"
@@ -26,7 +26,7 @@ STAGE_DIR=""
 RESOLVED_PACKAGE_ROOT=""
 UNIT_STAGE=""
 SYSTEMD_SCOPE=""
-SYSTEM_TEST_ROOT="${KEKULV_SYSTEM_TEST_ROOT:-}"
+SYSTEM_TEST_ROOT="${SUMPTER_SYSTEM_TEST_ROOT:-}"
 SYSTEM_ROOT=""
 SERVICE_USER=""
 SERVICE_GROUP=""
@@ -52,14 +52,14 @@ die() {
 }
 
 note() {
-    echo "[kekulv-install] $*"
+    echo "[sumpter-install] $*"
 }
 
 usage() {
     cat <<'EOF'
 用法:
   install.sh [选项]
-      从当前已解压的 kekulv Linux 发布包安装。
+      从当前已解压的 sumpter Linux 发布包安装。
 
   install.sh --repo OWNER/REPO [--version vX.Y.Z] [选项]
       从 GitHub Release 下载当前架构的 tar.gz 与 SHA256SUMS，校验后安装。
@@ -74,25 +74,25 @@ usage() {
                         覆盖默认凭据文件路径（写入 systemd drop-in）
   -h, --help            显示帮助
 
-也可用环境变量 KEKULV_ADMIN_HOST / KEKULV_ADMIN_PORT /
-KEKULV_ADMIN_PASSWORD_FILE（CLI 优先）。
+也可用环境变量 SUMPTER_ADMIN_HOST / SUMPTER_ADMIN_PORT /
+SUMPTER_ADMIN_PASSWORD_FILE（CLI 优先）。
 未指定时保留已有 Admin drop-in；指定后写入 <unit>.d/50-admin-listen.conf。
 首次安装会生成 <配置目录>/admin-password（0600），升级与普通卸载均保留。
 旧单行格式的初始用户名为 kkl；登录后可在 WebUI 安全页修改用户名和密码。
 Admin API/SSE 使用会话 Cookie，公网入口必须使用 HTTPS。
 
 普通用户安装（默认）:
-  程序: ~/.local/share/kekulv
-  上一版本: ~/.local/share/kekulv.previous
-  配置: ~/.config/kekulv（已有 config.json 永不覆盖）
-  unit: ~/.config/systemd/user/kekulv.service
+  程序: ~/.local/share/sumpter
+  上一版本: ~/.local/share/sumpter.previous
+  配置: ~/.config/sumpter（已有 config.json 永不覆盖）
+  unit: ~/.config/systemd/user/sumpter.service
 
 root / sudo 安装（system service）:
-  程序: /opt/kekulv
-  上一版本: /opt/kekulv.previous
-  配置和统计: /var/lib/kekulv（已有 config.json 永不覆盖）
-  unit: /etc/systemd/system/kekulv.service
-  daemon: 专用低权限 kekulv 系统用户，而非 root
+  程序: /opt/sumpter
+  上一版本: /opt/sumpter.previous
+  配置和统计: /var/lib/sumpter（已有 config.json 永不覆盖）
+  unit: /etc/systemd/system/sumpter.service
+  daemon: 专用低权限 sumpter 系统用户，而非 root
 EOF
 }
 
@@ -186,14 +186,14 @@ fi
 if [[ -n "$ADMIN_PASSWORD_FILE_CLI" ]]; then
     validate_admin_password_file_value "$ADMIN_PASSWORD_FILE_CLI"
 fi
-if [[ -z "$ADMIN_HOST_CLI" && -n "${KEKULV_ADMIN_HOST:-}" ]]; then
-    validate_admin_host_value "$KEKULV_ADMIN_HOST"
+if [[ -z "$ADMIN_HOST_CLI" && -n "${SUMPTER_ADMIN_HOST:-}" ]]; then
+    validate_admin_host_value "$SUMPTER_ADMIN_HOST"
 fi
-if [[ -z "$ADMIN_PORT_CLI" && -n "${KEKULV_ADMIN_PORT:-}" ]]; then
-    is_positive_port "$KEKULV_ADMIN_PORT" || die "KEKULV_ADMIN_PORT 必须是 1...65535:$KEKULV_ADMIN_PORT"
+if [[ -z "$ADMIN_PORT_CLI" && -n "${SUMPTER_ADMIN_PORT:-}" ]]; then
+    is_positive_port "$SUMPTER_ADMIN_PORT" || die "SUMPTER_ADMIN_PORT 必须是 1...65535:$SUMPTER_ADMIN_PORT"
 fi
-if [[ -z "$ADMIN_PASSWORD_FILE_CLI" && -n "${KEKULV_ADMIN_PASSWORD_FILE:-}" ]]; then
-    validate_admin_password_file_value "$KEKULV_ADMIN_PASSWORD_FILE"
+if [[ -z "$ADMIN_PASSWORD_FILE_CLI" && -n "${SUMPTER_ADMIN_PASSWORD_FILE:-}" ]]; then
+    validate_admin_password_file_value "$SUMPTER_ADMIN_PASSWORD_FILE"
 fi
 
 [[ -z "$VERSION" || -n "$REPOSITORY" ]] || die "--version 必须与 --repo 同用"
@@ -212,15 +212,15 @@ fi
 
 validate_system_test_root() {
     local temp_root=""
-    [[ "${KEKULV_INSTALLER_SELFTEST:-}" == "1" ]] \
-        || die "KEKULV_SYSTEM_TEST_ROOT 仅允许 installer-selftest 使用"
+    [[ "${SUMPTER_INSTALLER_SELFTEST:-}" == "1" ]] \
+        || die "SUMPTER_SYSTEM_TEST_ROOT 仅允许 installer-selftest 使用"
     [[ "$SYSTEM_TEST_ROOT" == /* && "$SYSTEM_TEST_ROOT" != "/" && -d "$SYSTEM_TEST_ROOT" && ! -L "$SYSTEM_TEST_ROOT" ]] \
         || die "测试 rootfs 必须是已存在的非链接绝对目录"
     SYSTEM_ROOT="$(realpath -e "$SYSTEM_TEST_ROOT")" || die "无法解析测试 rootfs:$SYSTEM_TEST_ROOT"
     temp_root="$(realpath -e "${TMPDIR:-/tmp}")" || die "无法解析 TMPDIR"
     case "$SYSTEM_ROOT" in
-        "$temp_root"/kekulv-installer-test.*/rootfs) ;;
-        *) die "测试 rootfs 必须位于 $temp_root/kekulv-installer-test.*/rootfs" ;;
+        "$temp_root"/sumpter-installer-test.*/rootfs) ;;
+        *) die "测试 rootfs 必须位于 $temp_root/sumpter-installer-test.*/rootfs" ;;
     esac
 }
 
@@ -235,8 +235,8 @@ configure_scope() {
         UNIT_DIR="$SYSTEM_ROOT/etc/systemd/system"
     elif [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
         SYSTEMD_SCOPE="system"
-        SERVICE_USER="kekulv"
-        SERVICE_GROUP="kekulv"
+        SERVICE_USER="sumpter"
+        SERVICE_GROUP="sumpter"
         PROGRAM_PARENT="/opt"
         CONFIG_PARENT="/var/lib"
         UNIT_DIR="/etc/systemd/system"
@@ -258,9 +258,9 @@ configure_scope() {
     UNIT_DROPIN_DIR="$UNIT_DIR/${SERVICE_NAME}.d"
     UNIT_DROPIN_FILE="$UNIT_DROPIN_DIR/$ADMIN_DROPIN_NAME"
     if [[ "$SYSTEMD_SCOPE" == "system" ]]; then
-        UNIT_SOURCE="kekulv-system.service"
+        UNIT_SOURCE="sumpter-system.service"
     else
-        UNIT_SOURCE="kekulv.service"
+        UNIT_SOURCE="sumpter.service"
     fi
 }
 
@@ -268,22 +268,22 @@ configure_scope() {
 resolve_admin_listen_for_unit() {
     if [[ -n "$ADMIN_HOST_CLI" ]]; then
         ADMIN_HOST_WRITE="$ADMIN_HOST_CLI"
-    elif [[ -n "${KEKULV_ADMIN_HOST:-}" ]]; then
-        ADMIN_HOST_WRITE="$KEKULV_ADMIN_HOST"
+    elif [[ -n "${SUMPTER_ADMIN_HOST:-}" ]]; then
+        ADMIN_HOST_WRITE="$SUMPTER_ADMIN_HOST"
     else
         ADMIN_HOST_WRITE=""
     fi
     if [[ -n "$ADMIN_PORT_CLI" ]]; then
         ADMIN_PORT_WRITE="$ADMIN_PORT_CLI"
-    elif [[ -n "${KEKULV_ADMIN_PORT:-}" ]]; then
-        ADMIN_PORT_WRITE="$KEKULV_ADMIN_PORT"
+    elif [[ -n "${SUMPTER_ADMIN_PORT:-}" ]]; then
+        ADMIN_PORT_WRITE="$SUMPTER_ADMIN_PORT"
     else
         ADMIN_PORT_WRITE=""
     fi
     if [[ -n "$ADMIN_PASSWORD_FILE_CLI" ]]; then
         ADMIN_PASSWORD_FILE_WRITE="$ADMIN_PASSWORD_FILE_CLI"
-    elif [[ -n "${KEKULV_ADMIN_PASSWORD_FILE:-}" ]]; then
-        ADMIN_PASSWORD_FILE_WRITE="$KEKULV_ADMIN_PASSWORD_FILE"
+    elif [[ -n "${SUMPTER_ADMIN_PASSWORD_FILE:-}" ]]; then
+        ADMIN_PASSWORD_FILE_WRITE="$SUMPTER_ADMIN_PASSWORD_FILE"
     else
         ADMIN_PASSWORD_FILE_WRITE=""
     fi
@@ -298,14 +298,14 @@ read_admin_dropin_values() {
     [[ -f "$UNIT_DROPIN_FILE" ]] || return 0
     while IFS= read -r line || [[ -n "$line" ]]; do
         case "$line" in
-            Environment=KEKULV_ADMIN_HOST=*)
-                ADMIN_DROPIN_HOST="${line#Environment=KEKULV_ADMIN_HOST=}"
+            Environment=SUMPTER_ADMIN_HOST=*)
+                ADMIN_DROPIN_HOST="${line#Environment=SUMPTER_ADMIN_HOST=}"
                 ;;
-            Environment=KEKULV_ADMIN_PORT=*)
-                ADMIN_DROPIN_PORT="${line#Environment=KEKULV_ADMIN_PORT=}"
+            Environment=SUMPTER_ADMIN_PORT=*)
+                ADMIN_DROPIN_PORT="${line#Environment=SUMPTER_ADMIN_PORT=}"
                 ;;
-            Environment=KEKULV_ADMIN_PASSWORD_FILE=*)
-                ADMIN_DROPIN_PASSWORD_FILE="${line#Environment=KEKULV_ADMIN_PASSWORD_FILE=}"
+            Environment=SUMPTER_ADMIN_PASSWORD_FILE=*)
+                ADMIN_DROPIN_PASSWORD_FILE="${line#Environment=SUMPTER_ADMIN_PASSWORD_FILE=}"
                 ;;
         esac
     done <"$UNIT_DROPIN_FILE"
@@ -395,28 +395,28 @@ apply_admin_listen_unit_override() {
 
     ensure_directory "$UNIT_DROPIN_DIR" 0755
     {
-        echo "# Managed by kekulv install.sh. Re-run install with --admin-host/--admin-port/--admin-password-file to update."
+        echo "# Managed by sumpter install.sh. Re-run install with --admin-host/--admin-port/--admin-password-file to update."
         echo "[Service]"
         if [[ -n "$write_host" ]]; then
-            printf 'Environment=KEKULV_ADMIN_HOST=%s\n' "$write_host"
+            printf 'Environment=SUMPTER_ADMIN_HOST=%s\n' "$write_host"
         fi
         if [[ -n "$write_port" ]]; then
-            printf 'Environment=KEKULV_ADMIN_PORT=%s\n' "$write_port"
+            printf 'Environment=SUMPTER_ADMIN_PORT=%s\n' "$write_port"
         fi
         if [[ -n "$write_password_file" ]]; then
-            printf 'Environment=KEKULV_ADMIN_PASSWORD_FILE=%s\n' "$write_password_file"
+            printf 'Environment=SUMPTER_ADMIN_PASSWORD_FILE=%s\n' "$write_password_file"
         fi
     } >"$UNIT_DROPIN_FILE"
     chmod 0644 "$UNIT_DROPIN_FILE"
     note "已写入 Admin 监听覆盖:$UNIT_DROPIN_FILE"
     if [[ -n "$write_host" ]]; then
-        note "  KEKULV_ADMIN_HOST=$write_host"
+        note "  SUMPTER_ADMIN_HOST=$write_host"
     fi
     if [[ -n "$write_port" ]]; then
-        note "  KEKULV_ADMIN_PORT=$write_port"
+        note "  SUMPTER_ADMIN_PORT=$write_port"
     fi
     if [[ -n "$write_password_file" ]]; then
-        note "  KEKULV_ADMIN_PASSWORD_FILE=$write_password_file"
+        note "  SUMPTER_ADMIN_PASSWORD_FILE=$write_password_file"
     fi
 }
 
@@ -531,7 +531,7 @@ relabel_path_for_selinux() {
         restorecon -RF -- "$target" >/dev/null 2>&1 \
             || note "警告:restorecon 未完全成功，服务若 203/EXEC 请手动: restorecon -RF $target"
     else
-        note "警告:SELinux 已启用但缺少 restorecon（安装 policycoreutils）。若服务无法启动: chcon -t bin_t $INSTALL_DIR/kekulvd"
+        note "警告:SELinux 已启用但缺少 restorecon（安装 policycoreutils）。若服务无法启动: chcon -t bin_t $INSTALL_DIR/sumpterd"
     fi
 }
 
@@ -556,7 +556,7 @@ dump_service_failure_hints() {
     if selinux_enabled; then
         note "SELinux=$(getenforce 2>/dev/null || echo unknown)。若日志含 status=203/EXEC 或 Permission denied:"
         note "  restorecon -RF $INSTALL_DIR"
-        note "  # 或: chcon -t bin_t $INSTALL_DIR/kekulvd"
+        note "  # 或: chcon -t bin_t $INSTALL_DIR/sumpterd"
         if command -v ausearch >/dev/null 2>&1; then
             ausearch -m avc -ts recent 2>/dev/null | tail -n 15 || true
         fi
@@ -578,9 +578,9 @@ ensure_system_account() {
     nologin_shell="$(resolve_nologin_shell)"
     if command -v useradd >/dev/null 2>&1; then
         # shadow-utils（Fedora/RHEL/Debian 通用）：系统用户 + 同名主组，不强制创建 home。
-        useradd --system --user-group --home-dir /var/lib/kekulv --shell "$nologin_shell" "$SERVICE_USER"
+        useradd --system --user-group --home-dir /var/lib/sumpter --shell "$nologin_shell" "$SERVICE_USER"
     elif command -v adduser >/dev/null 2>&1; then
-        adduser --system --group --no-create-home --home /var/lib/kekulv --shell "$nologin_shell" "$SERVICE_USER"
+        adduser --system --group --no-create-home --home /var/lib/sumpter --shell "$nologin_shell" "$SERVICE_USER"
     else
         die "root 安装需要 useradd 或 adduser 来创建低权限系统用户 $SERVICE_USER"
     fi
@@ -633,7 +633,7 @@ fi
 is_managed_install() {
     local candidate="$1"
     [[ -d "$candidate" && ! -L "$candidate" \
-        && -f "$candidate/kekulvd" && ! -L "$candidate/kekulvd" \
+        && -f "$candidate/sumpterd" && ! -L "$candidate/sumpterd" \
         && -f "$candidate/web/index.html" && ! -L "$candidate/web/index.html" ]]
 }
 
@@ -652,7 +652,7 @@ safe_remove_tree() {
     parent_real="$(realpath -e "$(dirname "$candidate")")" || die "无法解析删除目标父目录:$candidate"
     [[ "$parent_real" == "$PROGRAM_PARENT_REAL" ]] \
         || die "删除目标不在预期程序目录:$candidate"
-    is_managed_install "$candidate" || die "目录不像 kekulv 安装，拒绝删除:$candidate"
+    is_managed_install "$candidate" || die "目录不像 sumpter 安装，拒绝删除:$candidate"
     note "删除$label:$candidate"
     rm -rf -- "$candidate"
 }
@@ -716,13 +716,13 @@ finish() {
         rollback
     fi
     if [[ -n "$STAGE_DIR" ]]; then
-        safe_remove_temp "$STAGE_DIR" "$PROGRAM_PARENT/.kekulv.stage."
+        safe_remove_temp "$STAGE_DIR" "$PROGRAM_PARENT/.sumpter.stage."
     fi
-    if [[ -n "$UNIT_STAGE" && "$UNIT_STAGE" == "$UNIT_DIR/.kekulv.service."* ]]; then
+    if [[ -n "$UNIT_STAGE" && "$UNIT_STAGE" == "$UNIT_DIR/.sumpter.service."* ]]; then
         rm -f -- "$UNIT_STAGE"
     fi
     if [[ -n "$DOWNLOAD_DIR" ]]; then
-        safe_remove_temp "$DOWNLOAD_DIR" "${TMPDIR:-/tmp}/kekulv-download."
+        safe_remove_temp "$DOWNLOAD_DIR" "${TMPDIR:-/tmp}/sumpter-download."
     fi
     exit "$status"
 }
@@ -786,14 +786,14 @@ resolve_remote_package() {
         command -v "$command_name" >/dev/null 2>&1 || die "远程安装缺少命令:$command_name"
     done
     arch="$(detect_arch)"
-    asset="kekulv-linux-${arch}.tar.gz"
+    asset="sumpter-linux-${arch}.tar.gz"
     if [[ -n "$VERSION" ]]; then
         base_url="https://github.com/${REPOSITORY}/releases/download/${VERSION}"
     else
         base_url="https://github.com/${REPOSITORY}/releases/latest/download"
     fi
 
-    DOWNLOAD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/kekulv-download.XXXXXX")"
+    DOWNLOAD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sumpter-download.XXXXXX")"
     archive="$DOWNLOAD_DIR/$asset"
     sums="$DOWNLOAD_DIR/SHA256SUMS"
     note "下载:$base_url/$asset"
@@ -824,12 +824,12 @@ resolve_remote_package() {
         die "发布包包含符号链接，拒绝安装"
     fi
 
-    if [[ -f "$DOWNLOAD_DIR/extracted/kekulvd" ]]; then
+    if [[ -f "$DOWNLOAD_DIR/extracted/sumpterd" ]]; then
         RESOLVED_PACKAGE_ROOT="$DOWNLOAD_DIR/extracted"
         return
     fi
     mapfile -d '' -t roots < <(find "$DOWNLOAD_DIR/extracted" -mindepth 1 -maxdepth 1 -type d -print0)
-    [[ "${#roots[@]}" -eq 1 && -f "${roots[0]}/kekulvd" ]] \
+    [[ "${#roots[@]}" -eq 1 && -f "${roots[0]}/sumpterd" ]] \
         || die "发布包必须直接包含文件，或仅包含一个顶层目录"
     RESOLVED_PACKAGE_ROOT="${roots[0]}"
 }
@@ -840,37 +840,37 @@ validate_package() {
     local description=""
     local arch=""
 
-    for required in kekulvd config.example.json kekulv.service kekulv-system.service web/index.html scripts/install.sh scripts/uninstall.sh; do
+    for required in sumpterd config.example.json sumpter.service sumpter-system.service web/index.html scripts/install.sh scripts/uninstall.sh; do
         [[ -f "$package_root/$required" && ! -L "$package_root/$required" ]] \
             || die "发布包缺少普通文件:$required"
     done
-    [[ -x "$package_root/kekulvd" ]] || die "发布包中的 kekulvd 不可执行"
-    for required in kekulvd web scripts config.example.json kekulv.service kekulv-system.service; do
+    [[ -x "$package_root/sumpterd" ]] || die "发布包中的 sumpterd 不可执行"
+    for required in sumpterd web scripts config.example.json sumpter.service sumpter-system.service; do
         if find "$package_root/$required" -type l -print -quit | grep -q .; then
             die "发布包项目包含符号链接:$required"
         fi
     done
-    grep -Fq 'WorkingDirectory=%h/.local/share/kekulv' "$package_root/kekulv.service" \
-        || die "kekulv.service 的 WorkingDirectory 与安装器布局不一致"
-    grep -Fq 'ExecStart=%h/.local/share/kekulv/kekulvd --systemd-scope user --config-dir %h/.config/kekulv --web-root %h/.local/share/kekulv/web' "$package_root/kekulv.service" \
-        || die "kekulv.service 的 ExecStart 与安装器布局不一致"
-    grep -Fq 'WorkingDirectory=/opt/kekulv' "$package_root/kekulv-system.service" \
-        || die "kekulv-system.service 的 WorkingDirectory 与安装器布局不一致"
-    grep -Fq 'User=kekulv' "$package_root/kekulv-system.service" \
-        || die "kekulv-system.service 必须以低权限 kekulv 用户运行"
-    grep -Fq 'ExecStart=/opt/kekulv/kekulvd --systemd-scope system --config-dir /var/lib/kekulv --web-root /opt/kekulv/web' "$package_root/kekulv-system.service" \
-        || die "kekulv-system.service 的 ExecStart 与安装器布局不一致"
+    grep -Fq 'WorkingDirectory=%h/.local/share/sumpter' "$package_root/sumpter.service" \
+        || die "sumpter.service 的 WorkingDirectory 与安装器布局不一致"
+    grep -Fq 'ExecStart=%h/.local/share/sumpter/sumpterd --systemd-scope user --config-dir %h/.config/sumpter --web-root %h/.local/share/sumpter/web' "$package_root/sumpter.service" \
+        || die "sumpter.service 的 ExecStart 与安装器布局不一致"
+    grep -Fq 'WorkingDirectory=/opt/sumpter' "$package_root/sumpter-system.service" \
+        || die "sumpter-system.service 的 WorkingDirectory 与安装器布局不一致"
+    grep -Fq 'User=sumpter' "$package_root/sumpter-system.service" \
+        || die "sumpter-system.service 必须以低权限 sumpter 用户运行"
+    grep -Fq 'ExecStart=/opt/sumpter/sumpterd --systemd-scope system --config-dir /var/lib/sumpter --web-root /opt/sumpter/web' "$package_root/sumpter-system.service" \
+        || die "sumpter-system.service 的 ExecStart 与安装器布局不一致"
 
     if command -v file >/dev/null 2>&1; then
-        description="$(file -b "$package_root/kekulvd")"
-        [[ "$description" == *ELF* ]] || die "kekulvd 不是 Linux ELF:$description"
+        description="$(file -b "$package_root/sumpterd")"
+        [[ "$description" == *ELF* ]] || die "sumpterd 不是 Linux ELF:$description"
         arch="$(detect_arch)"
         if [[ "$arch" == "x86_64" ]]; then
             [[ "$description" == *"x86-64"* || "$description" == *"x86_64"* ]] \
-                || die "kekulvd 架构与本机 x86_64 不匹配:$description"
+                || die "sumpterd 架构与本机 x86_64 不匹配:$description"
         else
             [[ "$description" == *"aarch64"* || "$description" == *"ARM64"* ]] \
-                || die "kekulvd 架构与本机 aarch64 不匹配:$description"
+                || die "sumpterd 架构与本机 aarch64 不匹配:$description"
         fi
     fi
 }
@@ -879,8 +879,8 @@ copy_package_to_stage() {
     local package_root="$1"
     local item=""
 
-    STAGE_DIR="$(mktemp -d "$PROGRAM_PARENT/.kekulv.stage.XXXXXX")"
-    for item in kekulvd web scripts config.example.json kekulv.service kekulv-system.service; do
+    STAGE_DIR="$(mktemp -d "$PROGRAM_PARENT/.sumpter.stage.XXXXXX")"
+    for item in sumpterd web scripts config.example.json sumpter.service sumpter-system.service; do
         copy_tree_item "$package_root/$item" "$STAGE_DIR"
     done
     for item in README.md LICENSE NOTICE THIRD_PARTY_LICENSES specs; do
@@ -893,7 +893,7 @@ copy_package_to_stage() {
     done
     find "$STAGE_DIR" -type d -exec chmod 0755 {} +
     find "$STAGE_DIR" -type f -exec chmod 0644 {} +
-    chmod 0755 "$STAGE_DIR/kekulvd"
+    chmod 0755 "$STAGE_DIR/sumpterd"
     find "$STAGE_DIR/scripts" -type f -name '*.sh' -exec chmod 0755 {} +
     # 在 mv 进最终路径前先按目标父目录策略打标签，避免 Fedora 上带 tmp_t。
     relabel_path_for_selinux "$STAGE_DIR"
@@ -910,7 +910,7 @@ copy_package_to_stage "$PACKAGE_ROOT"
 
 if [[ -e "$INSTALL_DIR" || -L "$INSTALL_DIR" ]]; then
     is_managed_install "$INSTALL_DIR" \
-        || die "目标已存在但不是可识别的 kekulv 安装，拒绝覆盖:$INSTALL_DIR"
+        || die "目标已存在但不是可识别的 sumpter 安装，拒绝覆盖:$INSTALL_DIR"
     HAD_INSTALL=1
 fi
 if [[ -e "$PREVIOUS_DIR" || -L "$PREVIOUS_DIR" ]]; then
@@ -949,7 +949,7 @@ if [[ "$HAD_UNIT" -eq 1 ]]; then
     mv -- "$UNIT_PATH" "$UNIT_PREVIOUS"
 fi
 UNIT_SWAPPED=1
-UNIT_STAGE="$(mktemp "$UNIT_DIR/.kekulv.service.XXXXXX")"
+UNIT_STAGE="$(mktemp "$UNIT_DIR/.sumpter.service.XXXXXX")"
     install -m 0644 "$INSTALL_DIR/$UNIT_SOURCE" "$UNIT_STAGE"
 mv -f -- "$UNIT_STAGE" "$UNIT_PATH"
 UNIT_STAGE=""
@@ -982,11 +982,11 @@ ensure_admin_password_file
 # 最终路径再 restorecon 一次（mv 后 inode 路径变化，策略按路径匹配）。
 relabel_path_for_selinux "$INSTALL_DIR"
 if [[ "$SYSTEMD_SCOPE" == "system" ]]; then
-    # 确保 kekulv 用户能遍历程序目录读 web 静态资源。
+    # 确保 sumpter 用户能遍历程序目录读 web 静态资源。
     chmod 0755 "$INSTALL_DIR"
     find "$INSTALL_DIR" -type d -exec chmod 0755 {} +
     find "$INSTALL_DIR" -type f -exec chmod 0644 {} +
-    chmod 0755 "$INSTALL_DIR/kekulvd"
+    chmod 0755 "$INSTALL_DIR/sumpterd"
     find "$INSTALL_DIR/scripts" -type f -name '*.sh' -exec chmod 0755 {} + 2>/dev/null || true
 fi
 
@@ -1015,4 +1015,4 @@ else
     note "user 服务管理: systemctl --user status|restart|stop $SERVICE_NAME"
 fi
 note "改登录凭据:使用 WebUI 安全页；忘记凭据时覆盖 ${ADMIN_EFFECTIVE_PASSWORD_FILE:-$CONFIG_DIR/admin-password} 为新单行密码并重启"
-note "改 Admin 监听/高级密码路径:重装时加 --admin-host/--admin-port/--admin-password-file，或用 systemctl edit 写 Environment=KEKULV_ADMIN_*"
+note "改 Admin 监听/高级密码路径:重装时加 --admin-host/--admin-port/--admin-password-file，或用 systemctl edit 写 Environment=SUMPTER_ADMIN_*"

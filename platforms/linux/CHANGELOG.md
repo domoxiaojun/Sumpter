@@ -1,6 +1,6 @@
 # Changelog
 
-本文件记录 Linux 版（`kekulvd` + Web Admin）每个发布版本的变化。版本号由
+本文件记录 Linux 版（`sumpterd` + Web Admin）每个发布版本的变化。历史条目里的 `kekulv` 是当时的运行时名字。版本号由
 `Cargo.toml` 的 `workspace.package.version` 决定，`webui/package.json` 与之保持一致。
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本。

@@ -223,7 +223,7 @@ fn normalize_headers(headers: &HeaderMap) -> Vec<(String, String)> {
             if matches!(key.as_str(), "date" | "server" | "via") {
                 return None;
             }
-            let value = if key == "x-kekulv-request-id" {
+            let value = if key == "x-sumpter-request-id" {
                 "<request-id>".to_string()
             } else {
                 value.to_str().ok()?.to_string()

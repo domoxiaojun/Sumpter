@@ -175,7 +175,7 @@ public struct CodexCompactionMetadata: Codable, Equatable, Sendable {
 }
 
 /// Safe, bounded Codex turn metadata emitted by the Rust sidecar.
-/// 客户端用入站 `X-Kekulv-*` header 自称的项目归因。
+/// 客户端用入站 `X-Sumpter-*` header 自称的项目归因。
 ///
 /// 给 Claude Code 之类不上行 workspace 结构的客户端补项目维度用。可信度低于
 /// `CodexMetadata`：值是客户端自称的，daemon 侧归因时排在 Codex workspace 之后。

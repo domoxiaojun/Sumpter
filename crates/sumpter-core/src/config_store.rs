@@ -66,13 +66,13 @@ fn is_affinity_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-/// Linux 默认配置目录：`$XDG_CONFIG_HOME/kekulv`，否则 `~/.config/kekulv`。
+/// Linux 默认配置目录：`$XDG_CONFIG_HOME/sumpter`，否则 `~/.config/sumpter`。
 pub fn default_config_dir() -> Option<PathBuf> {
     if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()) {
-        return Some(PathBuf::from(xdg).join("kekulv"));
+        return Some(PathBuf::from(xdg).join("sumpter"));
     }
     let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".config/kekulv"))
+    Some(PathBuf::from(home).join(".config/sumpter"))
 }
 
 #[derive(Debug, Clone)]
@@ -945,7 +945,7 @@ fn atomic_write(path: &Path, data: &[u8]) -> io::Result<PersistOutcome> {
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("kekulv-data");
+        .unwrap_or("sumpter-data");
     let tmp = path.with_file_name(format!(".{file_name}.{}.tmp", std::process::id()));
     let prepare_result = (|| {
         let mut options = OpenOptions::new();
@@ -1003,7 +1003,7 @@ mod tests {
 
     fn temp_dir(tag: &str) -> ConfigDir {
         let root =
-            std::env::temp_dir().join(format!("kekulv-linux-test-{tag}-{}", std::process::id()));
+            std::env::temp_dir().join(format!("sumpter-linux-test-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         ConfigDir::new(root)
     }

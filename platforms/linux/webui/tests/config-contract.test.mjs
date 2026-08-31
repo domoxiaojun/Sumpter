@@ -468,7 +468,7 @@ test('Codex workspace context prefers local project names and keeps remote as se
     agentName: '/root',
     workspaces: {
       '/workspace/automode-proxy': {
-        associatedRemoteURLs: { origin: 'https://github.com/example/kekulv.git' },
+        associatedRemoteURLs: { origin: 'https://github.com/example/sumpter.git' },
         latestGitCommitHash: '1234567890abcdef',
         hasChanges: true,
       },
@@ -481,7 +481,7 @@ test('Codex workspace context prefers local project names and keeps remote as se
       projectName: 'automode-proxy',
       status: '有未提交改动',
       commit: '12345678',
-      remote: 'github.com/example/kekulv',
+      remote: 'github.com/example/sumpter',
     },
     {
       path: '/workspace/local-only',
@@ -1025,7 +1025,7 @@ test('diagnostic capture write response remains an index without plaintext body'
 test('runtime mock session export and delete update the visible aggregate', async () => {
   const before = await api.getRuntimeAnalytics('24h');
   const exported = await api.exportRuntimeSession('session-demo-001');
-  assert.equal(exported.format, 'kekulv-session-export-v1');
+  assert.equal(exported.format, 'sumpter-session-export-v1');
   assert.equal(exported.sessionID, 'session-demo-001');
   const mutation = await api.deleteRuntimeSession('session-demo-001');
   assert.equal(mutation.deletedRequests, 36);

@@ -44,7 +44,7 @@ private struct RecreateDatabaseButton: View {
 }
 
 struct UsagePane: View {
-    @Environment(\.kekulvPalette) private var palette
+    @Environment(\.sumpterPalette) private var palette
     private enum StatisticsBoard: String, CaseIterable, Identifiable {
         case overview
         case trends
@@ -681,7 +681,7 @@ struct UsagePane: View {
             TableColumn("最近活动", value: \.lastSeen) { row in Text(RuntimeEventDisplay.dateTime(Date(timeIntervalSinceReferenceDate: row.lastSeen))).font(.caption.monospacedDigit()) }.width(min: 150, ideal: 174)
         }
         .onChange(of: sortOrder.wrappedValue) { _, order in applyRuntimeOverviewSort(order, kind: kind) }
-        .kekulvTableSurface()
+        .sumpterTableSurface()
         .frame(minWidth: 1_040)
         .frame(height: min(280, max(96, CGFloat(page.rows.count) * 31 + 38)))
     }
@@ -698,7 +698,7 @@ struct UsagePane: View {
             TableColumn("最近活动", value: \.lastSeen) { row in Text(RuntimeEventDisplay.dateTime(Date(timeIntervalSinceReferenceDate: row.lastSeen))).font(.caption.monospacedDigit()) }.width(min: 150, ideal: 174)
         }
         .onChange(of: sortOrder.wrappedValue) { _, order in applyRuntimeOverviewSort(order, kind: kind) }
-        .kekulvTableSurface()
+        .sumpterTableSurface()
         .frame(minWidth: 720)
         .frame(height: min(240, max(96, CGFloat(page.rows.count) * 31 + 38)))
     }
@@ -999,7 +999,7 @@ struct UsagePane: View {
                             }
                             .width(min: 92, ideal: 105, max: 125)
                     }
-                    .kekulvTableSurface()
+                    .sumpterTableSurface()
                     .frame(minWidth: 1_020)
                     .frame(minHeight: 150)
                 }
@@ -1162,7 +1162,7 @@ struct UsagePane: View {
                 }
                 .width(min: 92, ideal: 105, max: 125)
             }
-            .kekulvTableSurface()
+            .sumpterTableSurface()
             .frame(minHeight: 150)
         } else {
             EmptyStateView(title: "所选范围暂无上游 Token usage", systemImage: "number")
@@ -1342,7 +1342,7 @@ struct UsagePane: View {
                     }
                     .width(min: 96, ideal: 112, max: 140)
                 }
-                .kekulvTableSurface()
+                .sumpterTableSurface()
                 .frame(minHeight: 150)
             }
         }
@@ -1646,7 +1646,7 @@ struct UsagePane: View {
                             TableColumn("平均完成耗时") { point in Text(latencyAverage(point.durationMS)).monospacedDigit() }.width(min: 108, ideal: 122)
                             TableColumn("成本") { point in Text(costText(point.cost.estimatedCostMicros, currency: point.cost.currency)).monospacedDigit() }.width(min: 110, ideal: 130)
                     }
-                    .kekulvTableSurface()
+                    .sumpterTableSurface()
                     .frame(minWidth: 820)
                     .frame(height: min(260, max(90, CGFloat(trend.points.count) * 26 + 34)))
                 }
@@ -1725,7 +1725,7 @@ struct UsagePane: View {
                             TableColumn("会话") { group in Text(tokenNumber(group.affectedSessions)).monospacedDigit() }.width(min: 76, ideal: 86)
                             TableColumn("最近") { group in Text(RuntimeEventDisplay.dateTime(Date(timeIntervalSinceReferenceDate: group.lastSeen))).font(.caption.monospacedDigit()) }.width(min: 150, ideal: 170)
                     }
-                    .kekulvTableSurface()
+                    .sumpterTableSurface()
                     .frame(minWidth: 900)
                     .frame(height: min(240, max(90, CGFloat(page.groups.count) * 28 + 34)))
                 }
@@ -1839,7 +1839,7 @@ struct UsagePane: View {
                 .onChange(of: runtimeDimensionTableSort) { _, order in
                     applyRuntimeDimensionSort(order)
                 }
-                .kekulvTableSurface()
+                .sumpterTableSurface()
                 .frame(maxWidth: .infinity)
                 .frame(height: min(310, max(102, CGFloat(page.rows.count) * 31 + 38)))
             }
@@ -2085,7 +2085,7 @@ struct UsagePane: View {
                         TableColumn("平均耗时") { row in Text(row.averageDurationMS.map { RuntimeEventPresentation.durationDisplay(Int($0.rounded())) } ?? "—").monospacedDigit() }.width(min: 100, ideal: 120)
                         TableColumn("最近") { row in Text(RuntimeEventDisplay.dateTime(Date(timeIntervalSinceReferenceDate: row.lastSeen))).font(.caption.monospacedDigit()) }.width(min: 150, ideal: 170)
                 }
-                .kekulvTableSurface()
+                .sumpterTableSurface()
                 .frame(minWidth: 860)
                 .frame(height: min(240, max(90, CGFloat(page.rows.count) * 28 + 34)))
             }
@@ -2691,7 +2691,7 @@ struct UsagePane: View {
                     Text("\(row.failovers)").monospacedDigit()
                 }
             }
-            .kekulvTableSurface()
+            .sumpterTableSurface()
             .frame(height: adaptiveTableHeight(rows: rows.count, max: 240))
         }
     }
@@ -2747,7 +2747,7 @@ struct UsagePane: View {
                             .monospacedDigit()
                     }
                 }
-                .kekulvTableSurface()
+                .sumpterTableSurface()
                 .frame(height: adaptiveTableHeight(rows: rows.count, max: 220))
             }
         }

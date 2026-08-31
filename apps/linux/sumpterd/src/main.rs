@@ -1,9 +1,9 @@
 //! sumpterd Linux daemon。
 //!
 //! Admin 默认监听 loopback `127.0.0.1:57879`，可用 `--admin-host` / `--admin-port`
-//! 或环境变量 `KEKULV_ADMIN_HOST` / `KEKULV_ADMIN_PORT` 覆盖（适合写进 systemd unit）。
+//! 或环境变量 `SUMPTER_ADMIN_HOST` / `SUMPTER_ADMIN_PORT` 覆盖（适合写进 systemd unit）。
 //! Admin 默认读取 `<config-dir>/admin-password`，由 WebUI 内置登录页保护；
-//! `--admin-password-file` / `KEKULV_ADMIN_PASSWORD_FILE` 可覆盖凭据文件路径。
+//! `--admin-password-file` / `SUMPTER_ADMIN_PASSWORD_FILE` 可覆盖凭据文件路径。
 //! 现有单行密码文件会在首次修改凭据时迁移为 Argon2 哈希 JSON；公网访问仍建议 HTTPS。
 //! Proxy 数据面按 schema v5 `config.json.listener` 独立运行。
 //! daemon 默认前台运行，适配 systemd user/system service，不监视 stdin EOF。
@@ -140,13 +140,13 @@ fn resolve_admin_listen(
     cli_port: Option<u16>,
 ) -> Result<AdminListen, String> {
     let host = cli_host
-        .or_else(|| std::env::var("KEKULV_ADMIN_HOST").ok())
+        .or_else(|| std::env::var("SUMPTER_ADMIN_HOST").ok())
         .unwrap_or_else(|| DEFAULT_ADMIN_HOST.to_string());
     let port = match cli_port {
         Some(port) => port,
-        None => match std::env::var("KEKULV_ADMIN_PORT") {
+        None => match std::env::var("SUMPTER_ADMIN_PORT") {
             Ok(value) => parse_admin_port_arg(&value)
-                .map_err(|error| format!("KEKULV_ADMIN_PORT: {error}"))?,
+                .map_err(|error| format!("SUMPTER_ADMIN_PORT: {error}"))?,
             Err(_) => DEFAULT_ADMIN_PORT,
         },
     };
@@ -169,7 +169,7 @@ fn resolve_admin_auth(
     cli_password_file: Option<PathBuf>,
     config_dir: &Path,
 ) -> Result<AdminAuth, String> {
-    let env_password_file = std::env::var_os("KEKULV_ADMIN_PASSWORD_FILE").map(PathBuf::from);
+    let env_password_file = std::env::var_os("SUMPTER_ADMIN_PASSWORD_FILE").map(PathBuf::from);
     resolve_admin_auth_from(cli_password_file, env_password_file, config_dir)
 }
 
@@ -190,13 +190,13 @@ fn print_usage() {
 [--systemd-scope user|system] [--admin-host <ip>] [--admin-port <port>] \
 [--admin-password-file <path>] \
 [--foreground] [--version]\n\
-环境变量: KEKULV_ADMIN_HOST / KEKULV_ADMIN_PORT / KEKULV_ADMIN_PASSWORD_FILE / KEKULV_WEB_ROOT\n\
+环境变量: SUMPTER_ADMIN_HOST / SUMPTER_ADMIN_PORT / SUMPTER_ADMIN_PASSWORD_FILE / SUMPTER_WEB_ROOT\n\
 Admin 默认 {DEFAULT_ADMIN_HOST}:{DEFAULT_ADMIN_PORT}；凭据默认读取 <config-dir>/{DEFAULT_ADMIN_PASSWORD_FILENAME}"
     );
 }
 
 fn default_web_root() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("KEKULV_WEB_ROOT") {
+    if let Some(path) = std::env::var_os("SUMPTER_WEB_ROOT") {
         let path = PathBuf::from(path);
         if path.is_dir() {
             return Some(path);
@@ -204,7 +204,7 @@ fn default_web_root() -> Option<PathBuf> {
     }
     let executable = std::env::current_exe().ok()?;
     let prefix = executable.parent()?.parent()?;
-    let installed = prefix.join("share/kekulv/web");
+    let installed = prefix.join("share/sumpter/web");
     if installed.is_dir() {
         return Some(installed);
     }
@@ -420,7 +420,7 @@ mod tests {
 
     fn temp_password_path(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
-            "kekulv-admin-password-{label}-{}-{}",
+            "sumpter-admin-password-{label}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

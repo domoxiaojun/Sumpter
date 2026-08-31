@@ -1923,7 +1923,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
       const url = `data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(payload, null, 2))}`;
       const anchor = document.createElement('a');
       anchor.href = url;
-      anchor.download = `kekulv-session-${value.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 96) || 'export'}.json`;
+      anchor.download = `sumpter-session-${value.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 96) || 'export'}.json`;
       anchor.click();
       addToast?.('会话已导出', 'success');
     } catch (error) {

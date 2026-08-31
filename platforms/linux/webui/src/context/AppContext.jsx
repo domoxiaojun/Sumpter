@@ -23,8 +23,8 @@ function normalizeAnalyticsFilters(filters = {}) {
 
 const refreshIntervalOptions = [1, 2, 5, 10, 15, 30];
 const refreshIntervalStorageKeys = {
-  run: 'kekulv-refresh-interval-run',
-  statistics: 'kekulv-refresh-interval-statistics',
+  run: 'sumpter-refresh-interval-run',
+  statistics: 'sumpter-refresh-interval-statistics',
 };
 
 function readRefreshInterval(key, fallback) {
@@ -126,7 +126,7 @@ export function AppProvider({ children }) {
   });
 
   // Theme State
-  const [theme, setTheme] = useState(() => localStorage.getItem('kekulv-theme') || 'dark');
+  const [theme, setTheme] = useState(() => localStorage.getItem('sumpter-theme') || 'dark');
 
   // Core Data State
   const [configDoc, setConfigDoc] = useState(null);
@@ -267,7 +267,7 @@ export function AppProvider({ children }) {
   // Sync Theme to DOM
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('kekulv-theme', theme);
+    localStorage.setItem('sumpter-theme', theme);
   }, [theme]);
 
   // Sync Hash to Route
@@ -309,7 +309,7 @@ export function AppProvider({ children }) {
   const showMigrationNotice = useCallback((notice) => {
     const id = String(notice?.id || '').trim();
     if (!id || migrationNoticesRef.current.has(id)) return;
-    const storageKey = `kekulv-migration-notice:${id}`;
+    const storageKey = `sumpter-migration-notice:${id}`;
     let alreadyShown = false;
     try { alreadyShown = Boolean(localStorage.getItem(storageKey)); } catch { /* notification stays non-blocking */ }
     if (alreadyShown) {

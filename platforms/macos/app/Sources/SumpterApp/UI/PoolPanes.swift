@@ -599,7 +599,7 @@ private struct ProviderSummaryPanel<Content: View, Action: View>: View {
     @ViewBuilder var action: Action
     @ViewBuilder var content: Content
 
-    @Environment(\.kekulvPalette) private var palette
+    @Environment(\.sumpterPalette) private var palette
 
     var body: some View {
         VStack(alignment: .leading, spacing: SumpterTheme.Layout.panelSpacing) {
@@ -634,7 +634,7 @@ private struct ProviderSummaryPanel<Content: View, Action: View>: View {
 private struct ProviderPolicySummaryItem: View {
     let title: String
     let value: String
-    @Environment(\.kekulvPalette) private var palette
+    @Environment(\.sumpterPalette) private var palette
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -664,7 +664,7 @@ private struct EndpointDetailField: View {
     let value: String
     var copyable = false
 
-    @Environment(\.kekulvPalette) private var palette
+    @Environment(\.sumpterPalette) private var palette
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
@@ -768,7 +768,7 @@ private struct ProviderTableColumnWidths: Equatable, Codable {
     var models = ProviderTableColumn.models.defaultWidth
     var actions = ProviderTableColumn.actions.defaultWidth
 
-    static let storageKey = "kekulv.providers.table.columnWidths"
+    static let storageKey = "sumpter.providers.table.columnWidths"
 
     var total: CGFloat {
         status + name + priority + protocolName + mapping + models + actions
@@ -835,7 +835,7 @@ private struct ProviderResizableHeaderCell: View {
     let maximumWidth: CGFloat
     let onResizeEnded: () -> Void
 
-    @Environment(\.kekulvPalette) private var palette
+    @Environment(\.sumpterPalette) private var palette
     @State private var dragOrigin: CGFloat?
     @State private var isHoveringHandle = false
 
@@ -931,7 +931,7 @@ private struct ProviderAccountsTable: View {
     var onMove: (EndpointDisplayRow, Int) -> Void = { _, _ in }
     var onReorder: (String, String, Bool) -> Void = { _, _, _ in }
 
-    @Environment(\.kekulvPalette) private var palette
+    @Environment(\.sumpterPalette) private var palette
     @State private var selectionAnchor: String?
     @State private var hoveredRowID: String?
     @State private var draggedProviderID: String?
@@ -1159,7 +1159,7 @@ private struct ProviderAccountCompactRow: View {
     let onMove: (Int) -> Void
     let onReorder: (String, Bool) -> Void
 
-    @Environment(\.kekulvPalette) private var palette
+    @Environment(\.sumpterPalette) private var palette
     @State private var isDropTargeted = false
     @State private var dropPlacement: ProviderDropPlacement = .after
 
@@ -1339,7 +1339,7 @@ private struct ProviderAccountListRow: View {
     let onMove: (Int) -> Void
     let onReorder: (String, Bool) -> Void
 
-    @Environment(\.kekulvPalette) private var palette
+    @Environment(\.sumpterPalette) private var palette
     @State private var isDropTargeted = false
     @State private var dropPlacement: ProviderDropPlacement = .after
 
@@ -1699,7 +1699,7 @@ private struct ProviderRowDropDelegate: DropDelegate {
 /// full URL so the preview cannot expose credentials or sensitive endpoints.
 private struct ProviderRowDragPreview: View {
     let row: EndpointDisplayRow
-    @Environment(\.kekulvPalette) private var palette
+    @Environment(\.sumpterPalette) private var palette
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -1743,7 +1743,7 @@ private struct ProviderRowDragPreview: View {
 /// alone.  It is an overlay and never captures the row's normal hit testing.
 private struct ProviderDropInsertionPreview: View {
     let placement: ProviderDropPlacement
-    @Environment(\.kekulvPalette) private var palette
+    @Environment(\.sumpterPalette) private var palette
 
     var body: some View {
         ZStack {
@@ -1801,7 +1801,7 @@ struct MappingTable: View {
                     Text(timeoutSummary(row.failoverTimeoutSeconds)).monospacedDigit()
                 }
             }
-            .kekulvTableSurface()
+            .sumpterTableSurface()
             // 双击 = 编辑;右键 = 编辑/删除。
             .contextMenu(forSelectionType: String.self) { ids in
                 if ids.count == 1, let row = rows.first(where: { $0.id == ids.first }) {

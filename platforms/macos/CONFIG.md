@@ -1,8 +1,8 @@
 # config.json 说明（schema v6）
 
 两端共用同一份磁盘格式。macOS 读 `~/Library/Application Support/Sumpter/config.json`，Linux 读
-`$XDG_CONFIG_HOME/kekulv/config.json`（否则 `~/.config/kekulv`；system 安装为 `/var/lib/kekulv`）。
-Linux 路径里的 `kekulv` 是兼容契约，不是过期品牌。权限必须是 0600，文件含明文 key。
+`$XDG_CONFIG_HOME/sumpter/config.json`（否则 `~/.config/sumpter`；system 安装为 `/var/lib/sumpter`）。
+权限必须是 0600，文件含明文 key。
 
 当前格式是 schema v6；启动时自动迁移 schema v3 / v4 / v5。旧的 `keys.json`（Python 兼容 wire）
 **不再读取，也不会被改写**，可以留在原地当 key 的抄写来源。
