@@ -9,10 +9,10 @@ import Testing
             shell:            zsh
             rc:               /Users/test/.zshrc
             rc 内标记块:      已安装
-            snippet:          /Users/test/.config/kekulv/claude-project-attribution.sh
+            snippet:          /Users/test/.config/sumpter/claude-project-attribution.sh
             settings.json 键: 无(正确)
             备份:
-              /Users/test/.zshrc.kekulv-bak-20260826-120000
+              /Users/test/.zshrc.sumpter-bak-20260826-120000
             """)
 
         #expect(status.condition == .installed)
@@ -29,7 +29,7 @@ import Testing
             shell:            zsh
             rc:               /Users/test/.zshrc
             rc 内标记块:      未安装
-            snippet:          /Users/test/.config/kekulv/claude-project-attribution.sh
+            snippet:          /Users/test/.config/sumpter/claude-project-attribution.sh
             settings.json 键: 无(正确)
             备份:
               (无)
@@ -46,7 +46,7 @@ import Testing
             shell:            bash
             rc:               /Users/test/.bash_profile
             rc 内标记块:      已安装
-            snippet:          /Users/test/.config/kekulv/claude-project-attribution.sh (不存在)
+            snippet:          /Users/test/.config/sumpter/claude-project-attribution.sh (不存在)
             settings.json 键: 无(正确)
             备份:
               (无)
@@ -58,7 +58,7 @@ import Testing
             shell:            zsh
             rc:               /Users/test/.zshrc (不存在)
             rc 内标记块:      未安装
-            snippet:          /Users/test/.config/kekulv/claude-project-attribution.sh (不存在)
+            snippet:          /Users/test/.config/sumpter/claude-project-attribution.sh (不存在)
             settings.json 键: 存在(会覆盖 wrapper,必须删)
             备份:
               (无)

@@ -1,6 +1,6 @@
 # Sumpter Linux WebUI
 
-这是 Linux 版唯一正式前端源码。构建产物写入 `../web/`，由 `sumpterd-linux --web-root`（发布包内二进制名为 `kekulvd`）静态托管。
+这是 Linux 版唯一正式前端源码。构建产物写入 `../web/`，由 `sumpterd-linux --web-root`（发布包内二进制名为 `sumpterd`）静态托管。
 
 ```bash
 npm ci

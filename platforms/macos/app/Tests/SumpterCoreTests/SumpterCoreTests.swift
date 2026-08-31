@@ -732,7 +732,7 @@ final class SumpterCoreTests: XCTestCase {
 
     func testConfigStoreMigratesLegacyPassthroughToAutoAndBacksUp() throws {
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("kekulv-config-migration-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("sumpter-config-migration-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("config.json")
@@ -768,7 +768,7 @@ final class SumpterCoreTests: XCTestCase {
 
     func testConfigStoreLegacyFalsePreservesFixedProtocolAndMigratesV4() throws {
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("kekulv-config-migration-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("sumpter-config-migration-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("config.json")
@@ -804,7 +804,7 @@ final class SumpterCoreTests: XCTestCase {
 
     func testConfigStoreMigratesV5GlobalModelsToEndpointMappingsOnce() throws {
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("kekulv-config-global-models-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("sumpter-config-global-models-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("config.json")
@@ -837,7 +837,7 @@ final class SumpterCoreTests: XCTestCase {
 
     func testConfigStoreRejectsV4EndpointWithoutExplicitProtocol() throws {
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("kekulv-config-v4-required-protocol-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("sumpter-config-v4-required-protocol-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("config.json")
@@ -858,7 +858,7 @@ final class SumpterCoreTests: XCTestCase {
 
     func testConfigStoreRejectsLegacyProtocolsArrayAndInvalidProtocolInV4() throws {
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("kekulv-config-v4-protocol-validation-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("sumpter-config-v4-protocol-validation-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("config.json")
@@ -892,7 +892,7 @@ final class SumpterCoreTests: XCTestCase {
 
     func testConfigStoreRejectsNonBooleanLegacyPassthroughWithoutWriting() throws {
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("kekulv-config-v3-invalid-passthrough-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("sumpter-config-v3-invalid-passthrough-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("config.json")

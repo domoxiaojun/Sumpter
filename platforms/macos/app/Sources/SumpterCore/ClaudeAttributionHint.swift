@@ -118,7 +118,7 @@ public enum ClaudeAttributionHint {
         public static let why = """
             Claude Code 不把工作目录放进请求（cwd / project_dir 只给本机 statusLine 和 hook 用），\
             所以默认所有 CC 请求都堆在「未识别项目」里。要分项目，就让 CC 把项目名随请求带上：\
-            Sumpter认 X-Kekulv-Project / X-Kekulv-Workspace / X-Kekulv-Git-Remote 三个入站 header，\
+            Sumpter认 X-Sumpter-Project / X-Sumpter-Workspace / X-Sumpter-Git-Remote 三个入站 header，\
             读完即从出站剥离。会话维度不受影响 —— CC 无条件发 X-Claude-Code-Session-Id。
             """
 
@@ -180,7 +180,7 @@ public enum ClaudeAttributionHint {
             MatrixRow(
                 id: 1, label: "配置器位置",
                 macOS: "App 内 Resources/（源码构建则在 platforms/linux/scripts/）",
-                linux: "部署包解包后 scripts/（安装后 /opt/kekulv/scripts/）"),
+                linux: "部署包解包后 scripts/（安装后 /opt/sumpter/scripts/）"),
             MatrixRow(
                 id: 2, label: "默认 shell",
                 macOS: "通常 zsh → ~/.zshrc", linux: "视发行版，zsh 或 bash 都常见"),
@@ -219,7 +219,7 @@ public enum ClaudeAttributionHint {
         public static let rollback: [RollbackCommand] = [
             RollbackCommand(
                 id: 1, command: "./cc-project-attribution.sh restore",
-                note: "还原 rc 到装前（取最新备份，并先把当前 rc 另存为 .kekulv-prerestore-*）"),
+                note: "还原 rc 到装前（取最新备份，并先把当前 rc 另存为 .sumpter-prerestore-*）"),
             RollbackCommand(
                 id: 2, command: "./cc-project-attribution.sh uninstall",
                 note: "移除 wrapper，保留备份"),

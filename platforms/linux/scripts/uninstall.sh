@@ -5,7 +5,7 @@ umask 077
 
 PURGE=0
 SYSTEMD_SCOPE=""
-SYSTEM_TEST_ROOT="${KEKULV_SYSTEM_TEST_ROOT:-}"
+SYSTEM_TEST_ROOT="${SUMPTER_SYSTEM_TEST_ROOT:-}"
 SYSTEM_ROOT=""
 HOME_REAL=""
 PROGRAM_PARENT=""
@@ -29,15 +29,15 @@ die() {
 }
 
 note() {
-    echo "[kekulv-uninstall] $*"
+    echo "[sumpter-uninstall] $*"
 }
 
 usage() {
     cat <<'EOF'
 用法: uninstall.sh [--purge]
 
-默认停用 kekulv.service，并删除程序、上一版本和对应 scope 的 unit；保留配置。
-普通用户配置位于 ~/.config/kekulv，root/system 配置位于 /var/lib/kekulv。
+默认停用 sumpter.service，并删除程序、上一版本和对应 scope 的 unit；保留配置。
+普通用户配置位于 ~/.config/sumpter，root/system 配置位于 /var/lib/sumpter。
 只有显式传入 --purge 才删除 config.json、stats.json 和运行时文件。
 
 选项:
@@ -64,15 +64,15 @@ done
 
 validate_system_test_root() {
     local temp_root=""
-    [[ "${KEKULV_INSTALLER_SELFTEST:-}" == "1" ]] \
-        || die "KEKULV_SYSTEM_TEST_ROOT 仅允许 installer-selftest 使用"
+    [[ "${SUMPTER_INSTALLER_SELFTEST:-}" == "1" ]] \
+        || die "SUMPTER_SYSTEM_TEST_ROOT 仅允许 installer-selftest 使用"
     [[ "$SYSTEM_TEST_ROOT" == /* && "$SYSTEM_TEST_ROOT" != "/" && -d "$SYSTEM_TEST_ROOT" && ! -L "$SYSTEM_TEST_ROOT" ]] \
         || die "测试 rootfs 必须是已存在的非链接绝对目录"
     SYSTEM_ROOT="$(realpath -e "$SYSTEM_TEST_ROOT")" || die "无法解析测试 rootfs:$SYSTEM_TEST_ROOT"
     temp_root="$(realpath -e "${TMPDIR:-/tmp}")" || die "无法解析 TMPDIR"
     case "$SYSTEM_ROOT" in
-        "$temp_root"/kekulv-installer-test.*/rootfs) ;;
-        *) die "测试 rootfs 必须位于 $temp_root/kekulv-installer-test.*/rootfs" ;;
+        "$temp_root"/sumpter-installer-test.*/rootfs) ;;
+        *) die "测试 rootfs 必须位于 $temp_root/sumpter-installer-test.*/rootfs" ;;
     esac
 }
 
@@ -97,10 +97,10 @@ configure_scope() {
         CONFIG_PARENT="$HOME/.config"
         UNIT_DIR="$CONFIG_PARENT/systemd/user"
     fi
-    INSTALL_DIR="$PROGRAM_PARENT/kekulv"
-    PREVIOUS_DIR="$PROGRAM_PARENT/kekulv.previous"
-    CONFIG_DIR="$CONFIG_PARENT/kekulv"
-    UNIT_PATH="$UNIT_DIR/kekulv.service"
+    INSTALL_DIR="$PROGRAM_PARENT/sumpter"
+    PREVIOUS_DIR="$PROGRAM_PARENT/sumpter.previous"
+    CONFIG_DIR="$CONFIG_PARENT/sumpter"
+    UNIT_PATH="$UNIT_DIR/sumpter.service"
     UNIT_PREVIOUS="$UNIT_PATH.previous"
     if [[ "$SYSTEMD_SCOPE" == "user" ]]; then
         PROGRAM_PARENT_EXPECTED="$HOME_REAL/.local/share"
@@ -153,7 +153,7 @@ fi
 is_managed_install() {
     local candidate="$1"
     [[ -d "$candidate" && ! -L "$candidate" \
-        && -f "$candidate/kekulvd" && ! -L "$candidate/kekulvd" \
+        && -f "$candidate/sumpterd" && ! -L "$candidate/sumpterd" \
         && -f "$candidate/web/index.html" && ! -L "$candidate/web/index.html" ]]
 }
 
@@ -175,7 +175,7 @@ validate_program_tree() {
     [[ -n "$PROGRAM_PARENT_REAL" && "$parent_real" == "$PROGRAM_PARENT_REAL" ]] \
         || die "程序目录不在预期程序目录，拒绝递归删除:$candidate"
     is_managed_install "$candidate" \
-        || die "目录不像 kekulv 安装，拒绝递归删除:$candidate"
+        || die "目录不像 sumpter 安装，拒绝递归删除:$candidate"
 }
 
 safe_remove_program_tree() {
@@ -238,14 +238,14 @@ if [[ -e "$UNIT_PATH" || -L "$UNIT_PATH" || -e "$UNIT_PREVIOUS" || -L "$UNIT_PRE
         || die "unit 父目录不在预期目录，拒绝删除"
 fi
 
-note "停用并停止 kekulv.service"
-if ! run_systemctl disable --now kekulv.service; then
-    if run_systemctl is-active --quiet kekulv.service; then
+note "停用并停止 sumpter.service"
+if ! run_systemctl disable --now sumpter.service; then
+    if run_systemctl is-active --quiet sumpter.service; then
         die "服务仍在运行；为避免删除运行中的程序，本次未删除任何文件"
     fi
     note "unit 可能尚未启用；服务当前不在运行，继续卸载"
 fi
-if run_systemctl is-active --quiet kekulv.service; then
+if run_systemctl is-active --quiet sumpter.service; then
     die "服务仍在运行；本次未删除任何文件"
 fi
 
@@ -261,7 +261,7 @@ for unit_file in "$UNIT_PATH" "$UNIT_PREVIOUS"; do
     fi
 done
 # 安装器写入的 Admin 监听 drop-in（以及用户 systemctl edit 产生的同名目录）。
-UNIT_DROPIN_DIR="$UNIT_DIR/kekulv.service.d"
+UNIT_DROPIN_DIR="$UNIT_DIR/sumpter.service.d"
 if [[ -e "$UNIT_DROPIN_DIR" || -L "$UNIT_DROPIN_DIR" ]]; then
     [[ -d "$UNIT_DIR" && ! -L "$UNIT_DIR" && -n "$UNIT_DIR_REAL" \
         && "$(realpath -e "$UNIT_DIR")" == "$UNIT_DIR_REAL" ]] \
@@ -277,7 +277,7 @@ if [[ -e "$UNIT_DROPIN_DIR" || -L "$UNIT_DROPIN_DIR" ]]; then
     fi
 fi
 run_systemctl daemon-reload
-run_systemctl reset-failed kekulv.service >/dev/null 2>&1 || true
+run_systemctl reset-failed sumpter.service >/dev/null 2>&1 || true
 
 if [[ "$PURGE" -eq 1 ]]; then
     safe_remove_config_tree "$CONFIG_DIR"

@@ -118,9 +118,9 @@ check_file "$ROOT/config.example.json"
 check_file "$ROOT/README.md"
 check_file "$ROOT/USAGE.md"
 check_file "$ROOT/specs/admin-api.md"
-check_file "$ROOT/deploy/kekulv.service"
-check_file "$ROOT/deploy/kekulv-system.service"
-check_file "$ROOT/deploy/nginx-kekulv-admin.conf.example"
+check_file "$ROOT/deploy/sumpter.service"
+check_file "$ROOT/deploy/sumpter-system.service"
+check_file "$ROOT/deploy/nginx-sumpter-admin.conf.example"
 check_file "$ROOT/scripts/start.sh"
 check_file "$ROOT/scripts/stop.sh"
 check_file "$ROOT/scripts/smoke.sh"
@@ -154,12 +154,16 @@ for entry in "${TARGETS[@]}"; do
     arch="${entry##*:}"
     echo
     echo "== cargo zigbuild --release --locked --target $target =="
+    repo_root="$ROOT"
+    if [[ -f "$ROOT/../../Cargo.toml" && -d "$ROOT/../../crates" ]]; then
+        repo_root="$(cd "$ROOT/../.." && pwd -P)"
+    fi
     (
-        cd "$ROOT"
-        cargo zigbuild --release --locked --target "$target" --bin kekulvd
+        cd "$repo_root"
+        cargo zigbuild --release --locked --target "$target" --bin sumpterd-linux
     )
 
-    binary="$ROOT/target/$target/release/kekulvd"
+    binary="$repo_root/target/$target/release/sumpterd-linux"
     [[ -x "$binary" ]] || {
         echo "错误:未找到构建产物 $binary" >&2
         exit 1
@@ -179,21 +183,21 @@ for entry in "${TARGETS[@]}"; do
         exit 1
     fi
 
-    stage="$(mktemp -d "$DIST/.stage-kekulv-linux-${arch}.XXXXXX")"
-    final="$DIST/kekulv-linux-$arch"
+    stage="$(mktemp -d "$DIST/.stage-sumpter-linux-${arch}.XXXXXX")"
+    final="$DIST/sumpter-linux-$arch"
     mkdir -p "$stage/deploy" "$stage/scripts" "$stage/specs" "$stage/web" "$stage/logs"
-    cp "$binary" "$stage/kekulvd"
-    chmod 0755 "$stage/kekulvd"
+    cp "$binary" "$stage/sumpterd"
+    chmod 0755 "$stage/sumpterd"
     cp -R "$ROOT/web/." "$stage/web/"
     for script in start.sh stop.sh smoke.sh install.sh bootstrap-install.sh uninstall.sh \
         bootstrap-uninstall.sh cc-project-attribution.sh; do
         cp "$ROOT/scripts/$script" "$stage/scripts/$script"
         chmod 0755 "$stage/scripts/$script"
     done
-    cp "$ROOT/deploy/kekulv.service" "$stage/kekulv.service"
-    cp "$ROOT/deploy/kekulv-system.service" "$stage/kekulv-system.service"
-    cp "$ROOT/deploy/nginx-kekulv-admin.conf.example" \
-        "$stage/deploy/nginx-kekulv-admin.conf.example"
+    cp "$ROOT/deploy/sumpter.service" "$stage/sumpter.service"
+    cp "$ROOT/deploy/sumpter-system.service" "$stage/sumpter-system.service"
+    cp "$ROOT/deploy/nginx-sumpter-admin.conf.example" \
+        "$stage/deploy/nginx-sumpter-admin.conf.example"
     cp "$ROOT/specs/admin-api.md" "$stage/specs/admin-api.md"
     cp "$ROOT/config.example.json" "$stage/config.example.json"
     cp "$ROOT/README.md" "$stage/README.md"

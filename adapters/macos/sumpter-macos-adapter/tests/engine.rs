@@ -1117,7 +1117,7 @@ async fn response_timeout_reports_effective_200_second_deadline() {
     assert_eq!(response.status(), 502);
     let response_request_id = response
         .headers()
-        .get("x-kekulv-request-id")
+        .get("x-sumpter-request-id")
         .and_then(|value| value.to_str().ok())
         .expect("失败响应应返回关联 ID")
         .to_string();
@@ -1203,7 +1203,7 @@ async fn streaming_relay_chunked_sse_and_events_upserted() {
     assert_eq!(response.status(), 200);
     let response_request_id = response
         .headers()
-        .get("x-kekulv-request-id")
+        .get("x-sumpter-request-id")
         .and_then(|value| value.to_str().ok())
         .map(str::to_string)
         .expect("成功响应应返回关联 ID");
@@ -2013,13 +2013,13 @@ async fn rejected_requests_record_client_events() {
 async fn client_declared_project_headers_reach_both_forwarded_and_rejected_events() {
     let fake = FakeTransport::new();
     let declared = vec![
-        ("X-Kekulv-Project".to_string(), "automode-proxy".to_string()),
+        ("X-Sumpter-Project".to_string(), "automode-proxy".to_string()),
         (
-            "x-kekulv-workspace".to_string(),
+            "x-sumpter-workspace".to_string(),
             "/Users/kkl/.claude/automode-proxy".to_string(),
         ),
         (
-            "X-Kekulv-Git-Remote".to_string(),
+            "X-Sumpter-Git-Remote".to_string(),
             "https://user:tok@github.com/domoxiaojun/sumpter.git".to_string(),
         ),
     ];
@@ -2058,7 +2058,7 @@ async fn client_declared_project_headers_reach_both_forwarded_and_rejected_event
     let upstream = fake.requests();
     let sent = &upstream.first().expect("upstream request").headers;
     assert!(
-        !sent.iter().any(|(name, _)| name.starts_with("x-kekulv-")),
+        !sent.iter().any(|(name, _)| name.starts_with("x-sumpter-")),
         "私有归因 header 泄到上游: {sent:?}"
     );
 
@@ -2329,7 +2329,7 @@ async fn notify_enriches_hook_payloads() {
     let payload = json!({
         "session_id": "sess-1",
         "transcript_path": "/tmp/t.jsonl",
-        "cwd": "/Users/kkl/projects/kekulv",
+        "cwd": "/Users/kkl/projects/sumpter",
         "hook_event_name": "Notification",
         "message": "Claude needs your permission to use Bash",
     });
@@ -2347,7 +2347,7 @@ async fn notify_enriches_hook_payloads() {
     assert_eq!(message, "Claude needs your permission to use Bash");
     assert_eq!(kind.as_deref(), Some("notification"));
     assert_eq!(session_id.as_deref(), Some("sess-1"));
-    assert_eq!(cwd.as_deref(), Some("/Users/kkl/projects/kekulv"));
+    assert_eq!(cwd.as_deref(), Some("/Users/kkl/projects/sumpter"));
 
     // Stop:无 message → cwd 项目名兜底;transcript_path 不再被当成消息弹出。
     let payload = json!({
@@ -5604,7 +5604,7 @@ async fn images_edit_multipart_preserves_body_and_content_type_byte_for_byte() {
         },
     );
     let engine = engine_with(native_passthrough_config("gpt-image-*"), fake.clone());
-    let boundary = "kekulv-boundary";
+    let boundary = "sumpter-boundary";
     let mut multipart = format!(
         "--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngpt-image-2\r\n\
          --{boundary}\r\nContent-Disposition: form-data; name=\"stream\"\r\n\r\nfalse\r\n\

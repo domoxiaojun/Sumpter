@@ -3,7 +3,7 @@ import SwiftUI
 
 struct OverviewPane: View {
     @ObservedObject var model: AppModel
-    @Environment(\.kekulvPalette) private var palette
+    @Environment(\.sumpterPalette) private var palette
     // 关闭自动刷新时冻结的画面快照;nil 表示跟随实时数据。
     // AppModel 的后台轮询(菜单栏健康点)仍在更新模型,不冻结的话表格会自己跳动,开关就形同虚设。
     @State private var frozenRuntime: RuntimeSnapshot?

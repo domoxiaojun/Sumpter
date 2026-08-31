@@ -549,7 +549,7 @@ pub mod sticky {
     use md5::{Digest, Md5};
     use sha2::Sha256;
 
-    const STICKY_V3_DOMAIN: &[u8] = b"kekulv-sticky-v3";
+    const STICKY_V3_DOMAIN: &[u8] = b"sumpter-sticky-v3";
     const STABLE_SESSION_TAG: u8 = 0x01;
     const CONTENT_FINGERPRINT_TAG: u8 = 0x02;
     const OPTIONAL_NONE_TAG: u8 = 0x00;

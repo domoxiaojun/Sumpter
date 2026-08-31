@@ -26,7 +26,7 @@ final class RuntimeEventPresentationTests: XCTestCase {
         )
     }
 
-    /// Claude Code 不上行 workspace,项目只能来自 X-Kekulv-* 声明。归因必须落到声明值、
+    /// Claude Code 不上行 workspace,项目只能来自 X-Sumpter-* 声明。归因必须落到声明值、
     /// 来源与 Codex 的本地项目区分开,且 Codex 的结构化 workspace 在同时存在时优先。
     func testProjectAttributionFallsBackToClientDeclaredHeaders() throws {
         let declared = ClientDeclaredMetadata(
@@ -219,7 +219,7 @@ final class RuntimeEventPresentationTests: XCTestCase {
     }
 
     /// 现行词表全 token 覆盖(rust/specs/spec-engine.md §5.1)。
-    /// 清单与 crates/kekulv-proxy/tests/engine.rs 的 `MESSAGE_TOKEN_PREFIXES` 互钉:
+    /// 清单与 crates/sumpter-proxy/tests/engine.rs 的 `MESSAGE_TOKEN_PREFIXES` 互钉:
     /// 引擎新增 token 而这里没映射,对应断言会以「原样透传」失败暴露。
     func testFriendlyMessageVocabulary() {
         func friendly(

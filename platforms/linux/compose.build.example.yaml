@@ -3,8 +3,8 @@
 #   docker compose -f compose.yaml -f compose.build.example.yaml up -d --build
 
 services:
-  kekulv:
-    image: ${KEKULV_IMAGE:-kekulv:local}
+  sumpter:
+    image: ${SUMPTER_IMAGE:-sumpter:local}
     build:
       context: .
       dockerfile: Dockerfile

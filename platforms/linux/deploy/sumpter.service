@@ -1,23 +1,23 @@
-# systemd user unit；安装器布局为 ~/.local/share/kekulv。
+# systemd user unit；安装器布局为 ~/.local/share/sumpter。
 #
 # Admin 默认 127.0.0.1:57879；静态登录壳公开，API/SSE 使用 WebUI 会话 Cookie。
 # daemon 自动读取配置目录的 admin-password；安装器首次安装会生成并在升级时保留。
 # 手动部署本 unit 时先创建 0600 单行密码文件：
 #      umask 077
-#      mkdir -p ~/.config/kekulv
-#      openssl rand -base64 32 > ~/.config/kekulv/admin-password
-# 然后: systemctl --user restart kekulv.service
+#      mkdir -p ~/.config/sumpter
+#      openssl rand -base64 32 > ~/.config/sumpter/admin-password
+# 然后: systemctl --user restart sumpter.service
 # 旧单行凭据初始用户名为 kkl；公网必须由外层 HTTPS 终止。高级自定义路径可用
-# KEKULV_ADMIN_PASSWORD_FILE 或 --admin-password-file 覆盖。
+# SUMPTER_ADMIN_PASSWORD_FILE 或 --admin-password-file 覆盖。
 [Unit]
-Description=kekulv (Sumpter) Anthropic 兼容本地代理守护进程
+Description=Sumpter Anthropic 兼容本地代理守护进程
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/.local/share/kekulv
-ExecStart=%h/.local/share/kekulv/kekulvd --systemd-scope user --config-dir %h/.config/kekulv --web-root %h/.local/share/kekulv/web
+WorkingDirectory=%h/.local/share/sumpter
+ExecStart=%h/.local/share/sumpter/sumpterd --systemd-scope user --config-dir %h/.config/sumpter --web-root %h/.local/share/sumpter/web
 # SIGHUP 重读 config.json；proxy listener 变化由 daemon 重绑。
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
@@ -30,7 +30,7 @@ PrivateTmp=true
 Environment=RUST_LOG=info
 StandardOutput=journal
 StandardError=journal
-# 用户级自动安装脚本固定使用 ~/.config/kekulv，升级时不会覆盖现有配置。
+# 用户级自动安装脚本固定使用 ~/.config/sumpter，升级时不会覆盖现有配置。
 # 自定义目录时编辑 ExecStart 的 --config-dir 参数。
 
 [Install]

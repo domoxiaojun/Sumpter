@@ -100,7 +100,7 @@ private struct FeatureRulesPanel: View {
             }
             .width(min: 170, ideal: 240)
         }
-        .kekulvTableSurface()
+        .sumpterTableSurface()
         .contextMenu(forSelectionType: String.self) { ids in
             if ids.count == 1, let rule = rule(id: ids.first) {
                 Button("编辑目标") { editingRule = rule }

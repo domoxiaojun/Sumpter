@@ -114,18 +114,19 @@ workspace 有 7 个 Rust package：3 个共享库、2 个平台 adapter、2 个 
 
 发布脚本仍有独立发布树假设，不能当成根 workspace 的通过证据：
 
-- `platforms/linux/scripts/assemble-shared-tree.sh`、`cross-build.sh`、`release-preflight.sh` 仍按 Linux 包根查找 `crates/`、`kekulvd`、`kekulv-core` 等旧输入。
+- `platforms/linux/scripts/assemble-shared-tree.sh`、`cross-build.sh`、`release-preflight.sh` 仍按 Linux 包根查找 `crates/` 等输入，不能当成根 workspace 的通过证据。
 - `platforms/linux/.github/workflows/` 是发布输入；本 monorepo 根目录没有 `.github/`，GitHub 不会自动跑这些 workflow。
 - `platforms/macos/app/package-app.sh` 已识别 monorepo 根 workspace 并构建 `sumpterd-macos`，但仍保留独立发布树分支和 `ENGINE_PROFILE` 兼容选项。
 
-## 品牌与兼容字段
+## 品牌与运行时名字
 
-工程级 Rust package、目录、macOS App 和用户可见文案使用 `sumpter` / `Sumpter`。下列内容是有意保留的兼容契约，不是文档笔误：
+工程包、macOS App、Linux 配置目录、systemd 单元、发布包二进制、环境变量、入站 header 和导出格式统一为 `sumpter` / `Sumpter`：
 
-- Linux 配置目录 `~/.config/kekulv`、system 路径 `/var/lib/kekulv`
-- 发布包二进制 `kekulvd`、systemd 单元 `kekulv.service`
-- 环境变量 `KEKULV_*`
-- 入站 header `X-Kekulv-*`
-- 导出格式标识如 `kekulv-session-export-v1`
+- 配置：`~/.config/sumpter`、`/var/lib/sumpter`、`/opt/sumpter`
+- 二进制与单元：`sumpterd`、`sumpter.service`
+- 环境变量 `SUMPTER_*` / `SUMPTERD_*`
+- 入站 header `X-Sumpter-*`
+- 导出格式 `sumpter-session-export-v1`
+- 粘性域 `sumpter-sticky-v3`
 
-若要彻底替换这些运行时名字，需要单独的兼容读取、升级说明和回滚策略。
+旧的 `kekulv` 路径、单元、header 和环境变量不再识别。已有安装需要卸载后重装，不要做原地双读迁移。

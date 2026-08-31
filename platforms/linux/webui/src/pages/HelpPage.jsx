@@ -110,7 +110,7 @@ export function HelpPage() {
         <section className="glass-panel help-panel">
           <div className="panel-title"><Icon name="server" size={18} style={{ color: 'var(--accent-cyan)' }} /><span>配置与接入</span></div>
           <div className="help-fact-list">
-            <div><span>配置文件</span><code>$XDG_CONFIG_HOME/kekulv/config.json</code><small>未设置时使用 ~/.config/kekulv/config.json</small></div>
+            <div><span>配置文件</span><code>$XDG_CONFIG_HOME/sumpter/config.json</code><small>未设置时使用 ~/.config/sumpter/config.json</small></div>
             <div><span>代理端口</span><code>http://{listener}</code></div>
             <div><span>配置版本</span><strong>schema v{schemaVersion}</strong></div>
           </div>

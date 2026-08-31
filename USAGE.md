@@ -30,7 +30,7 @@
 
 | 项目 | macOS App | Linux daemon / 发布包 |
 |---|---|---|
-| 配置文件 | `~/Library/Application Support/Sumpter/config.json` | 普通用户：`$XDG_CONFIG_HOME/kekulv/config.json`，否则 `~/.config/kekulv/config.json`；system 安装：`/var/lib/kekulv/config.json` |
+| 配置文件 | `~/Library/Application Support/Sumpter/config.json` | 普通用户：`$XDG_CONFIG_HOME/sumpter/config.json`，否则 `~/.config/sumpter/config.json`；system 安装：`/var/lib/sumpter/config.json` |
 | 数据面代理 | `http://127.0.0.1:57878`（以运行页/配置为准） | `http://127.0.0.1:57878`（以 `listener` 为准） |
 | Admin 地址 | sidecar 握手返回的本机动态端口（App 内部使用） | `http://127.0.0.1:57879/admin/`（可由启动参数覆盖） |
 | 入站鉴权 | `listener.authToken`（非空才启用） | `listener.authToken`（非空才启用） |
@@ -88,7 +88,7 @@ Agent：只改**本机配置目录**里的 `config.json`，不要把填好 key �
 
 | | macOS App | Linux daemon |
 |---|---|---|
-| 配置文件 | `~/Library/Application Support/Sumpter/config.json` | 普通用户：`$XDG_CONFIG_HOME/kekulv/config.json`，否则 `~/.config/kekulv/config.json`。system 安装：`/var/lib/kekulv/config.json` |
+| 配置文件 | `~/Library/Application Support/Sumpter/config.json` | 普通用户：`$XDG_CONFIG_HOME/sumpter/config.json`，否则 `~/.config/sumpter/config.json`。system 安装：`/var/lib/sumpter/config.json` |
 | 权限 | `0600` | `0600` |
 | 代理端口 | `listener.port`，默认 `57878` | 同左 |
 | 管理界面 | 菜单栏 App 设置窗 | 浏览器 `http://127.0.0.1:57879/admin/` |
@@ -116,11 +116,11 @@ Linux 首次 Admin 用户名是 `kkl`，密码在同目录 `admin-password`（�
 静态镜像一键安装（按架构自动取包）：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fLo /tmp/kekulv-install.sh https://sf.domob.org/kkl/kekulv-install.sh
-bash /tmp/kekulv-install.sh
+curl --proto '=https' --tlsv1.2 -fLo /tmp/sumpter-install.sh https://sf.domob.org/kkl/sumpter-install.sh
+bash /tmp/sumpter-install.sh
 ```
 
-`sudo bash /tmp/kekulv-install.sh` 会装成 system 服务（daemon 仍以低权限 `kekulv` 用户运行）。已有 `config.json` 与 `admin-password` 不会被覆盖。
+`sudo bash /tmp/sumpter-install.sh` 会装成 system 服务（daemon 仍以低权限 `sumpter` 用户运行）。已有 `config.json` 与 `admin-password` 不会被覆盖。
 
 Docker、systemd、Admin HTTPS 反代、卸载见 [`platforms/linux/README.md`](platforms/linux/README.md)。
 
@@ -160,9 +160,9 @@ export ANTHROPIC_AUTH_TOKEN='填 config 里的 authToken'
 
 ```toml
 model = "gpt-5.4"                 # 必须能被某个入口 mappings 接住
-model_provider = "kekulv"
+model_provider = "sumpter"
 
-[model_providers.kekulv]
+[model_providers.sumpter]
 name = "Sumpter"
 base_url = "http://127.0.0.1:57878/v1"
 wire_api = "responses"
@@ -393,7 +393,7 @@ Provider 不需要另填 WebSearch 能力字段。严格识别为 WebSearch 后�
 |---|---|
 | macOS App | 设置里保存；需要时点重启。监听地址/端口变了会重绑 |
 | Linux WebUI | 登录后改并保存（带 generation 对账） |
-| Linux 手改文件 | 对进程 `SIGHUP`，或 `systemctl --user reload kekulv` / `sudo systemctl reload kekulv` |
+| Linux 手改文件 | 对进程 `SIGHUP`，或 `systemctl --user reload sumpter` / `sudo systemctl reload sumpter` |
 
 手改 JSON 后语法坏了：进程拒载，**不会覆盖**你磁盘上的原文件。可先用 `jq empty config.json` 检查语法。
 
@@ -406,8 +406,8 @@ Provider 不需要另填 WebSearch 能力字段。严格识别为 WebSearch 后�
 所有 CC 请求都堆在「未识别项目」里。会话维度不受影响：CC 无条件发 `X-Claude-Code-Session-Id`，
 **会话统计零配置就有**，这里配的只是项目维度。
 
-要分项目，就让 CC 把项目名随请求带上。Sumpter认三个入站 header：`X-Kekulv-Project` /
-`X-Kekulv-Workspace` / `X-Kekulv-Git-Remote`（代理读完即从出站剥离，中转站看不到）。不用改 CC、
+要分项目，就让 CC 把项目名随请求带上。Sumpter认三个入站 header：`X-Sumpter-Project` /
+`X-Sumpter-Workspace` / `X-Sumpter-Git-Remote`（代理读完即从出站剥离，中转站看不到）。不用改 CC、
 不用装东西——一个 shell 配置器按你**当前目录**自动生成这三个值。
 
 > **在哪台机器配？** 在**跑 Claude Code 的那台机器**上，不是跑 daemon 的那台。daemon 常在远程
@@ -416,7 +416,7 @@ Provider 不需要另填 WebSearch 能力字段。严格识别为 WebSearch 后�
 
 ### 一键配置
 
-配置器 `cc-project-attribution.sh` 随发布包分发（Linux 解包后在 `/opt/kekulv/scripts/`；macOS
+配置器 `cc-project-attribution.sh` 随发布包分发（Linux 解包后在 `/opt/sumpter/scripts/`；macOS
 打包进 App 内的 `Sumpter.app/Contents/Resources/`，从源码构建则在 clone 仓库的 `platforms/linux/scripts/`
 下）。支持 zsh 与 bash，两个平台通用。
 
@@ -455,7 +455,7 @@ Provider 不需要另填 WebSearch 能力字段。严格识别为 WebSearch 后�
 | | macOS | Linux |
 |---|---|---|
 | 谁在跑 CC | 本机菜单栏 App 旁边就是 CC | CC 可能在本机，也可能在别的机器上连远程 daemon |
-| 配置器位置 | App 内 `Sumpter.app/Contents/Resources/`（源码构建则是 clone 仓库的 `platforms/linux/scripts/`） | 发布包解包后 `/opt/kekulv/scripts/` |
+| 配置器位置 | App 内 `Sumpter.app/Contents/Resources/`（源码构建则是 clone 仓库的 `platforms/linux/scripts/`） | 发布包解包后 `/opt/sumpter/scripts/` |
 | 默认 shell | 通常 zsh | 视发行版，zsh 或 bash 都常见 |
 | 看统计 | 菜单栏 App 的「统计」页 | Web Admin 的统计页（`http://<daemon>:57879/admin`） |
 
@@ -464,9 +464,9 @@ Provider 不需要另填 WebSearch 能力字段。严格识别为 WebSearch 后�
 ### 手工配置（不想用配置器时）
 
 ```bash
-export ANTHROPIC_CUSTOM_HEADERS="X-Kekulv-Project: $(basename "$PWD")
-X-Kekulv-Workspace: $PWD
-X-Kekulv-Git-Remote: $(git remote get-url origin 2>/dev/null)"
+export ANTHROPIC_CUSTOM_HEADERS="X-Sumpter-Project: $(basename "$PWD")
+X-Sumpter-Workspace: $PWD
+X-Sumpter-Git-Remote: $(git remote get-url origin 2>/dev/null)"
 ```
 
 curl 风格 `名字: 值`，**一行一个**，三个都可选。但手工设有几个坑配置器已经替你处理，自己写要注意：

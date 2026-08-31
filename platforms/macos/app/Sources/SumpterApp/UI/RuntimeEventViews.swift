@@ -513,7 +513,7 @@ struct RecentEventsPanel: View {
     var onSelectEvent: ((String?) -> Void)?
     var onLoadMore: (() -> Void)?
     @State private var selectedEventID: String?
-    @Environment(\.kekulvPalette) private var palette
+    @Environment(\.sumpterPalette) private var palette
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     // 默认只看客户端:一次请求一行。排 failover 时切「全部」看完整上游尝试链。
@@ -972,7 +972,7 @@ struct RecentEventsPanel: View {
             }
             .width(min: 160, ideal: 260)
         }
-        .kekulvTableSurface()
+        .sumpterTableSurface()
         .frame(minWidth: 920)
         .frame(height: eventTableHeight)
     }
@@ -1191,7 +1191,7 @@ private struct RuntimeEventDetail: View {
                 InfoRow(title: "模型链", value: modelChain)
                 InfoRow(title: "路由入口", value: routeSummary)
                 InfoRow(title: "故障转移", value: event.failover ? "是（已切换入口）" : "否")
-                // 归因对 Codex 的结构化 workspace 和 Claude Code 的 X-Kekulv-* 声明都要生效;
+                // 归因对 Codex 的结构化 workspace 和 Claude Code 的 X-Sumpter-* 声明都要生效;
                 // 只看 codexMetadata 会让所有 CC 请求恒显示「未识别项目」。
                 if let project = RuntimeEventPresentation.projectContext(
                     eventKind: event.kind,

@@ -23,13 +23,13 @@
 | | macOS | Linux |
 |---|---|---|
 | 形态 | 菜单栏 App + Rust sidecar | 前台 daemon + Web Admin |
-| 配置 | `~/Library/Application Support/Sumpter/config.json` | 普通用户：`~/.config/kekulv/config.json`；system 安装：`/var/lib/kekulv/config.json` |
+| 配置 | `~/Library/Application Support/Sumpter/config.json` | 普通用户：`~/.config/sumpter/config.json`；system 安装：`/var/lib/sumpter/config.json` |
 | 管理界面 | App 设置窗 | 浏览器 `http://127.0.0.1:57879/admin/` |
 | 入站鉴权 | `listener.authToken`（非空才启用） | 同左 |
 | 热重载 | App 里保存 / 重启 | WebUI 保存，或 `SIGHUP` |
 | 平台能力 | Claude Code / Codex 系统通知 | systemd、静态 musl 包、Docker |
 
-Linux 运行时目录、服务单元和部分协议 header 仍使用历史名 `kekulv`（例如 `~/.config/kekulv`、`kekulv.service`、`X-Kekulv-*`）。这是兼容契约，不是文档笔误。
+Linux 配置目录、systemd 单元、发布包二进制和协议 header 现已统一为 `sumpter` / `Sumpter`（例如 `~/.config/sumpter`、`sumpter.service`、`X-Sumpter-*`）。旧的 `kekulv` 名字不再识别，需卸载后重装。
 
 ## 快速开始
 
@@ -44,11 +44,11 @@ Linux 运行时目录、服务单元和部分协议 header 仍使用历史名 `k
 ### Linux
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fLo /tmp/kekulv-install.sh https://sf.domob.org/kkl/kekulv-install.sh
-bash /tmp/kekulv-install.sh
+curl --proto '=https' --tlsv1.2 -fLo /tmp/sumpter-install.sh https://sf.domob.org/kkl/sumpter-install.sh
+bash /tmp/sumpter-install.sh
 ```
 
-`sudo bash` 会装成 system 服务（daemon 仍以低权限 `kekulv` 用户运行）。Docker、systemd、反代和卸载见 [`platforms/linux/README.md`](platforms/linux/README.md)。
+`sudo bash` 会装成 system 服务（daemon 仍以低权限 `sumpter` 用户运行）。Docker、systemd、反代和卸载见 [`platforms/linux/README.md`](platforms/linux/README.md)。
 
 ### 接客户端
 

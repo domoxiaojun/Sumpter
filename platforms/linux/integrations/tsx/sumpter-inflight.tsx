@@ -4,16 +4,16 @@
  * 运行环境：Node.js 18+ + `tsx`，不是 iOS Scriptable 的直接脚本格式。
  *
  * 单文件配置：直接修改下面 CONFIG 即可运行。不要把填好密码的文件提交到 Git。
- * 环境变量 KEKULV_ADMIN_URL、KEKULV_ADMIN_USERNAME、KEKULV_ADMIN_PASSWORD
+ * 环境变量 SUMPTER_ADMIN_URL、SUMPTER_ADMIN_USERNAME、SUMPTER_ADMIN_PASSWORD
  * 存在时优先于 CONFIG，适合正式部署或密码管理器注入。
  *
  * 示例：
- *   npx tsx platforms/linux/integrations/tsx/kekulv-inflight.tsx
- *   npx tsx platforms/linux/integrations/tsx/kekulv-inflight.tsx --json
+ *   npx tsx platforms/linux/integrations/tsx/sumpter-inflight.tsx
+ *   npx tsx platforms/linux/integrations/tsx/sumpter-inflight.tsx --json
  */
 
 const APPLE_EPOCH_OFFSET_SECONDS = 978_307_200;
-const SESSION_COOKIE_NAME = "kekulv_admin_session";
+const SESSION_COOKIE_NAME = "sumpter_admin_session";
 const API_PREFIX = "/admin/api";
 const REQUEST_TIMEOUT_MS = 15_000;
 
@@ -56,15 +56,15 @@ type ApiResponse<T> = {
 };
 
 const adminURL = normalizeAdminURL(
-  process.env.KEKULV_ADMIN_URL || CONFIG.adminURL,
+  process.env.SUMPTER_ADMIN_URL || CONFIG.adminURL,
 );
 const username = configuredValue(
-  "KEKULV_ADMIN_USERNAME",
+  "SUMPTER_ADMIN_USERNAME",
   CONFIG.username,
   "管理员用户名",
 );
 const password = configuredValue(
-  "KEKULV_ADMIN_PASSWORD",
+  "SUMPTER_ADMIN_PASSWORD",
   CONFIG.password,
   "管理员密码",
 );
@@ -247,7 +247,7 @@ function configuredValue(name: string, fallback: string, label: string): string 
 function normalizeAdminURL(value: string | undefined): string {
   const input = String(value ?? "").trim().replace(/\/+$/, "");
   if (!/^https?:\/\/[^/?#]+$/i.test(input)) {
-    throw new Error("KEKULV_ADMIN_URL 必须是 http:// 或 https:// 地址，例如 http://192.168.1.20:57879。");
+    throw new Error("SUMPTER_ADMIN_URL 必须是 http:// 或 https:// 地址，例如 http://192.168.1.20:57879。");
   }
   return input;
 }

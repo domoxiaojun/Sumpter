@@ -1226,14 +1226,14 @@ async fn runtime_export(
         HeaderValue::from_static("nosniff"),
     );
     for (name, value) in [
-        ("x-kekulv-snapshot-seq", snapshot_seq.to_string()),
+        ("x-sumpter-snapshot-seq", snapshot_seq.to_string()),
         (
-            "x-kekulv-history-generation",
+            "x-sumpter-history-generation",
             history_generation.to_string(),
         ),
-        ("x-kekulv-row-count", row_count.to_string()),
+        ("x-sumpter-row-count", row_count.to_string()),
         (
-            "x-kekulv-privacy",
+            "x-sumpter-privacy",
             match query.privacy {
                 ExportPrivacy::Redacted => "redacted".into(),
                 ExportPrivacy::Stored => "stored".into(),
@@ -1800,7 +1800,7 @@ fn diagnostic_capture_response(
     privacy: &str,
 ) -> Response {
     let filename = format!(
-        "attachment; filename=\"kekulv-diagnostic-{scope}-{privacy}.{}\"",
+        "attachment; filename=\"sumpter-diagnostic-{scope}-{privacy}.{}\"",
         format.extension()
     );
     Response::builder()
@@ -1809,7 +1809,7 @@ fn diagnostic_capture_response(
         .header(header::CONTENT_DISPOSITION, filename)
         .header(header::CACHE_CONTROL, "no-store")
         .header("x-content-type-options", "nosniff")
-        .header("x-kekulv-privacy", privacy)
+        .header("x-sumpter-privacy", privacy)
         .body(body)
         .unwrap_or_default()
 }
@@ -2177,7 +2177,7 @@ mod tests {
     #[tokio::test]
     async fn runtime_api_v1_replaces_legacy_contract() {
         let root = std::env::temp_dir().join(format!(
-            "kekulv-macos-admin-runtime-v1-{}-{}",
+            "sumpter-macos-admin-runtime-v1-{}-{}",
             std::process::id(),
             rand::random::<u64>()
         ));
@@ -2217,7 +2217,7 @@ mod tests {
                 .headers()
                 .get("content-disposition")
                 .and_then(|value| value.to_str().ok()),
-            Some("attachment; filename=\"kekulv-diagnostic-all-redacted.json\"")
+            Some("attachment; filename=\"sumpter-diagnostic-all-redacted.json\"")
         );
         assert_eq!(
             export
@@ -2407,7 +2407,7 @@ mod tests {
         assert_eq!(
             runtime_export
                 .headers()
-                .get("x-kekulv-row-count")
+                .get("x-sumpter-row-count")
                 .and_then(|value| value.to_str().ok()),
             Some("0")
         );

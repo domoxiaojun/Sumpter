@@ -11,10 +11,10 @@ set -euo pipefail
 
 LINUX_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 SOURCE_ROOT="$(cd -- "$LINUX_ROOT/.." && pwd -P)"
-if [[ -d "$SOURCE_ROOT/shared/crates/kekulv-engine" ]]; then
+if [[ -d "$SOURCE_ROOT/shared/crates/sumpter-engine" ]]; then
     SHARED_ROOT="$SOURCE_ROOT/shared"
     SHARED_LAYOUT="nested"
-elif [[ -d "$SOURCE_ROOT/crates/kekulv-engine" ]]; then
+elif [[ -d "$SOURCE_ROOT/crates/sumpter-engine" ]]; then
     # `/Users/kkl/Documents/claude/sumpter` is itself the shared workspace.
     SHARED_ROOT="$SOURCE_ROOT"
     SHARED_LAYOUT="root"
@@ -79,7 +79,7 @@ ok() {
 [[ -d "$LINUX_ROOT/crates" ]] || fail "Linux crates 目录不存在:$LINUX_ROOT/crates"
 [[ -f "$LINUX_ROOT/Cargo.toml" ]] || fail "Linux Cargo.toml 不存在"
 [[ -f "$LINUX_ROOT/Cargo.lock" ]] || fail "Linux Cargo.lock 不存在"
-[[ -d "$SHARED_ROOT/crates/kekulv-engine" ]] || fail "共享引擎目录不存在:$SHARED_ROOT"
+[[ -d "$SHARED_ROOT/crates/sumpter-engine" ]] || fail "共享引擎目录不存在:$SHARED_ROOT"
 [[ -f "$SHARED_ROOT/Cargo.toml" ]] || fail "shared/Cargo.toml 不存在"
 command -v git >/dev/null 2>&1 || fail "git 不可用"
 command -v shasum >/dev/null 2>&1 || fail "shasum 不可用"
@@ -107,7 +107,7 @@ fi
 
 stage_parent="$(dirname -- "$OUTPUT")"
 mkdir -p "$stage_parent"
-stage="$(mktemp -d "$stage_parent/.kekulv-shared-stage.XXXXXX")"
+stage="$(mktemp -d "$stage_parent/.sumpter-shared-stage.XXXXXX")"
 cleanup() {
     if [[ -d "$stage" ]]; then
         rm -rf -- "$stage"

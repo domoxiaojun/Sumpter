@@ -36,9 +36,9 @@ reject_text() {
 
 version="$(awk -F'"' '/^version = / {print $2; exit}' Cargo.toml)"
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "bad Cargo.toml version:$version"
-need_text Cargo.lock "name = \"kekulvd\""
+need_text Cargo.lock "name = \"sumpterd\""
 # lock package versions for our crates
-for crate in kekulv-core kekulv-proxy kekulvd; do
+for crate in sumpter-core sumpter-proxy sumpterd; do
     awk -v crate="$crate" -v ver="$version" '
         /^\[\[package\]\]$/ { in_pkg=1; hit=0; next }
         in_pkg && $0 == "name = \"" crate "\"" { hit=1; next }
@@ -107,15 +107,15 @@ if [[ -d "$ROOT/shared" ]]; then
     shared_root="$ROOT/shared"
 elif [[ -d "$ROOT/../shared" ]]; then
     shared_root="$ROOT/../shared"
-elif [[ -d "$ROOT/../crates/kekulv-engine" ]]; then
+elif [[ -d "$ROOT/../crates/sumpter-engine" ]]; then
     # The standalone `sumpter` mirror keeps the shared workspace at its root;
     # Linux remains a sibling under that root.
     shared_root="$ROOT/../"
 fi
 if [[ -n "$shared_root" ]]; then
     need_file "$shared_root/Cargo.toml"
-    need_file "$shared_root/crates/kekulv-engine/Cargo.toml"
-    need_text "$shared_root/crates/kekulv-engine/Cargo.toml" "platform-linux"
+    need_file "$shared_root/crates/sumpter-engine/Cargo.toml"
+    need_text "$shared_root/crates/sumpter-engine/Cargo.toml" "platform-linux"
     need_file scripts/assemble-shared-tree.sh
     need_text scripts/assemble-shared-tree.sh "SOURCE_COMMIT"
     if [[ -f "$shared_root/SHA256SUMS" ]]; then
@@ -127,31 +127,31 @@ if [[ -n "$shared_root" ]]; then
     fi
 fi
 
-need_file crates/kekulvd/src/main.rs
-need_text crates/kekulvd/src/main.rs "--admin-host"
-need_text crates/kekulvd/src/main.rs "AdminListen"
-need_text crates/kekulvd/src/main.rs "KEKULV_ADMIN_HOST"
-need_text crates/kekulvd/src/main.rs "KEKULV_ADMIN_PASSWORD_FILE"
-need_text crates/kekulvd/src/main.rs 'DEFAULT_ADMIN_PASSWORD_FILENAME: &str = "admin-password"'
-need_text crates/kekulvd/src/main.rs "admin_listen.socket_addr()"
+need_file crates/sumpterd/src/main.rs
+need_text crates/sumpterd/src/main.rs "--admin-host"
+need_text crates/sumpterd/src/main.rs "AdminListen"
+need_text crates/sumpterd/src/main.rs "SUMPTER_ADMIN_HOST"
+need_text crates/sumpterd/src/main.rs "SUMPTER_ADMIN_PASSWORD_FILE"
+need_text crates/sumpterd/src/main.rs 'DEFAULT_ADMIN_PASSWORD_FILENAME: &str = "admin-password"'
+need_text crates/sumpterd/src/main.rs "admin_listen.socket_addr()"
 ok "daemon CLI admin listen"
 
-need_file crates/kekulv-proxy/src/admin.rs
-need_file crates/kekulv-proxy/src/admin_auth.rs
-need_text crates/kekulv-proxy/src/admin.rs "struct AdminListen"
-need_text crates/kekulv-proxy/src/admin.rs "DEFAULT_ADMIN_HOST"
-need_text crates/kekulv-proxy/src/admin.rs "is_loopback_bind"
-need_text crates/kekulv-proxy/src/admin.rs '"/auth/session"'
-need_text crates/kekulv-proxy/src/admin.rs '"/auth/login"'
-need_text crates/kekulv-proxy/src/admin.rs '"/auth/logout"'
-need_text crates/kekulv-proxy/src/admin.rs '"/auth/credentials"'
-need_text crates/kekulv-proxy/src/admin.rs '"x-kekulv-csrf"'
-need_text crates/kekulv-proxy/src/admin_auth.rs '"session-cookie"'
-need_text crates/kekulv-proxy/src/admin_auth.rs "SameSite=Strict"
-need_text crates/kekulv-proxy/src/admin_auth.rs "MAX_CREDENTIAL_FILE_BYTES: u64 = 16 * 1024"
-reject_text crates/kekulv-proxy/src/admin.rs "WWW_AUTHENTICATE"
-need_text crates/kekulv-proxy/src/admin.rs '"/healthz"'
-need_text crates/kekulv-proxy/src/admin.rs "admin_listen.host"
+need_file crates/sumpter-proxy/src/admin.rs
+need_file crates/sumpter-proxy/src/admin_auth.rs
+need_text crates/sumpter-proxy/src/admin.rs "struct AdminListen"
+need_text crates/sumpter-proxy/src/admin.rs "DEFAULT_ADMIN_HOST"
+need_text crates/sumpter-proxy/src/admin.rs "is_loopback_bind"
+need_text crates/sumpter-proxy/src/admin.rs '"/auth/session"'
+need_text crates/sumpter-proxy/src/admin.rs '"/auth/login"'
+need_text crates/sumpter-proxy/src/admin.rs '"/auth/logout"'
+need_text crates/sumpter-proxy/src/admin.rs '"/auth/credentials"'
+need_text crates/sumpter-proxy/src/admin.rs '"x-sumpter-csrf"'
+need_text crates/sumpter-proxy/src/admin_auth.rs '"session-cookie"'
+need_text crates/sumpter-proxy/src/admin_auth.rs "SameSite=Strict"
+need_text crates/sumpter-proxy/src/admin_auth.rs "MAX_CREDENTIAL_FILE_BYTES: u64 = 16 * 1024"
+reject_text crates/sumpter-proxy/src/admin.rs "WWW_AUTHENTICATE"
+need_text crates/sumpter-proxy/src/admin.rs '"/healthz"'
+need_text crates/sumpter-proxy/src/admin.rs "admin_listen.host"
 ok "admin session auth/diagnostics"
 
 need_file scripts/install.sh
@@ -203,37 +203,37 @@ need_text scripts/start.sh "/healthz"
 ok "start.sh probe"
 
 need_file scripts/uninstall.sh
-need_text scripts/uninstall.sh "kekulv.service.d"
+need_text scripts/uninstall.sh "sumpter.service.d"
 ok "uninstall drop-in cleanup"
 
-need_text deploy/kekulv.service "KEKULV_ADMIN_PASSWORD_FILE"
-need_text deploy/kekulv-system.service "KEKULV_ADMIN_PASSWORD_FILE"
-need_file deploy/nginx-kekulv-admin.conf.example
-[[ "$(grep -Fc "proxy_set_header Cookie \$http_cookie" deploy/nginx-kekulv-admin.conf.example)" -ge 2 ]] \
+need_text deploy/sumpter.service "SUMPTER_ADMIN_PASSWORD_FILE"
+need_text deploy/sumpter-system.service "SUMPTER_ADMIN_PASSWORD_FILE"
+need_file deploy/nginx-sumpter-admin.conf.example
+[[ "$(grep -Fc "proxy_set_header Cookie \$http_cookie" deploy/nginx-sumpter-admin.conf.example)" -ge 2 ]] \
     || fail "nginx example must forward Cookie in both SSE and general Admin locations"
-need_text deploy/nginx-kekulv-admin.conf.example "proxy_set_header X-Forwarded-Proto \$scheme"
-reject_text deploy/nginx-kekulv-admin.conf.example "proxy_set_header Authorization"
+need_text deploy/nginx-sumpter-admin.conf.example "proxy_set_header X-Forwarded-Proto \$scheme"
+reject_text deploy/nginx-sumpter-admin.conf.example "proxy_set_header Authorization"
 ok "unit docs"
 
 need_file Dockerfile
-need_text Dockerfile "KEKULV_ADMIN_HOST"
-need_text Dockerfile "KEKULV_ADMIN_PORT"
+need_text Dockerfile "SUMPTER_ADMIN_HOST"
+need_text Dockerfile "SUMPTER_ADMIN_PORT"
 need_file Dockerfile.runtime
-need_text Dockerfile.runtime "docker-bin/kekulvd-"
-need_text Dockerfile.runtime "KEKULV_ADMIN_HOST"
+need_text Dockerfile.runtime "docker-bin/sumpterd-"
+need_text Dockerfile.runtime "SUMPTER_ADMIN_HOST"
 need_file .github/workflows/container.yml
 need_text .github/workflows/container.yml "Dockerfile.runtime"
 need_text .github/workflows/container.yml "cargo-zigbuild"
 need_file compose.yaml
-need_text compose.yaml "KEKULV_ADMIN_HOST"
+need_text compose.yaml "SUMPTER_ADMIN_HOST"
 need_text compose.yaml "network_mode: host"
 need_file compose.bridge.example.yaml
 need_text compose.bridge.example.yaml "0.0.0.0"
 ok "docker compose examples"
 
-# Hard fail on the previous rsync footgun: exclude pattern 'kekulvd' must not be used bare.
+# Hard fail on the previous rsync footgun: exclude pattern 'sumpterd' must not be used bare.
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    if git grep -n -- '--exclude .kekulvd.' scripts >/dev/null 2>&1; then
+    if git grep -n -- '--exclude .sumpterd.' scripts >/dev/null 2>&1; then
         :
     fi
 fi

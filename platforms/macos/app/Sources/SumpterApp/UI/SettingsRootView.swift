@@ -7,7 +7,7 @@ struct SettingsRootView: View {
     @ObservedObject private var windowVisibility: SumpterWindowVisibility
     @State private var selection: SettingsSection? = .run
     @Environment(\.colorScheme) private var systemColorScheme
-    @AppStorage("kekulvAppearanceMode") private var appearanceModeRaw = SumpterAppearanceMode.system.rawValue
+    @AppStorage("sumpterAppearanceMode") private var appearanceModeRaw = SumpterAppearanceMode.system.rawValue
 
     init(model: AppModel, windowVisibility: SumpterWindowVisibility = SumpterWindowVisibility()) {
         self.model = model
@@ -61,8 +61,8 @@ struct SettingsRootView: View {
         }
         .tint(palette.brand)
         .background(palette.canvas)
-        .environment(\.kekulvPalette, palette)
-        .environment(\.kekulvWindowVisible, windowVisibility.isVisible)
+        .environment(\.sumpterPalette, palette)
+        .environment(\.sumpterWindowVisible, windowVisibility.isVisible)
         .preferredColorScheme(appearanceMode.preferredColorScheme)
         .toolbar {
             ToolbarItem(placement: .automatic) {

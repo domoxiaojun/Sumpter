@@ -137,7 +137,7 @@ enum ClaudeAttributionInstaller {
             markerInstalled: marker.contains("已安装"),
             snippetExists: !snippet.contains("(不存在)"),
             settingsConflict: settings.contains("存在("),
-            backupCount: lines.filter { $0.contains(".kekulv-bak-") }.count
+            backupCount: lines.filter { $0.contains(".sumpter-bak-") }.count
         )
     }
 

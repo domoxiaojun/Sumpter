@@ -86,4 +86,4 @@ jobs:
       - name: Run Claude Code attribution installer self-test
         run: ./scripts/cc-project-attribution-selftest.sh
         env:
-          KEKULV_TEST_SHELLS: /bin/bash
+          SUMPTER_TEST_SHELLS: /bin/bash

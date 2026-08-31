@@ -67,10 +67,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p docker-bin
-          cp dist/kekulv-linux-x86_64/kekulvd docker-bin/kekulvd-amd64
-          cp dist/kekulv-linux-aarch64/kekulvd docker-bin/kekulvd-arm64
-          chmod 0755 docker-bin/kekulvd-amd64 docker-bin/kekulvd-arm64
-          file docker-bin/kekulvd-amd64 docker-bin/kekulvd-arm64
+          cp dist/sumpter-linux-x86_64/sumpterd docker-bin/sumpterd-amd64
+          cp dist/sumpter-linux-aarch64/sumpterd docker-bin/sumpterd-arm64
+          chmod 0755 docker-bin/sumpterd-amd64 docker-bin/sumpterd-arm64
+          file docker-bin/sumpterd-amd64 docker-bin/sumpterd-arm64
 
       - name: Upload docker-bin
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

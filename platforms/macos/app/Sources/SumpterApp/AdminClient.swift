@@ -1587,7 +1587,7 @@ public enum AdminWire {
         public let clientModel: String
         public let effectiveModel: String
         public let featureRuleID: String?
-        /// 客户端 `X-Kekulv-*` 声明的项目归因。可选:旧 daemon 的捕获记录没有这一段。
+        /// 客户端 `X-Sumpter-*` 声明的项目归因。可选:旧 daemon 的捕获记录没有这一段。
         public let clientDeclared: ClientDeclaredMetadata?
         public let sourceFormat: ProviderProtocol?
         public let targetFormat: ProviderProtocol?

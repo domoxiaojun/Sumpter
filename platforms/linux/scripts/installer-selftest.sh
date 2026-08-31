@@ -4,7 +4,7 @@ set -Eeuo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 TEST_BASE="${TMPDIR:-/tmp}"
-TEST_ROOT="$(mktemp -d "$TEST_BASE/kekulv-installer-test.XXXXXX")"
+TEST_ROOT="$(mktemp -d "$TEST_BASE/sumpter-installer-test.XXXXXX")"
 USER_HOME="$TEST_ROOT/home"
 SYSTEM_ROOT="$TEST_ROOT/rootfs"
 TEST_PACKAGE="$TEST_ROOT/package"
@@ -18,7 +18,7 @@ REALPATH_BIN="/usr/bin/realpath"
 
 cleanup() {
     case "$TEST_ROOT" in
-        "$TEST_BASE"/kekulv-installer-test.*)
+        "$TEST_BASE"/sumpter-installer-test.*)
             [[ -d "$TEST_ROOT" && ! -L "$TEST_ROOT" ]] && rm -rf -- "$TEST_ROOT"
             ;;
         *)
@@ -49,11 +49,11 @@ done
     echo "找不到可执行的 false 测试夹具" >&2
     exit 1
 }
-cp "$TRUE_BIN" "$TEST_PACKAGE/kekulvd"
-chmod 0755 "$TEST_PACKAGE/kekulvd"
+cp "$TRUE_BIN" "$TEST_PACKAGE/sumpterd"
+chmod 0755 "$TEST_PACKAGE/sumpterd"
 cp "$ROOT/config.example.json" "$TEST_PACKAGE/config.example.json"
-cp "$ROOT/deploy/kekulv.service" "$TEST_PACKAGE/kekulv.service"
-cp "$ROOT/deploy/kekulv-system.service" "$TEST_PACKAGE/kekulv-system.service"
+cp "$ROOT/deploy/sumpter.service" "$TEST_PACKAGE/sumpter.service"
+cp "$ROOT/deploy/sumpter-system.service" "$TEST_PACKAGE/sumpter-system.service"
 cp -R "$ROOT/web/." "$TEST_PACKAGE/web/"
 cp "$ROOT/scripts/"*.sh "$TEST_PACKAGE/scripts/"
 chmod 0755 "$TEST_PACKAGE/scripts/"*.sh
@@ -73,22 +73,22 @@ if [[ "${1:-}" == "--user" ]]; then
 fi
 case "$*" in
     "show-environment") exit 0 ;;
-    "is-active --quiet kekulv.service") test -f "$STUB_STATE_DIR/$scope.active" ;;
-    "is-enabled --quiet kekulv.service") test -f "$STUB_STATE_DIR/$scope.enabled" ;;
-    "stop kekulv.service") rm -f -- "$STUB_STATE_DIR/$scope.active" ;;
-    "start kekulv.service")
+    "is-active --quiet sumpter.service") test -f "$STUB_STATE_DIR/$scope.active" ;;
+    "is-enabled --quiet sumpter.service") test -f "$STUB_STATE_DIR/$scope.enabled" ;;
+    "stop sumpter.service") rm -f -- "$STUB_STATE_DIR/$scope.active" ;;
+    "start sumpter.service")
         if [[ -f "$STUB_STATE_DIR/$scope.fail-start-once" ]]; then
             rm -f -- "$STUB_STATE_DIR/$scope.fail-start-once"
             exit 1
         fi
         touch "$STUB_STATE_DIR/$scope.active"
         ;;
-    "enable kekulv.service") touch "$STUB_STATE_DIR/$scope.enabled" ;;
-    "disable kekulv.service") rm -f -- "$STUB_STATE_DIR/$scope.enabled" ;;
-    "disable --now kekulv.service")
+    "enable sumpter.service") touch "$STUB_STATE_DIR/$scope.enabled" ;;
+    "disable sumpter.service") rm -f -- "$STUB_STATE_DIR/$scope.enabled" ;;
+    "disable --now sumpter.service")
         rm -f -- "$STUB_STATE_DIR/$scope.active" "$STUB_STATE_DIR/$scope.enabled"
         ;;
-    "daemon-reload" | "reset-failed kekulv.service") exit 0 ;;
+    "daemon-reload" | "reset-failed sumpter.service") exit 0 ;;
     *)
         echo "未预期的 systemctl 调用(scope=$scope):$*" >&2
         exit 1
@@ -123,8 +123,8 @@ hash_file() {
 }
 
 reset_package_binary() {
-    cp "$1" "$TEST_PACKAGE/kekulvd"
-    chmod 0755 "$TEST_PACKAGE/kekulvd"
+    cp "$1" "$TEST_PACKAGE/sumpterd"
+    chmod 0755 "$TEST_PACKAGE/sumpterd"
 }
 
 run_user() {
@@ -133,7 +133,7 @@ run_user() {
 
 run_system() {
     PATH="$STUB_BIN:$PATH" HOME="$USER_HOME" \
-        KEKULV_INSTALLER_SELFTEST=1 KEKULV_SYSTEM_TEST_ROOT="$SYSTEM_ROOT" \
+        SUMPTER_INSTALLER_SELFTEST=1 SUMPTER_SYSTEM_TEST_ROOT="$SYSTEM_ROOT" \
         bash "$TEST_PACKAGE/scripts/$1" "${@:2}"
 }
 
@@ -144,20 +144,20 @@ exercise_user_scope() {
         exit 1
     fi
     run_user install.sh
-    [[ -x "$USER_HOME/.local/share/kekulv/kekulvd" ]]
-    [[ -f "$USER_HOME/.config/kekulv/config.json" ]]
-    [[ -s "$USER_HOME/.config/kekulv/admin-password" ]]
-    [[ "$(wc -l <"$USER_HOME/.config/kekulv/admin-password")" -eq 1 ]]
-    [[ -f "$USER_HOME/.config/systemd/user/kekulv.service" ]]
-    [[ ! -e "$USER_HOME/.config/systemd/user/kekulv.service.d/50-admin-listen.conf" ]]
-    CONFIG_SUM="$(hash_file "$USER_HOME/.config/kekulv/config.json")"
-    DEFAULT_PASSWORD_SUM="$(hash_file "$USER_HOME/.config/kekulv/admin-password")"
+    [[ -x "$USER_HOME/.local/share/sumpter/sumpterd" ]]
+    [[ -f "$USER_HOME/.config/sumpter/config.json" ]]
+    [[ -s "$USER_HOME/.config/sumpter/admin-password" ]]
+    [[ "$(wc -l <"$USER_HOME/.config/sumpter/admin-password")" -eq 1 ]]
+    [[ -f "$USER_HOME/.config/systemd/user/sumpter.service" ]]
+    [[ ! -e "$USER_HOME/.config/systemd/user/sumpter.service.d/50-admin-listen.conf" ]]
+    CONFIG_SUM="$(hash_file "$USER_HOME/.config/sumpter/config.json")"
+    DEFAULT_PASSWORD_SUM="$(hash_file "$USER_HOME/.config/sumpter/admin-password")"
 
     # 默认密码文件让自定义监听无需再重复配置密码路径。
     run_user install.sh --admin-host 0.0.0.0
-    grep -Fq 'Environment=KEKULV_ADMIN_HOST=0.0.0.0' \
-        "$USER_HOME/.config/systemd/user/kekulv.service.d/50-admin-listen.conf"
-    [[ "$(hash_file "$USER_HOME/.config/kekulv/admin-password")" == "$DEFAULT_PASSWORD_SUM" ]]
+    grep -Fq 'Environment=SUMPTER_ADMIN_HOST=0.0.0.0' \
+        "$USER_HOME/.config/systemd/user/sumpter.service.d/50-admin-listen.conf"
+    [[ "$(hash_file "$USER_HOME/.config/sumpter/admin-password")" == "$DEFAULT_PASSWORD_SUM" ]]
 
     # 捕获安装结束摘要，确认自定义绑定会打印出来（0.0.0.0 的访问 URL 回落 127.0.0.1）。
     user_install_log="$TEST_ROOT/user-install-admin.log"
@@ -165,116 +165,116 @@ exercise_user_scope() {
         bash "$TEST_PACKAGE/scripts/install.sh" --admin-host 0.0.0.0 --admin-port 57901 \
         --admin-password-file "$ADMIN_PASSWORD_FILE" \
         | tee "$user_install_log"
-    [[ -f "$USER_HOME/.config/systemd/user/kekulv.service.d/50-admin-listen.conf" ]]
-    grep -Fq 'Environment=KEKULV_ADMIN_HOST=0.0.0.0' \
-        "$USER_HOME/.config/systemd/user/kekulv.service.d/50-admin-listen.conf"
-    grep -Fq 'Environment=KEKULV_ADMIN_PORT=57901' \
-        "$USER_HOME/.config/systemd/user/kekulv.service.d/50-admin-listen.conf"
-    grep -Fq "Environment=KEKULV_ADMIN_PASSWORD_FILE=$ADMIN_PASSWORD_FILE" \
-        "$USER_HOME/.config/systemd/user/kekulv.service.d/50-admin-listen.conf"
+    [[ -f "$USER_HOME/.config/systemd/user/sumpter.service.d/50-admin-listen.conf" ]]
+    grep -Fq 'Environment=SUMPTER_ADMIN_HOST=0.0.0.0' \
+        "$USER_HOME/.config/systemd/user/sumpter.service.d/50-admin-listen.conf"
+    grep -Fq 'Environment=SUMPTER_ADMIN_PORT=57901' \
+        "$USER_HOME/.config/systemd/user/sumpter.service.d/50-admin-listen.conf"
+    grep -Fq "Environment=SUMPTER_ADMIN_PASSWORD_FILE=$ADMIN_PASSWORD_FILE" \
+        "$USER_HOME/.config/systemd/user/sumpter.service.d/50-admin-listen.conf"
     grep -Fq 'Admin 绑定:0.0.0.0:57901' "$user_install_log"
     grep -Fq 'Web 管理:http://127.0.0.1:57901/admin/' "$user_install_log"
-    DROPIN_SUM="$(hash_file "$USER_HOME/.config/systemd/user/kekulv.service.d/50-admin-listen.conf")"
+    DROPIN_SUM="$(hash_file "$USER_HOME/.config/systemd/user/sumpter.service.d/50-admin-listen.conf")"
 
     # 只改 host 时应保留已有 port。
     run_user install.sh --admin-host 192.168.1.50
-    grep -Fq 'Environment=KEKULV_ADMIN_HOST=192.168.1.50' \
-        "$USER_HOME/.config/systemd/user/kekulv.service.d/50-admin-listen.conf"
-    grep -Fq 'Environment=KEKULV_ADMIN_PORT=57901' \
-        "$USER_HOME/.config/systemd/user/kekulv.service.d/50-admin-listen.conf"
+    grep -Fq 'Environment=SUMPTER_ADMIN_HOST=192.168.1.50' \
+        "$USER_HOME/.config/systemd/user/sumpter.service.d/50-admin-listen.conf"
+    grep -Fq 'Environment=SUMPTER_ADMIN_PORT=57901' \
+        "$USER_HOME/.config/systemd/user/sumpter.service.d/50-admin-listen.conf"
 
     # 升级未带 Admin 参数时应保留 drop-in。
-    DROPIN_SUM="$(hash_file "$USER_HOME/.config/systemd/user/kekulv.service.d/50-admin-listen.conf")"
+    DROPIN_SUM="$(hash_file "$USER_HOME/.config/systemd/user/sumpter.service.d/50-admin-listen.conf")"
     run_user install.sh
-    [[ -d "$USER_HOME/.local/share/kekulv.previous" ]]
-    [[ "$(hash_file "$USER_HOME/.config/kekulv/config.json")" == "$CONFIG_SUM" ]]
-    [[ "$(hash_file "$USER_HOME/.config/kekulv/admin-password")" == "$DEFAULT_PASSWORD_SUM" ]]
-    [[ "$(hash_file "$USER_HOME/.config/systemd/user/kekulv.service.d/50-admin-listen.conf")" == "$DROPIN_SUM" ]]
+    [[ -d "$USER_HOME/.local/share/sumpter.previous" ]]
+    [[ "$(hash_file "$USER_HOME/.config/sumpter/config.json")" == "$CONFIG_SUM" ]]
+    [[ "$(hash_file "$USER_HOME/.config/sumpter/admin-password")" == "$DEFAULT_PASSWORD_SUM" ]]
+    [[ "$(hash_file "$USER_HOME/.config/systemd/user/sumpter.service.d/50-admin-listen.conf")" == "$DROPIN_SUM" ]]
 
-    INSTALLED_SUM="$(hash_file "$USER_HOME/.local/share/kekulv/kekulvd")"
-    UNIT_SUM="$(hash_file "$USER_HOME/.config/systemd/user/kekulv.service")"
+    INSTALLED_SUM="$(hash_file "$USER_HOME/.local/share/sumpter/sumpterd")"
+    UNIT_SUM="$(hash_file "$USER_HOME/.config/systemd/user/sumpter.service")"
     reset_package_binary "$FALSE_BIN"
     touch "$STUB_STATE_DIR/user.fail-start-once"
     if run_user install.sh; then
         echo "user 新版本启动失败时安装器应返回非零" >&2
         exit 1
     fi
-    [[ "$(hash_file "$USER_HOME/.local/share/kekulv/kekulvd")" == "$INSTALLED_SUM" ]]
-    [[ "$(hash_file "$USER_HOME/.config/systemd/user/kekulv.service")" == "$UNIT_SUM" ]]
+    [[ "$(hash_file "$USER_HOME/.local/share/sumpter/sumpterd")" == "$INSTALLED_SUM" ]]
+    [[ "$(hash_file "$USER_HOME/.config/systemd/user/sumpter.service")" == "$UNIT_SUM" ]]
     [[ -f "$STUB_STATE_DIR/user.active" && -f "$STUB_STATE_DIR/user.enabled" ]]
-    [[ "$(hash_file "$USER_HOME/.config/kekulv/config.json")" == "$CONFIG_SUM" ]]
-    [[ "$(hash_file "$USER_HOME/.config/kekulv/admin-password")" == "$DEFAULT_PASSWORD_SUM" ]]
+    [[ "$(hash_file "$USER_HOME/.config/sumpter/config.json")" == "$CONFIG_SUM" ]]
+    [[ "$(hash_file "$USER_HOME/.config/sumpter/admin-password")" == "$DEFAULT_PASSWORD_SUM" ]]
 
     run_user uninstall.sh
-    [[ ! -e "$USER_HOME/.local/share/kekulv" ]]
-    [[ ! -e "$USER_HOME/.local/share/kekulv.previous" ]]
-    [[ -f "$USER_HOME/.config/kekulv/config.json" ]]
-    [[ "$(hash_file "$USER_HOME/.config/kekulv/admin-password")" == "$DEFAULT_PASSWORD_SUM" ]]
-    [[ ! -e "$USER_HOME/.config/systemd/user/kekulv.service" ]]
-    [[ ! -e "$USER_HOME/.config/systemd/user/kekulv.service.d" ]]
+    [[ ! -e "$USER_HOME/.local/share/sumpter" ]]
+    [[ ! -e "$USER_HOME/.local/share/sumpter.previous" ]]
+    [[ -f "$USER_HOME/.config/sumpter/config.json" ]]
+    [[ "$(hash_file "$USER_HOME/.config/sumpter/admin-password")" == "$DEFAULT_PASSWORD_SUM" ]]
+    [[ ! -e "$USER_HOME/.config/systemd/user/sumpter.service" ]]
+    [[ ! -e "$USER_HOME/.config/systemd/user/sumpter.service.d" ]]
 
     reset_package_binary "$TRUE_BIN"
     run_user install.sh
     run_user uninstall.sh --purge
-    [[ ! -e "$USER_HOME/.config/kekulv" ]]
+    [[ ! -e "$USER_HOME/.config/sumpter" ]]
 }
 
 exercise_system_scope() {
     reset_package_binary "$TRUE_BIN"
     run_system install.sh
-    [[ -x "$SYSTEM_ROOT/opt/kekulv/kekulvd" ]]
-    [[ -f "$SYSTEM_ROOT/var/lib/kekulv/config.json" ]]
-    [[ -s "$SYSTEM_ROOT/var/lib/kekulv/admin-password" ]]
-    [[ "$(wc -l <"$SYSTEM_ROOT/var/lib/kekulv/admin-password")" -eq 1 ]]
-    [[ -f "$SYSTEM_ROOT/etc/systemd/system/kekulv.service" ]]
-    grep -Fq 'WorkingDirectory=/opt/kekulv' "$SYSTEM_ROOT/etc/systemd/system/kekulv.service"
-    grep -Fq 'User=kekulv' "$SYSTEM_ROOT/etc/systemd/system/kekulv.service"
-    SYSTEM_CONFIG_SUM="$(hash_file "$SYSTEM_ROOT/var/lib/kekulv/config.json")"
-    SYSTEM_PASSWORD_SUM="$(hash_file "$SYSTEM_ROOT/var/lib/kekulv/admin-password")"
+    [[ -x "$SYSTEM_ROOT/opt/sumpter/sumpterd" ]]
+    [[ -f "$SYSTEM_ROOT/var/lib/sumpter/config.json" ]]
+    [[ -s "$SYSTEM_ROOT/var/lib/sumpter/admin-password" ]]
+    [[ "$(wc -l <"$SYSTEM_ROOT/var/lib/sumpter/admin-password")" -eq 1 ]]
+    [[ -f "$SYSTEM_ROOT/etc/systemd/system/sumpter.service" ]]
+    grep -Fq 'WorkingDirectory=/opt/sumpter' "$SYSTEM_ROOT/etc/systemd/system/sumpter.service"
+    grep -Fq 'User=sumpter' "$SYSTEM_ROOT/etc/systemd/system/sumpter.service"
+    SYSTEM_CONFIG_SUM="$(hash_file "$SYSTEM_ROOT/var/lib/sumpter/config.json")"
+    SYSTEM_PASSWORD_SUM="$(hash_file "$SYSTEM_ROOT/var/lib/sumpter/admin-password")"
 
     run_system install.sh --admin-host 192.168.1.10 --admin-port 58000 \
         --admin-password-file "$ADMIN_PASSWORD_FILE"
-    [[ -f "$SYSTEM_ROOT/etc/systemd/system/kekulv.service.d/50-admin-listen.conf" ]]
-    grep -Fq 'Environment=KEKULV_ADMIN_HOST=192.168.1.10' \
-        "$SYSTEM_ROOT/etc/systemd/system/kekulv.service.d/50-admin-listen.conf"
-    grep -Fq 'Environment=KEKULV_ADMIN_PORT=58000' \
-        "$SYSTEM_ROOT/etc/systemd/system/kekulv.service.d/50-admin-listen.conf"
-    grep -Fq "Environment=KEKULV_ADMIN_PASSWORD_FILE=$ADMIN_PASSWORD_FILE" \
-        "$SYSTEM_ROOT/etc/systemd/system/kekulv.service.d/50-admin-listen.conf"
+    [[ -f "$SYSTEM_ROOT/etc/systemd/system/sumpter.service.d/50-admin-listen.conf" ]]
+    grep -Fq 'Environment=SUMPTER_ADMIN_HOST=192.168.1.10' \
+        "$SYSTEM_ROOT/etc/systemd/system/sumpter.service.d/50-admin-listen.conf"
+    grep -Fq 'Environment=SUMPTER_ADMIN_PORT=58000' \
+        "$SYSTEM_ROOT/etc/systemd/system/sumpter.service.d/50-admin-listen.conf"
+    grep -Fq "Environment=SUMPTER_ADMIN_PASSWORD_FILE=$ADMIN_PASSWORD_FILE" \
+        "$SYSTEM_ROOT/etc/systemd/system/sumpter.service.d/50-admin-listen.conf"
 
     run_system install.sh
-    [[ -d "$SYSTEM_ROOT/opt/kekulv.previous" ]]
-    [[ "$(hash_file "$SYSTEM_ROOT/var/lib/kekulv/config.json")" == "$SYSTEM_CONFIG_SUM" ]]
-    [[ "$(hash_file "$SYSTEM_ROOT/var/lib/kekulv/admin-password")" == "$SYSTEM_PASSWORD_SUM" ]]
-    grep -Fq 'Environment=KEKULV_ADMIN_HOST=192.168.1.10' \
-        "$SYSTEM_ROOT/etc/systemd/system/kekulv.service.d/50-admin-listen.conf"
+    [[ -d "$SYSTEM_ROOT/opt/sumpter.previous" ]]
+    [[ "$(hash_file "$SYSTEM_ROOT/var/lib/sumpter/config.json")" == "$SYSTEM_CONFIG_SUM" ]]
+    [[ "$(hash_file "$SYSTEM_ROOT/var/lib/sumpter/admin-password")" == "$SYSTEM_PASSWORD_SUM" ]]
+    grep -Fq 'Environment=SUMPTER_ADMIN_HOST=192.168.1.10' \
+        "$SYSTEM_ROOT/etc/systemd/system/sumpter.service.d/50-admin-listen.conf"
 
-    SYSTEM_INSTALLED_SUM="$(hash_file "$SYSTEM_ROOT/opt/kekulv/kekulvd")"
-    SYSTEM_UNIT_SUM="$(hash_file "$SYSTEM_ROOT/etc/systemd/system/kekulv.service")"
+    SYSTEM_INSTALLED_SUM="$(hash_file "$SYSTEM_ROOT/opt/sumpter/sumpterd")"
+    SYSTEM_UNIT_SUM="$(hash_file "$SYSTEM_ROOT/etc/systemd/system/sumpter.service")"
     reset_package_binary "$FALSE_BIN"
     touch "$STUB_STATE_DIR/system.fail-start-once"
     if run_system install.sh; then
         echo "system 新版本启动失败时安装器应返回非零" >&2
         exit 1
     fi
-    [[ "$(hash_file "$SYSTEM_ROOT/opt/kekulv/kekulvd")" == "$SYSTEM_INSTALLED_SUM" ]]
-    [[ "$(hash_file "$SYSTEM_ROOT/etc/systemd/system/kekulv.service")" == "$SYSTEM_UNIT_SUM" ]]
+    [[ "$(hash_file "$SYSTEM_ROOT/opt/sumpter/sumpterd")" == "$SYSTEM_INSTALLED_SUM" ]]
+    [[ "$(hash_file "$SYSTEM_ROOT/etc/systemd/system/sumpter.service")" == "$SYSTEM_UNIT_SUM" ]]
     [[ -f "$STUB_STATE_DIR/system.active" && -f "$STUB_STATE_DIR/system.enabled" ]]
-    [[ "$(hash_file "$SYSTEM_ROOT/var/lib/kekulv/config.json")" == "$SYSTEM_CONFIG_SUM" ]]
-    [[ "$(hash_file "$SYSTEM_ROOT/var/lib/kekulv/admin-password")" == "$SYSTEM_PASSWORD_SUM" ]]
+    [[ "$(hash_file "$SYSTEM_ROOT/var/lib/sumpter/config.json")" == "$SYSTEM_CONFIG_SUM" ]]
+    [[ "$(hash_file "$SYSTEM_ROOT/var/lib/sumpter/admin-password")" == "$SYSTEM_PASSWORD_SUM" ]]
 
     run_system uninstall.sh
-    [[ ! -e "$SYSTEM_ROOT/opt/kekulv" ]]
-    [[ ! -e "$SYSTEM_ROOT/opt/kekulv.previous" ]]
-    [[ -f "$SYSTEM_ROOT/var/lib/kekulv/config.json" ]]
-    [[ "$(hash_file "$SYSTEM_ROOT/var/lib/kekulv/admin-password")" == "$SYSTEM_PASSWORD_SUM" ]]
-    [[ ! -e "$SYSTEM_ROOT/etc/systemd/system/kekulv.service" ]]
-    [[ ! -e "$SYSTEM_ROOT/etc/systemd/system/kekulv.service.d" ]]
+    [[ ! -e "$SYSTEM_ROOT/opt/sumpter" ]]
+    [[ ! -e "$SYSTEM_ROOT/opt/sumpter.previous" ]]
+    [[ -f "$SYSTEM_ROOT/var/lib/sumpter/config.json" ]]
+    [[ "$(hash_file "$SYSTEM_ROOT/var/lib/sumpter/admin-password")" == "$SYSTEM_PASSWORD_SUM" ]]
+    [[ ! -e "$SYSTEM_ROOT/etc/systemd/system/sumpter.service" ]]
+    [[ ! -e "$SYSTEM_ROOT/etc/systemd/system/sumpter.service.d" ]]
 
     reset_package_binary "$TRUE_BIN"
     run_system install.sh
     run_system uninstall.sh --purge
-    [[ ! -e "$SYSTEM_ROOT/var/lib/kekulv" ]]
+    [[ ! -e "$SYSTEM_ROOT/var/lib/sumpter" ]]
 }
 
 exercise_user_scope

@@ -44,7 +44,7 @@ use crate::{health, server};
 
 pub const DEFAULT_ADMIN_HOST: &str = "127.0.0.1";
 pub const DEFAULT_ADMIN_PORT: u16 = 57_879;
-pub const SYSTEMD_UNIT: &str = "kekulv.service";
+pub const SYSTEMD_UNIT: &str = "sumpter.service";
 const MAX_MODEL_CATALOG_BYTES: usize = 2 * 1024 * 1024;
 const MAX_MODEL_CATALOG_ITEMS: usize = 5_000;
 
@@ -173,8 +173,8 @@ impl SystemdScope {
 
     const fn journalctl_command(self) -> &'static str {
         match self {
-            Self::User => "journalctl --user -u kekulv.service -n 200 --no-pager",
-            Self::System => "journalctl -u kekulv.service -n 200 --no-pager",
+            Self::User => "journalctl --user -u sumpter.service -n 200 --no-pager",
+            Self::System => "journalctl -u sumpter.service -n 200 --no-pager",
         }
     }
 }
@@ -1688,14 +1688,14 @@ async fn runtime_export(
         HeaderValue::from_static("nosniff"),
     );
     for (name, value) in [
-        ("x-kekulv-snapshot-seq", snapshot_seq.to_string()),
+        ("x-sumpter-snapshot-seq", snapshot_seq.to_string()),
         (
-            "x-kekulv-history-generation",
+            "x-sumpter-history-generation",
             history_generation.to_string(),
         ),
-        ("x-kekulv-row-count", row_count.to_string()),
+        ("x-sumpter-row-count", row_count.to_string()),
         (
-            "x-kekulv-privacy",
+            "x-sumpter-privacy",
             match query.privacy {
                 ExportPrivacy::Redacted => "redacted".into(),
                 ExportPrivacy::Stored => "stored".into(),
@@ -2989,7 +2989,7 @@ fn diagnostic_capture_response(
     privacy: &str,
 ) -> Response {
     let filename = format!(
-        "attachment; filename=\"kekulv-diagnostic-{scope}-{privacy}.{}\"",
+        "attachment; filename=\"sumpter-diagnostic-{scope}-{privacy}.{}\"",
         format.extension()
     );
     Response::builder()
@@ -2998,7 +2998,7 @@ fn diagnostic_capture_response(
         .header(header::CONTENT_DISPOSITION, filename)
         .header(header::CACHE_CONTROL, "no-store")
         .header("x-content-type-options", "nosniff")
-        .header("x-kekulv-privacy", privacy)
+        .header("x-sumpter-privacy", privacy)
         .body(body)
         .unwrap_or_default()
 }
@@ -3230,7 +3230,7 @@ async fn put_autostart(
         return api_error(
             StatusCode::FORBIDDEN,
             "systemd_system_root_required",
-            "系统服务由 root 管理，请使用 sudo systemctl enable 或 disable kekulv.service",
+            "系统服务由 root 管理，请使用 sudo systemctl enable 或 disable sumpter.service",
         );
     }
     let action = if body.enabled { "enable" } else { "disable" };
@@ -3280,7 +3280,7 @@ async fn autostart_status(scope: SystemdScope) -> Value {
                 } else if scope.controllable() {
                     Value::String(String::from_utf8_lossy(&output.stderr).trim().to_string())
                 } else {
-                    Value::String("系统服务由 root 管理；请使用 sudo systemctl enable|disable kekulv.service".to_string())
+                    Value::String("系统服务由 root 管理；请使用 sudo systemctl enable|disable sumpter.service".to_string())
                 },
             })
         }
@@ -3501,7 +3501,7 @@ mod tests {
             engine.clone(),
             ProxySupervisor::new(engine),
             ConfigDir::new(std::env::temp_dir().join(format!(
-                "kekulv-admin-provider-models-{}-{}",
+                "sumpter-admin-provider-models-{}-{}",
                 std::process::id(),
                 rand::random::<u64>()
             ))),
@@ -3523,7 +3523,7 @@ mod tests {
             .header(header::HOST, "127.0.0.1:57879")
             .header(header::CONTENT_TYPE, "application/json")
             .header(header::COOKIE, &cookie)
-            .header("x-kekulv-csrf", &csrf)
+            .header("x-sumpter-csrf", &csrf)
             .body(r#"{"endpointID":"missing-endpoint"}"#)
             .send()
             .await
@@ -3566,7 +3566,7 @@ mod tests {
             engine.clone(),
             ProxySupervisor::new(engine),
             ConfigDir::new(std::env::temp_dir().join(format!(
-                "kekulv-admin-endpoint-secret-{}-{}",
+                "sumpter-admin-endpoint-secret-{}-{}",
                 std::process::id(),
                 rand::random::<u64>()
             ))),
@@ -3650,7 +3650,7 @@ mod tests {
             engine.clone(),
             ProxySupervisor::new(engine),
             ConfigDir::new(std::env::temp_dir().join(format!(
-                "kekulv-admin-auth-{}-{}",
+                "sumpter-admin-auth-{}-{}",
                 std::process::id(),
                 rand::random::<u64>()
             ))),
@@ -3740,7 +3740,7 @@ mod tests {
             .post(format!("http://{address}/admin/api/auth/logout"))
             .header(header::CONTENT_TYPE, "application/json")
             .header(header::COOKIE, &cookie)
-            .header("x-kekulv-csrf", &csrf)
+            .header("x-sumpter-csrf", &csrf)
             .body("{}")
             .send()
             .await
@@ -3782,7 +3782,7 @@ mod tests {
     #[tokio::test]
     async fn runtime_api_v1_replaces_legacy_contract_and_protects_reset() {
         let root = std::env::temp_dir().join(format!(
-            "kekulv-admin-runtime-v1-{}-{}",
+            "sumpter-admin-runtime-v1-{}-{}",
             std::process::id(),
             rand::random::<u64>()
         ));
@@ -3834,7 +3834,7 @@ mod tests {
                 .headers()
                 .get(header::CONTENT_DISPOSITION)
                 .and_then(|value| value.to_str().ok()),
-            Some("attachment; filename=\"kekulv-diagnostic-all-redacted.json\"")
+            Some("attachment; filename=\"sumpter-diagnostic-all-redacted.json\"")
         );
         assert_eq!(
             export
@@ -3916,7 +3916,7 @@ mod tests {
             .put(format!("http://{address}/admin/api/runtime/retention"))
             .header(header::CONTENT_TYPE, "application/json")
             .header(header::COOKIE, &cookie)
-            .header("x-kekulv-csrf", &csrf)
+            .header("x-sumpter-csrf", &csrf)
             .body(
                 serde_json::to_vec(&json!({
                     "expectedRevision": 1,
@@ -3936,7 +3936,7 @@ mod tests {
             .put(format!("http://{address}/admin/api/runtime/retention"))
             .header(header::CONTENT_TYPE, "application/json")
             .header(header::COOKIE, &cookie)
-            .header("x-kekulv-csrf", &csrf)
+            .header("x-sumpter-csrf", &csrf)
             .body(
                 serde_json::to_vec(&json!({
                     "expectedRevision": 1,
@@ -3998,7 +3998,7 @@ mod tests {
         assert_eq!(
             export
                 .headers()
-                .get("x-kekulv-row-count")
+                .get("x-sumpter-row-count")
                 .and_then(|value| value.to_str().ok()),
             Some("0")
         );
@@ -4044,7 +4044,7 @@ mod tests {
             .delete(format!("http://{address}/admin/api/runtime/session"))
             .header(header::CONTENT_TYPE, "application/json")
             .header(header::COOKIE, &cookie)
-            .header("x-kekulv-csrf", &csrf)
+            .header("x-sumpter-csrf", &csrf)
             .body("{}")
             .send()
             .await
@@ -4064,7 +4064,7 @@ mod tests {
             ))
             .header(header::CONTENT_TYPE, "application/json")
             .header(header::COOKIE, &cookie)
-            .header("x-kekulv-csrf", &csrf)
+            .header("x-sumpter-csrf", &csrf)
             .body("{}")
             .send()
             .await
@@ -4088,7 +4088,7 @@ mod tests {
                 .request(method, format!("http://{address}{path}"))
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::COOKIE, &cookie)
-                .header("x-kekulv-csrf", &csrf)
+                .header("x-sumpter-csrf", &csrf)
                 .body("{}")
                 .send()
                 .await
@@ -4110,7 +4110,7 @@ mod tests {
             .post(format!("http://{address}/admin/api/runtime/reset"))
             .header(header::CONTENT_TYPE, "application/json")
             .header(header::COOKIE, &cookie)
-            .header("x-kekulv-csrf", &csrf)
+            .header("x-sumpter-csrf", &csrf)
             .send()
             .await
             .unwrap();
@@ -4122,7 +4122,7 @@ mod tests {
         let empty_reset = client
             .post(format!("http://{address}/admin/api/runtime/reset"))
             .header(header::COOKIE, &cookie)
-            .header("x-kekulv-csrf", &csrf)
+            .header("x-sumpter-csrf", &csrf)
             .send()
             .await
             .unwrap();
@@ -4135,7 +4135,7 @@ mod tests {
         let recreate = client
             .post(format!("http://{address}/admin/api/runtime/recreate"))
             .header(header::COOKIE, &cookie)
-            .header("x-kekulv-csrf", &csrf)
+            .header("x-sumpter-csrf", &csrf)
             .send()
             .await
             .unwrap();
@@ -4152,7 +4152,7 @@ mod tests {
     #[tokio::test]
     async fn credentials_route_rotates_session_and_persists_new_username() {
         let credential_path = std::env::temp_dir().join(format!(
-            "kekulv-admin-credentials-route-{}-{}",
+            "sumpter-admin-credentials-route-{}-{}",
             std::process::id(),
             rand::random::<u64>()
         ));
@@ -4168,7 +4168,7 @@ mod tests {
             engine.clone(),
             ProxySupervisor::new(engine),
             ConfigDir::new(std::env::temp_dir().join(format!(
-                "kekulv-admin-credentials-config-{}-{}",
+                "sumpter-admin-credentials-config-{}-{}",
                 std::process::id(),
                 rand::random::<u64>()
             ))),
@@ -4189,7 +4189,7 @@ mod tests {
             .put(format!("http://{address}/admin/api/auth/credentials"))
             .header(header::CONTENT_TYPE, "application/json")
             .header(header::COOKIE, &old_cookie)
-            .header("x-kekulv-csrf", old_csrf)
+            .header("x-sumpter-csrf", old_csrf)
             .body(
                 serde_json::to_string(&json!({
                     "currentPassword": "old-admin-password",
@@ -4250,7 +4250,7 @@ mod tests {
                 .post(format!("http://{address}/admin/api/auth/logout"))
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::COOKIE, &replacement_cookie)
-                .header("x-kekulv-csrf", replacement_csrf)
+                .header("x-sumpter-csrf", replacement_csrf)
                 .body("{}")
                 .send()
                 .await
@@ -4273,7 +4273,7 @@ mod tests {
         );
         assert!(auth.authenticate(&headers).is_some());
         assert!(!auth.accepts_csrf(&headers, &grant.session));
-        headers.insert("x-kekulv-csrf", grant.session.csrf_token.parse().unwrap());
+        headers.insert("x-sumpter-csrf", grant.session.csrf_token.parse().unwrap());
         assert!(auth.accepts_csrf(&headers, &grant.session));
     }
 
@@ -4367,7 +4367,7 @@ mod tests {
         assert!(!SystemdScope::System.controllable());
         assert_eq!(
             SystemdScope::System.journalctl_command(),
-            "journalctl -u kekulv.service -n 200 --no-pager"
+            "journalctl -u sumpter.service -n 200 --no-pager"
         );
     }
 

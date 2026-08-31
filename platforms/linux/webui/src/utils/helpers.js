@@ -393,7 +393,7 @@ export const CC_ATTRIBUTION_GUIDE = {
     unconfigured: '有 Claude Code 请求落进「未识别项目」，且没有任何一行来自客户端声明。',
     unknown: '当前时间窗口内没有 Claude Code 流量，或分析数据还没取到 —— 无法判定。',
   },
-  why: 'Claude Code 不把工作目录放进请求（cwd / project_dir 只给本机 statusLine 和 hook 用），所以默认所有 CC 请求都堆在「未识别项目」里。要分项目，就让 CC 把项目名随请求带上：Sumpter认 X-Kekulv-Project / X-Kekulv-Workspace / X-Kekulv-Git-Remote 三个入站 header，读完即从出站剥离。会话维度不受影响 —— CC 无条件发 X-Claude-Code-Session-Id。',
+  why: 'Claude Code 不把工作目录放进请求（cwd / project_dir 只给本机 statusLine 和 hook 用），所以默认所有 CC 请求都堆在「未识别项目」里。要分项目，就让 CC 把项目名随请求带上：Sumpter认 X-Sumpter-Project / X-Sumpter-Workspace / X-Sumpter-Git-Remote 三个入站 header，读完即从出站剥离。会话维度不受影响 —— CC 无条件发 X-Claude-Code-Session-Id。',
   whereToRun: '先分清三台机器：WebUI/浏览器所在设备只负责打开管理页；daemon 所在 Linux 主机负责接收请求和保存统计；Claude Code 所在主机才需要安装 wrapper。配置命令必须在跑 CC 的主机执行，不是打开 WebUI 或运行 daemon 的机器。若 CC 与 daemon 不同机，先 SSH/进入 CC 主机，并确认 ANTHROPIC_BASE_URL 指向 daemon 的可达地址；daemon 只监听 127.0.0.1 时要使用 SSH 隧道或安全内网地址，不要直接暴露无认证监听。每台跑 CC 的机器各配一次。',
   steps: [
     {
@@ -429,7 +429,7 @@ export const CC_ATTRIBUTION_GUIDE = {
     { command: 'printf \'%s\\n\' "$ANTHROPIC_BASE_URL"', note: '确认 Claude Code 访问的是 daemon 的可达地址；跨机时不要误留 127.0.0.1。' },
   ],
   platformMatrix: [
-    { label: '配置器位置', macos: 'App 内 Resources/（源码构建则在 linux/scripts/）', linux: '部署包解包后 scripts/（安装后 /opt/kekulv/scripts/）' },
+    { label: '配置器位置', macos: 'App 内 Resources/（源码构建则在 linux/scripts/）', linux: '部署包解包后 scripts/（安装后 /opt/sumpter/scripts/）' },
     { label: '默认 shell', macos: '通常 zsh → ~/.zshrc', linux: '视发行版，zsh 或 bash 都常见' },
     { label: 'bash 用哪个 rc', macos: '~/.bash_profile（登录 shell 不读 .bashrc）', linux: '~/.bashrc' },
     { label: 'CC 与 daemon', macos: '通常同机', linux: 'CC 常在别的机器上连远程 daemon' },
@@ -450,7 +450,7 @@ export const CC_ATTRIBUTION_GUIDE = {
     },
   ],
   rollback: [
-    { command: './cc-project-attribution.sh restore', note: '还原 rc 到装前（取最新备份，并先把当前 rc 另存为 .kekulv-prerestore-*）' },
+    { command: './cc-project-attribution.sh restore', note: '还原 rc 到装前（取最新备份，并先把当前 rc 另存为 .sumpter-prerestore-*）' },
     { command: './cc-project-attribution.sh uninstall', note: '移除 wrapper，保留备份' },
   ],
   privacy: 'header 会被代理从出站剥离，上游中转站看不到。但同一请求的 body 本来就带工作目录绝对路径、CLAUDE.md 全文和 git status —— 配这三个 header 不增不减外泄面，只决定能否按项目统计。',
@@ -525,7 +525,7 @@ export function projectSourceLabel(source) {
   return labels[cleanText(source)] || '来源未记录';
 }
 
-// 客户端用 X-Kekulv-* 声明的项目归因。daemon 已做脱敏与有界处理，这里只读不再加工；
+// 客户端用 X-Sumpter-* 声明的项目归因。daemon 已做脱敏与有界处理，这里只读不再加工；
 // 显示名优先用 project，其次工作区尾段，最后 git remote。
 export function clientDeclaredProject(event) {
   const declared = event?.clientDeclared ?? event?.client_declared;

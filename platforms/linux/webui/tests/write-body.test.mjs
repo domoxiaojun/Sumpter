@@ -1,5 +1,5 @@
 // 写请求 body 契约:Linux admin 的写端点一律用 `Json<Value>` 提取器解析 body
-// (crates/kekulv-proxy/src/admin.rs 的 require_json),空 body 会被判非法 JSON 返回 400。
+// (crates/sumpter-proxy/src/admin.rs 的 require_json),空 body 会被判非法 JSON 返回 400。
 // 前端曾对无参写请求只声明 Content-Type 而不发 body,导致「重置统计」等按钮必然 400。
 // 这里用非 mock 模式(不带 ?mock=1)拦下 fetch,断言真实请求形状。
 import assert from 'node:assert/strict';

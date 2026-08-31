@@ -123,7 +123,7 @@ struct SettingsPage<Content: View>: View {
     let subtitle: String
     var maxWidth: CGFloat = 1240
     @ViewBuilder var content: Content
-    @Environment(\.kekulvPalette) private var palette
+    @Environment(\.sumpterPalette) private var palette
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
@@ -161,7 +161,7 @@ struct SectionPanel<Content: View>: View {
     let title: String
     var hint: String?
     @ViewBuilder var content: Content
-    @Environment(\.kekulvPalette) private var palette
+    @Environment(\.sumpterPalette) private var palette
 
     var body: some View {
         VStack(alignment: .leading, spacing: SumpterTheme.Layout.panelSpacing) {
@@ -280,7 +280,7 @@ struct SumpterWrappingLayout: Layout {
 /// inside a SectionPanel.  Keep the native Table for selection, sorting and
 /// VoiceOver, but make its scroll surface semantic and stable.
 struct SumpterTableSurfaceModifier: ViewModifier {
-    @Environment(\.kekulvPalette) private var palette
+    @Environment(\.sumpterPalette) private var palette
 
     func body(content: Content) -> some View {
         content
@@ -302,7 +302,7 @@ struct SumpterTableSurfaceModifier: ViewModifier {
 }
 
 extension View {
-    func kekulvTableSurface() -> some View {
+    func sumpterTableSurface() -> some View {
         modifier(SumpterTableSurfaceModifier())
     }
 }
@@ -481,8 +481,8 @@ struct RuntimeActivityIndicator: View {
     var label: String?
     var color: Color = .accentColor
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.kekulvWindowVisible) private var windowVisible
-    @Environment(\.kekulvPalette) private var palette
+    @Environment(\.sumpterWindowVisible) private var windowVisible
+    @Environment(\.sumpterPalette) private var palette
 
     private var spectrum: [Color] {
         [
@@ -521,8 +521,8 @@ struct RuntimeActivityIndicator: View {
 struct RuntimeLiveGlowBorder: View {
     var color: Color = .accentColor
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.kekulvWindowVisible) private var windowVisible
-    @Environment(\.kekulvPalette) private var palette
+    @Environment(\.sumpterWindowVisible) private var windowVisible
+    @Environment(\.sumpterPalette) private var palette
 
     var body: some View {
         RuntimeLiveGlowBorderLayer(
@@ -627,9 +627,9 @@ private final class SpectrumRingNSView: NSView {
             animation.duration = 3.2
             animation.repeatCount = .infinity
             animation.timingFunction = CAMediaTimingFunction(name: .linear)
-            gradientLayer.add(animation, forKey: "kekulv.spectrum.rotation")
+            gradientLayer.add(animation, forKey: "sumpter.spectrum.rotation")
         } else {
-            gradientLayer.removeAnimation(forKey: "kekulv.spectrum.rotation")
+            gradientLayer.removeAnimation(forKey: "sumpter.spectrum.rotation")
             gradientLayer.setAffineTransform(.identity)
         }
     }
@@ -804,10 +804,10 @@ private final class LiveGlowBorderNSView: NSView {
         animatedPerimeter = perimeter
         borderMask.lineDashPhase = 0
         glowMask.lineDashPhase = 0
-        borderMask.add(makePhaseAnimation(), forKey: "kekulv.liveGlow.phase")
-        glowMask.add(makePhaseAnimation(), forKey: "kekulv.liveGlow.phase")
-        gradientLayer.add(makeBreathingAnimation(), forKey: "kekulv.liveGlow.breathe")
-        glowGradientLayer.add(makeBreathingAnimation(), forKey: "kekulv.liveGlow.breathe")
+        borderMask.add(makePhaseAnimation(), forKey: "sumpter.liveGlow.phase")
+        glowMask.add(makePhaseAnimation(), forKey: "sumpter.liveGlow.phase")
+        gradientLayer.add(makeBreathingAnimation(), forKey: "sumpter.liveGlow.breathe")
+        glowGradientLayer.add(makeBreathingAnimation(), forKey: "sumpter.liveGlow.breathe")
     }
 
     private func makePhaseAnimation() -> CABasicAnimation {
@@ -839,10 +839,10 @@ private final class LiveGlowBorderNSView: NSView {
     }
 
     private func removeAnimations() {
-        borderMask.removeAnimation(forKey: "kekulv.liveGlow.phase")
-        glowMask.removeAnimation(forKey: "kekulv.liveGlow.phase")
-        gradientLayer.removeAnimation(forKey: "kekulv.liveGlow.breathe")
-        glowGradientLayer.removeAnimation(forKey: "kekulv.liveGlow.breathe")
+        borderMask.removeAnimation(forKey: "sumpter.liveGlow.phase")
+        glowMask.removeAnimation(forKey: "sumpter.liveGlow.phase")
+        gradientLayer.removeAnimation(forKey: "sumpter.liveGlow.breathe")
+        glowGradientLayer.removeAnimation(forKey: "sumpter.liveGlow.breathe")
         animatedPerimeter = 0
     }
 
@@ -876,7 +876,7 @@ private final class LiveGlowBorderNSView: NSView {
 struct RuntimeLiveBreathingAura: View {
     var colors: [Color]
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.kekulvWindowVisible) private var windowVisible
+    @Environment(\.sumpterWindowVisible) private var windowVisible
     @Environment(\.colorScheme) private var colorScheme
 
     private var isAnimating: Bool {
@@ -1047,7 +1047,7 @@ struct MetricTile: View {
     /// density.
     var titleAccessory: String? = nil
     var systemImage: String
-    @Environment(\.kekulvPalette) private var palette
+    @Environment(\.sumpterPalette) private var palette
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var accentColor: Color {
@@ -1129,7 +1129,7 @@ struct MetricTile: View {
 struct EmptyStateView: View {
     let title: String
     var systemImage: String = "tray"
-    @Environment(\.kekulvPalette) private var palette
+    @Environment(\.sumpterPalette) private var palette
 
     var body: some View {
         VStack(spacing: 8) {
@@ -1188,7 +1188,7 @@ struct InfoRow: View {
 /// 已 accepted 的事件显示「首字节 → 总时长」：流式请求单看总时长分不清上游卡住还是输出长。
 struct RuntimeEventDurationText: View {
     let event: RuntimeEvent
-    @Environment(\.kekulvWindowVisible) private var windowVisible
+    @Environment(\.sumpterWindowVisible) private var windowVisible
 
     @ViewBuilder
     var body: some View {
@@ -1214,7 +1214,7 @@ struct RuntimeEventDurationText: View {
 /// 事件详情里的 streaming / 已持续秒数，同样每秒更新。
 struct RuntimeEventStatusInfoRow: View {
     let event: RuntimeEvent
-    @Environment(\.kekulvWindowVisible) private var windowVisible
+    @Environment(\.sumpterWindowVisible) private var windowVisible
 
     var body: some View {
         GridRow {

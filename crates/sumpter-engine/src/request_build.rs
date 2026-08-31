@@ -50,10 +50,13 @@ const ANTHROPIC_BETA_EFFORT: &str = "effort-2025-11-24";
 
 /// 入站 header 黑名单(不透传;其余如 anthropic-version 原样透传)。
 ///
-/// `x-kekulv-*` 是客户端声明项目归因用的入站专用 header(见 `ClientDeclaredMetadata`):
+/// `x-sumpter-*` 是客户端声明项目归因用的入站专用 header(见 `ClientDeclaredMetadata`):
 /// 代理读完就必须剥掉,否则项目名与本机工作区路径会跟着请求外泄给上游中转站。
-const HEADER_BLOCKLIST: [&str; 17] = [
+const HEADER_BLOCKLIST: [&str; 20] = [
     "host",
+    "x-sumpter-project",
+    "x-sumpter-workspace",
+    "x-sumpter-git-remote",
     "x-kekulv-project",
     "x-kekulv-workspace",
     "x-kekulv-git-remote",
@@ -614,14 +617,18 @@ mod tests {
         // 本机工作区路径,一旦跟着转发出去就等于把这些信息泄给上游中转站 —— 出站黑名单是
         // 唯一的拦截点,所以在这里钉死。
         let inbound = vec![
-            ("X-Kekulv-Project".to_string(), "automode-proxy".to_string()),
+            ("X-Sumpter-Project".to_string(), "automode-proxy".to_string()),
             (
-                "x-kekulv-workspace".to_string(),
+                "x-sumpter-workspace".to_string(),
                 "/Users/kkl/.claude/automode-proxy".to_string(),
             ),
             (
-                "X-Kekulv-Git-Remote".to_string(),
+                "X-Sumpter-Git-Remote".to_string(),
                 "https://github.com/domoxiaojun/sumpter.git".to_string(),
+            ),
+            (
+                "X-Kekulv-Project".to_string(),
+                "legacy-should-not-leak".to_string(),
             ),
             ("anthropic-version".to_string(), "2023-06-01".to_string()),
         ];
@@ -642,6 +649,9 @@ mod tests {
         );
         // 直接钉死黑名单常量:从名单里摘掉任一项都会立刻红,等价于负向验证。
         for name in [
+            "x-sumpter-project",
+            "x-sumpter-workspace",
+            "x-sumpter-git-remote",
             "x-kekulv-project",
             "x-kekulv-workspace",
             "x-kekulv-git-remote",
@@ -652,10 +662,10 @@ mod tests {
             );
             assert!(header(&build, name).is_empty());
         }
-        // 出站里不应残留任何 kekulv 私有前缀,也不应有本机路径片段。
+        // 出站里不应残留任何 sumpter 私有前缀,也不应有本机路径片段。
         for (name, value) in &build.request.headers {
             assert!(
-                !name.starts_with("x-kekulv-"),
+                !name.starts_with("x-sumpter-"),
                 "出站残留私有 header: {name}"
             );
             assert!(

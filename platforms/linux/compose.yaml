@@ -1,10 +1,10 @@
-# kekulv Docker Compose（Linux 主机）
+# sumpter Docker Compose（Linux 主机）
 # 同名：docker-compose.yml → 本文件
 #
 # 设计：
 #   - 默认使用 GHCR :latest，不在本机 cargo/docker build
 #   - 配置与运行数据 bind 到当前目录 ./config
-#   - KEKULV_ADMIN_* / RUST_LOG 从宿主机环境透传进容器
+#   - SUMPTER_ADMIN_* / RUST_LOG 从宿主机环境透传进容器
 #
 # 首次：
 #   mkdir -p config
@@ -15,14 +15,14 @@
 #   docker compose pull && docker compose up -d
 #
 # :latest 跟随 main 最近一次成功的 Container 构建，不一定等于最新 GitHub Release。
-# 私有 GHCR 需先 docker login。钉死版本：export KEKULV_IMAGE=ghcr.io/domoxiaojun/sumpter:0.1.6
+# 私有 GHCR 需先 docker login。钉死版本：export SUMPTER_IMAGE=ghcr.io/domoxiaojun/sumpter:0.1.6
 #
-# 仅 Linux host network。为免 chown，默认 root 写 ./config（弱于 systemd 的 kekulv 用户）。
+# 仅 Linux host network。为免 chown，默认 root 写 ./config（弱于 systemd 的 sumpter 用户）。
 # Admin 默认读取 ./config/admin-password 并提供 WebUI 内置登录；公网反代仍必须使用 HTTPS。
 
 services:
-  kekulv:
-    image: ${KEKULV_IMAGE:-ghcr.io/domoxiaojun/sumpter:latest}
+  sumpter:
+    image: ${SUMPTER_IMAGE:-ghcr.io/domoxiaojun/sumpter:latest}
     # 本机编镜像见 compose.build.example.yaml
 
     network_mode: host
@@ -37,18 +37,18 @@ services:
     environment:
       RUST_LOG: ${RUST_LOG:-info}
       # 必须列出才会传入容器；宿主机 export / 命令前缀 / .env 均可覆盖
-      KEKULV_ADMIN_HOST: ${KEKULV_ADMIN_HOST:-127.0.0.1}
-      KEKULV_ADMIN_PORT: ${KEKULV_ADMIN_PORT:-57879}
+      SUMPTER_ADMIN_HOST: ${SUMPTER_ADMIN_HOST:-127.0.0.1}
+      SUMPTER_ADMIN_PORT: ${SUMPTER_ADMIN_PORT:-57879}
       # 启动前必须创建 ./config/admin-password；daemon 会按 --config-dir 自动读取。
-      # 高级自定义路径才需要 KEKULV_ADMIN_PASSWORD_FILE。
-      # KEKULV_WEB_ROOT: /opt/kekulv/web
+      # 高级自定义路径才需要 SUMPTER_ADMIN_PASSWORD_FILE。
+      # SUMPTER_WEB_ROOT: /opt/sumpter/web
 
     # CLI 优先于环境变量；取消注释须写全
     # command:
     #   - --config-dir
     #   - /config
     #   - --web-root
-    #   - /opt/kekulv/web
+    #   - /opt/sumpter/web
     #   - --admin-host
     #   - "0.0.0.0"
     #   - --admin-port
@@ -56,7 +56,7 @@ services:
 
     volumes:
       - ./config:/config
-      # - ./web:/opt/kekulv/web:ro
+      # - ./web:/opt/sumpter/web:ro
 
     healthcheck:
       test:
@@ -68,7 +68,7 @@ services:
           "3",
           "-O",
           "/dev/null",
-          "http://127.0.0.1:${KEKULV_ADMIN_PORT:-57879}/healthz",
+          "http://127.0.0.1:${SUMPTER_ADMIN_PORT:-57879}/healthz",
         ]
       interval: 15s
       timeout: 4s

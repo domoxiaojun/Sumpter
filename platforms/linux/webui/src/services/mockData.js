@@ -727,9 +727,9 @@ export const mockDiagnostics = {
   adminListener: { host: '127.0.0.1', port: 57879 },
   proxyListener: { host: '127.0.0.1', port: 57878 },
   statsWritable: true,
-  configPath: '~/.config/kekulv/config.json',
-  webRoot: '~/.local/share/kekulv/web',
-  journalctlCommand: 'journalctl --user -u kekulv -n 200 --no-pager',
+  configPath: '~/.config/sumpter/config.json',
+  webRoot: '~/.local/share/sumpter/web',
+  journalctlCommand: 'journalctl --user -u sumpter -n 200 --no-pager',
   warnings: [],
   capture: {
     enabled: false,
@@ -770,6 +770,6 @@ export const mockAutostart = {
   controllable: true,
   enabled: true,
   scope: 'user',
-  unit: 'kekulv.service',
+  unit: 'sumpter.service',
   reason: 'systemd user unit 已启用开机自启',
 };

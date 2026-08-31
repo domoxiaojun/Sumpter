@@ -931,7 +931,7 @@ fn sticky_key_v3_matches_canonical_sha256_vectors_and_redacts_debug() {
     );
     assert_eq!(
         stable.affinity_id(),
-        "7d711c360856e08fc7ac9c28fcd0f3fbb26d41f39b90cb63172a6eeb14f044d4"
+        "f5ef272c795ec9ae38fef42d40a07edcbf7a813324a222f055743e47d84fac2c"
     );
     assert!(stable.persistent());
     assert!(!format!("{stable:?}").contains("session-1"));
@@ -943,7 +943,7 @@ fn sticky_key_v3_matches_canonical_sha256_vectors_and_redacts_debug() {
     );
     assert_eq!(
         content.affinity_id(),
-        "ea83cc61419d189e987c3baa312aa7d63c276c3c73bcee439d0d82398f9602f4"
+        "5e007e24c9977613afc4f4844c643b2fbca93666d035f7e1a11e2ad3f18563b2"
     );
     assert!(!content.persistent());
 
@@ -954,7 +954,7 @@ fn sticky_key_v3_matches_canonical_sha256_vectors_and_redacts_debug() {
     );
     assert_eq!(
         unicode.affinity_id(),
-        "4ed42a1aa13ccec76db41fd0c760de2afc8555b4ca21cbd37c62ccc0e45fcb12"
+        "b376a00daaa61da23110a3cd7f2e9614a66a6829d2c44c9c56fce9b01b763db5"
     );
 }
 

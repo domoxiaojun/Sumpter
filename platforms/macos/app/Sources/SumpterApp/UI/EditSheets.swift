@@ -130,7 +130,7 @@ struct CatalogMappingSheet: View {
                             Text(row.displayName).lineLimit(1)
                         }
                     }
-                    .kekulvTableSurface()
+                    .sumpterTableSurface()
                     .frame(height: 240)
                 }
                 SheetErrorText(submission.errorText)
