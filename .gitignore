@@ -1,0 +1,27 @@
+# 密钥:含真实 key,绝不入库
+keys.json
+.control_token
+
+# 含明文密钥的旧备份
+*.bak-*
+
+# 运行时日志与统计
+*.log
+stats.json
+stats.json.tmp
+
+# 编译 / 打包产物(体积大,可重建)
+**/target/
+platforms/macos/app/.build/
+platforms/macos/app/dist/
+platforms/macos/app/dist-unified-engine-test/
+*.dmg
+**/node_modules/
+**/dist/
+
+# Python 残留
+__pycache__/
+*.pyc
+
+# 系统
+.DS_Store

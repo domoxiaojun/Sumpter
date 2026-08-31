@@ -1,0 +1,152 @@
+{
+  "schemaVersion": 6,
+  "listener": {
+    "host": "127.0.0.1",
+    "port": 57878,
+    "allowedCIDRs": [],
+    "authToken": ""
+  },
+  "retry": {
+    "responseTimeoutSeconds": null,
+    "streamIdleTimeoutSeconds": null,
+    "sessionStickyRetries": 2,
+    "maxDeferredRounds": 0,
+    "maxRetryDurationSeconds": 0,
+    "pinnedIPConcurrency": 3
+  },
+  "featureRules": [
+    {
+      "id": "classifier",
+      "name": "安全分类器",
+      "enabled": false,
+      "match": {
+        "requestKind": "classifier"
+      },
+      "target": {
+        "endpointID": "agentrouter",
+        "model": "claude-haiku-4-5-20251001",
+        "effort": "low"
+      }
+    },
+    {
+      "id": "websearch",
+      "name": "WebSearch",
+      "enabled": false,
+      "match": {
+        "requestKind": "websearch"
+      },
+      "target": {
+        "model": "claude-haiku-4-5-20251001"
+      }
+    },
+    {
+      "id": "webfetch",
+      "name": "WebFetch",
+      "enabled": false,
+      "match": {
+        "requestKind": "webfetch"
+      },
+      "target": {
+        "model": "claude-haiku-4-5-20251001"
+      }
+    }
+  ],
+  "endpoints": [
+    {
+      "id": "acc1",
+      "name": "acc1",
+      "baseURL": "https://anyrouter.top",
+      "protocol": "auto",
+      "enabled": true,
+      "apiKey": "",
+      "pinnedIPs": [],
+      "pinnedIPExclusive": false,
+      "stickyGroup": "acc1",
+      "mappings": [
+        {
+          "clientPattern": "claude-opus-*",
+          "upstreamModel": "",
+          "thinking": "adaptive",
+          "context": "oneMillion"
+        }
+      ]
+    },
+    {
+      "id": "acc2",
+      "name": "acc2",
+      "baseURL": "https://anyrouter.top",
+      "protocol": "auto",
+      "enabled": true,
+      "apiKey": "",
+      "pinnedIPs": [],
+      "priority": 10,
+      "pinnedIPExclusive": false,
+      "stickyGroup": "acc2",
+      "mappings": [
+        {
+          "clientPattern": "claude-opus-*",
+          "upstreamModel": "",
+          "thinking": "adaptive",
+          "context": "oneMillion"
+        }
+      ]
+    },
+    {
+      "id": "third-main",
+      "name": "Third API",
+      "baseURL": "https://example.com",
+      "protocol": "auto",
+      "enabled": true,
+      "apiKey": "",
+      "pinnedIPs": [],
+      "pinnedIPExclusive": false,
+      "mappings": [
+        {
+          "clientPattern": "gpt-5.4",
+          "upstreamModel": "gpt-5.4",
+          "thinking": "disabled",
+          "context": "standard"
+        }
+      ]
+    },
+    {
+      "id": "agentrouter",
+      "name": "AgentRouter",
+      "baseURL": "https://agentrouter.org",
+      "protocol": "auto",
+      "enabled": true,
+      "apiKey": "",
+      "pinnedIPs": [],
+      "priority": 20,
+      "pinnedIPExclusive": false,
+      "mappings": [
+        {
+          "clientPattern": "claude-haiku-4-5-20251001",
+          "upstreamModel": "claude-haiku-4-5-20251001",
+          "thinking": "disabled",
+          "context": "oneMillion"
+        }
+      ]
+    },
+    {
+      "id": "third",
+      "name": "Third API",
+      "baseURL": "https://example.com",
+      "protocol": "auto",
+      "enabled": true,
+      "apiKey": "",
+      "pinnedIPs": [],
+      "priority": 21,
+      "pinnedIPExclusive": false,
+      "mappings": [
+        {
+          "clientPattern": "claude-haiku-4-5-20251001",
+          "upstreamModel": "provider-haiku-alias",
+          "thinking": "disabled",
+          "context": "oneMillion",
+          "failoverTimeoutSeconds": 15
+        }
+      ]
+    }
+  ]
+}

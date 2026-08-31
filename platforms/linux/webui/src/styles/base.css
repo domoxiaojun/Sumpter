@@ -1,0 +1,272 @@
+/* Base & Layout Styles */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+  /* Native macOS scrolling is direct; keep anchor navigation from adding a
+     second animation layer to the already live dashboard. */
+  scroll-behavior: auto;
+}
+
+body {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--bg-page);
+  /* Keep the scrolling canvas identical to macOS Palette.canvas. Decorative
+     gradients belong on bounded cards, not on a fixed page layer that is
+     repainted behind every scroll pass. */
+  background-image: none;
+  background-attachment: initial;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Wide tables own their local scroll surface. Keep accidental fixed-width
+     children from widening the page canvas itself. */
+  overflow-x: clip;
+}
+
+/* Custom Sleek Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-medium);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Accessibility Skip Link */
+.skip-link {
+  position: absolute;
+  top: -40px;
+  left: 16px;
+  background: var(--primary);
+  color: var(--text-inverse);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  z-index: 9999;
+  transition: top var(--ease-fast);
+  text-decoration: none;
+}
+
+.skip-link:focus {
+  top: 16px;
+}
+
+/* App Layout Grid */
+.app-container {
+  display: flex;
+  min-height: 100vh;
+  min-height: 100dvh;
+  position: relative;
+}
+
+/* Main Content Area */
+.main-wrapper {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  overflow-y: auto;
+  position: relative;
+}
+
+.content-body {
+  flex: 1;
+  min-width: 0;
+  padding: var(--page-gutter) var(--page-gutter) var(--page-bottom-space);
+  max-width: calc(var(--content-max-width) + 2 * var(--page-gutter));
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* The main landmark is programmatically focused after route changes so
+   screen readers announce the new page. It is not itself an action, so avoid
+   painting a browser-default outline around the entire content canvas. */
+.content-body:focus {
+  outline: none;
+}
+
+.app-loading-state {
+  display: flex;
+  min-height: 50vh;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.app-loading-state .pulse-dot {
+  width: 16px;
+  height: 16px;
+  color: var(--primary);
+}
+
+.login-shell {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: var(--space-6);
+  background: var(--bg-page);
+  color: var(--text-primary);
+}
+
+.login-card {
+  width: min(100%, 430px);
+  padding: clamp(24px, 5vw, 40px);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface-elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+.login-brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 1.1rem; margin-bottom: 28px; }
+.brand-mark { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; color: var(--text-inverse); background: var(--primary); }
+.brand-mark img { width: 42px; height: 42px; display: block; }
+.login-card h1 { font-size: 1.8rem; margin-bottom: 8px; }
+.login-form { display: grid; gap: 18px; margin-top: 26px; }
+.login-submit { width: 100%; min-height: 44px; justify-content: center; }
+.form-error { color: var(--status-critical); font-size: .86rem; }
+
+/* Page Header */
+.page-header {
+  margin-bottom: var(--page-stack-gap);
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-4);
+}
+
+.page-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.page-title {
+  font-family: var(--font-sans);
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.page-subtitle {
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+}
+
+.page-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+/* Responsive Grid System */
+.grid-2col {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: var(--panel-gap);
+}
+
+.grid-3col {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: var(--panel-gap);
+}
+
+.grid-4col {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+  gap: var(--metric-gap);
+}
+
+/* Compact desktop: the sidebar remains visible, but the detail canvas is too
+   narrow for the wide-screen header and multi-column forms. Keep the same
+   information architecture and switch only the flow of those regions. The
+   dedicated <=900px rule below still owns the drawer/mobile treatment. */
+@media (max-width: 1199px) and (min-width: 901px) {
+  .page-header {
+    flex-wrap: wrap;
+  }
+
+  .page-title-group {
+    flex: 1 1 240px;
+  }
+
+  .page-actions {
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 900px) {
+  .app-container {
+    flex-direction: column;
+  }
+
+  .main-wrapper {
+    width: 100%;
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .content-body {
+    padding: var(--page-gutter) var(--page-gutter) var(--page-bottom-space);
+    max-width: 100%;
+  }
+
+  .grid-2col, .grid-3col, .grid-4col {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .page-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .page-title,
+  .page-actions {
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 600px) {
+  /* Prevent mobile Safari from zooming the viewport when a field receives
+     focus. Compact labels can remain smaller; editable controls cannot. */
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}

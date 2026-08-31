@@ -1,0 +1,41 @@
+# system-wide unit installed by `sudo scripts/install.sh`.
+# The daemon is deliberately unprivileged: the installer owns files, while the
+# Admin API cannot acquire systemd-management rights through this unit.
+#
+# Admin 默认 127.0.0.1:57879；静态登录壳公开，API/SSE 使用 WebUI 会话 Cookie。
+# daemon 自动读取 /var/lib/kekulv/admin-password；安装器首次安装会生成并在升级时保留。
+# 手动部署本 unit 时先创建：
+#      sudo install -o kekulv -g kekulv -m 600 /dev/null /var/lib/kekulv/admin-password
+#      openssl rand -base64 32 | sudo tee /var/lib/kekulv/admin-password >/dev/null
+#      sudo chown kekulv:kekulv /var/lib/kekulv/admin-password
+# 然后: sudo systemctl restart kekulv.service
+# 旧单行凭据初始用户名为 kkl；公网必须由外层 HTTPS 终止。高级自定义路径可用
+# KEKULV_ADMIN_PASSWORD_FILE 或 --admin-password-file 覆盖。
+[Unit]
+Description=kekulv (Sumpter) Anthropic 兼容本地代理守护进程
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kekulv
+Group=kekulv
+WorkingDirectory=/opt/kekulv
+ExecStart=/opt/kekulv/kekulvd --systemd-scope system --config-dir /var/lib/kekulv --web-root /opt/kekulv/web
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/kekulv
+Environment=RUST_LOG=info
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

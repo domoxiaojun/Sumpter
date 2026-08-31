@@ -1,0 +1,44 @@
+# syntax=docker/dockerfile:1.7
+# Fast runtime image: copies a prebuilt static kekulvd (no cargo in Docker).
+# Used by .github/workflows/container.yml after cargo-zigbuild.
+# Local full rebuild from source still uses ./Dockerfile.
+
+FROM alpine:3.22 AS runtime
+
+# hadolint ignore=DL3018
+RUN apk add --no-cache ca-certificates \
+    && addgroup -S -g 10001 kekulv \
+    && adduser -S -D -H -h /home/kekulv -u 10001 -G kekulv kekulv \
+    && mkdir -p /home/kekulv /config /opt/kekulv/web \
+    && chown -R 10001:10001 /home/kekulv /config /opt/kekulv \
+    && chmod 0700 /home/kekulv /config
+
+# buildx sets TARGETARCH to amd64 / arm64
+ARG TARGETARCH
+COPY --chmod=0755 docker-bin/kekulvd-${TARGETARCH} /usr/local/bin/kekulvd
+COPY --chown=kekulv:kekulv web/ /opt/kekulv/web/
+COPY --chown=kekulv:kekulv config.example.json /opt/kekulv/config.example.json
+
+# CMD sets `--config-dir /config`, so the mounted volume must contain
+# `/config/admin-password` before startup. Public access requires HTTPS.
+
+ENV HOME=/home/kekulv \
+    RUST_LOG=info \
+    KEKULV_ADMIN_HOST=127.0.0.1 \
+    KEKULV_ADMIN_PORT=57879 \
+    KEKULV_WEB_ROOT=/opt/kekulv/web
+
+WORKDIR /opt/kekulv
+USER 10001:10001
+VOLUME ["/config"]
+EXPOSE 57878 57879
+STOPSIGNAL SIGTERM
+
+# hadolint ignore=DL3025
+HEALTHCHECK --interval=15s --timeout=4s --start-period=10s --retries=4 \
+    CMD wget -q -T 3 -O /dev/null \
+      "http://127.0.0.1:$${KEKULV_ADMIN_PORT:-57879}/healthz" \
+      || exit 1
+
+ENTRYPOINT ["/usr/local/bin/kekulvd"]
+CMD ["--config-dir", "/config", "--web-root", "/opt/kekulv/web"]

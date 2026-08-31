@@ -1,0 +1,23 @@
+[package]
+name = "sumpterd-macos"
+edition.workspace = true
+version.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "sumpterd-macos"
+path = "src/main.rs"
+
+[dependencies]
+sumpter-core = { workspace = true }
+sumpter-macos-adapter = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+futures-util = { workspace = true }
+bytes = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rand = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

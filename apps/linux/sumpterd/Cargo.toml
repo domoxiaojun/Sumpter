@@ -1,0 +1,17 @@
+[package]
+name = "sumpterd-linux"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "sumpterd-linux"
+path = "src/main.rs"
+
+[dependencies]
+sumpter-core = { workspace = true }
+sumpter-linux-adapter = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

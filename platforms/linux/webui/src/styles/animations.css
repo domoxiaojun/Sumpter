@@ -1,0 +1,260 @@
+/* Keyframe Animations & Micro-interactions */
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.95);
+    opacity: 0.8;
+  }
+  50% {
+    transform: scale(1.8);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(0.95);
+    opacity: 0;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes modal-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.95) translateY(10px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes toast-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(100%) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+@keyframes runtime-row-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes runtime-page-enter-forward {
+  from {
+    opacity: 0.62;
+    transform: translate3d(12px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes runtime-page-enter-backward {
+  from {
+    opacity: 0.62;
+    transform: translate3d(-12px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes runtime-page-replace {
+  from { opacity: 0.68; }
+  to { opacity: 1; }
+}
+
+@keyframes runtime-stream-pulse {
+  0%, 100% { opacity: 0.58; transform: scale(0.92); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes telemetry-live-status-pulse {
+  0%, 100% {
+    opacity: 0.62;
+    transform: scale(0.86);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Each in-flight row breathes slowly. The gradients remain fixed while only
+   compositor-friendly opacity and transform values are animated. */
+@keyframes telemetry-ambient-base {
+  0%, 100% {
+    opacity: 0.16;
+    transform: translate3d(-1%, 0.4%, 0) scale(0.985);
+  }
+  52% {
+    opacity: 0.24;
+    transform: translate3d(1%, -0.4%, 0) scale(1.018);
+  }
+}
+
+@keyframes telemetry-ambient-halo {
+  0%, 100% {
+    opacity: 0.08;
+    transform: translate3d(0.5%, 0, 0) scale(0.99);
+  }
+  44% {
+    opacity: 0.13;
+    transform: translate3d(-0.8%, -0.5%, 0) scale(1.014);
+  }
+  76% {
+    opacity: 0.10;
+    transform: translate3d(0.4%, 0.5%, 0) scale(1.004);
+  }
+}
+
+@keyframes telemetry-ambient-flow {
+  0% {
+    opacity: 0.14;
+    transform: translate3d(-140%, 1%, 0) scale(0.98);
+  }
+  36% {
+    opacity: 0.28;
+    transform: translate3d(-10%, -0.4%, 0) scale(1.012);
+  }
+  72% {
+    opacity: 0.22;
+    transform: translate3d(140%, 0.5%, 0) scale(1.004);
+  }
+  100% {
+    opacity: 0.14;
+    transform: translate3d(240%, 0, 0) scale(0.99);
+  }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+.animate-pulse {
+  animation: fade-in 1.5s ease-in-out infinite alternate;
+}
+
+.skeleton {
+  background: linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.09) 50%, rgba(255,255,255,0.04) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: var(--radius-sm);
+}
+
+/* Runtime feedback stays on compositor-friendly opacity/transform properties.
+   The row animation is intentionally short so new SSE events feel live
+   without delaying table interaction. */
+.runtime-row-enter {
+  animation: runtime-row-enter var(--duration-normal) var(--motion-ease-enter) both;
+}
+
+.runtime-stream-indicator {
+  display: inline-flex;
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+  animation: runtime-stream-pulse 1.4s ease-in-out infinite;
+}
+
+.runtime-progress-track {
+  position: relative;
+  overflow: hidden;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--border-subtle);
+}
+
+.runtime-progress-value {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--progress-color, var(--primary));
+  transform: scaleX(var(--progress-scale, 0));
+  transform-origin: left center;
+  transition: transform var(--duration-normal) var(--timing-standard), background-color var(--duration-fast) var(--timing-standard);
+  will-change: transform;
+}
+
+.loading-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+  animation: runtime-stream-pulse 1.1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .runtime-row-enter,
+  .runtime-stream-indicator,
+  .loading-dot,
+  .skeleton,
+  .ambient-deco.telemetry-live-ambient > span,
+  .event-page-content,
+  .event-page-loading {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .event-page-stage-loading[data-page-direction] .event-page-content {
+    opacity: 1;
+    transform: none;
+  }
+
+  .ambient-deco.telemetry-live-ambient .ambient-base {
+    opacity: 0.09;
+    transform: scale(1);
+  }
+
+  .ambient-deco.telemetry-live-ambient .ambient-halo {
+    opacity: 0.055;
+    transform: none;
+  }
+
+  .ambient-deco.telemetry-live-ambient .ambient-flow {
+    opacity: 0.10;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+
+  .runtime-progress-value {
+    transition: none !important;
+  }
+}

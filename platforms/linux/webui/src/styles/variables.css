@@ -1,0 +1,221 @@
+/* Cyber-Slate & Aurora Modern Design System Tokens */
+
+:root {
+  color-scheme: dark light;
+
+  /* Typography */
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /* Spacing Scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  /* Radius Scale */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-full: 9999px;
+
+  /* Cross-platform surface rhythm.  macOS SectionPanel/MetricTile use the
+     same semantic layers and radii so screenshots remain comparable without
+     forcing SwiftUI to imitate browser controls. */
+  --panel-radius: 14px;
+  --panel-padding: 16px;
+  --metric-radius: 14px;
+  --metric-padding: 16px;
+  --control-height: 40px;
+  --control-height-touch: 44px;
+
+  /* Fluid layout contract. Breakpoints still change information structure
+     (for example a dense table becoming summary cards), while ordinary
+     resizing uses these continuous values instead of page-specific pixels. */
+  --page-gutter: clamp(16px, 2.1vw, 24px);
+  --page-bottom-space: clamp(24px, 4vw, 40px);
+  --page-stack-gap: clamp(16px, 1.75vw, 24px);
+  --panel-gap: 16px;
+  --metric-gap: 12px;
+  --content-max-width: 1240px;
+  --readable-measure: 72ch;
+
+  /* Transitions */
+  /*
+   * Keep transition shorthands for existing components, but do not pass
+   * these composite values to `animation`: a second time value there is an
+   * animation-delay, which made the shared modal appear to flash before it
+   * entered. Animation timing is split into primitives below.
+   */
+  --duration-fast: 150ms;
+  --duration-normal: 240ms;
+  --duration-spring: 300ms;
+  --timing-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --timing-spring: cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  --motion-overlay-duration: 160ms;
+  --motion-modal-duration: 220ms;
+  --motion-command-duration: 180ms;
+  --motion-ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-ease-exit: cubic-bezier(0.7, 0, 0.84, 0);
+
+  --ease-fast: var(--duration-fast) var(--timing-standard);
+  --ease-normal: var(--duration-normal) var(--timing-standard);
+  --ease-spring: var(--duration-spring) var(--timing-spring);
+}
+
+/* Dark Theme (Default Cyber-Slate Mode) */
+html[data-theme="dark"],
+:root:not([data-theme="light"]) {
+  /* Surfaces & Backgrounds */
+  --bg-page: #080c14;
+  --bg-page-gradient: radial-gradient(circle at 50% 0%, rgba(30, 58, 138, 0.15) 0%, rgba(8, 12, 20, 0.8) 70%), #080c14;
+  /* Keep shell surfaces opaque enough to match macOS SectionPanel/MetricTile.
+     Blur remains reserved for transient overlays; static scroll surfaces do
+     not need translucency and therefore stay cheap to repaint. */
+  --bg-surface: rgba(15, 23, 42, 0.90);
+  --bg-surface-elevated: rgba(22, 33, 58, 0.96);
+  /* Match macOS Palette.inset. Static tables and nested panels use this
+     semantic surface; keep it opaque enough that scrolling does not repaint
+     a translucent gradient underneath every row. */
+  --bg-surface-glass: rgba(13, 20, 36, 0.90);
+  --bg-sidebar: rgba(10, 15, 26, 0.96);
+  --bg-topbar: rgba(8, 12, 20, 0.96);
+  --bg-card: rgba(16, 24, 40, 0.94);
+  --bg-hover: rgba(255, 255, 255, 0.06);
+  --bg-active: rgba(56, 189, 248, 0.12);
+
+  /* Typography & Inks */
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #8290a5;
+  --text-inverse: #0f172a;
+
+  /* Borders & Dividers */
+  --border-subtle: rgba(255, 255, 255, 0.07);
+  --border-medium: rgba(255, 255, 255, 0.12);
+  --border-strong: rgba(255, 255, 255, 0.2);
+  --border-glow: rgba(56, 189, 248, 0.4);
+
+  /* Brand & Accent Lights */
+  --primary: #38bdf8;
+  --primary-hover: #0ea5e9;
+  --primary-action-start: #0369a1;
+  --primary-action-end: #1d4ed8;
+  --primary-glow: rgba(56, 189, 248, 0.35);
+  --accent-cyan: #06b6d4;
+  --accent-indigo: #6366f1;
+  --accent-purple: #a855f7;
+
+  /* Semantic Status Colors with Neon Glows */
+  --status-good: #10b981;
+  --status-good-bg: rgba(16, 185, 129, 0.12);
+  --status-good-border: rgba(16, 185, 129, 0.3);
+  --status-good-glow: rgba(16, 185, 129, 0.4);
+
+  --status-warning: #f59e0b;
+  --status-warning-bg: rgba(245, 158, 11, 0.12);
+  --status-warning-border: rgba(245, 158, 11, 0.3);
+  --status-warning-glow: rgba(245, 158, 11, 0.4);
+
+  --status-critical: #f43f5e;
+  --status-critical-bg: rgba(244, 63, 94, 0.12);
+  --status-critical-border: rgba(244, 63, 94, 0.3);
+  --status-critical-glow: rgba(244, 63, 94, 0.4);
+
+  --status-live: #06b6d4;
+  --status-live-bg: rgba(6, 182, 212, 0.12);
+  --status-live-border: rgba(6, 182, 212, 0.3);
+
+  --status-muted: #8290a5;
+  --status-muted-bg: rgba(100, 116, 139, 0.12);
+  --status-muted-border: rgba(100, 116, 139, 0.25);
+
+  /* Shadows & Glass Elevation */
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 12px 36px rgba(0, 0, 0, 0.55);
+  --shadow-glow-cyan: 0 0 24px rgba(56, 189, 248, 0.25);
+  --shadow-glow-emerald: 0 0 24px rgba(16, 185, 129, 0.25);
+
+  /* Glass Filter */
+  --backdrop-blur: blur(16px) saturate(180%);
+}
+
+/* Light Theme (Luminous Porcelain & Slate Mode) */
+html[data-theme="light"] {
+  /* Surfaces & Backgrounds */
+  --bg-page: #f6f8fc;
+  --bg-page-gradient: radial-gradient(circle at 50% 0%, rgba(219, 234, 254, 0.4) 0%, rgba(246, 248, 252, 1) 70%), #f6f8fc;
+  --bg-surface: rgba(255, 255, 255, 0.92);
+  --bg-surface-elevated: rgba(255, 255, 255, 0.98);
+  /* macOS Palette.inset is the same porcelain surface without a second
+     translucent layer. */
+  --bg-surface-glass: #f8fafc;
+  --bg-sidebar: rgba(248, 250, 252, 0.98);
+  --bg-topbar: rgba(246, 248, 252, 0.96);
+  --bg-card: rgba(255, 255, 255, 0.96);
+  --bg-hover: rgba(0, 0, 0, 0.04);
+  --bg-active: rgba(2, 132, 199, 0.08);
+
+  /* Typography & Inks */
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #5f6f84;
+  --text-inverse: #f8fafc;
+
+  /* Borders & Dividers */
+  --border-subtle: rgba(0, 0, 0, 0.06);
+  --border-medium: rgba(0, 0, 0, 0.11);
+  --border-strong: rgba(0, 0, 0, 0.2);
+  --border-glow: rgba(2, 132, 199, 0.4);
+
+  /* Brand & Accent Lights */
+  --primary: #0284c7;
+  --primary-hover: #0369a1;
+  --primary-action-start: #0369a1;
+  --primary-action-end: #1d4ed8;
+  --primary-glow: rgba(2, 132, 199, 0.2);
+  --accent-cyan: #0e7490;
+  --accent-indigo: #4f46e5;
+  --accent-purple: #9333ea;
+
+  /* Semantic Status Colors */
+  --status-good: #047857;
+  --status-good-bg: rgba(5, 150, 105, 0.1);
+  --status-good-border: rgba(5, 150, 105, 0.25);
+  --status-good-glow: rgba(5, 150, 105, 0.2);
+
+  --status-warning: #b45309;
+  --status-warning-bg: rgba(217, 119, 6, 0.1);
+  --status-warning-border: rgba(217, 119, 6, 0.25);
+  --status-warning-glow: rgba(217, 119, 6, 0.2);
+
+  --status-critical: #be123c;
+  --status-critical-bg: rgba(225, 29, 72, 0.1);
+  --status-critical-border: rgba(225, 29, 72, 0.25);
+  --status-critical-glow: rgba(225, 29, 72, 0.2);
+
+  --status-live: #0e7490;
+  --status-live-bg: rgba(8, 145, 178, 0.1);
+  --status-live-border: rgba(8, 145, 178, 0.25);
+
+  --status-muted: #5f6f84;
+  --status-muted-bg: rgba(100, 116, 139, 0.08);
+  --status-muted-border: rgba(100, 116, 139, 0.2);
+
+  /* Shadows & Glass Elevation */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.03);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.06), 0 2px 4px rgba(0, 0, 0, 0.03);
+  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.08), 0 4px 8px rgba(0, 0, 0, 0.04);
+  --shadow-glow-cyan: 0 0 18px rgba(2, 132, 199, 0.15);
+  --shadow-glow-emerald: 0 0 18px rgba(5, 150, 105, 0.15);
+
+  /* Glass Filter */
+  --backdrop-blur: blur(16px) saturate(160%);
+}

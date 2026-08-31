@@ -1,0 +1,12 @@
+# 可选：本机从源码 docker build（开发用）。生产请用 compose.yaml 拉 GHCR 镜像。
+#
+#   docker compose -f compose.yaml -f compose.build.example.yaml up -d --build
+
+services:
+  kekulv:
+    image: ${KEKULV_IMAGE:-kekulv:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        RUST_IMAGE: ${RUST_IMAGE:-rust:1.88-alpine}

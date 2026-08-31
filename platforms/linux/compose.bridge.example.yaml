@@ -1,0 +1,62 @@
+# bridge 网络示例：Admin 必须听 0.0.0.0，ports 才能映射到宿主机。
+# 使用已构建镜像 + 当前目录 ./config，不在本机编译。
+#
+#   mkdir -p config && umask 077
+#   openssl rand -base64 32 > config/admin-password
+#   docker compose -f compose.bridge.example.yaml pull
+#   docker compose -f compose.bridge.example.yaml up -d
+#
+# 警告：0.0.0.0 + 端口映射会让管理面网络可达；密码只能配合外层 HTTPS 使用。
+
+services:
+  kekulv:
+    image: ${KEKULV_IMAGE:-ghcr.io/domoxiaojun/sumpter:latest}
+
+    ports:
+      - "${KEKULV_PROXY_PORT:-57878}:57878"
+      - "${KEKULV_ADMIN_PORT:-57879}:57879"
+
+    init: true
+    user: "0:0"
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+
+    environment:
+      RUST_LOG: ${RUST_LOG:-info}
+      KEKULV_ADMIN_HOST: ${KEKULV_ADMIN_HOST:-0.0.0.0}
+      KEKULV_ADMIN_PORT: ${KEKULV_ADMIN_PORT:-57879}
+
+    volumes:
+      - ./config:/config
+      # - ./web:/opt/kekulv/web:ro
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "-q",
+          "-T",
+          "3",
+          "-O",
+          "/dev/null",
+          "http://127.0.0.1:${KEKULV_ADMIN_PORT:-57879}/healthz",
+        ]
+      interval: 15s
+      timeout: 4s
+      retries: 4
+      start_period: 10s
+
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

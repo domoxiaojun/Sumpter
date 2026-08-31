@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 6,
+  "listener": {
+    "host": "127.0.0.1",
+    "port": 57878,
+    "allowedCIDRs": [],
+    "authToken": ""
+  },
+  "retry": {
+    "responseTimeoutSeconds": null,
+    "streamIdleTimeoutSeconds": null,
+    "sessionStickyRetries": 2,
+    "maxDeferredRounds": 0,
+    "maxRetryDurationSeconds": 0,
+    "pinnedIPConcurrency": 3
+  },
+  "featureRules": [
+    {
+      "id": "websearch",
+      "name": "WebSearch",
+      "enabled": false,
+      "match": {
+        "requestKind": "websearch"
+      },
+      "target": {
+        "model": "claude-haiku-4-5-20251001"
+      }
+    },
+    {
+      "id": "webfetch",
+      "name": "WebFetch",
+      "enabled": false,
+      "match": {
+        "requestKind": "webfetch"
+      },
+      "target": {
+        "model": "claude-haiku-4-5-20251001"
+      }
+    },
+    {
+      "id": "classifier",
+      "name": "安全分类器",
+      "enabled": false,
+      "match": {
+        "requestKind": "classifier"
+      },
+      "target": {
+        "endpointID": "example-fallback",
+        "model": "claude-haiku-4-5-20251001",
+        "effort": "low"
+      }
+    }
+  ],
+  "endpoints": [
+    {
+      "id": "example-main",
+      "name": "示例 Provider 主入口（请替换）",
+      "baseURL": "https://main.example.invalid",
+      "protocol": "auto",
+      "enabled": false,
+      "apiKey": "sk-test-main-replace-me",
+      "pinnedIPs": [],
+      "pinnedIPExclusive": false,
+      "stickyGroup": "example-main",
+      "mappings": [
+        {
+          "clientPattern": "claude-opus-*",
+          "upstreamModel": "",
+          "thinking": "adaptive",
+          "context": "oneMillion"
+        }
+      ]
+    },
+    {
+      "id": "example-fallback",
+      "name": "示例 Provider 入口（请替换）",
+      "baseURL": "https://fallback.example.invalid",
+      "protocol": "auto",
+      "enabled": false,
+      "apiKey": "sk-test-fallback-replace-me",
+      "pinnedIPs": [],
+      "pinnedIPExclusive": false,
+      "priority": 10,
+      "mappings": [
+        {
+          "clientPattern": "claude-opus-*",
+          "upstreamModel": "",
+          "thinking": "adaptive",
+          "context": "oneMillion"
+        },
+        {
+          "clientPattern": "claude-haiku-4-5-20251001",
+          "upstreamModel": "claude-haiku-4-5-20251001",
+          "thinking": "disabled",
+          "context": "oneMillion"
+        }
+      ]
+    }
+  ]
+}

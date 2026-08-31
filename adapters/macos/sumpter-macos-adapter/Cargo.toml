@@ -1,0 +1,30 @@
+[package]
+name = "sumpter-macos-adapter"
+edition.workspace = true
+version.workspace = true
+repository.workspace = true
+
+[dependencies]
+sumpter-engine = { workspace = true }
+sumpter-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+hyper = { workspace = true }
+http = { workspace = true }
+http-body-util = { workspace = true }
+bytes = { workspace = true }
+futures-util = { workspace = true }
+reqwest = { workspace = true }
+tracing = { workspace = true }
+rand = { workspace = true }
+md-5 = { workspace = true }
+sha2 = { workspace = true }
+async-trait = { workspace = true }
+tokio-util = { workspace = true }
+rusqlite = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

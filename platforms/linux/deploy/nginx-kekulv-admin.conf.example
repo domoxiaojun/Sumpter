@@ -1,0 +1,49 @@
+# Sumpter Admin 的 Nginx/OpenResty 反代片段。
+#
+# 将本文件内容放进已有的 HTTPS `server { ... }`，并替换：
+#   1. server_name（你的管理域名）
+#   2. 后端端口（若不是默认 57879）
+#
+# daemon 继续只监听 127.0.0.1:57879，不要把 Admin 端口直接暴露到公网。
+# daemon 默认从配置目录的 admin-password 读取凭据并提供 WebUI 内置登录。
+# 这里不要再配 auth_basic，避免双重登录；公网 server 必须启用 TLS。
+
+location = /admin {
+    return 308 /admin/;
+}
+
+# SSE 单独关闭缓冲；静态资源与普通 API 保留 Nginx 默认缓冲，避免牺牲吞吐。
+location = /admin/api/events {
+    proxy_pass http://127.0.0.1:57879;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Cookie $http_cookie;
+    proxy_set_header Host $host;
+    proxy_set_header Origin $http_origin;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 1h;
+    proxy_send_timeout 1h;
+}
+
+location ^~ /admin/ {
+    proxy_pass http://127.0.0.1:57879;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+
+    # daemon 验证同源 Cookie + CSRF；Host/Origin 可保留公网 HTTPS origin。
+    # 明确传递原始 Cookie 与 HTTPS 协议，确保 Secure 会话 Cookie 正常工作。
+    proxy_set_header Cookie $http_cookie;
+    proxy_set_header Host $host;
+    proxy_set_header Origin $http_origin;
+
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+}

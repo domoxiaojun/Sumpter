@@ -1,0 +1,55 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/sumpter-core",
+    "crates/sumpter-runtime",
+    "crates/sumpter-engine",
+    "adapters/linux/sumpter-linux-adapter",
+    "adapters/macos/sumpter-macos-adapter",
+    "apps/linux/sumpterd",
+    "apps/macos/sumpterd",
+]
+
+[workspace.package]
+edition = "2024"
+version = "0.3.4"
+license = "MIT"
+rust-version = "1.88"
+repository = "https://github.com/domoxiaojun/sumpter"
+
+[workspace.dependencies]
+sumpter-core = { path = "crates/sumpter-core" }
+sumpter-runtime = { path = "crates/sumpter-runtime" }
+sumpter-engine = { path = "crates/sumpter-engine" }
+sumpter-linux-adapter = { path = "adapters/linux/sumpter-linux-adapter" }
+sumpter-macos-adapter = { path = "adapters/macos/sumpter-macos-adapter" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+hyper = "1"
+http = "1"
+http-body-util = "0.1"
+bytes = "1"
+futures-util = "0.3"
+base64 = "0.22"
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+    "stream",
+    "http2",
+] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rand = "0.9"
+md-5 = "0.10"
+sha2 = "0.10"
+argon2 = "0.5"
+async-trait = "0.1"
+tokio-util = "0.7"
+tower-http = { version = "0.6", features = ["fs"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+
+[profile.release]
+lto = "thin"
+strip = true

@@ -1,0 +1,192 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTUP_TOOLCHAIN: 1.88.0
+
+jobs:
+  build:
+    name: Build static Linux packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust 1.88 and musl targets
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt
+          rustup target add --toolchain 1.88.0 \
+            x86_64-unknown-linux-musl \
+            aarch64-unknown-linux-musl
+
+      - name: Verify release tag matches Cargo version
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          crate_version="$(cargo metadata --locked --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "kekulvd") | .version')"
+          test -n "$crate_version"
+          if [[ "$TAG_NAME" != "v${crate_version}" ]]; then
+            echo "tag $TAG_NAME 与 kekulvd v${crate_version} 不一致" >&2
+            exit 1
+          fi
+
+      - name: Verify source and tests before packaging
+        run: |
+          cargo fmt --all -- --check
+          cargo test --workspace --locked
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.1
+          use-cache: false
+
+      - name: Install cargo-zigbuild
+        run: |
+          cargo install cargo-zigbuild \
+            --git https://github.com/rust-cross/cargo-zigbuild.git \
+            --rev bbb57ac6a5eb90f53617a5c218fda03080599e4a \
+            --locked
+          cargo_bin_dir="${CARGO_HOME:-$HOME/.cargo}/bin"
+          "$cargo_bin_dir/cargo-zigbuild" --version
+
+      - name: Build and stage both architectures
+        run: |
+          export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+          command -v cargo-zigbuild
+          ./scripts/cross-build.sh
+
+      # 取仓库里手写的 CHANGELOG.md 当前版本段。刻意不用 GitHub 的自动发布说明
+      # 接口：那个接口需要 contents: write，而本 job 跑 cargo/zig 拉第三方依赖，
+      # 不应为了生成发布说明而提权到可写仓库（v0.2.2 曾因此 403 发布失败）。
+      # 手写段落也比自动 commit 列表可读。preflight 会拦住把它加回来。
+      - name: Package version changelog
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          version="${TAG_NAME#v}"
+          test -f CHANGELOG.md
+          # 抽 `## [<version>]` 到下一个 `## [` 之前;找不到就让发布失败,
+          # 宁可挡住发布,也不要发出一个没有版本说明的包。
+          body="$(awk -v ver="$version" '
+            index($0, "## [" ver "]") == 1 { inside = 1; next }
+            inside && index($0, "## [") == 1 { exit }
+            inside { print }
+          ' CHANGELOG.md)"
+          if [[ -z "${body//[[:space:]]/}" ]]; then
+            echo "CHANGELOG.md 缺少 ## [${version}] 段落,拒绝发布" >&2
+            exit 1
+          fi
+          {
+            printf '# %s\n\n' "$TAG_NAME"
+            printf '%s\n' "$body"
+          } > release/CHANGELOG.md
+          test -s release/CHANGELOG.md
+          for arch in x86_64 aarch64; do
+            package="kekulv-linux-${arch}"
+            test -d "dist/${package}"
+            cp release/CHANGELOG.md "dist/${package}/CHANGELOG.md"
+          done
+
+      - name: Create release archives and checksums
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          source_date_epoch="$(git show -s --format=%ct "$GITHUB_SHA")"
+          for arch in x86_64 aarch64; do
+            package="kekulv-linux-${arch}"
+            test -d "dist/${package}"
+            tar \
+              --sort=name \
+              --mtime="@${source_date_epoch}" \
+              --owner=0 \
+              --group=0 \
+              --numeric-owner \
+              -C dist \
+              -czf "release/${package}.tar.gz" \
+              "${package}"
+          done
+          (
+            cd release
+            sha256sum \
+              kekulv-linux-x86_64.tar.gz \
+              kekulv-linux-aarch64.tar.gz \
+              > SHA256SUMS
+            sha256sum --check SHA256SUMS
+          )
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: kekulv-linux-${{ github.sha }}
+          path: |
+            release/kekulv-linux-x86_64.tar.gz
+            release/kekulv-linux-aarch64.tar.gz
+            release/SHA256SUMS
+            release/CHANGELOG.md
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub Release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # Required to create the tag's GitHub Release and upload its assets.
+    steps:
+      - name: Download release artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: kekulv-linux-${{ github.sha }}
+          path: release
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          assets=(
+            release/kekulv-linux-x86_64.tar.gz
+            release/kekulv-linux-aarch64.tar.gz
+            release/SHA256SUMS
+          )
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" "${assets[@]}" --clobber
+            gh release edit "$TAG_NAME" \
+              --title "$TAG_NAME" \
+              --notes-file release/CHANGELOG.md
+          else
+            gh release create "$TAG_NAME" "${assets[@]}" \
+              --verify-tag \
+              --notes-file release/CHANGELOG.md \
+              --title "$TAG_NAME"
+          fi

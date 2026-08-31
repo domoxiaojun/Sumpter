@@ -1,0 +1,15 @@
+**
+# Full source build (local docker compose build)
+!Dockerfile
+!Cargo.toml
+!Cargo.lock
+!crates/
+!crates/**
+# Thin runtime image (CI Dockerfile.runtime)
+!Dockerfile.runtime
+!docker-bin/
+!docker-bin/**
+# Shared runtime assets
+!config.example.json
+!web/
+!web/**

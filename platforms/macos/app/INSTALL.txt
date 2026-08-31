@@ -1,0 +1,22 @@
+Sumpter macOS 安装说明
+====================
+
+本版本没有 Apple Developer notarization。首次安装时，macOS 可能提示“无法验证开发者”。
+
+推荐方式：
+
+1. 打开 DMG。
+2. 双击“安装 Sumpter.command”。
+3. 在终端窗口按回车确认。
+4. 安装器会校验 Bundle ID 和代码签名，只处理旁边的 “Sumpter.app”。
+5. 安装器只移除这个 App 的 quarantine 标记，不会关闭全局 Gatekeeper。
+
+如果你不想使用安装器，也可以把 “Sumpter.app” 拖到“应用程序”，然后在 Finder 中右键它并选择“打开”。
+
+不要执行以下做法：
+
+- 不要使用 `spctl --master-disable` 关闭全局 Gatekeeper。
+- 不要对整个磁盘或整个 Downloads 目录执行 `xattr -dr`。
+- 不要运行来源不明的安装脚本。
+
+后续更新由 App 内的 Sparkle 负责；更新包仍会通过 Sparkle Ed25519 签名校验。

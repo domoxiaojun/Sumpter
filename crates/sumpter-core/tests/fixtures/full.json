@@ -1,0 +1,155 @@
+{
+  "featureRules": [
+    {
+      "enabled": true,
+      "id": "classifier",
+      "match": {
+        "requestKind": "classifier"
+      },
+      "name": "安全分类器",
+      "target": {
+        "endpointID": "qwen",
+        "model": "qwen3.7-plus",
+        "protocol": "anthropic"
+      }
+    },
+    {
+      "enabled": false,
+      "id": "custom-batch",
+      "match": {
+        "messagesContain": "batch job",
+        "modelEquals": "claude-haiku-4-5-20251001",
+        "systemContains": "You are a batch runner",
+        "toolTypePrefix": "mcp__"
+      },
+      "name": "自定义批处理",
+      "target": {
+        "model": "glm-5"
+      }
+    }
+  ],
+  "listener": {
+    "allowedCIDRs": [
+      "192.168.1.0/24",
+      "10.0.0.0/8"
+    ],
+    "authToken": "sk-inbound-token",
+    "host": "0.0.0.0",
+    "port": 57878
+  },
+  "retry": {
+    "maxDeferredRounds": 4,
+    "maxRetryDurationSeconds": 0,
+    "pinnedIPConcurrency": 1,
+    "responseTimeoutSeconds": 200,
+    "sessionStickyRetries": 0,
+    "streamIdleTimeoutSeconds": null
+  },
+  "schemaVersion": 6,
+  "endpoints": [
+    {
+      "apiKey": "sk-main-1",
+      "baseURL": "https://primary.example.invalid",
+      "enabled": true,
+      "id": "main-acc1",
+      "keepAlive": true,
+      "mappings": [
+        {
+          "clientPattern": "claude-opus-*",
+          "context": "oneMillion",
+          "thinking": "adaptive",
+          "upstreamModel": ""
+        },
+        {
+          "clientPattern": "claude-fable-5",
+          "context": "standard",
+          "thinking": "passthrough",
+          "upstreamModel": ""
+        }
+      ],
+      "name": "acc1",
+      "pinnedIPExclusive": true,
+      "pinnedIPs": [
+        "1.2.3.4",
+        "5.6.7.8"
+      ],
+      "protocol": "auto",
+      "stickyGroup": "acc1"
+    },
+    {
+      "apiKey": "sk-fb-1",
+      "baseURL": "https://coding.example.com/apps/anthropic",
+      "catalog": {
+        "error": "/v1/models HTTP 404",
+        "models": [
+          "qwen3.7-plus",
+          "glm-5"
+        ],
+        "source": "api",
+        "status": "获取失败",
+        "updatedAt": "2026-07-11 17:22:38"
+      },
+      "enabled": true,
+      "id": "qwen",
+      "mappings": [
+        {
+          "clientPattern": "qwen3.7-plus",
+          "context": "standard",
+          "failoverTimeoutSeconds": 7.5,
+          "thinking": "disabled",
+          "upstreamModel": "qwen3.7-plus"
+        },
+        {
+          "clientPattern": "claude-haiku-4-5-20251001",
+          "context": "oneMillion",
+          "thinking": "passthrough",
+          "upstreamModel": ""
+        }
+      ],
+      "name": "Qwen",
+      "pinnedIPExclusive": false,
+      "pinnedIPs": [],
+      "protocol": "anthropic",
+      "priority": 10
+    },
+    {
+      "apiKey": "sk-fb-2",
+      "baseURL": "https://openai-compat.example.com",
+      "enabled": false,
+      "id": "oai",
+      "mappings": [
+        {
+          "clientPattern": "gpt-5.4",
+          "context": "standard",
+          "failoverTimeoutSeconds": 15,
+          "thinking": "disabled",
+          "upstreamModel": "gpt-5.4"
+        }
+      ],
+      "name": "OAI 桥",
+      "pinnedIPExclusive": false,
+      "pinnedIPs": [],
+      "protocol": "openai",
+      "priority": 11
+    },
+    {
+      "apiKey": "sk-extra",
+      "baseURL": "https://responses.example.com",
+      "enabled": true,
+      "id": "resp",
+      "mappings": [
+        {
+          "clientPattern": "glm-5",
+          "context": "standard",
+          "thinking": "disabled",
+          "upstreamModel": ""
+        }
+      ],
+      "name": "Responses",
+      "pinnedIPExclusive": false,
+      "pinnedIPs": [],
+      "protocol": "openai-responses",
+      "priority": 12
+    }
+  ]
+}

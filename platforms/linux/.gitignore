@@ -1,0 +1,20 @@
+.build*
+/target/
+/.zig-cache/
+/zig-cache/
+/dist/
+/release/
+/logs/
+/kekulvd
+/config.json
+/keys.json
+/stats.json
+/*.pid
+# Docker bind-mount 运行数据（保留说明与占位）
+/config/*
+!/config/.gitkeep
+!/config/README.md
+/docker-bin/
+Cargo.lock.orig
+*.profraw
+.DS_Store
