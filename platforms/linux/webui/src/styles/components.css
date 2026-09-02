@@ -910,8 +910,58 @@ html[data-theme="light"] .brand-title {
 .panel-body-flush { padding: 0; }
 
 .summary-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
   font-size: 0.82rem;
   gap: var(--space-2);
+}
+
+.provider-overview-metrics {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
+  gap: var(--space-2);
+  font-size: 0.78rem;
+}
+
+.provider-overview-metrics > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface-glass);
+}
+
+.provider-overview-metrics span {
+  color: var(--text-muted);
+}
+
+.provider-overview-metrics strong {
+  color: var(--text-primary);
+  font-weight: 650;
+}
+
+/* Provider summaries are compact status matrices, not input forms. Keep two
+   readable columns on phone widths so the overview does not become a long
+   stack before the actual Provider list. */
+@media (max-width: 900px) {
+  .summary-grid,
+  .provider-overview-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (max-width: 360px) {
+  .summary-grid,
+  .provider-overview-metrics {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+.retry-policy-section-title {
+  margin-top: -4px;
+  color: var(--text-primary);
+  font-size: 0.92rem;
+  font-weight: 700;
 }
 
 .endpoint-detail-grid {
@@ -1971,6 +2021,12 @@ html[data-theme="light"] .brand-title {
   height: 32px;
   color: var(--text-muted);
   pointer-events: none;
+}
+.provider-reorder-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 .provider-draggable-row:hover .provider-reorder-handle,
 .provider-draggable-row.provider-drop-before .provider-reorder-handle,
@@ -3261,6 +3317,13 @@ html[data-theme="light"] .brand-title {
   min-width: 88px;
   min-height: 44px;
 }
+
+.runtime-cleanup-dialog { max-width: 560px; }
+.runtime-cleanup-body { display: grid; gap: 14px; }
+.runtime-cleanup-body > label { display: grid; gap: 6px; }
+.runtime-cleanup-help { margin: 0; color: var(--text-secondary); font-size: 13px; line-height: 1.5; }
+.runtime-cleanup-preview { display: grid; gap: 4px; padding: 12px 14px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface-muted); }
+.runtime-cleanup-preview span { color: var(--text-secondary); font-size: 13px; }
 
 .runtime-v2-pricing-panel {
   display: grid;
@@ -6533,6 +6596,34 @@ button.responsive-data-card {
 
 .provider-mobile-summary dd {
   white-space: normal;
+}
+
+.provider-mobile-drag-handle {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 24px;
+  height: 32px;
+  color: var(--text-muted);
+  cursor: grab;
+}
+
+.provider-mobile-card:hover .provider-mobile-drag-handle,
+.provider-mobile-card.provider-drop-before .provider-mobile-drag-handle,
+.provider-mobile-card.provider-drop-after .provider-mobile-drag-handle {
+  color: var(--primary);
+}
+
+.provider-mobile-card.provider-row-dragging {
+  opacity: 0.62;
+}
+
+.provider-mobile-card.provider-drop-before {
+  border-top: 2px solid var(--primary);
+}
+
+.provider-mobile-card.provider-drop-after {
+  border-bottom: 2px solid var(--primary);
 }
 
 .telemetry-mobile-message {

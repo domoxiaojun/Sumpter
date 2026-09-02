@@ -101,9 +101,9 @@ export function HelpPage() {
         <section className="glass-panel help-panel">
           <div className="panel-title"><Icon name="sparkles" size={18} style={{ color: 'var(--primary)' }} /><span>快速开始</span></div>
           <div className="help-step-list">
-            <HelpStep number="1" title="准备 Provider 入口">在“Provider”页添加至少一个已启用入口，填写上游地址和密钥，并配置客户端模型映射。</HelpStep>
+            <HelpStep number="1" title="准备上游服务入口">在“Provider”页添加至少一个已启用入口，填写上游地址和密钥，并配置客户端模型映射。</HelpStep>
             <HelpStep number="2" title="确认代理监听">在“运行”页确认 daemon 正在运行。当前监听地址为 <code>{listener}</code>。</HelpStep>
-            <HelpStep number="3" title="连接客户端">Claude Code 使用 <code>ANTHROPIC_BASE_URL</code>；Codex 或其它 OpenAI 客户端使用 API Base。完整协议矩阵见仓库的 USAGE.md。</HelpStep>
+            <HelpStep number="3" title="连接客户端">Claude Code 使用 <code>ANTHROPIC_BASE_URL</code>；Codex 或其它 OpenAI 客户端使用带 <code>/v1</code> 的 API Base（默认 <code>http://127.0.0.1:57878/v1</code>）。完整协议矩阵见仓库的 USAGE.md。</HelpStep>
           </div>
         </section>
 
@@ -123,7 +123,7 @@ export function HelpPage() {
         <div className="help-faq-grid">
           <HelpQuestion question="Claude Code 连不上？">确认 Base URL 指向当前监听地址；若启用了入站认证，客户端 Token 必须与配置完全一致。</HelpQuestion>
           <HelpQuestion question="请求返回模型未找到？">检查 Provider 入口的 mappings 是否覆盖客户端发送的模型名；代理不会拿未声明的原名盲试上游。</HelpQuestion>
-          <HelpQuestion question="为什么某些能力不支持？">当前代理面向一次性 HTTP 协议适配；Realtime、WebSocket、Files、Videos 等不同生命周期能力不属于普通透传。</HelpQuestion>
+          <HelpQuestion question="Realtime、Files 或 Videos 失败？">这些能力由代理直接 relay 给上游：先检查 Provider 的 baseURL、API key、模型 mapping，以及上游是否开放对应 HTTP/WebSocket 能力。代理不会在本地重建协议。</HelpQuestion>
           <HelpQuestion question="仍然无法判断故障在哪？">先看“运行”和“诊断”页，再带上脱敏后的请求 ID、时间和错误阶段提交 Issue；不要上传 raw 捕获。</HelpQuestion>
         </div>
       </section>

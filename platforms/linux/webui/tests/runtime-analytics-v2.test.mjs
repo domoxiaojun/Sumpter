@@ -26,6 +26,14 @@ test('新环境所有可分页统计接口默认每页 10 条', async () => {
   assert.equal((await api.getRuntimeDimensions('endpoint')).pageSize, RUNTIME_DEFAULT_PAGE_SIZE);
 });
 
+test('按时间清理预览接口返回可确认的计数', async () => {
+  const cutoff = Date.now() / 1000 - 978307200 - 86_400;
+  const preview = await api.previewRuntimeCleanup({ olderThan: cutoff });
+  assert.equal(typeof preview.deletableEvents, 'number');
+  assert.equal(typeof preview.deletableRequests, 'number');
+  assert.equal(typeof preview.remainingEvents, 'number');
+});
+
 test('统计 facets 为所有可选条件提供选项', async () => {
   const facets = await api.getRuntimeFacets('today');
   for (const key of ['clientKinds', 'endpoints', 'projects', 'sessions', 'models', 'requestPurposes', 'failureKinds', 'failurePhases']) {
@@ -137,6 +145,44 @@ test('项目维度 mock 返回客户端归因列表', async () => {
   assert.ok(page.rows.every((row) => Array.isArray(row.clientKinds)));
 });
 
+test('mock 维度行使用稳定 ID，点击下钻后仍能得到关联用量', async () => {
+  const projects = await api.getRuntimeDimensions('project', { page: 1, pageSize: 10 });
+  const project = projects.rows.find((row) => row.name === 'automode-proxy');
+  assert.equal(project?.key, 'project-automode-proxy');
+  const sessions = await api.getRuntimeDimensions('session', {
+    page: 1,
+    pageSize: 10,
+    filters: { projectID: project.key },
+  });
+  assert.ok(sessions.totalCount > 0);
+  const session = sessions.rows[0];
+  assert.equal(session.key, 'session-demo-001');
+  const models = await api.getRuntimeDimensions('model', {
+    page: 1,
+    pageSize: 10,
+    filters: { sessionID: session.key },
+  });
+  assert.ok(models.totalCount > 0);
+});
+
+test('模型维度可按项目和会话分别查看 Token 用量', async () => {
+  const all = await api.getRuntimeDimensions('model', { pageSize: 25 });
+  assert.ok(all.rows.some((row) => row.name === 'claude-opus-5'));
+  assert.ok(all.rows.every((row) => Number.isFinite(row.inputTokens)));
+
+  const project = await api.getRuntimeDimensions('model', {
+    pageSize: 25,
+    filters: { projectID: 'project-unidentified_project' },
+  });
+  assert.deepEqual(project.rows.map((row) => row.name), ['gpt-4o']);
+
+  const session = await api.getRuntimeDimensions('model', {
+    pageSize: 25,
+    filters: { sessionID: 'session-demo-001' },
+  });
+  assert.deepEqual(session.rows.map((row) => row.name), ['claude-opus-5', 'gpt-5.4']);
+});
+
 test('错误聚合分页与存储/策略接口不把不支持能力拖垮主面板', async () => {
   const errors = await api.getRuntimeErrors({ page: 1, pageSize: 25 });
   assert.equal(errors.apiVersion, 3);
@@ -144,6 +190,7 @@ test('错误聚合分页与存储/策略接口不把不支持能力拖垮主面�
   const storage = await api.getRuntimeStorage();
   assert.equal(storage.backend, 'sqlite');
   const retention = await api.getRuntimeRetention();
+  assert.equal(retention.maxAgeDays, null, '最大保存天数默认关闭');
   assert.equal(retention.storageLimitBytes, null, '存储上限默认关闭');
   assert.equal(Object.hasOwn(retention, 'maxEvents'), false, '不再输出旧自动清理字段');
   await assert.rejects(
@@ -155,10 +202,20 @@ test('错误聚合分页与存储/策略接口不把不支持能力拖垮主面�
   );
   const saved = await api.updateRuntimeRetention({
     expectedRevision: retention.revision,
+    maxAgeDays: 30,
     storageLimitBytes: 1024 * 1024 * 1024,
   });
   assert.equal(saved.revision, retention.revision + 1);
+  assert.equal(saved.maxAgeDays, 30);
   assert.equal(saved.storageLimitBytes, 1024 * 1024 * 1024);
+
+  const disabledTime = await api.updateRuntimeRetention({
+    expectedRevision: saved.revision,
+    maxAgeDays: null,
+    storageLimitBytes: saved.storageLimitBytes,
+  });
+  assert.equal(disabledTime.maxAgeDays, null);
+  assert.equal(disabledTime.storageLimitBytes, saved.storageLimitBytes);
 });
 
 test('导出先估算后触发 attachment 流，stored 需要显式确认', async () => {
@@ -196,7 +253,7 @@ test('统计页和 v2 导出不再在前端拼接完整 JSON Blob', async () => 
   assert.match(workspace, /onSearchSubmit/);
   assert.match(workspace, /AbortController/);
   assert.match(workspace, /自动轮换/);
-  assert.match(workspace, /上限按有效占用计算/);
+  assert.match(workspace, /滚动 24 小时/);
   assert.match(workspace, /手动清理统计/);
   assert.doesNotMatch(workspace, /停用自动清理/);
   assert.doesNotMatch(workspace, /onClearError/);
@@ -224,11 +281,13 @@ test('统计页和 v2 导出不再在前端拼接完整 JSON Blob', async () => 
   assert.doesNotMatch(storageCard, /<small>数据库占用<\/small>/);
   const storagePanel = workspace.slice(storagePanelStart);
   assert.match(storagePanel, /runtime-v2-storage-limit-mb/);
-  assert.match(storagePanel, /<label htmlFor="runtime-v2-storage-limit-mb">上限（MB）<\/label>/);
+  assert.match(storagePanel, /runtime-v2-storage-max-age-days/);
+  assert.match(storagePanel, /最大保存天数/);
+  assert.match(storagePanel, /<label htmlFor="runtime-v2-storage-limit-mb">容量上限<\/label>/);
   assert.match(storagePanel, /runtime-v2-storage-dialog-context/);
   assert.match(storagePanel, /轮换不会立即缩小数据库文件/);
   assert.doesNotMatch(workspace, /自动保留 10,000 条事件/);
-  assert.doesNotMatch(workspace, /保存保留策略/);
+  assert.match(workspace, /保存保留策略/);
   assert.doesNotMatch(workspace, /命中率（请求）|命中率（Token）|写入占比|缓存写入占比/);
   assert.doesNotMatch(workspace, /缓存写入（缓存命中率）/);
 });

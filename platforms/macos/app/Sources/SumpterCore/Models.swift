@@ -190,11 +190,19 @@ public struct RetryPolicy: Codable, Equatable, Sendable {
     public var responseTimeoutSeconds: Double?
     /// 流式响应两次吐字之间的最长间隔;nil = 允许无限空闲。
     public var streamIdleTimeoutSeconds: Double?
+    /// 单个入口收到 HTTP 500 后的额外重试次数;0 = 不在该入口重试。
+    public var max500Retries: Int
+    /// 当前入口 HTTP 500 重试耗尽后是否切换到下一个入口。
+    public var failoverOn500: Bool
+    /// 最终失败响应中可透传的 retry_delay 秒数;nil = 未配置。
+    public var retryDelaySeconds: Double?
+    /// 是否把 retry_delay 与 Retry-After 透传给客户端。
+    public var passThroughRetryDelay: Bool
     /// 所有可重试状态与首响应前网络故障的最大轮数;0 = 不限轮数。
     public var maxDeferredRounds: Int
     /// 所有可重试状态与首响应前网络故障的跨轮总上限秒数;0 = 不限。
     public var maxRetryDurationSeconds: Double
-    /// 同一次请求中当前粘性调度组在首次失败后的额外尝试次数;0 = 首次失败后立即切换。
+    /// 同一次请求中当前粘性调度组在非 500 可重试故障后的额外尝试次数;0 = 首次失败后立即切换。
     public var sessionStickyRetries: Int
     /// pinned IP 并发竞速数。
     public var pinnedIPConcurrency: Int
@@ -205,6 +213,10 @@ public struct RetryPolicy: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case responseTimeoutSeconds
         case streamIdleTimeoutSeconds
+        case max500Retries
+        case failoverOn500
+        case retryDelaySeconds
+        case passThroughRetryDelay
         case maxDeferredRounds
         case maxRetryDurationSeconds
         case sessionStickyRetries
@@ -214,6 +226,10 @@ public struct RetryPolicy: Codable, Equatable, Sendable {
     public init(
         responseTimeoutSeconds: Double? = nil,
         streamIdleTimeoutSeconds: Double? = nil,
+        max500Retries: Int = 0,
+        failoverOn500: Bool = true,
+        retryDelaySeconds: Double? = nil,
+        passThroughRetryDelay: Bool = true,
         maxDeferredRounds: Int = 0,
         maxRetryDurationSeconds: Double = 0,
         sessionStickyRetries: Int = 2,
@@ -223,6 +239,10 @@ public struct RetryPolicy: Codable, Equatable, Sendable {
     ) {
         self.responseTimeoutSeconds = responseTimeoutSeconds
         self.streamIdleTimeoutSeconds = streamIdleTimeoutSeconds
+        self.max500Retries = max(0, max500Retries)
+        self.failoverOn500 = failoverOn500
+        self.retryDelaySeconds = retryDelaySeconds
+        self.passThroughRetryDelay = passThroughRetryDelay
         self.maxDeferredRounds = max(0, maxDeferredRounds)
         self.maxRetryDurationSeconds = max(0, maxRetryDurationSeconds)
         self.sessionStickyRetries = max(0, sessionStickyRetries)
@@ -236,6 +256,10 @@ public struct RetryPolicy: Codable, Equatable, Sendable {
         self.init(
             responseTimeoutSeconds: try keyed.decodeIfPresent(Double.self, forKey: .responseTimeoutSeconds),
             streamIdleTimeoutSeconds: try keyed.decodeIfPresent(Double.self, forKey: .streamIdleTimeoutSeconds),
+            max500Retries: try keyed.decodeIfPresent(Int.self, forKey: .max500Retries) ?? 0,
+            failoverOn500: try keyed.decodeIfPresent(Bool.self, forKey: .failoverOn500) ?? true,
+            retryDelaySeconds: try keyed.decodeIfPresent(Double.self, forKey: .retryDelaySeconds),
+            passThroughRetryDelay: try keyed.decodeIfPresent(Bool.self, forKey: .passThroughRetryDelay) ?? true,
             maxDeferredRounds: try keyed.decodeIfPresent(Int.self, forKey: .maxDeferredRounds) ?? 0,
             maxRetryDurationSeconds: try keyed.decodeIfPresent(Double.self, forKey: .maxRetryDurationSeconds) ?? 0,
             sessionStickyRetries: try keyed.decodeIfPresent(Int.self, forKey: .sessionStickyRetries) ?? 2,
@@ -248,6 +272,10 @@ public struct RetryPolicy: Codable, Equatable, Sendable {
         // 显式写 null 而不是省略:让「不设截止」在配置文件里是可见的选择。
         try keyed.encode(responseTimeoutSeconds, forKey: .responseTimeoutSeconds)
         try keyed.encode(streamIdleTimeoutSeconds, forKey: .streamIdleTimeoutSeconds)
+        try keyed.encode(max500Retries, forKey: .max500Retries)
+        try keyed.encode(failoverOn500, forKey: .failoverOn500)
+        try keyed.encode(retryDelaySeconds, forKey: .retryDelaySeconds)
+        try keyed.encode(passThroughRetryDelay, forKey: .passThroughRetryDelay)
         try keyed.encode(maxDeferredRounds, forKey: .maxDeferredRounds)
         try keyed.encode(maxRetryDurationSeconds, forKey: .maxRetryDurationSeconds)
         try keyed.encode(sessionStickyRetries, forKey: .sessionStickyRetries)
@@ -333,6 +361,10 @@ public struct ModelMapping: Codable, Equatable, Sendable, Identifiable {
     public var context: ContextMode
     /// 该映射的首个响应超时;nil = 不额外设截止。
     public var failoverTimeoutSeconds: Double?
+    /// Mapping-level capabilities. Empty keeps the Rust-side name inference.
+    /// This is persisted for forward compatibility; the current editor does
+    /// not expose a capability picker yet.
+    public var capabilities: [String]
 
     enum CodingKeys: String, CodingKey {
         case clientPattern
@@ -340,6 +372,7 @@ public struct ModelMapping: Codable, Equatable, Sendable, Identifiable {
         case thinking
         case context
         case failoverTimeoutSeconds
+        case capabilities
     }
 
     public init(
@@ -347,13 +380,15 @@ public struct ModelMapping: Codable, Equatable, Sendable, Identifiable {
         upstreamModel: String = "",
         thinking: ThinkingMode = .disabled,
         context: ContextMode = .standard,
-        failoverTimeoutSeconds: Double? = nil
+        failoverTimeoutSeconds: Double? = nil,
+        capabilities: [String] = []
     ) {
         self.clientPattern = clientPattern
         self.upstreamModel = upstreamModel
         self.thinking = thinking
         self.context = context
         self.failoverTimeoutSeconds = failoverTimeoutSeconds
+        self.capabilities = capabilities
     }
 
     public init(from decoder: Decoder) throws {
@@ -363,6 +398,7 @@ public struct ModelMapping: Codable, Equatable, Sendable, Identifiable {
         thinking = try keyed.decodeIfPresent(ThinkingMode.self, forKey: .thinking) ?? .disabled
         context = try keyed.decodeIfPresent(ContextMode.self, forKey: .context) ?? .standard
         failoverTimeoutSeconds = try keyed.decodeIfPresent(Double.self, forKey: .failoverTimeoutSeconds)
+        capabilities = try keyed.decodeIfPresent([String].self, forKey: .capabilities) ?? []
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -372,6 +408,9 @@ public struct ModelMapping: Codable, Equatable, Sendable, Identifiable {
         try keyed.encode(thinking, forKey: .thinking)
         try keyed.encode(context, forKey: .context)
         try keyed.encodeIfPresent(failoverTimeoutSeconds, forKey: .failoverTimeoutSeconds)
+        if !capabilities.isEmpty {
+            try keyed.encode(capabilities, forKey: .capabilities)
+        }
     }
 
     /// 上游模型名:留空表示与客户端模型同名。

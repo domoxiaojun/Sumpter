@@ -56,7 +56,7 @@ export SPARKLE_DOWNLOAD_URL_PREFIX="https://github.com/domoxiaojun/sumpter/relea
 ## 本机构建与正式分发
 
 当前源码树就是 monorepo：Rust workspace 在仓库根，macOS 输入在 `platforms/macos/`。
-**本机测试包**用仓库根脚本，不要假设仓库根已经有 `.github/workflows/macos-release.yml`：
+**本机测试包**用仓库根脚本：
 
 ```bash
 # 在 monorepo 根
@@ -66,9 +66,9 @@ export SPARKLE_DOWNLOAD_URL_PREFIX="https://github.com/domoxiaojun/sumpter/relea
 该脚本调用 `package-app.sh`，走根 `Cargo.toml` 构建 `sumpterd-macos`，默认 ad-hoc 签名，产物在
 `platforms/macos/app/dist/`。正式分发仍须 Developer ID、公证，以及下面的 Sparkle 密钥。
 
-Linux 的 GitHub Actions 输入在 `platforms/linux/.github/workflows/`。当前 monorepo 根没有
-`.github/`，GitHub 不会自动跑这些 workflow，也不能用旧的「发布仓库根 = Linux、macOS 挂在 `macos/`」
-合成提交流程来操作现在的源码树。把 CI 提升到仓库根、恢复 tag 发布链是单独的发布适配任务。
+GitHub Actions 工作流已提升到仓库根 `.github/workflows/`，按当前根 workspace、
+`platforms/linux/` 和 `platforms/macos/` 路径运行。推送与 Cargo workspace 版本一致的 `vX.Y.Z` tag
+会触发 Linux Release、GHCR 容器和 macOS Release；macOS Release 还会更新 `macos-updates` 分支。
 
 若自行托管 Sparkle feed，仍需要：
 
@@ -78,4 +78,5 @@ Linux 的 GitHub Actions 输入在 `platforms/linux/.github/workflows/`。当前
 
 `SPARKLE_FEED_URL` 应指向稳定地址，不跟随版本号变化。历史 feed 曾放在
 `https://raw.githubusercontent.com/domoxiaojun/sumpter/macos-updates/macos/appcast.xml`；
-在发布链恢复前，不要假设推 `v*` tag 就会自动更新它。
+发布工作流需要仓库 Actions 的 `SPARKLE_PRIVATE_KEY` 和 `SPARKLE_PUBLIC_ED_KEY`；没有这些 Secret，
+macOS Release 会在构建前失败。

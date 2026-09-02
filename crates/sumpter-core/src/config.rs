@@ -18,6 +18,7 @@
 
 use serde::{Deserialize, Serialize, Serializer};
 
+use crate::capability::ModelCapability;
 use crate::model_name;
 
 pub const SCHEMA_VERSION: u32 = 6;
@@ -102,6 +103,7 @@ impl AppConfig {
         self.retry.max_deferred_rounds = self.retry.max_deferred_rounds.max(0);
         self.retry.max_retry_duration_seconds = self.retry.max_retry_duration_seconds.max(0.0);
         self.retry.session_sticky_retries = self.retry.session_sticky_retries.max(0);
+        self.retry.max_500_retries = self.retry.max_500_retries.max(0);
         self.retry.pinned_ip_concurrency = self.retry.pinned_ip_concurrency.max(1);
 
         for endpoint in &mut self.endpoints {
@@ -120,6 +122,10 @@ impl AppConfig {
             for mapping in &mut endpoint.mappings {
                 mapping.client_pattern = mapping.client_pattern.trim().to_string();
                 mapping.upstream_model = model_name::clean(&mapping.upstream_model);
+                mapping
+                    .capabilities
+                    .sort_by_key(|capability| capability.as_str());
+                mapping.capabilities.dedup();
             }
         }
 
@@ -226,13 +232,25 @@ impl Default for ListenerConfig {
 /// 全局转发/重试参数。语义(见 specs/spec-engine.md §2-3):
 /// - `response_timeout_seconds`:流式 = 响应头截止;非流式 = 整响应截止。None = 不限。
 /// - `stream_idle_timeout_seconds`:流式两次吐字最大间隔。None = 不限。
-/// - `max_deferred_rounds`:历史 JSON 键名；现为所有可重试故障的最大轮数,0 = 不限。
-/// - `max_retry_duration_seconds`:所有可重试故障的跨轮墙钟总闸,0 = 不限。
+/// - `max_deferred_rounds`:历史 JSON 键名；现为跨轮可重试故障的最大轮数,0 = 不限。
+/// - `max_retry_duration_seconds`:跨轮可重试故障的墙钟总闸,0 = 不限（HTTP 500 不跨轮）。
 /// - `pinned_ip_concurrency`:pinned IP 并发赛跑数,normalized 后 ≥1。
-/// - `session_sticky_retries`:同一次请求中,当前粘性调度组首次失败后额外重试的次数；
+/// - `session_sticky_retries`:同一次请求中,当前粘性调度组遇到非 500 可重试故障后额外重试的次数；
 ///   全部遇到可重试故障后才访问其它调度组,其它组成功立即改绑。0 = 首次失败后立即 failover。
+/// - `max_500_retries`:单个入口收到 HTTP 500 后的额外重试次数；0 = 不在该入口重试,
+///   直接尝试下一个入口（当 `failover_on_500` 开启时）。
+/// - `failover_on_500`:当前入口 HTTP 500 重试耗尽后是否切换到下一个入口；默认开启。
+/// - `retry_delay_seconds`:最终失败响应可透传的 `retry_delay` 秒数；None = 不配置。
+/// - `pass_through_retry_delay`:是否把 `retry_delay` 与 `Retry-After` 透传给客户端；默认开启。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RetryPolicy {
+    #[serde(rename = "max500Retries", default)]
+    pub max_500_retries: i64,
+    #[serde(
+        rename = "failoverOn500",
+        default = "RetryPolicy::default_failover_on_500"
+    )]
+    pub failover_on_500: bool,
     #[serde(rename = "maxDeferredRounds", default)]
     pub max_deferred_rounds: i64,
     #[serde(
@@ -253,6 +271,13 @@ pub struct RetryPolicy {
         serialize_with = "trim_opt_f64"
     )]
     pub response_timeout_seconds: Option<f64>,
+    #[serde(rename = "retryDelaySeconds", default, serialize_with = "trim_opt_f64")]
+    pub retry_delay_seconds: Option<f64>,
+    #[serde(
+        rename = "passThroughRetryDelay",
+        default = "RetryPolicy::default_pass_through_retry_delay"
+    )]
+    pub pass_through_retry_delay: bool,
     #[serde(
         rename = "sessionStickyRetries",
         default = "RetryPolicy::default_session_sticky_retries"
@@ -276,6 +301,12 @@ impl RetryPolicy {
     fn default_session_sticky_retries() -> i64 {
         2
     }
+    fn default_failover_on_500() -> bool {
+        true
+    }
+    fn default_pass_through_retry_delay() -> bool {
+        true
+    }
 
     /// 不可配、不进配置文件。只把能明确归因于当前入口的故障列为 failover：
     /// 401/402/403 = 当前入口凭据/额度/权限不可用；429/网关状态 = 当前入口暂不可用。
@@ -290,6 +321,11 @@ impl RetryPolicy {
         Self::RETRYABLE_STATUS_CODES.contains(&status)
     }
 
+    /// HTTP 500 仅由 `max500Retries` 控制入口内重试，不进入跨轮无限重试集合。
+    pub fn is_endpoint_retryable_status(status: u16) -> bool {
+        status == 500 || Self::is_retryable_status(status)
+    }
+
     pub fn is_deferred_status(status: u16) -> bool {
         Self::is_retryable_status(status)
     }
@@ -298,10 +334,14 @@ impl RetryPolicy {
 impl Default for RetryPolicy {
     fn default() -> Self {
         Self {
+            max_500_retries: 0,
+            failover_on_500: Self::default_failover_on_500(),
             max_deferred_rounds: 0,
             max_retry_duration_seconds: Self::default_max_retry_duration(),
             pinned_ip_concurrency: Self::default_pinned_ip_concurrency(),
             response_timeout_seconds: None,
+            retry_delay_seconds: None,
+            pass_through_retry_delay: Self::default_pass_through_retry_delay(),
             session_sticky_retries: Self::default_session_sticky_retries(),
             stream_idle_timeout_seconds: None,
         }
@@ -507,6 +547,9 @@ pub struct ModelMapping {
     /// 空串 = 与客户端模型同名。
     #[serde(rename = "upstreamModel", default)]
     pub upstream_model: String,
+    /// Mapping-level capabilities. Empty means infer from `clientPattern`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<ModelCapability>,
 }
 
 impl ModelMapping {

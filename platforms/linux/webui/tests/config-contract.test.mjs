@@ -116,6 +116,8 @@ test('Linux Provider 入口拖拽覆盖整行且不劫持原生控件', () => {
   assert.match(providerEditorSource, /createProviderDragImage/);
   assert.match(providerEditorSource, /拖动整行可调整入口顺序/);
   assert.match(providerEditorSource, /编辑此入口价格/);
+  assert.match(providerEditorSource, /className="provider-reorder-cell"/);
+  assert.match(componentStyles, /\.provider-reorder-cell\s*\{[\s\S]*?display:\s*flex;[\s\S]*?align-items:\s*center;/);
 });
 
 test('Provider 每行在编辑后提供入口级获取模型动作', () => {
@@ -777,6 +779,19 @@ test('v6 UI config adapts endpoint mappings, secret status and pinned IPs', () =
   assert.equal(ui.secretStatus.endpoints.ep.configured, true);
 });
 
+test('v6 retry settings preserve HTTP 500 failover and retry delay fields', () => {
+  const wire = toWireConfig({
+    schemaVersion: 6,
+    listener: {},
+    retry: { max500Retries: 4, failoverOn500: false, retryDelaySeconds: 2.5 },
+    featureRules: [],
+    endpoints: [],
+  });
+  assert.equal(wire.retry.max500Retries, 4);
+  assert.equal(wire.retry.failoverOn500, false);
+  assert.equal(wire.retry.retryDelaySeconds, 2.5);
+});
+
 test('save adapter emits only Rust v6 endpoint and routing fields', () => {
   const wire = toWireConfig({ schemaVersion: 6, listener: { authToken: 'redacted', host: '127.0.0.1', port: 57878 }, retry: {}, featureRules: [{ id: 'custom', name: 'custom', enabled: true, match: { requestKind: 'session_title', modelEquals: 'x' }, target: { endpointID: 'ep', model: 'x', effort: 'high' } }], endpoints: [{ id: 'ep', name: '入口', baseURL: 'https://example.invalid', apiKey: 'redacted', protocol: 'openai', enabled: true, pinnedIP: '203.0.113.1', timeoutSeconds: 30, headers: { x: 'y' }, modelMappings: [{ from: 'gpt-*', to: 'gpt-5', thinking: 'disable', context: 'strip' }] }] });
   const endpoint = wire.endpoints[0];
@@ -1306,6 +1321,10 @@ test('安全页面归因引导:三态文案齐全、命令可复制、三个陷�
   assert.ok(CC_ATTRIBUTION_GUIDE.remoteMachines.every((item) => item.label && item.detail));
   assert.equal(CC_ATTRIBUTION_GUIDE.remoteScenarios.length, 3);
   assert.ok(CC_ATTRIBUTION_GUIDE.remoteScenarios.every((item) => item.title && item.detail));
+  assert.match(CC_ATTRIBUTION_GUIDE.remoteDownload.command, /__sumpter\/cc-project-attribution\.sh/);
+  assert.match(CC_ATTRIBUTION_GUIDE.remoteDownload.command, /192\.168\.1\.20:57878/);
+  assert.match(CC_ATTRIBUTION_GUIDE.remoteDownload.note, /Nginx/);
+  assert.match(CC_ATTRIBUTION_GUIDE.remoteDownload.note, /发布镜像/);
   assert.deepEqual(
     CC_ATTRIBUTION_GUIDE.remoteChecks.map((item) => item.command),
     ['hostname', 'whoami', 'pwd', 'printf \'%s\\n\' "$ANTHROPIC_BASE_URL"'],

@@ -585,6 +585,8 @@ pub fn admin_router(state: AdminState) -> Router {
             axum::routing::delete(delete_runtime_session),
         )
         .route("/runtime/session/export", get(export_runtime_session))
+        .route("/runtime/cleanup/preview", post(runtime_cleanup_preview))
+        .route("/runtime/cleanup", post(runtime_cleanup))
         .route("/runtime/reset", post(reset_runtime))
         .route("/runtime/recreate", post(recreate_runtime))
         .route("/events", get(events))
@@ -1089,7 +1091,6 @@ fn runtime_filter_from_events_query(query: &RuntimeEventsQuery) -> RuntimeFilter
         failure_phase: query.failure_phase.clone(),
         from: query.from,
         to: query.to,
-        ..RuntimeFilter::default()
     }
 }
 
@@ -1180,7 +1181,6 @@ impl From<RuntimeFilterQuery> for RuntimeFilter {
             failure_phase: query.failure_phase,
             from: query.from,
             to: query.to,
-            ..RuntimeFilter::default()
         }
     }
 }
@@ -1433,7 +1433,56 @@ async fn runtime_retention(State(state): State<AdminState>) -> Response {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RuntimeRetentionPayload {
     expected_revision: i64,
+    #[serde(default)]
+    max_age_days: Option<i64>,
+    #[serde(default)]
     storage_limit_bytes: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RuntimeCleanupPayload {
+    /// Apple reference-date seconds; rows strictly older than this cutoff
+    /// are eligible when their complete request group is also old.
+    older_than: f64,
+}
+
+async fn runtime_cleanup_preview(
+    State(state): State<AdminState>,
+    payload: JsonPayload<RuntimeCleanupPayload>,
+) -> Response {
+    let payload = match require_json(payload) {
+        Ok(payload) => payload,
+        Err(response) => return response,
+    };
+    match state
+        .inner
+        .engine
+        .runtime_cleanup_preview(payload.older_than)
+    {
+        Ok(value) => json_ok(&value),
+        Err(message) if message.contains("olderThan") => {
+            api_error(StatusCode::BAD_REQUEST, "invalid_cleanup", &message)
+        }
+        Err(message) => api_error(StatusCode::CONFLICT, "runtime_cleanup_failed", &message),
+    }
+}
+
+async fn runtime_cleanup(
+    State(state): State<AdminState>,
+    payload: JsonPayload<RuntimeCleanupPayload>,
+) -> Response {
+    let payload = match require_json(payload) {
+        Ok(payload) => payload,
+        Err(response) => return response,
+    };
+    match state.inner.engine.runtime_cleanup(payload.older_than) {
+        Ok(value) => json_ok(&value),
+        Err(message) if message.contains("olderThan") => {
+            api_error(StatusCode::BAD_REQUEST, "invalid_cleanup", &message)
+        }
+        Err(message) => api_error(StatusCode::CONFLICT, "runtime_cleanup_failed", &message),
+    }
 }
 
 async fn runtime_retention_update(
@@ -1449,6 +1498,7 @@ async fn runtime_retention_update(
         .engine
         .runtime_set_retention(RuntimeRetentionUpdate {
             expected_revision: payload.expected_revision,
+            max_age_days: payload.max_age_days,
             storage_limit_bytes: payload.storage_limit_bytes,
         }) {
         Ok(value) => json_ok(&value),
@@ -1552,6 +1602,8 @@ struct RuntimeExportQuery {
     filters: RuntimeFilterQuery,
 }
 
+// Err 侧是已构造好的 axum Response,直接返回给调用方;装箱只会多一次堆分配。
+#[allow(clippy::result_large_err)]
 fn parse_runtime_export_query(query: RuntimeExportQuery) -> Result<ExportQuery, Response> {
     let scope = match query.scope.as_deref().unwrap_or("events") {
         "events" => ExportScope::Events,
@@ -2222,6 +2274,7 @@ pub fn validate_config(config: &AppConfig) -> Result<(), String> {
     if config.retry.max_deferred_rounds < 0
         || config.retry.max_retry_duration_seconds < 0.0
         || config.retry.pinned_ip_concurrency < 1
+        || config.retry.max_500_retries < 0
         || config.retry.session_sticky_retries < 0
         || config
             .retry
@@ -2230,6 +2283,10 @@ pub fn validate_config(config: &AppConfig) -> Result<(), String> {
         || config
             .retry
             .stream_idle_timeout_seconds
+            .is_some_and(|value| !value.is_finite() || value <= 0.0)
+        || config
+            .retry
+            .retry_delay_seconds
             .is_some_and(|value| !value.is_finite() || value <= 0.0)
     {
         return Err("全局重试/超时参数无效".into());
@@ -2283,17 +2340,16 @@ pub fn validate_config(config: &AppConfig) -> Result<(), String> {
         }
     }
     for rule in &config.feature_rules {
-        if let Some(endpoint_id) = rule.target.endpoint_id.as_deref() {
-            if !config
+        if let Some(endpoint_id) = rule.target.endpoint_id.as_deref()
+            && !config
                 .endpoints
                 .iter()
                 .any(|endpoint| endpoint.id == endpoint_id)
-            {
-                return Err(format!(
-                    "分流规则 {} 指向不存在的 Endpoint {endpoint_id}",
-                    rule.id
-                ));
-            }
+        {
+            return Err(format!(
+                "分流规则 {} 指向不存在的 Endpoint {endpoint_id}",
+                rule.id
+            ));
         }
     }
     Ok(())
@@ -2656,11 +2712,11 @@ fn extract_models(value: &Value) -> Vec<String> {
             }
         }
         // Some gateways return a map keyed by model id: {"models":{"gpt-4o":{...}}}.
-        if models.len() == before {
-            if let Some(Value::Object(entries)) = object.get("models") {
-                for key in entries.keys() {
-                    visit(&Value::String(key.clone()), models, depth + 1);
-                }
+        if models.len() == before
+            && let Some(Value::Object(entries)) = object.get("models")
+        {
+            for key in entries.keys() {
+                visit(&Value::String(key.clone()), models, depth + 1);
             }
         }
         if models.len() == before
@@ -2794,6 +2850,7 @@ impl DiagnosticCaptureFormat {
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_diagnostic_capture_format(raw: Option<&str>) -> Result<DiagnosticCaptureFormat, Response> {
     match raw.unwrap_or("jsonl") {
         "jsonl" => Ok(DiagnosticCaptureFormat::Jsonl),
@@ -2938,11 +2995,10 @@ fn redact_capture_value(value: &mut Value) {
                                             "value".into(),
                                             Value::String("[REDACTED]".into()),
                                         );
-                                    } else if let Some(header_value) = header.get_mut("value") {
-                                        if let Some(text) = header_value.as_str() {
-                                            *header_value =
-                                                Value::String(redact_text_secrets(text));
-                                        }
+                                    } else if let Some(header_value) = header.get_mut("value")
+                                        && let Some(text) = header_value.as_str()
+                                    {
+                                        *header_value = Value::String(redact_text_secrets(text));
                                     }
                                 }
                             }
@@ -3940,6 +3996,7 @@ mod tests {
             .body(
                 serde_json::to_vec(&json!({
                     "expectedRevision": 1,
+                    "maxAgeDays": 30,
                     "storageLimitBytes": 8388608
                 }))
                 .unwrap(),
@@ -3951,6 +4008,7 @@ mod tests {
         let retention_update: Value =
             serde_json::from_slice(&retention_update.bytes().await.unwrap()).unwrap();
         assert_eq!(retention_update["revision"], 2);
+        assert_eq!(retention_update["maxAgeDays"], 30);
         assert_eq!(retention_update["storageLimitBytes"], 8_388_608);
         assert!(retention_update.get("maxEvents").is_none());
 

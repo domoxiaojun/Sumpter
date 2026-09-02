@@ -81,6 +81,10 @@ public enum InputValidation {
     public struct RetryPolicyInput: Equatable, Sendable {
         public var responseTimeoutSeconds: Double?
         public var streamIdleTimeoutSeconds: Double?
+        public var max500Retries: Int
+        public var failoverOn500: Bool
+        public var retryDelaySeconds: Double?
+        public var passThroughRetryDelay: Bool
         public var maxDeferredRounds: Int
         public var maxRetryDurationSeconds: Double
         public var sessionStickyRetries: Int
@@ -89,6 +93,10 @@ public enum InputValidation {
         public init(
             responseTimeoutSeconds: Double?,
             streamIdleTimeoutSeconds: Double?,
+            max500Retries: Int = 0,
+            failoverOn500: Bool = true,
+            retryDelaySeconds: Double? = nil,
+            passThroughRetryDelay: Bool = true,
             maxDeferredRounds: Int,
             maxRetryDurationSeconds: Double,
             sessionStickyRetries: Int,
@@ -96,6 +104,10 @@ public enum InputValidation {
         ) {
             self.responseTimeoutSeconds = responseTimeoutSeconds
             self.streamIdleTimeoutSeconds = streamIdleTimeoutSeconds
+            self.max500Retries = max500Retries
+            self.failoverOn500 = failoverOn500
+            self.retryDelaySeconds = retryDelaySeconds
+            self.passThroughRetryDelay = passThroughRetryDelay
             self.maxDeferredRounds = maxDeferredRounds
             self.maxRetryDurationSeconds = maxRetryDurationSeconds
             self.sessionStickyRetries = sessionStickyRetries
@@ -107,33 +119,46 @@ public enum InputValidation {
     public static func retryPolicy(
         responseTimeoutText: String,
         streamIdleTimeoutText: String,
+        max500RetriesText: String = "0",
+        failoverOn500: Bool = true,
+        retryDelaySecondsText: String = "",
+        passThroughRetryDelay: Bool = true,
         maxDeferredRoundsText: String,
         maxRetryDurationSecondsText: String,
         sessionStickyRetriesText: String,
         pinnedIPConcurrencyText: String
     ) throws -> RetryPolicyInput {
-        let responseTimeout = try optionalPositiveDouble(responseTimeoutText, field: "单次超时")
-        let streamIdleTimeout = try optionalPositiveDouble(streamIdleTimeoutText, field: "吐字超时")
+        let responseTimeout = try optionalPositiveDouble(responseTimeoutText, field: "首响应截止")
+        let streamIdleTimeout = try optionalPositiveDouble(streamIdleTimeoutText, field: "流式空闲截止")
+        guard let max500Retries = Int(max500RetriesText.trimmingCharacters(in: .whitespacesAndNewlines)),
+              max500Retries >= 0 else {
+            throw InputValidationError("入口内 500 重试次数必须为 0 或正整数")
+        }
+        let retryDelaySeconds = try optionalPositiveDouble(retryDelaySecondsText, field: "retry_delay 秒数")
         guard let deferredRounds = Int(maxDeferredRoundsText.trimmingCharacters(in: .whitespacesAndNewlines)),
               deferredRounds >= 0 else {
-            throw InputValidationError("可重试故障最大轮数必须为 0 或正整数")
+            throw InputValidationError("故障重试最大轮数必须为 0 或正整数")
         }
         guard let retrySeconds = Double(maxRetryDurationSecondsText.trimmingCharacters(in: .whitespacesAndNewlines)),
               retrySeconds.isFinite,
               retrySeconds >= 0 else {
-            throw InputValidationError("跨轮重试上限必须为 0 或正数")
+            throw InputValidationError("跨轮最长时长必须为 0 或正数")
         }
         guard let stickyRetries = Int(sessionStickyRetriesText.trimmingCharacters(in: .whitespacesAndNewlines)),
               stickyRetries >= 0 else {
-            throw InputValidationError("粘性入口重试次数必须为 0 或正整数")
+            throw InputValidationError("粘性入口额外重试次数必须为 0 或正整数")
         }
         guard let ipConcurrency = Int(pinnedIPConcurrencyText.trimmingCharacters(in: .whitespacesAndNewlines)),
               ipConcurrency > 0 else {
-            throw InputValidationError("IP 并发数必须大于 0")
+            throw InputValidationError("固定 IP 并发数必须大于 0")
         }
         return RetryPolicyInput(
             responseTimeoutSeconds: responseTimeout,
             streamIdleTimeoutSeconds: streamIdleTimeout,
+            max500Retries: max500Retries,
+            failoverOn500: failoverOn500,
+            retryDelaySeconds: retryDelaySeconds,
+            passThroughRetryDelay: passThroughRetryDelay,
             maxDeferredRounds: deferredRounds,
             maxRetryDurationSeconds: retrySeconds,
             sessionStickyRetries: stickyRetries,

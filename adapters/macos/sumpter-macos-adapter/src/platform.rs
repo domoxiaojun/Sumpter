@@ -107,6 +107,13 @@ impl Platform {
             }
         };
         let payload: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        let client_kind = Self::query_value(query, "clientKind")
+            .and_then(|value| match value {
+                "codex" => Some(ClientKind::Codex),
+                "claude_code" => Some(ClientKind::ClaudeCode),
+                _ => None,
+            })
+            .unwrap_or(ClientKind::ClaudeCode);
         let pick = |key: &str| {
             payload
                 .get(key)
@@ -122,7 +129,22 @@ impl Platform {
             .or_else(|| pick("type"))
             .unwrap_or_else(|| "notification".into());
         let event_kind = normalize_hook_event(&event_kind);
+        let payload_event_kind = pick("hook_event_name")
+            .or_else(|| pick("type"))
+            .map(|value| normalize_hook_event(&value));
+        // Codex integration only accepts notification-worthy lifecycle events.
+        // Tool/compaction/session hooks remain available to users, but are not
+        // converted into system notifications and their payloads are ignored.
+        if client_kind == ClientKind::Codex
+            && (!codex_notification_event_supported(&event_kind)
+                || payload_event_kind
+                    .as_deref()
+                    .is_some_and(|value| value != event_kind.as_str()))
+        {
+            return sumpter_engine::engine::json_response(StatusCode::OK, &json!({"ok": "true"}));
+        }
         let session_id = pick("session_id").or_else(|| pick("sessionId"));
+        let turn_id = pick("turn_id").or_else(|| pick("turnId"));
         let cwd = pick("cwd");
         let project = cwd
             .as_deref()
@@ -136,21 +158,28 @@ impl Platform {
             .then(|| recent_claude_failure(engine.as_ref(), session_id.as_deref()))
             .flatten();
         let (default_title, default_message) = notify_presentation(
+            client_kind,
             &event_kind,
             project.as_deref(),
             notification_type.as_deref(),
             matched_failure.as_ref(),
         );
-        let message = pick("message")
-            .filter(|value| *value != event_kind)
-            .or_else(|| pick("payload"))
-            .unwrap_or(default_message);
+        let message = if client_kind == ClientKind::Codex {
+            // Codex Stop payloads can contain transcript/prompt/error fields;
+            // never copy them into the system notification.
+            default_message.clone()
+        } else {
+            pick("message")
+                .filter(|value| *value != event_kind)
+                .or_else(|| pick("payload"))
+                .unwrap_or(default_message)
+        };
         let message = if event_kind == "stop_failure" {
             failure_notification_message(pick("error").as_deref(), matched_failure.as_ref())
         } else {
             sanitize_notification_text(&message, 512)
         };
-        let title = if event_kind == "stop_failure" {
+        let title = if client_kind == ClientKind::Codex || event_kind == "stop_failure" {
             default_title
         } else {
             pick("title")
@@ -159,19 +188,25 @@ impl Platform {
                 .unwrap_or(default_title)
         };
         let sound = pick("sound").map(|value| sanitize_notification_text(&value, 80));
-        let action_id = [
-            "action_id",
-            "actionID",
-            "request_id",
-            "requestID",
-            "tool_use_id",
-        ]
-        .into_iter()
-        .find_map(pick)
-        .map(|value| sanitize_notification_text(&value, 160));
+        let action_id = if client_kind == ClientKind::Codex {
+            // Do not echo arbitrary identifiers from the Stop payload.  The
+            // private turn id is used only below for in-memory deduplication.
+            None
+        } else {
+            [
+                "action_id",
+                "actionID",
+                "request_id",
+                "requestID",
+                "tool_use_id",
+            ]
+            .into_iter()
+            .find_map(pick)
+            .map(|value| sanitize_notification_text(&value, 160))
+        };
 
         let event = RuntimeEvent {
-            client_kind: None,
+            client_kind: Some(client_kind),
             codex_metadata: None,
             client_declared: None,
             client_model: None,
@@ -212,6 +247,7 @@ impl Platform {
         engine.record_platform_event(event);
 
         let notice = PlatformNotice::Notify {
+            client_kind,
             kind: event_kind.clone(),
             title: title.clone(),
             message: message.clone(),
@@ -220,12 +256,19 @@ impl Platform {
             priority: Some(priority.into()),
             action_id: action_id.clone(),
             session_id: session_id.clone(),
-            cwd: cwd.clone(),
+            cwd: (client_kind != ClientKind::Codex)
+                .then_some(cwd.clone())
+                .flatten(),
         };
         let dedup_key = notify_dedup_key(
+            client_kind,
             category,
             session_id.as_deref(),
-            action_id.as_deref(),
+            action_id.as_deref().or_else(|| {
+                (client_kind == ClientKind::Codex)
+                    .then_some(turn_id.as_deref())
+                    .flatten()
+            }),
             &message,
         );
         if self.should_emit_notify(&dedup_key) {
@@ -361,11 +404,20 @@ fn new_event_id() -> String {
 fn normalize_hook_event(event: &str) -> String {
     match event {
         "Notification" => "notification".into(),
+        "PermissionRequest" => "permission_request".into(),
         "Stop" => "stop".into(),
         "StopFailure" => "stop_failure".into(),
         "SubagentStop" => "subagent_stop".into(),
+        "Interrupt" => "interrupt".into(),
         other => other.to_string(),
     }
+}
+
+fn codex_notification_event_supported(event: &str) -> bool {
+    matches!(
+        event,
+        "permission_request" | "stop" | "subagent_stop" | "interrupt"
+    )
 }
 
 fn notify_category(event: &str, notification_type: Option<&str>) -> (&'static str, &'static str) {
@@ -373,6 +425,8 @@ fn notify_category(event: &str, notification_type: Option<&str>) -> (&'static st
         "stop_failure" => ("turn_failed", "high"),
         "subagent_stop" => ("subtask_completed", "normal"),
         "stop" => ("turn_completed", "normal"),
+        "interrupt" => ("turn_failed", "high"),
+        "permission_request" => ("action_required", "high"),
         "notification" => match notification_type {
             None
             | Some(
@@ -389,11 +443,32 @@ fn notify_category(event: &str, notification_type: Option<&str>) -> (&'static st
 }
 
 fn notify_presentation(
+    client_kind: ClientKind,
     event: &str,
     project: Option<&str>,
     notification_type: Option<&str>,
     matched_failure: Option<&RuntimeEvent>,
 ) -> (String, String) {
+    if client_kind == ClientKind::Codex {
+        return match event {
+            "permission_request" => (
+                "Codex CLI · 需要你处理".into(),
+                "Codex CLI 正在等待你的授权决定".into(),
+            ),
+            "subagent_stop" => (
+                "Codex CLI · 子任务结束".into(),
+                "Codex CLI 子任务已完成".into(),
+            ),
+            "interrupt" => (
+                "Codex CLI · 回合中断".into(),
+                "Codex CLI 回合被中断，未完成".into(),
+            ),
+            _ => (
+                "Codex CLI · 回合完成".into(),
+                "Codex CLI 主回合已完成".into(),
+            ),
+        };
+    }
     match event {
         "notification" if notification_type.is_none() => (
             "Claude Code · 等待确认".into(),
@@ -545,6 +620,7 @@ fn sanitize_notification_text(value: &str, max_chars: usize) -> String {
 }
 
 fn notify_dedup_key(
+    client_kind: ClientKind,
     category: &str,
     session_id: Option<&str>,
     action_id: Option<&str>,
@@ -553,7 +629,8 @@ fn notify_dedup_key(
     let mut hasher = DefaultHasher::new();
     message.hash(&mut hasher);
     format!(
-        "{category}|{}|{}|{:016x}",
+        "{}|{category}|{}|{}|{:016x}",
+        client_kind.as_str(),
         session_id.unwrap_or("<no-session>"),
         action_id.unwrap_or("<no-action>"),
         hasher.finish()

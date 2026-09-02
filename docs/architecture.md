@@ -1,6 +1,6 @@
 # Sumpter 当前架构
 
-维护基线是「一份共享引擎，多端适配器」：Linux 和 macOS 共用同一套数据面、协议桥接、重试和运行时存储；平台差异只出现在 adapter、app 和 `platforms/`。
+维护基线是「一份共享引擎，多端适配器」：Linux 和 macOS 共用同一套数据面、请求透传、模型映射、重试和运行时存储；平台差异只出现在 adapter、app 和 `platforms/`。Codex `/v1/live` 的 SDP/multipart bootstrap 是共享引擎内唯一的 quicksilver 封装特例，公开 `/v1/realtime` 仍保持原生透传。
 
 ## 结构树
 
@@ -9,7 +9,7 @@
 ├── Cargo.toml                         # 唯一 Rust workspace
 ├── Cargo.lock
 ├── crates/                            # 跨平台真源
-│   ├── sumpter-core/                  # 配置、路由、调度、协议和事件契约
+│   ├── sumpter-core/                  # 配置、路由、调度、模型映射和事件契约
 │   ├── sumpter-runtime/               # SQLite worker、投影、rollup、查询、导出
 │   └── sumpter-engine/                # HTTP 数据面、转发、重试、relay、回放
 │       └── src/
@@ -41,9 +41,11 @@
 │   │   ├── deploy/                    # service / 反代模板
 │   │   ├── specs/                     # Linux Admin API 规格
 │   │   ├── integrations/              # 外部客户端集成示例
-│   │   └── .github/workflows/         # Linux 独立发布 workflow 输入
-│   └── macos/                         # SwiftUI 壳和打包输入
+│   │   └── .github/workflows/         # 独立 Linux 发布树 workflow 输入
+│   └── macos/                         # SwiftUI 壳、脚本和打包输入
+│       ├── scripts/                   # macOS 随 App 内置的客户端配置脚本
 │       └── app/                       # Swift Package、测试、DMG / Sparkle
+├── .github/workflows/                 # 当前 monorepo 的 CI / Release / Container workflows
 ├── docs/                              # 当前说明和历史对照
 └── scripts/                           # 仓库级辅助脚本
 ```
@@ -81,14 +83,16 @@ apps/<platform>/sumpterd
 
 共享引擎默认使用 `NoopPlatform`，因此 core / runtime / engine 可以在没有操作系统控制面时独立测试。实际二进制由对应 adapter 注入具体 `Platform`。
 
+对应页面优先保持同一信息层级、字段命名、状态语义和主要交互；只有原生控件、窗口形态或平台生命周期确有差异时才保留平台化表现。运行统计存储统一使用 `maxAgeDays` 与 `storageLimitBytes` 的 OR 轮换语义，进行中的请求组整体保护；低频技术字段进入详情，策略编辑使用 Linux 弹窗 / macOS sheet。
+
 ## 变更归属
 
 | 需求 | 修改位置 | 不应修改 |
 | --- | --- | --- |
-| 配置、路由、协议桥接、事件契约 | `crates/sumpter-core/` | adapter / app 内复制实现 |
+| 配置、路由、模型映射、事件契约 | `crates/sumpter-core/` | adapter / app 内复制实现 |
 | SQLite 写入、投影、分页、导出 | `crates/sumpter-runtime/` | Linux / macOS 各维护一份 runtime |
 | 入站、重试、relay、回放、健康检查 | `crates/sumpter-engine/` | 平台目录中的 proxy engine |
-| Linux 权限、Admin、systemd 语义 | `adapters/linux/`、`apps/linux/` | shared engine 引入 Linux 依赖 |
+| Linux 权限、Admin、systemd、listener 内置脚本 | `adapters/linux/`、`apps/linux/` | shared engine 引入 Linux 依赖 |
 | macOS control token、通知、sidecar 生命周期 | `adapters/macos/`、`apps/macos/` | shared engine 引入 Swift / macOS 依赖 |
 | WebUI / SwiftUI / 安装和发布输入 | `platforms/linux/`、`platforms/macos/` | 把 UI 逻辑搬进 shared crate |
 
@@ -112,10 +116,10 @@ workspace 有 7 个 Rust package：3 个共享库、2 个平台 adapter、2 个 
 
 本机测试 DMG：`./scripts/build-macos-dmg.sh`。该脚本走 monorepo 根 workspace，产物是 ad-hoc 签名的 `Sumpter-local.dmg`。
 
-发布脚本仍有独立发布树假设，不能当成根 workspace 的通过证据：
+发布输入分为当前 monorepo 根 workflow 与独立 Linux 发布树兼容脚本：
 
-- `platforms/linux/scripts/assemble-shared-tree.sh`、`cross-build.sh`、`release-preflight.sh` 仍按 Linux 包根查找 `crates/` 等输入，不能当成根 workspace 的通过证据。
-- `platforms/linux/.github/workflows/` 是发布输入；本 monorepo 根目录没有 `.github/`，GitHub 不会自动跑这些 workflow。
+- `platforms/linux/scripts/cross-build.sh` 已识别根 workspace，可从仓库根构建 `sumpterd-linux` 并生成双架构包；`assemble-shared-tree.sh` 与 `release-preflight.sh` 仍主要服务独立 Linux 发布树。
+- 当前 monorepo 的 GitHub workflow 在根 `.github/workflows/`；`platforms/linux/.github/workflows/` 仅保留独立 Linux 发布树输入，GitHub 不会发现该嵌套目录。
 - `platforms/macos/app/package-app.sh` 已识别 monorepo 根 workspace 并构建 `sumpterd-macos`，但仍保留独立发布树分支和 `ENGINE_PROFILE` 兼容选项。
 
 ## 品牌与运行时名字

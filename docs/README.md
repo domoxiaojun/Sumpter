@@ -16,15 +16,15 @@
 
 ## 源码布局
 
-- `crates/sumpter-core/`：配置、路由、调度、协议转换和事件契约。
+- `crates/sumpter-core/`：配置、路由、调度、模型映射和事件契约。
 - `crates/sumpter-runtime/`：共享 SQLite worker、投影、rollup、查询和导出。
 - `crates/sumpter-engine/`：共享 HTTP 数据面、转发、重试、relay、回放和生命周期。
 - `adapters/linux/sumpter-linux-adapter/`：Linux 平台边界、Admin、server。
 - `adapters/macos/sumpter-macos-adapter/`：macOS 平台边界、Admin、通知、sidecar server。
 - `apps/linux/sumpterd/`、`apps/macos/sumpterd/`：可执行入口；只做参数、配置目录、监听和生命周期。
-- `platforms/macos/app/`：SwiftUI 壳、测试、Sparkle 和 DMG 打包。
+- `platforms/macos/scripts/`、`platforms/macos/app/`：macOS 客户端配置脚本、SwiftUI 壳、测试、Sparkle 和 DMG 打包。
 - `platforms/linux/webui/`：WebUI 源码与测试；`platforms/linux/web/` 是已构建静态资源。
-- `platforms/linux/scripts/`、`platforms/linux/deploy/`、`platforms/linux/.github/workflows/`：Linux 安装、systemd 与发布输入。
+- `platforms/linux/scripts/`、`platforms/linux/deploy/`、`platforms/linux/.github/workflows/`：Linux 安装、systemd 与独立发布树输入；当前 monorepo 的 GitHub workflow 在根 `.github/workflows/`。
 - `scripts/sync-usage-docs.py`、`docs/usage-onboarding.md`、`docs/usage-path-matrix.json`：开箱正文模板和同步检查。
 
 根 `Cargo.toml` 是唯一 Rust workspace。共享引擎与平台的最小接口是 `crates/sumpter-engine/src/boundary.rs`。

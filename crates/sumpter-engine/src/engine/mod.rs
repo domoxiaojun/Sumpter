@@ -21,12 +21,14 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
+use axum::extract::ws::{Message as WebSocketMessage, WebSocket};
 use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::response::Response;
 use bytes::Bytes;
-use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
+use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 use sumpter_core::bridge::{self, SseBridge};
 use sumpter_core::bridge_in::{self, ClientDialect};
@@ -40,7 +42,8 @@ use sumpter_core::events::{
     StreamTrace, message_tokens, unix_to_apple_epoch,
 };
 use sumpter_core::routing::{
-    PlannedEndpoint, RequestPurpose, RouteMode, RoutePlanner, RoutingRequest, inspector, sticky,
+    PlannedEndpoint, RequestPurpose, RouteMode, RoutePlanError, RoutePlanner, RoutingRequest,
+    inspector, sticky,
 };
 use sumpter_core::stream_terminal::{SseDialect, SseTerminal, SseTerminalTracker};
 use sumpter_core::{access, scheduler};
@@ -56,8 +59,8 @@ use crate::runtime_query::{
     ExportQuery, RuntimeFilter, RuntimeQueryError, TrendQuery,
 };
 use crate::runtime_store::{
-    AnalyticsFilter, RuntimeCounters, RuntimeEventListItem, RuntimePricingUpdate,
-    RuntimeRetentionUpdate, RuntimeStore,
+    AnalyticsFilter, RuntimeCleanupMutation, RuntimeCleanupPreview, RuntimeCounters,
+    RuntimeEventListItem, RuntimePricingUpdate, RuntimeRetentionUpdate, RuntimeStore,
 };
 
 const IP_COOLDOWN_SECS: f64 = 60.0;
@@ -330,6 +333,88 @@ fn prune_session_sticky(sticky: &mut HashMap<String, SessionStickyEntry>, now: f
 }
 /// 请求体上限：server body-limit 与 Engine 实际读取共用，防止异常请求无限占用内存。
 pub const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
+/// Realtime ephemeral keys are short-lived upstream credentials. Keep only a
+/// bounded, in-memory allow-list so a listener token can remain enabled while
+/// a client uses the `ek_…` returned by `/v1/realtime/client_secrets`.
+const MAX_REALTIME_CLIENT_SECRETS: usize = 256;
+const DEFAULT_REALTIME_CLIENT_SECRET_TTL_SECS: f64 = 300.0;
+const MAX_LIVE_SESSIONS: usize = 256;
+const DEFAULT_LIVE_SESSION_TTL_SECS: f64 = 900.0;
+
+#[derive(Clone)]
+struct RealtimeClientSecretEntry {
+    expires_at: f64,
+    endpoint_id: Option<String>,
+    model: Option<String>,
+    /// The session configuration returned by the upstream client-secret
+    /// endpoint.  CPA replays this configuration with `session.update` when
+    /// the ephemeral key opens a WebSocket, so voice/instructions survive the
+    /// two-step browser flow.
+    session: Option<Value>,
+}
+
+type NativeWebSocket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// A Realtime/Live upstream connection that has completed its handshake.
+/// Adapters hold the downstream upgrade until this value is ready, matching
+/// CPA's behavior for upstream 401/404/429 responses.
+pub struct PreparedWebSocket {
+    upstream: NativeWebSocket,
+}
+
+#[derive(Debug)]
+pub struct WebSocketPrepareError {
+    status: u16,
+    code: &'static str,
+    message: String,
+}
+
+impl WebSocketPrepareError {
+    fn new(status: u16, code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            code,
+            message: message.into(),
+        }
+    }
+
+    pub fn status_code(&self) -> u16 {
+        self.status
+    }
+
+    pub fn error_code(&self) -> &'static str {
+        self.code
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+pub fn websocket_prepare_error_response(error: &WebSocketPrepareError) -> Response {
+    let status = StatusCode::from_u16(error.status_code()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let body = serde_json::to_vec(&json!({
+        "error": error.error_code(),
+        "message": error.message(),
+    }))
+    .unwrap_or_else(|_| b"{\"error\":\"upstream_error\"}".to_vec());
+    Response::builder()
+        .status(status)
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .unwrap_or_else(|_| Response::new(Body::empty()))
+}
+
+#[derive(Clone)]
+struct LiveSessionEntry {
+    expires_at: f64,
+    endpoint_id: String,
+    /// Logical model selected during the bootstrap. Sideband requests often
+    /// omit `model`; retaining it prevents them from being re-routed through
+    /// the standard Realtime default.
+    model: String,
+}
 
 /// 引擎对外广播（Linux Admin SSE 的事实源）。
 #[allow(clippy::large_enum_variant)]
@@ -399,6 +484,9 @@ pub struct EngineInner {
     started_at: Instant,
     runtime_store: Option<RuntimeStore>,
     runtime_write: Mutex<()>,
+    realtime_client_secrets: Mutex<HashMap<String, RealtimeClientSecretEntry>>,
+    live_sessions: Mutex<HashMap<String, LiveSessionEntry>>,
+    video_sessions: Mutex<HashMap<String, LiveSessionEntry>>,
 }
 
 fn now_unix() -> f64 {
@@ -570,6 +658,9 @@ impl Engine {
                 capture: Mutex::new(capture),
                 runtime_store,
                 runtime_write: Mutex::new(()),
+                realtime_client_secrets: Mutex::new(HashMap::new()),
+                live_sessions: Mutex::new(HashMap::new()),
+                video_sessions: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -596,6 +687,254 @@ impl Engine {
 
     pub fn uptime_seconds(&self) -> u64 {
         self.inner.started_at.elapsed().as_secs()
+    }
+
+    /// Remember an upstream Realtime ephemeral key without persisting or
+    /// exposing it through runtime events. The expiration is bounded so a
+    /// malformed/overly long upstream lifetime cannot turn it into a durable
+    /// listener credential.
+    fn register_realtime_client_secret(
+        &self,
+        token: &str,
+        expires_at: Option<f64>,
+        endpoint_id: Option<&str>,
+        model: Option<&str>,
+        session: Option<Value>,
+    ) {
+        let token = token.trim();
+        if !token.starts_with("ek_") || token.len() > 512 || token.chars().any(char::is_control) {
+            return;
+        }
+        let now = now_unix();
+        let requested_expiry = expires_at
+            .filter(|value| value.is_finite() && *value > now)
+            .unwrap_or(now + DEFAULT_REALTIME_CLIENT_SECRET_TTL_SECS);
+        let expiry = requested_expiry.min(now + DEFAULT_REALTIME_CLIENT_SECRET_TTL_SECS);
+        let mut secrets = self.inner.realtime_client_secrets.lock().unwrap();
+        secrets.retain(|_, value| value.expires_at > now);
+        if secrets.len() >= MAX_REALTIME_CLIENT_SECRETS
+            && !secrets.contains_key(token)
+            && let Some(oldest) = secrets
+                .iter()
+                .min_by(|(_, left), (_, right)| left.expires_at.total_cmp(&right.expires_at))
+                .map(|(key, _)| key.clone())
+        {
+            secrets.remove(&oldest);
+        }
+        secrets.insert(
+            token.to_string(),
+            RealtimeClientSecretEntry {
+                expires_at: expiry,
+                endpoint_id: endpoint_id
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string),
+                model: model
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string),
+                session,
+            },
+        );
+    }
+
+    fn realtime_client_secret_authorized(&self, headers: &[(String, String)]) -> bool {
+        let Some(token) = realtime_ephemeral_token(headers) else {
+            return false;
+        };
+        let now = now_unix();
+        let mut secrets = self.inner.realtime_client_secrets.lock().unwrap();
+        secrets.retain(|_, value| value.expires_at > now);
+        secrets
+            .get(&token)
+            .is_some_and(|entry| entry.expires_at > now)
+    }
+
+    fn realtime_client_secret_endpoint(&self, headers: &[(String, String)]) -> Option<String> {
+        let token = realtime_ephemeral_token(headers)?;
+        let now = now_unix();
+        let mut secrets = self.inner.realtime_client_secrets.lock().unwrap();
+        secrets.retain(|_, value| value.expires_at > now);
+        secrets
+            .get(&token)
+            .and_then(|entry| entry.endpoint_id.clone())
+    }
+
+    fn realtime_client_secret_model(&self, headers: &[(String, String)]) -> Option<String> {
+        let token = realtime_ephemeral_token(headers)?;
+        let now = now_unix();
+        let mut secrets = self.inner.realtime_client_secrets.lock().unwrap();
+        secrets.retain(|_, value| value.expires_at > now);
+        secrets.get(&token).and_then(|entry| entry.model.clone())
+    }
+
+    fn realtime_client_secret_session(&self, headers: &[(String, String)]) -> Option<Value> {
+        let token = realtime_ephemeral_token(headers)?;
+        let now = now_unix();
+        let mut secrets = self.inner.realtime_client_secrets.lock().unwrap();
+        secrets.retain(|_, value| value.expires_at > now);
+        secrets.get(&token).and_then(|entry| entry.session.clone())
+    }
+
+    fn register_realtime_client_secret_from_body(
+        &self,
+        body: &[u8],
+        endpoint_id: Option<&str>,
+        model: Option<&str>,
+        fallback_session: Option<Value>,
+    ) {
+        let Ok(value) = serde_json::from_slice::<Value>(body) else {
+            return;
+        };
+        let root_expiry = value.get("expires_at").and_then(json_timestamp);
+        let candidate = value
+            .get("value")
+            .and_then(Value::as_str)
+            .map(|token| (token, root_expiry))
+            .or_else(|| {
+                let secret = value.get("client_secret")?;
+                if let Some(token) = secret.as_str() {
+                    return Some((token, root_expiry));
+                }
+                let object = secret.as_object()?;
+                let token = object.get("value").and_then(Value::as_str)?;
+                Some((
+                    token,
+                    object
+                        .get("expires_at")
+                        .and_then(json_timestamp)
+                        .or(root_expiry),
+                ))
+            });
+        let session = value
+            .get("session")
+            .and_then(Value::as_object)
+            .map(|session| {
+                let mut session = session.clone();
+                // The public client-secret response adds bookkeeping fields that
+                // are not part of the session configuration CPA replays.
+                for field in ["id", "object", "expires_at", "client_secret"] {
+                    session.remove(field);
+                }
+                Value::Object(session)
+            })
+            .or(fallback_session);
+        if let Some((token, expires_at)) = candidate {
+            self.register_realtime_client_secret(token, expires_at, endpoint_id, model, session);
+        }
+    }
+
+    fn register_live_session(&self, call_id: &str, endpoint_id: &str, model: &str) {
+        let call_id = call_id.trim();
+        if call_id.is_empty()
+            || call_id.len() > 256
+            || call_id.chars().any(char::is_control)
+            || endpoint_id.trim().is_empty()
+        {
+            return;
+        }
+        let now = now_unix();
+        let mut sessions = self.inner.live_sessions.lock().unwrap();
+        sessions.retain(|_, entry| entry.expires_at > now);
+        if sessions.len() >= MAX_LIVE_SESSIONS
+            && !sessions.contains_key(call_id)
+            && let Some(oldest) = sessions
+                .iter()
+                .min_by(|(_, left), (_, right)| left.expires_at.total_cmp(&right.expires_at))
+                .map(|(key, _)| key.clone())
+        {
+            sessions.remove(&oldest);
+        }
+        sessions.insert(
+            call_id.to_string(),
+            LiveSessionEntry {
+                expires_at: now + DEFAULT_LIVE_SESSION_TTL_SECS,
+                endpoint_id: endpoint_id.trim().to_string(),
+                model: model.trim().to_string(),
+            },
+        );
+    }
+
+    /// Return the originating endpoint for a sideband target. The outer
+    /// `Option` indicates whether the target carried a call id; the inner
+    /// value is `None` when that id is unknown or expired. Keeping those
+    /// states distinct is important: an unknown Live id must not silently
+    /// fall back to ordinary provider selection.
+    fn live_session_endpoint(&self, path_and_query: &str) -> Option<Option<String>> {
+        let call_id = live_call_id_from_target(path_and_query)?;
+        let now = now_unix();
+        let mut sessions = self.inner.live_sessions.lock().unwrap();
+        sessions.retain(|_, entry| entry.expires_at > now);
+        Some(sessions.get(call_id).map(|entry| entry.endpoint_id.clone()))
+    }
+
+    fn live_session_model(&self, path_and_query: &str) -> Option<Option<String>> {
+        let call_id = live_call_id_from_target(path_and_query)?;
+        let now = now_unix();
+        let mut sessions = self.inner.live_sessions.lock().unwrap();
+        sessions.retain(|_, entry| entry.expires_at > now);
+        Some(sessions.get(call_id).map(|entry| entry.model.clone()))
+    }
+
+    fn register_video_session(&self, video_id: &str, endpoint_id: &str, model: &str) {
+        self.register_live_session_into(&self.inner.video_sessions, video_id, endpoint_id, model);
+    }
+
+    fn register_live_session_into(
+        &self,
+        store: &Mutex<HashMap<String, LiveSessionEntry>>,
+        session_id: &str,
+        endpoint_id: &str,
+        model: &str,
+    ) {
+        let session_id = session_id.trim();
+        if session_id.is_empty()
+            || session_id.len() > 256
+            || session_id.chars().any(char::is_control)
+            || endpoint_id.trim().is_empty()
+        {
+            return;
+        }
+        let now = now_unix();
+        let mut sessions = store.lock().unwrap();
+        sessions.retain(|_, entry| entry.expires_at > now);
+        if sessions.len() >= MAX_LIVE_SESSIONS
+            && !sessions.contains_key(session_id)
+            && let Some(oldest) = sessions
+                .iter()
+                .min_by(|(_, left), (_, right)| left.expires_at.total_cmp(&right.expires_at))
+                .map(|(key, _)| key.clone())
+        {
+            sessions.remove(&oldest);
+        }
+        sessions.insert(
+            session_id.to_string(),
+            LiveSessionEntry {
+                expires_at: now + DEFAULT_LIVE_SESSION_TTL_SECS,
+                endpoint_id: endpoint_id.trim().to_string(),
+                model: model.trim().to_string(),
+            },
+        );
+    }
+
+    fn video_session_endpoint(&self, path: &str) -> Option<Option<String>> {
+        let video_id = video_id_from_path(path)?;
+        let now = now_unix();
+        let mut sessions = self.inner.video_sessions.lock().unwrap();
+        sessions.retain(|_, entry| entry.expires_at > now);
+        Some(
+            sessions
+                .get(video_id)
+                .map(|entry| entry.endpoint_id.clone()),
+        )
+    }
+
+    fn video_session_model(&self, path: &str) -> Option<Option<String>> {
+        let video_id = video_id_from_path(path)?;
+        let now = now_unix();
+        let mut sessions = self.inner.video_sessions.lock().unwrap();
+        sessions.retain(|_, entry| entry.expires_at > now);
+        Some(sessions.get(video_id).map(|entry| entry.model.clone()))
     }
 
     pub fn runtime_snapshot(&self) -> RuntimeSnapshot {
@@ -637,6 +976,8 @@ impl Engine {
         })
     }
 
+    // 事件查询的过滤维度直接透传给 runtime,合并成 struct 只会多一层转换。
+    #[allow(clippy::too_many_arguments)]
     pub fn runtime_events(
         &self,
         before_seq: Option<i64>,
@@ -783,6 +1124,29 @@ impl Engine {
                 .unwrap_or_else(|| "runtime.sqlite3 不可用，无法更新保留策略".into())
         })?;
         let mutation = store.set_retention(update)?;
+        serde_json::to_value(mutation).map_err(|error| error.to_string())
+    }
+
+    pub fn runtime_cleanup_preview(&self, older_than: f64) -> Result<Value, String> {
+        let _runtime_write = self.inner.runtime_write.lock().unwrap();
+        let store = self.inner.runtime_store.as_ref().ok_or_else(|| {
+            self.last_error()
+                .unwrap_or_else(|| "runtime.sqlite3 不可用，无法预览清理范围".into())
+        })?;
+        let preview: RuntimeCleanupPreview = store.cleanup_before_preview(older_than)?;
+        serde_json::to_value(preview).map_err(|error| error.to_string())
+    }
+
+    pub fn runtime_cleanup(&self, older_than: f64) -> Result<Value, String> {
+        let _runtime_write = self.inner.runtime_write.lock().unwrap();
+        let store = self.inner.runtime_store.as_ref().ok_or_else(|| {
+            self.last_error()
+                .unwrap_or_else(|| "runtime.sqlite3 不可用，无法清理统计".into())
+        })?;
+        let mutation: RuntimeCleanupMutation = store.cleanup_before(older_than)?;
+        let runtime = store.snapshot()?;
+        self.inner.state.lock().unwrap().runtime = runtime;
+        let _ = self.inner.notices.send(EngineNotice::StatsReset);
         serde_json::to_value(mutation).map_err(|error| error.to_string())
     }
 
@@ -2074,6 +2438,439 @@ impl Engine {
             .await
     }
 
+    /// Authenticate a WebSocket upgrade before accepting it.  The normal HTTP
+    /// path performs the same CIDR/token checks in `handle_request_parts`; a
+    /// dedicated helper keeps rejected upgrades at HTTP 401/403 instead of
+    /// returning a misleading 101 and only failing after the first frame.
+    pub fn authorize_websocket(
+        &self,
+        remote: Option<IpAddr>,
+        headers: &[(String, String)],
+    ) -> bool {
+        self.authorize_websocket_with_ephemeral(remote, headers, false)
+    }
+
+    /// Realtime accepts the short-lived `ek_…` key returned by
+    /// `/v1/realtime/client_secrets` in addition to the listener token.
+    pub fn authorize_realtime_websocket(
+        &self,
+        remote: Option<IpAddr>,
+        headers: &[(String, String)],
+    ) -> bool {
+        self.authorize_websocket_with_ephemeral(remote, headers, true)
+    }
+
+    fn authorize_websocket_with_ephemeral(
+        &self,
+        remote: Option<IpAddr>,
+        headers: &[(String, String)],
+        allow_ephemeral: bool,
+    ) -> bool {
+        let config = self.config();
+        access::is_allowed(
+            remote.map(|ip| ip.to_string()).as_deref(),
+            &config.listener.allowed_cidrs,
+        ) && (!config.listener.has_inbound_auth()
+            || inbound_auth_ok(headers, &config.listener.auth_token)
+            || (allow_ephemeral && self.realtime_client_secret_authorized(headers)))
+    }
+
+    /// Dial a standard Realtime/Live upstream before the adapter sends the
+    /// downstream 101 response.  Responses WebSocket connections without a
+    /// query model still use the deferred path because their model is carried
+    /// by the first post-upgrade `response.create` frame.
+    pub async fn prepare_realtime_websocket(
+        &self,
+        path_and_query: &str,
+        headers: &[(String, String)],
+    ) -> Result<PreparedWebSocket, WebSocketPrepareError> {
+        let path = path_without_query(path_and_query);
+        if !is_realtime_http_path(path) {
+            return Err(WebSocketPrepareError::new(
+                400,
+                "invalid_request",
+                "websocket path is not a Realtime endpoint",
+            ));
+        }
+        let sideband_model = self
+            .live_session_model(path_and_query)
+            .flatten()
+            .filter(|model| !model.trim().is_empty());
+        let query_model = path_and_query
+            .split_once('?')
+            .and_then(|(_, query)| query_value(query, "model"))
+            .filter(|model| !model.trim().is_empty())
+            .map(str::to_string);
+        let secret_model = self.realtime_client_secret_model(headers);
+        let model = realtime_voice_route_model(
+            "GET",
+            path_and_query,
+            query_model,
+            sideband_model,
+            secret_model,
+        );
+        let request = RoutingRequest::from_value(&json!({"model": model})).ok_or_else(|| {
+            WebSocketPrepareError::new(400, "invalid_request", "invalid websocket model")
+        })?;
+        let upstream = self
+            .connect_native_websocket(path, path_and_query, headers, &request)
+            .await?;
+        Ok(PreparedWebSocket { upstream })
+    }
+
+    /// Relay an already-handshaken upstream after the adapter completes the
+    /// downstream upgrade.
+    pub async fn handle_prepared_websocket(
+        &self,
+        socket: WebSocket,
+        remote: Option<IpAddr>,
+        prepared: PreparedWebSocket,
+    ) {
+        relay_native_websocket(socket, prepared.upstream, None).await;
+        let _ = remote;
+    }
+
+    /// Compatibility wrapper for callers that name the Responses route. The
+    /// data plane still uses the same protocol-agnostic WebSocket relay.
+    pub async fn handle_responses_websocket(
+        &self,
+        socket: WebSocket,
+        remote: Option<IpAddr>,
+        path_and_query: String,
+        headers: Vec<(String, String)>,
+    ) {
+        self.handle_native_websocket(socket, remote, path_and_query, headers)
+            .await;
+    }
+
+    /// Compatibility wrapper for callers that name the Realtime/Live route.
+    /// Text, binary, ping/pong and close frames are forwarded unchanged.
+    pub async fn handle_realtime_websocket(
+        &self,
+        socket: WebSocket,
+        remote: Option<IpAddr>,
+        path_and_query: String,
+        headers: Vec<(String, String)>,
+    ) {
+        self.handle_native_websocket(socket, remote, path_and_query, headers)
+            .await;
+    }
+
+    /// Relay any upgraded data-plane connection. Provider selection uses only
+    /// configured mappings; the original path/query and every WebSocket frame
+    /// are forwarded unchanged.
+    pub async fn handle_websocket(
+        &self,
+        socket: WebSocket,
+        remote: Option<IpAddr>,
+        path_and_query: String,
+        headers: Vec<(String, String)>,
+    ) {
+        self.handle_native_websocket(socket, remote, path_and_query, headers)
+            .await;
+    }
+
+    async fn handle_native_websocket(
+        &self,
+        mut socket: WebSocket,
+        remote: Option<IpAddr>,
+        path_and_query: String,
+        headers: Vec<(String, String)>,
+    ) {
+        let path = path_without_query(&path_and_query);
+        let mut initial_message = None;
+        let query_model = path_and_query
+            .split_once('?')
+            .and_then(|(_, query)| query_value(query, "model"))
+            .filter(|model| !model.trim().is_empty())
+            .map(str::to_string);
+        let sideband_model = self
+            .live_session_model(&path_and_query)
+            .flatten()
+            .filter(|model| !model.trim().is_empty());
+        let secret_model = self.realtime_client_secret_model(&headers);
+        let model = if is_realtime_http_path(path) {
+            Some(realtime_voice_route_model(
+                "GET",
+                &path_and_query,
+                query_model,
+                sideband_model,
+                secret_model,
+            ))
+        } else if query_model.is_some() {
+            query_model
+        } else if is_responses_websocket_path(path) {
+            // CPA selects a Responses WebSocket from the first
+            // `response.create` frame when the query has no model. Buffer
+            // that frame so it can still be relayed after route planning.
+            let frame_model = match socket.recv().await {
+                Some(Ok(message)) => {
+                    let model = websocket_message_model(&message);
+                    initial_message = Some(message);
+                    model
+                }
+                Some(Err(error)) => {
+                    let _ = send_websocket_json_error(
+                        &mut socket,
+                        "invalid_request",
+                        &format!("invalid websocket frame: {error}"),
+                    )
+                    .await;
+                    return;
+                }
+                None => return,
+            };
+            frame_model.or(sideband_model).or(secret_model)
+        } else {
+            None
+        };
+        let Some(model) = model else {
+            let _ = send_websocket_json_error(
+                &mut socket,
+                "invalid_request",
+                "websocket model is required (query model or first response.create frame)",
+            )
+            .await;
+            return;
+        };
+        let request = RoutingRequest::from_value(&json!({"model": model}));
+        let Some(request) = request else {
+            let _ = send_websocket_json_error(
+                &mut socket,
+                "invalid_request",
+                "invalid websocket model",
+            )
+            .await;
+            return;
+        };
+        let upstream = match self
+            .connect_native_websocket(path, &path_and_query, &headers, &request)
+            .await
+        {
+            Ok(upstream) => upstream,
+            Err(error) => {
+                let _ = send_websocket_json_error(&mut socket, error.error_code(), error.message())
+                    .await;
+                return;
+            }
+        };
+        relay_native_websocket(socket, upstream, initial_message).await;
+        let _ = remote;
+    }
+
+    async fn connect_native_websocket(
+        &self,
+        path: &str,
+        path_and_query: &str,
+        headers: &[(String, String)],
+        request: &RoutingRequest,
+    ) -> Result<NativeWebSocket, WebSocketPrepareError> {
+        if matches!(self.live_session_endpoint(path_and_query), Some(None)) {
+            return Err(WebSocketPrepareError::new(
+                if is_codex_live_sideband_target(path_and_query) {
+                    410
+                } else {
+                    404
+                },
+                if is_codex_live_sideband_target(path_and_query) {
+                    "live_session_expired"
+                } else {
+                    "realtime_call_not_found"
+                },
+                "Realtime session is unknown or expired",
+            ));
+        }
+        let mut plan = match RoutePlanner::plan_for_passthrough(
+            request,
+            &self.config(),
+            ProviderProtocol::OpenAI,
+        ) {
+            Ok(plan) => plan,
+            Err(error) => {
+                return Err(WebSocketPrepareError::new(
+                    if is_codex_live_family_path(path) {
+                        503
+                    } else {
+                        400
+                    },
+                    if is_codex_live_family_path(path) {
+                        "no_live_provider"
+                    } else {
+                        "invalid_request"
+                    },
+                    error.to_string(),
+                ));
+            }
+        };
+        // Anthropic endpoints cannot speak the OpenAI Realtime/Quicksilver
+        // wire protocol. Keep voice traffic on an exact mapping only.
+        if is_realtime_http_path(path) {
+            let codex_live =
+                is_codex_live_route_model(&request.model) || is_codex_live_family_path(path);
+            let config = self.config();
+            plan.endpoints.retain(|endpoint| {
+                endpoint.protocol != ProviderProtocol::Anthropic
+                    && has_exact_realtime_mapping(&config, &endpoint.endpoint_id, &request.model)
+                    && (!codex_live || has_exact_codex_live_mapping(&config, &endpoint.endpoint_id))
+            });
+            if plan.endpoints.is_empty() {
+                return Err(WebSocketPrepareError::new(
+                    if codex_live { 503 } else { 400 },
+                    if codex_live {
+                        "no_live_provider"
+                    } else {
+                        "no_compatible_protocol"
+                    },
+                    "no Realtime-compatible Provider",
+                ));
+            }
+        }
+        if let Some(session) = self.live_session_endpoint(path_and_query) {
+            match session {
+                Some(endpoint_id) => {
+                    plan.endpoints
+                        .retain(|endpoint| endpoint.endpoint_id == endpoint_id);
+                    if plan.endpoints.is_empty() {
+                        return Err(WebSocketPrepareError::new(
+                            if is_codex_live_sideband_target(path_and_query) {
+                                410
+                            } else {
+                                404
+                            },
+                            if is_codex_live_sideband_target(path_and_query) {
+                                "live_session_expired"
+                            } else {
+                                "realtime_call_not_found"
+                            },
+                            "Realtime session is no longer available on its originating endpoint",
+                        ));
+                    }
+                }
+                None => {
+                    return Err(WebSocketPrepareError::new(
+                        if is_codex_live_sideband_target(path_and_query) {
+                            410
+                        } else {
+                            404
+                        },
+                        if is_codex_live_sideband_target(path_and_query) {
+                            "live_session_expired"
+                        } else {
+                            "realtime_call_not_found"
+                        },
+                        "Realtime session is unknown or expired",
+                    ));
+                }
+            }
+        }
+        if let Some(expected_model) = self.realtime_client_secret_model(headers)
+            && sumpter_core::model_name::clean(&expected_model)
+                != sumpter_core::model_name::clean(&request.model)
+        {
+            return Err(WebSocketPrepareError::new(
+                403,
+                "realtime_client_secret_scope_mismatch",
+                "Realtime client secret is not valid for the requested model",
+            ));
+        }
+        if let Some(endpoint_id) = self.realtime_client_secret_endpoint(headers) {
+            plan.endpoints
+                .retain(|endpoint| endpoint.endpoint_id == endpoint_id);
+            if plan.endpoints.is_empty() {
+                return Err(WebSocketPrepareError::new(
+                    403,
+                    "realtime_client_secret_scope_mismatch",
+                    "Realtime client secret is not valid for the requested endpoint",
+                ));
+            }
+        }
+        let ephemeral = realtime_ephemeral_token(headers);
+        let session = self.realtime_client_secret_session(headers);
+        let mut last_error = None;
+        for endpoint in &plan.endpoints {
+            let Some(url) = websocket_url(&endpoint.base_url, path_and_query) else {
+                last_error = Some(WebSocketPrepareError::new(
+                    502,
+                    "upstream_error",
+                    "invalid realtime upstream URL",
+                ));
+                continue;
+            };
+            let url = if is_realtime_http_path(path) && !is_codex_live_family_path(path) {
+                request_build::rewrite_realtime_model_query(
+                    &url,
+                    &request.model,
+                    &endpoint.upstream_model,
+                )
+            } else {
+                url
+            };
+            let api_key = self
+                .config()
+                .endpoint(&endpoint.endpoint_id)
+                .map(|endpoint| endpoint.api_key.clone())
+                .unwrap_or_default();
+            let mut upstream_request = match url.into_client_request().map_err(|error| {
+                WebSocketPrepareError::new(502, "upstream_error", error.to_string())
+            }) {
+                Ok(request) => request,
+                Err(error) => {
+                    last_error = Some(error);
+                    continue;
+                }
+            };
+            for (name, value) in websocket_upstream_headers(headers) {
+                if let Ok(name) = http::header::HeaderName::from_bytes(name.as_bytes())
+                    && let Ok(value) = http::header::HeaderValue::from_str(&value)
+                {
+                    upstream_request.headers_mut().append(name, value);
+                }
+            }
+            let provider_headers = ephemeral
+                .as_deref()
+                .map(|token| vec![("authorization", format!("Bearer {token}"))])
+                .unwrap_or_else(|| request_build::provider_auth_headers(&api_key));
+            for (name, value) in provider_headers {
+                if let Ok(name) = http::header::HeaderName::from_bytes(name.as_bytes())
+                    && let Ok(value) = http::header::HeaderValue::from_str(&value)
+                {
+                    upstream_request.headers_mut().insert(name, value);
+                }
+            }
+            match tokio_tungstenite::connect_async(upstream_request).await {
+                Ok((mut upstream, _)) => {
+                    if let Some(session) = session.as_ref()
+                        && let Err(error) = send_realtime_session_update(
+                            &mut upstream,
+                            session,
+                            &endpoint.upstream_model,
+                        )
+                        .await
+                    {
+                        last_error = Some(WebSocketPrepareError::new(
+                            502,
+                            "upstream_error",
+                            format!("failed to apply Realtime session: {error}"),
+                        ));
+                        continue;
+                    }
+                    return Ok(upstream);
+                }
+                Err(error) => {
+                    let (status, message) = websocket_connect_error(&error);
+                    last_error = Some(WebSocketPrepareError::new(
+                        status,
+                        "upstream_error",
+                        message,
+                    ));
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| {
+            WebSocketPrepareError::new(502, "upstream_error", "upstream websocket unavailable")
+        }))
+    }
+
     async fn handle_request_parts(
         &self,
         remote: Option<IpAddr>,
@@ -2181,6 +2978,7 @@ impl Engine {
                     &config,
                     PassthroughKind::Completions,
                     RequestPurpose::Standard,
+                    method,
                     path_and_query,
                     headers,
                     body,
@@ -2192,6 +2990,7 @@ impl Engine {
                     &config,
                     PassthroughKind::ClaudeCountTokens,
                     RequestPurpose::TokenCount,
+                    method,
                     path_and_query,
                     headers,
                     body,
@@ -2205,6 +3004,7 @@ impl Engine {
                     &config,
                     PassthroughKind::ImagesGenerations,
                     RequestPurpose::ImageGeneration,
+                    method,
                     path_and_query,
                     headers,
                     body,
@@ -2216,6 +3016,7 @@ impl Engine {
                     &config,
                     PassthroughKind::ImagesEdits,
                     RequestPurpose::ImageEdit,
+                    method,
                     path_and_query,
                     headers,
                     body,
@@ -2227,6 +3028,33 @@ impl Engine {
                     &config,
                     PassthroughKind::AlphaSearch,
                     RequestPurpose::AlphaSearch,
+                    method,
+                    path_and_query,
+                    headers,
+                    body,
+                )
+                .await
+            }
+            // OpenAI Realtime/Live HTTP bootstrap is a native data-plane
+            // request. Keep the exact method, SDP/JSON body, and path so the
+            // configured Provider remains the protocol authority.
+            "/v1/realtime/client_secrets"
+            | "/realtime/client_secrets"
+            | "/openai/v1/realtime/client_secrets"
+            | "/v1/realtime"
+            | "/realtime"
+            | "/openai/v1/realtime"
+            | "/v1/realtime/calls"
+            | "/realtime/calls"
+            | "/openai/v1/realtime/calls"
+            | "/v1/live"
+            | "/live"
+            | "/openai/v1/live" => {
+                self.handle_native_openai_passthrough(
+                    &config,
+                    PassthroughKind::Realtime,
+                    RequestPurpose::Standard,
+                    method,
                     path_and_query,
                     headers,
                     body,
@@ -2238,6 +3066,39 @@ impl Engine {
             // 管理写操作仅存在于固定 loopback Admin listener，数据面不留旁路。
             "/__reset-stats" | "/__reload" => {
                 error_response(StatusCode::NOT_FOUND, &[("error", "not_found")])
+            }
+            // CPA exposes dynamic Realtime/Live, Files, Videos and Models
+            // paths.  Dispatch them by intent instead of maintaining a
+            // brittle allow-list for every resource-id/control suffix.
+            _ if !path.starts_with("/__") => {
+                let kind = native_passthrough_kind(path);
+                // Raw 是「转发任意上游路径」的兜底,只有请求自己带得出 model 时才
+                // 成立 —— 没有 model 就选不出入口。不带 model 的未知路径就是未知
+                // 路径:直接 404,既不做鉴权也不碰请求体,否则 /healthz、/favicon.ico
+                // 这类探测会先吃到 401/400 并计进「被拒客户端」统计,把那块面板淹掉。
+                //
+                // 只认 query 里的 model:判定必须早于读 body(bodyless 的未知路径
+                // 不能被迫分配 payload),所以 body 里的 model 不参与这道判定。
+                if kind == PassthroughKind::Raw
+                    && query
+                        .and_then(|query| query_value(query, "model"))
+                        .is_none_or(|model| model.trim().is_empty())
+                {
+                    return error_response(
+                        StatusCode::NOT_FOUND,
+                        &[("error", "not_found"), ("path", path)],
+                    );
+                }
+                self.handle_native_openai_passthrough(
+                    &config,
+                    kind,
+                    RequestPurpose::Standard,
+                    method,
+                    path_and_query,
+                    headers,
+                    body,
+                )
+                .await
             }
             _ => error_response(
                 StatusCode::NOT_FOUND,
@@ -2536,6 +3397,7 @@ impl Engine {
                     ClientDialect::Chat => SseDialect::OpenAiChat,
                     ClientDialect::Responses => SseDialect::OpenAiResponses,
                 },
+                realtime_client_secret: false,
             }),
             request_purpose,
             client_kind,
@@ -2548,11 +3410,13 @@ impl Engine {
     /// 没有可安全复用的跨方言桥。它们始终保留原生请求/响应，只借用公共的模型池、
     /// 粘性、鉴权、首响应前 failover 与事件管线。multipart 图片编辑只读取短文本
     /// 路由字段，上传内容从不重建。
+    #[allow(clippy::too_many_arguments)]
     async fn handle_native_openai_passthrough(
         &self,
         config: &AppConfig,
         kind: PassthroughKind,
         purpose: RequestPurpose,
+        method: &str,
         path_and_query: &str,
         headers: Vec<(String, String)>,
         body: Body,
@@ -2563,8 +3427,12 @@ impl Engine {
         );
         let source_format = source_format_for_passthrough(kind);
         let header_codex_metadata = CodexMetadata::from_request(&headers, None);
+        let realtime_ephemeral_auth = kind == PassthroughKind::Realtime
+            && !is_realtime_client_secret_path(path_and_query)
+            && self.realtime_client_secret_authorized(&headers);
         if config.listener.has_inbound_auth()
             && !inbound_auth_ok(&headers, &config.listener.auth_token)
+            && !realtime_ephemeral_auth
         {
             self.record_rejected_client_with_metadata(
                 401,
@@ -2581,7 +3449,7 @@ impl Engine {
                 &[("error", "inbound_auth_required")],
             );
         }
-        let body = match axum::body::to_bytes(body, MAX_BODY_BYTES).await {
+        let mut body = match axum::body::to_bytes(body, MAX_BODY_BYTES).await {
             Ok(body) => body,
             Err(error) => {
                 let message = error.to_string();
@@ -2601,14 +3469,203 @@ impl Engine {
                 );
             }
         };
-        let content_type = header_value(&headers, "content-type")
-            .unwrap_or("application/json")
-            .to_string();
-        let metadata_body = content_type_is_json(&content_type)
+        let mut content_type = header_value(&headers, "content-type").map(str::to_string);
+        let resource_intent = is_resource_passthrough_kind(kind);
+        // Known JSON endpoints historically accepted an omitted media type;
+        // preserve that compatibility while keeping Raw and empty resource
+        // requests genuinely opaque (not guessed as JSON).
+        if content_type.is_none()
+            && !body.is_empty()
+            && !matches!(kind, PassthroughKind::Raw)
+            && !resource_intent
+        {
+            content_type = Some("application/json".into());
+        }
+        // CPA uses the same Live handler for POST /v1/live and POST /v1/realtime.
+        // Codex Desktop may also send the current chat model on those paths;
+        // wrap the SDP/multipart bootstrap so routing cannot inherit it.
+        if kind == PassthroughKind::Realtime
+            && method.eq_ignore_ascii_case("POST")
+            && should_normalize_codex_live_http(path_without_query(path_and_query))
+        {
+            let (normalized_body, normalized_content_type) =
+                match prepare_codex_live_request(&body, content_type.as_deref().unwrap_or("")) {
+                    Ok(request) => request,
+                    Err(reason) => {
+                        self.record_rejected_client_with_metadata(
+                            400,
+                            reason,
+                            None,
+                            Some(purpose),
+                            client_kind,
+                            header_codex_metadata.clone(),
+                            ClientDeclaredMetadata::from_headers(&headers),
+                            Some(source_format),
+                        );
+                        return error_response(
+                            StatusCode::BAD_REQUEST,
+                            &[("error", "invalid_request"), ("message", reason)],
+                        );
+                    }
+                };
+            body = normalized_body;
+            content_type = Some(normalized_content_type);
+        }
+        if kind == PassthroughKind::Realtime
+            && is_realtime_call_bootstrap_path(path_without_query(path_and_query))
+            && let Some(session) = self.realtime_client_secret_session(&headers)
+        {
+            let (normalized_body, normalized_content_type) =
+                match apply_realtime_client_secret_session(
+                    &body,
+                    content_type.as_deref().unwrap_or(""),
+                    &session,
+                ) {
+                    Ok(value) => value,
+                    Err(reason) => {
+                        self.record_rejected_client_with_metadata(
+                            400,
+                            reason,
+                            None,
+                            Some(purpose),
+                            client_kind,
+                            header_codex_metadata.clone(),
+                            ClientDeclaredMetadata::from_headers(&headers),
+                            Some(source_format),
+                        );
+                        return error_response(
+                            StatusCode::BAD_REQUEST,
+                            &[("error", "invalid_request"), ("message", reason)],
+                        );
+                    }
+                };
+            body = normalized_body;
+            content_type = Some(normalized_content_type);
+        }
+        let metadata_body = content_type
+            .as_deref()
+            .is_some_and(content_type_is_json)
             .then(|| serde_json::from_slice::<Value>(&body).ok())
             .flatten();
         let codex_metadata = CodexMetadata::from_request(&headers, metadata_body.as_ref());
-        let fields = if content_type_is_json(&content_type) {
+        let fields = if resource_intent {
+            NativePassthroughFields {
+                model: sumpter_core::routing::RESOURCE_ROUTING_MODEL.into(),
+                stream: false,
+            }
+        } else if kind == PassthroughKind::Raw {
+            let body_model = content_type
+                .as_deref()
+                .filter(|content_type| content_type_is_json(content_type))
+                .and_then(|_| serde_json::from_slice::<Value>(&body).ok())
+                .and_then(|value| {
+                    value
+                        .get("model")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|model| !model.is_empty())
+                        .map(str::to_string)
+                });
+            let model = path_and_query
+                .split_once('?')
+                .and_then(|(_, query)| query_value(query, "model"))
+                .map(str::trim)
+                .filter(|model| !model.is_empty())
+                .map(str::to_string)
+                .or(body_model);
+            let Some(model) = model else {
+                let reason = "model is required for raw passthrough";
+                self.record_rejected_client_with_metadata(
+                    400,
+                    reason,
+                    None,
+                    Some(purpose),
+                    client_kind,
+                    codex_metadata.clone(),
+                    ClientDeclaredMetadata::from_headers(&headers),
+                    Some(source_format),
+                );
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    &[("error", "invalid_request"), ("message", reason)],
+                );
+            };
+            NativePassthroughFields {
+                model,
+                stream: false,
+            }
+        } else if kind == PassthroughKind::Realtime {
+            // CPA Live/Realtime bootstrap always uses Codex OAuth and maps
+            // empty/`gpt-realtime*` names to `gpt-live-1-codex`. Sumpter
+            // selects providers by mapping, so voice bootstrap must not inherit
+            // the surrounding chat model (the original fable-5 failure).
+            let query_model = path_and_query
+                .split_once('?')
+                .and_then(|(_, query)| query_value(query, "model"))
+                .map(str::trim)
+                .filter(|model| !model.is_empty())
+                .map(str::to_string);
+            let model = realtime_voice_route_model(
+                method,
+                path_and_query,
+                query_model.or_else(|| realtime_body_model(&body, content_type.as_deref())),
+                self.live_session_model(path_and_query).flatten(),
+                self.realtime_client_secret_model(&headers),
+            );
+            NativePassthroughFields {
+                model,
+                stream: false,
+            }
+        } else if kind == PassthroughKind::Videos {
+            let path = path_without_query(path_and_query);
+            let requested = path_and_query
+                .split_once('?')
+                .and_then(|(_, query)| query_value(query, "model"))
+                .map(str::trim)
+                .filter(|model| !model.is_empty())
+                .map(str::to_string)
+                .or_else(|| realtime_body_model(&body, content_type.as_deref()));
+            let model = if is_videos_lookup_path(path) {
+                self.video_session_model(path)
+                    .flatten()
+                    .filter(|model| !model.trim().is_empty())
+                    .or(requested)
+                    .or_else(|| {
+                        RoutePlanner::default_model_for_capability(
+                            config,
+                            sumpter_core::capability::ModelCapability::Video,
+                        )
+                    })
+            } else {
+                requested.or_else(|| {
+                    RoutePlanner::default_model_for_capability(
+                        config,
+                        sumpter_core::capability::ModelCapability::Video,
+                    )
+                })
+            };
+            let Some(model) = model.filter(|model| !model.trim().is_empty()) else {
+                let message = "no video-capable Provider";
+                self.record_rejected_client_with_metadata(
+                    503,
+                    message,
+                    None,
+                    Some(purpose),
+                    client_kind,
+                    codex_metadata.clone(),
+                    ClientDeclaredMetadata::from_headers(&headers),
+                    Some(source_format),
+                );
+                return error_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    &[("error", "no_video_provider"), ("message", message)],
+                );
+            };
+            NativePassthroughFields {
+                model,
+                stream: false,
+            }
+        } else if content_type.as_deref().is_some_and(content_type_is_json) {
             match native_json_fields(&body, kind) {
                 Ok(fields) => fields,
                 Err(reason) => {
@@ -2628,8 +3685,12 @@ impl Engine {
                     );
                 }
             }
-        } else if kind == PassthroughKind::ImagesEdits && content_type_is_multipart(&content_type) {
-            match native_multipart_fields(&body, &content_type) {
+        } else if kind == PassthroughKind::ImagesEdits
+            && content_type
+                .as_deref()
+                .is_some_and(content_type_is_multipart)
+        {
+            match native_multipart_fields(&body, content_type.as_deref().unwrap_or("")) {
                 Ok(fields) => fields,
                 Err(reason) => {
                     self.record_rejected_client_with_metadata(
@@ -2666,6 +3727,18 @@ impl Engine {
             );
         };
 
+        let mut fields = fields;
+        if matches!(
+            kind,
+            PassthroughKind::ImagesGenerations | PassthroughKind::ImagesEdits
+        ) && !config.matches_model(&fields.model)
+            && let Some(fallback) = RoutePlanner::default_model_for_capability(
+                config,
+                sumpter_core::capability::ModelCapability::Image,
+            )
+        {
+            fields.model = fallback;
+        }
         let routing_value = json!({
             "model": fields.model,
             "stream": fields.stream,
@@ -2678,14 +3751,14 @@ impl Engine {
             source_format,
             headers,
             body.clone(),
-            "POST",
+            method,
             path_and_query,
             Some(ClientOut {
                 dialect: None,
                 passthrough_kind: kind,
                 stream: fields.stream,
                 passthrough: Some(body),
-                content_type: Some(content_type),
+                content_type,
                 terminal_dialect: match kind {
                     PassthroughKind::ImagesGenerations | PassthroughKind::ImagesEdits => {
                         SseDialect::OpenAiImages
@@ -2694,8 +3767,14 @@ impl Engine {
                     PassthroughKind::ClaudeCountTokens => SseDialect::Anthropic,
                     PassthroughKind::Responses
                     | PassthroughKind::ResponsesCompact
-                    | PassthroughKind::AlphaSearch => SseDialect::OpenAiResponses,
+                    | PassthroughKind::AlphaSearch
+                    | PassthroughKind::Raw
+                    | PassthroughKind::Files
+                    | PassthroughKind::Videos
+                    | PassthroughKind::Realtime
+                    | PassthroughKind::Models => SseDialect::OpenAiResponses,
                 },
+                realtime_client_secret: is_realtime_client_secret_path(path_and_query),
             }),
             Some(purpose),
             client_kind,
@@ -2725,12 +3804,106 @@ impl Engine {
         // 但这是正常的 OpenAI 请求形状，不能误报为 Claude 指纹失配。
         let unmatched_no_tools =
             client_kind == ClientKind::ClaudeCode && inspector::is_unmatched_no_tools(&request);
-        let mut plan = match RoutePlanner::plan_for_source(&request, config, source_format) {
+        // dialect 入站(OpenAI chat/Responses)有两种归宿:落到同协议上游可以按字节
+        // 透传,落到 Anthropic 上游必须走翻译面。所以不能一看到 passthrough body 就
+        // 认定透传 —— `plan_for_passthrough` 不做协议 gate,会把 route_mode 恒定压成
+        // Native,翻译面永远走不到,客户端拿到的是上游原始 SSE 而不是自己协议的响应。
+        //
+        // 先按协议 gate 规划一次探真实 route_mode,只有首选入口确实是 Native 才透传。
+        // 多出来的是一次纯计算(无 IO),真正的规划在下面按同样的输入再做一次。
+        let mut client_out = client_out;
+        let passthrough_intent = client_out.as_ref().is_some_and(|client| {
+            client.passthrough.is_some()
+                && (client.dialect.is_none()
+                    || RoutePlanner::plan_for_source(&request, config, source_format)
+                        .ok()
+                        .and_then(|plan| {
+                            plan.endpoints.first().map(|endpoint| endpoint.route_mode)
+                        })
+                        == Some(RouteMode::Native))
+        });
+        // 判定为翻译面时把 passthrough body 一并清掉:下游还有多处直接看
+        // `client.passthrough`(最关键的是 `bridging`,它决定响应 content-type 与
+        // 是否启用客户端桥),留着会让那些地方继续以为这是按字节透传。
+        if !passthrough_intent && let Some(client) = &mut client_out {
+            client.passthrough = None;
+        }
+        let resource_intent = client_out
+            .as_ref()
+            .is_some_and(|client| is_resource_passthrough_kind(client.passthrough_kind));
+        if matches!(self.live_session_endpoint(path_and_query), Some(None)) {
+            let is_live = is_codex_live_sideband_target(path_and_query);
+            let message = "Realtime session is unknown or expired";
+            let status = if is_live {
+                StatusCode::GONE
+            } else {
+                StatusCode::NOT_FOUND
+            };
+            let error = if is_live {
+                "live_session_expired"
+            } else {
+                "realtime_call_not_found"
+            };
+            self.record_rejected_client_with_metadata(
+                status.as_u16().into(),
+                message,
+                Some(request.model.clone()),
+                Some(purpose),
+                client_kind,
+                codex_metadata.clone(),
+                ClientDeclaredMetadata::from_headers(&headers),
+                Some(source_format),
+            );
+            return error_response(status, &[("error", error), ("message", message)]);
+        }
+        let passthrough_kind = client_out.as_ref().map(|client| client.passthrough_kind);
+        let mut plan = match if resource_intent {
+            RoutePlanner::plan_for_resource(config, source_format)
+        } else if matches!(
+            passthrough_kind,
+            Some(PassthroughKind::ImagesGenerations | PassthroughKind::ImagesEdits)
+        ) {
+            RoutePlanner::plan_for_capability(
+                &request,
+                config,
+                source_format,
+                sumpter_core::capability::ModelCapability::Image,
+            )
+        } else if passthrough_kind == Some(PassthroughKind::Videos) {
+            RoutePlanner::plan_for_capability(
+                &request,
+                config,
+                source_format,
+                sumpter_core::capability::ModelCapability::Video,
+            )
+        } else if passthrough_intent {
+            RoutePlanner::plan_for_passthrough(&request, config, source_format)
+        } else {
+            RoutePlanner::plan_for_source(&request, config, source_format)
+        } {
             Ok(plan) => plan,
             Err(e) => {
-                // message = planner Display 原串(词表 §5.1 前缀映射)。
+                let capability_error = match &e {
+                    RoutePlanError::NoProviderForCapability { capability } => {
+                        Some(capability.as_str())
+                    }
+                    _ => None,
+                };
+                let is_live = client_out.as_ref().is_some_and(|client| {
+                    client.passthrough_kind == PassthroughKind::Realtime
+                        && is_codex_live_family_path(path_without_query(path_and_query))
+                });
+                let (status, error) = if is_live {
+                    (StatusCode::SERVICE_UNAVAILABLE, "no_live_provider")
+                } else if capability_error == Some("video") {
+                    (StatusCode::SERVICE_UNAVAILABLE, "no_video_provider")
+                } else if capability_error == Some("image") {
+                    (StatusCode::BAD_REQUEST, "no_image_provider")
+                } else {
+                    (StatusCode::BAD_REQUEST, "route_planning")
+                };
                 self.record_rejected_client_with_metadata(
-                    400,
+                    status.as_u16().into(),
                     &e.to_string(),
                     Some(request.model.clone()),
                     Some(purpose),
@@ -2739,12 +3912,218 @@ impl Engine {
                     ClientDeclaredMetadata::from_headers(&headers),
                     Some(source_format),
                 );
-                return error_response(
-                    StatusCode::BAD_REQUEST,
-                    &[("error", "route_planning"), ("message", &e.to_string())],
-                );
+                return error_response(status, &[("error", error), ("message", &e.to_string())]);
             }
         };
+        let realtime_intent = client_out.as_ref().is_some_and(|client| {
+            client.passthrough.is_some() && client.passthrough_kind == PassthroughKind::Realtime
+        });
+        if realtime_intent {
+            // A text-only Anthropic endpoint must never receive an OpenAI
+            // Realtime/Quicksilver request merely because it has a broad or
+            // stale model mapping (the original fable-5 failure mode).
+            let path = path_without_query(path_and_query);
+            let codex_live = is_codex_live_route_model(&request.model)
+                || is_codex_live_family_path(path)
+                || is_codex_live_http_bootstrap(method, path);
+            plan.endpoints.retain(|endpoint| {
+                endpoint.protocol != ProviderProtocol::Anthropic
+                    && has_exact_realtime_mapping(config, &endpoint.endpoint_id, &request.model)
+                    && (!codex_live || has_exact_codex_live_mapping(config, &endpoint.endpoint_id))
+            });
+            if plan.endpoints.is_empty() {
+                let is_live = codex_live;
+                let message = "no Realtime-compatible Provider";
+                self.record_rejected_client_with_metadata(
+                    if is_live { 503 } else { 400 },
+                    message,
+                    Some(request.model.clone()),
+                    Some(purpose),
+                    client_kind,
+                    codex_metadata.clone(),
+                    ClientDeclaredMetadata::from_headers(&headers),
+                    Some(source_format),
+                );
+                return error_response(
+                    if is_live {
+                        StatusCode::SERVICE_UNAVAILABLE
+                    } else {
+                        StatusCode::BAD_REQUEST
+                    },
+                    &[
+                        (
+                            "error",
+                            if is_live {
+                                "no_live_provider"
+                            } else {
+                                "no_compatible_protocol"
+                            },
+                        ),
+                        ("message", message),
+                    ],
+                );
+            }
+        }
+        if let Some(session) = self.live_session_endpoint(path_and_query) {
+            let is_live = is_codex_live_sideband_target(path_and_query);
+            match session {
+                Some(endpoint_id) => {
+                    plan.endpoints
+                        .retain(|endpoint| endpoint.endpoint_id == endpoint_id);
+                    if plan.endpoints.is_empty() {
+                        let message =
+                            "Realtime session is no longer available on its originating endpoint";
+                        self.record_rejected_client_with_metadata(
+                            410,
+                            message,
+                            Some(request.model.clone()),
+                            Some(purpose),
+                            client_kind,
+                            codex_metadata.clone(),
+                            ClientDeclaredMetadata::from_headers(&headers),
+                            Some(source_format),
+                        );
+                        return error_response(
+                            StatusCode::GONE,
+                            &[
+                                (
+                                    "error",
+                                    if is_live {
+                                        "live_session_expired"
+                                    } else {
+                                        "realtime_call_not_found"
+                                    },
+                                ),
+                                ("message", message),
+                            ],
+                        );
+                    }
+                }
+                None => {
+                    let message = "Realtime session is unknown or expired";
+                    let status = if is_live {
+                        StatusCode::GONE
+                    } else {
+                        StatusCode::NOT_FOUND
+                    };
+                    let error = if is_live {
+                        "live_session_expired"
+                    } else {
+                        "realtime_call_not_found"
+                    };
+                    self.record_rejected_client_with_metadata(
+                        status.as_u16().into(),
+                        message,
+                        Some(request.model.clone()),
+                        Some(purpose),
+                        client_kind,
+                        codex_metadata.clone(),
+                        ClientDeclaredMetadata::from_headers(&headers),
+                        Some(source_format),
+                    );
+                    return error_response(status, &[("error", error), ("message", message)]);
+                }
+            }
+        }
+        if passthrough_kind == Some(PassthroughKind::Videos) {
+            let video_path = path_without_query(path_and_query);
+            if is_videos_lookup_path(video_path) {
+                match self.video_session_endpoint(video_path) {
+                    Some(Some(endpoint_id)) => {
+                        plan.endpoints
+                            .retain(|endpoint| endpoint.endpoint_id == endpoint_id);
+                        if plan.endpoints.is_empty() {
+                            let message =
+                                "Video session is no longer available on its originating endpoint";
+                            self.record_rejected_client_with_metadata(
+                                410,
+                                message,
+                                Some(request.model.clone()),
+                                Some(purpose),
+                                client_kind,
+                                codex_metadata.clone(),
+                                ClientDeclaredMetadata::from_headers(&headers),
+                                Some(source_format),
+                            );
+                            return error_response(
+                                StatusCode::GONE,
+                                &[("error", "video_session_expired"), ("message", message)],
+                            );
+                        }
+                    }
+                    Some(None) => {
+                        let message = "Video session is unknown or expired";
+                        self.record_rejected_client_with_metadata(
+                            404,
+                            message,
+                            Some(request.model.clone()),
+                            Some(purpose),
+                            client_kind,
+                            codex_metadata.clone(),
+                            ClientDeclaredMetadata::from_headers(&headers),
+                            Some(source_format),
+                        );
+                        return error_response(
+                            StatusCode::NOT_FOUND,
+                            &[("error", "video_session_not_found"), ("message", message)],
+                        );
+                    }
+                    None => {}
+                }
+            }
+        }
+        if passthrough_intent
+            && is_realtime_http_path(path_without_query(path_and_query))
+            && let Some(expected_model) = self.realtime_client_secret_model(&headers)
+            && sumpter_core::model_name::clean(&expected_model)
+                != sumpter_core::model_name::clean(&request.model)
+        {
+            let message = "Realtime client secret is not valid for the requested model";
+            self.record_rejected_client_with_metadata(
+                403,
+                message,
+                Some(request.model.clone()),
+                Some(purpose),
+                client_kind,
+                codex_metadata.clone(),
+                ClientDeclaredMetadata::from_headers(&headers),
+                Some(source_format),
+            );
+            return error_response(
+                StatusCode::FORBIDDEN,
+                &[
+                    ("error", "realtime_client_secret_scope_mismatch"),
+                    ("message", message),
+                ],
+            );
+        }
+        if passthrough_intent
+            && is_realtime_http_path(path_without_query(path_and_query))
+            && let Some(endpoint_id) = self.realtime_client_secret_endpoint(&headers)
+        {
+            plan.endpoints
+                .retain(|endpoint| endpoint.endpoint_id == endpoint_id);
+            if plan.endpoints.is_empty() {
+                let message = "Realtime client secret is not valid for the requested endpoint";
+                self.record_rejected_client_with_metadata(
+                    403,
+                    message,
+                    Some(request.model.clone()),
+                    Some(purpose),
+                    client_kind,
+                    codex_metadata.clone(),
+                    ClientDeclaredMetadata::from_headers(&headers),
+                    Some(source_format),
+                );
+                return error_response(
+                    StatusCode::FORBIDDEN,
+                    &[
+                        ("error", "realtime_client_secret_scope_mismatch"),
+                        ("message", message),
+                    ],
+                );
+            }
+        }
 
         if let Some(required) = client_out
             .as_ref()
@@ -2772,9 +4151,9 @@ impl Engine {
             }
         }
 
-        // Native Adapter 不经过 Translator checker；只有规划阶段已经确定为桥接的
-        // 候选才检查请求能力。无法保真表达的 reasoning、引用、工具或内容块直接
-        // 从候选集中剔除，绝不在转换器里静默丢弃。
+        // Raw data-plane requests bypass the legacy bridge capability checker:
+        // the selected Provider owns the protocol contract and receives the
+        // original request. The branch remains for internal non-raw callers.
         if client_out
             .as_ref()
             .is_none_or(|client| client.dialect.is_some())
@@ -2809,16 +4188,9 @@ impl Engine {
             }
         }
 
-        let mut client_out = client_out;
-        if plan
-            .endpoints
-            .first()
-            .is_some_and(|endpoint| endpoint.route_mode == RouteMode::Translated)
-            && let Some(client) = &mut client_out
-            && client.dialect.is_some()
-        {
-            client.passthrough = None;
-        }
+        // 「首选是 Translated 就清 client.passthrough」的补救原本在这里,已前移到
+        // passthrough_intent:排在 plan 之后时,route_mode 已经被 plan_for_passthrough
+        // 压成 Native,条件永不成立。
 
         let claude_session_id = header_value(&headers, "x-claude-code-session-id")
             // Codex 等 OpenAI 客户端通常使用 session_id,纳入同一稳定粘性键。
@@ -2832,6 +4204,51 @@ impl Engine {
         );
         let session_key = sticky_key.session_key();
         let ordered = self.ordered_endpoints(&plan, &session_key);
+        // 出站桥无法无损表达的请求不能悄悄降级成残缺翻译:把承接不了的入口从候选里
+        // 剔除,failover 仍有机会落到能原生承接的入口;全都承接不了才回 400,并带上
+        // 具体字段名 —— 否则这类失败在客户端侧完全不可诊断(只表现为模型不听话)。
+        // native 入口按字节转发,不过出站桥,所以不参与这道校验。
+        let mut translation_error: Option<bridge::TranslationError> = None;
+        let ordered: Vec<PlannedEndpoint> = ordered
+            .into_iter()
+            .filter(|endpoint| {
+                if endpoint.route_mode != RouteMode::Translated {
+                    return true;
+                }
+                let server_retrieval =
+                    request_build::server_retrieval_enabled(endpoint, &request, purpose);
+                match bridge::check_anthropic_translation(
+                    &request,
+                    endpoint.protocol,
+                    server_retrieval,
+                ) {
+                    Ok(()) => true,
+                    Err(error) => {
+                        translation_error.get_or_insert(error);
+                        false
+                    }
+                }
+            })
+            .collect();
+        if ordered.is_empty() {
+            let message = translation_error
+                .map(|error| error.to_string())
+                .unwrap_or_else(|| "no endpoint can serve this request".into());
+            self.record_rejected_client_with_metadata(
+                400,
+                &message,
+                Some(request.model.clone()),
+                Some(purpose),
+                client_kind,
+                codex_metadata.clone(),
+                ClientDeclaredMetadata::from_headers(&headers),
+                Some(source_format),
+            );
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                &[("error", "unsupported_translation"), ("message", &message)],
+            );
+        }
         // 路由计划定型且粘性排序已完成：此时首选入口已经确定，虽然尚未真正
         // 发起网络尝试。先写入候选协议，accepted/failover 后仍由 guard 用实际
         // 胜出入口覆盖，避免长时间等待首响应时三元组一直为空。
@@ -3026,7 +4443,7 @@ impl Engine {
             );
         }
         // `ordered_endpoints` 保证调度组连续。粘性组的每一轮先完整尝试，再按
-        // sessionStickyRetries 重新执行整个组；只有该组本轮出现可重试故障才重来。
+        // sessionStickyRetries 重新执行整个组；HTTP 500 由独立次数控制，不触发整组重试。
         let sticky_endpoint_count = if sticky_enabled {
             ordered
                 .iter()
@@ -3043,37 +4460,45 @@ impl Engine {
         let forward_started = Instant::now();
         let mut last_attempt_endpoint: Option<String> = None;
         let mut round: i64 = 0;
+        let mut consecutive_500_endpoint: Option<String> = None;
+        let mut consecutive_500_retries = 0_i64;
         // chat 桥 stop_reason 回映射依据(见 bridge::OpenAiStreamBridge)。
         let declared_stop_sequences = request
             .raw
             .get("stop_sequences")
             .and_then(serde_json::Value::as_array)
             .is_some_and(|a| !a.is_empty());
+        let realtime_secret_request_session = client_out
+            .as_ref()
+            .filter(|client| client.realtime_client_secret)
+            .and_then(|client| client.passthrough.as_ref())
+            .and_then(|body| realtime_client_secret_request_session(path_and_query, body));
 
         loop {
             round += 1;
             guard.set_round(round);
             let mut round_state = RoundState {
                 retryable_failures: 0,
+                sticky_retryable_failures: 0,
                 retry_after_seconds: None,
                 last_failure: None,
             };
 
             let mut endpoint_index = 0usize;
             let mut sticky_retry_number = 0i64;
-            let mut sticky_pass_checkpoint = round_state.retryable_failures;
+            let mut sticky_pass_checkpoint = round_state.sticky_retryable_failures;
             while endpoint_index < ordered.len() {
                 // 即使组内某个候选因桥能力被跳过，也要在进入其它组前执行边界判断。
                 if sticky_endpoint_count > 0
                     && endpoint_index == sticky_endpoint_count
                     && sticky_retry_number < sticky_retry_limit
-                    && round_state.retryable_failures > sticky_pass_checkpoint
+                    && round_state.sticky_retryable_failures > sticky_pass_checkpoint
                 {
                     sticky_retry_number += 1;
                     let delay =
                         retry_backoff_delay(sticky_retry_number, round_state.retry_after_seconds);
                     tokio::time::sleep(delay).await;
-                    sticky_pass_checkpoint = round_state.retryable_failures;
+                    sticky_pass_checkpoint = round_state.sticky_retryable_failures;
                     endpoint_index = 0;
                     continue;
                 }
@@ -3107,10 +4532,19 @@ impl Engine {
                 // 【Rust 变更】空 key = 无鉴权上游(本地 LLM/内网中转):照常转发、
                 // 不发鉴权头(见 request_build)。Swift 老版是 401 missing_secret 终止;
                 // 配置疑似遗漏仍由 ConfigWarnings 提示,不再阻断请求。
-                let api_key = config
+                let configured_api_key = config
                     .endpoint(&endpoint.endpoint_id)
                     .map(|e| e.api_key.clone())
                     .unwrap_or_default();
+                // A registered `ek_…` token is a valid Realtime credential in
+                // its own right. Preserve it for native HTTP bootstrap calls
+                // instead of silently replacing it with the endpoint key;
+                // ordinary APIs always use the configured Provider key.
+                let api_key = if is_realtime_http_path(path_without_query(path_and_query)) {
+                    realtime_ephemeral_token(headers).unwrap_or(configured_api_key)
+                } else {
+                    configured_api_key
+                };
 
                 let is_failover = last_attempt_endpoint
                     .as_ref()
@@ -3140,6 +4574,9 @@ impl Engine {
 
                 let response_timeout = effective_response_timeout(retry, endpoint);
                 let concurrency = retry.pinned_ip_concurrency.max(1) as usize;
+                let capture_realtime_secret = client_out
+                    .as_ref()
+                    .is_some_and(|client| client.realtime_client_secret);
                 let passthrough = client_out.as_ref().and_then(|client| {
                     client.passthrough.as_ref().map(|body| PassthroughRequest {
                         kind: client.passthrough_kind,
@@ -3206,6 +4643,7 @@ impl Engine {
                         endpoint,
                         response,
                         guard,
+                        path_and_query,
                         attempt_started,
                         is_failover,
                         winner_ip,
@@ -3214,19 +4652,51 @@ impl Engine {
                         server_retrieval,
                         client_out,
                         client_stream,
+                        capture_realtime_secret,
+                        realtime_secret_request_session.clone(),
                     );
+                }
+                // HTTP 500 使用独立的入口内重试次数，不参与 sessionStickyRetries。
+                // 达到次数后默认继续遍历下一个入口；关闭 failoverOn500 时在当前入口终止。
+                let last_was_500 = round_state
+                    .last_failure
+                    .as_ref()
+                    .is_some_and(|failure| failure.upstream_status_code == Some(500));
+                if last_was_500 {
+                    if consecutive_500_endpoint.as_deref() != Some(endpoint.endpoint_id.as_str()) {
+                        consecutive_500_endpoint = Some(endpoint.endpoint_id.clone());
+                        consecutive_500_retries = 0;
+                    }
+                    if consecutive_500_retries < retry.max_500_retries.max(0) {
+                        consecutive_500_retries += 1;
+                        endpoint_index -= 1;
+                        let delay = retry_backoff_delay(
+                            consecutive_500_retries,
+                            round_state.retry_after_seconds,
+                        );
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                    consecutive_500_retries = 0;
+                    if !retry.failover_on_500 {
+                        // 保留当前入口的最终 500，跳过其它入口与跨轮重试。
+                        endpoint_index = ordered.len();
+                    }
+                } else {
+                    consecutive_500_endpoint = None;
+                    consecutive_500_retries = 0;
                 }
                 if sticky_endpoint_count > 0
                     && endpoint_index == sticky_endpoint_count
                     && sticky_retry_number < sticky_retry_limit
-                    && round_state.retryable_failures > sticky_pass_checkpoint
+                    && round_state.sticky_retryable_failures > sticky_pass_checkpoint
                 {
                     sticky_retry_number += 1;
                     let delay =
                         retry_backoff_delay(sticky_retry_number, round_state.retry_after_seconds);
                     // 复用跨轮退避，避免原入口故障时瞬间轰击；sleep 可随客户端取消。
                     tokio::time::sleep(delay).await;
-                    sticky_pass_checkpoint = round_state.retryable_failures;
+                    sticky_pass_checkpoint = round_state.sticky_retryable_failures;
                     endpoint_index = 0;
                 }
             }
@@ -3288,7 +4758,14 @@ impl Engine {
             };
             let request_id = guard.request_id().to_string();
             guard.complete(status.as_u16() as i64, Some(message), failure.clone());
-            return proxy_failure_response(status, error, &request_id, &failure);
+            return proxy_failure_response(
+                status,
+                error,
+                &request_id,
+                &failure,
+                retry.retry_delay_seconds,
+                retry.pass_through_retry_delay,
+            );
         }
     }
 
@@ -3484,6 +4961,7 @@ impl Engine {
                 self.complete_upstream(event);
                 if e.is_retryable_before_response() {
                     round_state.retryable_failures += 1;
+                    round_state.sticky_retryable_failures += 1;
                 }
                 round_state.last_failure = Some(failure);
                 None
@@ -3492,7 +4970,7 @@ impl Engine {
                 if let Some(ip) = candidate {
                     self.touch_ip(ip, true, now);
                 }
-                if RetryPolicy::is_retryable_status(response.status) {
+                if RetryPolicy::is_endpoint_retryable_status(response.status) {
                     let attempt_ttfb_ms = attempt_started.elapsed().as_millis() as i64;
                     let failure = FailureInfo::upstream_http(
                         response.status,
@@ -3511,7 +4989,10 @@ impl Engine {
                     failure.apply_to(&mut event);
                     event.ttfb_ms = Some(attempt_ttfb_ms);
                     self.complete_upstream(event);
-                    round_state.retryable_failures += 1;
+                    if response.status != 500 {
+                        round_state.retryable_failures += 1;
+                        round_state.sticky_retryable_failures += 1;
+                    }
                     round_state.note_retry_after(&response.headers);
                     round_state.last_failure = Some(failure);
                     return None;
@@ -3587,6 +5068,7 @@ impl Engine {
         endpoint: &PlannedEndpoint,
         response: crate::outbound::UpstreamResponse,
         mut guard: CompletionGuard,
+        path_and_query: &str,
         attempt_started: Instant,
         is_failover: bool,
         pinned_ip: Option<String>,
@@ -3595,7 +5077,22 @@ impl Engine {
         server_retrieval: bool,
         client_out: Option<ClientOut>,
         client_stream: bool,
+        capture_realtime_secret: bool,
+        realtime_secret_request_session: Option<Value>,
     ) -> Response {
+        if (is_codex_live_path(path_without_query(path_and_query))
+            || is_realtime_call_bootstrap_path(path_without_query(path_and_query)))
+            && (200..=299).contains(&response.status)
+            && let Some(call_id) = live_call_id_from_headers(&response.headers)
+        {
+            self.register_live_session(&call_id, &endpoint.endpoint_id, &endpoint.routed_model);
+        }
+        if is_videos_create_path(path_without_query(path_and_query))
+            && (200..=299).contains(&response.status)
+            && let Some(video_id) = video_id_from_headers(&response.headers)
+        {
+            self.register_video_session(&video_id, &endpoint.endpoint_id, &endpoint.routed_model);
+        }
         let passthrough = client_out
             .as_ref()
             .is_some_and(|client| client.passthrough.is_some());
@@ -3744,7 +5241,14 @@ impl Engine {
         // latter is required for non-stream tool calls and structured failed /
         // incomplete statuses; the observer only emits a terminal once the
         // complete bounded JSON object has arrived.
-        let terminal_tracker = (response.status == 200).then(|| {
+        // Raw relay must never terminate early based on a JSON field that only
+        // happens to resemble a known protocol terminal event. Known native
+        // protocol paths still need their terminal tracker for correct stream
+        // lifecycle accounting; only the explicit Raw marker disables it.
+        let raw_passthrough = client_out
+            .as_ref()
+            .is_some_and(|client| client.passthrough_kind == PassthroughKind::Raw);
+        let terminal_tracker = (!raw_passthrough && response.status == 200).then(|| {
             let dialect = client_out
                 .as_ref()
                 .map(|client| client.terminal_dialect)
@@ -3802,6 +5306,20 @@ impl Engine {
             observe_sse: client_stream,
             upstream_observe_sse: client_stream || bridging || client_json || client_streaming,
             strict_terminal,
+            realtime_secret_body: (capture_realtime_secret
+                && (200..=299).contains(&response.status))
+            .then(Vec::new),
+            realtime_secret_endpoint_id: capture_realtime_secret
+                .then(|| endpoint.endpoint_id.clone()),
+            realtime_secret_model: capture_realtime_secret.then(|| endpoint.routed_model.clone()),
+            realtime_secret_session: realtime_secret_request_session,
+            video_session_body: (is_videos_create_path(path_without_query(path_and_query))
+                && (200..=299).contains(&response.status))
+            .then(Vec::new),
+            video_session_endpoint_id: is_videos_create_path(path_without_query(path_and_query))
+                .then(|| endpoint.endpoint_id.clone()),
+            video_session_model: is_videos_create_path(path_without_query(path_and_query))
+                .then(|| endpoint.routed_model.clone()),
             idle_timeout,
             guard,
             finished: false,
@@ -3815,6 +5333,22 @@ impl Engine {
                 match next {
                     Ok(Some(chunk)) => {
                         st.guard.record_stream_chunk(chunk.len());
+                        if let Some(secret_body) = &mut st.realtime_secret_body {
+                            const MAX_SECRET_RESPONSE_BYTES: usize = 64 * 1024;
+                            let remaining =
+                                MAX_SECRET_RESPONSE_BYTES.saturating_sub(secret_body.len());
+                            if remaining > 0 {
+                                secret_body.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+                            }
+                        }
+                        if let Some(video_body) = &mut st.video_session_body {
+                            const MAX_VIDEO_RESPONSE_BYTES: usize = 64 * 1024;
+                            let remaining =
+                                MAX_VIDEO_RESPONSE_BYTES.saturating_sub(video_body.len());
+                            if remaining > 0 {
+                                video_body.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+                            }
+                        }
                         if let Some(attempt_id) = st.guard.capture_attempt_id() {
                             st.guard.engine.capture_upstream_chunk(
                                 st.guard.request_id(),
@@ -3869,6 +5403,25 @@ impl Engine {
                     }
                     Ok(None) => {
                         st.finished = true;
+                        if let Some(secret_body) = st.realtime_secret_body.take() {
+                            st.guard.engine.register_realtime_client_secret_from_body(
+                                &secret_body,
+                                st.realtime_secret_endpoint_id.as_deref(),
+                                st.realtime_secret_model.as_deref(),
+                                st.realtime_secret_session.take(),
+                            );
+                        }
+                        if let Some(video_body) = st.video_session_body.take()
+                            && let (Some(endpoint_id), Some(model)) = (
+                                st.video_session_endpoint_id.as_deref(),
+                                st.video_session_model.as_deref(),
+                            )
+                            && let Some(video_id) = video_id_from_json(&video_body)
+                        {
+                            st.guard
+                                .engine
+                                .register_video_session(&video_id, endpoint_id, model);
+                        }
                         let mut tail = st.bridge.as_mut().map(|b| b.finish()).unwrap_or_default();
                         if let Some(client) = &mut st.client_bridge {
                             let mut client_tail = client.feed(&tail);
@@ -3985,6 +5538,211 @@ impl EngineCapabilities for Engine {
     }
 }
 
+fn websocket_http_headers(headers: &[(String, String)]) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter(|(name, _)| {
+            let lower = name.to_ascii_lowercase();
+            !matches!(
+                lower.as_str(),
+                "connection"
+                    | "upgrade"
+                    | "host"
+                    | "content-length"
+                    | "sec-websocket-key"
+                    | "sec-websocket-version"
+                    | "sec-websocket-extensions"
+                    | "sec-websocket-protocol"
+            )
+        })
+        .cloned()
+        .collect()
+}
+
+/// Headers copied to a native upstream WebSocket.  Downstream listener
+/// credentials must never be forwarded, and provider auth is injected from
+/// the selected endpoint below; omitting them also prevents duplicate
+/// `Authorization` headers when the client used the same name for both hops.
+fn websocket_upstream_headers(headers: &[(String, String)]) -> Vec<(String, String)> {
+    let mut forwarded = websocket_http_headers(headers);
+    // Subprotocol is part of the WebSocket handshake contract (Realtime
+    // providers may use it for version negotiation), unlike the hop-by-hop
+    // transport headers removed above.
+    if let Some(protocol) = header_value(headers, "sec-websocket-protocol") {
+        forwarded.push(("sec-websocket-protocol".into(), protocol.to_string()));
+    }
+    forwarded
+        .into_iter()
+        .filter(|(name, _)| {
+            !name.eq_ignore_ascii_case("authorization")
+                && !name.eq_ignore_ascii_case("x-api-key")
+                && !matches!(
+                    name.to_ascii_lowercase().as_str(),
+                    "x-sumpter-project"
+                        | "x-sumpter-workspace"
+                        | "x-sumpter-git-remote"
+                        | "x-kekulv-project"
+                        | "x-kekulv-workspace"
+                        | "x-kekulv-git-remote"
+                )
+        })
+        .collect()
+}
+
+fn realtime_ephemeral_token(headers: &[(String, String)]) -> Option<String> {
+    headers.iter().rev().find_map(|(name, value)| {
+        let candidate = if name.eq_ignore_ascii_case("authorization") {
+            let value = value.trim();
+            value
+                .get(..7)
+                .filter(|prefix| prefix.eq_ignore_ascii_case("bearer "))
+                .map(|_| value[7..].trim())
+        } else if name.eq_ignore_ascii_case("x-api-key") {
+            Some(value.trim())
+        } else {
+            None
+        }?;
+        (candidate.starts_with("ek_")
+            && candidate.len() <= 512
+            && !candidate.chars().any(char::is_control))
+        .then(|| candidate.to_string())
+    })
+}
+
+async fn send_websocket_json_error(
+    socket: &mut WebSocket,
+    error_type: &str,
+    message: &str,
+) -> Result<(), axum::Error> {
+    let payload = serde_json::to_string(&json!({
+        "type": "error",
+        "error": {"type": error_type, "message": message}
+    }))
+    .unwrap_or_else(|_| "{\"type\":\"error\",\"error\":{\"type\":\"server_error\"}}".into());
+    socket.send(WebSocketMessage::Text(payload.into())).await
+}
+
+async fn relay_native_websocket(
+    socket: WebSocket,
+    upstream: NativeWebSocket,
+    initial_message: Option<WebSocketMessage>,
+) {
+    let (mut downstream_tx, mut downstream_rx) = socket.split();
+    let (mut upstream_tx, mut upstream_rx) = upstream.split();
+    if let Some(message) = initial_message
+        && upstream_tx
+            .send(websocket_message_to_tungstenite(message))
+            .await
+            .is_err()
+    {
+        let _ = downstream_tx.close().await;
+        return;
+    }
+    let downstream_to_upstream = async {
+        while let Some(Ok(message)) = downstream_rx.next().await {
+            if upstream_tx
+                .send(websocket_message_to_tungstenite(message))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+        let _ = upstream_tx.close().await;
+    };
+    let upstream_to_downstream = async {
+        while let Some(Ok(message)) = upstream_rx.next().await {
+            let converted = match message {
+                tokio_tungstenite::tungstenite::Message::Text(text) => {
+                    WebSocketMessage::Text(text.to_string().into())
+                }
+                tokio_tungstenite::tungstenite::Message::Binary(bytes) => {
+                    WebSocketMessage::Binary(bytes.to_vec().into())
+                }
+                tokio_tungstenite::tungstenite::Message::Ping(bytes) => {
+                    WebSocketMessage::Ping(bytes.to_vec().into())
+                }
+                tokio_tungstenite::tungstenite::Message::Pong(bytes) => {
+                    WebSocketMessage::Pong(bytes.to_vec().into())
+                }
+                tokio_tungstenite::tungstenite::Message::Close(frame) => {
+                    WebSocketMessage::Close(frame.map(|frame| axum::extract::ws::CloseFrame {
+                        code: frame.code.into(),
+                        reason: frame.reason.to_string().into(),
+                    }))
+                }
+                tokio_tungstenite::tungstenite::Message::Frame(_) => continue,
+            };
+            if downstream_tx.send(converted).await.is_err() {
+                break;
+            }
+        }
+        let _ = downstream_tx.close().await;
+    };
+    tokio::select! {
+        _ = downstream_to_upstream => {},
+        _ = upstream_to_downstream => {},
+    }
+}
+
+async fn send_realtime_session_update(
+    upstream: &mut NativeWebSocket,
+    session: &Value,
+    upstream_model: &str,
+) -> Result<(), tokio_tungstenite::tungstenite::Error> {
+    let Some(mut session) = session.as_object().cloned() else {
+        return Ok(());
+    };
+    for field in ["id", "object", "expires_at", "client_secret"] {
+        session.remove(field);
+    }
+    if !upstream_model.trim().is_empty() {
+        session.insert(
+            "model".into(),
+            Value::String(upstream_model.trim().to_string()),
+        );
+    }
+    let payload = serde_json::to_string(&json!({
+        "type": "session.update",
+        "session": session,
+    }))
+    .map_err(|error| {
+        tokio_tungstenite::tungstenite::Error::Io(std::io::Error::other(error.to_string()))
+    })?;
+    upstream
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            payload.into(),
+        ))
+        .await
+}
+
+fn websocket_connect_error(error: &tokio_tungstenite::tungstenite::Error) -> (u16, String) {
+    match error {
+        tokio_tungstenite::tungstenite::Error::Http(response) => (
+            response.status().as_u16(),
+            "upstream websocket handshake rejected".into(),
+        ),
+        _ => (502, "upstream websocket unavailable".into()),
+    }
+}
+
+fn websocket_url(base_url: &str, path_and_query: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(base_url).ok()?;
+    let scheme = match parsed.scheme() {
+        "http" => "ws",
+        "https" => "wss",
+        "ws" | "wss" => parsed.scheme(),
+        _ => return None,
+    };
+    let host = parsed.host_str()?;
+    let port = parsed
+        .port()
+        .map(|port| format!(":{port}"))
+        .unwrap_or_default();
+    let path = request_build::openai_resource_path(parsed.path(), path_and_query);
+    Some(format!("{scheme}://{host}{port}{path}"))
+}
+
 struct RelayState {
     upstream: BoxStream<'static, Result<Bytes, TransportError>>,
     bridge: Option<Box<dyn SseBridge>>,
@@ -3999,6 +5757,15 @@ struct RelayState {
     /// 严格协议边界：流式响应必须有 SSE 终止事件，严格非流式对话 JSON
     /// 必须有可识别的终态；EOF 只能作为其他旧路径的兼容兜底。
     strict_terminal: bool,
+    /// Bounded response capture used only for Realtime client-secret
+    /// registration; ordinary resource payloads remain byte-for-byte streamed.
+    realtime_secret_body: Option<Vec<u8>>,
+    realtime_secret_endpoint_id: Option<String>,
+    realtime_secret_model: Option<String>,
+    realtime_secret_session: Option<Value>,
+    video_session_body: Option<Vec<u8>>,
+    video_session_endpoint_id: Option<String>,
+    video_session_model: Option<String>,
     idle_timeout: Option<Duration>,
     guard: CompletionGuard,
     finished: bool,
@@ -4041,39 +5808,56 @@ fn effective_response_timeout(retry: &RetryPolicy, endpoint: &PlannedEndpoint) -
 /// 入站 OpenAI 兼容层的客户端出口形态。
 #[derive(Clone)]
 struct ClientOut {
-    /// Only Chat/Responses requests can enter the Anthropic bridge. Native image
-    /// and Alpha Search passthroughs intentionally have no bridge dialect.
+    /// Legacy bridge dialect marker. The public data plane always uses Raw,
+    /// leaving protocol interpretation to the upstream Provider.
     dialect: Option<ClientDialect>,
     passthrough_kind: PassthroughKind,
     stream: bool,
-    /// Some = 出站原样打上游对应端点；None = Chat/Responses 走双向桥。
+    /// Some = 出站原样打上游；None = legacy internal bridge path.
     passthrough: Option<Bytes>,
     content_type: Option<String>,
     terminal_dialect: SseDialect,
+    /// Capture only bounded JSON responses of Realtime secret/session routes
+    /// so returned `ek_…` credentials can authorize following calls/upgrades.
+    realtime_client_secret: bool,
 }
 
+/// Legacy internal callers can request a native protocol. Raw data-plane
+/// requests do not use this filter and are always relayed to the selected
+/// Provider, regardless of its protocol label.
 fn source_format_for_passthrough(kind: PassthroughKind) -> ProviderProtocol {
     match kind {
         PassthroughKind::ClaudeCountTokens => ProviderProtocol::Anthropic,
-        PassthroughKind::Chat
-        | PassthroughKind::Completions
-        | PassthroughKind::ImagesGenerations
-        | PassthroughKind::ImagesEdits => ProviderProtocol::OpenAI,
         PassthroughKind::Responses
         | PassthroughKind::ResponsesCompact
         | PassthroughKind::AlphaSearch => ProviderProtocol::OpenAIResponses,
+        PassthroughKind::Chat
+        | PassthroughKind::Completions
+        | PassthroughKind::ImagesGenerations
+        | PassthroughKind::ImagesEdits
+        | PassthroughKind::Files
+        | PassthroughKind::Videos
+        | PassthroughKind::Realtime
+        | PassthroughKind::Models
+        | PassthroughKind::Raw => ProviderProtocol::OpenAI,
     }
 }
 
-/// 特殊 API 没有 Translator；入口必须显式兼容其原生真实协议。
-/// Images 保留独立模型 Adapter，不把图片能力绑定为三种对话协议之一。
 fn required_native_protocol(kind: PassthroughKind) -> Option<ProviderProtocol> {
     match kind {
+        PassthroughKind::Raw => None,
         PassthroughKind::ClaudeCountTokens => Some(ProviderProtocol::Anthropic),
         PassthroughKind::Completions => Some(ProviderProtocol::OpenAI),
         PassthroughKind::ResponsesCompact | PassthroughKind::AlphaSearch => {
             Some(ProviderProtocol::OpenAIResponses)
         }
+        // Resource and Realtime paths are opaque native requests. Any fixed
+        // endpoint protocol may receive them; the upstream owns that
+        // endpoint contract and the proxy must not reject it by label.
+        PassthroughKind::Files
+        | PassthroughKind::Videos
+        | PassthroughKind::Realtime
+        | PassthroughKind::Models => None,
         PassthroughKind::ImagesGenerations | PassthroughKind::ImagesEdits => None,
         PassthroughKind::Chat | PassthroughKind::Responses => None,
     }
@@ -4133,6 +5917,8 @@ struct ClientMeta {
 /// 一轮 failover 遍历的聚合状态。
 struct RoundState {
     retryable_failures: u64,
+    /// 除 HTTP 500 外触发 `sessionStickyRetries` 的故障数。
+    sticky_retryable_failures: u64,
     /// 当前轮上游返回的数字 Retry-After，取最大值并与指数退避共同生效。
     retry_after_seconds: Option<f64>,
     /// 最后一次真实失败决定最终 API 反馈；不能让较早的 HTTP 502 覆盖随后发生的
@@ -4890,10 +6676,1080 @@ fn observed_session_id(headers: &[(String, String)]) -> Option<String> {
         })
 }
 
+#[cfg(test)]
+fn supports_extended_reasoning_levels(client_version: &str) -> bool {
+    let trimmed = client_version.trim().trim_start_matches('v');
+    if trimmed.is_empty() {
+        return true;
+    }
+    let parts = trimmed.split('.').collect::<Vec<_>>();
+    if !(2..=3).contains(&parts.len()) {
+        return true;
+    }
+    let Some(major) = parts[0].parse::<u64>().ok() else {
+        return true;
+    };
+    let Some(minor) = parts[1].parse::<u64>().ok() else {
+        return true;
+    };
+    let patch = parts
+        .get(2)
+        .and_then(|part| part.parse::<u64>().ok())
+        .unwrap_or(0);
+    (major, minor, patch) >= (0, 144, 0)
+}
+
+fn query_value<'a>(query: &'a str, key: &str) -> Option<&'a str> {
+    query.split('&').find_map(|pair| {
+        let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+        (name == key).then_some(value)
+    })
+}
+
+fn path_without_query(path_and_query: &str) -> &str {
+    path_and_query
+        .split_once('?')
+        .map_or(path_and_query, |(path, _)| path)
+}
+
+fn json_timestamp(value: &Value) -> Option<f64> {
+    value
+        .as_f64()
+        .or_else(|| {
+            value
+                .as_str()
+                .and_then(|raw| raw.trim().parse::<f64>().ok())
+        })
+        .filter(|timestamp| timestamp.is_finite())
+}
+
+fn is_realtime_http_path(path: &str) -> bool {
+    [
+        "/v1/realtime",
+        "/realtime",
+        "/openai/v1/realtime",
+        "/v1/live",
+        "/live",
+        "/openai/v1/live",
+    ]
+    .iter()
+    .any(|prefix| {
+        path == *prefix
+            || path
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with('/'))
+    })
+}
+
+fn is_responses_websocket_path(path: &str) -> bool {
+    [
+        "/v1/responses",
+        "/responses",
+        "/backend-api/codex/responses",
+    ]
+    .iter()
+    .any(|prefix| {
+        path == *prefix
+            || path
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with('/'))
+    })
+}
+
+fn is_path_or_child(path: &str, prefix: &str) -> bool {
+    path == prefix
+        || path
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+fn is_resource_passthrough_kind(kind: PassthroughKind) -> bool {
+    matches!(kind, PassthroughKind::Files | PassthroughKind::Models)
+}
+
+fn has_exact_codex_live_mapping(config: &AppConfig, endpoint_id: &str) -> bool {
+    let live_model = request_build::DEFAULT_CODEX_LIVE_MODEL;
+    config.endpoint(endpoint_id).is_some_and(|endpoint| {
+        endpoint.mappings.iter().any(|mapping| {
+            sumpter_core::model_name::clean(&mapping.client_pattern) == live_model
+                && (mapping.upstream_model.trim().is_empty()
+                    || sumpter_core::model_name::clean(&mapping.upstream_model) == live_model)
+                && sumpter_core::capability::mapping_has_capability(
+                    &mapping.capabilities,
+                    &mapping.client_pattern,
+                    sumpter_core::capability::ModelCapability::Live,
+                )
+        })
+    })
+}
+
+fn has_exact_realtime_mapping(config: &AppConfig, endpoint_id: &str, model: &str) -> bool {
+    let model = sumpter_core::model_name::clean(model);
+    config.endpoint(endpoint_id).is_some_and(|endpoint| {
+        endpoint
+            .mappings
+            .iter()
+            .any(|mapping| sumpter_core::model_name::clean(&mapping.client_pattern) == model)
+    })
+}
+
+/// Map the CPA-compatible dynamic HTTP surface to a native relay intent.
+/// Unknown non-control paths intentionally become Raw so vendor-specific
+/// resources do not require another engine release just to be reachable.
+fn native_passthrough_kind(path: &str) -> PassthroughKind {
+    if is_openai_resource_tree(path, "models") {
+        PassthroughKind::Models
+    } else if is_openai_resource_tree(path, "files") {
+        PassthroughKind::Files
+    } else if is_openai_resource_tree(path, "videos") {
+        PassthroughKind::Videos
+    } else if is_realtime_http_path(path) {
+        PassthroughKind::Realtime
+    } else {
+        PassthroughKind::Raw
+    }
+}
+
+fn is_openai_resource_tree(path: &str, resource: &str) -> bool {
+    [
+        format!("/v1/{resource}"),
+        format!("/{resource}"),
+        format!("/openai/v1/{resource}"),
+    ]
+    .iter()
+    .any(|prefix| is_path_or_child(path, prefix))
+}
+
+fn is_videos_create_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/v1/videos"
+            | "/videos"
+            | "/openai/v1/videos"
+            | "/v1/videos/generations"
+            | "/videos/generations"
+            | "/openai/v1/videos/generations"
+            | "/v1/videos/edits"
+            | "/videos/edits"
+            | "/openai/v1/videos/edits"
+            | "/v1/videos/extensions"
+            | "/videos/extensions"
+            | "/openai/v1/videos/extensions"
+    )
+}
+
+fn video_id_from_path(path: &str) -> Option<&str> {
+    ["/v1/videos/", "/videos/", "/openai/v1/videos/"]
+        .iter()
+        .find_map(|prefix| path.strip_prefix(prefix))
+        .map(|rest| rest.split('/').next().unwrap_or_default())
+        .filter(|id| !id.is_empty() && !matches!(*id, "generations" | "edits" | "extensions"))
+}
+
+fn is_videos_lookup_path(path: &str) -> bool {
+    video_id_from_path(path).is_some()
+}
+
+fn video_id_from_headers(headers: &[(String, String)]) -> Option<String> {
+    headers.iter().rev().find_map(|(name, value)| {
+        if !name.eq_ignore_ascii_case("location") {
+            return None;
+        }
+        let path = path_without_query(value.trim());
+        video_id_from_path(path).map(str::to_string)
+    })
+}
+
+fn video_id_from_json(body: &[u8]) -> Option<String> {
+    let value = serde_json::from_slice::<Value>(body).ok()?;
+    ["id", "request_id", "video_id"]
+        .into_iter()
+        .filter_map(|key| value.get(key).and_then(Value::as_str))
+        .map(str::trim)
+        .find(|id| !id.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            value
+                .get("data")
+                .and_then(|data| data.get("id"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(str::to_string)
+        })
+}
+
+fn websocket_message_model(message: &WebSocketMessage) -> Option<String> {
+    let WebSocketMessage::Text(text) = message else {
+        return None;
+    };
+    let value = serde_json::from_str::<Value>(text.as_str()).ok()?;
+    [
+        value.get("model"),
+        value
+            .get("session")
+            .and_then(|session| session.get("model")),
+        value
+            .get("response")
+            .and_then(|response| response.get("model")),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(Value::as_str)
+    .map(str::trim)
+    .find(|model| !model.is_empty())
+    .map(str::to_string)
+}
+
+fn websocket_message_to_tungstenite(
+    message: WebSocketMessage,
+) -> tokio_tungstenite::tungstenite::Message {
+    match message {
+        WebSocketMessage::Text(text) => {
+            tokio_tungstenite::tungstenite::Message::Text(text.as_str().to_string().into())
+        }
+        WebSocketMessage::Binary(bytes) => {
+            tokio_tungstenite::tungstenite::Message::Binary(bytes.to_vec().into())
+        }
+        WebSocketMessage::Ping(bytes) => {
+            tokio_tungstenite::tungstenite::Message::Ping(bytes.to_vec().into())
+        }
+        WebSocketMessage::Pong(bytes) => {
+            tokio_tungstenite::tungstenite::Message::Pong(bytes.to_vec().into())
+        }
+        WebSocketMessage::Close(frame) => {
+            let frame = frame.map(
+                |frame| tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                    code: frame.code.into(),
+                    reason: frame.reason.to_string().into(),
+                },
+            );
+            tokio_tungstenite::tungstenite::Message::Close(frame)
+        }
+    }
+}
+
+fn is_codex_live_path(path: &str) -> bool {
+    matches!(path, "/v1/live" | "/live" | "/openai/v1/live")
+}
+
+fn is_codex_live_root_realtime_path(path: &str) -> bool {
+    matches!(path, "/v1/realtime" | "/realtime" | "/openai/v1/realtime")
+}
+
+fn is_codex_live_http_bootstrap(method: &str, path: &str) -> bool {
+    method.eq_ignore_ascii_case("POST")
+        && (is_codex_live_path(path)
+            || is_codex_live_root_realtime_path(path)
+            || is_realtime_call_bootstrap_path(path))
+}
+
+fn should_normalize_codex_live_http(path: &str) -> bool {
+    is_codex_live_path(path) || is_codex_live_root_realtime_path(path)
+}
+
+fn is_codex_live_route_model(model: &str) -> bool {
+    sumpter_core::model_name::clean(model) == request_build::DEFAULT_CODEX_LIVE_MODEL
+}
+
+/// CPA Live/Realtime bootstrap always selects Codex OAuth and maps empty or
+/// standard Realtime names to `gpt-live-1-codex`. Sumpter selects providers by
+/// mapping, so voice paths must not inherit the surrounding chat model.
+fn realtime_voice_route_model(
+    method: &str,
+    path_and_query: &str,
+    requested: Option<String>,
+    sideband_model: Option<String>,
+    secret_model: Option<String>,
+) -> String {
+    let path = path_without_query(path_and_query);
+    if is_codex_live_sideband_target(path_and_query) {
+        return sideband_model
+            .filter(|model| !model.trim().is_empty())
+            .or(secret_model)
+            .unwrap_or_else(|| request_build::DEFAULT_CODEX_LIVE_MODEL.to_string());
+    }
+    if is_realtime_client_secret_path(path_and_query) {
+        return requested
+            .or(secret_model)
+            .filter(|model| !model.trim().is_empty())
+            .unwrap_or_else(|| request_build::DEFAULT_REALTIME_MODEL.to_string());
+    }
+    if secret_model
+        .as_deref()
+        .is_some_and(|model| !model.trim().is_empty())
+        && !is_codex_live_path(path)
+        && !is_codex_live_family_path(path)
+    {
+        return requested
+            .or(secret_model)
+            .filter(|model| !model.trim().is_empty())
+            .unwrap_or_else(|| request_build::DEFAULT_CODEX_LIVE_MODEL.to_string());
+    }
+    if is_codex_live_http_bootstrap(method, path)
+        || is_codex_live_family_path(path)
+        || is_codex_live_root_realtime_path(path)
+        || is_realtime_http_path(path)
+    {
+        return request_build::DEFAULT_CODEX_LIVE_MODEL.to_string();
+    }
+    requested
+        .or(secret_model)
+        .filter(|model| !model.trim().is_empty())
+        .unwrap_or_else(|| request_build::DEFAULT_CODEX_LIVE_MODEL.to_string())
+}
+
+fn is_codex_live_family_path(path: &str) -> bool {
+    ["/v1/live", "/live", "/openai/v1/live"]
+        .iter()
+        .any(|prefix| is_path_or_child(path, prefix))
+}
+
+fn is_realtime_call_bootstrap_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/v1/realtime/calls" | "/realtime/calls" | "/openai/v1/realtime/calls"
+    )
+}
+
+fn live_call_id_from_path(path: &str) -> Option<&str> {
+    [
+        "/v1/live/",
+        "/live/",
+        "/openai/v1/live/",
+        "/v1/realtime/calls/",
+        "/realtime/calls/",
+        "/openai/v1/realtime/calls/",
+    ]
+    .iter()
+    .find_map(|prefix| path.strip_prefix(prefix))
+    .map(|rest| rest.split('/').next().unwrap_or_default())
+    .filter(|call_id| !call_id.is_empty())
+}
+
+/// CPA also exposes a frameless quicksilver sideband at
+/// `/v1/realtime?intent=quicksilver&call_id=…`; treat it as the same session
+/// target as `/v1/live/{call_id}` while leaving ordinary Realtime connections
+/// untouched.
+fn live_call_id_from_target(path_and_query: &str) -> Option<&str> {
+    let path = path_without_query(path_and_query);
+    if let Some(call_id) = live_call_id_from_path(path) {
+        return Some(call_id);
+    }
+    if !is_realtime_http_path(path) || is_codex_live_family_path(path) {
+        return None;
+    }
+    let query = path_and_query.split_once('?').map(|(_, query)| query)?;
+    let intent = query_value(query, "intent")?;
+    if !intent.eq_ignore_ascii_case("quicksilver") {
+        return None;
+    }
+    query_value(query, "call_id").filter(|call_id| !call_id.trim().is_empty())
+}
+
+fn is_codex_live_sideband_target(path_and_query: &str) -> bool {
+    let path = path_without_query(path_and_query);
+    (is_codex_live_family_path(path) && live_call_id_from_target(path_and_query).is_some())
+        || (is_realtime_http_path(path)
+            && query_value(
+                path_and_query
+                    .split_once('?')
+                    .map_or("", |(_, query)| query),
+                "intent",
+            )
+            .is_some_and(|intent| intent.eq_ignore_ascii_case("quicksilver"))
+            && live_call_id_from_target(path_and_query).is_some())
+}
+
+fn live_call_id_from_headers(headers: &[(String, String)]) -> Option<String> {
+    headers.iter().rev().find_map(|(name, value)| {
+        if name.eq_ignore_ascii_case("x-live-call-id")
+            || name.eq_ignore_ascii_case("x-live-session")
+            || name.eq_ignore_ascii_case("x-call-id")
+        {
+            return (!value.trim().is_empty()).then(|| value.trim().to_string());
+        }
+        if !name.eq_ignore_ascii_case("location") {
+            return None;
+        }
+        let location = value.trim();
+        let target = reqwest::Url::parse(location)
+            .map(|url| {
+                let mut target = url.path().to_string();
+                if let Some(query) = url.query() {
+                    target.push('?');
+                    target.push_str(query);
+                }
+                target
+            })
+            .unwrap_or_else(|_| location.to_string());
+        live_call_id_from_target(&target)
+            .map(str::to_string)
+            .or_else(|| {
+                (!location.contains('/') && !location.contains('?')).then(|| location.to_string())
+            })
+    })
+}
+
+fn is_realtime_client_secret_path(path_and_query: &str) -> bool {
+    let path = path_without_query(path_and_query);
+    matches!(
+        path,
+        "/v1/realtime/client_secrets"
+            | "/realtime/client_secrets"
+            | "/openai/v1/realtime/client_secrets"
+            | "/v1/realtime/sessions"
+            | "/realtime/sessions"
+            | "/openai/v1/realtime/sessions"
+            | "/v1/realtime/translations/client_secrets"
+            | "/realtime/translations/client_secrets"
+            | "/openai/v1/realtime/translations/client_secrets"
+    )
+}
+
+fn is_hop_by_hop(name: &str) -> bool {
+    matches!(
+        name,
+        "connection"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+    )
+}
+
+pub fn error_response(status: StatusCode, pairs: &[(&str, &str)]) -> Response {
+    let mut map = serde_json::Map::new();
+    for (k, v) in pairs {
+        map.insert((*k).to_string(), Value::String((*v).to_string()));
+    }
+    json_response(status, &Value::Object(map))
+}
+
+fn proxy_failure_response(
+    status: StatusCode,
+    error: &str,
+    request_id: &str,
+    failure: &FailureInfo,
+    retry_delay_seconds: Option<f64>,
+    pass_through_retry_delay: bool,
+) -> Response {
+    let mut body = serde_json::Map::new();
+    body.insert("error".into(), Value::String(error.into()));
+    body.insert("requestID".into(), Value::String(request_id.into()));
+    body.insert(
+        "failureKind".into(),
+        Value::String(failure.kind.as_str().into()),
+    );
+    body.insert(
+        "failurePhase".into(),
+        Value::String(failure.phase.as_str().into()),
+    );
+    if let Some(detail) = &failure.detail {
+        body.insert("message".into(), Value::String(detail.clone()));
+    }
+    if let Some(timeout_ms) = failure.timeout_ms {
+        body.insert("timeoutMS".into(), Value::Number(timeout_ms.into()));
+    }
+    if let Some(upstream_status) = failure.upstream_status_code {
+        body.insert(
+            "upstreamStatusCode".into(),
+            Value::Number(upstream_status.into()),
+        );
+    }
+    if let Some(upstream_request_id) = &failure.upstream_request_id {
+        body.insert(
+            "upstreamRequestID".into(),
+            Value::String(upstream_request_id.clone()),
+        );
+    }
+    let retry_delay_seconds = pass_through_retry_delay
+        .then(|| {
+            matches!(
+                failure.kind,
+                RuntimeFailureKind::ResponseTimeout
+                    | RuntimeFailureKind::ConnectionFailed
+                    | RuntimeFailureKind::UpstreamHttpStatus
+            )
+            .then_some(retry_delay_seconds)
+            .flatten()
+            .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
+        })
+        .flatten();
+    if let Some(seconds) = retry_delay_seconds {
+        body.insert(
+            "retry_delay".into(),
+            serde_json::Number::from_f64(seconds)
+                .map(Value::Number)
+                .unwrap_or(Value::Null),
+        );
+    }
+    let mut response = json_response(status, &Value::Object(body));
+    if let Ok(value) = HeaderValue::from_str(request_id) {
+        response.headers_mut().insert("x-sumpter-request-id", value);
+    }
+    if let Some(seconds) = retry_delay_seconds {
+        // 标准 Retry-After 只接受整数 delay-seconds；向上取整避免客户端过早重试。
+        let delay = seconds.ceil().min(u64::MAX as f64) as u64;
+        if let Ok(value) = HeaderValue::from_str(&delay.to_string()) {
+            response.headers_mut().insert("retry-after", value);
+        }
+    }
+    response
+}
+
+pub fn json_response(status: StatusCode, body: &Value) -> Response {
+    Response::builder()
+        .status(status)
+        .header("content-type", "application/json; charset=utf-8")
+        .body(Body::from(serde_json::to_vec(body).unwrap_or_default()))
+        .unwrap_or_default()
+}
+
+pub fn json_bytes_response(status: StatusCode, body: Vec<u8>) -> Response {
+    Response::builder()
+        .status(status)
+        .header("content-type", "application/json; charset=utf-8")
+        .header("cache-control", "no-store")
+        .body(Body::from(body))
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod retry_delay_tests {
+    use super::*;
+
+    fn assert_seconds(actual: Duration, expected: f64) {
+        assert!(
+            (actual.as_secs_f64() - expected).abs() < 0.001,
+            "expected {expected}s, got {}s",
+            actual.as_secs_f64()
+        );
+    }
+
+    #[test]
+    fn retry_after_uses_largest_valid_numeric_header() {
+        let headers = vec![
+            ("Retry-After".into(), "2.5".into()),
+            ("retry-after".into(), "7".into()),
+            ("Retry-After".into(), "Wed, 21 Oct 2015 07:28:00 GMT".into()),
+            ("Retry-After".into(), "-3".into()),
+            ("Retry-After".into(), "NaN".into()),
+        ];
+        assert_eq!(retry_after_seconds(&headers), Some(7.0));
+    }
+
+    #[test]
+    fn retry_backoff_is_exponential_and_capped_with_retry_after() {
+        assert_seconds(retry_backoff_delay(1, None), 0.5);
+        assert_seconds(retry_backoff_delay(2, None), 0.85);
+        assert_seconds(retry_backoff_delay(3, None), 1.445);
+        assert_seconds(retry_backoff_delay(1, Some(7.0)), 7.0);
+        assert_seconds(retry_backoff_delay(1, Some(45.0)), 30.0);
+        assert_seconds(retry_backoff_delay(100, None), 30.0);
+        assert_seconds(retry_backoff_delay(1, Some(-1.0)), 0.5);
+        assert_seconds(retry_backoff_delay(1, Some(f64::NAN)), 0.5);
+    }
+
+    #[test]
+    fn observed_session_id_is_trimmed_bounded_and_rejects_controls() {
+        let valid = vec![(
+            "X-Claude-Code-Session-Id".into(),
+            "  claude-session  ".into(),
+        )];
+        assert_eq!(
+            observed_session_id(&valid).as_deref(),
+            Some("claude-session")
+        );
+
+        let control = vec![("session_id".into(), "bad\nsession".into())];
+        assert_eq!(observed_session_id(&control), None);
+
+        let long = vec![("session-id".into(), "会".repeat(100))];
+        let value = observed_session_id(&long).unwrap();
+        assert!(value.len() <= 256);
+        assert!(value.is_char_boundary(value.len()));
+    }
+}
+
+#[cfg(test)]
+mod protocol_tests {
+    use super::*;
+
+    #[test]
+    fn codex_live_sdp_is_wrapped_as_quicksilver_json() {
+        let (body, content_type) =
+            prepare_codex_live_request(b"v=0\r\na=setup:actpass\r\n", "application/sdp")
+                .expect("valid SDP");
+        assert_eq!(content_type, "application/json");
+        let value: Value = serde_json::from_slice(&body).expect("JSON envelope");
+        assert_eq!(value["sdp"], "v=0\r\na=setup:actpass\r\n");
+        assert_eq!(value["session"]["type"], "quicksilver");
+        assert_eq!(
+            value["session"]["model"],
+            request_build::DEFAULT_CODEX_LIVE_MODEL
+        );
+    }
+
+    #[test]
+    fn codex_live_multipart_preserves_session_fields_and_overrides_text_model() {
+        let boundary = "live-boundary";
+        let body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"sdp\"\r\n\r\nv=0\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"session\"\r\n\r\n{{\"instructions\":\"hello\",\"model\":\"claude-fable-5\"}}\r\n--{boundary}--\r\n"
+        );
+        let (body, content_type) = prepare_codex_live_request(
+            body.as_bytes(),
+            &format!("multipart/form-data; boundary={boundary}"),
+        )
+        .expect("valid multipart Live request");
+        assert_eq!(content_type, "application/json");
+        let value: Value = serde_json::from_slice(&body).expect("JSON envelope");
+        assert_eq!(value["sdp"], "v=0");
+        assert_eq!(value["session"]["instructions"], "hello");
+        assert_eq!(value["session"]["type"], "quicksilver");
+        assert_eq!(
+            value["session"]["model"],
+            request_build::DEFAULT_CODEX_LIVE_MODEL
+        );
+    }
+
+    #[test]
+    fn video_lookup_paths_extract_resource_ids() {
+        assert_eq!(
+            video_id_from_path("/v1/videos/video_123/content"),
+            Some("video_123")
+        );
+        assert_eq!(
+            video_id_from_path("/openai/v1/videos/video_abc"),
+            Some("video_abc")
+        );
+        assert_eq!(video_id_from_path("/v1/videos/generations"), None);
+        assert!(is_videos_create_path("/v1/videos"));
+        assert!(is_videos_create_path("/v1/videos/generations"));
+        assert!(!is_videos_create_path("/v1/videos/video_123"));
+        assert_eq!(
+            video_id_from_json(br#"{"id":"video_abc","object":"video"}"#).as_deref(),
+            Some("video_abc")
+        );
+    }
+
+    #[test]
+    fn public_realtime_path_is_not_treated_as_codex_live() {
+        assert!(is_codex_live_path("/v1/live"));
+        assert!(!is_codex_live_path("/v1/realtime/calls"));
+        assert!(is_codex_live_http_bootstrap("POST", "/v1/live"));
+        assert!(is_codex_live_http_bootstrap("POST", "/v1/realtime"));
+        assert!(is_codex_live_http_bootstrap("POST", "/v1/realtime/calls"));
+        assert!(!is_codex_live_http_bootstrap("GET", "/v1/realtime"));
+        assert!(!is_codex_live_http_bootstrap(
+            "POST",
+            "/v1/realtime/client_secrets"
+        ));
+        assert!(should_normalize_codex_live_http("/v1/realtime"));
+        assert!(!should_normalize_codex_live_http("/v1/realtime/calls"));
+    }
+
+    #[test]
+    fn voice_bootstrap_ignores_leaked_chat_models() {
+        assert_eq!(
+            realtime_voice_route_model(
+                "POST",
+                "/v1/realtime?model=claude-fable-5",
+                Some("claude-fable-5".into()),
+                None,
+                None,
+            ),
+            request_build::DEFAULT_CODEX_LIVE_MODEL
+        );
+        assert_eq!(
+            realtime_voice_route_model(
+                "GET",
+                "/v1/realtime?model=claude-fable-5",
+                Some("claude-fable-5".into()),
+                None,
+                None,
+            ),
+            request_build::DEFAULT_CODEX_LIVE_MODEL
+        );
+        assert_eq!(
+            realtime_voice_route_model(
+                "POST",
+                "/v1/realtime/client_secrets",
+                Some("gpt-4o".into()),
+                None,
+                None,
+            ),
+            "gpt-4o"
+        );
+        assert_eq!(
+            realtime_voice_route_model(
+                "GET",
+                "/v1/realtime?model=gpt-4o",
+                Some("gpt-4o".into()),
+                None,
+                Some("gpt-4o".into()),
+            ),
+            "gpt-4o"
+        );
+    }
+
+    #[test]
+    fn cpa_live_targets_accept_header_and_quicksilver_call_ids() {
+        assert_eq!(
+            live_call_id_from_headers(&[("X-Live-Session".into(), "call-header".into())])
+                .as_deref(),
+            Some("call-header")
+        );
+        assert_eq!(
+            live_call_id_from_target("/v1/live/call-path"),
+            Some("call-path")
+        );
+        assert_eq!(
+            live_call_id_from_target("/v1/realtime?intent=quicksilver&call_id=call-query"),
+            Some("call-query")
+        );
+        assert_eq!(
+            live_call_id_from_headers(&[(
+                "Location".into(),
+                "https://provider.invalid/v1/realtime?intent=quicksilver&call_id=call-location"
+                    .into(),
+            )])
+            .as_deref(),
+            Some("call-location")
+        );
+        assert!(is_codex_live_sideband_target(
+            "/v1/realtime?intent=quicksilver&call_id=call-query"
+        ));
+        assert!(!is_codex_live_sideband_target(
+            "/v1/realtime?call_id=ordinary-realtime"
+        ));
+    }
+
+    #[test]
+    fn realtime_body_model_reads_session_model_without_guessing_text_model() {
+        assert_eq!(
+            realtime_body_model(
+                br#"{"session":{"model":"gpt-realtime"}}"#,
+                Some("application/json")
+            )
+            .as_deref(),
+            Some("gpt-realtime")
+        );
+        assert_eq!(realtime_body_model(b"{}", Some("application/sdp")), None);
+    }
+
+    #[test]
+    fn resource_paths_preserve_inbound_aliases_and_avoid_duplicate_base_v1() {
+        assert_eq!(
+            request_build::openai_resource_path("", "/files/file_123/content?x=1"),
+            "/files/file_123/content?x=1"
+        );
+        assert_eq!(
+            request_build::openai_resource_path("/v1", "/v1/videos/video_123"),
+            "/v1/videos/video_123"
+        );
+        assert_eq!(
+            request_build::openai_resource_path("/gateway", "/openai/v1/files"),
+            "/gateway/openai/v1/files"
+        );
+        assert_eq!(
+            request_build::openai_resource_path("/gateway/v1", "/v1foo"),
+            "/gateway/v1/v1foo"
+        );
+    }
+
+    #[test]
+    fn realtime_websocket_does_not_forward_listener_or_project_headers() {
+        let forwarded = websocket_upstream_headers(&[
+            ("authorization".into(), "Bearer listener-secret".into()),
+            ("x-sumpter-project".into(), "private-workspace".into()),
+            ("x-kekulv-workspace".into(), "/Users/example/project".into()),
+            ("openai-beta".into(), "realtime=v1".into()),
+            ("sec-websocket-protocol".into(), "realtime".into()),
+        ]);
+        assert!(
+            !forwarded
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+        );
+        assert!(
+            !forwarded
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("x-sumpter-project")
+                    || name.eq_ignore_ascii_case("x-kekulv-workspace"))
+        );
+        assert!(forwarded.iter().any(
+            |(name, value)| name.eq_ignore_ascii_case("openai-beta") && value == "realtime=v1"
+        ));
+        assert!(forwarded.iter().any(|(name, value)| {
+            name.eq_ignore_ascii_case("sec-websocket-protocol") && value == "realtime"
+        }));
+    }
+
+    #[test]
+    fn realtime_websocket_url_preserves_base_path_without_duplicate_v1() {
+        assert_eq!(
+            websocket_url(
+                "https://provider.invalid/v1",
+                "/v1/realtime?model=gpt-realtime"
+            ),
+            Some("wss://provider.invalid/v1/realtime?model=gpt-realtime".into())
+        );
+        assert_eq!(
+            websocket_url("http://127.0.0.1:9000", "/realtime"),
+            Some("ws://127.0.0.1:9000/realtime".into())
+        );
+        assert_eq!(
+            websocket_url(
+                "https://provider.invalid/v1",
+                "/backend-api/codex/responses?model=gpt-4o"
+            ),
+            Some("wss://provider.invalid/v1/backend-api/codex/responses?model=gpt-4o".into())
+        );
+    }
+
+    #[test]
+    fn codex_model_reasoning_levels_follow_client_version() {
+        assert!(!supports_extended_reasoning_levels("0.143.9"));
+        assert!(supports_extended_reasoning_levels("0.144.0"));
+        assert!(supports_extended_reasoning_levels("v0.149.1"));
+        assert!(supports_extended_reasoning_levels(""));
+        assert!(supports_extended_reasoning_levels("latest"));
+        assert!(supports_extended_reasoning_levels("0"));
+    }
+}
 #[derive(Debug, PartialEq, Eq)]
 struct NativePassthroughFields {
     model: String,
     stream: bool,
+}
+
+fn realtime_body_model(body: &[u8], content_type: Option<&str>) -> Option<String> {
+    let content_type = content_type?;
+    if !content_type_is_json(content_type) {
+        return None;
+    }
+    let value = serde_json::from_slice::<Value>(body).ok()?;
+    [
+        value.get("model"),
+        value
+            .get("session")
+            .and_then(|session| session.get("model")),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(Value::as_str)
+    .map(str::trim)
+    .find(|model| !model.is_empty())
+    .map(str::to_string)
+}
+
+/// Apply the session configuration bound to an ephemeral Realtime key to a
+/// subsequent `/v1/realtime/calls` request.  This is the HTTP counterpart of
+/// CPA's `session.update` WebSocket frame and preserves SDP callers as well as
+/// JSON callers.
+fn apply_realtime_client_secret_session(
+    body: &[u8],
+    content_type: &str,
+    session: &Value,
+) -> Result<(Bytes, String), &'static str> {
+    let media_type = content_type
+        .split(';')
+        .next()
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if matches!(media_type.as_str(), "application/sdp" | "text/plain") {
+        let sdp = std::str::from_utf8(body).map_err(|_| "Realtime SDP must be UTF-8")?;
+        if sdp.trim().is_empty() {
+            return Err("Realtime call request requires an SDP offer");
+        }
+        let value = json!({"sdp": sdp, "session": session});
+        let encoded = serde_json::to_vec(&value).map_err(|_| "Realtime session encoding failed")?;
+        return Ok((Bytes::from(encoded), "application/json".into()));
+    }
+    if media_type.is_empty() || media_type == "application/json" {
+        let mut value: Value = serde_json::from_slice(body)
+            .map_err(|_| "Realtime call request body must be valid JSON")?;
+        let object = value
+            .as_object_mut()
+            .ok_or("Realtime call request body must be an object")?;
+        object.insert("session".into(), session.clone());
+        let encoded = serde_json::to_vec(&value).map_err(|_| "Realtime session encoding failed")?;
+        return Ok((Bytes::from(encoded), "application/json".into()));
+    }
+    Err("Realtime client secrets require an SDP or JSON call request")
+}
+
+fn realtime_client_secret_request_session(path_and_query: &str, body: &[u8]) -> Option<Value> {
+    let value = serde_json::from_slice::<Value>(body).ok()?;
+    let path = path_without_query(path_and_query);
+    let session = if matches!(
+        path,
+        "/v1/realtime/client_secrets"
+            | "/realtime/client_secrets"
+            | "/openai/v1/realtime/client_secrets"
+    ) {
+        value.get("session")?.as_object()?.clone()
+    } else if matches!(
+        path,
+        "/v1/realtime/sessions" | "/realtime/sessions" | "/openai/v1/realtime/sessions"
+    ) {
+        value.as_object()?.clone()
+    } else {
+        return None;
+    };
+    let mut session = session;
+    for field in ["id", "object", "expires_at", "client_secret"] {
+        session.remove(field);
+    }
+    Some(Value::Object(session))
+}
+
+/// Normalize Codex Desktop's Live/Quicksilver bootstrap to the JSON envelope
+/// used by CPA. Called for `/v1/live` and POST `/v1/realtime`; `/v1/realtime/calls`
+/// keeps the public SDP/JSON body and only the routing model is forced.
+fn prepare_codex_live_request(
+    body: &[u8],
+    content_type: &str,
+) -> Result<(Bytes, String), &'static str> {
+    let media_type = content_type
+        .split(';')
+        .next()
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match media_type.as_str() {
+        "application/sdp" | "text/plain" => {
+            let sdp = std::str::from_utf8(body).map_err(|_| "Codex Live SDP must be UTF-8")?;
+            if sdp.trim().is_empty() {
+                return Err("Codex Live request requires an SDP offer");
+            }
+            encode_codex_live_envelope(sdp, None)
+        }
+        "multipart/form-data" => prepare_codex_live_multipart(body, content_type),
+        "application/json" => {
+            let mut value: Value =
+                serde_json::from_slice(body).map_err(|_| "Codex Live JSON body is invalid")?;
+            let object = value
+                .as_object_mut()
+                .ok_or("Codex Live JSON body must be an object")?;
+            let sdp = object
+                .get("sdp")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or("Codex Live request requires an SDP offer")?
+                .to_string();
+            let mut session = match object.remove("session") {
+                Some(Value::Object(session)) => session,
+                Some(_) => return Err("Codex Live session must be an object"),
+                None => serde_json::Map::new(),
+            };
+            // The desktop voice route is Codex's quicksilver protocol even
+            // when the surrounding text session currently uses another model.
+            session.insert("type".into(), Value::String("quicksilver".into()));
+            session.insert(
+                "model".into(),
+                Value::String(request_build::DEFAULT_CODEX_LIVE_MODEL.into()),
+            );
+            // A root model is not the Live session model. Removing it avoids
+            // routing the call by a stale Claude text model from Codex headers.
+            object.remove("model");
+            object.insert("sdp".into(), Value::String(sdp));
+            object.insert("session".into(), Value::Object(session));
+            let encoded =
+                serde_json::to_vec(&value).map_err(|_| "Codex Live JSON encoding failed")?;
+            Ok((Bytes::from(encoded), "application/json".into()))
+        }
+        _ => Err("unsupported Content-Type for Codex Live request"),
+    }
+}
+
+fn prepare_codex_live_multipart(
+    body: &[u8],
+    content_type: &str,
+) -> Result<(Bytes, String), &'static str> {
+    let boundary = multipart_boundary(content_type).ok_or("multipart boundary is required")?;
+    let marker = format!("--{boundary}").into_bytes();
+    let mut cursor = 0usize;
+    let mut sdp = None;
+    let mut session = None;
+    while let Some(relative) = find_bytes(&body[cursor..], &marker) {
+        let mut part_start = cursor + relative + marker.len();
+        if body.get(part_start..part_start + 2) == Some(b"--") {
+            break;
+        }
+        if body.get(part_start..part_start + 2) == Some(b"\r\n") {
+            part_start += 2;
+        } else if body.get(part_start) == Some(&b'\n') {
+            part_start += 1;
+        }
+        let Some((header_offset, separator_len)) = multipart_header_end(&body[part_start..]) else {
+            return Err("malformed multipart headers");
+        };
+        if header_offset > 16 * 1024 {
+            return Err("multipart headers are too large");
+        }
+        let headers = &body[part_start..part_start + header_offset];
+        let content_start = part_start + header_offset + separator_len;
+        let Some(next_relative) = find_bytes(&body[content_start..], &marker) else {
+            return Err("multipart closing boundary is missing");
+        };
+        let mut content_end = content_start + next_relative;
+        while content_end > content_start && matches!(body[content_end - 1], b'\r' | b'\n') {
+            content_end -= 1;
+        }
+        if let Some(name) = multipart_field_name(headers) {
+            let field = &body[content_start..content_end];
+            match name.as_str() {
+                "sdp" => {
+                    let value = std::str::from_utf8(field)
+                        .map_err(|_| "Codex Live SDP must be UTF-8")?
+                        .trim();
+                    if value.is_empty() {
+                        return Err("Codex Live request requires an SDP offer");
+                    }
+                    sdp = Some(value.to_string());
+                }
+                "session" => {
+                    let value: Value = serde_json::from_slice(field)
+                        .map_err(|_| "Codex Live session field must contain valid JSON")?;
+                    session = Some(
+                        value
+                            .as_object()
+                            .cloned()
+                            .ok_or("Codex Live session must be an object")?,
+                    );
+                }
+                _ => {}
+            }
+        }
+        cursor = content_start + next_relative;
+    }
+    let sdp = sdp.ok_or("Codex Live multipart body requires an sdp field")?;
+    encode_codex_live_envelope(&sdp, session)
+}
+
+fn encode_codex_live_envelope(
+    sdp: &str,
+    session: Option<serde_json::Map<String, Value>>,
+) -> Result<(Bytes, String), &'static str> {
+    let mut session = session.unwrap_or_default();
+    session.insert("type".into(), Value::String("quicksilver".into()));
+    session.insert(
+        "model".into(),
+        Value::String(request_build::DEFAULT_CODEX_LIVE_MODEL.into()),
+    );
+    let value = json!({
+        "sdp": sdp,
+        "session": session,
+    });
+    let encoded = serde_json::to_vec(&value).map_err(|_| "Codex Live JSON encoding failed")?;
+    Ok((Bytes::from(encoded), "application/json".into()))
 }
 
 fn content_type_is_json(content_type: &str) -> bool {
@@ -4916,17 +7772,34 @@ fn native_json_fields(
 ) -> Result<NativePassthroughFields, &'static str> {
     let value: Value = serde_json::from_slice(body).map_err(|_| "body is not JSON")?;
     let object = value.as_object().ok_or("body is not an object")?;
-    let default_model = matches!(
-        kind,
-        PassthroughKind::ImagesGenerations | PassthroughKind::ImagesEdits
-    )
-    .then_some("gpt-image-2")
-    .unwrap_or_default();
+    let default_model = match kind {
+        PassthroughKind::ImagesGenerations | PassthroughKind::ImagesEdits => "gpt-image-2",
+        PassthroughKind::Realtime => {
+            // Live is normalized before this helper and carries its model in
+            // `session.model`; standard Realtime gets its own deterministic
+            // default rather than inheriting an arbitrary text mapping.
+            request_build::DEFAULT_REALTIME_MODEL
+        }
+        _ => "",
+    };
     let model = object
         .get("model")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
+        .or_else(|| {
+            // Realtime client-secrets requests carry the model under
+            // `session.model`; retain that shape while still using it for
+            // endpoint mapping.
+            (kind == PassthroughKind::Realtime)
+                .then(|| object.get("session"))
+                .flatten()
+                .and_then(Value::as_object)
+                .and_then(|session| session.get("model"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
         .unwrap_or(default_model)
         .to_string();
     if model.is_empty() {
@@ -5074,142 +7947,4 @@ fn valid_anthropic_messages_request(value: &Value) -> bool {
             .is_some_and(|model| !model.trim().is_empty())
             && object.get("messages").is_some_and(Value::is_array)
     })
-}
-
-fn is_hop_by_hop(name: &str) -> bool {
-    matches!(
-        name,
-        "connection"
-            | "keep-alive"
-            | "proxy-authenticate"
-            | "proxy-authorization"
-            | "te"
-            | "trailer"
-            | "transfer-encoding"
-            | "upgrade"
-    )
-}
-
-pub fn error_response(status: StatusCode, pairs: &[(&str, &str)]) -> Response {
-    let mut map = serde_json::Map::new();
-    for (k, v) in pairs {
-        map.insert((*k).to_string(), Value::String((*v).to_string()));
-    }
-    json_response(status, &Value::Object(map))
-}
-
-fn proxy_failure_response(
-    status: StatusCode,
-    error: &str,
-    request_id: &str,
-    failure: &FailureInfo,
-) -> Response {
-    let mut body = serde_json::Map::new();
-    body.insert("error".into(), Value::String(error.into()));
-    body.insert("requestID".into(), Value::String(request_id.into()));
-    body.insert(
-        "failureKind".into(),
-        Value::String(failure.kind.as_str().into()),
-    );
-    body.insert(
-        "failurePhase".into(),
-        Value::String(failure.phase.as_str().into()),
-    );
-    if let Some(detail) = &failure.detail {
-        body.insert("message".into(), Value::String(detail.clone()));
-    }
-    if let Some(timeout_ms) = failure.timeout_ms {
-        body.insert("timeoutMS".into(), Value::Number(timeout_ms.into()));
-    }
-    if let Some(upstream_status) = failure.upstream_status_code {
-        body.insert(
-            "upstreamStatusCode".into(),
-            Value::Number(upstream_status.into()),
-        );
-    }
-    if let Some(upstream_request_id) = &failure.upstream_request_id {
-        body.insert(
-            "upstreamRequestID".into(),
-            Value::String(upstream_request_id.clone()),
-        );
-    }
-    let mut response = json_response(status, &Value::Object(body));
-    if let Ok(value) = HeaderValue::from_str(request_id) {
-        response.headers_mut().insert("x-sumpter-request-id", value);
-    }
-    response
-}
-
-pub fn json_response(status: StatusCode, body: &Value) -> Response {
-    Response::builder()
-        .status(status)
-        .header("content-type", "application/json; charset=utf-8")
-        .body(Body::from(serde_json::to_vec(body).unwrap_or_default()))
-        .unwrap_or_default()
-}
-
-pub fn json_bytes_response(status: StatusCode, body: Vec<u8>) -> Response {
-    Response::builder()
-        .status(status)
-        .header("content-type", "application/json; charset=utf-8")
-        .header("cache-control", "no-store")
-        .body(Body::from(body))
-        .unwrap_or_default()
-}
-
-#[cfg(test)]
-mod retry_delay_tests {
-    use super::*;
-
-    fn assert_seconds(actual: Duration, expected: f64) {
-        assert!(
-            (actual.as_secs_f64() - expected).abs() < 0.001,
-            "expected {expected}s, got {}s",
-            actual.as_secs_f64()
-        );
-    }
-
-    #[test]
-    fn retry_after_uses_largest_valid_numeric_header() {
-        let headers = vec![
-            ("Retry-After".into(), "2.5".into()),
-            ("retry-after".into(), "7".into()),
-            ("Retry-After".into(), "Wed, 21 Oct 2015 07:28:00 GMT".into()),
-            ("Retry-After".into(), "-3".into()),
-            ("Retry-After".into(), "NaN".into()),
-        ];
-        assert_eq!(retry_after_seconds(&headers), Some(7.0));
-    }
-
-    #[test]
-    fn retry_backoff_is_exponential_and_capped_with_retry_after() {
-        assert_seconds(retry_backoff_delay(1, None), 0.5);
-        assert_seconds(retry_backoff_delay(2, None), 0.85);
-        assert_seconds(retry_backoff_delay(3, None), 1.445);
-        assert_seconds(retry_backoff_delay(1, Some(7.0)), 7.0);
-        assert_seconds(retry_backoff_delay(1, Some(45.0)), 30.0);
-        assert_seconds(retry_backoff_delay(100, None), 30.0);
-        assert_seconds(retry_backoff_delay(1, Some(-1.0)), 0.5);
-        assert_seconds(retry_backoff_delay(1, Some(f64::NAN)), 0.5);
-    }
-
-    #[test]
-    fn observed_session_id_is_trimmed_bounded_and_rejects_controls() {
-        let valid = vec![(
-            "X-Claude-Code-Session-Id".into(),
-            "  claude-session  ".into(),
-        )];
-        assert_eq!(
-            observed_session_id(&valid).as_deref(),
-            Some("claude-session")
-        );
-
-        let control = vec![("session_id".into(), "bad\nsession".into())];
-        assert_eq!(observed_session_id(&control), None);
-
-        let long = vec![("session-id".into(), "会".repeat(100))];
-        let value = observed_session_id(&long).unwrap();
-        assert!(value.len() <= 256);
-        assert!(value.is_char_boundary(value.len()));
-    }
 }

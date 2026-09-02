@@ -1,0 +1,564 @@
+# 统一发布编排：所有平台构建成功后，只由一个 publish job 对外发布。
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "已有统一版本 tag，例如 v0.3.4"
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  # push 与 workflow_dispatch 对同一个 tag 使用同一并发组，避免重复发布。
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTUP_TOOLCHAIN: 1.88.0
+
+jobs:
+  resolve:
+    name: Resolve release tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      major: ${{ steps.release.outputs.major }}
+      major_minor: ${{ steps.release.outputs.major_minor }}
+    steps:
+      - name: Resolve and validate tag input
+        id: release
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_TAG: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -Eeuo pipefail
+          tag="$PUSH_TAG"
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            tag="$INPUT_TAG"
+          fi
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            || { echo "tag 必须形如 vX.Y.Z: $tag" >&2; exit 1; }
+          version="${tag#v}"
+          IFS=. read -r major minor _patch <<< "$version"
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "major=$major"
+            echo "major_minor=${major}.${minor}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check out release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ steps.release.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify tag matches workspace version
+        env:
+          TAG_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -Eeuo pipefail
+          workspace_version="$(awk '
+            /^\[workspace\.package\]$/ { in_workspace_package = 1; next }
+            in_workspace_package && /^\[/ { exit }
+            in_workspace_package && $1 == "version" && $2 == "=" {
+              gsub(/"/, "", $3)
+              print $3
+              exit
+            }
+          ' Cargo.toml)"
+          [[ "$workspace_version" == "$TAG_VERSION" ]] \
+            || { echo "tag 版本与 workspace 不一致: $TAG_VERSION != $workspace_version" >&2; exit 1; }
+
+  linux:
+    name: Build Linux packages
+    needs: resolve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Rust 1.88 and musl targets
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt
+          rustup target add --toolchain 1.88.0 \
+            x86_64-unknown-linux-musl \
+            aarch64-unknown-linux-musl
+
+      - name: Verify source and tests before packaging
+        run: |
+          cargo fmt --all -- --check
+          cargo test --workspace --locked
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.1
+          use-cache: false
+
+      - name: Install cargo-zigbuild
+        run: |
+          cargo install cargo-zigbuild \
+            --git https://github.com/rust-cross/cargo-zigbuild.git \
+            --rev bbb57ac6a5eb90f53617a5c218fda03080599e4a \
+            --locked
+          cargo_bin_dir="${CARGO_HOME:-$HOME/.cargo}/bin"
+          "$cargo_bin_dir/cargo-zigbuild" --version
+
+      - name: Build and stage both architectures
+        run: |
+          export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+          command -v cargo-zigbuild
+          ./platforms/linux/scripts/cross-build.sh
+
+      - name: Package version changelog
+        env:
+          TAG_NAME: ${{ needs.resolve.outputs.tag }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p release
+          test -f platforms/linux/CHANGELOG.md
+          body="$(awk -v ver="$VERSION" '
+            index($0, "## [" ver "]") == 1 { inside = 1; next }
+            inside && index($0, "## [") == 1 { exit }
+            inside { print }
+          ' platforms/linux/CHANGELOG.md)"
+          if [[ -z "${body//[[:space:]]/}" ]]; then
+            echo "platforms/linux/CHANGELOG.md 缺少 ## [$VERSION] 段落,拒绝发布" >&2
+            exit 1
+          fi
+          {
+            printf '# %s\n\n' "$TAG_NAME"
+            printf '%s\n' "$body"
+          } > release/CHANGELOG.md
+          test -s release/CHANGELOG.md
+          for arch in x86_64 aarch64; do
+            package="sumpter-linux-${arch}"
+            test -d "platforms/linux/dist/${package}"
+            cp release/CHANGELOG.md "platforms/linux/dist/${package}/CHANGELOG.md"
+          done
+
+      - name: Create release archives and checksums
+        env:
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -Eeuo pipefail
+          source_date_epoch="$(git show -s --format=%ct "refs/tags/${TAG}")"
+          for arch in x86_64 aarch64; do
+            package="sumpter-linux-${arch}"
+            test -d "platforms/linux/dist/${package}"
+            tar \
+              --sort=name \
+              --mtime="@${source_date_epoch}" \
+              --owner=0 \
+              --group=0 \
+              --numeric-owner \
+              -C platforms/linux/dist \
+              -czf "release/${package}.tar.gz" \
+              "${package}"
+          done
+          (
+            cd release
+            sha256sum \
+              sumpter-linux-x86_64.tar.gz \
+              sumpter-linux-aarch64.tar.gz \
+              > SHA256SUMS
+            sha256sum --check SHA256SUMS
+          )
+
+      - name: Stage container binaries
+        run: |
+          set -Eeuo pipefail
+          mkdir -p docker-bin
+          cp platforms/linux/dist/sumpter-linux-x86_64/sumpterd docker-bin/sumpterd-amd64
+          cp platforms/linux/dist/sumpter-linux-aarch64/sumpterd docker-bin/sumpterd-arm64
+          chmod 0755 docker-bin/sumpterd-amd64 docker-bin/sumpterd-arm64
+          file docker-bin/sumpterd-amd64 docker-bin/sumpterd-arm64
+
+      - name: Upload Linux release artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sumpter-linux-${{ github.run_id }}
+          path: |
+            release/sumpter-linux-x86_64.tar.gz
+            release/sumpter-linux-aarch64.tar.gz
+            release/SHA256SUMS
+            release/CHANGELOG.md
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Upload container binaries
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sumpter-container-binaries-${{ github.run_id }}
+          path: docker-bin/
+          if-no-files-found: error
+          retention-days: 7
+
+  container:
+    name: Validate multi-architecture container build
+    needs: [resolve, linux]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+          persist-credentials: false
+
+      - name: Download container binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sumpter-container-binaries-${{ github.run_id }}
+          path: docker-bin
+
+      - name: Prepare runtime image context
+        run: |
+          set -Eeuo pipefail
+          mkdir -p platforms/linux/docker-bin
+          cp docker-bin/sumpterd-amd64 docker-bin/sumpterd-arm64 platforms/linux/docker-bin/
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        with:
+          version: v0.36.1
+          cache-binary: false
+
+      - name: Validate multi-architecture image build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: ./platforms/linux
+          file: ./platforms/linux/Dockerfile.runtime
+          platforms: linux/amd64,linux/arm64
+          outputs: type=cacheonly
+          provenance: false
+          sbom: false
+
+  macos:
+    name: Build macOS packages
+    needs: resolve
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate release secrets
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$SPARKLE_PRIVATE_KEY" ]] \
+            || { echo "缺少 GitHub Actions Secret: SPARKLE_PRIVATE_KEY" >&2; exit 1; }
+          [[ -n "$SPARKLE_PUBLIC_ED_KEY" ]] \
+            || { echo "缺少 GitHub Actions Secret: SPARKLE_PUBLIC_ED_KEY" >&2; exit 1; }
+
+      - name: Select Xcode and Rust toolchain
+        run: |
+          set -Eeuo pipefail
+          # Package.swift 要求 swift-tools-version 6.0，选择 runner 上可用的最高 Swift 6+ Xcode。
+          swift_binary() {
+            printf '%s' "$1/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift"
+          }
+          swift_version_output() {
+            DEVELOPER_DIR="$1" "$(swift_binary "$1")" --version 2>&1
+          }
+          swift_major() {
+            local reported
+            reported="$(swift_version_output "$1" \
+              | sed -n 's/.*Swift version \([0-9][0-9]*\).*/\1/p' | head -1)"
+            printf '%s' "${reported:-0}"
+          }
+          selected=""
+          selected_major=0
+          for app in /Applications/Xcode*.app; do
+            developer="$app/Contents/Developer"
+            [[ -x "$(swift_binary "$developer")" ]] || continue
+            major="$(swift_major "$developer")"
+            if (( major > selected_major )); then
+              selected="$developer"
+              selected_major="$major"
+            fi
+          done
+          if [[ -z "$selected" ]] || (( selected_major < 6 )); then
+            echo "找不到带 Swift 6+ 的 Xcode(Package.swift 要求 6.0)" >&2
+            exit 1
+          fi
+          sudo xcode-select -s "$selected"
+          echo "选中 Swift major $selected_major: $selected"
+          xcodebuild -version
+          swift --version
+          command -v rustup
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Build signed macOS packages
+        env:
+          SHORT_VERSION: ${{ needs.resolve.outputs.version }}
+          BUILD_VERSION: ${{ github.run_number }}
+          SPARKLE_FEED_URL: https://raw.githubusercontent.com/${{ github.repository }}/macos-updates/macos/appcast.xml
+          SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
+          CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+        run: |
+          set -Eeuo pipefail
+          ./platforms/macos/app/package-app.sh
+          mkdir -p release appcast-input
+          macos_dmg="sumpter-macos-${SHORT_VERSION}.dmg"
+          macos_zip="sumpter-macos-${SHORT_VERSION}.zip"
+          cp "platforms/macos/app/dist/Sumpter.dmg" "release/${macos_dmg}"
+          cp "platforms/macos/app/dist/Sumpter-${SHORT_VERSION}-macos.zip" "release/${macos_zip}"
+          cp "platforms/macos/app/dist/Sumpter-${SHORT_VERSION}-macos.zip" "appcast-input/${macos_zip}"
+
+      - name: Generate signed Sparkle appcast
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          SPARKLE_DOWNLOAD_URL_PREFIX: https://github.com/${{ github.repository }}/releases/download/${{ needs.resolve.outputs.tag }}/
+        run: |
+          set -Eeuo pipefail
+          ./platforms/macos/app/generate-appcast.sh "$GITHUB_WORKSPACE/appcast-input"
+          cp appcast-input/appcast.xml release/appcast.xml
+          (
+            cd release
+            shasum -a 256 \
+              "sumpter-macos-${VERSION}.dmg" \
+              "sumpter-macos-${VERSION}.zip" \
+              appcast.xml > macOS-SHA256SUMS
+            shasum -a 256 --check macOS-SHA256SUMS
+          )
+
+      - name: Upload macOS release artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sumpter-macos-${{ github.run_id }}
+          path: |
+            release/sumpter-macos-*.dmg
+            release/sumpter-macos-*.zip
+            release/appcast.xml
+            release/macOS-SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  publish:
+    name: Publish all release outputs
+    # 不使用 always()：默认 success() 会在任一构建 job 失败时跳过整个发布。
+    needs: [resolve, linux, container, macos]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # 构建可以并行；发布必须跨版本串行，因为它们会共享 latest、GHCR
+    # 大版本标签和 macos-updates 分支。
+    concurrency:
+      group: release-publish
+      cancel-in-progress: false
+    permissions:
+      contents: write # 创建 Release、上传资产并更新 macos-updates 分支。
+      packages: write # 发布已经通过多架构构建校验的 GHCR 镜像。
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: sumpter-*
+          path: artifacts
+          merge-multiple: false
+
+      - name: Assemble and verify release inputs
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p release macos-release docker-bin
+          cp "artifacts/sumpter-linux-${GITHUB_RUN_ID}"/* release/
+          cp "artifacts/sumpter-macos-${GITHUB_RUN_ID}"/* macos-release/
+          cp "artifacts/sumpter-container-binaries-${GITHUB_RUN_ID}"/* docker-bin/
+          for required in \
+            "release/sumpter-linux-x86_64.tar.gz" \
+            "release/sumpter-linux-aarch64.tar.gz" \
+            release/SHA256SUMS \
+            release/CHANGELOG.md \
+            "macos-release/sumpter-macos-${VERSION}.dmg" \
+            "macos-release/sumpter-macos-${VERSION}.zip" \
+            macos-release/appcast.xml \
+            macos-release/macOS-SHA256SUMS \
+            docker-bin/sumpterd-amd64 \
+            docker-bin/sumpterd-arm64; do
+            [[ -f "$required" ]] || { echo "缺少发布输入: $required" >&2; exit 1; }
+          done
+          (cd release && sha256sum --check SHA256SUMS)
+          (cd macos-release && sha256sum --check macOS-SHA256SUMS)
+
+      - name: Prepare runtime image context
+        run: |
+          set -Eeuo pipefail
+          mkdir -p platforms/linux/docker-bin
+          cp docker-bin/sumpterd-amd64 docker-bin/sumpterd-arm64 platforms/linux/docker-bin/
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        with:
+          version: v0.36.1
+          cache-binary: false
+
+      - name: Normalize GHCR image name
+        id: image
+        shell: bash
+        env:
+          GH_REPOSITORY: ${{ github.repository }}
+        run: printf 'name=ghcr.io/%s\n' "${GH_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate image metadata
+        id: metadata
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=raw,value=${{ needs.resolve.outputs.version }}
+            type=raw,value=${{ needs.resolve.outputs.major_minor }}
+            type=raw,value=${{ needs.resolve.outputs.major }}
+            type=raw,value=latest
+            type=sha,format=long
+
+      - name: Build and publish multi-architecture image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: ./platforms/linux
+          file: ./platforms/linux/Dockerfile.runtime
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          provenance: mode=min
+          sbom: true
+
+      - name: Publish GitHub Release as draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -Eeuo pipefail
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --verify-tag \
+              --draft \
+              --notes-file release/CHANGELOG.md \
+              --title "$TAG"
+          fi
+          assets=(
+            release/sumpter-linux-x86_64.tar.gz
+            release/sumpter-linux-aarch64.tar.gz
+            release/SHA256SUMS
+            "macos-release/sumpter-macos-${VERSION}.dmg"
+            "macos-release/sumpter-macos-${VERSION}.zip"
+            macos-release/appcast.xml
+            macos-release/macOS-SHA256SUMS
+          )
+          gh release upload "$TAG" "${assets[@]}" --clobber
+          expected_assets=(
+            sumpter-linux-x86_64.tar.gz
+            sumpter-linux-aarch64.tar.gz
+            SHA256SUMS
+            "sumpter-macos-${VERSION}.dmg"
+            "sumpter-macos-${VERSION}.zip"
+            appcast.xml
+            macOS-SHA256SUMS
+          )
+          actual_assets="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+          for asset in "${expected_assets[@]}"; do
+            grep -Fxq "$asset" <<< "$actual_assets" \
+              || { echo "Release 缺少资产: $asset" >&2; exit 1; }
+          done
+
+      - name: Publish Release and verify image manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+          IMAGE: ${{ steps.image.outputs.name }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -Eeuo pipefail
+          gh release edit "$TAG" \
+            --title "$TAG" \
+            --notes-file release/CHANGELOG.md \
+            --draft=false
+          docker buildx imagetools inspect "$IMAGE:$VERSION" >/dev/null
+
+      - name: Publish stable appcast branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -Eeuo pipefail
+          branch="macos-updates"
+          release_commit="$(git rev-parse "refs/tags/${TAG}^{commit}")"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}.git"
+          if ! git ls-remote --exit-code origin "refs/heads/$branch" >/dev/null 2>&1; then
+            git push origin "$release_commit:refs/heads/$branch"
+          fi
+          git fetch origin "$branch:refs/remotes/origin/$branch"
+          appcast_tmp="$(mktemp)"
+          cp macos-release/appcast.xml "$appcast_tmp"
+          git checkout --detach "origin/$branch"
+          mkdir -p macos
+          cp "$appcast_tmp" macos/appcast.xml
+          rm -f "$appcast_tmp"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add macos/appcast.xml
+          if git diff --cached --quiet; then
+            echo "appcast 未变化"
+          else
+            git commit -m "chore(macos): publish appcast $TAG"
+            git push origin HEAD:"$branch"
+          fi

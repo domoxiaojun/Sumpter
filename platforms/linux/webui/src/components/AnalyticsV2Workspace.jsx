@@ -685,8 +685,8 @@ function DimensionTable({ page, loading, onPageChange, onPageSizeChange, onSearc
       render: (row) => {
         const busy = sessionActionID === row.name;
         return <div className="runtime-v2-sample-actions">
-          <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => onSessionExport?.(row.name)} aria-label={`导出会话 ${row.name}`}>导出</button>
-          <button type="button" className="btn btn-danger btn-sm" disabled={busy} onClick={() => onSessionDelete?.(row.name)} aria-label={`删除会话 ${row.name}`}>{busy ? '处理中…' : '删除'}</button>
+          <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={(event) => { event.stopPropagation(); onSessionExport?.(row.name); }} aria-label={`导出会话 ${row.name}`}>导出</button>
+          <button type="button" className="btn btn-danger btn-sm" disabled={busy} onClick={(event) => { event.stopPropagation(); onSessionDelete?.(row.name); }} aria-label={`删除会话 ${row.name}`}>{busy ? '处理中…' : '删除'}</button>
         </div>;
       },
     });
@@ -736,6 +736,7 @@ const USAGE_DIMENSION_META = [
   ['endpoint', '入口使用情况'],
   ['project', '项目使用情况'],
   ['session', '会话使用情况'],
+  ['model', '模型使用情况'],
 ];
 
 function DimensionBlock({
@@ -758,10 +759,16 @@ function DimensionBlock({
   onRowClick,
   selectedProjectLabel,
   onClearProject,
+  selectedSessionLabel,
+  onClearSession,
   mode = 'usage',
 }) {
   const displayTitle = kind === 'session' && selectedProjectLabel
     ? `${title} · 项目：${selectedProjectLabel}`
+    : kind === 'model' && selectedSessionLabel
+      ? `${title} · 会话：${selectedSessionLabel}`
+      : kind === 'model' && selectedProjectLabel
+        ? `${title} · 项目：${selectedProjectLabel}`
     : title;
   return (
     <section className={`runtime-v2-dimension-block runtime-v2-dimension-block-${mode}`} aria-labelledby={`runtime-v2-${mode}-${kind}-heading`}>
@@ -770,6 +777,8 @@ function DimensionBlock({
         <span className="runtime-v2-dimension-heading-meta">
           {page ? `共 ${numberWithComma(page.totalCount)} 个${dimensionLabel(kind)}` : '读取中…'}
           {kind === 'session' && selectedProjectLabel && <button type="button" className="btn btn-ghost btn-sm" onClick={onClearProject}>清除项目选择</button>}
+          {kind === 'model' && selectedSessionLabel && <button type="button" className="btn btn-ghost btn-sm" onClick={onClearSession}>清除会话选择</button>}
+          {kind === 'model' && !selectedSessionLabel && selectedProjectLabel && <button type="button" className="btn btn-ghost btn-sm" onClick={onClearProject}>清除项目选择</button>}
         </span>
       </div>
       <PanelMessage error={error} onRetry={onRetry} />
@@ -856,6 +865,7 @@ function StorageManagementCard({ storage, retention, loading, error, onOpen, onR
   const pendingBytes = storage?.pendingBytes == null ? null : safeNumber(storage.pendingBytes);
   const databaseBytes = storage?.databaseBytes ?? storage?.dbBytes;
   const retainedEvents = storage?.retainedEvents ?? storage?.eventCount;
+  const maxAgeDays = retention?.maxAgeDays ?? storage?.retention?.maxAgeDays;
   const storageLimitBytes = retention?.storageLimitBytes ?? storage?.retention?.storageLimitBytes;
   // Retention is enforced against liveBytes. Older daemons may not expose it,
   // so keep the previous database-size field as a display fallback.
@@ -863,11 +873,23 @@ function StorageManagementCard({ storage, retention, loading, error, onOpen, onR
   const capacityExceeded = storageLimitBytes != null
     && effectiveBytes != null
     && effectiveBytes >= Number(storageLimitBytes);
+  const ageExceeded = maxAgeDays != null
+    && storage?.earliestTimestamp != null
+    && ((Date.now() / 1000) - 978307200 - Number(storage.earliestTimestamp)) >= Number(maxAgeDays) * 86400;
+  const automaticRetention = maxAgeDays != null || storageLimitBytes != null;
+  const retentionLabel = automaticRetention ? '自动轮换' : '仅手动清理';
+  const retentionDetail = maxAgeDays != null && storageLimitBytes != null
+    ? `按 ${maxAgeDays} 天 + 容量上限`
+    : maxAgeDays != null
+      ? `最长保存 ${maxAgeDays} 天`
+      : storageLimitBytes != null
+        ? '按容量上限'
+        : '未设置上限';
   const hasPending = (pending != null && pending > 0) || (pendingBytes != null && pendingBytes > 0);
   const presentation = error
     ? { label: '读取失败', kind: 'warning', detail: '存储状态读取失败，保留上一份数据' }
-    : capacityExceeded
-      ? { label: '需要关注', kind: 'warning', detail: '已达到存储上限，最旧的已完成数据会自动轮换' }
+    : capacityExceeded || ageExceeded
+      ? { label: '需要关注', kind: 'warning', detail: capacityExceeded && ageExceeded ? '已达到时间和容量条件，旧数据会自动轮换' : capacityExceeded ? '已达到存储上限，旧数据会自动轮换' : '已达到保存时长，旧数据会自动轮换' }
       : storageStatePresentation(storage);
   return (
     <section className="runtime-v2-storage-management" aria-labelledby="runtime-v2-storage-management-heading" data-storage-management>
@@ -877,7 +899,7 @@ function StorageManagementCard({ storage, retention, loading, error, onOpen, onR
           <h3 id="runtime-v2-storage-management-heading">运行统计存储</h3>
           <StatusBadge text={presentation.label} kind={presentation.kind} />
         </div>
-        <p>{presentation.detail} · 查看当前占用与事件保留情况；需要调整上限或执行清理时打开存储设置。</p>
+        <p>{presentation.detail} · 查看当前占用与事件保留情况；需要调整保留策略或执行清理时打开存储设置。</p>
         {storage?.legacyRetentionDetected && (
           <div className="runtime-v2-retention-warning" role="alert">
             检测到旧版本的自动清理设置。它们已不再生效，也不会自动迁移；手动清理只删除事件，需使用“重置并新建数据库”移除旧字段。
@@ -886,7 +908,7 @@ function StorageManagementCard({ storage, retention, loading, error, onOpen, onR
         <div className="runtime-v2-storage-management-metrics" aria-label="数据存储摘要">
           <span className={capacityExceeded ? 'is-warning' : ''}><strong>{effectiveBytes == null ? '—' : formatBytes(effectiveBytes)}</strong><small>有效占用</small></span>
           <span><strong>{retainedEvents == null ? '—' : numberWithComma(retainedEvents)}</strong><small>保留事件</small></span>
-          <span><strong>{storageLimitBytes == null ? '仅手动清理' : '自动轮换'}</strong><small>{storageLimitBytes == null ? '未设置上限' : '已设置上限 · 在设置中调整'}</small></span>
+          <span><strong>{retentionLabel}</strong><small>{retentionDetail} · 在设置中调整</small></span>
           {hasPending && <span className="is-warning"><strong>{pending == null ? '—' : numberWithComma(pending)}</strong><small>待写入{pendingBytes == null ? '' : ` · ${formatBytes(pendingBytes)}`}</small></span>}
         </div>
         <StorageTechnicalDetails storage={storage} />
@@ -983,8 +1005,11 @@ function OverviewPanel({
   onSessionDelete,
   sessionActionID,
   selectedProject,
+  selectedSession,
   onProjectSelect,
+  onSessionSelect,
   onClearProject,
+  onClearSession,
 }) {
   const effectiveStorage = storage
     ? {
@@ -1010,7 +1035,7 @@ function OverviewPanel({
       <div className="runtime-v2-panel-header">
         <div>
           <h2 id="runtime-v3-overview-heading">使用概览</h2>
-          <p>今天的请求、入口、项目和会话使用情况集中展示；点击列标题可切换正序 / 倒序。</p>
+          <p>当前范围的入口、项目、会话与模型用量集中展示；点击项目或会话行，可查看对应模型明细。</p>
         </div>
         <span className="runtime-v2-panel-kicker">入口 · 项目 · 会话</span>
       </div>
@@ -1063,7 +1088,7 @@ function OverviewPanel({
       <div className="runtime-v2-overview-block runtime-v2-overview-usage-block">
         <div className="runtime-v2-overview-block-heading">
           <h3>使用明细</h3>
-          <span>默认同时显示全部入口、项目和会话</span>
+          <span>项目 / 会话行可钻取模型用量</span>
         </div>
         <div className="runtime-v2-dimension-stack">
           {USAGE_DIMENSION_META.map(([kind, title]) => (
@@ -1084,10 +1109,12 @@ function OverviewPanel({
               onSessionExport={onSessionExport}
               onSessionDelete={onSessionDelete}
               sessionActionID={sessionActionID}
-              activeRowKey={kind === 'project' ? selectedProject?.key : undefined}
-              onRowClick={kind === 'project' ? onProjectSelect : undefined}
-              selectedProjectLabel={kind === 'session' ? selectedProject?.name : undefined}
-              onClearProject={kind === 'session' ? onClearProject : undefined}
+              activeRowKey={kind === 'project' ? selectedProject?.key : kind === 'session' ? selectedSession?.key : undefined}
+              onRowClick={kind === 'project' ? onProjectSelect : kind === 'session' ? onSessionSelect : undefined}
+              selectedProjectLabel={(kind === 'session' || kind === 'model') && !selectedSession ? selectedProject?.name : undefined}
+              selectedSessionLabel={kind === 'model' ? selectedSession?.name : undefined}
+              onClearProject={kind === 'session' || (kind === 'model' && !selectedSession) ? onClearProject : undefined}
+              onClearSession={kind === 'model' && selectedSession ? onClearSession : undefined}
             />
           ))}
         </div>
@@ -1180,6 +1207,7 @@ function StorageSettingsDialog({ storage, retention, loading, error, onClose, on
 
 function StoragePanel({ storage, retention, loading, error, onRetry, onUpdateRetention, onManualCleanup, onRecreateDatabase }) {
   const activeRetention = retention || storage?.retention;
+  const maxAgeDays = activeRetention?.maxAgeDays;
   const storageLimitBytes = activeRetention?.storageLimitBytes;
   const databaseBytes = storage?.databaseBytes ?? storage?.dbBytes;
   // Keep the UI's quota indicator aligned with the daemon's live-byte limit.
@@ -1191,66 +1219,84 @@ function StoragePanel({ storage, retention, loading, error, onRetry, onUpdateRet
     ? Math.min(100, Math.round((Number(effectiveBytes) / Math.max(1, Number(storageLimitBytes))) * 100))
     : null;
   const [storageLimitMB, setStorageLimitMB] = useState('');
-  const [storageLimitDirty, setStorageLimitDirty] = useState(false);
-  const [savingStorageLimit, setSavingStorageLimit] = useState(false);
-  const [storageLimitError, setStorageLimitError] = useState('');
+  const [maxAgeDaysInput, setMaxAgeDaysInput] = useState('');
+  const [retentionDirty, setRetentionDirty] = useState(false);
+  const [savingRetention, setSavingRetention] = useState(false);
+  const [retentionError, setRetentionError] = useState('');
   useEffect(() => {
-    if (!storageLimitDirty) {
+    if (!retentionDirty) {
       const bytes = activeRetention?.storageLimitBytes;
       setStorageLimitMB(bytes == null ? '' : String(Math.max(1, Math.round(Number(bytes) / 1048576))));
+      setMaxAgeDaysInput(maxAgeDays == null ? '' : String(Math.max(1, Number(maxAgeDays))));
     }
-  }, [activeRetention?.storageLimitBytes, storageLimitDirty]);
-  const persistStorageLimit = async (storageLimit) => {
+  }, [activeRetention?.storageLimitBytes, maxAgeDays, retentionDirty]);
+  const persistRetention = async (nextMaxAgeDays, nextStorageLimitBytes) => {
     if (!activeRetention || !onUpdateRetention) return;
-    setStorageLimitError('');
-    setSavingStorageLimit(true);
+    setRetentionError('');
+    setSavingRetention(true);
     try {
       await onUpdateRetention({
         expectedRevision: activeRetention.revision,
-        storageLimitBytes: storageLimit,
+        maxAgeDays: nextMaxAgeDays,
+        storageLimitBytes: nextStorageLimitBytes,
       });
-      setStorageLimitDirty(false);
+      setRetentionDirty(false);
     } catch (nextError) {
-      setStorageLimitError(nextError?.message || '存储设置保存失败');
+      setRetentionError(nextError?.message || '保留策略保存失败');
     } finally {
-      setSavingStorageLimit(false);
+      setSavingRetention(false);
     }
   };
-  const saveStorageLimit = async (event) => {
+  const saveRetention = async (event) => {
     event?.preventDefault();
     if (!activeRetention || !onUpdateRetention) return;
-    const value = storageLimitMB.trim();
-    const megabytes = value === '' ? null : Number(value);
-    if (megabytes != null && (!Number.isInteger(megabytes) || megabytes < 1 || megabytes > Number.MAX_SAFE_INTEGER / 1048576)) {
-      setStorageLimitError('请输入至少 1 MB 的整数');
+    const ageValue = maxAgeDaysInput.trim();
+    const nextMaxAgeDays = ageValue === '' ? null : Number(ageValue);
+    if (nextMaxAgeDays != null && (!Number.isSafeInteger(nextMaxAgeDays) || nextMaxAgeDays < 1)) {
+      setRetentionError('最大保存天数必须是至少 1 天的整数');
       return;
     }
-    await persistStorageLimit(megabytes == null ? null : megabytes * 1048576);
+    const sizeValue = storageLimitMB.trim();
+    const megabytes = sizeValue === '' ? null : Number(sizeValue);
+    if (megabytes != null && (!Number.isSafeInteger(megabytes) || megabytes < 1 || megabytes > Number.MAX_SAFE_INTEGER / 1048576)) {
+      setRetentionError('存储上限必须是至少 1 MB 的整数');
+      return;
+    }
+    await persistRetention(nextMaxAgeDays, megabytes == null ? null : megabytes * 1048576);
   };
   const disableStorageLimit = () => {
     setStorageLimitMB('');
-    setStorageLimitDirty(false);
-    persistStorageLimit(null);
+    setRetentionDirty(false);
+    persistRetention(maxAgeDays == null ? null : Number(maxAgeDays), null);
+  };
+  const disableMaxAge = () => {
+    setMaxAgeDaysInput('');
+    setRetentionDirty(false);
+    persistRetention(null, storageLimitBytes == null ? null : Number(storageLimitBytes));
   };
   return (
     <div className="runtime-v2-storage-panel-content">
-      <p className="runtime-v2-storage-dialog-copy">上限按有效占用计算；达到上限后自动轮换最旧的已完成请求，新的请求继续写入；进行中的请求不会删除。轮换不会立即缩小数据库文件，需要真正回收空间时请使用“重置并新建数据库”。留空表示不限制容量。</p>
+      <p className="runtime-v2-storage-dialog-copy">系统按滚动 24 小时的保存天数和 SQLite 有效占用上限自动轮换；任一条件先达到就触发。按请求组删除，进行中的请求组会完整保留。留空可分别关闭对应条件；轮换不会立即缩小数据库文件。</p>
       <PanelMessage error={error} onRetry={onRetry} />
       {loading && !storage ? <LoadingLine text="正在读取存储状态…" /> : storage ? (
         <>
           <div className="runtime-v2-storage-limit-editor">
             <div className="runtime-v2-storage-limit-heading">
-              <strong>存储上限</strong>
-              <span>{storageLimitBytes == null ? '不限制' : `当前 ${formatBytes(storageLimitBytes)}`} · 已用 {effectiveBytes == null ? '—' : formatBytes(effectiveBytes)}{usedPercent == null ? '' : ` · ${usedPercent}%`}</span>
+              <strong>自动保留策略</strong>
+              <span>{maxAgeDays == null && storageLimitBytes == null ? '仅手动清理' : `${maxAgeDays == null ? '' : `最长 ${maxAgeDays} 天`}${maxAgeDays != null && storageLimitBytes != null ? ' · ' : ''}${storageLimitBytes == null ? '' : `容量 ${formatBytes(storageLimitBytes)}`}`}</span>
             </div>
-            <form className="runtime-v2-storage-limit-controls" onSubmit={saveStorageLimit}>
-              <label htmlFor="runtime-v2-storage-limit-mb">上限（MB）</label>
-              <input id="runtime-v2-storage-limit-mb" className="form-input" inputMode="numeric" pattern="[0-9]*" value={storageLimitMB} onChange={(event) => { setStorageLimitMB(event.target.value.replace(/[^0-9]/g, '')); setStorageLimitDirty(true); }} placeholder="例如 1024" />
+            <form className="runtime-v2-storage-limit-controls" onSubmit={saveRetention}>
+              <label htmlFor="runtime-v2-storage-max-age-days">最大保存天数</label>
+              <input id="runtime-v2-storage-max-age-days" className="form-input" inputMode="numeric" pattern="[0-9]*" value={maxAgeDaysInput} onChange={(event) => { setMaxAgeDaysInput(event.target.value.replace(/[^0-9]/g, '')); setRetentionDirty(true); }} placeholder="例如 30" />
+              <span aria-hidden="true">天</span>
+              <label htmlFor="runtime-v2-storage-limit-mb">容量上限</label>
+              <input id="runtime-v2-storage-limit-mb" className="form-input" inputMode="numeric" pattern="[0-9]*" value={storageLimitMB} onChange={(event) => { setStorageLimitMB(event.target.value.replace(/[^0-9]/g, '')); setRetentionDirty(true); }} placeholder="例如 1024" />
               <span aria-hidden="true">MB</span>
-              <button type="submit" className="btn btn-secondary" disabled={savingStorageLimit || !activeRetention}>{savingStorageLimit ? '保存中…' : '保存存储上限'}</button>
-              <button type="button" className="btn btn-ghost" onClick={disableStorageLimit} disabled={savingStorageLimit || activeRetention?.storageLimitBytes == null}>关闭上限</button>
+              <button type="submit" className="btn btn-secondary" disabled={savingRetention || !activeRetention}>{savingRetention ? '保存中…' : '保存保留策略'}</button>
+              <button type="button" className="btn btn-ghost" onClick={disableMaxAge} disabled={savingRetention || activeRetention?.maxAgeDays == null}>关闭时间上限</button>
+              <button type="button" className="btn btn-ghost" onClick={disableStorageLimit} disabled={savingRetention || activeRetention?.storageLimitBytes == null}>关闭容量上限</button>
             </form>
-            {storageLimitError && <div className="runtime-v2-storage-limit-error" role="alert">{storageLimitError}</div>}
+            {retentionError && <div className="runtime-v2-storage-limit-error" role="alert">{retentionError}</div>}
           </div>
           <div className="runtime-v2-storage-dialog-context" aria-label="当前存储上下文">
             <span>保留事件 <strong>{retainedEvents == null ? '—' : numberWithComma(retainedEvents)}</strong></span>
@@ -1258,18 +1304,18 @@ function StoragePanel({ storage, retention, loading, error, onRetry, onUpdateRet
           </div>
           <div className="runtime-v2-storage-grid">
             <div className="runtime-v2-subpanel runtime-v2-manual-cleanup-panel">
-              <div className="runtime-v2-subpanel-heading"><strong>清理方式</strong><StatusBadge text={storageLimitBytes == null ? '仅手动清理' : '自动轮换'} kind="good" /></div>
-              <p className="runtime-v2-storage-action-copy">{storageLimitBytes == null ? '未设置上限，记录会持续保留，直到你主动清理统计。' : '达到上限后自动轮换最旧的已完成请求；进行中的请求会继续保留。'}</p>
+              <div className="runtime-v2-subpanel-heading"><strong>清理方式</strong><StatusBadge text={maxAgeDays == null && storageLimitBytes == null ? '仅手动清理' : '自动轮换'} kind="good" /></div>
+              <p className="runtime-v2-storage-action-copy">{maxAgeDays == null && storageLimitBytes == null ? '未设置自动条件，记录会持续保留，直到你主动清理统计。' : `按${maxAgeDays == null ? '' : `时间（${maxAgeDays} 天）`}${maxAgeDays != null && storageLimitBytes != null ? '或' : ''}${storageLimitBytes == null ? '' : '容量'}自动轮换最旧的已完成请求；进行中的请求组会继续保留。`}</p>
               <div className="runtime-v2-form-actions">
-                <span>手动清理会清空全部 SQLite 运行统计，诊断捕获不受影响。</span>
-                <button type="button" className="btn btn-danger" onClick={onManualCleanup}>手动清理统计</button>
+                <span>按时间清理已完成统计，进行中的请求组会保留；诊断捕获不受影响。</span>
+                <button type="button" className="btn btn-danger" onClick={onManualCleanup}>按时间清理统计</button>
               </div>
               <div className="runtime-v2-form-actions runtime-v2-recreate-database-actions">
                 <span>旧版自动清理字段不会通过手动清理移除；需要彻底切换到当前数据库结构时使用此操作。</span>
                 <button type="button" className="btn btn-danger" onClick={onRecreateDatabase}>重置并新建数据库</button>
               </div>
             </div>
-            <div className="runtime-v2-subpanel runtime-v2-storage-note"><strong>数据说明</strong><p>运行记录会保留源事件和会话归属；自动轮换按最早完成的请求整组删除，避免请求链残缺。进行中的请求不会被轮换。</p><p>完整诊断捕获独立保存，源请求正文、Headers 和流式 Chunk 不会重复计入统计。</p></div>
+            <div className="runtime-v2-subpanel runtime-v2-storage-note"><strong>数据说明</strong><p>运行记录会保留源事件和会话归属；自动轮换按请求组删除，任何含进行中事件的请求组都会跳过，避免请求链残缺。</p><p>完整诊断捕获独立保存，源请求正文、Headers 和流式 Chunk 不会重复计入统计。</p></div>
           </div>
         </>
       ) : <div className="runtime-v2-empty">暂无存储状态</div>}
@@ -1440,12 +1486,12 @@ function TokenPanel({ trend, legacyAnalytics, loading, error, onRetry }) {
   );
 }
 
-function CostPanel({ pricing, trend, legacyAnalytics, costPages, costLoading, costErrors, costCallbacks, clientKindFacets, addToast, selectedProject, onProjectSelect, onClearProject }) {
+function CostPanel({ pricing, trend, legacyAnalytics, costPages, costLoading, costErrors, costCallbacks, clientKindFacets, addToast, selectedProject, selectedSession, onProjectSelect, onSessionSelect, onClearProject, onClearSession }) {
   const totals = trend?.totals || legacyTrendTotals(legacyAnalytics);
   const cost = totals?.cost || {};
   return (
     <section className="runtime-v2-panel runtime-v2-cost-section" aria-labelledby="runtime-v3-cost-heading">
-      <div className="runtime-v2-panel-header"><div><h2 id="runtime-v3-cost-heading">成本</h2><p>按入口、项目和会话查看估算成本。只有服务端完成价格与用量匹配的请求才计入金额；其余请求明确显示为暂无法计价。</p></div></div>
+      <div className="runtime-v2-panel-header"><div><h2 id="runtime-v3-cost-heading">成本</h2><p>按入口、项目、会话和模型查看估算成本。点击项目或会话行，可继续查看对应模型成本。</p></div></div>
       <div className="runtime-v2-metrics-grid runtime-v2-cost-summary">
         <Metric label="估算成本" value={safeNumber(cost?.pricedRequests) > 0 ? formatMoney(cost.estimatedCostMicros, cost.currency || pricing?.currency || 'USD') : '—'} detail={safeNumber(cost?.pricedRequests) > 0 ? `基于 ${numberWithComma(cost.pricedRequests)} 个已计价请求` : '暂无可计价请求'} accent="var(--status-good)" />
         <Metric label="请求" value={optionalNumberWithComma(totals?.clientRequests)} detail="当前筛选范围" accent="var(--primary)" />
@@ -1468,10 +1514,12 @@ function CostPanel({ pricing, trend, legacyAnalytics, costPages, costLoading, co
             clientKindFacets={clientKindFacets}
             addToast={addToast}
             mode="cost"
-            activeRowKey={kind === 'project' ? selectedProject?.key : undefined}
-            onRowClick={kind === 'project' ? onProjectSelect : undefined}
-            selectedProjectLabel={kind === 'session' ? selectedProject?.name : undefined}
-            onClearProject={kind === 'session' ? onClearProject : undefined}
+            activeRowKey={kind === 'project' ? selectedProject?.key : kind === 'session' ? selectedSession?.key : undefined}
+            onRowClick={kind === 'project' ? onProjectSelect : kind === 'session' ? onSessionSelect : undefined}
+            selectedProjectLabel={(kind === 'session' || kind === 'model') && !selectedSession ? selectedProject?.name : undefined}
+            selectedSessionLabel={kind === 'model' ? selectedSession?.name : undefined}
+            onClearProject={kind === 'session' || (kind === 'model' && !selectedSession) ? onClearProject : undefined}
+            onClearSession={kind === 'model' && selectedSession ? onClearSession : undefined}
           />
         ))}
       </div>
@@ -1533,7 +1581,7 @@ function ExportPanel({ addToast, filters = {} }) {
   );
 }
 
-export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, onRecreateDatabase, openExportSignal = 0, analyticsFilters = {}, analyticsRange = 'today', onAnalyticsRangeChange, facets = null, analyticsRefreshSignal = 0, onProjectSelectionChange, projectSelectionResetSignal = 0, legacyAnalytics = null, summaryStorage = null, config = null }) {
+export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, onRecreateDatabase, openExportSignal = 0, analyticsFilters = {}, analyticsRange = 'today', onAnalyticsRangeChange, facets = null, analyticsRefreshSignal = 0, onProjectSelectionChange, onSessionSelectionChange, projectSelectionResetSignal = 0, legacyAnalytics = null, summaryStorage = null, config = null }) {
   const [section, setSection] = useState('overview');
   const sectionTabRefs = useRef([]);
   const [range, setRange] = useState(analyticsRange || 'today');
@@ -1546,17 +1594,19 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
   const [diagnostics, setDiagnostics] = useState(null);
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
   const [diagnosticsError, setDiagnosticsError] = useState(null);
-  // Keep the three user-facing comparison lists independent. A single shared
-  // dimension slot made it impossible to see入口、项目和会话 together and
+  // Keep the user-facing comparison lists independent. A single shared
+  // dimension slot made it impossible to see入口、项目、会话和模型 together and
   // caused one table's pagination/search to overwrite another's state.
-  const [dimensions, setDimensions] = useState({ endpoint: null, project: null, session: null });
-  const [dimensionLoading, setDimensionLoading] = useState({ endpoint: false, project: false, session: false });
-  const [dimensionError, setDimensionError] = useState({ endpoint: null, project: null, session: null });
-  const [dimensionSearch, setDimensionSearch] = useState({ endpoint: '', project: '', session: '' });
+  const [dimensions, setDimensions] = useState({ endpoint: null, project: null, session: null, model: null });
+  const [dimensionLoading, setDimensionLoading] = useState({ endpoint: false, project: false, session: false, model: false });
+  const [dimensionError, setDimensionError] = useState({ endpoint: null, project: null, session: null, model: null });
+  const [dimensionSearch, setDimensionSearch] = useState({ endpoint: '', project: '', session: '', model: '' });
   // A project row is a local drill-down, not a replacement for the global
   // project filter. It only narrows the session projection below the tables.
   const [selectedProject, setSelectedProject] = useState(null);
+  const [selectedSession, setSelectedSession] = useState(null);
   const previousSelectedProjectRef = useRef(null);
+  const previousSelectedSessionRef = useRef(null);
   const skipNextClearedProjectReloadRef = useRef(false);
   const [storage, setStorage] = useState(null);
   const [retention, setRetention] = useState(null);
@@ -1573,6 +1623,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     endpoint: { current: { id: 0, controller: null } },
     project: { current: { id: 0, controller: null } },
     session: { current: { id: 0, controller: null } },
+    model: { current: { id: 0, controller: null } },
   });
   const storageRequestRef = useRef({ id: 0, controller: null });
   // Keep the selected analytics page size in React state as well as
@@ -1658,15 +1709,22 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     }
   }, [activeFilters, range]);
 
-  const loadDimension = useCallback(async (kind, page = 1, nextPageSize = dimensions[kind]?.pageSize || pageSize, search = dimensionSearch[kind] || '', snapshot = dimensions[kind]) => {
-    if (!['endpoint', 'project', 'session'].includes(kind)) return;
+  const loadDimension = useCallback(async (kind, page = 1, nextPageSize = dimensions[kind]?.pageSize || pageSize, search = dimensionSearch[kind] || '', snapshot = dimensions[kind], localSelection = undefined) => {
+    if (!['endpoint', 'project', 'session', 'model'].includes(kind)) return;
     const request = beginLatestRequest(dimensionRequestRefs.current[kind]);
     setDimensionLoading((previous) => ({ ...previous, [kind]: true }));
     setDimensionError((previous) => ({ ...previous, [kind]: null }));
+    const localProject = localSelection === undefined ? selectedProject : localSelection?.project || null;
+    const localSession = localSelection === undefined ? selectedSession : localSelection?.session || null;
     try {
       const sort = snapshot?.sort || 'last_seen';
       const order = snapshot?.order || 'desc';
-      const queryFilters = kind === 'session' && selectedProject
+      const queryFilters = (kind === 'session' || kind === 'model') && localSession
+        ? {
+          ...activeFilters,
+          sessionID: localSession.key,
+        }
+        : (kind === 'session' || kind === 'model') && localProject
         ? {
           ...activeFilters,
           // The row key is the stable project_id for identified projects.
@@ -1674,8 +1732,8 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
           // independent predicates, which needlessly slows the query and can
           // exclude rows whose name changed. Synthetic unidentified rows have
           // no project_id, so they must use the display-name predicate.
-          projectID: selectedProject.key === 'unidentified_project' ? '' : selectedProject.key,
-          project: selectedProject.key === 'unidentified_project' ? selectedProject.name : '',
+          projectID: localProject.key === 'unidentified_project' ? '' : localProject.key,
+          project: localProject.key === 'unidentified_project' ? localProject.name : '',
         }
         : activeFilters;
       const value = await api.getRuntimeDimensions(kind, {
@@ -1693,11 +1751,13 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
       setDimensionError((previous) => ({ ...previous, [kind]: error }));
       if (isRuntimeSnapshotError(error) && snapshot) {
         try {
-          const queryFilters = kind === 'session' && selectedProject
+          const queryFilters = (kind === 'session' || kind === 'model') && localSession
+            ? { ...activeFilters, sessionID: localSession.key }
+            : (kind === 'session' || kind === 'model') && localProject
             ? {
               ...activeFilters,
-              projectID: selectedProject.key === 'unidentified_project' ? '' : selectedProject.key,
-              project: selectedProject.key === 'unidentified_project' ? selectedProject.name : '',
+              projectID: localProject.key === 'unidentified_project' ? '' : localProject.key,
+              project: localProject.key === 'unidentified_project' ? localProject.name : '',
             }
             : activeFilters;
           const value = await api.getRuntimeDimensions(kind, { page: 1, pageSize: nextPageSize, search, sort: 'last_seen', order: 'desc', filters: queryFilters }, { signal: request.controller.signal });
@@ -1710,9 +1770,9 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     } finally {
       if (request.isCurrent()) setDimensionLoading((previous) => ({ ...previous, [kind]: false }));
     }
-  }, [activeFilters, dimensionSearch, dimensions, pageSize, selectedProject]);
+  }, [activeFilters, dimensionSearch, dimensions, pageSize, selectedProject, selectedSession]);
 
-  const loadDimensions = useCallback((kinds = ['endpoint', 'project', 'session']) => {
+  const loadDimensions = useCallback((kinds = ['endpoint', 'project', 'session', 'model']) => {
     return Promise.allSettled(kinds.map((kind) => loadDimension(kind)));
   }, [loadDimension]);
 
@@ -1776,7 +1836,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     setTrend(null);
     setErrors(null);
     setDiagnostics(null);
-    setDimensions({ endpoint: null, project: null, session: null });
+    setDimensions({ endpoint: null, project: null, session: null, model: null });
     if (selectedProject) {
       // The filter-change path below reloads all dimensions, including the
       // unfiltered session table. Avoid scheduling a second session request
@@ -1784,25 +1844,29 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
       skipNextClearedProjectReloadRef.current = true;
       onProjectSelectionChange?.(null);
     }
+    if (selectedSession) onSessionSelectionChange?.(null);
     setSelectedProject(null);
+    setSelectedSession(null);
     setTrendError(null);
     setErrorsError(null);
     setDiagnosticsError(null);
-    setDimensionError({ endpoint: null, project: null, session: null });
+    setDimensionError({ endpoint: null, project: null, session: null, model: null });
     if (section === 'overview' || section === 'trends' || section === 'tokens') loadTrends(range);
-    if (section === 'overview') loadDimensions(['endpoint', 'project', 'session']);
+    if (section === 'overview') loadDimensions(['endpoint', 'project', 'session', 'model']);
     if (section === 'errors') { loadErrors(1, errors?.pageSize || pageSize, null); loadDiagnostics(); }
-    if (section === 'tokens') loadDimensions(['endpoint', 'project', 'session']);
+    if (section === 'tokens') loadDimensions(['endpoint', 'project', 'session', 'model']);
   }, [activeQueryKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const previousSelectedProject = previousSelectedProjectRef.current;
+    const previousSelectedSession = previousSelectedSessionRef.current;
     previousSelectedProjectRef.current = selectedProject;
-    if (!['overview', 'tokens'].includes(section) || (!selectedProject && !previousSelectedProject)) return;
-    if (!selectedProject && skipNextClearedProjectReloadRef.current) {
-      skipNextClearedProjectReloadRef.current = false;
-      return;
-    }
+    previousSelectedSessionRef.current = selectedSession;
+    const projectChanged = selectedProject?.key !== previousSelectedProject?.key;
+    const sessionChanged = selectedSession?.key !== previousSelectedSession?.key;
+    if (!['overview', 'tokens'].includes(section) || (!projectChanged && !sessionChanged)) return;
+    const skipProjectReload = projectChanged && !selectedProject && skipNextClearedProjectReloadRef.current;
+    if (skipProjectReload) skipNextClearedProjectReloadRef.current = false;
     // Let the selected row/title paint before starting the potentially costly
     // session aggregation. This keeps the click responsive on large SQLite
     // histories while retaining the latest-wins abort behavior in
@@ -1814,14 +1878,20 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
       ? (handle) => window.cancelAnimationFrame(handle)
       : (handle) => globalThis.clearTimeout(handle);
     const handle = schedule(() => {
-      loadDimension('session', 1, dimensions.session?.pageSize || pageSize, dimensionSearch.session || '', dimensions.session);
+      if (projectChanged && !skipProjectReload) {
+        loadDimension('session', 1, dimensions.session?.pageSize || pageSize, dimensionSearch.session || '', dimensions.session);
+      }
+      if (projectChanged || sessionChanged) {
+        loadDimension('model', 1, dimensions.model?.pageSize || pageSize, dimensionSearch.model || '', dimensions.model);
+      }
     });
     return () => cancel(handle);
-  }, [selectedProject]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedProject, selectedSession]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (projectSelectionResetSignal <= 0 || !selectedProject) return;
+    if (projectSelectionResetSignal <= 0 || (!selectedProject && !selectedSession)) return;
     setSelectedProject(null);
+    setSelectedSession(null);
   }, [projectSelectionResetSignal]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -1841,9 +1911,9 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     lastAnalyticsRefreshSignal.current = analyticsRefreshSignal;
     if (firstSignal) return;
     if (section === 'overview' || section === 'trends' || section === 'tokens') loadTrends(range);
-    if (section === 'overview') loadDimensions(['endpoint', 'project', 'session']);
+    if (section === 'overview') loadDimensions(['endpoint', 'project', 'session', 'model']);
     if (section === 'errors') { loadErrors(1, errors?.pageSize || pageSize, null); loadDiagnostics(); }
-    if (section === 'tokens') loadDimensions(['endpoint', 'project', 'session']);
+    if (section === 'tokens') loadDimensions(['endpoint', 'project', 'session', 'model']);
     if (section === 'overview' && showStorageSettings) loadStorage({ includeRetention: true });
   }, [analyticsRefreshSignal]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -1851,10 +1921,10 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
   }, [openExportSignal]);
   useEffect(() => {
     if ((section === 'overview' || section === 'trends' || section === 'tokens') && !trend) loadTrends();
-    if (section === 'overview' && !dimensions.endpoint) loadDimensions(['endpoint', 'project', 'session']);
+    if (section === 'overview' && !dimensions.endpoint) loadDimensions(['endpoint', 'project', 'session', 'model']);
     if (section === 'errors' && !errors) loadErrors();
     if (section === 'errors' && !diagnostics) loadDiagnostics();
-    if (section === 'tokens' && !dimensions.endpoint) loadDimensions(['endpoint', 'project', 'session']);
+    if (section === 'tokens' && !dimensions.endpoint) loadDimensions(['endpoint', 'project', 'session', 'model']);
     if (section === 'overview' && !storage) loadStorage();
     if (section === 'tokens' && !pricing) loadStorage({ includeStorage: false, includePricing: true });
     // Load once when entering a section. Individual panels expose Retry, so a
@@ -1882,7 +1952,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     const next = persistRuntimeAnalyticsPageSize(value);
     setAnalyticsPageSize(next);
     if (kind === 'errors') loadErrors(1, next, null);
-    else if (['endpoint', 'project', 'session'].includes(kind)) loadDimension(kind, 1, next, dimensionSearch[kind] || '', null);
+    else if (['endpoint', 'project', 'session', 'model'].includes(kind)) loadDimension(kind, 1, next, dimensionSearch[kind] || '', null);
   };
   const retryTrends = useCallback(() => loadTrends(range), [loadTrends, range]);
   const closeStorageSettings = useCallback(() => setShowStorageSettings(false), []);
@@ -1904,7 +1974,18 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
       const value = await api.updateRuntimeRetention(payload);
       setRetention((current) => ({ ...(current || {}), ...value }));
       setStorage((current) => (current ? { ...current, retention: { ...(current.retention || {}), ...value } } : current));
-      addToast?.(payload.storageLimitBytes == null ? '已关闭存储上限，之后请手动清理统计' : '存储上限已保存，旧数据会自动轮换', 'success');
+      const hasTime = payload.maxAgeDays != null;
+      const hasCapacity = payload.storageLimitBytes != null;
+      addToast?.(
+        !hasTime && !hasCapacity
+          ? '已关闭自动保留条件，之后请手动清理统计'
+          : hasTime && hasCapacity
+            ? '时间与容量保留策略已保存，旧数据会自动轮换'
+            : hasTime
+              ? '最大保存天数已保存，旧数据会自动轮换'
+              : '存储容量上限已保存，旧数据会自动轮换',
+        'success',
+      );
     } catch (error) {
       setStorageError(error);
       addToast?.(`存储设置更新失败：${error.message}`, 'error');
@@ -1945,9 +2026,21 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     setSessionActionID(value);
     try {
       await api.deleteRuntimeSession(value, { confirmUnidentified: value === 'unidentified_session' });
+      const deletedSelectedSession = selectedSession?.key === value || selectedSession?.name === value;
+      if (deletedSelectedSession) {
+        setSelectedSession(null);
+        onSessionSelectionChange?.(null);
+      }
       setDimensions((previous) => ({ ...previous, session: null }));
       await Promise.allSettled([
-        loadDimension('session', 1, pageSize, dimensionSearch.session || '', null),
+        loadDimension(
+          'session',
+          1,
+          pageSize,
+          dimensionSearch.session || '',
+          null,
+          deletedSelectedSession ? { project: selectedProject, session: null } : undefined,
+        ),
         loadTrends(range),
       ]);
       addToast?.('会话及其统计已删除', 'success');
@@ -1980,14 +2073,29 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     if (!key) return;
     const next = { key, name: String(row?.name || key) };
     skipNextClearedProjectReloadRef.current = false;
+    setSelectedSession(null);
+    onSessionSelectionChange?.(null);
     setSelectedProject(next);
     onProjectSelectionChange?.(next);
-  }, [onProjectSelectionChange]);
+  }, [onProjectSelectionChange, onSessionSelectionChange]);
+  const selectSession = useCallback((row) => {
+    const key = String(row?.key || row?.name || '').trim();
+    if (!key) return;
+    const next = { key, name: String(row?.name || key) };
+    setSelectedSession(next);
+    onSessionSelectionChange?.(next);
+  }, [onSessionSelectionChange]);
   const clearSelectedProject = useCallback(() => {
     skipNextClearedProjectReloadRef.current = false;
+    setSelectedSession(null);
+    onSessionSelectionChange?.(null);
     setSelectedProject(null);
     onProjectSelectionChange?.(null);
-  }, [onProjectSelectionChange]);
+  }, [onProjectSelectionChange, onSessionSelectionChange]);
+  const clearSelectedSession = useCallback(() => {
+    setSelectedSession(null);
+    onSessionSelectionChange?.(null);
+  }, [onSessionSelectionChange]);
 
   return (
     <section className="runtime-v2-workspace" aria-label="统计详情">
@@ -2042,14 +2150,17 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
           onSessionDelete={deleteSession}
           sessionActionID={sessionActionID}
           selectedProject={selectedProject}
+          selectedSession={selectedSession}
           onProjectSelect={selectProject}
+          onSessionSelect={selectSession}
           onClearProject={clearSelectedProject}
+          onClearSession={clearSelectedSession}
         />
       </section>}
       {section === 'trends' && <section id="analytics-panel-trends" className="runtime-v2-tab-panel" role="tabpanel" aria-labelledby="analytics-tab-trends"><MemoizedTrendPanel trend={trend} legacyAnalytics={legacyAnalytics} loading={trendLoading} error={trendError} onRetry={retryTrends} /></section>}
       {section === 'errors' && <section id="analytics-panel-errors" role="tabpanel" aria-labelledby="analytics-tab-errors" className="runtime-v2-panel"><div className="runtime-v2-panel-header"><div><h2>错误与结构化诊断</h2><p>先看错误分组与样本，再按需展开模型、用途、协议、失败和流终止分组。</p></div></div><PanelMessage error={errorsError} onRetry={() => loadErrors(1)} /><div className="runtime-v2-table-status">{errorsLoading && <LoadingLine text="正在读取错误分组…" />}</div>{errors && <ErrorTable page={errors} loading={errorsLoading} onPageChange={(page) => loadErrors(page)} onPageSizeChange={(size) => changePageSize('errors', size)} onSelectEvent={onSelectEvent} />}<AdvancedDiagnosticsPanel analytics={diagnostics} loading={diagnosticsLoading} error={diagnosticsError} onRetry={loadDiagnostics} /></section>}
       {section === 'tokens' && <section id="analytics-panel-tokens" role="tabpanel" aria-labelledby="analytics-tab-tokens">
-        <CostPanel pricing={pricing} trend={trend} legacyAnalytics={legacyAnalytics} costPages={dimensions} costLoading={dimensionLoading} costErrors={dimensionError} costCallbacks={dimensionCallbacks} clientKindFacets={facets?.clientKinds} addToast={addToast} selectedProject={selectedProject} onProjectSelect={selectProject} onClearProject={clearSelectedProject} />
+        <CostPanel pricing={pricing} trend={trend} legacyAnalytics={legacyAnalytics} costPages={dimensions} costLoading={dimensionLoading} costErrors={dimensionError} costCallbacks={dimensionCallbacks} clientKindFacets={facets?.clientKinds} addToast={addToast} selectedProject={selectedProject} selectedSession={selectedSession} onProjectSelect={selectProject} onSessionSelect={selectSession} onClearProject={clearSelectedProject} onClearSession={clearSelectedSession} />
       </section>}
       {showExport && <section id="analytics-panel-export" className="runtime-v2-panel" aria-label="运行统计导出"><div className="runtime-v2-panel-header"><div><h2>运行统计导出</h2><p>导出当前筛选下的 SQLite 运行统计字段，不包含诊断正文。</p></div><button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowExport(false)}>关闭</button></div><ExportPanel addToast={addToast} filters={activeFilters} /></section>}
     </section>

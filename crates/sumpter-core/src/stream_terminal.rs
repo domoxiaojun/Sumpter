@@ -98,15 +98,12 @@ impl SseTerminalTracker {
         // body can only be complete once its last non-whitespace byte closes an
         // object/array; malformed bodies remain observable as truncated/unknown
         // instead of consuming quadratic CPU.
-        let Some(last) = self
+        let last = self
             .json_pending
             .iter()
             .rev()
             .copied()
-            .find(|byte| !byte.is_ascii_whitespace())
-        else {
-            return None;
-        };
+            .find(|byte| !byte.is_ascii_whitespace())?;
         if !matches!(last, b'}' | b']') {
             return None;
         }
@@ -404,10 +401,10 @@ fn observe_tool_call(dialect: SseDialect, payload: &str, calls: &mut Vec<String>
 
 fn observe_tool_call_value(dialect: SseDialect, value: &Value, calls: &mut Vec<String>) {
     let candidates = match dialect {
-        SseDialect::OpenAiResponses => responses_tool_names(&value),
-        SseDialect::OpenAiChat => chat_tool_names(&value),
+        SseDialect::OpenAiResponses => responses_tool_names(value),
+        SseDialect::OpenAiChat => chat_tool_names(value),
         SseDialect::OpenAiImages => Vec::new(),
-        SseDialect::Anthropic => anthropic_tool_names(&value),
+        SseDialect::Anthropic => anthropic_tool_names(value),
     };
     for name in candidates {
         let name = name.trim();
@@ -553,10 +550,9 @@ fn anthropic_tool_names(value: &Value) -> Vec<String> {
         if matches!(
             block.get("type").and_then(Value::as_str),
             Some("tool_use" | "server_tool_use" | "mcp_tool_use")
-        ) {
-            if let Some(name) = block.get("name").and_then(Value::as_str) {
-                names.push(name.to_string());
-            }
+        ) && let Some(name) = block.get("name").and_then(Value::as_str)
+        {
+            names.push(name.to_string());
         }
     }
     for block in value
@@ -569,10 +565,9 @@ fn anthropic_tool_names(value: &Value) -> Vec<String> {
         if matches!(
             block.get("type").and_then(Value::as_str),
             Some("tool_use" | "server_tool_use" | "mcp_tool_use")
-        ) {
-            if let Some(name) = block.get("name").and_then(Value::as_str) {
-                names.push(name.to_string());
-            }
+        ) && let Some(name) = block.get("name").and_then(Value::as_str)
+        {
+            names.push(name.to_string());
         }
     }
     names

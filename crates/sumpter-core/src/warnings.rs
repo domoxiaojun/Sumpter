@@ -4,7 +4,7 @@
 //! 分组类提示(重复/共用地址)在 Swift 侧因字典无序而顺序不稳,这里按首次出现顺序输出;
 //! 测试仍应断言「包含某条」而非整列顺序。
 
-use crate::config::{AppConfig, Endpoint, FeatureRule};
+use crate::config::{AppConfig, Endpoint, FeatureRule, ProviderProtocol};
 use crate::model_name;
 
 pub fn evaluate(config: &AppConfig) -> Vec<String> {
@@ -37,11 +37,51 @@ pub fn evaluate(config: &AppConfig) -> Vec<String> {
         append_endpoint_warnings(endpoint, &mut risks);
     }
     append_shared_resource_warnings(&config.endpoints, &mut risks);
+    append_lossy_translation_warnings(config, &mut risks);
 
     for rule in config.feature_rules.iter().filter(|r| r.enabled) {
         append_feature_rule_warnings(rule, config, &mut risks);
     }
     risks
+}
+
+/// 有损翻译降级提示。
+///
+/// 出站桥能表达文本、图片和工具调用,但表达不了结构化输出(`output_config`),也不
+/// 回放历史推理。一个模型若**只**能落到非 Anthropic 协议的入口,该模型的 Claude
+/// 客户端流量就必然走翻译面 —— 这在运行时只表现为「模型行为不如预期」,配置期不
+/// 提示的话没人会想到是协议转换造成的。
+///
+/// 只在「该模型没有任何 Anthropic 入口可落」时提示:混合配置下 native 入口优先,
+/// 翻译面只在 native 全不可用时才会被用到,不值得为此报警。
+fn append_lossy_translation_warnings(config: &AppConfig, risks: &mut Vec<String>) {
+    for model in config.accepted_models() {
+        let mut has_anthropic = false;
+        let mut translated_targets: Vec<&str> = Vec::new();
+        for endpoint in config.endpoints.iter().filter(|e| e.enabled) {
+            if endpoint.mapping_for(&model).is_none() {
+                continue;
+            }
+            match endpoint.protocol.fixed_protocol() {
+                // Auto 入口跟随入站协议,Anthropic 客户端进来就是原生转发。
+                None | Some(ProviderProtocol::Anthropic) => has_anthropic = true,
+                Some(protocol) => {
+                    let token = protocol.token();
+                    if !translated_targets.contains(&token) {
+                        translated_targets.push(token);
+                    }
+                }
+            }
+        }
+        if has_anthropic || translated_targets.is_empty() {
+            continue;
+        }
+        risks.push(format!(
+            "{model} 只能落到 {} 协议入口：Claude 客户端的请求会经协议转换转发，\
+             结构化输出(output_config)会被拒绝，历史推理内容不会回放。",
+            translated_targets.join(" / ")
+        ));
+    }
 }
 
 fn append_endpoint_warnings(endpoint: &Endpoint, risks: &mut Vec<String>) {
@@ -231,6 +271,7 @@ mod tests {
                     failover_timeout_seconds: None,
                     thinking: ThinkingMode::Adaptive,
                     upstream_model: String::new(),
+                    capabilities: Vec::new(),
                 }],
                 ..endpoint("a", "sk-11112222")
             }],
@@ -257,6 +298,31 @@ mod tests {
         );
         assert!(risks.contains(&"没有启用且配好 Key 的 Provider 候选。".to_string()));
         assert!(risks.contains(&"a 未配置 API Key(将以无鉴权方式转发)。".to_string()));
+    }
+
+    #[test]
+    fn model_reachable_only_through_translation_warns() {
+        let mut c = config();
+        // 唯一承接该模型的入口是 OpenAI 协议 → Claude 客户端必然走翻译面。
+        c.endpoints[0].protocol = crate::config::EndpointProtocolMode::OpenAI;
+        let risks = evaluate(&c);
+        assert!(
+            risks
+                .iter()
+                .any(|risk| risk.contains("只能落到 openai 协议入口")),
+            "{risks:?}"
+        );
+
+        // 只要还有一个 Anthropic(或 Auto)入口能承接,native 优先,不提示。
+        let mut native = c.endpoints[0].clone();
+        native.id = "b".into();
+        native.protocol = crate::config::EndpointProtocolMode::Anthropic;
+        c.endpoints.push(native);
+        let risks = evaluate(&c);
+        assert!(
+            !risks.iter().any(|risk| risk.contains("只能落到")),
+            "{risks:?}"
+        );
     }
 
     #[test]
@@ -334,6 +400,7 @@ mod tests {
             failover_timeout_seconds: None,
             thinking: ThinkingMode::Disabled,
             upstream_model: "x".into(),
+            capabilities: Vec::new(),
         });
         c.endpoints.push(b);
         let risks = evaluate(&c);

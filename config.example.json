@@ -7,7 +7,11 @@
     "authToken": ""
   },
   "retry": {
+    "max500Retries": 0,
+    "failoverOn500": true,
     "responseTimeoutSeconds": null,
+    "retryDelaySeconds": null,
+    "passThroughRetryDelay": true,
     "streamIdleTimeoutSeconds": null,
     "sessionStickyRetries": 2,
     "maxDeferredRounds": 0,
@@ -63,12 +67,12 @@
       "pinnedIPExclusive": false,
       "stickyGroup": "example-main",
       "mappings": [
-        {
-          "clientPattern": "claude-opus-*",
-          "upstreamModel": "",
-          "thinking": "adaptive",
-          "context": "oneMillion"
-        }
+      {
+        "clientPattern": "claude-opus-*",
+        "upstreamModel": "",
+        "thinking": "adaptive",
+        "context": "oneMillion"
+      }
       ]
     },
     {
@@ -88,12 +92,26 @@
           "thinking": "adaptive",
           "context": "oneMillion"
         },
-        {
-          "clientPattern": "claude-haiku-4-5-20251001",
-          "upstreamModel": "claude-haiku-4-5-20251001",
-          "thinking": "disabled",
-          "context": "oneMillion"
-        }
+      {
+        "clientPattern": "claude-haiku-4-5-20251001",
+        "upstreamModel": "claude-haiku-4-5-20251001",
+        "thinking": "disabled",
+        "context": "oneMillion"
+      },
+      {
+        "clientPattern": "gpt-live-1-codex",
+        "upstreamModel": "gpt-live-1-codex",
+        "capabilities": ["live"],
+        "thinking": "passthrough",
+        "context": "standard"
+      },
+      {
+        "clientPattern": "gpt-realtime",
+        "upstreamModel": "gpt-realtime",
+        "capabilities": ["live"],
+        "thinking": "passthrough",
+        "context": "standard"
+      }
       ]
     }
   ]

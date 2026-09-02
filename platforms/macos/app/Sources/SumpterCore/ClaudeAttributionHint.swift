@@ -179,7 +179,7 @@ public enum ClaudeAttributionHint {
         public static let platformMatrix: [MatrixRow] = [
             MatrixRow(
                 id: 1, label: "配置器位置",
-                macOS: "App 内 Resources/（源码构建则在 platforms/linux/scripts/）",
+                macOS: "App 内 Resources/（源码构建则在 platforms/macos/scripts/）",
                 linux: "部署包解包后 scripts/（安装后 /opt/sumpter/scripts/）"),
             MatrixRow(
                 id: 2, label: "默认 shell",

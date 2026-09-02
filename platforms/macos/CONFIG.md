@@ -26,12 +26,17 @@
 
 - `responseTimeoutSeconds`：首响应总截止秒数，`null` = 由客户端决定
 - `streamIdleTimeoutSeconds`：流式两次吐字之间的最长间隔，`null` = 允许无限空闲
+- `max500Retries`：当前入口收到 HTTP 500 后的额外重试次数；`0` = 不额外重试
+- `failoverOn500`：HTTP 500 重试耗尽后是否切换入口；默认 `true`，关闭后在当前入口直接返回 500
+- `retryDelaySeconds`：为最终失败响应准备的 `retry_delay` 秒数；是否返回由 `passThroughRetryDelay` 控制
+- `passThroughRetryDelay`：是否将 `retry_delay` 与 `Retry-After` 透传给客户端，默认 `true`
 - `maxDeferredRounds`：所有可重试故障的最大轮数（历史字段名保留兼容），`0` = 不限轮数
 - `maxRetryDurationSeconds`：所有可重试故障的跨轮总上限秒数，`0` = 不限总时长
-- `sessionStickyRetries`：同一次请求中，当前粘性调度组首次失败后的额外重试次数；全部遇到可重试故障后才访问其它调度组，其它组成功后立即改绑会话。`0` = 首次失败后立即切换；默认 `2`
+- `sessionStickyRetries`：同一次请求中，当前粘性调度组遇到非 500 可重试故障后的额外重试次数；全部遇到可重试故障后才访问其它调度组，其它组成功后立即改绑会话。`0` = 首次失败后立即切换；默认 `2`
 - `pinnedIPConcurrency`：pinned IP 并发竞速数
 
-可跨轮的 HTTP 状态为 `401/402/403/429/502/503/504/520-527/529/530`，另含首响应前的
+可跨轮的 HTTP 状态为 `401/402/403/429/502/503/504/520-527/529/530`；HTTP 500 仅按
+`max500Retries` 在当前入口内重试，是否切换入口由 `failoverOn500` 控制，不进入跨轮无限重试。另含首响应前的
 超时和连接失败。只有 `maxDeferredRounds` 与 `maxRetryDurationSeconds` **同时为 0** 才是
 真正无限重试。轮间按 `0.5s × 1.7` 指数退避，最多 30 秒；数字 `Retry-After` 与退避取较大值，
 同样封顶 30 秒。客户端断开会立即取消等待和上游请求。

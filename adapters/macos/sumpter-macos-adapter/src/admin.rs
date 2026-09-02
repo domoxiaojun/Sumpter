@@ -88,6 +88,11 @@ pub fn admin_router(engine: Engine) -> Router {
             axum::routing::delete(delete_runtime_session),
         )
         .route("/admin/runtime/session/export", get(export_runtime_session))
+        .route(
+            "/admin/runtime/cleanup/preview",
+            post(runtime_cleanup_preview),
+        )
+        .route("/admin/runtime/cleanup", post(runtime_cleanup))
         .route("/admin/runtime/reset", post(reset_runtime))
         .route("/admin/runtime/recreate", post(recreate_runtime))
         .route("/admin/reload", post(reload))
@@ -494,11 +499,11 @@ fn extract_models(value: &Value) -> Vec<String> {
             }
         }
         // Some gateways return a map keyed by model id: {"models":{"gpt-4o":{...}}}.
-        if models.len() == before {
-            if let Some(Value::Object(entries)) = object.get("models") {
-                for key in entries.keys() {
-                    visit(&Value::String(key.clone()), models, depth + 1);
-                }
+        if models.len() == before
+            && let Some(Value::Object(entries)) = object.get("models")
+        {
+            for key in entries.keys() {
+                visit(&Value::String(key.clone()), models, depth + 1);
             }
         }
         if models.len() == before
@@ -633,7 +638,6 @@ fn runtime_filter_from_events_query(query: &RuntimeEventsQuery) -> RuntimeFilter
         failure_phase: query.failure_phase.clone(),
         from: query.from,
         to: query.to,
-        ..RuntimeFilter::default()
     }
 }
 
@@ -724,7 +728,6 @@ impl From<RuntimeFilterQuery> for RuntimeFilter {
             failure_phase: query.failure_phase,
             from: query.from,
             to: query.to,
-            ..RuntimeFilter::default()
         }
     }
 }
@@ -977,7 +980,50 @@ async fn runtime_retention(State(engine): State<Engine>) -> Response {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RuntimeRetentionPayload {
     expected_revision: i64,
+    #[serde(default)]
+    max_age_days: Option<i64>,
+    #[serde(default)]
     storage_limit_bytes: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RuntimeCleanupPayload {
+    older_than: f64,
+}
+
+async fn runtime_cleanup_preview(
+    State(engine): State<Engine>,
+    payload: JsonPayload<RuntimeCleanupPayload>,
+) -> Response {
+    let payload = match require_json(payload) {
+        Ok(payload) => payload,
+        Err(response) => return response,
+    };
+    match engine.runtime_cleanup_preview(payload.older_than) {
+        Ok(value) => json_ok(&value),
+        Err(message) if message.contains("olderThan") => {
+            error(StatusCode::BAD_REQUEST, "invalid_cleanup", &message)
+        }
+        Err(message) => error(StatusCode::CONFLICT, "runtime_cleanup_failed", &message),
+    }
+}
+
+async fn runtime_cleanup(
+    State(engine): State<Engine>,
+    payload: JsonPayload<RuntimeCleanupPayload>,
+) -> Response {
+    let payload = match require_json(payload) {
+        Ok(payload) => payload,
+        Err(response) => return response,
+    };
+    match engine.runtime_cleanup(payload.older_than) {
+        Ok(value) => json_ok(&value),
+        Err(message) if message.contains("olderThan") => {
+            error(StatusCode::BAD_REQUEST, "invalid_cleanup", &message)
+        }
+        Err(message) => error(StatusCode::CONFLICT, "runtime_cleanup_failed", &message),
+    }
 }
 
 async fn runtime_retention_update(
@@ -990,6 +1036,7 @@ async fn runtime_retention_update(
     };
     match engine.runtime_set_retention(RuntimeRetentionUpdate {
         expected_revision: payload.expected_revision,
+        max_age_days: payload.max_age_days,
         storage_limit_bytes: payload.storage_limit_bytes,
     }) {
         Ok(value) => json_ok(&value),
@@ -1090,6 +1137,8 @@ struct RuntimeExportQuery {
     filters: RuntimeFilterQuery,
 }
 
+// Err 侧是已构造好的 axum Response,直接返回给调用方;装箱只会多一次堆分配。
+#[allow(clippy::result_large_err)]
 fn parse_runtime_export_query(query: RuntimeExportQuery) -> Result<ExportQuery, Response> {
     let scope = match query.scope.as_deref().unwrap_or("events") {
         "events" => ExportScope::Events,
@@ -1490,6 +1539,7 @@ async fn events(
                                     json!({"seq": seq, "changeSeq": change_seq, "event": event}),
                                 ),
                                 EngineNotice::PlatformNotice(PlatformNotice::Notify {
+                                    client_kind,
                                     title,
                                     message,
                                     sound,
@@ -1502,6 +1552,7 @@ async fn events(
                                 }) => (
                                     "notify",
                                     json!({
+                                        "clientKind": client_kind.as_str(),
                                         "title": title,
                                         "message": message,
                                         "sound": sound,
@@ -1604,6 +1655,7 @@ impl DiagnosticCaptureFormat {
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_diagnostic_capture_format(raw: Option<&str>) -> Result<DiagnosticCaptureFormat, Response> {
     match raw.unwrap_or("jsonl") {
         "jsonl" => Ok(DiagnosticCaptureFormat::Jsonl),
@@ -1748,11 +1800,10 @@ fn redact_capture_value(value: &mut Value) {
                                             "value".into(),
                                             Value::String("[REDACTED]".into()),
                                         );
-                                    } else if let Some(header_value) = header.get_mut("value") {
-                                        if let Some(text) = header_value.as_str() {
-                                            *header_value =
-                                                Value::String(redact_text_secrets(text));
-                                        }
+                                    } else if let Some(header_value) = header.get_mut("value")
+                                        && let Some(text) = header_value.as_str()
+                                    {
+                                        *header_value = Value::String(redact_text_secrets(text));
                                     }
                                 }
                             }
@@ -2047,12 +2098,15 @@ fn _headers(_: HeaderMap) {}
 
 #[cfg(test)]
 mod tests {
+    use futures_util::StreamExt;
     use std::net::{IpAddr, Ipv4Addr};
     use std::sync::Arc;
 
     use super::*;
     use sumpter_core::config::AppConfig;
     use sumpter_core::config_store::ConfigDir;
+    use sumpter_core::events::ClientKind;
+    use sumpter_engine::boundary::EngineCapabilities;
 
     fn test_engine() -> Engine {
         Engine::new(
@@ -2095,6 +2149,64 @@ mod tests {
             .map(|value| value.0),
             Some("bad_token")
         );
+    }
+
+    #[tokio::test]
+    async fn admin_events_include_notify_client_kind() {
+        let root = std::env::temp_dir().join(format!(
+            "sumpter-macos-admin-events-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let engine = Engine::new(
+            AppConfig::bootstrap().normalized(),
+            Some(ConfigDir::new(root.clone())),
+            Arc::new(crate::outbound::ReqwestTransport::new()),
+            "events-control-token".into(),
+        );
+        let (address, server) = crate::server::serve_router(
+            admin_router(engine.clone()),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        )
+        .await
+        .unwrap();
+        let client = reqwest::Client::new();
+        let response = client
+            .get(format!("http://{address}/admin/events"))
+            .header("x-control-token", "events-control-token")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let mut stream = response.bytes_stream();
+
+        EngineCapabilities::publish_platform_notice(
+            &engine,
+            PlatformNotice::Notify {
+                client_kind: ClientKind::Codex,
+                kind: "stop".into(),
+                title: "Codex CLI · 回合完成".into(),
+                message: "Codex CLI 主回合已完成".into(),
+                sound: None,
+                category: Some("turn_completed".into()),
+                priority: Some("normal".into()),
+                action_id: None,
+                session_id: Some("session-1".into()),
+                cwd: None,
+            },
+        );
+        let chunk = tokio::time::timeout(Duration::from_secs(1), stream.next())
+            .await
+            .expect("SSE notify should arrive")
+            .expect("SSE stream should stay open")
+            .expect("SSE chunk should be readable");
+        let text = String::from_utf8_lossy(&chunk);
+        assert!(text.contains("event: notify"), "{text}");
+        assert!(text.contains("\"clientKind\":\"codex\""), "{text}");
+        assert!(text.contains("Codex CLI 主回合已完成"), "{text}");
+
+        server.abort();
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -2333,6 +2445,7 @@ mod tests {
             .body(
                 serde_json::to_vec(&json!({
                     "expectedRevision": 1,
+                    "maxAgeDays": 30,
                     "storageLimitBytes": 8388608
                 }))
                 .unwrap(),
@@ -2344,6 +2457,7 @@ mod tests {
         let retention_update: Value =
             serde_json::from_slice(&retention_update.bytes().await.unwrap()).unwrap();
         assert_eq!(retention_update["revision"], 2);
+        assert_eq!(retention_update["maxAgeDays"], 30);
         assert_eq!(retention_update["storageLimitBytes"], 8_388_608);
         assert!(retention_update.get("maxEvents").is_none());
 

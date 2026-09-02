@@ -24,7 +24,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Compose 默认以 `user: "0:0"` 运行，**不必** `chown 10001`。  
+镜像和 Compose 均不显式指定用户，容器默认以 root 运行，**不必** `chown 10001`。
 配置文件会由容器直接写在本目录。
 
 可选：放入示例配置后再启动：

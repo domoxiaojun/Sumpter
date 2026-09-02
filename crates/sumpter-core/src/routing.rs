@@ -80,7 +80,11 @@ impl RoutingRequest {
     }
 }
 
-/// 请求用途,仅用于日志/统计/排障,不参与路由。
+/// 请求用途。
+///
+/// **不参与路由**(入口选择只看 mappings 与 featureRules),但确实参与出站 body
+/// 改写:`request_build::server_retrieval_enabled` 用它判断是否启用上游服务端检索,
+/// WebFetch 命中时会替换 `tools`。改这里的判定会改变数据面行为,不只是改统计口径。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RequestPurpose {
     #[serde(rename = "standard")]
@@ -139,7 +143,13 @@ pub mod inspector {
         python_style_json_string(&message.content)
     }
 
-    /// 工具类型前缀判定:存在目标前缀工具、且**不存在** type 为空的客户端工具。
+    /// 工具类型前缀判定:存在目标前缀工具、且**不存在**客户端自定义工具。
+    ///
+    /// 客户端自定义工具在 Anthropic Messages 上有两种等价 wire 形状:省略 `type`
+    /// (Claude Code 当前形状)与显式 `type: "custom"`(SDK 也接受,见
+    /// `tests/bridge_in.rs` 的 Codex 侧样本)。只认省略形状会让带 `"custom"` 的
+    /// 主对话请求在同时挂了一个 `mcp__*` 工具时命中 toolTypePrefix 规则,被分流
+    /// 到内建子请求专用的入口。
     pub fn has_tool_type(request: &RoutingRequest, prefix: &str) -> bool {
         if prefix.is_empty() {
             return false;
@@ -150,11 +160,18 @@ pub mod inspector {
             let tool_type = tool.get("type").and_then(Value::as_str).unwrap_or("");
             if tool_type.starts_with(prefix) {
                 has_target = true;
-            } else if tool_type.is_empty() {
+            } else if is_client_tool_type(tool_type) {
                 has_client_tool = true;
             }
         }
         has_target && !has_client_tool
+    }
+
+    /// 客户端自定义工具的 type 形状:省略(空)或显式 `"custom"`。
+    /// 出站桥用它区分「要映射成 OpenAI function 的客户端工具」与「由上游执行的
+    /// 服务端工具」。
+    pub fn is_client_tool_type(tool_type: &str) -> bool {
+        tool_type.is_empty() || tool_type == "custom"
     }
 
     /// 任一消息前 800 字符(大小写不敏感)包含 needle。
@@ -213,14 +230,18 @@ pub mod inspector {
     /// 仅单条 user 消息,且用途判为 Standard。
     ///
     /// 只陈述形状,不猜用途。判据逐条都在排除已知的正常形状:
-    /// - 无 tools + 单条 user:CC 主对话恒定带 tools 且多轮;
+    /// - 无 tools + 单条 user:CC 主对话恒定带 tools 且多轮,进不到这里;
     /// - system 非空:排除裸 curl / 简易客户端的探测请求;
-    /// - system 不含 CC 身份标识:主对话的 system 必含它,内部辅助请求各有专用 system
-    ///   (`Write the title in …`、`You are a security monitor …` 等)。
+    /// - 用途为 Standard:已识别的辅助请求(标题/搜索/抓取/分类)自己有标签。
     ///
     /// 剩下的就是「带专用 system 的单轮无工具请求,却谁也没匹配上」——几乎必然是
     /// CC 升级后指纹失配的内部请求。存在的意义就是把这种失配变成可见信号:否则
     /// `matches_session_title` 等会静默退化成 Standard,无人察觉。
+    ///
+    /// 身份标识的处理:判「除 CC 身份之外还有没有专用指令」,而不是「出现身份标识
+    /// 就排除」。CC 2.1.220+ 的辅助请求 system 是「billing 头 + CC 身份 + 专用指令」
+    /// 三段,按出现即排除会把最需要告警的一类请求恰好屏蔽掉;而只带身份(或身份加
+    /// 环境上下文)的请求本就不是辅助请求,剥掉身份后没有指令剩下,自然不命中。
     pub fn is_unmatched_no_tools(request: &RoutingRequest) -> bool {
         if !request.tools.is_empty()
             || request.messages.len() != 1
@@ -228,10 +249,8 @@ pub mod inspector {
         {
             return false;
         }
-        let system = system_text(request);
-        !system.trim().is_empty()
-            && !system.contains(CLAUDE_CODE_IDENTITY)
-            && request_purpose(request) == RequestPurpose::Standard
+        let instructions = system_text(request).replace(CLAUDE_CODE_IDENTITY, "");
+        !instructions.trim().is_empty() && request_purpose(request) == RequestPurpose::Standard
     }
 
     /// 分流规则匹配:enabled、各条件 AND、且至少存在一个条件。
@@ -375,8 +394,13 @@ pub mod inspector {
             && forced_tool_choice(request, "classify_result")
     }
 
-    /// Claude Code 2.1.x 自动会话标题请求:专用 system、单条 `<session>` 消息、无工具。
+    /// Claude Code 自动会话标题请求:单条 `<session>` 消息、无工具,外加一条身份判据。
     /// 不看模型名,避免把用户主动选择的模型主请求误标成内部辅助请求。
+    ///
+    /// 身份判据有两条,取或:早期版本只能靠 system 措辞;2.1.220+ 改用结构化输出,
+    /// `output_config` 的 json_schema 比措辞稳定得多 —— 措辞每次改版都可能动,而
+    /// schema 是客户端的解析契约,不会随便变。只留措辞判据会让新版静默退化成
+    /// Standard。
     fn matches_session_title(request: &RoutingRequest) -> bool {
         if !request.tools.is_empty()
             || request.messages.len() != 1
@@ -387,15 +411,32 @@ pub mod inspector {
         let Some(raw_text) = strict_text(&request.messages[0].content) else {
             return false;
         };
-        let system = normalized_newlines(&system_text(request));
-        if !system.contains(SESSION_TITLE_SYSTEM_PREFIX)
-            || !system.contains(SESSION_TITLE_SYSTEM_SUFFIX)
-        {
-            return false;
-        }
         let normalized = normalized_newlines(&raw_text);
         let text = normalized.trim();
-        text.starts_with("<session>") && text.ends_with("</session>")
+        if !text.starts_with("<session>") || !text.ends_with("</session>") {
+            return false;
+        }
+        let system = normalized_newlines(&system_text(request));
+        (system.contains(SESSION_TITLE_SYSTEM_PREFIX)
+            && system.contains(SESSION_TITLE_SYSTEM_SUFFIX))
+            || matches_title_output_schema(request)
+    }
+
+    /// `output_config.format` 是 json_schema 且只约束一个字符串 `title`。
+    fn matches_title_output_schema(request: &RoutingRequest) -> bool {
+        let Some(format) = request
+            .raw
+            .get("output_config")
+            .and_then(|config| config.pointer("/format"))
+        else {
+            return false;
+        };
+        if format.get("type").and_then(Value::as_str) != Some("json_schema") {
+            return false;
+        }
+        format
+            .pointer("/schema/properties/title")
+            .is_some_and(|title| title.get("type").and_then(Value::as_str) == Some("string"))
     }
 
     fn forced_tool_choice(request: &RoutingRequest, name: &str) -> bool {
@@ -820,9 +861,17 @@ pub enum RoutePlanError {
     NoEnabledProvider,
     #[error("no compatible Provider for {source_format}")]
     NoCompatibleProvider { source_format: String },
+    #[error("no Provider accepts {capability} capability")]
+    NoProviderForCapability { capability: String },
 }
 
 pub struct RoutePlanner;
+
+/// Synthetic model used for native resource requests that do not carry a
+/// model field (Files, Videos, Models and their dynamic sub-paths).  It is
+/// never sent to an upstream Provider; it only gives the shared sticky and
+/// runtime-event pipeline a stable routing identity.
+pub const RESOURCE_ROUTING_MODEL: &str = "__sumpter_resource__";
 
 impl RoutePlanner {
     /// 无既有会话归属时的确定性入口顺序：按分组最低 priority 排序，
@@ -857,11 +906,133 @@ impl RoutePlanner {
         Self::plan_for_source(request, config, ProviderProtocol::Anthropic)
     }
 
+    /// Plan a data-plane request that must be relayed byte-for-byte.
+    ///
+    /// Raw requests still use the configured model mappings (and feature-rule
+    /// endpoint/model selection), but an endpoint's declared protocol is not a
+    /// compatibility gate. The upstream owns the protocol contract; Sumpter
+    /// must not reject a request merely because its path looks unlike the
+    /// endpoint's configured protocol.
+    pub fn plan_for_passthrough(
+        request: &RoutingRequest,
+        config: &AppConfig,
+        source_format: ProviderProtocol,
+    ) -> Result<RoutePlan, RoutePlanError> {
+        Self::plan_for_source_mode(request, config, source_format, true)
+    }
+
+    /// First configured mapping that can serve `capability`.
+    pub fn default_model_for_capability(
+        config: &AppConfig,
+        capability: crate::capability::ModelCapability,
+    ) -> Option<String> {
+        for endpoint in &config.endpoints {
+            if !endpoint.enabled {
+                continue;
+            }
+            for mapping in &endpoint.mappings {
+                if crate::capability::mapping_has_capability(
+                    &mapping.capabilities,
+                    &mapping.client_pattern,
+                    capability,
+                ) {
+                    return Some(crate::capability::canonical_model_from_pattern(
+                        &mapping.client_pattern,
+                    ));
+                }
+            }
+        }
+        None
+    }
+
+    /// Passthrough planning that also requires the matched mapping to serve
+    /// `capability`. A text wildcard therefore cannot steal image/video/live
+    /// traffic merely because it matches the client model string.
+    pub fn plan_for_capability(
+        request: &RoutingRequest,
+        config: &AppConfig,
+        source_format: ProviderProtocol,
+        capability: crate::capability::ModelCapability,
+    ) -> Result<RoutePlan, RoutePlanError> {
+        let mut plan = Self::plan_for_passthrough(request, config, source_format)?;
+        plan.endpoints.retain(|endpoint| {
+            config
+                .endpoint(&endpoint.endpoint_id)
+                .is_some_and(|configured| {
+                    configured
+                        .mapping_for(&request.model)
+                        .is_some_and(|mapping| {
+                            crate::capability::mapping_has_capability(
+                                &mapping.capabilities,
+                                // 显式声明缺省时按**请求的实际模型**推断,不按
+                                // pattern:`grok-imagine-*` 这种通配同时覆盖 image
+                                // 与 video 模型,它的 stem 里没有区分信息,只会落到
+                                // Text 而把整类请求挡掉。用实际模型推断既能分出
+                                // image/video,也仍然拦得住 `claude-opus-*` 这类
+                                // 文本通配去抢媒体流量(它匹配到的模型仍推断为 Text)。
+                                &request.model,
+                                capability,
+                            )
+                        })
+                })
+        });
+        if plan.endpoints.is_empty() {
+            return Err(RoutePlanError::NoProviderForCapability {
+                capability: capability.as_str().into(),
+            });
+        }
+        Ok(plan)
+    }
+
+    /// Plan a native resource request that has no model field.  CPA routes
+    /// resource APIs by the provider/credential surface rather than by a text
+    /// model mapping.  Sumpter keeps its explicit mapping requirement for
+    /// conversational requests, while resource intents may use any enabled
+    /// non-Anthropic endpoint and remain byte-for-byte native.
+    pub fn plan_for_resource(
+        config: &AppConfig,
+        source_format: ProviderProtocol,
+    ) -> Result<RoutePlan, RoutePlanError> {
+        let endpoints = Self::planned_endpoints(
+            &config.endpoints,
+            RESOURCE_ROUTING_MODEL,
+            source_format,
+            None,
+            None,
+            None,
+            true,
+            true,
+        )
+        .into_iter()
+        .filter(|endpoint| endpoint.protocol != ProviderProtocol::Anthropic)
+        .collect::<Vec<_>>();
+        if endpoints.is_empty() {
+            return Err(RoutePlanError::NoCompatibleProvider {
+                source_format: source_format.token().into(),
+            });
+        }
+        Ok(RoutePlan {
+            client_model: RESOURCE_ROUTING_MODEL.into(),
+            effective_model: RESOURCE_ROUTING_MODEL.into(),
+            feature_rule_id: None,
+            endpoints,
+        })
+    }
+
     /// 入口路径已确定 SourceFormat 的路由规划；不读取 UA，也不从请求体猜测协议。
     pub fn plan_for_source(
         request: &RoutingRequest,
         config: &AppConfig,
         source_format: ProviderProtocol,
+    ) -> Result<RoutePlan, RoutePlanError> {
+        Self::plan_for_source_mode(request, config, source_format, false)
+    }
+
+    fn plan_for_source_mode(
+        request: &RoutingRequest,
+        config: &AppConfig,
+        source_format: ProviderProtocol,
+        passthrough: bool,
     ) -> Result<RoutePlan, RoutePlanError> {
         let base_model = model_name::clean(&request.model);
         let feature_rule = config
@@ -870,7 +1041,8 @@ impl RoutePlanner {
             .find(|rule| inspector::feature_rule_matches(rule, request));
 
         if let Some(rule) = feature_rule
-            && let Some(result) = Self::feature_plan(config, rule, &base_model, source_format)
+            && let Some(result) =
+                Self::feature_plan(config, rule, &base_model, source_format, passthrough)
         {
             return result;
         }
@@ -884,6 +1056,8 @@ impl RoutePlanner {
             None,
             None,
             None,
+            passthrough,
+            false,
         );
 
         if endpoints.is_empty() {
@@ -906,6 +1080,7 @@ impl RoutePlanner {
         rule: &FeatureRule,
         base_model: &str,
         source_format: ProviderProtocol,
+        passthrough: bool,
     ) -> Option<Result<RoutePlan, RoutePlanError>> {
         let target = &rule.target;
         let effective_model = model_name::clean(&target.model);
@@ -914,7 +1089,8 @@ impl RoutePlanner {
                 rule.match_.request_kind,
                 Some(RequestKind::WebSearch | RequestKind::WebFetch)
             ) && effective_model.to_ascii_lowercase().starts_with("grok-");
-        if grok_requires_responses
+        if !passthrough
+            && grok_requires_responses
             && target
                 .protocol_override
                 .is_some_and(|protocol| protocol != ProviderProtocol::OpenAIResponses)
@@ -923,7 +1099,9 @@ impl RoutePlanner {
                 source_format: source_format.token().into(),
             }));
         }
-        let protocol_override = if grok_requires_responses {
+        let protocol_override = if passthrough {
+            None
+        } else if grok_requires_responses {
             Some(ProviderProtocol::OpenAIResponses)
         } else {
             target.protocol_override
@@ -940,6 +1118,8 @@ impl RoutePlanner {
             protocol_override,
             target.endpoint_id.as_deref(),
             target.effort,
+            passthrough,
+            false,
         );
         // 规则钉住的入口被停用/删除时降级为候选序列 failover,而不是让整条规则失效。
         if endpoints.is_empty() && target.endpoint_id.is_some() && !pinned_endpoint_available {
@@ -950,6 +1130,8 @@ impl RoutePlanner {
                 protocol_override,
                 None,
                 target.effort,
+                passthrough,
+                false,
             );
         }
         if endpoints.is_empty() {
@@ -967,6 +1149,7 @@ impl RoutePlanner {
 
     /// `protocol_override` 非空(分流规则指定协议)时覆盖各入口自身协议;
     /// `pinned_endpoint_id` 非空(规则钉住入口)时只保留该入口并**跳过模型映射筛选**。
+    #[allow(clippy::too_many_arguments)]
     fn planned_endpoints(
         endpoints: &[Endpoint],
         effective_model: &str,
@@ -974,6 +1157,8 @@ impl RoutePlanner {
         protocol_override: Option<ProviderProtocol>,
         pinned_endpoint_id: Option<&str>,
         effort_override: Option<model_name::ReasoningEffort>,
+        passthrough: bool,
+        allow_unmapped: bool,
     ) -> Vec<PlannedEndpoint> {
         let candidates: Vec<PlannedEndpoint> = endpoints
             .iter()
@@ -982,12 +1167,18 @@ impl RoutePlanner {
             .filter_map(|endpoint| {
                 // 每个入口都通过显式 mappings 声明承接范围。
                 let mapping = endpoint.mapping_for(effective_model).cloned();
-                if pinned_endpoint_id.is_none() && mapping.is_none() {
+                if pinned_endpoint_id.is_none() && mapping.is_none() && !allow_unmapped {
                     return None;
                 }
                 let failover_timeout = mapping.as_ref().and_then(|m| m.failover_timeout_seconds);
                 let configured_protocol = endpoint.protocol;
-                let protocol = configured_protocol.resolve(source_format, protocol_override)?;
+                let protocol = if passthrough {
+                    configured_protocol
+                        .fixed_protocol()
+                        .unwrap_or(source_format)
+                } else {
+                    configured_protocol.resolve(source_format, protocol_override)?
+                };
                 let upstream_model = mapping
                     .as_ref()
                     .map(|m| m.upstream_model_for(effective_model))
@@ -999,7 +1190,7 @@ impl RoutePlanner {
                     configured_protocol,
                     source_format,
                     protocol,
-                    route_mode: if source_format == protocol {
+                    route_mode: if passthrough || source_format == protocol {
                         RouteMode::Native
                     } else {
                         RouteMode::Translated

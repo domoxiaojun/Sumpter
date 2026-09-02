@@ -185,6 +185,14 @@ if [[ "$(status_of "$PROXY_BASE" /__status)" == "200" ]]; then
 else
     fail "proxy /__status 未返回 200"
 fi
+if curl --noproxy '*' --fail --silent --show-error --max-time 5 \
+    "$PROXY_BASE/__sumpter/cc-project-attribution.sh" \
+    -o "$TMP_DIR/attribution.sh" \
+    && cmp -s "$TMP_DIR/attribution.sh" "$BASE_DIR/scripts/cc-project-attribution.sh"; then
+    note "✓ Linux listener 内置归因脚本与发布包脚本一致"
+else
+    fail "Linux listener 未返回内置归因脚本"
+fi
 if [[ "$(status_of "$PROXY_BASE" /v1/does-not-exist)" == "404" ]]; then
     note "✓ proxy 未知路径 404"
 else

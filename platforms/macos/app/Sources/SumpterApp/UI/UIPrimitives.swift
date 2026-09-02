@@ -95,7 +95,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .providers: "上游入口、优先级、粘性分组与入口显式模型映射。"
         case .routing: "Claude Code 内部子请求分流与 effort 覆盖。"
         case .security: "监听、入站认证、入站方言和登录项。"
-        case .notifications: "Claude Code hook 与系统通知。"
+        case .notifications: "Claude Code 与 Codex CLI hook 统一系统通知。"
         case .statistics: "按请求用途、入口和模型看成功率、延迟与成本。"
         case .diagnostics: "配置路径、最近请求和诊断捕获。"
         case .help: "快速开始、客户端接入、常见问题与安全边界。"
@@ -287,6 +287,11 @@ struct SumpterTableSurfaceModifier: ViewModifier {
             .tableStyle(.inset)
             .alternatingRowBackgrounds(.disabled)
             .scrollContentBackground(.hidden)
+            // Keep the horizontal affordance visible when a table's column
+            // layout is wider than the current detail pane.  The native Table
+            // still owns scrolling and selection; this only prevents the
+            // scrollbar from disappearing before users discover it.
+            .scrollIndicators(.visible, axes: .horizontal)
             .background(palette.inset)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay {
@@ -1047,6 +1052,10 @@ struct MetricTile: View {
     /// density.
     var titleAccessory: String? = nil
     var systemImage: String
+    /// An optional minimum height lets a group of related KPI cards share one
+    /// baseline even when one card has a wrapped detail or an accessory line.
+    /// Dynamic Type can still grow the tile beyond this value when needed.
+    var minimumHeight: CGFloat? = nil
     @Environment(\.sumpterPalette) private var palette
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
@@ -1105,7 +1114,15 @@ struct MetricTile: View {
             }
         }
         .padding(compact ? 12 : SumpterTheme.Layout.metricPadding)
-        .frame(minWidth: compact ? 138 : 150, maxWidth: .infinity, minHeight: dynamicTypeSize.isAccessibilitySize ? (compact ? 112 : 124) : (compact ? 92 : SumpterTheme.Layout.metricMinimumHeight), alignment: .topLeading)
+        .frame(
+            minWidth: compact ? 138 : 150,
+            maxWidth: .infinity,
+            minHeight: max(
+                minimumHeight ?? 0,
+                dynamicTypeSize.isAccessibilitySize ? (compact ? 112 : 124) : (compact ? 92 : SumpterTheme.Layout.metricMinimumHeight)
+            ),
+            alignment: .topLeading
+        )
         .background(
             ZStack(alignment: .bottomTrailing) {
                 RoundedRectangle(cornerRadius: SumpterTheme.Layout.metricRadius, style: .continuous)

@@ -113,9 +113,9 @@ struct HelpPane: View {
             }
             SectionPanel(title: "快速开始", hint: "Sumpter是本机协议代理；先启动代理，再把客户端 API Base 指向监听地址。") {
                 VStack(alignment: .leading, spacing: 10) {
-                    HelpStep(number: 1, title: "准备 Provider 入口", bodyText: "在“Provider”页添加至少一个已启用入口，填写上游地址和密钥，并为客户端模型配置入口映射。")
+                    HelpStep(number: 1, title: "准备上游服务入口", bodyText: "在“Provider”页添加至少一个已启用入口，填写上游地址和密钥，并为客户端模型配置入口映射。")
                     HelpStep(number: 2, title: "启动并确认监听", bodyText: "回到“运行”页确认 sidecar 正在运行。默认代理地址是 http://127.0.0.1:57878；实际地址以运行页显示为准。")
-                    HelpStep(number: 3, title: "连接客户端", bodyText: "Claude Code 使用 ANTHROPIC_BASE_URL；Codex 或其它 OpenAI 客户端使用 API Base。具体变量和协议矩阵见 USAGE.md。")
+                    HelpStep(number: 3, title: "连接客户端", bodyText: "Claude Code 使用 ANTHROPIC_BASE_URL；Codex 或其它 OpenAI 客户端必须使用带 /v1 的 API Base（默认 http://127.0.0.1:57878/v1）。具体变量和协议矩阵见 USAGE.md。")
                 }
             }
 
@@ -124,7 +124,7 @@ struct HelpPane: View {
                     Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 8) {
                         InfoRow(title: "macOS 配置路径", value: model.configPath.isEmpty ? "~/Library/Application Support/Sumpter/config.json" : model.configPath, copyable: !model.configPath.isEmpty)
                         InfoRow(title: "Claude Code", value: "ANTHROPIC_BASE_URL=http://127.0.0.1:57878")
-                        InfoRow(title: "Codex / OpenAI", value: "API Base=http://127.0.0.1:57878")
+                        InfoRow(title: "Codex / OpenAI", value: "API Base=http://127.0.0.1:57878/v1")
                     }
                     Text("不要把 config.json、API key、入站 Token 或诊断原文提交到 Git，也不要粘贴到公开 Issue。")
                         .font(.callout)
@@ -137,7 +137,7 @@ struct HelpPane: View {
                 VStack(alignment: .leading, spacing: 10) {
                     HelpFAQ(question: "Claude Code 连不上？", answer: "确认 Base URL 指向当前监听地址；若启用了入站认证，客户端 Token 必须与配置完全一致。")
                     HelpFAQ(question: "请求返回模型未找到？", answer: "检查 Provider 入口的 mappings 是否覆盖客户端发送的模型名；代理不会拿未声明的原名盲试上游。")
-                    HelpFAQ(question: "为什么某些能力不支持？", answer: "当前代理面向一次性 HTTP 协议适配；Realtime、WebSocket、Files、Videos 等不同生命周期能力不属于普通透传。")
+                    HelpFAQ(question: "Realtime、Files 或 Videos 失败？", answer: "这些能力由代理直接 relay 给上游：先检查 Provider 的 baseURL、API key、模型 mapping，以及上游是否开放对应 HTTP/WebSocket 能力。代理不会在本地重建协议。")
                 }
             }
 

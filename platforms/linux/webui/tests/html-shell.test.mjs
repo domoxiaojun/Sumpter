@@ -103,11 +103,32 @@ test('StatsPage Token 展示统一术语并把缓存命中率并入缓存读取'
 test('统计项目点击只局部过滤会话，不改变全局统计筛选', () => {
   const source = readFileSync(ANALYTICS_WORKSPACE, 'utf8');
   assert.match(source, /selectedProject/);
-  assert.match(source, /projectID: selectedProject\.key/);
+  assert.match(source, /projectID: localProject\.key/);
   assert.match(source, /kind === 'session'/);
+  assert.match(source, /\['model', '模型使用情况'\]/);
+  assert.match(source, /sessionID: localSession\.key/);
+  assert.match(source, /onSessionSelect/);
   assert.match(source, /清除项目选择/);
-  assert.match(source, /onRowClick=\{kind === 'project' \? onProjectSelect : undefined\}/);
+  assert.match(source, /onRowClick=\{kind === 'project' \? onProjectSelect : kind === 'session' \? onSessionSelect : undefined\}/);
   assert.doesNotMatch(source, /onProjectSelect[\s\S]{0,400}setRuntimeAnalyticsFilters/);
+});
+
+test('统计项目局部选择同步顶部清除筛选状态', () => {
+  const stats = readFileSync(STATS_PAGE, 'utf8');
+  const workspace = readFileSync(ANALYTICS_WORKSPACE, 'utf8');
+  assert.match(stats, /selectedProject\?\.key/);
+  assert.match(stats, /selectedSession\?\.key/);
+  assert.match(stats, /projectSelectionResetSignal/);
+  assert.match(stats, /onProjectSelectionChange=\{handleProjectSelectionChange\}/);
+  assert.match(stats, /onSessionSelectionChange=\{handleSessionSelectionChange\}/);
+  assert.match(workspace, /onProjectSelectionChange\?\.\(next\)/);
+  assert.match(workspace, /onSessionSelectionChange\?\.\(next\)/);
+  assert.match(workspace, /projectSelectionResetSignal/);
+});
+
+test('统计表格内操作按钮不会被行键盘下钻拦截', () => {
+  const table = readFileSync(new URL('../src/components/DataTable.jsx', import.meta.url), 'utf8');
+  assert.match(table, /event\.target !== event\.currentTarget/);
 });
 
 test('DiagnosticsPage 详情内容按需生成且全量导出不经过前端内存', () => {

@@ -89,7 +89,58 @@ function LocalToggle({ initial, label, title, ariaLabel, onChange }) {
   );
 }
 
-const PROVIDER_DRAG_INTERACTIVE_SELECTOR = 'button,input,select,textarea,a,[role="button"]';
+// Keep the retry_delay input and its pass-through switch in one stateful
+// surface.  The modal itself stores draft values in a closure for the save
+// action, but the input disabled state must still react immediately when the
+// user flips the switch.
+function RetryDelayControls({ initialSeconds, initialEnabled, onChange }) {
+  const [seconds, setSeconds] = useState(initialSeconds ?? '');
+  const [enabled, setEnabled] = useState(Boolean(initialEnabled));
+
+  const update = (nextSeconds, nextEnabled) => {
+    onChange?.({ seconds: nextSeconds, enabled: nextEnabled });
+  };
+
+  return (
+    <>
+      <div className="form-group">
+        <label className="form-label">retry_delay 秒数</label>
+        <input
+          type="number"
+          min="0.1"
+          step="0.1"
+          className="form-input"
+          value={seconds}
+          placeholder="例如 2.5"
+          disabled={!enabled}
+          onChange={(event) => {
+            const nextSeconds = event.target.value ? Number(event.target.value) : '';
+            setSeconds(nextSeconds);
+            update(nextSeconds, enabled);
+          }}
+        />
+        <span className="form-hint">填写秒数后，最终失败响应可返回 retry_delay 数字字段。</span>
+      </div>
+
+      <div className="form-group">
+        <label className="form-label">透传 retry_delay</label>
+        <LocalToggle
+          initial={enabled}
+          label={(checked) => checked ? '已开启' : '已关闭'}
+          title="控制最终失败响应是否带回 retry_delay 与 Retry-After"
+          ariaLabel="透传 retry_delay 与 Retry-After"
+          onChange={(nextEnabled) => {
+            setEnabled(nextEnabled);
+            update(seconds, nextEnabled);
+          }}
+        />
+        <span className="form-hint">关闭后即使填写秒数，也不会把 retry_delay 或 Retry-After 返回给客户端。</span>
+      </div>
+    </>
+  );
+}
+
+const PROVIDER_DRAG_INTERACTIVE_SELECTOR = 'button,input,select,textarea,a,summary,[role="button"]';
 
 function providerDropPosition(event) {
   const bounds = event.currentTarget.getBoundingClientRect();
@@ -104,21 +155,25 @@ function providerDropPosition(event) {
 function createProviderDragImage(sourceRow) {
   if (!sourceRow || typeof document === 'undefined') return null;
   const bounds = sourceRow.getBoundingClientRect();
-  const table = document.createElement('table');
-  table.className = 'data-table provider-drag-preview';
-  table.style.width = `${Math.max(280, Math.round(bounds.width))}px`;
-  table.style.maxWidth = `${Math.max(280, Math.round(bounds.width))}px`;
-  const body = document.createElement('tbody');
   const clone = sourceRow.cloneNode(true);
   clone.removeAttribute('aria-selected');
   clone.classList.add('provider-drag-preview-row');
-  body.appendChild(clone);
-  table.appendChild(body);
-  table.style.position = 'fixed';
-  table.style.left = '-10000px';
-  table.style.top = '-10000px';
-  document.body.appendChild(table);
-  return table;
+  const preview = sourceRow.tagName === 'TR' ? document.createElement('table') : document.createElement('div');
+  preview.className = `provider-drag-preview${sourceRow.tagName === 'TR' ? ' data-table' : ''}`;
+  preview.style.width = `${Math.max(280, Math.round(bounds.width))}px`;
+  preview.style.maxWidth = `${Math.max(280, Math.round(bounds.width))}px`;
+  if (sourceRow.tagName === 'TR') {
+    const body = document.createElement('tbody');
+    body.appendChild(clone);
+    preview.appendChild(body);
+  } else {
+    preview.appendChild(clone);
+  }
+  preview.style.position = 'fixed';
+  preview.style.left = '-10000px';
+  preview.style.top = '-10000px';
+  document.body.appendChild(preview);
+  return preview;
 }
 
 function CatalogModelPicker({ models, onChange }) {
@@ -258,6 +313,11 @@ export function PrimaryProvidersPage() {
   const endpoints = config?.endpoints || [];
   const retry = config?.retry || {};
   const selectedEndpoint = endpoints.find((e) => e.id === selectedEndpointID) || endpoints[0];
+  const enabledEndpointCount = endpoints.filter((endpoint) => endpoint.enabled !== false).length;
+  const mappedModelCount = endpoints.reduce((total, endpoint) => total + endpointMappings(endpoint).length, 0);
+  const catalogModelCount = new Set(
+    endpoints.flatMap((endpoint) => catalogModels(endpoint).map((model) => modelKey(model))),
+  ).size;
 
   const setModelFetchState = (endpointID, fetching) => {
     setFetchingModelEndpointIDs((previous) => {
@@ -539,18 +599,22 @@ export function PrimaryProvidersPage() {
     let maxRounds = retry.maxDeferredRounds ?? retry.crossRoundRetries ?? 3;
     let maxDuration = retry.maxRetryDurationSeconds ?? 0;
     let pinnedIPConcurrency = retry.pinnedIPConcurrency ?? 3;
+    let max500Retries = retry.max500Retries ?? 0;
+    let failoverOn500 = retry.failoverOn500 ?? true;
+    let retryDelaySeconds = retry.retryDelaySeconds ?? '';
+    let passThroughRetryDelay = retry.passThroughRetryDelay ?? true;
 
     openModal({
-      title: '编辑全局跨轮重试与超时策略',
+      title: '编辑全局转发与重试策略',
       content: (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
           <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-            重试参数作用于所有 Provider 入口。当上游返回 429、500、502、503 或网络中断时自动退避重试。
+            这些参数作用于所有 Provider 入口；可分别控制超时、HTTP 500 处理、错误重试轮数，以及是否向客户端透传 retry_delay。
           </div>
 
           <div className="grid-2col">
             <div className="form-group">
-              <label className="form-label">单次响应超时（秒）</label>
+              <label className="form-label">首响应截止（秒）</label>
               <input
                 type="number"
                 min="0.1"
@@ -564,7 +628,7 @@ export function PrimaryProvidersPage() {
             </div>
 
             <div className="form-group">
-              <label className="form-label">流式空闲超时（秒）</label>
+              <label className="form-label">流式空闲截止（秒）</label>
               <input
                 type="number"
                 min="0.1"
@@ -578,9 +642,47 @@ export function PrimaryProvidersPage() {
             </div>
           </div>
 
+          <div className="retry-policy-section-title">HTTP 500 处理</div>
+
           <div className="grid-2col">
             <div className="form-group">
-              <label className="form-label">会话粘性入口失败后重试</label>
+              <label className="form-label">500 失败后切换入口</label>
+              <LocalToggle
+                initial={failoverOn500}
+                label={(checked) => checked ? '已开启' : '已关闭'}
+                title="控制 HTTP 500 重试耗尽后是否切换到下一个入口"
+                ariaLabel="HTTP 500 失败后切换入口"
+                onChange={(value) => { failoverOn500 = value; }}
+              />
+              <span className="form-hint">开启：重试耗尽后继续下一个入口；关闭：在当前入口直接返回 500。</span>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">入口内 500 重试</label>
+              <input
+                type="number"
+                min="0"
+                step="1"
+                className="form-input"
+                defaultValue={max500Retries}
+                onChange={(e) => { max500Retries = Number(e.target.value); }}
+              />
+              <span className="form-hint">仅针对同一入口连续收到的 HTTP 500；0 表示不额外重试。</span>
+            </div>
+
+            <RetryDelayControls
+              initialSeconds={retryDelaySeconds}
+              initialEnabled={passThroughRetryDelay}
+              onChange={({ seconds, enabled }) => {
+                retryDelaySeconds = seconds;
+                passThroughRetryDelay = enabled;
+              }}
+            />
+          </div>
+
+          <div className="grid-2col">
+            <div className="form-group">
+              <label className="form-label">粘性入口额外重试</label>
               <input
                 type="number"
                 min="0"
@@ -589,11 +691,11 @@ export function PrimaryProvidersPage() {
                 defaultValue={stickyRetries}
                 onChange={(e) => { stickyRetries = Number(e.target.value); }}
               />
-              <span className="form-hint">设置 2 = 首次失败后额外重试 2 次；全部遇到可重试故障才切换其它组，成功后立即改绑。</span>
+              <span className="form-hint">设置 2 = 非 500 可重试故障后额外重试 2 次；全部遇到可重试故障才切换其它组，成功后立即改绑。</span>
             </div>
 
             <div className="form-group">
-              <label className="form-label">可重试故障最大轮数</label>
+              <label className="form-label">故障重试最大轮数</label>
               <input
                 type="number"
                 min="0"
@@ -608,7 +710,7 @@ export function PrimaryProvidersPage() {
 
           <div className="grid-2col">
             <div className="form-group">
-              <label className="form-label">跨轮重试最大时长（秒）</label>
+              <label className="form-label">跨轮最长时长（秒）</label>
               <input
                 type="number"
                 min="0"
@@ -622,7 +724,7 @@ export function PrimaryProvidersPage() {
             </div>
 
             <div className="form-group">
-              <label className="form-label">IP 直连竞速并发数</label>
+              <label className="form-label">固定 IP 并发</label>
               <input
                 type="number"
                 min="1"
@@ -648,22 +750,30 @@ export function PrimaryProvidersPage() {
             const maxRoundsNumber = Number(maxRounds);
             const maxDurationNumber = Number(maxDuration);
             const pinnedIPConcurrencyNumber = Number(pinnedIPConcurrency);
+            const max500RetriesNumber = Number(max500Retries);
+            const retryDelaySecondsNumber = retryDelaySeconds == null || retryDelaySeconds === '' ? null : Number(retryDelaySeconds);
             if ((responseTimeoutNumber != null && (!Number.isFinite(responseTimeoutNumber) || responseTimeoutNumber <= 0))
               || (streamIdleTimeoutNumber != null && (!Number.isFinite(streamIdleTimeoutNumber) || streamIdleTimeoutNumber <= 0))) {
-              addToast('响应超时和流式空闲超时必须留空或填写大于 0 的数字', 'warning');
+              addToast('首响应截止和流式空闲截止必须留空或填写大于 0 的数字', 'warning');
               return true;
             }
-            if (!Number.isInteger(stickyRetriesNumber) || stickyRetriesNumber < 0
+            if (!Number.isInteger(max500RetriesNumber) || max500RetriesNumber < 0
+              || (retryDelaySecondsNumber != null && (!Number.isFinite(retryDelaySecondsNumber) || retryDelaySecondsNumber <= 0))
+              || !Number.isInteger(stickyRetriesNumber) || stickyRetriesNumber < 0
               || !Number.isInteger(maxRoundsNumber) || maxRoundsNumber < 0
               || !Number.isFinite(maxDurationNumber) || maxDurationNumber < 0
               || !Number.isInteger(pinnedIPConcurrencyNumber) || pinnedIPConcurrencyNumber < 1) {
-              addToast('重试次数/轮数必须是非负整数，最大时长不能为负，IP 并发数至少为 1', 'warning');
+              addToast('入口内 500 重试、故障轮数和粘性重试必须是非负整数；retry_delay 秒数和超时必须大于 0；IP 并发至少为 1', 'warning');
               return true;
             }
             const nextConfig = clone(config);
             nextConfig.retry = {
               responseTimeoutSeconds: responseTimeoutNumber,
               streamIdleTimeoutSeconds: streamIdleTimeoutNumber,
+              max500Retries: max500RetriesNumber,
+              failoverOn500,
+              retryDelaySeconds: retryDelaySecondsNumber,
+              passThroughRetryDelay,
               sessionStickyRetries: stickyRetriesNumber,
               maxDeferredRounds: maxRoundsNumber,
               maxRetryDurationSeconds: maxDurationNumber,
@@ -776,7 +886,7 @@ export function PrimaryProvidersPage() {
           </div>
 
           <div className="form-group">
-            <label className="form-label">Base URL *</label>
+            <label className="form-label">API 地址 *</label>
             <input
               type="text"
               className="form-input"
@@ -799,7 +909,7 @@ export function PrimaryProvidersPage() {
           </div>
 
           <div className="form-group">
-            <label className="form-label">入口协议能力</label>
+            <label className="form-label">入口协议</label>
             <select
               className="form-select"
               defaultValue={protocol}
@@ -813,7 +923,7 @@ export function PrimaryProvidersPage() {
           </div>
 
           <div className="form-group">
-            <label className="form-label">Pinned IP（可多值）</label>
+            <label className="form-label">Pinned IPs（可多值）</label>
             <textarea
               className="form-input"
               rows="2"
@@ -821,7 +931,7 @@ export function PrimaryProvidersPage() {
               placeholder="可选，每行或逗号分隔一个 IPv4/IPv6 地址"
               onChange={(e) => { pinnedIPs = parseList(e.target.value); }}
             />
-            <span className="form-hint">TLS SNI 仍使用 Base URL 的域名；多个地址按运行时策略尝试。</span>
+            <span className="form-hint">TLS SNI 仍使用 API 地址的域名；多个地址按运行时策略尝试。</span>
           </div>
 
           <div className="grid-2col">
@@ -832,13 +942,13 @@ export function PrimaryProvidersPage() {
             <div className="form-group">
               <label className="form-label">粘性分组</label>
               <input type="text" className="form-input" defaultValue={stickyGroup} placeholder="留空 = 入口独立分组" onChange={(e) => { stickyGroup = e.target.value; }} />
-                      <span className="form-hint">同一分组共享会话粘性；当前分组故障后再故障转移到其他分组。</span>
+              <span className="form-hint">同一分组共享会话粘性；当前分组故障后再故障转移到其他分组。</span>
             </div>
           </div>
 
           <div className="grid-2col">
             <div className="form-group">
-              <label className="form-label">连接复用 (Keep-Alive)</label>
+              <label className="form-label">连接复用</label>
               <LocalToggle initial={keepAlive} onChange={(value) => { keepAlive = value; }} label={(value) => (value ? '启用连接复用' : '每请求新建连接')} ariaLabel="切换连接复用（Keep-Alive）" />
               <span className="form-hint">新入口默认启用；可按入口关闭。启用后复用出站连接，可减少 TCP/TLS 握手开销。</span>
             </div>
@@ -866,7 +976,7 @@ export function PrimaryProvidersPage() {
           kind: 'primary',
           onClick: async () => {
             if (!name.trim() || !baseURL.trim()) {
-              addToast('请填写完整的入口名称与 Base URL', 'warning');
+              addToast('请填写完整的入口名称与 API 地址', 'warning');
               return true;
             }
             const normalizedID = endpointID.trim() || `endpoint-${Date.now().toString(36)}`;
@@ -885,7 +995,7 @@ export function PrimaryProvidersPage() {
                 throw new Error('invalid base url');
               }
             } catch {
-              addToast('Base URL 必须是无凭据、query 和 fragment 的有效 http/https 地址', 'warning');
+              addToast('API 地址必须是无凭据、query 和 fragment 的有效 http/https 地址', 'warning');
               return true;
             }
 
@@ -1086,13 +1196,13 @@ export function PrimaryProvidersPage() {
       width: '178px',
       minWidth: '160px',
       render: (row) => (
-        <>
+        <span className="provider-reorder-cell">
           <span className="provider-reorder-handle" aria-hidden="true"><Icon name="drag" size={15} /></span>
           <span className="provider-reorder-copy">
             <strong>{row.name}</strong>
             <small className="mono-cell">{row.id}</small>
           </span>
-        </>
+        </span>
       ),
     },
     {
@@ -1241,7 +1351,7 @@ export function PrimaryProvidersPage() {
         <div className="glass-panel panel-padded-stack">
           <div className="panel-toolbar">
             <span style={{ fontSize: '0.82rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)' }}>
-              入口模型映射
+              入口模型映射与入口概览
             </span>
             <StatusBadge text="按入口生效" kind="good" />
           </div>
@@ -1250,6 +1360,13 @@ export function PrimaryProvidersPage() {
             精确模型名优先于 <code>prefix-*</code> 通配映射；点击入口后即可编辑。
           </p>
           <span className="form-hint">每个 Provider 入口独立声明模型映射；系统按优先级、粘性组和协议能力形成候选序列。</span>
+          <div className="grid-3col provider-overview-metrics" aria-label="Provider 入口概览">
+            <div><span>入口总数</span><strong className="mono-cell">{endpoints.length}</strong></div>
+            <div><span>已启用</span><strong className="mono-cell">{enabledEndpointCount}</strong></div>
+            <div><span>未启用</span><strong className="mono-cell">{Math.max(0, endpoints.length - enabledEndpointCount)}</strong></div>
+            <div><span>模型映射</span><strong className="mono-cell">{mappedModelCount} 条</strong></div>
+            <div><span>目录模型（去重）</span><strong className="mono-cell">{catalogModelCount ? `${catalogModelCount} 个` : '尚未获取'}</strong></div>
+          </div>
         </div>
 
         {/* Global Retry Policy Card */}
@@ -1261,12 +1378,15 @@ export function PrimaryProvidersPage() {
             <StatusBadge text="生效中" kind="good" />
           </div>
           <div className="grid-2col summary-grid">
-            <div>单次响应截止：<strong className="mono-cell">{retry.responseTimeoutSeconds ? `${retry.responseTimeoutSeconds}s` : '由客户端决定'}</strong></div>
+            <div>首响应截止：<strong className="mono-cell">{retry.responseTimeoutSeconds ? `${retry.responseTimeoutSeconds}s` : '由客户端决定'}</strong></div>
             <div>流式空闲截止：<strong className="mono-cell">{retry.streamIdleTimeoutSeconds ? `${retry.streamIdleTimeoutSeconds}s` : '无限空闲'}</strong></div>
+            <div>500 失败后切换入口：<strong className="mono-cell">{(retry.failoverOn500 ?? true) ? '开启' : '关闭'}</strong></div>
+            <div>入口内 500 重试：<strong className="mono-cell">{retry.max500Retries ?? 0} 次</strong></div>
+            <div>retry_delay 透传：<strong className="mono-cell">{(retry.passThroughRetryDelay ?? true) ? (retry.retryDelaySeconds ? `${retry.retryDelaySeconds}s` : '未配置') : '关闭'}</strong></div>
             <div>粘性入口重试：<strong className="mono-cell">{retry.sessionStickyRetries ?? 2} 次</strong></div>
-            <div>跨轮重试上限：<strong className="mono-cell">{retry.maxDeferredRounds ?? retry.crossRoundRetries ?? 3} 轮</strong></div>
-            <div>IP 直连并发数：<strong className="mono-cell">{retry.pinnedIPConcurrency ?? 3}</strong></div>
-            <div>跨轮最长耗时：<strong className="mono-cell">{retry.maxRetryDurationSeconds ? `${retry.maxRetryDurationSeconds}s` : '不限时长'}</strong></div>
+            <div>故障重试最大轮数：<strong className="mono-cell">{retry.maxDeferredRounds ?? retry.crossRoundRetries ?? 3} 轮</strong></div>
+            <div>固定 IP 并发：<strong className="mono-cell">{retry.pinnedIPConcurrency ?? 3}</strong></div>
+            <div>跨轮最长时长：<strong className="mono-cell">{retry.maxRetryDurationSeconds ? `${retry.maxRetryDurationSeconds}s` : '不限时长'}</strong></div>
           </div>
         </div>
       </div>
@@ -1301,13 +1421,18 @@ export function PrimaryProvidersPage() {
             ) : endpoints.map((endpoint, idx) => {
               const models = catalogModels(endpoint);
               const selected = selectedEndpoint?.id === endpoint.id;
+              const dragProps = providerRowProps(endpoint);
               return (
                 <article
+                  {...dragProps}
                   key={endpoint.id}
-                  className={`responsive-data-card provider-mobile-card${selected ? ' is-selected' : ''}`}
+                  className={`${dragProps.className} responsive-data-card provider-mobile-card${selected ? ' is-selected' : ''}`}
                   role="listitem"
                 >
                   <div className="responsive-data-card-heading">
+                    <span className="provider-mobile-drag-handle" aria-hidden="true">
+                      <Icon name="drag" size={15} />
+                    </span>
                     <div className="responsive-data-card-title">
                       <strong>{endpoint.name || endpoint.id}</strong>
                       <small className="mono-cell">{endpoint.id}</small>
@@ -1419,7 +1544,7 @@ export function PrimaryProvidersPage() {
           <div className="panel-toolbar">
             <div className="panel-actions">
               <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
-                通道详情与模型映射 · {selectedEndpoint.name}
+                入口详情 · {selectedEndpoint.name}
               </h3>
               <StatusBadge text={selectedEndpoint.enabled ? '已就绪' : '已停用'} kind={selectedEndpoint.enabled ? 'good' : 'muted'} />
             </div>
@@ -1457,13 +1582,13 @@ export function PrimaryProvidersPage() {
 
           <div className="grid-4col endpoint-detail-grid">
             <div><span style={{ color: 'var(--text-muted)' }}>入口 ID：</span><span className="mono-cell">{selectedEndpoint.id}</span></div>
-            <div><span style={{ color: 'var(--text-muted)' }}>Base URL：</span><span className="mono-cell">{selectedEndpoint.baseURL}</span></div>
+            <div><span style={{ color: 'var(--text-muted)' }}>API 地址：</span><span className="mono-cell">{selectedEndpoint.baseURL}</span></div>
             <div><span style={{ color: 'var(--text-muted)' }}>API Key：</span><span className={secretStatus?.endpoints?.[selectedEndpoint.id]?.configured ? 'provider-secret-configured' : 'provider-secret-missing'}>{secretStatus?.endpoints?.[selectedEndpoint.id]?.configured ? `已配置 · 尾号 ${secretStatus.endpoints[selectedEndpoint.id].last4 || '****'}` : '未配置'}</span></div>
-            <div><span style={{ color: 'var(--text-muted)' }}>入口协议能力：</span><span className="mono-cell">{endpointProtocolLabel(selectedEndpoint.protocol)}</span></div>
-            <div><span style={{ color: 'var(--text-muted)' }}>Pinned IP：</span><span className="mono-cell">{endpointPinnedIPs(selectedEndpoint).join(', ') || '自动 DNS'}</span></div>
+            <div><span style={{ color: 'var(--text-muted)' }}>入口协议：</span><span className="mono-cell">{endpointProtocolLabel(selectedEndpoint.protocol)}</span></div>
+            <div><span style={{ color: 'var(--text-muted)' }}>Pinned IPs：</span><span className="mono-cell">{endpointPinnedIPs(selectedEndpoint).join(', ') || '自动 DNS'}</span></div>
             <div><span style={{ color: 'var(--text-muted)' }}>粘性分组：</span><span className="mono-cell">{selectedEndpoint.stickyGroup || '独立分组'}</span></div>
             <div><span style={{ color: 'var(--text-muted)' }}>出口模式：</span><span className="mono-cell">{selectedEndpoint.pinnedIPExclusive ? '仅固定 IP' : '允许 DNS 回落'}</span></div>
-            <div><span style={{ color: 'var(--text-muted)' }}>Keep-Alive：</span><span className="mono-cell">{selectedEndpoint.keepAlive ? '开启' : '关闭'}</span></div>
+            <div><span style={{ color: 'var(--text-muted)' }}>连接复用：</span><span className="mono-cell">{selectedEndpoint.keepAlive ? '开启' : '关闭'}</span></div>
           </div>
 
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', padding: '12px 14px', borderRadius: 'var(--radius-md)', background: 'var(--bg-surface-glass)', border: '1px solid var(--border-subtle)' }}>
@@ -1498,7 +1623,7 @@ export function PrimaryProvidersPage() {
           {/* Model Mappings Table */}
           <div>
             <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '10px' }}>
-              针对该入口的具体模型映射转换规则 ({endpointMappings(selectedEndpoint).length})
+              模型映射 · {selectedEndpoint.name} ({endpointMappings(selectedEndpoint).length})
             </div>
 
             {endpointMappings(selectedEndpoint).length > 0 ? (

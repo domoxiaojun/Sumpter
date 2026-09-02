@@ -659,7 +659,7 @@ struct SecurityPane: View {
             Bundle.main.url(forResource: "cc-project-attribution", withExtension: "sh"),
             Bundle.main.bundleURL
                 .deletingLastPathComponent()
-                .appendingPathComponent("platforms/linux/scripts/cc-project-attribution.sh"),
+                .appendingPathComponent("platforms/macos/scripts/cc-project-attribution.sh"),
         ]
         return candidates.compactMap { $0 }.first { FileManager.default.fileExists(atPath: $0.path) }
     }
@@ -885,11 +885,19 @@ struct SecurityPane: View {
 }
 
 struct StorageLimitEditor: View {
+    enum Presentation {
+        case inline
+        case sheet(onClose: () -> Void)
+    }
+
     @ObservedObject var model: AppModel
     let probe: AdminWire.RuntimeStorageProbe
+    var presentation: Presentation = .inline
+    @State private var maxAgeDays = ""
     @State private var limitMB = ""
     @State private var dirty = false
     @State private var saving = false
+    @State private var validationError: String?
 
     private var retention: AdminWire.RuntimeRetention { model.runtimeRetention ?? probe.retention }
 
@@ -899,75 +907,179 @@ struct StorageLimitEditor: View {
         ByteCountFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .memory)
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+    init(
+        model: AppModel,
+        probe: AdminWire.RuntimeStorageProbe,
+        presentation: Presentation = .inline
+    ) {
+        self.model = model
+        self.probe = probe
+        self.presentation = presentation
+    }
+
+    @ViewBuilder
+    private var formContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Label("存储上限", systemImage: "gauge.with.dots.needle.67percent")
+                Label("自动保留策略", systemImage: "arrow.triangle.2.circlepath")
                     .font(.callout.weight(.semibold))
                 Spacer(minLength: 0)
-                if let value = retention.storageLimitBytes {
-                    let percent = min(100, Int((Double(usedBytes) / Double(max(1, value)) * 100).rounded()))
-                    Text("当前 \(formatBytes(value)) · 已用 \(formatBytes(usedBytes)) · \(percent)%")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(usedBytes >= value ? .orange : .secondary)
-                } else {
-                    Text("不限制").font(.caption).foregroundStyle(.secondary)
-                }
+                Text(retentionSummary)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
             }
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { input; buttons }
-                VStack(alignment: .leading, spacing: 8) { input; buttons }
+                HStack(spacing: 10) { maxAgeInput; input; buttons }
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 10) { maxAgeInput; input }
+                    buttons
+                }
             }
-            Text("上限按有效占用计算；达到上限后自动轮换最旧的已完成请求，新的请求继续写入；进行中的请求不会删除。轮换不会立即缩小数据库文件，需要真正回收空间时请使用“重置并新建数据库”。留空表示不限制容量。")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text("系统按滚动 24 小时的保存天数和 SQLite 有效占用上限自动轮换；任一条件先达到就触发。按请求组删除，进行中的请求组会完整保留。留空可分别关闭对应条件；轮换不会立即缩小数据库文件，需要真正回收空间时使用“重置并新建数据库”。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let validationError {
+                Label(validationError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if case .sheet = presentation, let error = model.runtimeV2Error {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
-        .padding(10)
-        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    @ViewBuilder
+    var body: some View {
+        Group {
+            if case let .sheet(onClose) = presentation {
+                SheetShell(
+                    title: "运行统计存储设置",
+                    primaryTitle: saving ? "保存中…" : "完成",
+                    primaryDisabled: saving,
+                    onCancel: onClose,
+                    onSubmit: onClose
+                ) {
+                    formContent
+                }
+            } else {
+                formContent
+                    .padding(10)
+                    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+        }
         .task { syncFromModel() }
+        .onChange(of: model.runtimeRetention?.maxAgeDays) { _, _ in syncFromModel() }
         .onChange(of: model.runtimeRetention?.storageLimitBytes) { _, _ in syncFromModel() }
-        .onChange(of: limitMB) { _, _ in dirty = true }
+        .onChange(of: maxAgeDays) { _, _ in
+            dirty = true
+            validationError = nil
+        }
+        .onChange(of: limitMB) { _, _ in
+            dirty = true
+            validationError = nil
+        }
+    }
+
+    private var maxAgeInput: some View {
+        HStack(spacing: 8) {
+            Text("最长保存")
+                .foregroundStyle(.secondary)
+            TextField("例如 30", text: $maxAgeDays)
+                .textFieldStyle(.roundedBorder)
+                .frame(minWidth: 86, maxWidth: 120)
+            Text("天")
+                .foregroundStyle(.secondary)
+        }
     }
 
     private var input: some View {
         HStack(spacing: 8) {
+            Text("容量上限")
+                .foregroundStyle(.secondary)
             TextField("例如 1024", text: $limitMB)
                 .textFieldStyle(.roundedBorder)
-                .frame(minWidth: 120, maxWidth: 180)
+                .frame(minWidth: 86, maxWidth: 120)
             Text("MB").foregroundStyle(.secondary)
         }
     }
 
     private var buttons: some View {
         HStack(spacing: 8) {
-            Button(saving ? "保存中…" : "保存存储上限") { save() }
+            Button(saving ? "保存中…" : "保存保留策略") { save() }
                 .controlSize(.small).disabled(saving)
-            Button("关闭上限") {
+            Button("关闭时间上限") {
+                maxAgeDays = ""
+                dirty = false
+                save(maxAgeDaysValue: nil, storageLimitBytesValue: retention.storageLimitBytes)
+            }
+            .controlSize(.small)
+            .disabled(saving || retention.maxAgeDays == nil)
+            Button("关闭容量上限") {
                 limitMB = ""
                 dirty = false
-                save()
+                save(maxAgeDaysValue: retention.maxAgeDays, storageLimitBytesValue: nil)
             }
             .controlSize(.small)
             .disabled(saving || retention.storageLimitBytes == nil)
         }
     }
 
+    private var retentionSummary: String {
+        switch (retention.maxAgeDays, retention.storageLimitBytes) {
+        case let (age?, bytes?):
+            let percent = min(100, Int((Double(usedBytes) / Double(max(1, bytes)) * 100).rounded()))
+            return "最长 \(age) 天 · 容量 \(formatBytes(bytes)) · 已用 \(percent)%"
+        case let (age?, nil):
+            return "最长 \(age) 天 · 容量不限制"
+        case let (nil, bytes?):
+            let percent = min(100, Int((Double(usedBytes) / Double(max(1, bytes)) * 100).rounded()))
+            return "时间不限制 · 容量 \(formatBytes(bytes)) · 已用 \(percent)%"
+        case (nil, nil):
+            return "仅手动清理"
+        }
+    }
+
     private func syncFromModel() {
         guard !dirty else { return }
+        maxAgeDays = retention.maxAgeDays.map(String.init) ?? ""
         limitMB = retention.storageLimitBytes.map { String(max(1, $0 / 1_048_576)) } ?? ""
         dirty = false
     }
 
-    private func save() {
-        let value = limitMB.trimmingCharacters(in: .whitespacesAndNewlines)
-        let megabytes = value.isEmpty ? nil : Int(value)
-        guard value.isEmpty || ((megabytes ?? 0) >= 1 && (megabytes ?? 0) <= Int.max / 1_048_576) else {
-            model.flash("存储上限必须是至少 1 MB 的整数")
+    private func save(maxAgeDaysValue: Int? = nil, storageLimitBytesValue: Int? = nil) {
+        let ageText = maxAgeDays.trimmingCharacters(in: .whitespacesAndNewlines)
+        let age = maxAgeDaysValue ?? (ageText.isEmpty ? nil : Int(ageText))
+        guard ageText.isEmpty || (age ?? 0) >= 1 else {
+            validationError = "最大保存天数必须是至少 1 天的整数"
+            model.flash("最大保存天数必须是至少 1 天的整数")
             return
         }
+
+        let value = limitMB.trimmingCharacters(in: .whitespacesAndNewlines)
+        let megabytes = value.isEmpty ? nil : Int(value)
+        let storageBytes: Int?
+        if let storageLimitBytesValue {
+            storageBytes = storageLimitBytesValue
+        } else {
+            guard value.isEmpty || ((megabytes ?? 0) >= 1 && (megabytes ?? 0) <= Int.max / 1_048_576) else {
+                validationError = "存储上限必须是至少 1 MB 的整数"
+                model.flash("存储上限必须是至少 1 MB 的整数")
+                return
+            }
+            storageBytes = megabytes.map { $0 * 1_048_576 }
+        }
+        validationError = nil
         saving = true
         model.updateRuntimeRetention(AdminWire.RuntimeRetentionUpdate(
             expectedRevision: retention.revision,
-            storageLimitBytes: megabytes.map { $0 * 1_048_576 }
+            maxAgeDays: age,
+            storageLimitBytes: storageBytes
         ))
         dirty = false
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { saving = false }
@@ -1013,7 +1125,6 @@ struct DiagnosticsPane: View {
 
     var body: some View {
         SettingsPage(title: SettingsSection.diagnostics.title, subtitle: SettingsSection.diagnostics.subtitle) {
-            runtimeStoragePanel
             diagnosticCapturePanel
             diagnosticsPanel
             claudeSettingsPanel
@@ -1023,7 +1134,6 @@ struct DiagnosticsPane: View {
                 captureCapacityMB = String(max(1, maxBytes / 1_048_576))
             }
             model.refreshDiagnosticCapture()
-            model.refreshRuntimeMaintenance()
         }
         .task {
             // 页面可见时只低频刷新轻量索引；正文、Headers 与 Chunk 仍需显式读取。
@@ -1150,120 +1260,6 @@ struct DiagnosticsPane: View {
         } message: {
             Text("当前详情包含原始请求/响应/Headers/Chunk，可能含敏感数据；仅用于可信的本地诊断。")
         }
-    }
-
-    private var runtimeStoragePanel: some View {
-        SectionPanel(title: "运行统计存储", hint: "设置存储上限后自动轮换最旧的已完成请求；进行中的请求不会删除，仍可在统计页手动清理。旧 stats.json 作为归档保留，应用不再读取或修改。") {
-            if let probe = model.runtimeStorageProbe {
-                VStack(alignment: .leading, spacing: 14) {
-                    probeStorageHeader(probe)
-                    Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 8) {
-                        InfoRow(title: "保留事件", value: grouped(probe.retainedEvents))
-                        InfoRow(title: "已完成 / 进行中", value: "\(grouped(probe.completedEvents)) / \(grouped(probe.inFlightEvents))")
-                        InfoRow(title: "数据库文件 / 有效占用", value: "\(formatBytes(probe.databaseBytes)) / \(formatBytes(probe.liveBytes))")
-                        InfoRow(title: "WAL / 空闲页", value: "\(formatBytes(probe.walBytes)) / \(formatBytes(probe.freelistBytes))")
-                        InfoRow(title: "用户删除", value: "\(grouped(probe.userDeletedEvents)) 条事件 / \(grouped(probe.userDeletedRequests)) 个请求")
-                        InfoRow(title: "小时聚合", value: probe.hourlyRollupComplete ? "完成至 #\(probe.hourlyRollupMaxSeq)" : "待处理 \(grouped(probe.hourlyRollupDirtyBuckets)) 个桶")
-                        InfoRow(title: "缺失索引", value: probe.missingIndexes.isEmpty ? "无" : probe.missingIndexes.joined(separator: ", "))
-                    }
-                    StorageLimitEditor(model: model, probe: probe)
-                    retentionEditor
-                    if let error = model.runtimeV2Error {
-                        Label(error, systemImage: "exclamationmark.triangle.fill")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                            .textSelection(.enabled)
-                    }
-                }
-            } else if let storage = model.runtimeSummary?.storage {
-                VStack(alignment: .leading, spacing: 12) {
-                    legacyStorageHeader(storage)
-                    Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 8) {
-                        InfoRow(title: "后端", value: storage.backend)
-                        InfoRow(title: "持久事件", value: "\(storage.eventCount)")
-                        InfoRow(title: "待写事件", value: "\(storage.pendingEvents)")
-                        InfoRow(title: "数据库大小", value: formatBytes(storage.dbBytes))
-                        InfoRow(title: "WAL 大小", value: formatBytes(storage.walBytes))
-                        InfoRow(
-                            title: "最后提交",
-                            value: storage.lastCommitAt.map {
-                                RuntimeEventDisplay.dateTime(Date(timeIntervalSince1970: $0))
-                            } ?? "尚未提交"
-                        )
-                        InfoRow(title: "最后错误", value: storage.lastError ?? "无")
-                    }
-                }
-            } else {
-                EmptyStateView(title: "尚未取得 SQLite 状态", systemImage: "externaldrive")
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func probeStorageHeader(_ probe: AdminWire.RuntimeStorageProbe) -> some View {
-        ViewThatFits(in: .horizontal) {
-            HStack {
-                probeStorageBadge(probe)
-                Text("schema v\(probe.schemaVersion) · projection v\(probe.projectionVersion)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 0)
-                Button("刷新") { model.refreshRuntimeMaintenance() }
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                probeStorageBadge(probe)
-                HStack {
-                    Text("schema v\(probe.schemaVersion) · projection v\(probe.projectionVersion)")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
-                    Button("刷新") { model.refreshRuntimeMaintenance() }
-                }
-            }
-        }
-    }
-
-    private func probeStorageBadge(_ probe: AdminWire.RuntimeStorageProbe) -> some View {
-        StatusBadge(
-            text: probe.projectionIndexesReady && probe.projectionBackfillComplete ? "Analytics v3 就绪" : "Analytics v3 索引处理中",
-            systemImage: probe.projectionIndexesReady && probe.projectionBackfillComplete ? "externaldrive.fill.badge.checkmark" : "externaldrive.badge.exclamationmark",
-            color: probe.projectionIndexesReady && probe.projectionBackfillComplete ? .green : .orange
-        )
-    }
-
-    @ViewBuilder
-    private func legacyStorageHeader(_ storage: AdminWire.RuntimeStorage) -> some View {
-        ViewThatFits(in: .horizontal) {
-            HStack {
-                legacyStorageBadge(storage)
-                Text(storageStateMessage(storage))
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 0)
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                legacyStorageBadge(storage)
-                Text(storageStateMessage(storage))
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func legacyStorageBadge(_ storage: AdminWire.RuntimeStorage) -> some View {
-        StatusBadge(
-            text: storage.state,
-            systemImage: storage.state == "ready" ? "externaldrive.fill.badge.checkmark" : "externaldrive.badge.exclamationmark",
-            color: storage.state == "ready" ? .green : storage.state == "backpressure" ? .red : .orange
-        )
-    }
-
-    private func storageStateMessage(_ storage: AdminWire.RuntimeStorage) -> String {
-        storage.state == "backpressure"
-            ? "持久化积压已达到硬上限，新的代理请求会暂时被拒绝。"
-            : storage.state == "degraded"
-                ? "内存统计与 Admin 继续可用，SQLite 正在重试。"
-                : "SQLite 持久化正常。"
     }
 
     @ViewBuilder
@@ -1524,39 +1520,6 @@ struct DiagnosticsPane: View {
             requestCaptureJSON(.export)
         }
                         .disabled(!detailMatchesSelection || captureJSONEncodingBusy)
-    }
-
-    private var retentionEditor: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Divider()
-            retentionStatus
-            Text(currentStorageLimitBytes == nil
-                ? "当前未设置存储上限：事件会持续保留，直到你在统计页主动清理。"
-                : "当前按存储上限自动轮换最旧的已完成请求；进行中的请求不会删除。你仍可在统计页手动清理全部统计。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private var currentStorageLimitBytes: Int? {
-        model.runtimeRetention?.storageLimitBytes ?? model.runtimeStorageProbe?.retention.storageLimitBytes
-    }
-
-    private var retentionStatus: some View {
-        HStack(spacing: 8) {
-            Label("清理方式", systemImage: currentStorageLimitBytes == nil ? "hand.raised.fill" : "arrow.triangle.2.circlepath")
-                .font(.callout.weight(.semibold))
-            StatusBadge(
-                text: currentStorageLimitBytes == nil ? "仅手动清理" : "自动轮换",
-                systemImage: currentStorageLimitBytes == nil ? "hand.raised.fill" : "arrow.triangle.2.circlepath",
-                color: .green
-            )
-        }
-    }
-
-    private func grouped(_ value: Int) -> String {
-        RuntimeEventPresentation.tokenCountDisplay(value)
     }
 
     private var captureMaxBytes: Int? {

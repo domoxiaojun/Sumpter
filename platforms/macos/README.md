@@ -27,13 +27,13 @@ cargo clippy --manifest-path ../../Cargo.toml --workspace --all-targets -- -D wa
 
 ## 入站 API
 
-sidecar 支持 Claude `/v1/messages`，OpenAI Chat / Responses 的 Native Adapter 与安全 Translator，以及 Images Generations / Edits、Legacy Completions、Claude Count Tokens、Responses Compact 与 Codex Alpha Search。Images 同时覆盖 OpenAI GPT Image 与 Grok Image 参数，JSON 未知字段会保留，multipart 编辑不会重建上传体。Responses WebSocket、Realtime / Live、Videos、Files 仍不支持。完整路径与四态入口协议见根目录 [`USAGE.md`](../../USAGE.md#4-协议与路径)。
+sidecar 支持 Claude `/v1/messages`，OpenAI Chat / Responses 的 Native Adapter 与安全 Translator，以及 Images Generations / Edits、Legacy Completions、Claude Count Tokens、Responses Compact、Codex Alpha Search、Responses WebSocket、Realtime/Live、Files、Videos 和 `/v1/models`。其中资源 HTTP 与 WebSocket 协议只由 sidecar 做鉴权、Provider 选择和 relay，原始 path/query、multipart、二进制响应及 WebSocket 帧交给上游；Codex `/v1/live` bootstrap 会将 SDP/multipart 封装为 quicksilver JSON（默认模型 `gpt-live-1-codex`），公开 `/v1/realtime` 仍原生透传。Realtime/Live WebSocket 会先完成上游握手再向客户端返回 `101`，ephemeral client-secret 的 session 配置会继续用于 `session.update` 和后续 calls 请求。完整路径与四态入口协议见根目录 [`USAGE.md`](../../USAGE.md#4-协议与路径)。Provider 的实际权限和媒体/Realtime 能力仍需目标上游实测。
 
-想让「统计」页按项目区分 Claude Code 请求，在跑 CC 的机器上运行 `cc-project-attribution.sh install`。打包后的 App 里脚本在 `Sumpter.app/Contents/Resources/`，源码树则是 `platforms/linux/scripts/`。App 的**安全**页有完整引导。原理见 [`USAGE.md` §8](../../USAGE.md#8-让-claude-code-按项目统计可选)。
+想让「统计」页按项目区分 Claude Code 请求，在跑 CC 的机器上运行 `cc-project-attribution.sh install`。打包后的 App 里脚本在 `Sumpter.app/Contents/Resources/`，源码树则是 `platforms/macos/scripts/`。App 的**安全**页有完整引导。原理见 [`USAGE.md` §8](../../USAGE.md#8-让-claude-code-按项目统计可选)。
 
 ## 统一通知
 
-通知设置同时支持 Claude Code 与 Codex CLI。Claude 使用 `~/.claude/settings.json` Hook；Codex 使用 `CODEX_HOME/hooks.json`（未设置时 `~/.codex/hooks.json`）的 `Stop` Hook，脚本位于 `hooks/sumpter-codex-notify.zsh`。Codex 默认关闭，写入后需在 Codex CLI 执行 `/hooks` 信任，收到真实 Stop SSE 后才会显示「已验证」。Codex 通知只使用 Sumpter 生成的固定安全文案，不转发 transcript、prompt、`last_assistant_message` 或原始错误详情。
+通知设置同时支持 Claude Code 与 Codex CLI，并共用一套总开关、通知类别、系统授权、声音和测试入口。Claude 的 Hook 写入 `~/.claude/settings.json`；Codex 的 Hook 写入 `CODEX_HOME/hooks.json`（未设置时 `~/.codex/hooks.json`），同一个 `hooks/sumpter-codex-notify.zsh` 脚本覆盖 `PermissionRequest`、`Stop`、`SubagentStop`、`Interrupt` 四个有用户价值的生命周期事件。普通工具、压缩和会话生命周期事件不默认弹系统通知，避免噪声。Codex 写入后仍需在 Codex CLI 执行 `/hooks` 信任，收到真实 SSE 后才会显示「已验证」。Codex 通知只使用 Sumpter 生成的固定安全文案，不转发 transcript、prompt、`last_assistant_message`、工具参数或原始错误详情。
 
 启用 Codex 通知时，App 会直接移除 `config.toml` 中已知的 `SkyComputerUseClient … turn-ended` legacy `notify`，不保留备份也不自动恢复；自定义或无法安全解析的 legacy 配置会保留并显示冲突。Claude 与 Codex 的通知线程按客户端来源隔离。Linux daemon 不提供通知 Hook 和 `/__notify`。
 

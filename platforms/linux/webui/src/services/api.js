@@ -300,6 +300,15 @@ export function toWireConfig(document) {
         upstreamModel: String(mapping.to ?? mapping.upstreamModel ?? '').trim(),
         thinking: thinkingToWire[mapping.thinking] || 'disabled',
         context: contextToWire[mapping.context] || 'standard',
+        ...(Array.isArray(mapping.capabilities) && mapping.capabilities.length > 0
+          ? {
+              capabilities: [...new Set(
+                mapping.capabilities
+                  .map((capability) => String(capability).trim().toLowerCase())
+                  .filter(Boolean),
+              )],
+            }
+          : {}),
         ...(normalizeOptionalNumber(mapping.failoverTimeoutSeconds) == null
           ? {}
           : { failoverTimeoutSeconds: normalizeOptionalNumber(mapping.failoverTimeoutSeconds) }),
@@ -363,6 +372,7 @@ class ApiService {
       runtimeAnalytics: clone(mockAnalytics),
       runtimeRetention: {
         revision: 1,
+        maxAgeDays: null,
         storageLimitBytes: null,
       },
       runtimePricing: {
@@ -1058,11 +1068,21 @@ class ApiService {
             ? dimensionRows[kind]
             : this.mockState.runtimeAnalytics.projects;
       const dimensionEndpointID = String(query.get('endpointID') || '').trim();
+      const dimensionProjectID = String(query.get('projectID') || '').trim();
+      const dimensionProject = String(query.get('project') || '').trim();
+      const dimensionSessionID = String(query.get('sessionID') || '').trim();
       const endpointScopedRows = dimensionEndpointID
         ? sourceRows.filter((row) => String(row?.endpointID || '') === dimensionEndpointID
           || (row?.endpointIDs || []).includes(dimensionEndpointID))
         : sourceRows;
-      const effectiveSourceRows = endpointScopedRows.length || dimensionEndpointID ? endpointScopedRows : sourceRows;
+      const projectScopedRows = dimensionProjectID
+        ? endpointScopedRows.filter((row) => (row?.projectIDs || []).includes(dimensionProjectID))
+        : dimensionProject
+          ? endpointScopedRows.filter((row) => (row?.projects || []).includes(dimensionProject))
+          : endpointScopedRows;
+      const effectiveSourceRows = dimensionSessionID
+        ? projectScopedRows.filter((row) => (row?.sessionIDs || []).includes(dimensionSessionID))
+        : projectScopedRows;
       const search = String(query.get('search') || '').trim().toLowerCase();
       const sort = query.get('sort') || 'last_seen';
       const order = query.get('order') === 'asc' ? 1 : -1;
@@ -1072,10 +1092,26 @@ class ApiService {
         ? (effectiveSourceRows.length ? 64 : 0)
         : kind === 'session'
           ? (effectiveSourceRows.length ? 148 : 0)
+          : kind === 'model'
+            ? effectiveSourceRows.length
           : (effectiveSourceRows.length ? Math.max(12, effectiveSourceRows.length) : 0);
       const expanded = Array.from({ length: expandedLength }, (_, index) => {
         const template = effectiveSourceRows[index % effectiveSourceRows.length];
         const name = index < sourceRows.length ? template.name : `${kind}-demo-${String(index + 1).padStart(3, '0')}`;
+        // Dimension row keys are sent back as projectID/sessionID filters when
+        // a user drills down. Keep the first real rows aligned with the
+        // stable IDs used by the runtime wire contract; synthetic ordinal keys
+        // make the mock appear empty after a perfectly valid row click.
+        const stableKey = kind === 'project'
+          ? template.projectID || template.name
+          : kind === 'session'
+            ? template.sessionID || template.name
+            : kind === 'endpoint'
+              ? template.endpointID || template.name
+              : kind === 'model'
+                ? template.modelKey || template.name
+                : template[`${kind}ID`] || template.name;
+        const key = index < sourceRows.length ? stableKey : `${kind}-demo-${String(index + 1).padStart(3, '0')}`;
         const requests = Math.max(1, Number(template.attempts || 1) - index * 3);
         const inputTokens = Number(template.inputTokens || 0);
         const cacheReadInputTokens = Number(template.cacheReadInputTokens || 0);
@@ -1085,7 +1121,7 @@ class ApiService {
         const cacheReadTokenEligibleRequests = Number(template.cacheReadTokenEligibleRequests ?? (template.tokenAccountingSemantics && processedInputTokens > 0 ? cacheReadReportedRequests : 0));
         const cacheReadTokenUnknownRequests = Number(template.cacheReadTokenUnknownRequests ?? Math.max(0, Number(template.observedRequests || 0) - cacheReadTokenEligibleRequests));
         return {
-          key: `${kind}-${index + 1}`,
+          key,
           name,
           source: template.projectSource || (kind === 'project' ? 'workspace_local' : kind === 'session' ? 'session_id' : kind),
           requests,
@@ -1103,6 +1139,8 @@ class ApiService {
           relatedCount: kind === 'project' ? 2 + (index % 8) : 1 + (index % 3),
           workspacePaths: kind === 'project' ? (template.workspacePaths || [`.../.claude/${name}`]) : [],
           clientKinds: Array.isArray(template.clientKinds) ? template.clientKinds : [],
+          tokenAccountingSemantics: template.tokenAccountingSemantics,
+          tokenAccountingQuality: template.tokenAccountingQuality,
         };
       }).filter((row) => !search || row.name.toLowerCase().includes(search));
       const sortValues = {
@@ -1160,19 +1198,59 @@ class ApiService {
       if (Number(body.expectedRevision) !== Number(this.mockState.runtimeRetention.revision)) {
         const error = new Error('保留策略版本已更新'); error.status = 409; error.code = 'runtime_revision_conflict'; throw error;
       }
-      const allowedKeys = new Set(['expectedRevision', 'storageLimitBytes']);
+      const allowedKeys = new Set(['expectedRevision', 'maxAgeDays', 'storageLimitBytes']);
       if (Object.keys(body).some((key) => !allowedKeys.has(key))) {
         const error = new Error('存储设置包含已废弃字段');
         error.status = 400;
         error.code = 'invalid_json';
         throw error;
       }
+      const maxAgeDays = body.maxAgeDays ?? null;
+      if (maxAgeDays != null && (!Number.isSafeInteger(maxAgeDays) || maxAgeDays < 1)) {
+        const error = new Error('maxAgeDays 必须为空或至少为 1 天');
+        error.status = 400;
+        error.code = 'invalid_retention';
+        throw error;
+      }
+      const storageLimitBytes = body.storageLimitBytes ?? null;
+      if (storageLimitBytes != null && (!Number.isSafeInteger(storageLimitBytes) || storageLimitBytes < 1024 * 1024)) {
+        const error = new Error('storageLimitBytes 必须为空或至少为 1 MiB');
+        error.status = 400;
+        error.code = 'invalid_retention';
+        throw error;
+      }
       this.mockState.runtimeRetention = {
         ...this.mockState.runtimeRetention,
         revision: this.mockState.runtimeRetention.revision + 1,
-        storageLimitBytes: body.storageLimitBytes ?? null,
+        maxAgeDays,
+        storageLimitBytes,
       };
       return clone(this.mockState.runtimeRetention);
+    }
+    if ((path === '/runtime/cleanup/preview' || path === '/runtime/cleanup') && method === 'POST') {
+      const body = JSON.parse(options.body || '{}');
+      const olderThan = Number(body.olderThan);
+      if (!Number.isFinite(olderThan) || olderThan <= 0) {
+        const error = new Error('olderThan 必须是大于 0 的有限时间戳'); error.status = 400; error.code = 'invalid_cleanup'; throw error;
+      }
+      // Mock history uses JavaScript milliseconds while the real wire contract
+      // uses Apple reference-date seconds. Normalize only for this fixture.
+      const toSeconds = (value) => Number(value) > 1e11 ? Number(value) / 1000 - 978307200 : Number(value);
+      const selected = this.mockState.runtimeHistory.filter((event) => toSeconds(event.timestamp) < olderThan);
+      const preview = {
+        olderThan,
+        deletableEvents: selected.length,
+        deletableRequests: new Set(selected.filter((event) => event.kind === 'client').map((event) => event.requestID || event.id)).size,
+        remainingEvents: this.mockState.runtimeHistory.length - selected.length,
+      };
+      if (path === '/runtime/cleanup/preview') return preview;
+      this.mockState.runtimeHistory = this.mockState.runtimeHistory.filter((event) => !selected.includes(event));
+      this.mockState.runtimeHistoryGeneration += selected.length ? 1 : 0;
+      this.mockState.runtimeAnalytics = clone(mockAnalytics);
+      return {
+        ...preview,
+        historyGeneration: this.mockState.runtimeHistoryGeneration,
+      };
     }
     if (path === '/runtime/pricing' && method === 'GET') return clone(this.mockState.runtimePricing);
     if (path === '/runtime/pricing' && method === 'PUT') {
@@ -1562,6 +1640,20 @@ class ApiService {
     return this.request('/runtime/retention', {
       ...options,
       method: 'PUT',
+      body: JSON.stringify(payload || {}),
+    });
+  }
+  previewRuntimeCleanup(payload, options = {}) {
+    return this.request('/runtime/cleanup/preview', {
+      ...options,
+      method: 'POST',
+      body: JSON.stringify(payload || {}),
+    });
+  }
+  cleanupRuntime(payload, options = {}) {
+    return this.request('/runtime/cleanup', {
+      ...options,
+      method: 'POST',
       body: JSON.stringify(payload || {}),
     });
   }

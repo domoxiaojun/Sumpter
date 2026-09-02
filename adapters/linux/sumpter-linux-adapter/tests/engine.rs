@@ -221,6 +221,7 @@ fn two_endpoint_config() -> AppConfig {
             failover_timeout_seconds: None,
             thinking: ThinkingMode::Adaptive,
             upstream_model: String::new(),
+            capabilities: Vec::new(),
         }];
     }
     let retry = RetryPolicy {
@@ -1177,6 +1178,165 @@ async fn upstream_http_502_keeps_status_and_request_id_distinct_from_transport_5
 }
 
 #[tokio::test]
+async fn upstream_http_500_retries_same_entry_then_moves_on() {
+    let fake = FakeTransport::new();
+    let mut config = two_endpoint_config();
+    config.retry.max_deferred_rounds = 1;
+    config.retry.max_500_retries = 1;
+    let engine = engine_with(config.normalized(), fake.clone());
+    fake.push(
+        "a.example.com",
+        Outcome::Status {
+            status: 500,
+            headers: vec![],
+            chunks: vec![],
+        },
+    );
+    fake.push("a.example.com", sse_ok(&["data: {\"recovered\":1}\n\n"]));
+
+    let (status, response) = call(&engine, loopback(), "/v1/messages", vec![], body()).await;
+    assert_eq!(status, 200);
+    assert!(String::from_utf8_lossy(&response).contains("recovered"));
+    assert_eq!(fake.requests().len(), 2);
+}
+
+#[tokio::test]
+async fn upstream_http_500_zero_retries_switches_to_next_entry() {
+    let fake = FakeTransport::new();
+    let mut config = two_endpoint_config();
+    config.retry.max_deferred_rounds = 1;
+    config.retry.max_500_retries = 0;
+    let engine = engine_with(config.normalized(), fake.clone());
+    fake.push(
+        "a.example.com",
+        Outcome::Status {
+            status: 500,
+            headers: vec![],
+            chunks: vec![],
+        },
+    );
+    fake.push("b.example.com", sse_ok(&["data: {\"switched\":1}\n\n"]));
+
+    let (status, response) = call(&engine, loopback(), "/v1/messages", vec![], body()).await;
+    assert_eq!(status, 200);
+    assert!(String::from_utf8_lossy(&response).contains("switched"));
+    assert_eq!(fake.requests().len(), 2);
+}
+
+#[tokio::test]
+async fn upstream_http_500_can_stop_without_failover() {
+    let fake = FakeTransport::new();
+    let mut config = two_endpoint_config();
+    config.retry.max_deferred_rounds = 1;
+    config.retry.max_500_retries = 0;
+    config.retry.failover_on_500 = false;
+    let engine = engine_with(config.normalized(), fake.clone());
+    fake.push(
+        "a.example.com",
+        Outcome::Status {
+            status: 500,
+            headers: vec![],
+            chunks: vec![],
+        },
+    );
+    fake.push(
+        "b.example.com",
+        sse_ok(&["data: {\"should_not_switch\":1}\n\n"]),
+    );
+
+    let (status, response) = call(&engine, loopback(), "/v1/messages", vec![], body()).await;
+    assert_eq!(status, 500);
+    assert!(!String::from_utf8_lossy(&response).contains("should_not_switch"));
+    assert_eq!(fake.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn final_upstream_500_includes_custom_retry_delay() {
+    let fake = FakeTransport::new();
+    let mut config = two_endpoint_config();
+    config.endpoints[1].enabled = false;
+    config.retry.max_deferred_rounds = 1;
+    config.retry.retry_delay_seconds = Some(3.5);
+    let engine = engine_with(config.normalized(), fake.clone());
+    fake.push(
+        "a.example.com",
+        Outcome::Status {
+            status: 500,
+            headers: vec![],
+            chunks: vec![],
+        },
+    );
+
+    let response = engine
+        .handle_request(loopback(), "POST", "/v1/messages", vec![], body())
+        .await;
+    assert_eq!(response.status(), 500);
+    assert_eq!(response.headers().get("retry-after").unwrap(), "4");
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["upstreamStatusCode"], 500);
+    assert_eq!(json["retry_delay"], 3.5);
+}
+
+#[tokio::test]
+async fn final_retry_delay_can_be_hidden_from_client() {
+    let fake = FakeTransport::new();
+    let mut config = two_endpoint_config();
+    config.endpoints[1].enabled = false;
+    config.retry.max_deferred_rounds = 1;
+    config.retry.retry_delay_seconds = Some(3.5);
+    config.retry.pass_through_retry_delay = false;
+    let engine = engine_with(config.normalized(), fake.clone());
+    fake.push(
+        "a.example.com",
+        Outcome::Status {
+            status: 500,
+            headers: vec![],
+            chunks: vec![],
+        },
+    );
+
+    let response = engine
+        .handle_request(loopback(), "POST", "/v1/messages", vec![], body())
+        .await;
+    assert_eq!(response.status(), 500);
+    assert!(response.headers().get("retry-after").is_none());
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(json.get("retry_delay").is_none());
+}
+
+#[tokio::test]
+async fn upstream_http_500_does_not_enter_unbounded_cross_round_retry() {
+    let fake = FakeTransport::new();
+    let mut config = two_endpoint_config();
+    config.retry.max_deferred_rounds = 0;
+    config.retry.max_retry_duration_seconds = 0.0;
+    config.retry.max_500_retries = 0;
+    let engine = engine_with(config.normalized(), fake.clone());
+    for host in ["a.example.com", "b.example.com"] {
+        fake.push(
+            host,
+            Outcome::Status {
+                status: 500,
+                headers: vec![],
+                chunks: vec![],
+            },
+        );
+    }
+
+    let response = engine
+        .handle_request(loopback(), "POST", "/v1/messages", vec![], body())
+        .await;
+    assert_eq!(response.status(), 500);
+    assert_eq!(fake.requests().len(), 2);
+}
+
+#[tokio::test]
 async fn streaming_relay_chunked_sse_and_events_upserted() {
     let fake = FakeTransport::new();
     let engine = engine_with(two_endpoint_config(), fake.clone());
@@ -1769,6 +1929,7 @@ async fn openai_endpoint_bridged_to_anthropic_sse() {
         failover_timeout_seconds: None,
         thinking: ThinkingMode::Disabled,
         upstream_model: "gpt-up".into(),
+        capabilities: Vec::new(),
     }];
     // b 停用,只走 a。
     config.endpoints[1].enabled = false;
@@ -1872,6 +2033,91 @@ async fn linux_data_plane_has_no_control_or_notify_write_endpoints() {
     )
     .await;
     assert_eq!(status, 403);
+}
+
+#[tokio::test]
+async fn linux_listener_serves_builtin_attribution_script() {
+    let fake = FakeTransport::new();
+    let engine = engine_with(two_endpoint_config(), fake);
+
+    let response = engine
+        .handle_request(
+            loopback(),
+            "GET",
+            sumpter_linux_adapter::engine::ATTRIBUTION_SCRIPT_PATH,
+            vec![],
+            Body::from("request body must not be read"),
+        )
+        .await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.headers().get("cache-control").unwrap(), "no-store");
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "text/x-shellscript; charset=utf-8"
+    );
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(body.starts_with(b"#!/usr/bin/env bash\n"));
+    assert!(
+        body.windows(b"X-Sumpter-Project".len())
+            .any(|window| { window == b"X-Sumpter-Project" })
+    );
+
+    let response = engine
+        .handle_request(
+            loopback(),
+            "POST",
+            sumpter_linux_adapter::engine::ATTRIBUTION_SCRIPT_PATH,
+            vec![],
+            Bytes::new(),
+        )
+        .await;
+    assert_eq!(response.status(), 405);
+    assert_eq!(response.headers().get("allow").unwrap(), "GET");
+}
+
+#[tokio::test]
+async fn linux_attribution_script_obeys_listener_access_policy() {
+    let fake = FakeTransport::new();
+    let mut config = two_endpoint_config();
+    config.listener.allowed_cidrs = vec!["10.0.0.0/8".into()];
+    config.listener.auth_token = "secret-inbound".into();
+    let engine = engine_with(config, fake);
+    let path = sumpter_linux_adapter::engine::ATTRIBUTION_SCRIPT_PATH;
+
+    let response = engine
+        .handle_request(
+            Some("192.0.2.10".parse().unwrap()),
+            "GET",
+            path,
+            vec![("authorization".into(), "Bearer secret-inbound".into())],
+            Bytes::new(),
+        )
+        .await;
+    assert_eq!(response.status(), 403);
+
+    let response = engine
+        .handle_request(
+            Some("10.0.0.10".parse().unwrap()),
+            "GET",
+            path,
+            vec![],
+            Bytes::new(),
+        )
+        .await;
+    assert_eq!(response.status(), 401);
+
+    let response = engine
+        .handle_request(
+            Some("10.0.0.10".parse().unwrap()),
+            "GET",
+            path,
+            vec![("authorization".into(), "Bearer secret-inbound".into())],
+            Bytes::new(),
+        )
+        .await;
+    assert_eq!(response.status(), 200);
 }
 
 #[tokio::test]
@@ -1991,7 +2237,10 @@ async fn rejected_requests_record_client_events() {
 async fn client_declared_project_headers_reach_both_forwarded_and_rejected_events() {
     let fake = FakeTransport::new();
     let declared = vec![
-        ("X-Sumpter-Project".to_string(), "automode-proxy".to_string()),
+        (
+            "X-Sumpter-Project".to_string(),
+            "automode-proxy".to_string(),
+        ),
         (
             "x-sumpter-workspace".to_string(),
             "/Users/kkl/.claude/automode-proxy".to_string(),
@@ -2217,6 +2466,7 @@ async fn bridge_and_deferred_round_tokens() {
         failover_timeout_seconds: None,
         thinking: ThinkingMode::Disabled,
         upstream_model: "gpt-up".into(),
+        capabilities: Vec::new(),
     });
     config.endpoints[1].enabled = false;
     let engine = engine_with(config.normalized(), fake.clone());
@@ -2718,11 +2968,11 @@ async fn grok_server_retrieval_cross_protocol_engine_matrix() {
 async fn unknown_path_404_shape() {
     let fake = FakeTransport::new();
     let engine = engine_with(two_endpoint_config(), fake);
-    let (status, resp) = call(&engine, loopback(), "/v1/models", vec![], Bytes::new()).await;
+    let (status, resp) = call(&engine, loopback(), "/v1/unknown", vec![], Bytes::new()).await;
     assert_eq!(status, 404);
     let json: Value = serde_json::from_slice(&resp).unwrap();
     assert_eq!(json["error"], "not_found");
-    assert_eq!(json["path"], "/v1/models");
+    assert_eq!(json["path"], "/v1/unknown");
 }
 
 #[tokio::test]
@@ -2853,6 +3103,7 @@ async fn same_session_keeps_independent_assignments_per_effective_model() {
         failover_timeout_seconds: None,
         thinking: ThinkingMode::Disabled,
         upstream_model: String::new(),
+        capabilities: Vec::new(),
     }];
     config.endpoints[1].sticky_group = Some("gb".into());
     config.endpoints[1].mappings = vec![ModelMapping {
@@ -2861,6 +3112,7 @@ async fn same_session_keeps_independent_assignments_per_effective_model() {
         failover_timeout_seconds: None,
         thinking: ThinkingMode::Disabled,
         upstream_model: String::new(),
+        capabilities: Vec::new(),
     }];
     let dir = temp_config_dir("sticky-model-namespace");
     let engine = engine_with_dir(config.normalized(), dir.clone(), fake.clone());
@@ -4105,6 +4357,7 @@ async fn auto_endpoint_sends_raw_responses_body_natively() {
         failover_timeout_seconds: None,
         thinking: ThinkingMode::Adaptive,
         upstream_model: String::new(),
+        capabilities: Vec::new(),
     }];
     let upstream_sse = concat!(
         "event: response.created\ndata: {\"type\":\"response.created\"}\n\n",
@@ -4595,6 +4848,7 @@ fn native_passthrough_config(pattern: &str) -> AppConfig {
         failover_timeout_seconds: None,
         thinking: ThinkingMode::Passthrough,
         upstream_model: String::new(),
+        capabilities: Vec::new(),
     });
     config.endpoints[1].enabled = false;
     config.normalized()
@@ -5098,6 +5352,7 @@ async fn events_separate_logical_model_from_upstream_alias() {
             failover_timeout_seconds: None,
             thinking: ThinkingMode::Passthrough,
             upstream_model: "provider-luna".into(),
+            capabilities: Vec::new(),
         }];
         ep
     });
@@ -5182,6 +5437,7 @@ async fn native_adapter_applies_endpoint_model_alias() {
         failover_timeout_seconds: None,
         thinking: ThinkingMode::Passthrough,
         upstream_model: "provider-terra".into(),
+        capabilities: Vec::new(),
     }];
     fake.push(
         "a.example.com",
@@ -5243,6 +5499,7 @@ async fn native_adapter_applies_rule_then_endpoint_model_mapping() {
         failover_timeout_seconds: None,
         thinking: ThinkingMode::Passthrough,
         upstream_model: "provider-luna".into(),
+        capabilities: Vec::new(),
     }];
     config.feature_rules = vec![FeatureRule {
         enabled: true,

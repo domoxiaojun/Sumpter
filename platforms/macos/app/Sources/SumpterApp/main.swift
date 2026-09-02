@@ -61,59 +61,164 @@ enum NotificationAuthorizationState: String, Sendable {
     }
 }
 
-enum NotificationSoundPreference: String, CaseIterable, Identifiable, Sendable {
+struct SystemSoundOption: Hashable, Identifiable, Sendable {
+    let fileName: String
+    let url: URL
+
+    var id: String { fileName }
+
+    var title: String {
+        URL(fileURLWithPath: fileName).deletingPathExtension().lastPathComponent
+    }
+}
+
+enum SystemSoundCatalog {
+    static let directoryURL = URL(fileURLWithPath: "/System/Library/Sounds", isDirectory: true)
+    private static let supportedExtensions: Set<String> = ["aiff", "wav", "caf", "m4a", "mp3"]
+
+    static func available() -> [SystemSoundOption] {
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+        return urls
+            .filter { url in
+                guard supportedExtensions.contains(url.pathExtension.lowercased()) else { return false }
+                return (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
+            }
+            .map { SystemSoundOption(fileName: $0.lastPathComponent, url: $0) }
+            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+    }
+
+    static func option(named fileName: String) -> SystemSoundOption? {
+        available().first { $0.fileName == fileName }
+    }
+}
+
+enum NotificationSoundPreference: Hashable, Identifiable, Sendable {
     case systemDefault
     case silent
-    case glass
-    case ping
-    case hero
-    case submarine
-    case tink
-    case pop
-    case funk
+    case system(fileName: String)
 
     static let defaultsKey = "notificationSoundPreference"
 
-    var id: String { rawValue }
+    var id: String {
+        switch self {
+        case .systemDefault: "systemDefault"
+        case .silent: "silent"
+        case .system(let fileName): "system:\(fileName)"
+        }
+    }
 
     var title: String {
         switch self {
         case .systemDefault: "系统默认"
         case .silent: "静音"
-        case .glass: "Glass"
-        case .ping: "Ping"
-        case .hero: "Hero"
-        case .submarine: "Submarine"
-        case .tink: "Tink"
-        case .pop: "Pop"
-        case .funk: "Funk"
+        case .system(let fileName):
+            SystemSoundOption(fileName: fileName, url: SystemSoundCatalog.directoryURL.appendingPathComponent(fileName)).title
         }
     }
 
     var systemSoundName: String? {
         switch self {
-        case .glass: "Glass"
-        case .ping: "Ping"
-        case .hero: "Hero"
-        case .submarine: "Submarine"
-        case .tink: "Tink"
-        case .pop: "Pop"
-        case .funk: "Funk"
+        case .system(let fileName): fileName
         case .systemDefault, .silent: nil
         }
     }
 
+    static var allCases: [NotificationSoundPreference] {
+        [.systemDefault, .silent] + SystemSoundCatalog.available().map { .system(fileName: $0.fileName) }
+    }
+
     static func load() -> NotificationSoundPreference {
-        guard let value = UserDefaults.standard.string(forKey: defaultsKey),
-              let preference = NotificationSoundPreference(rawValue: value) else {
+        guard let value = UserDefaults.standard.string(forKey: defaultsKey) else {
             return .systemDefault
         }
-        return preference
+        switch value {
+        case "systemDefault":
+            return .systemDefault
+        case "silent":
+            return .silent
+        default:
+            let prefix = "system:"
+            if value.hasPrefix(prefix) {
+                let fileName = String(value.dropFirst(prefix.count))
+                return SystemSoundCatalog.option(named: fileName).map { .system(fileName: $0.fileName) } ?? .systemDefault
+            }
+            // 兼容旧版本保存的裸名称（例如 `pop`），按当前系统目录中的
+            // 文件名迁移；不再维护一份硬编码的系统音效清单。
+            return SystemSoundCatalog.available()
+                .first { $0.title.caseInsensitiveCompare(value) == .orderedSame }
+                .map { .system(fileName: $0.fileName) } ?? .systemDefault
+        }
     }
 
     func save() {
-        UserDefaults.standard.set(rawValue, forKey: Self.defaultsKey)
+        UserDefaults.standard.set(id, forKey: Self.defaultsKey)
     }
+}
+
+/// Claude Code 与 Codex CLI 在协议层事件名不同，但在用户侧只有同一组
+/// 通知意图。这个分类集中维护，避免设置页出现两套重复开关。
+enum UnifiedNotificationCategory: String, CaseIterable, Identifiable, Sendable {
+    case actionRequired = "action_required"
+    case status
+    case turnCompleted = "turn_completed"
+    case subtaskCompleted = "subtask_completed"
+    case turnFailed = "turn_failed"
+
+    var id: String { rawValue }
+    var category: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .actionRequired: "需要我处理"
+        case .status: "普通状态提示"
+        case .turnCompleted: "回合完成"
+        case .subtaskCompleted: "子任务完成"
+        case .turnFailed: "回合异常 / 中断"
+        }
+    }
+
+    var hint: String {
+        switch self {
+        case .actionRequired: "权限、输入、选择、确认"
+        case .status: "低频状态变化（默认关闭）"
+        case .turnCompleted: "主会话正常结束"
+        case .subtaskCompleted: "Agent / 子代理任务结束"
+        case .turnFailed: "最终失败或客户端主动中断"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .actionRequired: "hand.raised"
+        case .status: "info.circle"
+        case .turnCompleted: "checkmark.circle"
+        case .subtaskCompleted: "square.stack.3d.up"
+        case .turnFailed: "exclamationmark.triangle"
+        }
+    }
+
+}
+
+private func loadNotificationPreference(
+    key: String,
+    legacyKey: String,
+    defaultValue: Bool
+) -> Bool {
+    let defaults = UserDefaults.standard
+    if let value = defaults.object(forKey: key) as? Bool {
+        return value
+    }
+    if let value = defaults.object(forKey: legacyKey) as? Bool {
+        defaults.set(value, forKey: key)
+        return value
+    }
+    return defaultValue
 }
 
 /// 运行页/统计页自动刷新设置的 UserDefaults 键与可选间隔。
@@ -127,6 +232,7 @@ private let runtimeDimensionPageSizeDefaultsKey = "runtimeStatisticsDimensionPag
 private let runtimeEndpointPageSizeDefaultsKey = "runtimeStatisticsEndpointPageSize"
 private let runtimeProjectPageSizeDefaultsKey = "runtimeStatisticsProjectPageSize"
 private let runtimeSessionPageSizeDefaultsKey = "runtimeStatisticsSessionPageSize"
+private let runtimeModelPageSizeDefaultsKey = "runtimeStatisticsModelPageSize"
 let autoRefreshIntervalChoices: [Double] = [1, 2, 5, 10, 15, 30]
 
 private func storedRuntimePageSize(forKey key: String, default fallback: Int = AdminWire.RuntimeHistoryPage.defaultPageSize) -> Int {
@@ -218,6 +324,7 @@ final class AppModel: ObservableObject {
     @Published var runtimeProjectsPage: AdminWire.RuntimeDimensionPage?
     @Published var runtimeSessionsPage: AdminWire.RuntimeDimensionPage?
     @Published var runtimeEndpointsPage: AdminWire.RuntimeDimensionPage?
+    @Published var runtimeModelsPage: AdminWire.RuntimeDimensionPage?
     @Published private(set) var runtimeDimensionsLoading = false
     @Published var runtimeV2Error: String?
     @Published private(set) var runtimeV2Loading = false
@@ -230,6 +337,9 @@ final class AppModel: ObservableObject {
     @Published var runtimeEndpointSearch = ""
     @Published var runtimeEndpointSort = "last_seen"
     @Published var runtimeEndpointOrder = "desc"
+    @Published var runtimeModelSearch = ""
+    @Published var runtimeModelSort = "last_seen"
+    @Published var runtimeModelOrder = "desc"
     @Published var runtimeEndpointPageSize: Int = storedRuntimePageSize(forKey: runtimeEndpointPageSizeDefaultsKey) {
         didSet { UserDefaults.standard.set(runtimeEndpointPageSize, forKey: runtimeEndpointPageSizeDefaultsKey) }
     }
@@ -238,6 +348,9 @@ final class AppModel: ObservableObject {
     }
     @Published var runtimeSessionPageSize: Int = storedRuntimePageSize(forKey: runtimeSessionPageSizeDefaultsKey) {
         didSet { UserDefaults.standard.set(runtimeSessionPageSize, forKey: runtimeSessionPageSizeDefaultsKey) }
+    }
+    @Published var runtimeModelPageSize: Int = storedRuntimePageSize(forKey: runtimeModelPageSizeDefaultsKey) {
+        didSet { UserDefaults.standard.set(runtimeModelPageSize, forKey: runtimeModelPageSizeDefaultsKey) }
     }
     @Published var runtimeV2ProjectID = ""
     /// Optional display-name alias paired with the stable project ID. The
@@ -251,6 +364,10 @@ final class AppModel: ObservableObject {
     /// projection requests only.
     @Published var runtimeLocalProjectID = ""
     @Published var runtimeLocalProjectName = ""
+    /// UI-only session drill-down used by the model table. It does not alter
+    /// the global analytics filters or the project/session picker state.
+    @Published var runtimeLocalSessionID = ""
+    @Published var runtimeLocalSessionName = ""
     @Published var runtimeStorageProbe: AdminWire.RuntimeStorageProbe?
     @Published var runtimeRetention: AdminWire.RuntimeRetention?
     @Published var runtimePricing: AdminWire.RuntimePricing?
@@ -265,14 +382,28 @@ final class AppModel: ObservableObject {
     @Published var transientMessage: String?
     @Published var claudeNotificationsEnabled = false
     @Published var claudeNotificationArguments: Set<String> = []
-    /// 客户端通知类别开关。行动/完成/失败默认开启；普通状态默认关闭，
+    @Published var codexNotificationsEnabled = false
+    @Published var codexNotificationArguments: Set<String> = []
+    @Published private(set) var codexNotificationHookStatus: CodexNotificationHookStatus = .notConfigured
+    @Published private(set) var codexNotificationHookPath = "~/.codex/hooks.json"
+    /// 统一客户端通知类别开关。行动/完成/失败默认开启；普通状态默认关闭，
     /// 避免 auth_success、computer_use_exit 等高频状态把真正需要处理的
-    /// 权限/选择和最终失败淹没。所有类别仍可在通知设置中单独打开。
-    @Published var claudeActionNotificationsEnabled = UserDefaults.standard.object(forKey: "claudeActionNotificationsEnabled") as? Bool ?? true
-    @Published var claudeStatusNotificationsEnabled = UserDefaults.standard.object(forKey: "claudeStatusNotificationsEnabled") as? Bool ?? false
-    @Published var claudeTurnCompletionNotificationsEnabled = UserDefaults.standard.object(forKey: "claudeTurnCompletionNotificationsEnabled") as? Bool ?? true
-    @Published var claudeSubtaskNotificationsEnabled = UserDefaults.standard.object(forKey: "claudeSubtaskNotificationsEnabled") as? Bool ?? true
-    @Published var claudeFailureNotificationsEnabled = UserDefaults.standard.object(forKey: "claudeFailureNotificationsEnabled") as? Bool ?? true
+    /// 权限/选择和最终失败淹没。类别过滤对 Claude 与 Codex 共用。
+    @Published var actionNotificationsEnabled = loadNotificationPreference(
+        key: "notificationActionRequiredEnabled", legacyKey: "claudeActionNotificationsEnabled", defaultValue: true
+    )
+    @Published var statusNotificationsEnabled = loadNotificationPreference(
+        key: "notificationStatusEnabled", legacyKey: "claudeStatusNotificationsEnabled", defaultValue: false
+    )
+    @Published var turnCompletionNotificationsEnabled = loadNotificationPreference(
+        key: "notificationTurnCompletedEnabled", legacyKey: "claudeTurnCompletionNotificationsEnabled", defaultValue: true
+    )
+    @Published var subtaskNotificationsEnabled = loadNotificationPreference(
+        key: "notificationSubtaskCompletedEnabled", legacyKey: "claudeSubtaskNotificationsEnabled", defaultValue: true
+    )
+    @Published var failureNotificationsEnabled = loadNotificationPreference(
+        key: "notificationTurnFailedEnabled", legacyKey: "claudeFailureNotificationsEnabled", defaultValue: true
+    )
     @Published var notificationAuthorizationStatus: NotificationAuthorizationState = .unknown
     @Published var notificationSoundPreference = NotificationSoundPreference.load()
     @Published var notificationError: String?
@@ -473,6 +604,19 @@ final class AppModel: ObservableObject {
         guard !sidecar.isRunning else { return }
         sidecarState = .starting
         statusText = "启动中"
+        // A restarted daemon has its own authoritative runtime snapshot.  Do
+        // not keep rendering the previous connection's in-flight overlay while
+        // the new admin channel is being established: if the old process died
+        // mid-stream, that row can otherwise keep counting forever even though
+        // the new daemon has already normalized it on startup.
+        runtimePage = nil
+        runtimeChangeSeq = 0
+        runHistoryRequestGeneration &+= 1
+        runHistoryPage = nil
+        runHistoryLoading = false
+        runHistoryError = nil
+        runtimeEventDetail = nil
+        runtime.recentEvents.removeAll(where: \.isInFlight)
         do {
             let dir = try SumpterPaths.appSupportDirectory()
             let handshake = try await sidecar.start(configDir: dir)
@@ -720,16 +864,43 @@ final class AppModel: ObservableObject {
 
     private func handleAdminEvent(_ event: AdminWire.Event) async {
         switch event {
-        case .notify(let title, let message, _, let kind, let category, _, _, let sessionID, let cwd):
-            guard shouldDeliverClaudeNotification(category: category) else { return }
-            await deliverNotification(
-                title: title,
-                message: message,
-                kind: kind,
-                category: category,
-                sessionID: sessionID,
-                cwd: cwd
-            )
+        case .notify(let clientKind, let title, let message, _, let kind, let category, _, _, let sessionID, let cwd):
+            guard notificationsEnabled else { return }
+            if clientKind == "codex" {
+                guard codexNotificationsEnabled else { return }
+            } else {
+                guard claudeNotificationsEnabled else { return }
+            }
+            if clientKind == "codex" {
+                // A real SSE delivery is the only reliable evidence that the
+                // Codex `/hooks` trust step has completed.
+                CodexNotificationHooks.markVerified()
+                codexNotificationHookStatus = .verified
+            }
+            guard shouldDeliverNotification(category: category) else { return }
+            if clientKind == "codex" {
+                await deliverNotification(
+                    title: title,
+                    message: message,
+                    kind: kind,
+                    category: category,
+                    sessionID: sessionID,
+                    // Codex notifications stay fully fixed and do not expose
+                    // even the workspace basename as a subtitle.
+                    cwd: nil,
+                    clientKind: "codex"
+                )
+            } else {
+                await deliverNotification(
+                    title: title,
+                    message: message,
+                    kind: kind,
+                    category: category,
+                    sessionID: sessionID,
+                    cwd: cwd,
+                    clientKind: "claude_code"
+                )
+            }
         case .configReloaded(let generation):
             // 外部 /__reload 或 CLI 改动:sumpterd 已自主读盘,UI 重读磁盘对账内存副本。
             engineGeneration = generation
@@ -779,6 +950,12 @@ final class AppModel: ObservableObject {
                 loadRuntimeEvent(id: change.event.id)
             }
         }
+    }
+
+    /// 用户侧只有一个通知总开关；Claude/Codex 的配置文件仍由各自安全编辑器
+    /// 维护，但一次操作会同步安装或移除两边的通知 Hook。
+    var notificationsEnabled: Bool {
+        !claudeNotificationArguments.isEmpty || !codexNotificationArguments.isEmpty
     }
 
     func refresh() {
@@ -839,6 +1016,7 @@ final class AppModel: ObservableObject {
         guard ["today", "7d", "30d", "all"].contains(range) else { return }
         runtimeAnalyticsRange = range
         clearRuntimeLocalProject()
+        clearRuntimeLocalSession()
         reloadRuntimeFacets()
         refreshRuntimeV2(resetSnapshot: true)
     }
@@ -860,6 +1038,7 @@ final class AppModel: ObservableObject {
         if let failureKind { runtimeAnalyticsFailureKind = failureKind }
         if let failurePhase { runtimeAnalyticsFailurePhase = failurePhase }
         clearRuntimeLocalProject()
+        clearRuntimeLocalSession()
         reloadRuntimeFacets()
         refreshRuntimeV2(resetSnapshot: true)
     }
@@ -867,16 +1046,47 @@ final class AppModel: ObservableObject {
     func setRuntimeLocalProject(_ projectID: String, projectName: String? = nil) {
         runtimeLocalProjectID = projectID
         runtimeLocalProjectName = projectName ?? runtimeProjectsPage?.rows.first(where: { $0.key == projectID })?.name ?? projectID
-        loadRuntimeSessions(page: 1)
+        runtimeLocalSessionID = ""
+        runtimeLocalSessionName = ""
+        loadRuntimeDimensionsForBoard()
     }
 
     func clearRuntimeLocalProject() {
         guard !runtimeLocalProjectID.isEmpty || !runtimeLocalProjectName.isEmpty else { return }
+        resetRuntimeLocalProjectState()
+        resetRuntimeLocalSessionState()
+        if statisticsVisible, ["overview", "tokens"].contains(statisticsBoard) {
+            loadRuntimeDimensionsForBoard()
+        }
+    }
+
+    func setRuntimeLocalSession(_ sessionID: String, sessionName: String? = nil) {
+        runtimeLocalSessionID = sessionID
+        runtimeLocalSessionName = sessionName ?? runtimeSessionsPage?.rows.first(where: { $0.key == sessionID })?.name ?? sessionID
+        loadRuntimeModels(page: 1)
+    }
+
+    func clearRuntimeLocalSession() {
+        guard !runtimeLocalSessionID.isEmpty || !runtimeLocalSessionName.isEmpty else { return }
+        resetRuntimeLocalSessionState()
+        if statisticsVisible, ["overview", "tokens"].contains(statisticsBoard) {
+            loadRuntimeModels(page: 1)
+        }
+    }
+
+    private func resetRuntimeLocalProjectState() {
         runtimeLocalProjectID = ""
         runtimeLocalProjectName = ""
-        if statisticsVisible, ["overview", "tokens"].contains(statisticsBoard) {
-            loadRuntimeSessions(page: 1)
-        }
+    }
+
+    private func resetRuntimeLocalSessionState() {
+        runtimeLocalSessionID = ""
+        runtimeLocalSessionName = ""
+    }
+
+    private func resetRuntimeLocalDrillDownState() {
+        resetRuntimeLocalProjectState()
+        resetRuntimeLocalSessionState()
     }
 
     private func reloadRuntimeAnalytics() {
@@ -1145,7 +1355,8 @@ final class AppModel: ObservableObject {
             // timezone cannot turn this into a rolling 24-hour window.
             from: runtimeAnalyticsRange == "today" ? localTodayStart : nil
         )
-        guard includeLocalProject, !runtimeLocalProjectID.isEmpty || !runtimeLocalProjectName.isEmpty else {
+        guard includeLocalProject,
+              !runtimeLocalProjectID.isEmpty || !runtimeLocalProjectName.isEmpty || !runtimeLocalSessionID.isEmpty else {
             return base
         }
         return AdminWire.RuntimeFilter(
@@ -1154,9 +1365,12 @@ final class AppModel: ObservableObject {
             requestPurpose: base.requestPurpose,
             endpointID: base.endpointID,
             model: base.model,
-            projectID: runtimeLocalProjectID.isEmpty ? base.projectID : runtimeLocalProjectID,
-            project: runtimeLocalProjectName.isEmpty ? base.project : runtimeLocalProjectName,
-            sessionID: base.sessionID,
+            // The synthetic unidentified row has no project_id column; use
+            // its display-name predicate instead of asking SQLite for the
+            // literal key "unidentified_project".
+            projectID: runtimeLocalProjectID == "unidentified_project" ? nil : (runtimeLocalProjectID.isEmpty ? base.projectID : runtimeLocalProjectID),
+            project: runtimeLocalProjectID == "unidentified_project" ? runtimeLocalProjectName : (runtimeLocalProjectName.isEmpty ? base.project : runtimeLocalProjectName),
+            sessionID: runtimeLocalSessionID.isEmpty ? base.sessionID : runtimeLocalSessionID,
             failureKind: base.failureKind,
             failurePhase: base.failurePhase,
             from: base.from,
@@ -1213,6 +1427,7 @@ final class AppModel: ObservableObject {
                 runtimeProjectsPage = nil
                 runtimeSessionsPage = nil
                 runtimeEndpointsPage = nil
+                runtimeModelsPage = nil
             }
         }
         Task { [weak self] in
@@ -1462,7 +1677,7 @@ final class AppModel: ObservableObject {
         guard statisticsVisible, runtimeHistoryPage != nil else { return }
         switch board {
         case "overview":
-            if force || runtimeEndpointsPage == nil || runtimeProjectsPage == nil || runtimeSessionsPage == nil {
+            if force || runtimeEndpointsPage == nil || runtimeProjectsPage == nil || runtimeSessionsPage == nil || runtimeModelsPage == nil {
                 loadRuntimeDimensionsForBoard()
             }
         case "errors":
@@ -1470,7 +1685,7 @@ final class AppModel: ObservableObject {
                 loadRuntimeV2ErrorPage(page: 1)
             }
         case "tokens":
-            if force || runtimeEndpointsPage == nil || runtimeProjectsPage == nil || runtimeSessionsPage == nil {
+            if force || runtimeEndpointsPage == nil || runtimeProjectsPage == nil || runtimeSessionsPage == nil || runtimeModelsPage == nil {
                 loadRuntimeDimensionsForBoard()
             }
         case "dimensions":
@@ -1572,6 +1787,13 @@ final class AppModel: ObservableObject {
         loadRuntimeSessions(page: 1)
     }
 
+    func setRuntimeModelPageSize(_ pageSize: Int) {
+        guard AdminWire.RuntimeHistoryPage.allowedPageSizes.contains(pageSize) else { return }
+        runtimeModelPageSize = pageSize
+        guard statisticsVisible, ["overview", "tokens", "dimensions"].contains(statisticsBoard) else { return }
+        loadRuntimeModels(page: 1)
+    }
+
     func setRuntimeEndpointPageSize(_ pageSize: Int) {
         guard AdminWire.RuntimeHistoryPage.allowedPageSizes.contains(pageSize) else { return }
         runtimeEndpointPageSize = pageSize
@@ -1584,6 +1806,13 @@ final class AppModel: ObservableObject {
         runtimeEndpointOrder = ["asc", "desc"].contains(order) ? order : "desc"
         guard statisticsVisible, ["overview", "tokens"].contains(statisticsBoard) else { return }
         loadRuntimeEndpoints(page: 1)
+    }
+
+    func setRuntimeModelSort(_ sort: String, order: String = "desc") {
+        runtimeModelSort = sort
+        runtimeModelOrder = ["asc", "desc"].contains(order) ? order : "desc"
+        guard statisticsVisible, ["overview", "tokens"].contains(statisticsBoard) else { return }
+        loadRuntimeModels(page: 1)
     }
 
     func setRuntimeProjectSort(_ sort: String, order: String = "desc") {
@@ -1657,7 +1886,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// 入口、项目与会话是同一看板的三个首屏表，使用同一个 generation
+    /// 入口、项目、会话与模型是同一看板的首屏表，使用同一个 generation
     /// 并发读取；每张表仍保留自己的页、搜索和排序状态。
     private func loadRuntimeDimensionsForBoard() {
         guard let admin, let anchor = runtimeHistoryPage else { return }
@@ -1666,6 +1895,7 @@ final class AppModel: ObservableObject {
         let snapshotGeneration = runtimeV2RequestGeneration
         let filter = runtimeV2Filter()
         let sessionFilter = runtimeV2Filter(includeLocalProject: true)
+        let modelFilter = runtimeV2Filter(includeLocalProject: true)
         runtimeDimensionsLoading = true
         let endpointPageSize = runtimeEndpointPageSize
         let projectPageSize = runtimeProjectPageSize
@@ -1679,6 +1909,10 @@ final class AppModel: ObservableObject {
         let projectOrder = runtimeProjectOrder
         let sessionSort = runtimeSessionSort
         let sessionOrder = runtimeSessionOrder
+        let modelPageSize = runtimeModelPageSize
+        let modelSearch = runtimeModelSearch
+        let modelSort = runtimeModelSort
+        let modelOrder = runtimeModelOrder
         Task { [weak self] in
             guard let self else { return }
             defer {
@@ -1719,7 +1953,18 @@ final class AppModel: ObservableObject {
                     historyGeneration: anchor.historyGeneration,
                     filter: sessionFilter
                 )
-                let (endpointValue, projectValue, sessionValue) = try await (endpoints, projects, sessions)
+                async let models = admin.runtimeDimensions(
+                    kind: "model",
+                    page: 1,
+                    pageSize: modelPageSize,
+                    search: modelSearch,
+                    sort: modelSort,
+                    order: modelOrder,
+                    snapshotSeq: anchor.snapshotSeq,
+                    historyGeneration: anchor.historyGeneration,
+                    filter: modelFilter
+                )
+                let (endpointValue, projectValue, sessionValue, modelValue) = try await (endpoints, projects, sessions, models)
                 guard generation == self.runtimeDimensionRequestGeneration,
                       snapshotGeneration == self.runtimeV2RequestGeneration else { return }
                 if self.runtimeEndpointsPage != endpointValue {
@@ -1730,6 +1975,9 @@ final class AppModel: ObservableObject {
                 }
                 if self.runtimeSessionsPage != sessionValue {
                     self.runtimeSessionsPage = sessionValue
+                }
+                if self.runtimeModelsPage != modelValue {
+                    self.runtimeModelsPage = modelValue
                 }
                 self.runtimeV2Error = nil
             } catch {
@@ -1844,11 +2092,15 @@ final class AppModel: ObservableObject {
         loadRuntimeDimension(kind: .session, page: page)
     }
 
+    func loadRuntimeModels(page: Int = 1) {
+        loadRuntimeDimension(kind: .model, page: page)
+    }
+
     func loadRuntimeEndpoints(page: Int = 1) {
         loadRuntimeDimension(kind: .endpoint, page: page)
     }
 
-    private enum RuntimeDimension { case endpoint, project, session }
+    private enum RuntimeDimension { case endpoint, project, session, model }
 
     private func loadRuntimeDimension(kind: RuntimeDimension, page: Int) {
         guard let admin, let anchor = runtimeHistoryPage else {
@@ -1871,6 +2123,8 @@ final class AppModel: ObservableObject {
             search = runtimeProjectSearch; sort = runtimeProjectSort; order = runtimeProjectOrder; pageSize = runtimeProjectPageSize
         case .session:
             search = runtimeSessionSearch; sort = runtimeSessionSort; order = runtimeSessionOrder; pageSize = runtimeSessionPageSize
+        case .model:
+            search = runtimeModelSearch; sort = runtimeModelSort; order = runtimeModelOrder; pageSize = runtimeModelPageSize
         }
         Task { [weak self] in
             guard let self else { return }
@@ -1894,10 +2148,16 @@ final class AppModel: ObservableObject {
                         order: self.runtimeProjectOrder, snapshotSeq: anchor.snapshotSeq,
                         historyGeneration: anchor.historyGeneration, filter: self.runtimeV2Filter()
                     )
-                } else {
+                } else if kind == .session {
                     value = try await admin.runtimeSessions(
                         page: page, pageSize: pageSize, search: search, sort: sort,
                         order: self.runtimeSessionOrder, snapshotSeq: anchor.snapshotSeq,
+                        historyGeneration: anchor.historyGeneration, filter: self.runtimeV2Filter(includeLocalProject: true)
+                    )
+                } else {
+                    value = try await admin.runtimeDimensions(
+                        kind: "model", page: page, pageSize: pageSize, search: search,
+                        sort: sort, order: order, snapshotSeq: anchor.snapshotSeq,
                         historyGeneration: anchor.historyGeneration, filter: self.runtimeV2Filter(includeLocalProject: true)
                     )
                 }
@@ -1909,8 +2169,10 @@ final class AppModel: ObservableObject {
                     if self.runtimeProjectsPage != value {
                         self.runtimeProjectsPage = value
                     }
-                } else if self.runtimeSessionsPage != value {
-                    self.runtimeSessionsPage = value
+                } else if kind == .session {
+                    if self.runtimeSessionsPage != value { self.runtimeSessionsPage = value }
+                } else if kind == .model {
+                    if self.runtimeModelsPage != value { self.runtimeModelsPage = value }
                 }
                 self.runtimeV2Error = nil
             } catch {
@@ -2122,6 +2384,7 @@ final class AppModel: ObservableObject {
         runtimeProjectsPage = nil
         runtimeSessionsPage = nil
         runtimeEndpointsPage = nil
+        runtimeModelsPage = nil
         runtimeRequestChain = nil
         runtimeExportEstimate = nil
         runtimeHistoryError = nil
@@ -2529,6 +2792,7 @@ final class AppModel: ObservableObject {
                 runtimeV2RequestGeneration &+= 1
                 runtimeErrorPageRequestGeneration &+= 1
                 runtimeDimensionRequestGeneration &+= 1
+                resetRuntimeLocalDrillDownState()
                 flash("SQLite 新统计已清空")
             } catch {
                 lastError = "\(error)"
@@ -2555,6 +2819,7 @@ final class AppModel: ObservableObject {
                 runtimeErrorPageRequestGeneration &+= 1
                 runtimeDimensionRequestGeneration &+= 1
                 runtimeMaintenanceRequestGeneration &+= 1
+                resetRuntimeLocalDrillDownState()
                 flash("已重置并新建 SQLite 数据库")
             } catch {
                 lastError = "\(error)"
@@ -2562,6 +2827,32 @@ final class AppModel: ObservableObject {
             }
             await refreshStatus(loadLatestEvents: true)
         }
+    }
+
+    func previewRuntimeCleanup(olderThan: Double) async throws -> AdminWire.RuntimeCleanupPreview {
+        guard let admin else { throw AppModelError.invalidInput("管理连接尚未就绪") }
+        return try await admin.previewRuntimeCleanup(olderThan: olderThan)
+    }
+
+    func cleanupRuntime(olderThan: Double) async throws -> AdminWire.RuntimeCleanupMutation {
+        guard let admin else { throw AppModelError.invalidInput("管理连接尚未就绪") }
+        let mutation = try await admin.cleanupRuntime(olderThan: olderThan)
+        runtimeChangeSeq = 0
+        runtimeEventDetail = nil
+        runtimePage = nil
+        runHistoryRequestGeneration &+= 1
+        runHistoryPage = nil
+        runHistoryError = nil
+        clearRuntimeV2Snapshot()
+        runtimeV2RequestGeneration &+= 1
+        runtimeErrorPageRequestGeneration &+= 1
+        runtimeDimensionRequestGeneration &+= 1
+        resetRuntimeLocalDrillDownState()
+        runtime.recentEvents = []
+        flash("已按时间清理 \(mutation.deletedEvents) 条统计事件")
+        await refreshStatus(loadLatestEvents: true)
+        refreshRuntimeMaintenance()
+        return mutation
     }
 
     func deleteRuntimeSession(sessionID: String, confirmUnidentified: Bool = false) {
@@ -2582,6 +2873,9 @@ final class AppModel: ObservableObject {
                 runtimeV2RequestGeneration &+= 1
                 runtimeErrorPageRequestGeneration &+= 1
                 runtimeDimensionRequestGeneration &+= 1
+                if runtimeLocalSessionID == sessionID || runtimeLocalSessionName == sessionID {
+                    resetRuntimeLocalSessionState()
+                }
                 if runtimeAnalyticsSessionID == sessionID {
                     runtimeAnalyticsSessionID = ""
                 }
@@ -2615,12 +2909,40 @@ final class AppModel: ObservableObject {
     func setClaudeNotifications(enabled: Bool) {
         do {
             try ClaudeNotificationHooks.setEnabled(enabled, port: config.listener.port)
-            claudeNotificationsEnabled = ClaudeNotificationHooks.isEnabled()
-            claudeNotificationArguments = ClaudeNotificationHooks.enabledArguments()
+            refreshNotificationHookState()
             if enabled {
                 requestNotificationAuthorization()
             }
         } catch {
+            lastError = "\(error)"
+            flash("通知设置失败")
+        }
+    }
+
+    func setCodexNotifications(enabled: Bool) {
+        do {
+            try CodexNotificationHooks.setEnabled(enabled, port: config.listener.port)
+            refreshNotificationHookState()
+            if enabled {
+                requestNotificationAuthorization()
+            }
+        } catch {
+            refreshNotificationHookState()
+            lastError = "\(error)"
+            flash("Codex 通知设置失败")
+        }
+    }
+
+    func setNotifications(enabled: Bool) {
+        do {
+            try ClaudeNotificationHooks.setEnabled(enabled, port: config.listener.port)
+            try CodexNotificationHooks.setEnabled(enabled, port: config.listener.port)
+            refreshNotificationHookState()
+            if enabled {
+                requestNotificationAuthorization()
+            }
+        } catch {
+            refreshNotificationHookState()
             lastError = "\(error)"
             flash("通知设置失败")
         }
@@ -2635,8 +2957,7 @@ final class AppModel: ObservableObject {
                 arguments.remove(argument)
             }
             try ClaudeNotificationHooks.setSelectedArguments(arguments, port: config.listener.port)
-            claudeNotificationsEnabled = ClaudeNotificationHooks.isEnabled()
-            claudeNotificationArguments = ClaudeNotificationHooks.enabledArguments()
+            refreshNotificationHookState()
             if !arguments.isEmpty {
                 requestNotificationAuthorization()
             }
@@ -2646,17 +2967,26 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func setClaudeNotificationCategory(_ category: String, enabled: Bool) {
+    func setNotificationCategory(_ category: String, enabled: Bool) {
         switch category {
-        case "action_required": claudeActionNotificationsEnabled = enabled
-        case "status": claudeStatusNotificationsEnabled = enabled
-        case "turn_completed": claudeTurnCompletionNotificationsEnabled = enabled
-        case "subtask_completed": claudeSubtaskNotificationsEnabled = enabled
-        case "turn_failed": claudeFailureNotificationsEnabled = enabled
+        case "action_required": actionNotificationsEnabled = enabled
+        case "status": statusNotificationsEnabled = enabled
+        case "turn_completed": turnCompletionNotificationsEnabled = enabled
+        case "subtask_completed": subtaskNotificationsEnabled = enabled
+        case "turn_failed": failureNotificationsEnabled = enabled
         default: return
         }
-        UserDefaults.standard.set(enabled, forKey: claudeNotificationCategoryKey(category))
+        UserDefaults.standard.set(enabled, forKey: notificationCategoryKey(category))
         if enabled { requestNotificationAuthorization() }
+    }
+
+    private func refreshNotificationHookState() {
+        claudeNotificationArguments = ClaudeNotificationHooks.enabledArguments()
+        claudeNotificationsEnabled = !claudeNotificationArguments.isEmpty
+        codexNotificationHookPath = CodexNotificationHooks.resolvedHooksJSONPath()
+        codexNotificationArguments = CodexNotificationHooks.enabledArguments()
+        codexNotificationHookStatus = CodexNotificationHooks.currentStatus()
+        codexNotificationsEnabled = !codexNotificationArguments.isEmpty
     }
 
     func sendTestNotification() {
@@ -3157,6 +3487,10 @@ final class AppModel: ObservableObject {
     func updateRetryPolicyAndSave(
         responseTimeoutText: String,
         streamIdleTimeoutText: String,
+        max500RetriesText: String,
+        failoverOn500: Bool = true,
+        retryDelaySecondsText: String,
+        passThroughRetryDelay: Bool = true,
         maxDeferredRoundsText: String,
         maxRetryDurationSecondsText: String,
         sessionStickyRetriesText: String,
@@ -3166,6 +3500,10 @@ final class AppModel: ObservableObject {
             try InputValidation.retryPolicy(
                 responseTimeoutText: responseTimeoutText,
                 streamIdleTimeoutText: streamIdleTimeoutText,
+                max500RetriesText: max500RetriesText,
+                failoverOn500: failoverOn500,
+                retryDelaySecondsText: retryDelaySecondsText,
+                passThroughRetryDelay: passThroughRetryDelay,
                 maxDeferredRoundsText: maxDeferredRoundsText,
                 maxRetryDurationSecondsText: maxRetryDurationSecondsText,
                 sessionStickyRetriesText: sessionStickyRetriesText,
@@ -3176,6 +3514,10 @@ final class AppModel: ObservableObject {
             config.retry = RetryPolicy(
                 responseTimeoutSeconds: tuning.responseTimeoutSeconds,
                 streamIdleTimeoutSeconds: tuning.streamIdleTimeoutSeconds,
+                max500Retries: tuning.max500Retries,
+                failoverOn500: tuning.failoverOn500,
+                retryDelaySeconds: tuning.retryDelaySeconds,
+                passThroughRetryDelay: tuning.passThroughRetryDelay,
                 maxDeferredRounds: tuning.maxDeferredRounds,
                 maxRetryDurationSeconds: tuning.maxRetryDurationSeconds,
                 sessionStickyRetries: tuning.sessionStickyRetries,
@@ -3199,8 +3541,7 @@ final class AppModel: ObservableObject {
     func restoreClaudeSettingsBackup() {
         do {
             try ClaudeNotificationHooks.restoreBackup()
-            claudeNotificationsEnabled = ClaudeNotificationHooks.isEnabled()
-            claudeNotificationArguments = ClaudeNotificationHooks.enabledArguments()
+            refreshNotificationHookState()
             flash("Claude Code 配置已还原")
         } catch {
             lastError = "\(error)"
@@ -3242,6 +3583,8 @@ final class AppModel: ObservableObject {
                 if portChanged {
                     do {
                         try ClaudeNotificationHooks.rewriteScriptIfEnabled(port: port)
+                        try CodexNotificationHooks.rewriteScriptIfEnabled(port: port)
+                        refreshNotificationHookState()
                     } catch {
                         flash("通知脚本更新失败,请重新切换一次通知开关")
                     }
@@ -3350,11 +3693,14 @@ final class AppModel: ObservableObject {
                     isRunning: false
                 )
             }
-            claudeNotificationsEnabled = ClaudeNotificationHooks.isEnabled()
-            claudeNotificationArguments = ClaudeNotificationHooks.enabledArguments()
+            refreshNotificationHookState()
             // hooks 已启用则启动时重写脚本:脚本模板升级(如 v2 转发 stdin)随 app
             // 更新自动生效,不用等用户碰通知开关或改端口。
             try? ClaudeNotificationHooks.rewriteScriptIfEnabled(port: config.listener.port)
+            if codexNotificationsEnabled {
+                try? CodexNotificationHooks.rewriteScriptIfEnabled(port: config.listener.port)
+                refreshNotificationHookState()
+            }
             refreshLoginItemStatus()
             if FileManager.default.fileExists(atPath: try SumpterPaths.autostartURL().path) {
                 await startSidecar()
@@ -3399,11 +3745,12 @@ final class AppModel: ObservableObject {
         kind: String? = nil,
         category: String? = nil,
         sessionID: String? = nil,
-        cwd: String? = nil
+        cwd: String? = nil,
+        clientKind: String = "claude_code"
     ) async {
         do {
-            // 同会话通知按 session_id 堆叠(缺省退回事件类型);副标题带项目目录名。
-            let thread = sessionID ?? category ?? kind ?? "sumpter"
+            // 来源前缀保证 Claude 与 Codex 即使复用 session id 也不会混组。
+            let thread = "\(clientKind):\(sessionID ?? category ?? kind ?? "sumpter")"
             let subtitle = cwd.map { URL(fileURLWithPath: $0).lastPathComponent } ?? ""
             notificationAuthorizationStatus = try await NativeNotifier.shared.deliver(
                 title: title,
@@ -3420,30 +3767,30 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func shouldDeliverClaudeNotification(category: String?) -> Bool {
+    private func shouldDeliverNotification(category: String?) -> Bool {
         guard let category else { return true }
         return notificationCategoryEnabled(category)
     }
 
     func notificationCategoryEnabled(_ category: String) -> Bool {
         switch category {
-        case "action_required": return claudeActionNotificationsEnabled
-        case "status": return claudeStatusNotificationsEnabled
-        case "turn_completed": return claudeTurnCompletionNotificationsEnabled
-        case "subtask_completed": return claudeSubtaskNotificationsEnabled
-        case "turn_failed": return claudeFailureNotificationsEnabled
+        case "action_required": return actionNotificationsEnabled
+        case "status": return statusNotificationsEnabled
+        case "turn_completed": return turnCompletionNotificationsEnabled
+        case "subtask_completed": return subtaskNotificationsEnabled
+        case "turn_failed": return failureNotificationsEnabled
         default: return true
         }
     }
 
-    private func claudeNotificationCategoryKey(_ category: String) -> String {
+    private func notificationCategoryKey(_ category: String) -> String {
         switch category {
-        case "action_required": return "claudeActionNotificationsEnabled"
-        case "status": return "claudeStatusNotificationsEnabled"
-        case "turn_completed": return "claudeTurnCompletionNotificationsEnabled"
-        case "subtask_completed": return "claudeSubtaskNotificationsEnabled"
-        case "turn_failed": return "claudeFailureNotificationsEnabled"
-        default: return "claudeUnknownNotificationsEnabled"
+        case "action_required": return "notificationActionRequiredEnabled"
+        case "status": return "notificationStatusEnabled"
+        case "turn_completed": return "notificationTurnCompletedEnabled"
+        case "subtask_completed": return "notificationSubtaskCompletedEnabled"
+        case "turn_failed": return "notificationTurnFailedEnabled"
+        default: return "notificationUnknownEnabled"
         }
     }
 
@@ -3778,9 +4125,9 @@ final class NativeNotifier: NSObject, UNUserNotificationCenterDelegate {
             content.sound = nil
         default:
             // 自定义音效交给通知系统播放,与 banner 绑定;不再用 NSSound 旁路,
-            // 避免 banner 投递失败时仍有声音、反而掩盖问题。系统音效在 /System/Library/Sounds/*.aiff。
+            // 避免 banner 投递失败时仍有声音、反而掩盖问题。文件名来自系统音效目录。
             if let name = soundPreference.systemSoundName {
-                content.sound = UNNotificationSound(named: UNNotificationSoundName("\(name).aiff"))
+                content.sound = UNNotificationSound(named: UNNotificationSoundName(name))
             } else {
                 content.sound = .default
             }
@@ -3844,13 +4191,13 @@ final class NativeNotifier: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    private func cachedSound(named name: String) -> NSSound? {
-        if let cached = soundCache[name] {
+    private func cachedSound(named fileName: String) -> NSSound? {
+        if let cached = soundCache[fileName] {
             return cached
         }
-        let sound = NSSound(named: NSSound.Name(name))
-            ?? NSSound(contentsOf: URL(fileURLWithPath: "/System/Library/Sounds/\(name).aiff"), byReference: true)
-        soundCache[name] = sound
+        let sound = SystemSoundCatalog.option(named: fileName)
+            .flatMap { NSSound(contentsOf: $0.url, byReference: true) }
+        soundCache[fileName] = sound
         return sound
     }
 }

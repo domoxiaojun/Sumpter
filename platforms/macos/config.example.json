@@ -7,7 +7,11 @@
     "authToken": ""
   },
   "retry": {
+    "max500Retries": 0,
+    "failoverOn500": true,
     "responseTimeoutSeconds": null,
+    "retryDelaySeconds": null,
+    "passThroughRetryDelay": true,
     "streamIdleTimeoutSeconds": null,
     "sessionStickyRetries": 2,
     "maxDeferredRounds": 0,
@@ -15,19 +19,6 @@
     "pinnedIPConcurrency": 3
   },
   "featureRules": [
-    {
-      "id": "classifier",
-      "name": "安全分类器",
-      "enabled": false,
-      "match": {
-        "requestKind": "classifier"
-      },
-      "target": {
-        "endpointID": "agentrouter",
-        "model": "claude-haiku-4-5-20251001",
-        "effort": "low"
-      }
-    },
     {
       "id": "websearch",
       "name": "WebSearch",
@@ -49,19 +40,32 @@
       "target": {
         "model": "claude-haiku-4-5-20251001"
       }
+    },
+    {
+      "id": "classifier",
+      "name": "安全分类器",
+      "enabled": false,
+      "match": {
+        "requestKind": "classifier"
+      },
+      "target": {
+        "endpointID": "example-fallback",
+        "model": "claude-haiku-4-5-20251001",
+        "effort": "low"
+      }
     }
   ],
   "endpoints": [
     {
-      "id": "acc1",
-      "name": "acc1",
-      "baseURL": "https://anyrouter.top",
+      "id": "example-main",
+      "name": "示例 Provider 主入口（请替换）",
+      "baseURL": "https://main.example.invalid",
       "protocol": "auto",
-      "enabled": true,
-      "apiKey": "",
+      "enabled": false,
+      "apiKey": "sk-test-main-replace-me",
       "pinnedIPs": [],
       "pinnedIPExclusive": false,
-      "stickyGroup": "acc1",
+      "stickyGroup": "example-main",
       "mappings": [
         {
           "clientPattern": "claude-opus-*",
@@ -72,80 +76,42 @@
       ]
     },
     {
-      "id": "acc2",
-      "name": "acc2",
-      "baseURL": "https://anyrouter.top",
+      "id": "example-fallback",
+      "name": "示例 Provider 入口（请替换）",
+      "baseURL": "https://fallback.example.invalid",
       "protocol": "auto",
-      "enabled": true,
-      "apiKey": "",
+      "enabled": false,
+      "apiKey": "sk-test-fallback-replace-me",
       "pinnedIPs": [],
+      "pinnedIPExclusive": false,
       "priority": 10,
-      "pinnedIPExclusive": false,
-      "stickyGroup": "acc2",
       "mappings": [
         {
           "clientPattern": "claude-opus-*",
           "upstreamModel": "",
           "thinking": "adaptive",
           "context": "oneMillion"
-        }
-      ]
-    },
-    {
-      "id": "third-main",
-      "name": "Third API",
-      "baseURL": "https://example.com",
-      "protocol": "auto",
-      "enabled": true,
-      "apiKey": "",
-      "pinnedIPs": [],
-      "pinnedIPExclusive": false,
-      "mappings": [
-        {
-          "clientPattern": "gpt-5.4",
-          "upstreamModel": "gpt-5.4",
-          "thinking": "disabled",
-          "context": "standard"
-        }
-      ]
-    },
-    {
-      "id": "agentrouter",
-      "name": "AgentRouter",
-      "baseURL": "https://agentrouter.org",
-      "protocol": "auto",
-      "enabled": true,
-      "apiKey": "",
-      "pinnedIPs": [],
-      "priority": 20,
-      "pinnedIPExclusive": false,
-      "mappings": [
+        },
         {
           "clientPattern": "claude-haiku-4-5-20251001",
           "upstreamModel": "claude-haiku-4-5-20251001",
           "thinking": "disabled",
           "context": "oneMillion"
-        }
-      ]
-    },
-    {
-      "id": "third",
-      "name": "Third API",
-      "baseURL": "https://example.com",
-      "protocol": "auto",
-      "enabled": true,
-      "apiKey": "",
-      "pinnedIPs": [],
-      "priority": 21,
-      "pinnedIPExclusive": false,
-      "mappings": [
-        {
-          "clientPattern": "claude-haiku-4-5-20251001",
-          "upstreamModel": "provider-haiku-alias",
-          "thinking": "disabled",
-          "context": "oneMillion",
-          "failoverTimeoutSeconds": 15
-        }
+        },
+          {
+            "clientPattern": "gpt-live-1-codex",
+            "upstreamModel": "gpt-live-1-codex",
+            "capabilities": ["live"],
+            "thinking": "passthrough",
+            "context": "standard"
+          },
+          {
+            "clientPattern": "gpt-realtime",
+            "upstreamModel": "gpt-realtime",
+            "capabilities": ["live"],
+            "thinking": "passthrough",
+            "context": "standard"
+          }
       ]
     }
   ]

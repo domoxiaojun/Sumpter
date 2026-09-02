@@ -67,6 +67,7 @@ private enum MappingSheetMode: Identifiable {
 
 struct ProvidersPane: View {
     @ObservedObject var model: AppModel
+    @Environment(\.sumpterPalette) private var palette
     @State private var providerSelection = Set<String>()
     @State private var mappingSelection = Set<String>()
     @State private var togglingEndpointIDs = Set<String>()
@@ -196,21 +197,29 @@ struct ProvidersPane: View {
                 .filter { !$0.isEmpty }
         ).count
         return ProviderSummaryPanel(
-            title: "入口概览",
-            hint: "当前 Provider 入口数量、启用状态、模型映射和目录获取情况。",
-            action: { EmptyView() },
+            title: "入口模型映射与入口概览",
+            hint: "每个入口独立声明客户端模型、上游模型、Thinking 和上下文策略；精确模型名优先于 prefix-* 通配映射。",
+            action: {
+                StatusBadge(text: "按入口生效", systemImage: "arrow.left.arrow.right", color: palette.success)
+            },
             content: {
-            overviewMetrics(
-                columns: [
-                    GridItem(.flexible(), spacing: 10),
-                    GridItem(.flexible(), spacing: 10),
-                    GridItem(.flexible(), spacing: 10)
-                ],
-                rows: rows,
-                enabledCount: enabledCount,
-                mappingCount: mappingCount,
-                catalogModelCount: catalogModelCount
-            )
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("点击入口后可编辑映射；系统按优先级、粘性组和协议能力形成候选序列。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    overviewMetrics(
+                        columns: [
+                            GridItem(.flexible(), spacing: 10),
+                            GridItem(.flexible(), spacing: 10),
+                            GridItem(.flexible(), spacing: 10)
+                        ],
+                        rows: rows,
+                        enabledCount: enabledCount,
+                        mappingCount: mappingCount,
+                        catalogModelCount: catalogModelCount
+                    )
+                }
             }
         )
     }
@@ -236,13 +245,13 @@ struct ProvidersPane: View {
 
     private var retryPolicyPanel: some View {
         ProviderSummaryPanel(
-            title: "参数设置",
-            hint: "全局作用于所有 Provider 入口；故障时先重试当前粘性分组，再按优先级切换下一候选。",
+            title: "全局超时与重试参数摘要",
+            hint: "这些参数作用于所有 Provider 入口；非 500 故障先重试当前粘性分组，500 使用独立次数后再按优先级切换。",
             action: {
                 Button {
                     retrySheetPresented = true
                 } label: {
-                    Label("编辑参数", systemImage: "slider.horizontal.3")
+                    Label("编辑重试策略", systemImage: "slider.horizontal.3")
                 }
                 .controlSize(.small)
                 .fixedSize()
@@ -266,18 +275,26 @@ struct ProvidersPane: View {
         retry: RetryPolicy
     ) -> some View {
         LazyVGrid(columns: columns, spacing: 10) {
-            ProviderPolicySummaryItem(title: "单次超时", value: timeoutSummary(retry.responseTimeoutSeconds))
-            ProviderPolicySummaryItem(title: "吐字超时", value: timeoutSummary(retry.streamIdleTimeoutSeconds))
+            ProviderPolicySummaryItem(title: "首响应截止", value: timeoutSummary(retry.responseTimeoutSeconds))
+            ProviderPolicySummaryItem(title: "流式空闲截止", value: timeoutSummary(retry.streamIdleTimeoutSeconds))
+            ProviderPolicySummaryItem(title: "500 失败后切换入口", value: retry.failoverOn500 ? "开启" : "关闭")
+            ProviderPolicySummaryItem(title: "入口内 500 重试", value: "\(retry.max500Retries) 次")
             ProviderPolicySummaryItem(
-                title: "故障重试轮数",
+                title: "retry_delay 透传",
+                value: retry.passThroughRetryDelay
+                    ? (retry.retryDelaySeconds.map { "\($0)s" } ?? "未配置")
+                    : "已关闭"
+            )
+            ProviderPolicySummaryItem(
+                title: "故障重试最大轮数",
                 value: retry.maxDeferredRounds == 0 ? "不限" : "\(retry.maxDeferredRounds)"
             )
             ProviderPolicySummaryItem(
-                title: "跨轮时限",
+                title: "跨轮最长时长",
                 value: retry.maxRetryDurationSeconds == 0 ? "不限" : "\(retry.maxRetryDurationSeconds)s"
             )
-            ProviderPolicySummaryItem(title: "粘性重试", value: "\(retry.sessionStickyRetries) 次")
-            ProviderPolicySummaryItem(title: "IP 并发", value: "\(retry.pinnedIPConcurrency)")
+            ProviderPolicySummaryItem(title: "粘性入口重试", value: "\(retry.sessionStickyRetries) 次")
+            ProviderPolicySummaryItem(title: "固定 IP 并发", value: "\(retry.pinnedIPConcurrency)")
         }
     }
 
@@ -413,7 +430,7 @@ struct ProvidersPane: View {
                     // 每一行看起来像独立卡片，同时让四行字段在默认窗口内完整可见。
                     spacing: 6
                 ) {
-                    EndpointDetailField(title: "ID", value: row.id, copyable: true)
+                    EndpointDetailField(title: "入口 ID", value: row.id, copyable: true)
                     EndpointDetailField(title: "名称", value: row.name)
                     EndpointDetailField(title: "优先级", value: row.priorityText)
                     EndpointDetailField(title: "入口协议", value: row.protocolDisplayName)
@@ -1166,6 +1183,11 @@ private struct ProviderAccountCompactRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .center, spacing: 8) {
+                Image(systemName: "line.3.horizontal")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(palette.textMuted)
+                    .frame(width: 24, height: 32)
+                    .accessibilityHidden(true)
                 if showsQuickToggle {
                     Toggle(
                         isOn: Binding(

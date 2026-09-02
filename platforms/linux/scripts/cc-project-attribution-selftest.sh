@@ -4,7 +4,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-INSTALLER="$SCRIPT_DIR/cc-project-attribution.sh"
+INSTALLER="${SUMPTER_CC_ATTRIBUTION_SCRIPT:-$SCRIPT_DIR/cc-project-attribution.sh}"
 [ -x "$INSTALLER" ] || {
     printf 'selftest FAIL: 找不到可执行的 %s\n' "$INSTALLER" >&2
     exit 1

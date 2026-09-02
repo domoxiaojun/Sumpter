@@ -840,7 +840,7 @@ validate_package() {
     local description=""
     local arch=""
 
-    for required in sumpterd config.example.json sumpter.service sumpter-system.service web/index.html scripts/install.sh scripts/uninstall.sh; do
+    for required in sumpterd config.example.json sumpter.service sumpter-system.service web/index.html scripts/install.sh scripts/uninstall.sh scripts/cc-project-attribution.sh; do
         [[ -f "$package_root/$required" && ! -L "$package_root/$required" ]] \
             || die "发布包缺少普通文件:$required"
     done
