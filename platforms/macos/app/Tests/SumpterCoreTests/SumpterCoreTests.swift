@@ -1050,6 +1050,15 @@ final class SumpterCoreTests: XCTestCase {
         )
         XCTAssertEqual(retry.deferredStatusCodes, retry.retryableStatusCodes)
         XCTAssertFalse(retry.retryableStatusCodes.contains(400))
+        XCTAssertEqual(retry.max500Retries, 0)
+        XCTAssertTrue(retry.failoverOn500)
+        XCTAssertNil(retry.retryDelaySeconds)
+
+        let configured = RetryPolicy(max500Retries: 3, failoverOn500: false, retryDelaySeconds: 2.5)
+        let wire = try! JSONSerialization.jsonObject(with: JSONEncoder().encode(configured)) as! [String: Any]
+        XCTAssertEqual(wire["max500Retries"] as? Int, 3)
+        XCTAssertEqual(wire["failoverOn500"] as? Bool, false)
+        XCTAssertEqual(wire["retryDelaySeconds"] as? Double, 2.5)
     }
 
     func testConfigRoundTripsWithoutLoss() throws {
@@ -1366,6 +1375,7 @@ final class SumpterCoreTests: XCTestCase {
           "schemaVersion": 3,
           "listener": {"host": "127.0.0.1", "port": 57878, "allowedCIDRs": [], "authToken": ""},
           "retry": {"responseTimeoutSeconds": null, "streamIdleTimeoutSeconds": null,
+                    "max500Retries": 0, "retryDelaySeconds": null,
                     "maxDeferredRounds": 0, "maxRetryDurationSeconds": 1800, "sessionStickyRetries": 2, "pinnedIPConcurrency": 3},
           "endpoints": [{
             "id": "e1", "name": "e1", "baseURL": "https://a.example.com",

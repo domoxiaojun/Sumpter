@@ -1630,10 +1630,9 @@ fn source_workspace_paths(
         }
         if let Some(path) =
             source_bounded_nonempty(path, CODEX_METADATA_MAX_SOURCE_PATH_BYTES, state)
+            && !paths.contains(&path)
         {
-            if !paths.contains(&path) {
-                paths.push(path);
-            }
+            paths.push(path);
         }
     }
     Some(paths)

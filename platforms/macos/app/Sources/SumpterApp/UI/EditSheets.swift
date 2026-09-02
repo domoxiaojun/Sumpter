@@ -6,6 +6,10 @@ struct RetryPolicySheet: View {
     let onClose: () -> Void
     @State private var responseTimeout: String
     @State private var streamIdle: String
+    @State private var max500Retries: String
+    @State private var failoverOn500: Bool
+    @State private var retryDelaySeconds: String
+    @State private var passThroughRetryDelay: Bool
     @State private var deferredRounds: String
     @State private var retryMaxSeconds: String
     @State private var sessionStickyRetries: String
@@ -18,6 +22,10 @@ struct RetryPolicySheet: View {
         let retry = model.config.retry
         _responseTimeout = State(initialValue: retry.responseTimeoutSeconds.map { String($0) } ?? "")
         _streamIdle = State(initialValue: retry.streamIdleTimeoutSeconds.map { String($0) } ?? "")
+        _max500Retries = State(initialValue: "\(retry.max500Retries)")
+        _failoverOn500 = State(initialValue: retry.failoverOn500)
+        _retryDelaySeconds = State(initialValue: retry.retryDelaySeconds.map { String($0) } ?? "")
+        _passThroughRetryDelay = State(initialValue: retry.passThroughRetryDelay)
         _deferredRounds = State(initialValue: "\(retry.maxDeferredRounds)")
         _retryMaxSeconds = State(initialValue: "\(retry.maxRetryDurationSeconds)")
         _sessionStickyRetries = State(initialValue: "\(retry.sessionStickyRetries)")
@@ -26,38 +34,96 @@ struct RetryPolicySheet: View {
 
     var body: some View {
         SheetShell(
-            title: "转发参数（全局）",
+            title: "编辑全局转发与重试策略",
             primaryTitle: submission.isSubmitting ? "保存中..." : "保存",
             primaryDisabled: submission.isSubmitting,
             onCancel: onClose,
             onSubmit: submit
         ) {
             VStack(alignment: .leading, spacing: 12) {
-                FormLine(title: "单次超时") {
-                    TextField("留空则由客户端决定", text: $responseTimeout)
+                FormLine(title: "首响应截止（秒）") {
+                    TextField("客户端决定", text: $responseTimeout)
                         .frame(width: 120)
                 }
-                FormLine(title: "吐字超时") {
-                    TextField("留空则由客户端决定", text: $streamIdle)
+                Text("连接、TLS 握手到首个响应头的总等待上限；留空由客户端决定。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 122)
+                FormLine(title: "流式空闲截止（秒）") {
+                    TextField("客户端决定", text: $streamIdle)
                         .frame(width: 120)
                 }
-                FormLine(title: "可重试故障最大轮数") {
-                    TextField("0=不限制轮数", text: $deferredRounds)
+                Text("首个响应后，两次流式输出之间的最大空闲时间；留空不限制。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 122)
+                Text("HTTP 500 处理")
+                    .font(.headline)
+                    .padding(.top, 4)
+                FormLine(title: "500 失败后切换入口") {
+                    HStack(spacing: 8) {
+                        Toggle("", isOn: $failoverOn500)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .accessibilityLabel("HTTP 500 失败后切换入口")
+                        Text(failoverOn500 ? "已开启" : "已关闭")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Text(failoverOn500
+                    ? "开启：当前入口重试耗尽后，继续尝试下一个入口。"
+                    : "关闭：当前入口重试耗尽后直接返回 HTTP 500，不会切换入口。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 122)
+                FormLine(title: "入口内 500 重试") {
+                    TextField("0", text: $max500Retries)
                         .frame(width: 160)
                 }
-                FormLine(title: "跨轮重试上限") {
-                    TextField("秒；两项均为0=无限", text: $retryMaxSeconds)
+                Text("仅针对同一入口连续收到的 HTTP 500；0 表示不额外重试。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 122)
+                FormLine(title: "retry_delay 秒数") {
+                    TextField("例如 2.5", text: $retryDelaySeconds)
                         .frame(width: 160)
+                        .disabled(!passThroughRetryDelay)
                 }
-                FormLine(title: "会话粘性入口失败后重试") {
-                    TextField("次数；0=立即切换", text: $sessionStickyRetries)
-                        .frame(width: 160)
+                FormLine(title: "透传 retry_delay") {
+                    HStack(spacing: 8) {
+                        Toggle("", isOn: $passThroughRetryDelay)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .accessibilityLabel("透传 retry_delay 与 Retry-After")
+                        Text(passThroughRetryDelay ? "已开启" : "已关闭")
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                Text("同一次请求先完整重试当前粘性调度组；设置 2 就是首次失败后再试 2 次，全部失败才访问其它组。其它组成功后立即成为该会话的新粘性入口。")
+                Text("开启且填写秒数后，最终失败响应会带 retry_delay（秒）和 Retry-After；关闭则不返回这两个字段。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                FormLine(title: "IP 并发数") {
+                FormLine(title: "故障重试最大轮数") {
+                    TextField("0=不限制轮数", text: $deferredRounds)
+                        .frame(width: 160)
+                }
+                FormLine(title: "跨轮最长时长（秒）") {
+                    TextField("秒；两项均为0=无限", text: $retryMaxSeconds)
+                        .frame(width: 160)
+                }
+                FormLine(title: "粘性入口额外重试") {
+                    TextField("次数；0=立即切换", text: $sessionStickyRetries)
+                        .frame(width: 160)
+                }
+                Text("同一次请求先完整重试当前粘性调度组（HTTP 500 使用上面的独立次数）；设置 2 就是首次非 500 可重试故障后再试 2 次，全部失败才访问其它组。其它组成功后立即成为该会话的新粘性入口。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                FormLine(title: "固定 IP 并发") {
                     TextField("3", text: $ipConcurrency)
                         .frame(width: 120)
                 }
@@ -73,6 +139,10 @@ struct RetryPolicySheet: View {
                 try await model.updateRetryPolicyAndSave(
                     responseTimeoutText: responseTimeout,
                     streamIdleTimeoutText: streamIdle,
+                    max500RetriesText: max500Retries,
+                    failoverOn500: failoverOn500,
+                    retryDelaySecondsText: retryDelaySeconds,
+                    passThroughRetryDelay: passThroughRetryDelay,
                     maxDeferredRoundsText: deferredRounds,
                     maxRetryDurationSecondsText: retryMaxSeconds,
                     sessionStickyRetriesText: sessionStickyRetries,
@@ -225,7 +295,7 @@ struct MappingEditorSheet: View {
                     VStack(alignment: .leading, spacing: 2) {
                         TextField("留空则由客户端决定", text: $failoverTimeout)
                             .frame(width: 120)
-                        Text("与全局单次超时同时配置时，使用更早到达的截止时间。")
+                        Text("与全局首响应截止同时配置时，使用更早到达的截止时间。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

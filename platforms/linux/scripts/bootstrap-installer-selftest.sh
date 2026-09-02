@@ -9,6 +9,7 @@ TEST_ROOT="$(mktemp -d "$TEST_BASE/sumpter-bootstrap-test.XXXXXX")"
 STUB_BIN="$TEST_ROOT/bin"
 ARCHIVE_DIR="$TEST_ROOT/archive"
 GOOD_ARCHIVE="$TEST_ROOT/good.tar.gz"
+MISSING_ATTRIBUTION_ARCHIVE="$TEST_ROOT/missing-attribution.tar.gz"
 BAD_ARCHIVE="$TEST_ROOT/bad.tar.gz"
 MARKER="$TEST_ROOT/inner-installer-ran"
 REQUEST_URL="$TEST_ROOT/request-url"
@@ -54,12 +55,18 @@ else
 fi
 EOF
 chmod 0755 "$PACKAGE_ROOT/scripts/install.sh"
+printf '%s\n' '#!/usr/bin/env bash' >"$PACKAGE_ROOT/scripts/cc-project-attribution.sh"
+chmod 0755 "$PACKAGE_ROOT/scripts/cc-project-attribution.sh"
 cat >"$PACKAGE_ROOT/CHANGELOG.md" <<'EOF'
 # v9.8.7
 
 * bootstrap changelog display fixture
 EOF
 tar -C "$ARCHIVE_DIR" -czf "$GOOD_ARCHIVE" "$PACKAGE_NAME"
+MISSING_ROOT="$TEST_ROOT/missing/$PACKAGE_NAME"
+mkdir -p "$MISSING_ROOT/scripts"
+cp -- "$PACKAGE_ROOT/scripts/install.sh" "$MISSING_ROOT/scripts/install.sh"
+tar -C "$TEST_ROOT/missing" -czf "$MISSING_ATTRIBUTION_ARCHIVE" "$PACKAGE_NAME"
 INSTALL_ARGS_FILE="$TEST_ROOT/install-args"
 
 cat >"$STUB_BIN/curl" <<'EOF'
@@ -127,6 +134,18 @@ PATH="$STUB_BIN:$PATH" \
     SUMPTER_BOOTSTRAP_REQUEST_URL="$REQUEST_URL" \
     bash "$BOOTSTRAP" --base-url "$BASE_URL" -- --admin-host 10.0.0.1
 [[ "$(cat "$INSTALL_ARGS_FILE")" == "--admin-host 10.0.0.1" ]]
+
+rm -f -- "$MARKER" "$REQUEST_URL" "$INSTALL_ARGS_FILE"
+if PATH="$STUB_BIN:$PATH" \
+    SUMPTER_BOOTSTRAP_ARCHIVE="$MISSING_ATTRIBUTION_ARCHIVE" \
+    SUMPTER_BOOTSTRAP_MARKER="$MARKER" \
+    SUMPTER_BOOTSTRAP_INSTALL_ARGS="$INSTALL_ARGS_FILE" \
+    SUMPTER_BOOTSTRAP_REQUEST_URL="$REQUEST_URL" \
+    bash "$BOOTSTRAP" --base-url "$BASE_URL"; then
+    echo "缺少归因配置器的发布包应被拒绝" >&2
+    exit 1
+fi
+[[ ! -e "$MARKER" ]]
 
 if PATH="$STUB_BIN:$PATH" \
     SUMPTER_BOOTSTRAP_ARCHIVE="$GOOD_ARCHIVE" \

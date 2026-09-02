@@ -154,6 +154,10 @@ export function DataTable({
                   className={[isActive ? 'active-row' : '', customRowClassName || ''].filter(Boolean).join(' ')}
                   onClick={onRowClick ? () => onRowClick(row) : undefined}
                   onKeyDown={onRowClick ? (event) => {
+                    // Interactive controls inside an actionable row own their
+                    // keyboard events; do not turn Enter/Space on an export or
+                    // delete button into an unrelated row drill-down.
+                    if (event.target !== event.currentTarget) return;
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.preventDefault();
                       onRowClick(row);

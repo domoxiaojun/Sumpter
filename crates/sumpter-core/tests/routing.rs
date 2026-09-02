@@ -4,7 +4,8 @@
 use serde_json::{Value, json};
 use sumpter_core::config::*;
 use sumpter_core::routing::{
-    RouteMode, RoutePlanError, RoutePlanner, RoutingRequest, inspector, sticky,
+    RESOURCE_ROUTING_MODEL, RouteMode, RoutePlanError, RoutePlanner, RoutingRequest, inspector,
+    sticky,
 };
 use sumpter_core::{ReasoningEffort, RequestPurpose};
 
@@ -45,6 +46,7 @@ fn mapping(pattern: &str, upstream: &str) -> ModelMapping {
         failover_timeout_seconds: None,
         thinking: ThinkingMode::Disabled,
         upstream_model: upstream.into(),
+        capabilities: Vec::new(),
     }
 }
 
@@ -180,6 +182,28 @@ fn mapped_model_routes_to_unified_provider_and_unmapped_model_is_rejected() {
 
     let err = RoutePlanner::plan(&plain_request("gpt-5.4"), &config).unwrap_err();
     assert_eq!(err, RoutePlanError::NoProviderForModel("gpt-5.4".into()));
+}
+
+#[test]
+fn resource_plan_does_not_require_text_model_mapping_or_anthropic_endpoint() {
+    let mut openai = endpoint("openai", vec![]);
+    openai.protocol = EndpointProtocolMode::OpenAI;
+    let mut anthropic = endpoint("anthropic", vec![]);
+    anthropic.protocol = EndpointProtocolMode::Anthropic;
+    let config = AppConfig {
+        endpoints: vec![anthropic, openai],
+        feature_rules: vec![],
+        listener: ListenerConfig::default(),
+        retry: RetryPolicy::default(),
+        schema_version: SCHEMA_VERSION,
+    }
+    .normalized();
+
+    let plan = RoutePlanner::plan_for_resource(&config, ProviderProtocol::OpenAI).unwrap();
+    assert_eq!(plan.client_model, RESOURCE_ROUTING_MODEL);
+    assert_eq!(plan.endpoints.len(), 1);
+    assert_eq!(plan.endpoints[0].endpoint_id, "openai");
+    assert_eq!(plan.endpoints[0].upstream_model, RESOURCE_ROUTING_MODEL);
 }
 
 #[test]
@@ -710,6 +734,23 @@ fn unmatched_no_tools_only_flags_unrecognized_internal_shape() {
     );
     assert!(!inspector::is_unmatched_no_tools(&titled));
 
+    // CC 2.1.220+ 的辅助请求 system 带 CC 身份 + 专用指令;措辞失配时必须告警,
+    // 不能因为出现身份标识就被屏蔽 —— 这正是该信号存在的场景。
+    let drifted_with_identity = request_from(json!({
+        "model": "claude-haiku-4-5-20251001",
+        "system": [
+            {"type": "text", "text": "x-anthropic-billing-header: cch=abcde;"},
+            {"type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude."},
+            {"type": "text", "text": "Produce a one-line summary of the transcript."}
+        ],
+        "messages": [{"role": "user", "content": "<transcript>x</transcript>"}],
+    }));
+    assert_eq!(
+        inspector::request_purpose(&drifted_with_identity),
+        RequestPurpose::Standard
+    );
+    assert!(inspector::is_unmatched_no_tools(&drifted_with_identity));
+
     // 多轮对话:内部辅助请求都是单轮。
     let multi_turn = request_from(json!({
         "model": "claude-opus-5",
@@ -823,6 +864,49 @@ fn custom_rule_conditions_are_anded_and_require_one() {
     assert!(!inspector::feature_rule_matches(&rule, &request));
 }
 
+/// 2.1.220+ 的标题请求靠 output_config 的 json_schema 识别:system 措辞改了也不能
+/// 退化成 Standard。
+#[test]
+fn session_title_recognized_by_structured_output_schema() {
+    let structured = request_from(json!({
+        "model": "claude-haiku-4-5-20251001",
+        "system": [
+            {"type": "text", "text": "x-anthropic-billing-header: cch=abcde;"},
+            {"type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude."},
+            {"type": "text", "text": "Some future wording nobody has seen yet."}
+        ],
+        "messages": [{"role": "user", "content": "<session>user asked about rust</session>"}],
+        "thinking": {"type": "disabled"},
+        "output_config": {"format": {"type": "json_schema", "schema": {
+            "type": "object",
+            "properties": {"title": {"type": "string"}},
+            "required": ["title"],
+            "additionalProperties": false
+        }}},
+    }));
+    assert_eq!(
+        inspector::request_purpose(&structured),
+        RequestPurpose::SessionTitle
+    );
+    // 已识别 → 不再算失配。
+    assert!(!inspector::is_unmatched_no_tools(&structured));
+
+    // schema 约束的不是 title 时不认:那是别的结构化输出请求。
+    let other_schema = request_from(json!({
+        "model": "claude-haiku-4-5-20251001",
+        "system": "Some future wording nobody has seen yet.",
+        "messages": [{"role": "user", "content": "<session>x</session>"}],
+        "output_config": {"format": {"type": "json_schema", "schema": {
+            "type": "object",
+            "properties": {"summary": {"type": "string"}}
+        }}},
+    }));
+    assert_eq!(
+        inspector::request_purpose(&other_schema),
+        RequestPurpose::Standard
+    );
+}
+
 #[test]
 fn tool_type_prefix_requires_absence_of_client_tools() {
     // 存在无 type 的客户端工具 → 不算命中(主会话带 MCP 工具不误触发)。
@@ -835,6 +919,25 @@ fn tool_type_prefix_requires_absence_of_client_tools() {
         ],
     }));
     assert!(!inspector::has_tool_type(&request, "mcp__"));
+
+    // 显式 `type: "custom"` 是同一件事的另一种 wire 形状,同样不算命中。
+    let explicit_custom = request_from(json!({
+        "model": "m",
+        "messages": [{"role": "user", "content": "x"}],
+        "tools": [
+            {"name": "mcp_tool", "type": "mcp__jira__search"},
+            {"name": "Bash", "type": "custom", "input_schema": {}}
+        ],
+    }));
+    assert!(!inspector::has_tool_type(&explicit_custom, "mcp__"));
+
+    // 只有目标前缀工具 → 命中。
+    let only_target = request_from(json!({
+        "model": "m",
+        "messages": [{"role": "user", "content": "x"}],
+        "tools": [{"name": "mcp_tool", "type": "mcp__jira__search"}],
+    }));
+    assert!(inspector::has_tool_type(&only_target, "mcp__"));
 }
 
 // ---------------------------------------------------------------------------
@@ -1048,4 +1151,93 @@ fn session_identity_preserves_case_trims_and_redacts_stable_ids() {
     let blank = sticky::resolved_session_identity(&request, Some(" \t\n "));
     assert_eq!(missing, blank);
     assert!(!missing.persistent());
+}
+
+#[test]
+fn video_intent_does_not_use_the_first_text_provider() {
+    let mut xiao = endpoint("xiao", vec![mapping("claude-fable-5", "")]);
+    xiao.protocol = EndpointProtocolMode::OpenAI;
+    let mut cpa = endpoint(
+        "cpa",
+        vec![
+            mapping("gpt-5.6-sol", ""),
+            mapping("grok-imagine-video", ""),
+            mapping("grok-imagine-image", ""),
+        ],
+    );
+    cpa.protocol = EndpointProtocolMode::OpenAI;
+    let config = AppConfig {
+        endpoints: vec![xiao, cpa],
+        feature_rules: vec![],
+        listener: ListenerConfig::default(),
+        retry: RetryPolicy::default(),
+        schema_version: SCHEMA_VERSION,
+    }
+    .normalized();
+
+    assert_eq!(
+        RoutePlanner::default_model_for_capability(
+            &config,
+            sumpter_core::capability::ModelCapability::Video
+        )
+        .as_deref(),
+        Some("grok-imagine-video")
+    );
+
+    let plan = RoutePlanner::plan_for_capability(
+        &request_from(json!({"model": "grok-imagine-video"})),
+        &config,
+        ProviderProtocol::OpenAI,
+        sumpter_core::capability::ModelCapability::Video,
+    )
+    .unwrap();
+    assert_eq!(plan.endpoints[0].endpoint_id, "cpa");
+
+    let rejected = RoutePlanner::plan_for_capability(
+        &request_from(json!({"model": "claude-fable-5"})),
+        &config,
+        ProviderProtocol::OpenAI,
+        sumpter_core::capability::ModelCapability::Video,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        rejected,
+        RoutePlanError::NoProviderForCapability { .. }
+    ));
+}
+
+#[test]
+fn explicit_mapping_capabilities_override_name_inference_for_routing() {
+    let mut video = endpoint(
+        "video",
+        vec![ModelMapping {
+            client_pattern: "grok-imagine-video".into(),
+            context: ContextMode::Standard,
+            failover_timeout_seconds: None,
+            thinking: ThinkingMode::Disabled,
+            upstream_model: "grok-imagine-video".into(),
+            capabilities: vec![sumpter_core::capability::ModelCapability::Text],
+        }],
+    );
+    video.protocol = EndpointProtocolMode::OpenAI;
+    let config = AppConfig {
+        endpoints: vec![video],
+        feature_rules: vec![],
+        listener: ListenerConfig::default(),
+        retry: RetryPolicy::default(),
+        schema_version: SCHEMA_VERSION,
+    }
+    .normalized();
+
+    let error = RoutePlanner::plan_for_capability(
+        &request_from(json!({"model": "grok-imagine-video"})),
+        &config,
+        ProviderProtocol::OpenAI,
+        sumpter_core::capability::ModelCapability::Video,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        RoutePlanError::NoProviderForCapability { .. }
+    ));
 }

@@ -6,11 +6,13 @@ use std::net::{IpAddr, SocketAddr};
 
 use axum::Router;
 use axum::body::Body;
-use axum::extract::{ConnectInfo, State};
-use axum::http::Request;
+use axum::extract::ws::rejection::WebSocketUpgradeRejection;
+use axum::extract::{ConnectInfo, State, WebSocketUpgrade};
+use axum::http::{HeaderMap, Request, StatusCode, Uri};
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use futures_util::StreamExt;
+use sumpter_core::access;
 use tokio_util::sync::CancellationToken;
 
 use crate::engine::{Engine, MAX_BODY_BYTES};
@@ -43,9 +45,81 @@ impl Drop for ServerHandle {
 
 pub fn router(engine: Engine) -> Router {
     Router::new()
-        .fallback(handle)
+        // One data-plane dispatcher: there are no compatibility aliases. Any
+        // path/method is forwarded as received; WebSocket upgrades are
+        // selected by the request headers rather than a path allow-list.
+        .fallback(dispatch)
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(engine)
+}
+
+async fn dispatch(
+    State(engine): State<Engine>,
+    ConnectInfo(remote): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    uri: Uri,
+    upgrade: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
+    request: Request<Body>,
+) -> Response {
+    let pairs = sumpter_engine::engine::inbound::header_pairs(&headers);
+    let remote_ip = Some(remote.ip());
+    if let Ok(upgrade) = upgrade {
+        let path_and_query = uri
+            .path_and_query()
+            .map(|value| value.as_str().to_string())
+            .unwrap_or_else(|| "/".into());
+        let realtime = is_realtime_path(&path_and_query);
+        let authorized = if realtime {
+            engine.authorize_realtime_websocket(remote_ip, &pairs)
+        } else {
+            engine.authorize_websocket(remote_ip, &pairs)
+        };
+        if !authorized {
+            let cidr_allowed = access::is_allowed(
+                remote_ip.map(|ip| ip.to_string()).as_deref(),
+                &engine.config().listener.allowed_cidrs,
+            );
+            return Response::builder()
+                .status(if cidr_allowed {
+                    StatusCode::UNAUTHORIZED
+                } else {
+                    StatusCode::FORBIDDEN
+                })
+                .header("content-type", "application/json")
+                .body(Body::from(if engine.config().listener.has_inbound_auth() {
+                    r#"{"error":"inbound_auth_required"}"#
+                } else {
+                    r#"{"error":"client_forbidden"}"#
+                }))
+                .unwrap_or_else(|_| Response::new(Body::empty()));
+        }
+        let upgrade = select_websocket_protocol(upgrade, &pairs);
+        if realtime {
+            let prepared = match engine
+                .prepare_realtime_websocket(&path_and_query, &pairs)
+                .await
+            {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    return sumpter_engine::engine::websocket_prepare_error_response(&error);
+                }
+            };
+            let ws_engine = engine.clone();
+            return upgrade.on_upgrade(move |socket| async move {
+                ws_engine
+                    .handle_prepared_websocket(socket, remote_ip, prepared)
+                    .await;
+            });
+        }
+        let ws_engine = engine.clone();
+        return upgrade.on_upgrade(move |socket| async move {
+            ws_engine
+                .handle_websocket(socket, remote_ip, path_and_query, pairs)
+                .await;
+        });
+    }
+
+    handle(State(engine), ConnectInfo(remote), request).await
 }
 
 async fn handle(
@@ -83,6 +157,50 @@ async fn handle(
 
 fn remote_ip(addr: SocketAddr) -> IpAddr {
     addr.ip()
+}
+
+fn is_realtime_path(path_and_query: &str) -> bool {
+    let path = path_and_query
+        .split_once('?')
+        .map_or(path_and_query, |(path, _)| path);
+    [
+        "/v1/realtime",
+        "/realtime",
+        "/openai/v1/realtime",
+        "/v1/live",
+        "/live",
+        "/openai/v1/live",
+    ]
+    .iter()
+    .any(|prefix| {
+        path == *prefix
+            || path
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with('/'))
+    })
+}
+
+fn select_websocket_protocol(
+    upgrade: WebSocketUpgrade,
+    headers: &[(String, String)],
+) -> WebSocketUpgrade {
+    let protocols = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("sec-websocket-protocol"))
+        .map(|(_, value)| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if protocols.is_empty() {
+        upgrade
+    } else {
+        upgrade.protocols(protocols)
+    }
 }
 
 /// 绑定 proxy listener。host 语义对齐 Swift:空/`0.0.0.0`/`::` = 全接口。

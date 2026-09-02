@@ -17,7 +17,7 @@
 # :latest 跟随 main 最近一次成功的 Container 构建，不一定等于最新 GitHub Release。
 # 私有 GHCR 需先 docker login。钉死版本：export SUMPTER_IMAGE=ghcr.io/domoxiaojun/sumpter:0.1.6
 #
-# 仅 Linux host network。为免 chown，默认 root 写 ./config（弱于 systemd 的 sumpter 用户）。
+# 仅 Linux host network。镜像与 Compose 都不指定运行用户，默认由 root 写 ./config。
 # Admin 默认读取 ./config/admin-password 并提供 WebUI 内置登录；公网反代仍必须使用 HTTPS。
 
 services:
@@ -29,7 +29,6 @@ services:
     # bridge 见 compose.bridge.example.yaml（须 Admin 听 0.0.0.0）
 
     init: true
-    user: "0:0"
     restart: unless-stopped
     stop_signal: SIGTERM
     stop_grace_period: 30s

@@ -24,16 +24,17 @@ reset 也只清理 SQLite。Linux 旧 `GET /admin/api/runtime` 与
 - `GET /admin/api/runtime/events/:id`
 - `GET /admin/api/runtime/analytics?range=today|1h|24h|7d|30d|all&clientKind=...&project=...&sessionID=...&from=...&to=...`
 - `GET /admin/api/runtime/trends`、`/errors`、`/projects`、`/sessions`、`/storage`
-- `GET/PUT /admin/api/runtime/retention`（`revision` 与可选 `storageLimitBytes` SQLite 存储上限）
+- `GET/PUT /admin/api/runtime/retention`（`revision`、可选 `maxAgeDays` 时间上限与可选 `storageLimitBytes` SQLite 存储上限）
 - `DELETE /admin/api/runtime/session?sessionID=...`（按完整会话键删除客户端事件、关联上游尝试及统计）
 - `GET /admin/api/runtime/session/export?sessionID=...`（导出脱敏会话 JSON，不含正文、凭据或诊断捕获）
+- `POST /admin/api/runtime/cleanup/preview`、`POST /admin/api/runtime/cleanup`（按 `olderThan` 一次性清理历史统计）
 - `POST /admin/api/runtime/reset`
 - `POST /admin/api/runtime/recreate`（删除并按当前 schema 重建 `runtime.sqlite3`）
 
-`/runtime/retention` 只接受 `expectedRevision` 与 `storageLimitBytes`。旧的自动清理字段不再属于协议，
-带入后返回 400；未设置上限时统计事件不会按条数、天数或时间自动删除，只会在用户明确执行 reset、会话删除等
-删除操作时清理。`storageLimitBytes` 是 SQLite 有效占用上限，达到该值时自动轮换最旧的已完成请求整组，仍允许继续写入，进行中的请求不会删除，传
-`null` 可关闭上限。历史统计由用户手动清理后按新契约重新开始。升级时不会迁移旧
+`/runtime/retention` 接受 `expectedRevision`、`maxAgeDays` 与 `storageLimitBytes`；两个设置均可为 `null`，分别关闭对应条件。旧的自动清理字段不再属于协议，
+带入后返回 400。`maxAgeDays` 是滚动 24 小时的整日保存窗口，达到后自动轮换最旧的已完成请求组；`storageLimitBytes` 是 SQLite 有效占用上限，达到后同样轮换。两者按 OR 关系执行，任一条件先达到即可触发，后台 worker 会在写入、启动、策略变更和低流量周期检查时补偿执行。
+请求组内只要存在进行中事件，整组都会跳过，避免客户端事件与上游尝试链条残缺；无 `requestID` 的孤立事件按单行处理。未设置两个上限时统计事件不会按条数、天数或时间自动删除，只会在用户明确执行 reset、会话删除等
+删除操作时清理。历史统计也可通过按时间清理接口由用户明确删除；升级时不会迁移旧
 `runtime_retention` 列；若检测到旧表结构，存储面板会提示用户手动清理（只清空事件）或“重置并新建数据库”（移除旧字段），避免旧限制静默失效。
 
 所有带 `range` 的运行统计端点统一接受 `today|1h|24h|7d|30d|all`。`today` 表示自然日；调用方应
@@ -65,6 +66,9 @@ reset 也只清理 SQLite。Linux 旧 `GET /admin/api/runtime` 与
   workspace 路径尾部（例如 `.../projects/demo`），仅供本机界面定位目录，不包含完整绝对路径；
   客户端声明的工作区走同一字段、同一脱敏口径。
   分页维度行另外返回 `clientKinds`，仅表示该分组内实际记录到的入站客户端，不改变项目身份或来源分组。
+- `GET /runtime/dimensions?kind=model`：按模型分页返回同一组请求、Token、缓存和成本字段；调用方可
+  叠加 `projectID`/`project` 或 `sessionID` 精确查看某个项目、会话内各模型的分别用量。该组合筛选
+  不改变全局统计快照，适合项目/会话行的局部钻取。
 - `codexThreadClass` 与 `attributionScope`：Codex 事件的线程功能分类和归因范围。`ambient_*` 等
   后台线程在没有可信 workspace/client 项目声明时记为 `internal_feature`，不会进入普通
   `projects`/项目 facets 的 `unidentified_project`；总请求数仍保留，并通过
@@ -136,6 +140,28 @@ SSE `/admin/api/events` 的运行事件统一为 `runtime-change`，SSE `id` 是
 
 Admin 与 proxy 是两个 listener：proxy 地址来自 `config.listener`，停止或重绑 proxy 不应
 中断 Admin/WebUI。
+
+### 1.0.1 Linux proxy 内置归因脚本
+
+Linux proxy listener 固定提供 `GET /__sumpter/cc-project-attribution.sh`，响应为编译期内置的
+`cc-project-attribution.sh`，并带 `Content-Type: text/x-shellscript` 与 `Cache-Control: no-store`。
+它不读取运行目录中的脚本文件，也不会修改 daemon 主机；调用方应下载后在实际运行 Claude Code
+的客户端执行。该路径遵守 `listener.allowedCIDRs`；当 `listener.authToken` 非空时，必须带相同的
+`Authorization: Bearer <token>` 或 `x-api-key`。除 `GET` 外返回 405。macOS sidecar 不提供该路径。
+
+因此客户端的 Base URL 是 proxy listener 本身，可以是局域网 `http://host:port`，也可以是将该路径
+转发到 proxy listener 且保留 `Authorization`/`x-api-key` 的 Nginx HTTPS 地址，不是发布镜像地址。例如：
+
+```bash
+SUMPTER_LISTENER_BASE_URL="${SUMPTER_LISTENER_BASE_URL%/}"
+curl --fail --location \
+  "http://192.168.1.20:57878/__sumpter/cc-project-attribution.sh" \
+  -o /tmp/cc-project-attribution.sh
+bash /tmp/cc-project-attribution.sh install
+```
+
+通过 Nginx 对外提供时建议（跨机器时应）设置非空 `listener.authToken`；不要把无认证的 proxy
+listener 直接暴露到公网。
 
 ### 1.1 登录、退出与修改凭据
 
@@ -261,7 +287,16 @@ Admin 与 proxy 是两个 listener：proxy 地址来自 `config.listener`，停�
 
 在一个 SQLite 事务中删除全部 `runtime_events`、清零绝对计数并递增
 `resetGeneration`；序列号不回绕，提交成功后广播 `stats-reset`。旧 `stats.json` 保持原样，
-不提供按时间、类型或单条事件删除。
+该接口保留为兼容的全量清空操作；按时间清理请使用下方的 cleanup 接口。
+
+### `POST /admin/api/runtime/cleanup/preview` 与 `POST /admin/api/runtime/cleanup`
+
+请求体为 `{ "olderThan": <Apple reference-date seconds> }`，删除时间严格早于截止点的
+已完成事件。带 `requestID` 的事件按请求组处理：只有请求组内最新事件也早于截止点且不含
+进行中事件时才会整组删除；含进行中事件或较新事件的请求组完整保留。无 `requestID` 的
+孤立事件按单行处理。`preview` 只返回 `deletableEvents`、`deletableRequests` 和
+`remainingEvents`；实际 cleanup 另返回 `historyGeneration`。诊断捕获、自动保留策略和
+数据库结构不受影响，操作成功会广播 `stats-reset` 以使客户端刷新快照。
 
 ### `POST /admin/api/runtime/recreate`
 
@@ -302,6 +337,10 @@ Admin 与 proxy 是两个 listener：proxy 地址来自 `config.listener`，停�
   `featureRules[].target.protocol` 仍只能是 `anthropic`、`openai` 或 `openai-responses`。
 - 响应中的 `listener.authToken` 与每个 `endpoint.apiKey` 必须为空或省略，绝不返回明文。
 - `secretStatus` 只表达是否已配置及可选尾四位。
+- `retry.max500Retries` 控制单个入口 HTTP 500 后的额外重试次数，0 表示不额外重试；
+  `retry.failoverOn500` 控制 500 重试耗尽后是否切换入口，默认 `true`，关闭时直接返回当前入口的 500；
+  `retry.retryDelaySeconds` 为可选正数；`retry.passThroughRetryDelay` 默认 `true`，控制最终可重试失败响应
+  是否返回顶层 `retry_delay` 数字字段并附带取整向上的 `Retry-After`。
 - provider apiKey 的明文只经 `GET /admin/api/endpoint-secret` 单条按需读取（见 §4）；
   配置视图这条脱敏红线不因此放宽，`listener.authToken` 与 admin 密码没有任何读取端点。
 
@@ -333,7 +372,7 @@ Admin 与 proxy 是两个 listener：proxy 地址来自 `config.listener`，停�
 
 服务端至少校验：listener host（IP、`localhost` 或空值/全接口）/port/CIDR、endpoint ID 唯一、URL scheme/host、
 Base URL 不得包含 userinfo、query 或 fragment、入口 `protocol` 必须是四态之一、模型映射、feature target、
-可选超时为正数、重试轮数/时长非负、pinned 并发大于 0；遗留的 Provider WebSearch 能力字段必须拒绝，
+可选超时和 `retryDelaySeconds` 为正数、重试轮数/次数/时长非负、pinned 并发大于 0；遗留的 Provider WebSearch 能力字段必须拒绝，
 WebSearch 表达由严格 RequestPurpose 与最终 TargetFormat 自动选择。
 
 ### `POST /admin/api/reload`

@@ -67,8 +67,8 @@ webui_version="$(awk -F'"' '/^  "version"[[:space:]]*:/ {print $4; exit}' webui/
     || fail "webui/package.json version $webui_version 与 Cargo.toml $version 不一致"
 ok "WebUI version $webui_version"
 
-# macOS workspace 版本必须与 Linux 一致:同一个 v* tag 同时触发 release.yml 与
-# macos-release.yml,后者会校验根 Cargo.toml、macos/Cargo.toml 与 tag 三者相同,
+# macOS workspace 版本必须与 Linux 一致：同一个 v* tag 会由根 release.yml 统一构建 Linux
+# 与 macOS 资产，并在发布前校验根 Cargo.toml、macOS workspace 与 tag 三者相同，
 # 不一致就在 CI 上失败。这里提前挡住,免得推了 tag 才发现。
 # 两种拓扑都要认:发布仓库里 macOS 在 macos/ 子目录,上游 monorepo 里在 ../macos。
 macos_manifest=""
@@ -155,6 +155,8 @@ need_text crates/sumpter-proxy/src/admin.rs "admin_listen.host"
 ok "admin session auth/diagnostics"
 
 need_file scripts/install.sh
+need_file scripts/cc-project-attribution.sh
+[[ -x scripts/cc-project-attribution.sh ]] || fail "scripts/cc-project-attribution.sh must be executable"
 need_text scripts/install.sh "--admin-host"
 need_text scripts/install.sh "--admin-password-file"
 need_text scripts/install.sh "ensure_admin_password_file"

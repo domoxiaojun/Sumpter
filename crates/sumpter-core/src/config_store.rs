@@ -718,10 +718,10 @@ fn migrate_provider_pools_value(value: &mut Value) -> Result<(usize, Vec<String>
     }
     if let Some(rules) = root.get_mut("featureRules").and_then(Value::as_array_mut) {
         for rule in rules {
-            if let Some(target) = rule.get_mut("target").and_then(Value::as_object_mut) {
-                if target.remove("poolID").is_some() || target.remove("poolId").is_some() {
-                    removed.push("featureRules[].target.poolID".to_string());
-                }
+            if let Some(target) = rule.get_mut("target").and_then(Value::as_object_mut)
+                && (target.remove("poolID").is_some() || target.remove("poolId").is_some())
+            {
+                removed.push("featureRules[].target.poolID".to_string());
             }
         }
     }
@@ -1406,7 +1406,7 @@ mod tests {
             }]
         });
         std::fs::write(
-            &dir.config_path(),
+            dir.config_path(),
             serde_json::to_vec_pretty(&original).unwrap(),
         )
         .unwrap();

@@ -1,49 +1,56 @@
 ## 开箱路径（固定顺序）
 
-安装/启动 → 找到配置 → 启用入口与 mapping → 配置 Claude/Codex → 首个成功请求 → 查看请求链
+第一次使用只做 3 件事：找到配置 → 填一个上游服务（Provider）→ 启动 Sumpter 并接入客户端。
+备用入口、重试和功能规则等高级配置，等基本使用后再设置。
 
-这条顺序也是 Help 页的引导顺序。每个状态只给一个主要下一步，并只依据已有的
-`status`、`config`、运行统计和请求事件判断；不会要求用户粘贴密钥或 raw 诊断。
+### 1. 找到配置文件
 
-### 状态引导
+| 平台 | 配置文件 |
+|---|---|
+| macOS App | {{macos_config_path}} |
+| Linux daemon | {{linux_config_path}} |
 
-| 状态 | 现有数据的判断 | 唯一下一步 |
-|---|---|---|
-| 未启动 | `status.running` 不是 `true`（macOS 为 sidecar 未运行） | 启动代理 |
-| 未配置 | 没有可读的 `config.json` 或没有入口 | 添加并保存 Provider 入口 |
-| 无 mapping | 有入口，但没有启用入口包含 `endpoints[].mappings[]` | 为客户端模型添加 mapping |
-| 客户端未接入 | 有可用 mapping，但 `clientRequests == 0` | 配置 Claude/Codex 的 Base URL |
-| 首次失败 | 已有客户端请求，但 `clientSuccesses == 0` 且出现失败 | 打开运行页查看请求链和失败阶段 |
-| 首次成功 | `clientSuccesses > 0` | 查看成功请求链与后续 failover |
+优先复制对应平台的 `config.example.json`，不要从零创建 JSON。`listener` 默认保持
+`127.0.0.1:57878`，先保存配置，再启动 Sumpter。
 
-### 路径矩阵
+### 2. 只填一个上游服务入口
 
-| 项目 | macOS App | Linux daemon / 发布包 |
-|---|---|---|
-| 配置文件 | {{macos_config_path}} | {{linux_config_path}} |
-| 数据面代理 | `http://127.0.0.1:57878`（以运行页/配置为准） | `http://127.0.0.1:57878`（以 `listener` 为准） |
-| Admin 地址 | {{macos_admin_address}} | {{linux_admin_address}} |
-| 入站鉴权 | `listener.authToken`（非空才启用） | `listener.authToken`（非空才启用） |
-| Admin 鉴权 | App 与 sidecar 的本机控制通道 | Admin session cookie + CSRF；不要把密码写入文档或 Issue |
-| 模型 mapping | `endpoints[].mappings[]` | `endpoints[].mappings[]` |
-| 配置字段参考 | {{macos_config_reference}} | {{linux_config_reference}} |
-| 项目归因脚本 | {{attribution_location}} | {{attribution_location}} |
+在 `endpoints[]`（上游服务列表）中先只启用一个入口，填 `baseURL`（上游服务地址）、`apiKey`、
+`enabled: true` 和 `mappings`。例如：
 
-{{topology_note}}
+```json
+{ "clientPattern": "gpt-5.4", "upstreamModel": "gpt-5.4" }
+```
 
-### 客户端接入与安全边界
+`clientPattern` 必须和客户端实际使用的模型名一致；不确定时先用精确名称。
 
-- Claude Code 使用 `ANTHROPIC_BASE_URL`；Codex / OpenAI 兼容客户端使用 API Base，具体协议和路径见下文。
-- 代理会先做 CIDR 与入站鉴权，再读取请求体；不要用大 body 测试错误 token。
-- `apiKey`、`authToken`、Admin 密码、Cookie、请求体和 raw 捕获都只留在本机受限文件中；文档、截图和 Issue 只放脱敏后的请求 ID、时间和错误阶段。
-- 项目归因脚本必须运行在**启动 Claude Code 的客户端机器**上，而不是远程 daemon 所在机器；每台客户端机器单独配置。
+### 3. 接入客户端
 
-### macOS 统一通知（Claude Code + Codex CLI）
+Claude Code：
 
-- macOS App 的「通知」页分别管理 Claude Code Hook 与 Codex CLI Stop Hook；两者都由 Sumpter 的 `/__notify` 接收并投递系统通知。
-- Codex 默认关闭。启用后 App 会在 `CODEX_HOME/hooks.json`（未设置时为 `~/.codex/hooks.json`）写入 `Stop` Hook，并把脚本放在同目录的 `hooks/sumpter-codex-notify.zsh`；脚本只转发 Stop JSON，最多等待 2 秒，Sumpter 未运行也不会阻断 Codex。
-- 启用时会直接移除 Codex 顶层 `config.toml` 中已知的 `SkyComputerUseClient … turn-ended` legacy `notify`，不生成备份、不自动恢复。无法安全识别的自定义 `notify` 会保留并显示冲突，需手动删除后再启用。
-- 写入后在 Codex CLI 执行 `/hooks` 并信任 Sumpter Hook；设置页只有收到一次真实 Codex SSE 通知后才显示「已验证」。通知使用固定安全文案，不包含 transcript、完整 prompt、`last_assistant_message` 或原始错误详情。
-- Linux daemon 不提供通知 Hook，也不提供 `/__notify`；上述统一通知仅适用于 macOS App。
+```bash
+export ANTHROPIC_BASE_URL=http://127.0.0.1:57878
+```
+
+Codex：**Base URL 必须带 `/v1`**。
+
+```toml
+model = "gpt-5.4"                 # 改成你 mapping 里的模型名
+model_provider = "sumpter"
+
+[model_providers.sumpter]
+name = "Sumpter"
+base_url = "http://127.0.0.1:57878/v1"
+wire_api = "responses"
+experimental_bearer_token = "填 listener.authToken（未启用鉴权时删除此行）"
+```
+
+如果 `listener.authToken` 不为空，把同一个值填入 `experimental_bearer_token`；只在本机使用时可以删除这一行。
+
+启动 Sumpter 后，在客户端发一条请求即可开始使用。
+
+跨机器使用时，把 `listener.host` 改为内网可达地址并设置非空 `authToken`，不要把端口裸露到公网。
+
+不要把 `config.json`、API key、Token、Cookie 或 raw 诊断内容提交到 Git、Issue 或聊天记录。
 
 <!-- 由 scripts/sync-usage-docs.py 生成；请修改 docs/usage-onboarding.md 与 docs/usage-path-matrix.json 后同步。 -->

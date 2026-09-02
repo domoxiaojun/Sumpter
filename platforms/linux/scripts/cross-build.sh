@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # 用 cargo-zigbuild 构建 x86_64/aarch64 两个静态 musl 包。
+# 兼容两种布局：源码 monorepo 的根 workspace，以及把 platforms/linux
+# 提升为根目录后的独立 Linux 发布树。
 #
 # 用法:
 #   scripts/cross-build.sh --check  # 只报告环境/资源，不安装、不编译、不创建 dist
@@ -9,6 +11,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -f "$ROOT/../../Cargo.toml" && -d "$ROOT/../../crates" ]]; then
+    REPO_ROOT="$(cd "$ROOT/../.." && pwd -P)"
+else
+    REPO_ROOT="$ROOT"
+fi
 DIST="$ROOT/dist"
 TARGETS=(
     "x86_64-unknown-linux-musl:x86_64"
@@ -112,8 +119,8 @@ for entry in "${TARGETS[@]}"; do
     fi
 done
 
-check_file "$ROOT/Cargo.toml"
-check_file "$ROOT/Cargo.lock"
+check_file "$REPO_ROOT/Cargo.toml"
+check_file "$REPO_ROOT/Cargo.lock"
 check_file "$ROOT/config.example.json"
 check_file "$ROOT/README.md"
 check_file "$ROOT/USAGE.md"
@@ -154,16 +161,12 @@ for entry in "${TARGETS[@]}"; do
     arch="${entry##*:}"
     echo
     echo "== cargo zigbuild --release --locked --target $target =="
-    repo_root="$ROOT"
-    if [[ -f "$ROOT/../../Cargo.toml" && -d "$ROOT/../../crates" ]]; then
-        repo_root="$(cd "$ROOT/../.." && pwd -P)"
-    fi
     (
-        cd "$repo_root"
+        cd "$REPO_ROOT"
         cargo zigbuild --release --locked --target "$target" --bin sumpterd-linux
     )
 
-    binary="$repo_root/target/$target/release/sumpterd-linux"
+    binary="$REPO_ROOT/target/$target/release/sumpterd-linux"
     [[ -x "$binary" ]] || {
         echo "错误:未找到构建产物 $binary" >&2
         exit 1

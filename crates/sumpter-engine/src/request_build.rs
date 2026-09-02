@@ -13,6 +13,13 @@ use crate::outbound::{OutboundRequest, join_paths};
 /// (无 UA 探针打 DashScope 会 405,回落保住指纹放行面)。
 pub const CLAUDE_CODE_USER_AGENT: &str = "claude-cli/2.1.220 (external, cli)";
 pub const ANTHROPIC_VERSION: &str = "2023-06-01";
+/// Codex Desktop's private Live/Quicksilver bootstrap model.  It is distinct
+/// from the ordinary text model selected by the same client session.
+pub const DEFAULT_CODEX_LIVE_MODEL: &str = "gpt-live-1-codex";
+/// Standard OpenAI Realtime's default stateful voice model.  Keep it separate
+/// from Codex Live so a missing query/session model cannot inherit a text
+/// mapping or the private quicksilver model.
+pub const DEFAULT_REALTIME_MODEL: &str = "gpt-realtime";
 const IDENTITY_ACCEPT_ENCODING: &str = "identity";
 
 /// Authentication headers forced by the real data plane and reused by
@@ -21,6 +28,12 @@ pub fn provider_auth_headers(api_key: &str) -> Vec<(&'static str, String)> {
     let key = api_key.trim();
     if key.is_empty() {
         Vec::new()
+    } else if key.starts_with("ek_") {
+        // Realtime client secrets are bearer credentials, not provider API
+        // keys.  Sending the same short-lived token in both Authorization and
+        // x-api-key can make upstream gateways treat the request as having
+        // conflicting credentials.
+        vec![("authorization", format!("Bearer {key}"))]
     } else {
         vec![
             ("authorization", format!("Bearer {key}")),
@@ -85,6 +98,9 @@ pub struct OutboundBuild {
 /// using the common pool, sticky-session, failover and event pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PassthroughKind {
+    /// Arbitrary protocol/resource request.  The engine must not classify or
+    /// reshape its payload; this marker only keeps runtime accounting useful.
+    Raw,
     Chat,
     Completions,
     Responses,
@@ -93,11 +109,20 @@ pub enum PassthroughKind {
     ImagesEdits,
     AlphaSearch,
     ClaudeCountTokens,
+    /// OpenAI resource APIs (Files/Videos) and Realtime HTTP bootstrap. These
+    /// keep the full inbound path because resource IDs are part of the URL.
+    Files,
+    Videos,
+    Realtime,
+    /// OpenAI model discovery. The response is owned by the upstream Provider;
+    /// Sumpter only routes and relays it.
+    Models,
 }
 
 impl PassthroughKind {
     fn suffix(self) -> &'static str {
         match self {
+            Self::Raw => "/",
             Self::Chat => "/chat/completions",
             Self::Completions => "/completions",
             Self::Responses => "/responses",
@@ -106,11 +131,16 @@ impl PassthroughKind {
             Self::ImagesEdits => "/images/edits",
             Self::AlphaSearch => "/alpha/search",
             Self::ClaudeCountTokens => "/messages/count_tokens",
+            Self::Files => "/files",
+            Self::Videos => "/videos",
+            Self::Realtime => "/realtime",
+            Self::Models => "/models",
         }
     }
 
     pub fn token(self) -> &'static str {
         match self {
+            Self::Raw => "raw",
             Self::Chat => "chat",
             Self::Completions => "completions",
             Self::Responses => "responses",
@@ -119,6 +149,10 @@ impl PassthroughKind {
             Self::ImagesEdits => "images-edits",
             Self::AlphaSearch => "alpha-search",
             Self::ClaudeCountTokens => "claude-count-tokens",
+            Self::Files => "files",
+            Self::Videos => "videos",
+            Self::Realtime => "realtime",
+            Self::Models => "models",
         }
     }
 }
@@ -170,17 +204,22 @@ pub fn build_outbound(
     api_key: &str,
     pinned_ip: Option<String>,
     purpose: RequestPurpose,
-    // Native Adapter:Some((方言, 原始请求体))时原样打上游对应端点,仅改写 model。
-    // 实际协议已由 RoutePlanner 从入口四态模式解析完成。
+    // Data-plane passthrough: keep the client's original bytes and path. The
+    // active Raw mode only changes an existing model field when its mapping
+    // names a different upstream model.
     passthrough: Option<PassthroughRequest<'_>>,
 ) -> OutboundBuild {
+    let raw_passthrough = passthrough
+        .as_ref()
+        .is_some_and(|request| request.kind == PassthroughKind::Raw);
     let effort = endpoint
         .effort_override
         .or_else(|| model_name::reasoning_effort(&request.model));
     let server_retrieval = server_retrieval_enabled(endpoint, request, purpose);
     let protocol = endpoint.protocol;
 
-    // 1. 透传非黑名单 header(顺带防双份:同名只出现一次,后到覆盖)。
+    // 1. 透传非黑名单 header。旧桥接路径会在这里去重；Raw 路径随后从
+    // 原始 header 对重建，保留可转发字段的顺序与重复值。
     let mut headers: Vec<(String, String)> = Vec::new();
     for (name, value) in inbound_headers {
         let lower = name.to_lowercase();
@@ -197,42 +236,129 @@ pub fn build_outbound(
     }
     set_header(&mut headers, "accept-encoding", IDENTITY_ACCEPT_ENCODING);
     set_header(&mut headers, "content-type", "application/json");
-    // UA 透传入站(claude-cli / codex 等各用其真);缺失才回填 CC 指纹。
+    // Legacy bridged requests get a Claude-compatible fallback UA. Raw
+    // passthrough rebuilds its header list below without this synthetic value,
+    // so arbitrary vendor requests stay wire-faithful.
     if !headers.iter().any(|(n, _)| n == "user-agent") {
         set_header(&mut headers, "user-agent", CLAUDE_CODE_USER_AGENT);
+    }
+
+    if raw_passthrough {
+        // Rebuild the raw header list from the original pairs so duplicate
+        // negotiation/vendor headers and their order survive the proxy. The
+        // two media-negotiation headers are intentionally included here even
+        // though the legacy blocklist uses them for its synthetic defaults;
+        // all other blocked transport/auth/private headers stay removed.
+        headers.clear();
+        for (name, value) in inbound_headers {
+            let lower = name.to_ascii_lowercase();
+            if HEADER_BLOCKLIST.contains(&lower.as_str())
+                && !matches!(lower.as_str(), "content-type" | "accept-encoding")
+            {
+                continue;
+            }
+            headers.push((lower, value.clone()));
+        }
+        for (name, value) in provider_auth_headers(api_key) {
+            headers.push((name.to_string(), value));
+        }
     }
 
     let base_path = base_path_of(&endpoint.base_url);
 
     // 透传:出站即客户端方言,零转换(工具/reasoning 原生保真)。
     if let Some(passthrough) = passthrough {
-        set_header(
-            &mut headers,
-            "accept",
-            if passthrough.stream {
-                "text/event-stream"
-            } else {
-                "application/json"
-            },
-        );
-        set_header(
-            &mut headers,
-            "content-type",
-            passthrough.content_type.unwrap_or("application/json"),
-        );
-        if passthrough.kind == PassthroughKind::AlphaSearch {
+        let inbound_accept = headers
+            .iter()
+            .rev()
+            .find(|(name, _)| name.eq_ignore_ascii_case("accept"))
+            .map(|(_, value)| value.clone());
+        let is_resource_content = matches!(
+            passthrough.kind,
+            PassthroughKind::Files | PassthroughKind::Videos
+        ) && inbound_path_and_query
+            .split_once('?')
+            .map_or(inbound_path_and_query, |(path, _)| path)
+            .to_ascii_lowercase()
+            .ends_with("/content");
+        if raw_passthrough {
+            // A raw relay keeps negotiation headers exactly as supplied by
+            // the caller.  Synthetic JSON/SSE defaults are protocol logic,
+            // not proxy behavior.
+        } else {
+            set_header(
+                &mut headers,
+                "accept",
+                if is_resource_content {
+                    // Content downloads are binary (or provider-selected media).
+                    // Do not advertise JSON merely because the request is a
+                    // non-streaming passthrough; callers may provide a narrower
+                    // Accept value and otherwise */* is the interoperable default.
+                    inbound_accept.as_deref().unwrap_or("*/*")
+                } else if passthrough.kind == PassthroughKind::Realtime
+                    || passthrough.kind == PassthroughKind::Models
+                {
+                    // Realtime HTTP bootstrap may return SDP rather than JSON;
+                    // preserve the caller's preference and otherwise negotiate
+                    // either media or JSON with the provider.
+                    inbound_accept.as_deref().unwrap_or("*/*")
+                } else if passthrough.stream {
+                    "text/event-stream"
+                } else {
+                    "application/json"
+                },
+            );
+        }
+        if !raw_passthrough && (!passthrough.body.is_empty() || passthrough.content_type.is_some())
+        {
+            set_header(
+                &mut headers,
+                "content-type",
+                passthrough.content_type.unwrap_or("application/json"),
+            );
+        } else if !raw_passthrough {
+            headers.retain(|(name, _)| !name.eq_ignore_ascii_case("content-type"));
+        }
+        if passthrough.kind == PassthroughKind::AlphaSearch && !raw_passthrough {
             set_header(&mut headers, "originator", "codex_cli_rs");
         }
-        let passthrough_body = if passthrough.kind == PassthroughKind::AlphaSearch {
-            sanitize_alpha_search_body(passthrough.body)
+        let passthrough_body =
+            if passthrough.kind == PassthroughKind::AlphaSearch && !raw_passthrough {
+                sanitize_alpha_search_body(passthrough.body)
+            } else {
+                passthrough.body.to_vec()
+            };
+        let path_and_query = if passthrough.kind == PassthroughKind::Realtime {
+            let path_and_query = rewrite_realtime_model_query(
+                &openai_resource_path(&base_path, inbound_path_and_query),
+                &request.model,
+                &endpoint.upstream_model,
+            );
+            // The Codex Desktop WebRTC bootstrap is carried over the
+            // `/v1/realtime` compatibility path, but CPA deployments may
+            // require the private Quicksilver intent to be explicit in the
+            // query.  Scope this to the fixed Live model and POST root paths;
+            // ordinary Realtime and sideband/control requests stay opaque.
+            rewrite_codex_live_bootstrap_query(&path_and_query, inbound_method, &request.model)
         } else {
-            passthrough.body.to_vec()
+            openai_resource_path(&base_path, inbound_path_and_query)
         };
         return OutboundBuild {
             request: OutboundRequest {
                 method: inbound_method.to_string(),
                 base_url: endpoint.base_url.clone(),
-                path_and_query: openai_suffix_path(&base_path, passthrough.kind.suffix()),
+                path_and_query: if matches!(
+                    passthrough.kind,
+                    PassthroughKind::Raw
+                        | PassthroughKind::Files
+                        | PassthroughKind::Videos
+                        | PassthroughKind::Realtime
+                        | PassthroughKind::Models
+                ) {
+                    path_and_query
+                } else {
+                    openai_suffix_path(&base_path, passthrough.kind.suffix())
+                },
                 headers,
                 // JSON bodies can safely follow feature-rule model rewrites. Multipart
                 // uploads stay byte-for-byte intact so boundaries and binary images are
@@ -241,6 +367,7 @@ pub fn build_outbound(
                     &passthrough_body,
                     &endpoint.upstream_model,
                     passthrough.content_type,
+                    passthrough.kind,
                 ),
                 pinned_ip,
                 keep_alive: endpoint.keep_alive,
@@ -333,35 +460,102 @@ fn sanitize_alpha_search_body(raw: &[u8]) -> Vec<u8> {
     serde_json::to_vec(&value).unwrap_or_else(|_| raw.to_vec())
 }
 
-/// 透传体的唯一改写:`model` 换成入口的 upstreamModel(其余字段——tools、
-/// reasoning、include、metadata 等——一字不动)。解析失败则原样发出,
-/// 让上游自己拒绝,不在代理侧擅自造 body。
+/// 透传体只做必要的模型改写(其它字段——tools、reasoning、include、metadata
+/// 等——一字不动)。Files 没有模型字段；Realtime client-secrets 把模型放在
+/// `session.model`，两者都保持原有 JSON 结构。解析失败则原样发出，让上游自己
+/// 拒绝，不在代理侧擅自造 body。
 fn rewrite_passthrough_model(
     raw: &[u8],
     upstream_model: &str,
     content_type: Option<&str>,
+    kind: PassthroughKind,
 ) -> Vec<u8> {
     if upstream_model.is_empty() {
         return raw.to_vec();
     }
-    if content_type.is_some_and(|value| {
-        !value
-            .trim()
-            .to_ascii_lowercase()
-            .starts_with("application/json")
-    }) {
+    // Without an explicit JSON media type the payload is opaque.  In
+    // particular, a vendor may send JSON-looking bytes as a signed or
+    // content-negotiated document; reparsing and reserializing it would break
+    // the promised raw relay.  Callers that want model mapping must declare
+    // application/json (parameters such as charset are accepted).
+    let Some(content_type) = content_type else {
+        return raw.to_vec();
+    };
+    if !content_type
+        .trim()
+        .to_ascii_lowercase()
+        .starts_with("application/json")
+    {
         return raw.to_vec();
     }
     let Ok(mut value) = serde_json::from_slice::<Value>(raw) else {
         return raw.to_vec();
     };
-    match value.as_object_mut() {
-        Some(object) => {
-            object.insert("model".into(), json!(upstream_model));
-            serde_json::to_vec(&value).unwrap_or_else(|_| raw.to_vec())
+    let Some(object) = value.as_object_mut() else {
+        return raw.to_vec();
+    };
+    match kind {
+        // Files requests have no model field; routing uses a configured
+        // fallback but must not mutate the multipart/JSON resource payload.
+        PassthroughKind::Raw => {
+            if let Some(model) = object.get("model").and_then(Value::as_str) {
+                if model != upstream_model {
+                    object.insert("model".into(), json!(upstream_model));
+                } else {
+                    return raw.to_vec();
+                }
+            } else if let Some(session) = object.get_mut("session").and_then(Value::as_object_mut)
+                && let Some(model) = session.get("model").and_then(Value::as_str)
+            {
+                if model != upstream_model {
+                    session.insert("model".into(), json!(upstream_model));
+                } else {
+                    return raw.to_vec();
+                }
+            } else {
+                return raw.to_vec();
+            }
         }
-        None => raw.to_vec(),
+        PassthroughKind::Files | PassthroughKind::Videos | PassthroughKind::Models => {
+            return raw.to_vec();
+        }
+        PassthroughKind::Realtime => {
+            let mut changed = false;
+            if object.get("model").is_some_and(Value::is_string) {
+                changed = object
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .is_none_or(|model| model != upstream_model);
+                if changed {
+                    object.insert("model".into(), json!(upstream_model));
+                }
+            } else if let Some(session) = object.get_mut("session").and_then(Value::as_object_mut)
+                && session.get("model").is_some_and(Value::is_string)
+            {
+                changed = session
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .is_none_or(|model| model != upstream_model);
+                if changed {
+                    session.insert("model".into(), json!(upstream_model));
+                }
+            }
+            if !changed {
+                return raw.to_vec();
+            }
+        }
+        _ => {
+            if object
+                .get("model")
+                .and_then(Value::as_str)
+                .is_some_and(|model| model == upstream_model)
+            {
+                return raw.to_vec();
+            }
+            object.insert("model".into(), json!(upstream_model));
+        }
     }
+    serde_json::to_vec(&value).unwrap_or_else(|_| raw.to_vec())
 }
 
 fn set_header(headers: &mut Vec<(String, String)>, name: &str, value: &str) {
@@ -383,6 +577,134 @@ fn openai_suffix_path(base_path: &str, suffix: &str) -> String {
     } else {
         format!("{trimmed}/v1{suffix}")
     }
+}
+
+/// Preserve the inbound resource path and query when joining it to the
+/// configured Provider base path. The only normalization is removing a
+/// duplicated base suffix such as base `/v1` + inbound `/v1/files`; aliases
+/// like `/files` or `/openai/v1/files` are never rewritten to another path.
+pub fn openai_resource_path(base_path: &str, inbound_path_and_query: &str) -> String {
+    let (raw_path, query) = inbound_path_and_query
+        .split_once('?')
+        .map_or((inbound_path_and_query, None), |(path, query)| {
+            (path, Some(query))
+        });
+    let path = if raw_path.starts_with('/') {
+        raw_path.to_string()
+    } else {
+        format!("/{raw_path}")
+    };
+    let trimmed_base = base_path.trim_end_matches('/');
+    let output = if trimmed_base.ends_with("/v1") && (path == "/v1" || path.starts_with("/v1/")) {
+        format!("{trimmed_base}{}", &path[3..])
+    } else {
+        format!("{trimmed_base}{path}")
+    };
+    match query {
+        Some(query) if !query.is_empty() => format!("{output}?{query}"),
+        _ => output,
+    }
+}
+
+/// Rewrite an explicit Realtime `model` query parameter when a configured
+/// mapping uses a different upstream model. Query order and all unrelated
+/// parameters stay byte-for-byte unchanged; a missing model is not invented.
+pub(crate) fn rewrite_realtime_model_query(
+    path_and_query: &str,
+    client_model: &str,
+    upstream_model: &str,
+) -> String {
+    let replacement = if upstream_model.is_empty() {
+        client_model
+    } else {
+        upstream_model
+    };
+    if replacement.is_empty() {
+        return path_and_query.to_string();
+    }
+    let Some((path, query)) = path_and_query.split_once('?') else {
+        return path_and_query.to_string();
+    };
+    let mut changed = false;
+    let query = query
+        .split('&')
+        .map(|pair| {
+            let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+            if name == "model" && value != replacement {
+                changed = true;
+                format!("{name}={replacement}")
+            } else {
+                pair.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("&");
+    if changed {
+        format!("{path}?{query}")
+    } else {
+        path_and_query.to_string()
+    }
+}
+
+/// Add the CPA Quicksilver markers required by some deployed Codex Live
+/// gateways.  CPA's current source hard-codes these upstream, while older
+/// or remote deployments inspect the inbound query; sending them here keeps
+/// both versions compatible without changing standard Realtime traffic.
+pub(crate) fn rewrite_codex_live_bootstrap_query(
+    path_and_query: &str,
+    inbound_method: &str,
+    routed_model: &str,
+) -> String {
+    if !inbound_method.eq_ignore_ascii_case("POST")
+        || model_name::clean(routed_model) != DEFAULT_CODEX_LIVE_MODEL
+    {
+        return path_and_query.to_string();
+    }
+    let (path, query) = path_and_query
+        .split_once('?')
+        .map_or((path_and_query, None), |(path, query)| (path, Some(query)));
+    let is_root = matches!(
+        path,
+        "/v1/live"
+            | "/live"
+            | "/openai/v1/live"
+            | "/v1/realtime"
+            | "/realtime"
+            | "/openai/v1/realtime"
+            | "/v1/realtime/calls"
+            | "/realtime/calls"
+            | "/openai/v1/realtime/calls"
+    );
+    if !is_root {
+        return path_and_query.to_string();
+    }
+
+    let mut found_intent = false;
+    let mut found_architecture = false;
+    let mut pairs = query
+        .unwrap_or_default()
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| {
+            let (name, _) = pair.split_once('=').unwrap_or((pair, ""));
+            if name.eq_ignore_ascii_case("intent") {
+                found_intent = true;
+                "intent=quicksilver".to_string()
+            } else if name.eq_ignore_ascii_case("architecture") {
+                found_architecture = true;
+                "architecture=avas".to_string()
+            } else {
+                pair.to_string()
+            }
+        })
+        .collect::<Vec<_>>();
+    if !found_intent {
+        pairs.push("intent=quicksilver".into());
+    }
+    if !found_architecture {
+        pairs.push("architecture=avas".into());
+    }
+    format!("{path}?{}", pairs.join("&"))
 }
 
 /// `anthropic-beta` 组装:以客户端原值为基底,再补齐代理需要的 base token。
@@ -426,6 +748,17 @@ fn push_beta(parts: &mut Vec<String>, token: &str) {
     parts.push(token.to_string());
 }
 
+/// WebFetch 分流时合成的服务端搜索工具类型。
+///
+/// 这里只能是固定值:WebFetch 请求本身不带 tools(那正是它的指纹之一),没有客户端
+/// 声明可继承。WebSearch 分流不同 —— 那类请求自带 tools,`server_retrieval` 不改写
+/// 它们,客户端声明的版本(含 CC 后续版本的新类型)会原样透传。
+///
+/// 目标上游是 ccc / Grok 的 Anthropic 兼容层,它们按工具名而非类型版本派发,所以
+/// 这个值滞后于 Anthropic 官方新版(如 `web_search_20260209`)不影响检索执行。若将来
+/// 要对接严格校验类型版本的上游,应改成按入口配置而不是继续加硬编码分支。
+const SERVER_WEB_SEARCH_TOOL_TYPE: &str = "web_search_20250305";
+
 /// anthropic 直连的 body 改写:
 /// - `model` 换成上游模型;
 /// - 客户端模型带合法 `(effort)` 后缀时优先注入:
@@ -453,7 +786,7 @@ fn rewrite_anthropic_body(
                 "tools".into(),
                 json!([{
                     "name": "web_search",
-                    "type": "web_search_20250305",
+                    "type": SERVER_WEB_SEARCH_TOOL_TYPE,
                     "max_uses": 8
                 }]),
             );
@@ -609,6 +942,11 @@ mod tests {
                 .iter()
                 .any(|(name, _)| matches!(*name, "authorization" | "x-api-key"))
         );
+        let ephemeral = provider_auth_headers("ek_short_lived");
+        assert_eq!(
+            ephemeral,
+            vec![("authorization", "Bearer ek_short_lived".into())]
+        );
     }
 
     #[test]
@@ -617,7 +955,10 @@ mod tests {
         // 本机工作区路径,一旦跟着转发出去就等于把这些信息泄给上游中转站 —— 出站黑名单是
         // 唯一的拦截点,所以在这里钉死。
         let inbound = vec![
-            ("X-Sumpter-Project".to_string(), "automode-proxy".to_string()),
+            (
+                "X-Sumpter-Project".to_string(),
+                "automode-proxy".to_string(),
+            ),
             (
                 "x-sumpter-workspace".to_string(),
                 "/Users/kkl/.claude/automode-proxy".to_string(),
@@ -1258,6 +1599,221 @@ mod tests {
         let body: Value = serde_json::from_slice(&build.request.body).unwrap();
         assert!(body.get("input").is_some());
         assert!(body.get("messages").is_none());
+    }
+
+    #[test]
+    fn resource_content_passthrough_preserves_accept_and_omits_empty_content_type() {
+        let ep = endpoint(
+            ProviderProtocol::OpenAI,
+            ContextMode::Standard,
+            ThinkingMode::Disabled,
+        );
+        let build = build_outbound(
+            &ep,
+            &request("m"),
+            &[("accept".into(), "video/mp4".into())],
+            "GET",
+            "/v1/videos/video_123/content?variant=video",
+            "k",
+            None,
+            RequestPurpose::Standard,
+            Some(PassthroughRequest {
+                kind: PassthroughKind::Videos,
+                body: &[],
+                content_type: None,
+                stream: false,
+            }),
+        );
+        assert_eq!(
+            build.request.path_and_query,
+            "/v1/videos/video_123/content?variant=video"
+        );
+        assert_eq!(header(&build, "accept"), vec!["video/mp4"]);
+        assert!(header(&build, "content-type").is_empty());
+        assert_eq!(build.request.body, Vec::<u8>::new());
+    }
+
+    #[test]
+    fn realtime_http_passthrough_preserves_sdp_accept_and_media_type() {
+        let ep = endpoint(
+            ProviderProtocol::OpenAI,
+            ContextMode::Standard,
+            ThinkingMode::Disabled,
+        );
+        let build = build_outbound(
+            &ep,
+            &request("gpt-realtime"),
+            &[
+                ("accept".into(), "application/sdp".into()),
+                ("content-type".into(), "application/sdp".into()),
+            ],
+            "POST",
+            "/v1/realtime/calls?model=gpt-realtime",
+            "k",
+            None,
+            RequestPurpose::Standard,
+            Some(PassthroughRequest {
+                kind: PassthroughKind::Realtime,
+                body: b"v=0\r\n",
+                content_type: Some("application/sdp"),
+                stream: false,
+            }),
+        );
+        assert_eq!(header(&build, "accept"), vec!["application/sdp"]);
+        assert_eq!(header(&build, "content-type"), vec!["application/sdp"]);
+        assert_eq!(build.request.body, b"v=0\r\n");
+    }
+
+    #[test]
+    fn realtime_query_model_follows_explicit_upstream_mapping() {
+        let ep = endpoint(
+            ProviderProtocol::OpenAI,
+            ContextMode::Standard,
+            ThinkingMode::Disabled,
+        );
+        let build = build_outbound(
+            &ep,
+            &request("gpt-realtime"),
+            &[],
+            "POST",
+            "/v1/realtime/calls?model=gpt-realtime&voice=alloy",
+            "k",
+            None,
+            RequestPurpose::Standard,
+            Some(PassthroughRequest {
+                kind: PassthroughKind::Realtime,
+                body: br#"{"session":{"model":"gpt-realtime"}}"#,
+                content_type: Some("application/json"),
+                stream: false,
+            }),
+        );
+        assert_eq!(
+            build.request.path_and_query,
+            "/v1/realtime/calls?model=up-model&voice=alloy"
+        );
+        let leaked = build_outbound(
+            &ep,
+            &request("gpt-live-1-codex"),
+            &[],
+            "POST",
+            "/v1/realtime?model=claude-fable-5",
+            "k",
+            None,
+            RequestPurpose::Standard,
+            Some(PassthroughRequest {
+                kind: PassthroughKind::Realtime,
+                body: b"v=0\r\n",
+                content_type: Some("application/sdp"),
+                stream: false,
+            }),
+        );
+        assert_eq!(
+            leaked.request.path_and_query,
+            "/v1/realtime?model=up-model&intent=quicksilver&architecture=avas"
+        );
+        let body: Value = serde_json::from_slice(&build.request.body).unwrap();
+        assert_eq!(body["session"]["model"], "up-model");
+    }
+
+    #[test]
+    fn codex_live_bootstrap_query_declares_quicksilver_without_touching_standard_realtime() {
+        assert_eq!(
+            rewrite_codex_live_bootstrap_query(
+                "/v1/realtime?model=gpt-live-1-codex",
+                "POST",
+                "gpt-live-1-codex",
+            ),
+            "/v1/realtime?model=gpt-live-1-codex&intent=quicksilver&architecture=avas"
+        );
+        assert_eq!(
+            rewrite_codex_live_bootstrap_query(
+                "/v1/live?model=gpt-live-1-codex&intent=other&architecture=other&trace=1",
+                "POST",
+                "gpt-live-1-codex",
+            ),
+            "/v1/live?model=gpt-live-1-codex&intent=quicksilver&architecture=avas&trace=1"
+        );
+        assert_eq!(
+            rewrite_codex_live_bootstrap_query(
+                "/v1/realtime?model=gpt-realtime",
+                "POST",
+                "gpt-realtime",
+            ),
+            "/v1/realtime?model=gpt-realtime"
+        );
+        assert_eq!(
+            rewrite_codex_live_bootstrap_query(
+                "/v1/realtime/calls?model=gpt-live-1-codex",
+                "POST",
+                "gpt-live-1-codex",
+            ),
+            "/v1/realtime/calls?model=gpt-live-1-codex&intent=quicksilver&architecture=avas"
+        );
+    }
+
+    #[test]
+    fn raw_passthrough_does_not_guess_json_without_content_type() {
+        let ep = endpoint(
+            ProviderProtocol::OpenAI,
+            ContextMode::Standard,
+            ThinkingMode::Disabled,
+        );
+        let raw = br#"{"model":"m","signed":"  keep spacing  "}"#;
+        let build = build_outbound(
+            &ep,
+            &request("m"),
+            &[],
+            "POST",
+            "/vendor/request",
+            "k",
+            None,
+            RequestPurpose::Standard,
+            Some(PassthroughRequest {
+                kind: PassthroughKind::Raw,
+                body: raw,
+                content_type: None,
+                stream: false,
+            }),
+        );
+        assert_eq!(build.request.body, raw);
+        assert!(header(&build, "content-type").is_empty());
+    }
+
+    #[test]
+    fn raw_passthrough_preserves_duplicate_forwardable_headers() {
+        let ep = endpoint(
+            ProviderProtocol::OpenAI,
+            ContextMode::Standard,
+            ThinkingMode::Disabled,
+        );
+        let build = build_outbound(
+            &ep,
+            &request("m"),
+            &[
+                ("Accept".into(), "application/vnd.one".into()),
+                ("accept".into(), "application/vnd.two".into()),
+                ("X-Vendor-Signature".into(), "sig-a".into()),
+                ("x-vendor-signature".into(), "sig-b".into()),
+                ("Host".into(), "client.invalid".into()),
+            ],
+            "POST",
+            "/vendor/request",
+            "k",
+            None,
+            RequestPurpose::Standard,
+            Some(PassthroughRequest {
+                kind: PassthroughKind::Raw,
+                body: b"payload",
+                content_type: None,
+                stream: false,
+            }),
+        );
+        assert_eq!(
+            header(&build, "accept"),
+            vec!["application/vnd.one", "application/vnd.two"]
+        );
+        assert_eq!(header(&build, "x-vendor-signature"), vec!["sig-a", "sig-b"]);
+        assert!(header(&build, "host").is_empty());
     }
 
     #[test]

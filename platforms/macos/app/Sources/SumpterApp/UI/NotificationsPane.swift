@@ -3,26 +3,10 @@ import SwiftUI
 struct NotificationsPane: View {
     @ObservedObject var model: AppModel
 
-    private let eventRows: [(argument: String, title: String, systemImage: String)] = [
-        ("notification", "Claude 状态与行动事件", "person.crop.circle.badge.exclamationmark"),
-        ("stop", "回合结束", "checkmark.circle"),
-        ("subagent_stop", "子任务结束", "square.stack.3d.up"),
-        ("stop_failure", "回合异常 / 最终失败", "xmark.octagon")
-    ]
-
-    private let categoryRows: [(category: String, title: String, hint: String, systemImage: String)] = [
-        ("action_required", "需要我处理", "权限、输入、选择、确认", "hand.raised"),
-        ("status", "普通状态提示", "认证、计算机控制等状态变化（默认关闭）", "info.circle"),
-        ("turn_completed", "普通回合完成", "主会话正常结束", "checkmark.circle"),
-        ("subtask_completed", "子任务完成", "Agent / 子代理任务结束", "square.stack.3d.up"),
-        ("turn_failed", "最终失败", "仅 StopFailure 或已关联的最终失败", "exclamationmark.triangle")
-    ]
-
     var body: some View {
         SettingsPage(title: SettingsSection.notifications.title, subtitle: SettingsSection.notifications.subtitle) {
             authorizationPanel
             hookPanel
-            typesPanel
             categoryPanel
             soundPanel
         }
@@ -71,57 +55,96 @@ struct NotificationsPane: View {
         }
     }
 
-    /// hook 总开关状态(settings.json 里有任一事件参数即视为启用)。
+    /// Claude/Codex 任一接入已配置即视为统一通知已启用。
     private var hookEnabled: Bool {
-        !model.claudeNotificationArguments.isEmpty || model.claudeNotificationsEnabled
+        model.notificationsEnabled
     }
 
     private var hookPanel: some View {
-        SectionPanel(title: "Claude Code Hook", hint: "把 Claude Code 事件写入 ~/.claude/settings.json，通过本地代理转成系统通知。代理只转发客户端已经产生的事件，不根据单次上游 502 猜测失败；同一会话的通知在通知中心堆叠成组。") {
+        SectionPanel(title: "通知接入", hint: "一套开关同时管理 Claude Code 与 Codex CLI。两者的协议事件名不同，但都会归入下面同一组通知类别；Sumpter 只转发客户端已经产生的事件。") {
             VStack(alignment: .leading, spacing: 12) {
                 SumpterWrappingLayout(horizontalSpacing: 10, verticalSpacing: 8) {
-                    Toggle("启用 Claude Code 通知", isOn: Binding(
+                    Toggle("启用 Claude Code / Codex CLI 通知", isOn: Binding(
                         get: { hookEnabled },
-                        set: { model.setClaudeNotifications(enabled: $0) }
+                        set: { model.setNotifications(enabled: $0) }
                     ))
                     StatusBadge(
-                        text: model.claudeNotificationArguments.isEmpty ? "未启用" : "已启用",
-                        systemImage: model.claudeNotificationArguments.isEmpty ? "bell.slash" : "bell.fill",
-                        color: model.claudeNotificationArguments.isEmpty ? .secondary : .green
+                        text: hookEnabled ? "已启用" : "未启用",
+                        systemImage: hookEnabled ? "bell.fill" : "bell.slash",
+                        color: hookEnabled ? .green : .secondary
                     )
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                DisclosureGroup("各客户端接入状态") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Label("Claude Code", systemImage: "terminal")
+                            Spacer()
+                            StatusBadge(
+                                text: model.claudeNotificationArguments.isEmpty ? "未配置" : "已配置",
+                                systemImage: model.claudeNotificationArguments.isEmpty ? "minus.circle" : "checkmark.circle",
+                                color: model.claudeNotificationArguments.isEmpty ? .secondary : .green
+                            )
+                        }
+                        HStack {
+                            Label("Codex CLI", systemImage: "terminal.fill")
+                            Spacer()
+                            StatusBadge(
+                                text: model.codexNotificationHookStatus.title,
+                                systemImage: codexStatusImage,
+                                color: codexStatusColor
+                            )
+                        }
+                        Text("Codex 配置文件：\(model.codexNotificationHookPath)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                        switch model.codexNotificationHookStatus {
+                        case .pendingTrust:
+                            Text("首次使用请在 Codex CLI 输入 /hooks，信任 Sumpter 的通知 Hook；收到一次真实通知后会显示“已验证”。")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        case .legacyConflict:
+                            Text("检测到无法安全判断的 legacy notify。为避免误删，请先在 config.toml 中手动处理后再启用。")
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        case .writeFailed:
+                            Text("Codex 写入失败；请检查 CODEX_HOME、文件权限和 hooks.json 格式。")
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        case .notConfigured, .verified:
+                            EmptyView()
+                        }
+                    }
+                    .padding(.top, 6)
+                }
             }
         }
     }
 
-    private var typesPanel: some View {
-        SectionPanel(title: "Hook 事件来源", hint: hookEnabled ? nil : "先启用上方的 Claude Code 通知总开关。") {
-            VStack(alignment: .leading, spacing: 10) {
-                ForEach(eventRows, id: \.argument) { row in
-                    HStack {
-                        Label(row.title, systemImage: row.systemImage)
-                        Spacer()
-                        Toggle(row.title, isOn: Binding(
-                            get: { model.claudeNotificationArguments.contains(row.argument) },
-                            set: { model.setClaudeNotification(argument: row.argument, enabled: $0) }
-                        ))
-                        .labelsHidden()
-                    }
-                    if row.argument != eventRows.last?.argument {
-                        Divider()
-                    }
-                }
-            }
-            // 总开关关着时类型开关不可用,避免「勾了却没反应」的困惑。
-            .disabled(!hookEnabled)
+    private var codexStatusImage: String {
+        switch model.codexNotificationHookStatus {
+        case .notConfigured: "bell.slash"
+        case .pendingTrust: "clock"
+        case .verified: "checkmark.seal.fill"
+        case .legacyConflict: "exclamationmark.triangle.fill"
+        case .writeFailed: "xmark.octagon.fill"
+        }
+    }
+
+    private var codexStatusColor: Color {
+        switch model.codexNotificationHookStatus {
+        case .notConfigured: .secondary
+        case .pendingTrust: .orange
+        case .verified: .green
+        case .legacyConflict, .writeFailed: .red
         }
     }
 
     private var categoryPanel: some View {
-        SectionPanel(title: "客户端通知类别", hint: hookEnabled ? "通知类别在客户端过滤；关闭普通状态不会影响失败、完成或需要你操作的事件。" : "先启用上方的 Claude Code 通知总开关。") {
+        SectionPanel(title: "统一通知类别", hint: "这些开关同时适用于 Claude Code 与 Codex CLI；关闭普通状态不会影响失败、完成或需要你操作的事件。") {
             VStack(alignment: .leading, spacing: 10) {
-                ForEach(categoryRows, id: \.category) { row in
+                ForEach(UnifiedNotificationCategory.allCases) { row in
                     HStack(alignment: .top) {
                         Label(row.title, systemImage: row.systemImage)
                         VStack(alignment: .leading, spacing: 2) {
@@ -132,21 +155,20 @@ struct NotificationsPane: View {
                         Spacer()
                         Toggle(row.title, isOn: Binding(
                             get: { model.notificationCategoryEnabled(row.category) },
-                            set: { model.setClaudeNotificationCategory(row.category, enabled: $0) }
+                            set: { model.setNotificationCategory(row.category, enabled: $0) }
                         ))
                         .labelsHidden()
                     }
-                    if row.category != categoryRows.last?.category {
+                    if row != UnifiedNotificationCategory.allCases.last {
                         Divider()
                     }
                 }
             }
-            .disabled(!hookEnabled)
         }
     }
 
     private var soundPanel: some View {
-        SectionPanel(title: "声音与测试", hint: "试听声音会立即播放；发送测试通知用于验证横幅是否弹出。") {
+        SectionPanel(title: "声音与测试", hint: "提示音选项来自 macOS 的系统音效目录；试听声音会立即播放，发送测试通知用于验证横幅是否弹出。") {
             SumpterWrappingLayout(horizontalSpacing: 10, verticalSpacing: 8) {
                 Picker("提示音", selection: Binding(
                     get: { model.notificationSoundPreference },

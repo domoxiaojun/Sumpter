@@ -52,7 +52,7 @@ if [[ -f "$ROOT/../../../Cargo.toml" && -d "$ROOT/../../../crates" ]]; then
   REPO_ROOT="$(cd "$ROOT/../../.." && pwd -P)"
   RUST_DIR="$REPO_ROOT"
   DEFAULT_VERSION_SOURCE="$REPO_ROOT/Cargo.toml"
-  DEFAULT_CC_ATTRIBUTION_SCRIPT="$REPO_ROOT/platforms/linux/scripts/cc-project-attribution.sh"
+  DEFAULT_CC_ATTRIBUTION_SCRIPT="$REPO_ROOT/platforms/macos/scripts/cc-project-attribution.sh"
   SHARED_WORKSPACE=1
   SIDECAR_BIN="sumpterd-macos"
 else

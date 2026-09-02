@@ -374,7 +374,7 @@ export const CC_ATTRIBUTION_HINT = {
   title: 'Claude Code 项目归因未配置',
   message: '这些 Claude Code 请求没有项目归因。Linux 常见是浏览器在本机、daemon 在远程服务器；wrapper 必须装在 Claude Code 实际运行的那台机器，让它随请求带上项目名。会话统计不受影响。',
   command: './cc-project-attribution.sh status\n./cc-project-attribution.sh install',
-  hint: '从远程 WebUI 复制后，先 SSH/进入 Claude Code 主机，再在脚本所在目录执行。若 CC 与 daemon 不同机，确认 ANTHROPIC_BASE_URL 指向 daemon 的可达地址；装完要新开终端。',
+  hint: '从远程 WebUI 复制后，先 SSH/进入 Claude Code 主机，再在脚本所在目录执行；没有本地脚本时可从 Sumpter listener Base URL 下载。若 CC 与 daemon 不同机，确认 ANTHROPIC_BASE_URL 指向 daemon 的可达地址；装完要新开终端。',
 };
 
 // 安全页面的完整引导。与统计页的小提示卡(CC_ATTRIBUTION_HINT)分开:那里是"发现症状后的
@@ -419,9 +419,13 @@ export const CC_ATTRIBUTION_GUIDE = {
   ],
   remoteScenarios: [
     { title: 'CC 与 daemon 同机', detail: '在这台 Linux 主机执行 status/install；Claude Code 可使用 http://127.0.0.1:57878 访问 daemon。' },
-    { title: '本地电脑调用远程 daemon', detail: '在运行 Claude Code 的本地电脑安装 wrapper，不要只在远程 daemon 服务器安装；若本地没有脚本，先取得与 daemon 同版本的 cc-project-attribution.sh。ANTHROPIC_BASE_URL 指向远程 daemon 的安全可达地址。' },
+    { title: '本地电脑调用远程 daemon', detail: '在运行 Claude Code 的本地电脑安装 wrapper，不要只在远程 daemon 服务器安装；若本地没有脚本，从 Sumpter listener Base URL 的 /__sumpter/cc-project-attribution.sh 下载。ANTHROPIC_BASE_URL 指向远程 daemon 的安全可达地址。' },
     { title: '远程开发机调用另一台 daemon', detail: '先 SSH/进入远程开发机，再执行配置器；让该机的 ANTHROPIC_BASE_URL 指向 daemon。若 daemon 仅监听 127.0.0.1，使用 SSH 隧道、反向代理或安全内网，不要裸露无认证端口。' },
   ],
+  remoteDownload: {
+    command: "SUMPTER_LISTENER_BASE_URL='http://192.168.1.20:57878'\nSUMPTER_LISTENER_BASE_URL=\"\${SUMPTER_LISTENER_BASE_URL%/}\"\ncurl --fail --location \"\$SUMPTER_LISTENER_BASE_URL/__sumpter/cc-project-attribution.sh\" -o /tmp/cc-project-attribution.sh\nbash /tmp/cc-project-attribution.sh install",
+    note: 'Base URL 是 Sumpter Linux listener 地址，可以是局域网 host:port 或转发该路径的 Nginx HTTPS 地址，不是发布镜像地址。若 listener.authToken 非空，给 curl 加 Authorization: Bearer；Nginx 对外提供时建议（跨机器时应）开启非空 authToken。脚本只在 Claude Code 客户端本地执行。',
+  },
   remoteChecks: [
     { command: 'hostname', note: '确认当前终端确实是 Claude Code 将要运行的主机。' },
     { command: 'whoami', note: '确认 wrapper 会写入启动 Claude Code 的那个用户，而不是 root 或另一账号。' },
@@ -429,7 +433,7 @@ export const CC_ATTRIBUTION_GUIDE = {
     { command: 'printf \'%s\\n\' "$ANTHROPIC_BASE_URL"', note: '确认 Claude Code 访问的是 daemon 的可达地址；跨机时不要误留 127.0.0.1。' },
   ],
   platformMatrix: [
-    { label: '配置器位置', macos: 'App 内 Resources/（源码构建则在 linux/scripts/）', linux: '部署包解包后 scripts/（安装后 /opt/sumpter/scripts/）' },
+    { label: '配置器位置', macos: 'App 内 Resources/（源码构建则在 macos/scripts/）', linux: '部署包解包后 scripts/（安装后 /opt/sumpter/scripts/）' },
     { label: '默认 shell', macos: '通常 zsh → ~/.zshrc', linux: '视发行版，zsh 或 bash 都常见' },
     { label: 'bash 用哪个 rc', macos: '~/.bash_profile（登录 shell 不读 .bashrc）', linux: '~/.bashrc' },
     { label: 'CC 与 daemon', macos: '通常同机', linux: 'CC 常在别的机器上连远程 daemon' },

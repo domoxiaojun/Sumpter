@@ -55,6 +55,9 @@ final class UILogicTests: XCTestCase {
         let parsed = try InputValidation.retryPolicy(
             responseTimeoutText: " 9 ",
             streamIdleTimeoutText: "30",
+            max500RetriesText: "3",
+            failoverOn500: false,
+            retryDelaySecondsText: "4.5",
             maxDeferredRoundsText: "2",
             maxRetryDurationSecondsText: "5",
             sessionStickyRetriesText: "2",
@@ -62,6 +65,9 @@ final class UILogicTests: XCTestCase {
         )
         XCTAssertEqual(parsed.responseTimeoutSeconds, 9)
         XCTAssertEqual(parsed.streamIdleTimeoutSeconds, 30)
+        XCTAssertEqual(parsed.max500Retries, 3)
+        XCTAssertFalse(parsed.failoverOn500)
+        XCTAssertEqual(parsed.retryDelaySeconds, 4.5)
         XCTAssertEqual(parsed.maxDeferredRounds, 2)
         XCTAssertEqual(parsed.maxRetryDurationSeconds, 5)
         XCTAssertEqual(parsed.sessionStickyRetries, 2)
@@ -82,12 +88,12 @@ final class UILogicTests: XCTestCase {
 
     func testInputValidationRetryPolicyRejectsBadValues() {
         let cases: [(String, String, String, String, String, String, String)] = [
-            ("0", "45", "0", "2", "5", "3", "单次超时必须留空或大于 0"),
-            ("8", "0", "0", "2", "5", "3", "吐字超时必须留空或大于 0"),
-            ("8", "45", "-1", "2", "5", "3", "可重试故障最大轮数必须为 0 或正整数"),
-            ("8", "45", "0", "2", "-1", "3", "跨轮重试上限必须为 0 或正数"),
-            ("8", "45", "0", "-1", "5", "3", "粘性入口重试次数必须为 0 或正整数"),
-            ("8", "45", "0", "2", "5", "0", "IP 并发数必须大于 0")
+            ("0", "45", "0", "2", "5", "3", "首响应截止必须留空或大于 0"),
+            ("8", "0", "0", "2", "5", "3", "流式空闲截止必须留空或大于 0"),
+            ("8", "45", "-1", "2", "5", "3", "故障重试最大轮数必须为 0 或正整数"),
+            ("8", "45", "0", "2", "-1", "3", "跨轮最长时长必须为 0 或正数"),
+            ("8", "45", "0", "-1", "5", "3", "粘性入口额外重试次数必须为 0 或正整数"),
+            ("8", "45", "0", "2", "5", "0", "固定 IP 并发数必须大于 0")
         ]
         for (timeout, streamIdle, rounds, sticky, retrySeconds, ip, expected) in cases {
             XCTAssertThrowsError(try InputValidation.retryPolicy(

@@ -16,16 +16,13 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sumpter_core::config::ProviderProtocol;
-#[cfg(test)]
-use sumpter_core::events::APPLE_EPOCH_OFFSET_SECS;
 use sumpter_core::events::{
-    ClientDeclaredMetadata, ClientKind, CodexMetadata, KIND_CLIENT, KIND_NOTIFY, KIND_UPSTREAM,
-    RuntimeEvent, RuntimeEventOutcome, RuntimeEventPhase, RuntimeFailureKind, RuntimeFailurePhase,
-    RuntimeSnapshot, STATUS_CLIENT_DISCONNECTED, StreamTrace, codex_attribution_scope,
-    codex_thread_class,
+    APPLE_EPOCH_OFFSET_SECS, ClientDeclaredMetadata, ClientKind, CodexMetadata, KIND_CLIENT,
+    KIND_NOTIFY, KIND_UPSTREAM, RuntimeEvent, RuntimeEventOutcome, RuntimeEventPhase,
+    RuntimeFailureKind, RuntimeFailurePhase, RuntimeSnapshot, STATUS_CLIENT_DISCONNECTED,
+    StreamTrace, codex_attribution_scope, codex_thread_class,
 };
-use sumpter_core::routing::RequestPurpose;
-use sumpter_core::routing::RouteMode;
+use sumpter_core::routing::{RESOURCE_ROUTING_MODEL, RequestPurpose, RouteMode};
 
 const SCHEMA_VERSION: i64 = 3;
 const PROJECTION_VERSION: i64 = 4;
@@ -37,6 +34,9 @@ const PENDING_EVENTS_LIMIT: usize = 4096;
 const BACKPRESSURE_BYTES: usize = 3 * 1024 * 1024;
 const BACKPRESSURE_EVENTS: usize = 3072;
 const RECENT_CHANGES_LIMIT: usize = 600;
+/// 空闲 worker 的保留策略检查间隔。写入/启动/策略变更仍会立即补偿检查；
+/// 这里的周期检查让低流量实例也能在时间窗口到期后及时轮换。
+const RETENTION_IDLE_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 const TTFB_SLOW_MS: i64 = 5_000;
 const TTFB_CRITICAL_MS: i64 = 15_000;
 const DURATION_SLOW_MS: i64 = 3_000;
@@ -208,13 +208,7 @@ impl EventProjection {
         let (codex_thread_class, attribution_scope) = if is_codex_event {
             (
                 Some(codex_thread_class(event.codex_metadata.as_ref()).as_str()),
-                Some(
-                    codex_attribution_scope(
-                        event.codex_metadata.as_ref(),
-                        event.client_declared.as_ref(),
-                    )
-                    .as_str(),
-                ),
+                Some(event_attribution_scope(event).as_str()),
             )
         } else {
             (None, None)
@@ -407,14 +401,8 @@ impl RuntimeEventListItem {
                 .as_str()
                 .to_owned()
         });
-        let attribution_scope = is_codex_event.then(|| {
-            codex_attribution_scope(
-                event.codex_metadata.as_ref(),
-                event.client_declared.as_ref(),
-            )
-            .as_str()
-            .to_owned()
-        });
+        let attribution_scope =
+            is_codex_event.then(|| event_attribution_scope(&event).as_str().to_owned());
         Self {
             seq,
             change_seq,
@@ -558,10 +546,17 @@ impl PendingBatch {
     }
 }
 
+// Write 承载整条事件,比其它控制指令大得多。worker 队列每次只传一条命令,
+// 装箱反而多一次堆分配和解引用,收益不抵成本。
+#[allow(clippy::large_enum_variant)]
 enum Command {
     Write(WriteMessage),
     Reset(mpsc::Sender<Result<i64, String>>),
     Recreate(mpsc::Sender<Result<i64, String>>),
+    CleanupBefore {
+        older_than: f64,
+        reply: mpsc::Sender<Result<RuntimeCleanupMutation, String>>,
+    },
     DeleteSession {
         session_id: String,
         reply: mpsc::Sender<Result<SessionMutation, String>>,
@@ -585,9 +580,31 @@ pub struct SessionMutation {
     pub deleted_requests: i64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeCleanupPreview {
+    pub older_than: f64,
+    pub deletable_events: i64,
+    pub deletable_requests: i64,
+    pub remaining_events: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeCleanupMutation {
+    pub older_than: f64,
+    pub deleted_events: i64,
+    pub deleted_requests: i64,
+    pub remaining_events: i64,
+    pub history_generation: i64,
+}
+
 #[derive(Debug, Clone)]
 pub struct RuntimeRetentionUpdate {
     pub expected_revision: i64,
+    /// Optional rolling age limit in whole days. `None` disables this time
+    /// dimension; the cutoff uses a rolling 24-hour window.
+    pub max_age_days: Option<i64>,
     /// Optional SQLite live-storage limit. When reached, the oldest completed
     /// request history is rotated out; in-flight rows are never deleted.
     pub storage_limit_bytes: Option<i64>,
@@ -597,6 +614,7 @@ pub struct RuntimeRetentionUpdate {
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeRetentionMutation {
     pub revision: i64,
+    pub max_age_days: Option<i64>,
     pub storage_limit_bytes: Option<i64>,
 }
 
@@ -1257,7 +1275,7 @@ fn resolve_rollup_price<'a>(
             .filter(|value| !value.is_empty())
             .and_then(|endpoint| {
                 prices.iter().find(|price| {
-                    price.endpoint_id.as_deref() == Some(endpoint) && matches_timestamp(&price)
+                    price.endpoint_id.as_deref() == Some(endpoint) && matches_timestamp(price)
                 })
             })
     {
@@ -1265,9 +1283,12 @@ fn resolve_rollup_price<'a>(
     }
     prices
         .iter()
-        .find(|price| price.endpoint_id.is_none() && matches_timestamp(&price))
+        .find(|price| price.endpoint_id.is_none() && matches_timestamp(price))
 }
 
+// rollup 的一行成本由多个互不相关的维度共同决定;打包成结构体只会多一层
+// 只在这里用到的类型。
+#[allow(clippy::too_many_arguments)]
 fn add_rollup_cost(
     accumulator: &mut HourlyRollupAccumulator,
     request_purpose: Option<&str>,
@@ -2038,6 +2059,19 @@ fn set_storage_limit_meta(connection: &Connection, value: Option<i64>) -> rusqli
     }
 }
 
+fn set_retention_max_age_meta(connection: &Connection, value: Option<i64>) -> rusqlite::Result<()> {
+    match value {
+        Some(value) => set_meta(connection, "retention_max_age_days", value),
+        None => {
+            connection.execute(
+                "DELETE FROM runtime_meta WHERE key='retention_max_age_days'",
+                [],
+            )?;
+            Ok(())
+        }
+    }
+}
+
 fn load_cached_storage(connection: &Connection) -> rusqlite::Result<CachedStorageMetrics> {
     let (
         event_count,
@@ -2254,32 +2288,123 @@ fn sqlite_live_bytes(connection: &Connection) -> rusqlite::Result<u64> {
         .saturating_mul(page_size.max(0) as u64))
 }
 
-/// Keep the SQLite live page footprint under the configured limit by removing
-/// the oldest completed request groups. The limit is deliberately best effort:
-/// in-flight rows are protected, and the fixed schema/index footprint may be
-/// larger than a very small user limit.
-fn rotate_to_storage_limit(connection: &Connection) -> rusqlite::Result<StorageRotation> {
-    let Some(limit) = meta_i64(connection, "storage_limit_bytes")? else {
-        return Ok(StorageRotation::default());
+/// Return the current event-time cutoff for the rolling retention window.
+/// Runtime events use Apple reference-date seconds, while metadata timestamps
+/// use Unix seconds; keeping this conversion at the storage boundary avoids
+/// local-time and daylight-saving surprises.
+fn retention_age_cutoff(connection: &Connection) -> rusqlite::Result<Option<f64>> {
+    let Some(days) = meta_i64(connection, "retention_max_age_days")? else {
+        return Ok(None);
     };
-    let limit = limit.max(0) as u64;
-    if limit == 0 {
+    if days < 1 {
+        return Ok(None);
+    }
+    Ok(Some(
+        now() - APPLE_EPOCH_OFFSET_SECS - (days as f64 * 86_400.0),
+    ))
+}
+
+fn has_expired_completed_event(
+    connection: &Connection,
+    cutoff: Option<f64>,
+) -> rusqlite::Result<bool> {
+    let Some(cutoff) = cutoff else {
+        return Ok(false);
+    };
+    connection.query_row(
+        "SELECT EXISTS(
+             SELECT 1
+             FROM runtime_events AS candidate
+             WHERE candidate.is_in_flight=0
+               AND candidate.timestamp < ?1
+               AND (
+                   candidate.request_id IS NULL
+                   OR trim(candidate.request_id)=''
+                   OR NOT EXISTS(
+                       SELECT 1 FROM runtime_events AS newer
+                       WHERE newer.request_id=candidate.request_id
+                         AND newer.timestamp >= ?1
+                   )
+               )
+               AND (
+                   candidate.request_id IS NULL
+                   OR trim(candidate.request_id)=''
+                   OR NOT EXISTS(
+                       SELECT 1 FROM runtime_events AS active
+                       WHERE active.request_id=candidate.request_id
+                         AND active.is_in_flight=1
+                   )
+               )
+             LIMIT 1
+         )",
+        params![cutoff],
+        |row| row.get::<_, bool>(0),
+    )
+}
+
+/// Keep the SQLite live page footprint under the configured limit and/or the
+/// rolling age cutoff. Both dimensions are OR-ed: whichever condition is
+/// reached first may remove the oldest eligible completed request group.
+///
+/// A request group is indivisible for rotation. If any row in the group is
+/// still in flight, the entire group is protected; this prevents a partial
+/// request chain from appearing in analytics or exports.
+fn rotate_retention(connection: &Connection) -> rusqlite::Result<StorageRotation> {
+    let capacity_limit = meta_i64(connection, "storage_limit_bytes")?
+        .filter(|value| *value > 0)
+        .map(|value| value as u64);
+    let age_cutoff = retention_age_cutoff(connection)?;
+    if capacity_limit.is_none() && age_cutoff.is_none() {
         return Ok(StorageRotation::default());
     }
 
     let mut rotation = StorageRotation::default();
     loop {
-        if sqlite_live_bytes(connection)? <= limit {
+        let over_capacity = match capacity_limit {
+            Some(limit) => sqlite_live_bytes(connection)? > limit,
+            None => false,
+        };
+        let over_age = has_expired_completed_event(connection, age_cutoff)?;
+        if !over_capacity && !over_age {
             break;
         }
+
+        // When capacity is exceeded it is valid to evict the oldest eligible
+        // group even if that group's events are newer than the age cutoff.
+        // When only age is exceeded, require the whole group to be older than
+        // the cutoff so no fresh row is removed as a side effect.
         let candidate = connection
             .query_row(
                 "SELECT event_id,request_id,kind,timestamp
-                 FROM runtime_events
-                 WHERE is_in_flight=0
-                 ORDER BY timestamp ASC,seq ASC
+                 FROM runtime_events AS candidate
+                 WHERE candidate.is_in_flight=0
+                   AND (
+                       candidate.request_id IS NULL
+                       OR trim(candidate.request_id)=''
+                       OR NOT EXISTS(
+                           SELECT 1 FROM runtime_events AS active
+                           WHERE active.request_id=candidate.request_id
+                             AND active.is_in_flight=1
+                       )
+                   )
+                   AND (
+                       ?1=1
+                       OR (
+                           candidate.timestamp < ?2
+                           AND (
+                               candidate.request_id IS NULL
+                               OR trim(candidate.request_id)=''
+                               OR NOT EXISTS(
+                                   SELECT 1 FROM runtime_events AS newer
+                                   WHERE newer.request_id=candidate.request_id
+                                     AND newer.timestamp >= ?2
+                               )
+                           )
+                       )
+                   )
+                 ORDER BY candidate.timestamp ASC,candidate.seq ASC
                  LIMIT 1",
-                [],
+                params![i64::from(over_capacity), age_cutoff.unwrap_or(0.0)],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -2291,14 +2416,14 @@ fn rotate_to_storage_limit(connection: &Connection) -> rusqlite::Result<StorageR
             )
             .optional()?;
         let Some((event_id, request_id, kind, timestamp)) = candidate else {
+            // This is the expected best-effort outcome when every old group
+            // still contains an in-flight row, or only SQLite's fixed schema
+            // footprint is larger than the requested capacity.
             break;
         };
 
         let mut event_ids = Vec::new();
         if let Some(request_id) = request_id.filter(|value| !value.trim().is_empty()) {
-            // A request's client row and upstream attempts form one history
-            // unit. Delete only completed rows so a still-running attempt is
-            // never removed by capacity rotation.
             mark_request_hourly_rollups_dirty(connection, &request_id)?;
             let mut statement = connection.prepare(
                 "SELECT event_id FROM runtime_events
@@ -2366,9 +2491,9 @@ fn rotate_to_storage_limit(connection: &Connection) -> rusqlite::Result<StorageR
     Ok(rotation)
 }
 
-fn rotate_storage_limit_now(connection: &mut Connection) -> rusqlite::Result<StorageRotation> {
+fn rotate_retention_now(connection: &mut Connection) -> rusqlite::Result<StorageRotation> {
     let transaction = connection.transaction()?;
-    let rotation = rotate_to_storage_limit(&transaction)?;
+    let rotation = rotate_retention(&transaction)?;
     transaction.commit()?;
     Ok(rotation)
 }
@@ -2396,10 +2521,11 @@ fn write_batch(
                 },
             )
             .optional()?;
-        if let Some((kind, is_in_flight, timestamp)) = previous.as_ref() {
-            if kind == KIND_CLIENT && *is_in_flight == 0 {
-                mark_hourly_rollup_bucket(&transaction, hourly_bucket_start(*timestamp))?;
-            }
+        if let Some((kind, is_in_flight, timestamp)) = previous.as_ref()
+            && kind == KIND_CLIENT
+            && *is_in_flight == 0
+        {
+            mark_hourly_rollup_bucket(&transaction, hourly_bucket_start(*timestamp))?;
         }
         let payload = serde_json::to_string(&message.event)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
@@ -2547,7 +2673,7 @@ fn write_batch(
     set_meta_max(&transaction, "next_seq", max_seq.max(1) + 1)?;
     set_meta_max(&transaction, "next_change_seq", max_change_seq.max(1) + 1)?;
     set_meta(&transaction, "retained_event_count", retained_event_count)?;
-    let rotation = rotate_to_storage_limit(&transaction)?;
+    let rotation = rotate_retention(&transaction)?;
     transaction.commit()?;
     Ok(rotation)
 }
@@ -2565,7 +2691,7 @@ impl RuntimeStore {
         let normalized_changes =
             normalize_startup(&mut connection).map_err(|error| error.to_string())?;
         let startup_rotation =
-            rotate_storage_limit_now(&mut connection).map_err(|error| error.to_string())?;
+            rotate_retention_now(&mut connection).map_err(|error| error.to_string())?;
         let rotated_ids = startup_rotation
             .deleted_event_ids
             .into_iter()
@@ -2658,9 +2784,26 @@ impl RuntimeStore {
                                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
                             }
                         } else {
-                            match receiver.recv() {
+                            match receiver.recv_timeout(RETENTION_IDLE_CHECK_INTERVAL) {
                                 Ok(command) => command,
-                                Err(_) => break,
+                                Err(mpsc::RecvTimeoutError::Timeout) => {
+                                    let Some(worker_inner) = worker_ref.upgrade() else {
+                                        break;
+                                    };
+                                    match run_retention_maintenance(&worker_inner, &mut connection)
+                                    {
+                                        Ok(true) => projection_maintenance = true,
+                                        Ok(false) => {}
+                                        Err(error) => {
+                                            worker_inner.state.lock().unwrap().last_error =
+                                                Some(format!(
+                                                    "runtime retention maintenance failed: {error}"
+                                                ));
+                                        }
+                                    }
+                                    continue;
+                                }
+                                Err(mpsc::RecvTimeoutError::Disconnected) => break,
                             }
                         }
                     } else {
@@ -2768,6 +2911,28 @@ impl RuntimeStore {
                                 let _ =
                                     connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
                             }
+                        }
+                        Command::CleanupBefore { older_than, reply } => {
+                            let Some(worker_inner) = worker_ref.upgrade() else {
+                                let _ = reply.send(Err("runtime store closed".into()));
+                                break;
+                            };
+                            let result =
+                                commit_pending(&worker_inner, &mut connection, &mut pending)
+                                    .and_then(|_| {
+                                        cleanup_before_database(
+                                            &worker_inner,
+                                            &mut connection,
+                                            older_than,
+                                        )
+                                    })
+                                    .map_err(|error| error.to_string());
+                            if let Err(error) = &result {
+                                worker_inner.state.lock().unwrap().last_error = Some(error.clone());
+                            } else {
+                                projection_maintenance = true;
+                            }
+                            let _ = reply.send(result);
                         }
                         Command::DeleteSession { session_id, reply } => {
                             let Some(worker_inner) = worker_ref.upgrade() else {
@@ -3044,6 +3209,41 @@ impl RuntimeStore {
         Ok(generation)
     }
 
+    /// Preview a one-off age cleanup after flushing queued events, so the
+    /// confirmation count is based on the same durable request groups the
+    /// mutation will evaluate. The cutoff uses Apple reference-date seconds,
+    /// matching every runtime event timestamp exposed by Admin.
+    pub fn cleanup_before_preview(&self, older_than: f64) -> Result<RuntimeCleanupPreview, String> {
+        validate_cleanup_cutoff(older_than)?;
+        self.flush()?;
+        let connection = read_connection(&self.inner.path)?;
+        cleanup_before_preview_database(&connection, older_than).map_err(|error| error.to_string())
+    }
+
+    pub fn cleanup_before(&self, older_than: f64) -> Result<RuntimeCleanupMutation, String> {
+        validate_cleanup_cutoff(older_than)?;
+        let (sender, receiver) = mpsc::channel();
+        self.inner
+            .sender
+            .send(Command::CleanupBefore {
+                older_than,
+                reply: sender,
+            })
+            .map_err(|error| error.to_string())?;
+        let mutation = receiver.recv().map_err(|error| error.to_string())??;
+        let refreshed =
+            load_state(&read_connection(&self.inner.path)?).map_err(|error| error.to_string())?;
+        let mut state = self.inner.state.lock().unwrap();
+        state.counters = refreshed.counters;
+        state.latest_event = refreshed.latest_event;
+        state.history_generation = mutation.history_generation;
+        state.active_sequences.clear();
+        state.recent_changes.clear();
+        state.last_commit_at = Some(now());
+        state.last_error = None;
+        Ok(mutation)
+    }
+
     pub fn delete_session(&self, session_id: &str) -> Result<SessionMutation, String> {
         self.delete_session_confirmed(session_id, false)
     }
@@ -3178,6 +3378,8 @@ impl RuntimeStore {
             || self.inner.pending_events.load(Ordering::Acquire) >= PENDING_EVENTS_LIMIT
     }
 
+    // 事件查询的过滤条件就是这么多维,合并成 struct 会让调用方多写一层构造。
+    #[allow(clippy::too_many_arguments)]
     pub fn events(
         &self,
         before_seq: Option<i64>,
@@ -3298,7 +3500,7 @@ impl RuntimeStore {
             }
         }
         let mut result = merged.into_values().collect::<Vec<_>>();
-        result.sort_by(|left, right| right.seq.cmp(&left.seq));
+        result.sort_by_key(|row| std::cmp::Reverse(row.seq));
         result.truncate(query_limit);
         Ok(result)
     }
@@ -3935,24 +4137,24 @@ fn dimension_row_value(name: &str, row: &DimensionRow) -> Value {
                         "reasoningTokens": row.token_usage.usage_field_presence.reasoning_tokens,
                     },
     });
-    if let Some(source) = row.project_source.as_deref() {
-        if let Some(object) = value.as_object_mut() {
-            object.insert("projectSource".into(), Value::String(source.into()));
-        }
+    if let Some(source) = row.project_source.as_deref()
+        && let Some(object) = value.as_object_mut()
+    {
+        object.insert("projectSource".into(), Value::String(source.into()));
     }
-    if !row.workspace_paths.is_empty() {
-        if let Some(object) = value.as_object_mut() {
-            object.insert(
-                "workspacePaths".into(),
-                Value::Array(
-                    row.workspace_paths
-                        .iter()
-                        .cloned()
-                        .map(Value::String)
-                        .collect(),
-                ),
-            );
-        }
+    if !row.workspace_paths.is_empty()
+        && let Some(object) = value.as_object_mut()
+    {
+        object.insert(
+            "workspacePaths".into(),
+            Value::Array(
+                row.workspace_paths
+                    .iter()
+                    .cloned()
+                    .map(Value::String)
+                    .collect(),
+            ),
+        );
     }
     value
 }
@@ -4081,6 +4283,12 @@ fn event_project_projection(event: &RuntimeEvent) -> (String, String, &'static s
 }
 
 fn project_identity(event: &RuntimeEvent) -> String {
+    // Resource requests (for example Codex's `/v1/models` discovery call) do
+    // not belong to a project. Keep them out of `unidentified_project` so the
+    // UI does not present an internal capability probe as user traffic.
+    if is_internal_resource_event(event) {
+        return "internal_feature".into();
+    }
     let codex_workspaces = event
         .codex_metadata
         .as_ref()
@@ -4099,6 +4307,20 @@ fn project_identity(event: &RuntimeEvent) -> String {
         .as_ref()
         .and_then(declared_identity)
         .unwrap_or_else(|| "unidentified_project".into())
+}
+
+fn is_internal_resource_event(event: &RuntimeEvent) -> bool {
+    event.kind == KIND_CLIENT && event.client_model.as_deref() == Some(RESOURCE_ROUTING_MODEL)
+}
+
+fn event_attribution_scope(event: &RuntimeEvent) -> sumpter_core::events::CodexAttributionScope {
+    if is_internal_resource_event(event) {
+        return sumpter_core::events::CodexAttributionScope::InternalFeature;
+    }
+    codex_attribution_scope(
+        event.codex_metadata.as_ref(),
+        event.client_declared.as_ref(),
+    )
 }
 
 /// 客户端声明的项目身份。显式 project 名优先于 workspace 路径与 git remote,
@@ -4129,6 +4351,9 @@ fn declared_identity(declared: &sumpter_core::events::ClientDeclaredMetadata) ->
 /// only from the structured Codex workspace metadata; model names, paths in
 /// prompts, and client guesses are never used as a source.
 fn project_source(event: &RuntimeEvent) -> &'static str {
+    if is_internal_resource_event(event) {
+        return "internal_feature";
+    }
     // 客户端自称的归因可信度低于 Codex 结构化采集,所以只在后者缺位时才作为来源,
     // 并且用独立词标出来,不能和 workspace_local 混为一类。
     let declared_source = || {
@@ -4300,6 +4525,39 @@ fn refresh_cached_storage(
     Ok(())
 }
 
+fn reconcile_rotation_state(
+    inner: &Arc<Inner>,
+    connection: &Connection,
+    rotation: &StorageRotation,
+) -> rusqlite::Result<()> {
+    if rotation.deleted_event_ids.is_empty() {
+        return Ok(());
+    }
+    let refreshed = load_state(connection)?;
+    let rotated = rotation.deleted_event_ids.iter().collect::<HashSet<_>>();
+    let mut state = inner.state.lock().unwrap();
+    state
+        .recent_changes
+        .retain(|change| !rotated.contains(&change.event.id));
+    state.counters = refreshed.counters;
+    state.latest_event = refreshed.latest_event;
+    state.history_generation = refreshed.history_generation;
+    Ok(())
+}
+
+fn run_retention_maintenance(
+    inner: &Arc<Inner>,
+    connection: &mut Connection,
+) -> rusqlite::Result<bool> {
+    let rotation = rotate_retention_now(connection)?;
+    if rotation.deleted_event_ids.is_empty() {
+        return Ok(false);
+    }
+    refresh_cached_storage(inner, connection, true)?;
+    reconcile_rotation_state(inner, connection, &rotation)?;
+    Ok(true)
+}
+
 fn commit_pending(
     inner: &Arc<Inner>,
     connection: &mut Connection,
@@ -4326,23 +4584,13 @@ fn commit_pending(
             return Err(error);
         }
     };
-    refresh_cached_storage(inner, connection, false)?;
+    refresh_cached_storage(inner, connection, !rotation.deleted_event_ids.is_empty())?;
     inner
         .pending_events
         .fetch_sub(batch.len(), Ordering::AcqRel);
     inner.pending_bytes.fetch_sub(bytes, Ordering::AcqRel);
-    let rotated_ids = rotation.deleted_event_ids;
+    reconcile_rotation_state(inner, connection, &rotation)?;
     let mut state = inner.state.lock().unwrap();
-    if !rotated_ids.is_empty() {
-        let refreshed = load_state(connection)?;
-        let rotated = rotated_ids.iter().collect::<HashSet<_>>();
-        state
-            .recent_changes
-            .retain(|change| !rotated.contains(&change.event.id));
-        state.counters = refreshed.counters;
-        state.latest_event = refreshed.latest_event;
-        state.history_generation = refreshed.history_generation;
-    }
     state.last_commit_at = Some(now());
     state.last_error = None;
     inner.backpressure.store(false, Ordering::Release);
@@ -4353,6 +4601,9 @@ fn commit_pending(
 fn validate_retention_update(update: &RuntimeRetentionUpdate) -> Result<(), String> {
     if update.expected_revision < 1 {
         return Err("expectedRevision 必须大于 0".into());
+    }
+    if update.max_age_days.is_some_and(|value| value < 1) {
+        return Err("maxAgeDays 必须为空或至少为 1 天".into());
     }
     if update
         .storage_limit_bytes
@@ -4372,6 +4623,7 @@ fn load_retention_mutation(connection: &Connection) -> Result<RuntimeRetentionMu
             |row| {
                 Ok(RuntimeRetentionMutation {
                     revision: row.get(0)?,
+                    max_age_days: meta_i64(connection, "retention_max_age_days")?,
                     storage_limit_bytes: meta_i64(connection, "storage_limit_bytes")?,
                 })
             },
@@ -4408,22 +4660,14 @@ fn set_retention_database(
             params![next_revision, now()],
         )
         .map_err(|error| error.to_string())?;
+    set_retention_max_age_meta(&transaction, update.max_age_days)
+        .map_err(|error| error.to_string())?;
     set_storage_limit_meta(&transaction, update.storage_limit_bytes)
         .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())?;
-    let rotation = rotate_storage_limit_now(connection).map_err(|error| error.to_string())?;
+    let rotation = rotate_retention_now(connection).map_err(|error| error.to_string())?;
     refresh_cached_storage(inner, connection, true).map_err(|error| error.to_string())?;
-    if !rotation.deleted_event_ids.is_empty() {
-        let refreshed = load_state(connection).map_err(|error| error.to_string())?;
-        let rotated = rotation.deleted_event_ids.iter().collect::<HashSet<_>>();
-        let mut state = inner.state.lock().unwrap();
-        state
-            .recent_changes
-            .retain(|change| !rotated.contains(&change.event.id));
-        state.counters = refreshed.counters;
-        state.latest_event = refreshed.latest_event;
-        state.history_generation = refreshed.history_generation;
-    }
+    reconcile_rotation_state(inner, connection, &rotation).map_err(|error| error.to_string())?;
     load_retention_mutation(connection)
 }
 
@@ -4614,6 +4858,187 @@ fn reset_database(inner: &Arc<Inner>, connection: &mut Connection) -> Result<i64
     refresh_cached_storage(inner, connection, true)?;
     inner.state.lock().unwrap().last_commit_at = Some(now());
     Ok(generation)
+}
+
+fn validate_cleanup_cutoff(older_than: f64) -> Result<(), String> {
+    if !older_than.is_finite() || older_than <= 0.0 {
+        return Err("olderThan 必须是大于 0 的有限时间戳".into());
+    }
+    Ok(())
+}
+
+/// Select only complete request groups whose newest event is older than the
+/// cutoff. Requests with any in-flight row remain wholly intact; rows without
+/// a request ID are treated as independent events.
+///
+/// 一行是 `(event_id, request_id, kind, timestamp)`。
+type ExpiredEventRow = (String, Option<String>, String, f64);
+
+fn cleanup_before_ids(
+    connection: &Connection,
+    older_than: f64,
+) -> rusqlite::Result<Vec<ExpiredEventRow>> {
+    let mut statement = connection.prepare(
+        "SELECT event_id,request_id,kind,timestamp
+         FROM runtime_events AS candidate
+         WHERE candidate.is_in_flight=0
+           AND (
+               candidate.request_id IS NULL
+               OR trim(candidate.request_id)=''
+               OR (
+                   NOT EXISTS(
+                       SELECT 1 FROM runtime_events AS newer
+                       WHERE newer.request_id=candidate.request_id
+                         AND newer.timestamp >= ?1
+                   )
+                   AND NOT EXISTS(
+                       SELECT 1 FROM runtime_events AS active
+                       WHERE active.request_id=candidate.request_id
+                         AND active.is_in_flight=1
+                   )
+               )
+           )
+           AND candidate.timestamp < ?1
+         ORDER BY candidate.timestamp ASC,candidate.seq ASC",
+    )?;
+    statement
+        .query_map(params![older_than], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, f64>(3)?,
+            ))
+        })?
+        .collect()
+}
+
+fn cleanup_before_preview_database(
+    connection: &Connection,
+    older_than: f64,
+) -> rusqlite::Result<RuntimeCleanupPreview> {
+    let deletable = cleanup_before_ids(connection, older_than)?;
+    let deletable_events = deletable.len() as i64;
+    let deletable_requests = deletable
+        .iter()
+        .filter(|(_, _, kind, _)| kind == KIND_CLIENT)
+        .map(|(event_id, request_id, _, _)| {
+            request_id
+                .as_deref()
+                .filter(|id| !id.trim().is_empty())
+                .unwrap_or(event_id)
+                .to_owned()
+        })
+        .collect::<HashSet<_>>()
+        .len() as i64;
+    let retained = connection.query_row("SELECT COUNT(*) FROM runtime_events", [], |row| {
+        row.get::<_, i64>(0)
+    })?;
+    Ok(RuntimeCleanupPreview {
+        older_than,
+        deletable_events,
+        deletable_requests,
+        remaining_events: retained.saturating_sub(deletable_events),
+    })
+}
+
+fn cleanup_before_database(
+    inner: &Arc<Inner>,
+    connection: &mut Connection,
+    older_than: f64,
+) -> rusqlite::Result<RuntimeCleanupMutation> {
+    let transaction = connection.transaction()?;
+    let deletable = cleanup_before_ids(&transaction, older_than)?;
+    if deletable.is_empty() {
+        let remaining_events =
+            transaction.query_row("SELECT COUNT(*) FROM runtime_events", [], |row| {
+                row.get::<_, i64>(0)
+            })?;
+        let history_generation = meta_i64(&transaction, "history_generation")?.unwrap_or(0);
+        transaction.commit()?;
+        return Ok(RuntimeCleanupMutation {
+            older_than,
+            deleted_events: 0,
+            deleted_requests: 0,
+            remaining_events,
+            history_generation,
+        });
+    }
+    let mut deleted_ids = Vec::with_capacity(deletable.len());
+    for (event_id, request_id, kind, timestamp) in &deletable {
+        if let Some(request_id) = request_id.as_deref().filter(|id| !id.trim().is_empty()) {
+            mark_request_hourly_rollups_dirty(&transaction, request_id)?;
+        } else if kind == KIND_CLIENT {
+            mark_hourly_rollup_bucket(&transaction, hourly_bucket_start(*timestamp))?;
+        }
+        transaction.execute(
+            "DELETE FROM runtime_events WHERE event_id=?1 AND is_in_flight=0",
+            params![event_id],
+        )?;
+        deleted_ids.push(event_id.clone());
+    }
+    let counters = counters_from_connection(&transaction)?;
+    transaction.execute(
+        "UPDATE runtime_counters SET client_requests=?1,client_successes=?2,client_failures=?3,
+         upstream_attempts=?4,upstream_successes=?5,upstream_failures=?6,failovers=?7 WHERE id=1",
+        params![
+            counters.client_requests,
+            counters.client_successes,
+            counters.client_failures,
+            counters.upstream_attempts,
+            counters.upstream_successes,
+            counters.upstream_failures,
+            counters.failovers,
+        ],
+    )?;
+    let deleted_events = deleted_ids.len() as i64;
+    let deleted_requests = deletable
+        .iter()
+        .filter(|(_, _, kind, _)| kind == KIND_CLIENT)
+        .map(|(event_id, request_id, _, _)| {
+            request_id
+                .as_deref()
+                .filter(|id| !id.trim().is_empty())
+                .unwrap_or(event_id)
+                .to_owned()
+        })
+        .collect::<HashSet<_>>()
+        .len() as i64;
+    let history_generation = meta_i64(&transaction, "history_generation")?.unwrap_or(0) + 1;
+    set_meta(&transaction, "history_generation", history_generation)?;
+    let retained_events =
+        transaction.query_row("SELECT COUNT(*) FROM runtime_events", [], |row| {
+            row.get::<_, i64>(0)
+        })?;
+    set_meta(&transaction, "retained_event_count", retained_events)?;
+    let retained_from_seq = transaction.query_row(
+        "SELECT COALESCE(MIN(seq), COALESCE((SELECT CAST(value AS INTEGER) FROM runtime_meta WHERE key='next_seq'),1)) FROM runtime_events",
+        [],
+        |row| row.get::<_, i64>(0),
+    )?;
+    set_meta(&transaction, "retained_from_seq", retained_from_seq)?;
+    let user_deleted_events = meta_i64(&transaction, "user_deleted_events")?
+        .unwrap_or(0)
+        .saturating_add(deleted_events);
+    let user_deleted_requests = meta_i64(&transaction, "user_deleted_requests")?
+        .unwrap_or(0)
+        .saturating_add(deleted_requests);
+    set_meta(&transaction, "user_deleted_events", user_deleted_events)?;
+    set_meta(&transaction, "user_deleted_requests", user_deleted_requests)?;
+    set_meta(
+        &transaction,
+        "hourly_rollup_history_generation",
+        history_generation,
+    )?;
+    transaction.commit()?;
+    refresh_cached_storage(inner, connection, true)?;
+    Ok(RuntimeCleanupMutation {
+        older_than,
+        deleted_events,
+        deleted_requests,
+        remaining_events: retained_events,
+        history_generation,
+    })
 }
 
 /// Drop and recreate every runtime-owned table in place. Keeping the same
@@ -5035,6 +5460,88 @@ mod tests {
             .as_str(),
             "mixed"
         );
+    }
+
+    #[test]
+    fn cleanup_before_deletes_only_complete_old_request_groups() {
+        let dir = test_dir("cleanup-before");
+        let path = dir.join("runtime.sqlite3");
+        let (store, _) = RuntimeStore::new(&path).unwrap();
+        let now = event_now();
+        for (id, request_id, kind, timestamp, phase) in [
+            (
+                "old-client",
+                Some("old-request"),
+                KIND_CLIENT,
+                now - 200.0,
+                RuntimeEventPhase::Completed,
+            ),
+            (
+                "old-upstream",
+                Some("old-request"),
+                KIND_UPSTREAM,
+                now - 190.0,
+                RuntimeEventPhase::Completed,
+            ),
+            (
+                "mixed-client",
+                Some("mixed-request"),
+                KIND_CLIENT,
+                now - 200.0,
+                RuntimeEventPhase::Completed,
+            ),
+            (
+                "mixed-upstream",
+                Some("mixed-request"),
+                KIND_UPSTREAM,
+                now - 10.0,
+                RuntimeEventPhase::Completed,
+            ),
+            (
+                "active-client",
+                Some("active-request"),
+                KIND_CLIENT,
+                now - 200.0,
+                RuntimeEventPhase::Completed,
+            ),
+            (
+                "active-upstream",
+                Some("active-request"),
+                KIND_UPSTREAM,
+                now - 190.0,
+                RuntimeEventPhase::InFlight,
+            ),
+        ] {
+            let mut value = event(
+                id,
+                kind,
+                200,
+                phase,
+                if phase == RuntimeEventPhase::Completed {
+                    Some(RuntimeEventOutcome::Succeeded)
+                } else {
+                    None
+                },
+                timestamp,
+            );
+            value.request_id = request_id.map(str::to_owned);
+            store.enqueue(value, RuntimeCounters::default()).unwrap();
+        }
+        store.flush().unwrap();
+
+        let cutoff = now - 100.0;
+        let preview = store.cleanup_before_preview(cutoff).unwrap();
+        assert_eq!(preview.deletable_events, 2);
+        assert_eq!(preview.deletable_requests, 1);
+        let mutation = store.cleanup_before(cutoff).unwrap();
+        assert_eq!(mutation.deleted_events, 2);
+        assert_eq!(mutation.deleted_requests, 1);
+        assert!(store.event("old-client").unwrap().is_none());
+        assert!(store.event("old-upstream").unwrap().is_none());
+        assert!(store.event("mixed-client").unwrap().is_some());
+        assert!(store.event("active-upstream").unwrap().is_some());
+        drop(store);
+        remove_test_dir(&dir);
     }
 
     #[test]
@@ -5543,6 +6050,7 @@ mod tests {
         let retention = store
             .set_retention(RuntimeRetentionUpdate {
                 expected_revision: 1,
+                max_age_days: None,
                 storage_limit_bytes: None,
             })
             .unwrap();
@@ -5550,6 +6058,7 @@ mod tests {
         let with_storage_limit = store
             .set_retention(RuntimeRetentionUpdate {
                 expected_revision: 2,
+                max_age_days: None,
                 storage_limit_bytes: Some(8 * 1_048_576),
             })
             .unwrap();
@@ -5559,6 +6068,7 @@ mod tests {
             store
                 .set_retention(RuntimeRetentionUpdate {
                     expected_revision: 1,
+                    max_age_days: None,
                     storage_limit_bytes: None,
                 })
                 .unwrap_err()
@@ -5678,6 +6188,7 @@ mod tests {
         let mutation = store
             .set_retention(RuntimeRetentionUpdate {
                 expected_revision: 1,
+                max_age_days: None,
                 storage_limit_bytes: Some(1_048_576),
             })
             .unwrap();
@@ -5690,6 +6201,178 @@ mod tests {
         assert_eq!(summary.storage.in_flight_event_count, 1);
         assert_eq!(summary.counters.client_requests, 1);
         assert_eq!(summary.counters.client_successes, 1);
+
+        drop(store);
+        remove_test_dir(&dir);
+    }
+
+    #[test]
+    fn max_age_rotates_expired_completed_request_groups_and_keeps_fresh_rows() {
+        let dir = test_dir("max-age-rotation");
+        let path = dir.join("runtime.sqlite3");
+        let (store, _) = RuntimeStore::new(&path).unwrap();
+        let old_timestamp = event_now() - (3.0 * 86_400.0);
+        let mut old_client = event(
+            "age-old-client",
+            KIND_CLIENT,
+            200,
+            RuntimeEventPhase::Completed,
+            Some(RuntimeEventOutcome::Succeeded),
+            old_timestamp,
+        );
+        old_client.request_id = Some("age-old-request".into());
+        let mut old_upstream = old_client.clone();
+        old_upstream.id = "age-old-upstream".into();
+        old_upstream.kind = KIND_UPSTREAM.into();
+        store
+            .enqueue(old_client, RuntimeCounters::default())
+            .unwrap();
+        store
+            .enqueue(old_upstream, RuntimeCounters::default())
+            .unwrap();
+
+        let mut fresh = event(
+            "age-fresh-client",
+            KIND_CLIENT,
+            200,
+            RuntimeEventPhase::Completed,
+            Some(RuntimeEventOutcome::Succeeded),
+            event_now(),
+        );
+        fresh.request_id = Some("age-fresh-request".into());
+        store.enqueue(fresh, RuntimeCounters::default()).unwrap();
+        store.flush().unwrap();
+
+        let mutation = store
+            .set_retention(RuntimeRetentionUpdate {
+                expected_revision: 1,
+                max_age_days: Some(1),
+                storage_limit_bytes: None,
+            })
+            .unwrap();
+        assert_eq!(mutation.max_age_days, Some(1));
+        assert_eq!(mutation.storage_limit_bytes, None);
+        assert!(store.event("age-old-client").unwrap().is_none());
+        assert!(store.event("age-old-upstream").unwrap().is_none());
+        assert!(store.event("age-fresh-client").unwrap().is_some());
+        assert_eq!(store.summary().storage.event_count, 1);
+
+        drop(store);
+        remove_test_dir(&dir);
+    }
+
+    #[test]
+    fn max_age_protects_an_entire_request_group_while_any_event_is_in_flight() {
+        let dir = test_dir("max-age-in-flight-group");
+        let path = dir.join("runtime.sqlite3");
+        let (store, _) = RuntimeStore::new(&path).unwrap();
+        let old_timestamp = event_now() - (3.0 * 86_400.0);
+        let request_id = "age-live-request";
+
+        let mut completed = event(
+            "age-live-client",
+            KIND_CLIENT,
+            200,
+            RuntimeEventPhase::Completed,
+            Some(RuntimeEventOutcome::Succeeded),
+            old_timestamp,
+        );
+        completed.request_id = Some(request_id.into());
+        store
+            .enqueue(completed, RuntimeCounters::default())
+            .unwrap();
+
+        let mut active = event(
+            "age-live-upstream",
+            KIND_UPSTREAM,
+            0,
+            RuntimeEventPhase::InFlight,
+            None,
+            old_timestamp,
+        );
+        active.request_id = Some(request_id.into());
+        store.enqueue(active, RuntimeCounters::default()).unwrap();
+
+        let mut unrelated = event(
+            "age-unrelated-client",
+            KIND_CLIENT,
+            200,
+            RuntimeEventPhase::Completed,
+            Some(RuntimeEventOutcome::Succeeded),
+            old_timestamp,
+        );
+        unrelated.request_id = Some("age-unrelated-request".into());
+        store
+            .enqueue(unrelated, RuntimeCounters::default())
+            .unwrap();
+        store.flush().unwrap();
+
+        store
+            .set_retention(RuntimeRetentionUpdate {
+                expected_revision: 1,
+                max_age_days: Some(1),
+                storage_limit_bytes: None,
+            })
+            .unwrap();
+
+        assert!(store.event("age-live-client").unwrap().is_some());
+        assert!(store.event("age-live-upstream").unwrap().is_some());
+        assert!(store.event("age-unrelated-client").unwrap().is_none());
+
+        drop(store);
+        remove_test_dir(&dir);
+    }
+
+    #[test]
+    fn max_age_can_be_disabled_without_deleting_existing_events() {
+        let dir = test_dir("max-age-disable");
+        let path = dir.join("runtime.sqlite3");
+        let (store, _) = RuntimeStore::new(&path).unwrap();
+        let mut old = event(
+            "age-disabled-client",
+            KIND_CLIENT,
+            200,
+            RuntimeEventPhase::Completed,
+            Some(RuntimeEventOutcome::Succeeded),
+            event_now() - (3.0 * 86_400.0),
+        );
+        old.request_id = Some("age-disabled-request".into());
+        store.enqueue(old, RuntimeCounters::default()).unwrap();
+        store.flush().unwrap();
+
+        let enabled = store
+            .set_retention(RuntimeRetentionUpdate {
+                expected_revision: 1,
+                max_age_days: Some(1),
+                storage_limit_bytes: None,
+            })
+            .unwrap();
+        assert_eq!(enabled.max_age_days, Some(1));
+        assert!(store.event("age-disabled-client").unwrap().is_none());
+
+        let disabled = store
+            .set_retention(RuntimeRetentionUpdate {
+                expected_revision: 2,
+                max_age_days: None,
+                storage_limit_bytes: None,
+            })
+            .unwrap();
+        assert_eq!(disabled.max_age_days, None);
+
+        let mut second_old = event(
+            "age-disabled-client-2",
+            KIND_CLIENT,
+            200,
+            RuntimeEventPhase::Completed,
+            Some(RuntimeEventOutcome::Succeeded),
+            event_now() - (3.0 * 86_400.0),
+        );
+        second_old.request_id = Some("age-disabled-request-2".into());
+        store
+            .enqueue(second_old, RuntimeCounters::default())
+            .unwrap();
+        store.flush().unwrap();
+        assert!(store.event("age-disabled-client-2").unwrap().is_some());
 
         drop(store);
         remove_test_dir(&dir);
@@ -6988,6 +7671,29 @@ mod tests {
         .ok();
         let wire = serde_json::to_value(RuntimeEventListItem::from_change(1, 2, value)).unwrap();
         assert_eq!(wire["codexThreadClass"], "ambient");
+        assert_eq!(wire["attributionScope"], "internal_feature");
+    }
+
+    #[test]
+    fn resource_requests_are_not_attributed_to_unidentified_project() {
+        let mut value = event(
+            "wire-resource",
+            KIND_CLIENT,
+            499,
+            RuntimeEventPhase::Completed,
+            Some(RuntimeEventOutcome::Cancelled),
+            event_now(),
+        );
+        value.client_kind = Some(ClientKind::Codex);
+        value.client_model = Some(RESOURCE_ROUTING_MODEL.into());
+        value.codex_metadata = serde_json::from_value(json!({
+            "originator": "Codex Desktop"
+        }))
+        .ok();
+
+        let wire = serde_json::to_value(RuntimeEventListItem::from_change(1, 2, value)).unwrap();
+        assert_eq!(wire["projectName"], "internal_feature");
+        assert_eq!(wire["projectSource"], "internal_feature");
         assert_eq!(wire["attributionScope"], "internal_feature");
     }
 

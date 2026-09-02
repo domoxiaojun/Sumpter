@@ -32,6 +32,9 @@ usage() {
 从静态镜像下载当前 Linux 架构的 sumpter 发布包，再运行包内安装器。
 默认镜像: https://sf.domob.org/kkl
 下载路径: <base-url>/sumpter-linux-<x86_64|aarch64>.tar.gz
+归因配置器也随包安装到 `/opt/sumpter/scripts/`（普通用户安装则在
+`~/.local/share/sumpter/scripts/`）。若 Claude Code 在另一台机器上运行，可从 daemon 的
+Listener Base URL `/__sumpter/cc-project-attribution.sh` 下载后在客户端执行，不能只在 daemon 主机执行。
 
 静态镜像由发布方手工更新，可能落后于 GitHub Release。需要指定仓库/版本时，
 请直接使用已解压 Release 包内的 scripts/install.sh --repo/--version，不要加在本脚本后。
@@ -42,6 +45,9 @@ usage() {
 
 其余参数原样传给包内 scripts/install.sh，例如（高级路径覆盖）:
   --admin-password-file /absolute/path/admin-password
+
+注意：这里的 `--base-url` 只用于下载 Linux 发布包；Claude Code 归因脚本的远程下载使用
+运行中 daemon 的 Listener Base URL `/__sumpter/cc-project-attribution.sh`，两者不是同一个地址。
 
 示例:
   bash sumpter-install.sh
@@ -189,6 +195,8 @@ package_root="$WORK_DIR/extracted/$package_name"
     || die "发布包缺少顶层目录:$package_name"
 [[ -f "$package_root/scripts/install.sh" && ! -L "$package_root/scripts/install.sh" ]] \
     || die "发布包缺少包内安装器:scripts/install.sh"
+[[ -f "$package_root/scripts/cc-project-attribution.sh" && ! -L "$package_root/scripts/cc-project-attribution.sh" ]] \
+    || die "发布包缺少 Claude Code 项目归因配置器:scripts/cc-project-attribution.sh"
 
 # 首次安装时，包内安装器会先探测旧 unit 的状态。Fedora/systemd 对不存在的
 # unit 会把这条正常探测结果写到 stderr；只过滤这一条固定文案，保留安装器的

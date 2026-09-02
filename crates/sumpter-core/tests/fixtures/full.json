@@ -38,10 +38,14 @@
     "port": 57878
   },
   "retry": {
+    "max500Retries": 0,
+    "failoverOn500": true,
     "maxDeferredRounds": 4,
     "maxRetryDurationSeconds": 0,
     "pinnedIPConcurrency": 1,
     "responseTimeoutSeconds": 200,
+    "retryDelaySeconds": null,
+    "passThroughRetryDelay": true,
     "sessionStickyRetries": 0,
     "streamIdleTimeoutSeconds": null
   },

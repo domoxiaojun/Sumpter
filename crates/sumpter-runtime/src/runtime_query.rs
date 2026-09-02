@@ -772,6 +772,7 @@ pub struct DimensionPage {
 #[serde(rename_all = "camelCase")]
 pub struct RetentionStatus {
     pub revision: i64,
+    pub max_age_days: Option<i64>,
     pub storage_limit_bytes: Option<i64>,
 }
 
@@ -1772,13 +1773,13 @@ fn history_snapshot(
         ));
     }
     let history_generation = meta_i64(transaction, "history_generation")?.unwrap_or(0);
-    if let Some(requested) = requested_generation {
-        if requested != history_generation {
-            return Err(RuntimeQueryError::SnapshotExpired {
-                requested,
-                current: history_generation,
-            });
-        }
+    if let Some(requested) = requested_generation
+        && requested != history_generation
+    {
+        return Err(RuntimeQueryError::SnapshotExpired {
+            requested,
+            current: history_generation,
+        });
     }
     let max_seq = transaction.query_row(
         "SELECT COALESCE(MAX(seq),0) FROM runtime_events WHERE is_in_flight=0",
@@ -1786,8 +1787,8 @@ fn history_snapshot(
         |row| row.get(0),
     )?;
     let snapshot_seq = requested_seq.unwrap_or(max_seq);
-    let retained_from_seq = meta_i64(transaction, "retained_from_seq")?
-        .unwrap_or_else(|| if max_seq == 0 { 0 } else { 1 });
+    let retained_from_seq =
+        meta_i64(transaction, "retained_from_seq")?.unwrap_or(i64::from(max_seq != 0));
     if requested_seq.is_some()
         && snapshot_seq > 0
         && retained_from_seq > 0
@@ -2550,10 +2551,10 @@ fn analytics_facets_for_filter(
         // rejected before routing (for example inbound 401s) have no
         // endpoint_id and must remain visible in client/failed totals without
         // becoming a synthetic "unassigned_endpoint" entry.
-        if let Some(endpoint_id) = row.endpoint_id.as_deref() {
-            if facet_row_matches(&row, &endpoint_facet_filter, FacetDimension::Endpoint) {
-                *endpoint_counts.entry(endpoint_id.to_owned()).or_default() += 1;
-            }
+        if let Some(endpoint_id) = row.endpoint_id.as_deref()
+            && facet_row_matches(&row, &endpoint_facet_filter, FacetDimension::Endpoint)
+        {
+            *endpoint_counts.entry(endpoint_id.to_owned()).or_default() += 1;
         }
         if row.attribution_scope.as_deref() != Some("internal_feature")
             && facet_row_matches(&row, &project_facet_filter, FacetDimension::Project)
@@ -4070,7 +4071,7 @@ pub fn dimension_page_on(
     append_runtime_filter(&mut builder, &filters);
     if let Some(search) = search.as_ref() {
         builder.text_values(
-            &format!(
+            format!(
                 "(instr(lower(COALESCE(({name_expression}),'')),lower(?))>0 OR \
                   instr(lower(COALESCE(({key_expression}),'')),lower(?))>0)"
             ),
@@ -4494,7 +4495,7 @@ where
     // Redacted exports are assembled entirely from normalized columns.  Do
     // not select the potentially large detail blob unless the caller has
     // explicitly confirmed a stored export.
-    let payload_column = stored.then_some(",payload_json").unwrap_or("");
+    let payload_column = if stored { ",payload_json" } else { "" };
     let sql = format!(
         "SELECT seq,change_seq,event_id,request_id,timestamp,kind,outcome,status_code,\
                 client_kind,request_purpose,endpoint_id,endpoint_name,effective_model,\
@@ -4863,6 +4864,7 @@ pub fn storage_details_on(
             ))
         },
     )?;
+    let max_age_days = meta_i64(&transaction, "retention_max_age_days")?;
     let storage_limit_bytes = meta_i64(&transaction, "storage_limit_bytes")?;
     let reset_generation = meta_i64(&transaction, "reset_generation")?.unwrap_or(0);
     let legacy_retention_detected = has_legacy_retention_columns(&transaction)?;
@@ -4873,6 +4875,7 @@ pub fn storage_details_on(
         |row| {
             Ok(RetentionStatus {
                 revision: row.get(0)?,
+                max_age_days,
                 storage_limit_bytes,
             })
         },
@@ -5079,6 +5082,8 @@ mod tests {
         connection
     }
 
+    // 测试夹具:直接铺一行完整事件,参数就是表的列。
+    #[allow(clippy::too_many_arguments)]
     fn insert_endpoint_test_event(
         connection: &Connection,
         seq: i64,

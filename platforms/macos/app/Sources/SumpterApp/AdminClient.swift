@@ -190,6 +190,20 @@ public struct AdminClient: Sendable {
         _ = try await send(request("/admin/runtime/recreate", method: "POST"), as: AdminWire.ResetAck.self)
     }
 
+    public func previewRuntimeCleanup(olderThan: Double) async throws -> AdminWire.RuntimeCleanupPreview {
+        try await send(
+            jsonRequest("/admin/runtime/cleanup/preview", method: "POST", body: ["olderThan": olderThan]),
+            as: AdminWire.RuntimeCleanupPreview.self
+        )
+    }
+
+    public func cleanupRuntime(olderThan: Double) async throws -> AdminWire.RuntimeCleanupMutation {
+        try await send(
+            jsonRequest("/admin/runtime/cleanup", method: "POST", body: ["olderThan": olderThan]),
+            as: AdminWire.RuntimeCleanupMutation.self
+        )
+    }
+
     public func deleteRuntimeSession(
         sessionID: String,
         confirmUnidentified: Bool = false
@@ -1142,17 +1156,37 @@ public enum AdminWire {
 
     public struct RuntimeRetention: Decodable, Equatable, Sendable {
         public let revision: Int
+        /// Rolling whole-day retention window. `nil` means the time
+        /// dimension is disabled; the daemon evaluates it in 24-hour UTC-like
+        /// seconds rather than local calendar days.
+        public let maxAgeDays: Int?
         public let storageLimitBytes: Int?
 
         private enum CodingKeys: String, CodingKey {
-            case revision, storageLimitBytes
+            case revision, maxAgeDays, storageLimitBytes
         }
 
         public init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             revision = try container.decode(Int.self, forKey: .revision)
+            maxAgeDays = try container.decodeIfPresent(Int.self, forKey: .maxAgeDays)
             storageLimitBytes = try container.decodeIfPresent(Int.self, forKey: .storageLimitBytes)
         }
+    }
+
+    public struct RuntimeCleanupPreview: Decodable, Equatable, Sendable {
+        public let olderThan: Double
+        public let deletableEvents: Int
+        public let deletableRequests: Int
+        public let remainingEvents: Int
+    }
+
+    public struct RuntimeCleanupMutation: Decodable, Equatable, Sendable {
+        public let olderThan: Double
+        public let deletedEvents: Int
+        public let deletedRequests: Int
+        public let remainingEvents: Int
+        public let historyGeneration: Int
     }
 
     public struct RuntimeStorageProbe: Decodable, Equatable, Sendable {
@@ -1226,10 +1260,12 @@ public enum AdminWire {
 
     public struct RuntimeRetentionUpdate: Equatable, Sendable {
         public let expectedRevision: Int
+        public let maxAgeDays: Int?
         public let storageLimitBytes: Int?
 
         fileprivate var dictionary: [String: Any] {
             var value: [String: Any] = ["expectedRevision": expectedRevision]
+            value["maxAgeDays"] = maxAgeDays ?? NSNull()
             value["storageLimitBytes"] = storageLimitBytes ?? NSNull()
             return value
         }
@@ -1613,6 +1649,7 @@ public enum AdminWire {
     public enum Event: Sendable {
         case runtimeChange(RuntimeChange)
         case notify(
+            clientKind: String?,
             title: String,
             message: String,
             sound: String?,
@@ -1637,6 +1674,8 @@ public enum AdminWire {
                 return .runtimeChange(change)
             case "notify":
                 struct Wire: Decodable {
+                    // 老版 sumpterd 没有来源字段；缺省按 Claude Code 兼容处理。
+                    let clientKind: String?
                     let title: String
                     let message: String
                     let sound: String?
@@ -1652,6 +1691,7 @@ public enum AdminWire {
                     return nil
                 }
                 return .notify(
+                    clientKind: wire.clientKind,
                     title: wire.title,
                     message: wire.message,
                     sound: wire.sound,

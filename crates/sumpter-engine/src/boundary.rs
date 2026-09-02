@@ -63,6 +63,7 @@ pub struct InboundRequest {
 #[derive(Debug, Clone)]
 pub enum PlatformNotice {
     Notify {
+        client_kind: sumpter_core::events::ClientKind,
         kind: String,
         title: String,
         message: String,

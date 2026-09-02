@@ -58,7 +58,7 @@ struct ProviderAccountEditorSheet: View {
                     Text(providerName)
                         .foregroundStyle(.secondary)
                 }
-                FormLine(title: "ID") {
+                FormLine(title: "入口 ID") {
                     if let row {
                         Text(row.id)
                             .font(.callout.monospaced())

@@ -4,6 +4,7 @@
 pub mod access;
 pub mod bridge;
 pub mod bridge_in;
+pub mod capability;
 pub mod config;
 pub mod config_store;
 pub mod events;
@@ -13,6 +14,7 @@ pub mod scheduler;
 pub mod stream_terminal;
 pub mod warnings;
 
+pub use capability::ModelCapability;
 pub use config::{
     AppConfig, ContextMode, Endpoint, EndpointCatalog, EndpointProtocolMode, FeatureRule,
     FeatureRuleMatch, FeatureRuleTarget, ListenerConfig, ModelMapping, ProviderProtocol,

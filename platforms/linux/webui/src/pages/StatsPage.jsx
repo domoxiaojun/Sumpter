@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { AnalyticsWorkspace } from '../components/AnalyticsWorkspace.jsx';
 import { StatusBadge } from '../components/StatusBadge.jsx';
 import { useApp } from '../context/AppContext.jsx';
@@ -37,6 +37,90 @@ function sessionLabel(value) {
   if (value === 'unidentified_session') return '未识别会话';
   const text = String(value || '');
   return text.length <= 32 ? text : `${text.slice(0, 14)}…${text.slice(-12)}`;
+}
+
+const APPLE_EPOCH_OFFSET_SECONDS = 978307200;
+
+function cleanupCutoff(selection, customDate) {
+  const now = Date.now() / 1000 - APPLE_EPOCH_OFFSET_SECONDS;
+  if (selection === 'all') return now + 1;
+  if (selection === 'custom') {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(customDate || '')) return null;
+    const [year, month, day] = customDate.split('-').map(Number);
+    const local = new Date(year, month - 1, day);
+    if (local.getFullYear() !== year || local.getMonth() !== month - 1 || local.getDate() !== day) return null;
+    return local.getTime() / 1000 - APPLE_EPOCH_OFFSET_SECONDS;
+  }
+  const days = Number(selection);
+  return Number.isInteger(days) && days > 0 ? now - days * 86400 : null;
+}
+
+function RuntimeCleanupDialog({ open, onClose, onCompleted, addToast }) {
+  const [selection, setSelection] = useState('30');
+  const [customDate, setCustomDate] = useState('');
+  const [preview, setPreview] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (open) {
+      setSelection('30');
+      setCustomDate('');
+      setPreview(null);
+      setError('');
+    }
+  }, [open]);
+
+  if (!open) return null;
+  const olderThan = cleanupCutoff(selection, customDate);
+  const canPreview = olderThan != null && !loading;
+  const runPreview = async () => {
+    if (olderThan == null) return;
+    setLoading(true); setError(''); setPreview(null);
+    try {
+      setPreview(await api.previewRuntimeCleanup({ olderThan }));
+    } catch (nextError) {
+      setError(nextError?.message || '无法预览清理范围');
+    } finally { setLoading(false); }
+  };
+  const runCleanup = async () => {
+    if (!preview || olderThan == null || loading) return;
+    setLoading(true); setError('');
+    try {
+      const result = await api.cleanupRuntime({ olderThan });
+      addToast(`已按时间清理 ${formatNumber(result.deletedEvents || 0)} 条统计事件`, 'success');
+      onClose?.();
+      await onCompleted?.();
+    } catch (nextError) {
+      setError(nextError?.message || '清理失败');
+    } finally { setLoading(false); }
+  };
+  const nowDate = new Date();
+  const today = [nowDate.getFullYear(), String(nowDate.getMonth() + 1).padStart(2, '0'), String(nowDate.getDate()).padStart(2, '0')].join('-');
+  return (
+    <div className="modal-overlay runtime-v2-storage-modal" onClick={(event) => { if (event.target === event.currentTarget && !loading) onClose?.(); }}>
+      <section className="modal-dialog runtime-v2-storage-dialog runtime-cleanup-dialog" role="dialog" aria-modal="true" aria-labelledby="runtime-cleanup-heading">
+        <header className="modal-header runtime-v2-storage-dialog-header">
+          <div><h2 id="runtime-cleanup-heading">按时间清理运行统计</h2><p>只删除已完成且整组早于截止时间的请求；进行中的请求组会完整保留。</p></div>
+          <button type="button" className="btn-icon" onClick={onClose} disabled={loading} aria-label="关闭清理窗口"><Icon name="close" size={16} /></button>
+        </header>
+        <div className="modal-body runtime-v2-storage-dialog-body runtime-cleanup-body">
+          <label><span>清理范围</span><select className="form-select" value={selection} onChange={(event) => { setSelection(event.target.value); setPreview(null); setError(''); }} disabled={loading}>
+            <option value="7">早于 7 天</option><option value="30">早于 30 天</option><option value="90">早于 90 天</option><option value="custom">自定义日期</option><option value="all">全部已完成记录</option>
+          </select></label>
+          {selection === 'custom' && <label><span>清理早于此日期的记录</span><input className="form-input" type="date" value={customDate} max={today} onChange={(event) => { setCustomDate(event.target.value); setPreview(null); setError(''); }} disabled={loading} /></label>}
+          <p className="runtime-cleanup-help">将删除截止时间之前的统计事件。诊断捕获、自动保留策略和数据库结构不会受影响。</p>
+          {selection === 'all' && <div className="runtime-v2-storage-limit-error" role="note">“全部”也不会删除进行中的请求；如需移除旧版字段或回收数据库文件，请单独使用“重置并新建数据库”。</div>}
+          {preview && <div className="runtime-cleanup-preview" role="status"><strong>预计删除 {formatNumber(preview.deletableEvents)} 条事件</strong><span>涉及约 {formatNumber(preview.deletableRequests)} 个请求 · 清理后保留 {formatNumber(preview.remainingEvents)} 条事件</span></div>}
+          {error && <div className="runtime-v2-storage-limit-error" role="alert">{error}</div>}
+        </div>
+        <footer className="modal-footer runtime-v2-storage-dialog-footer">
+          <button type="button" className="btn btn-secondary" onClick={onClose} disabled={loading}>取消</button>
+          {!preview ? <button type="button" className="btn btn-primary" onClick={runPreview} disabled={!canPreview}>{loading ? '计算中…' : '预览清理范围'}</button> : <button type="button" className="btn btn-danger" onClick={runCleanup} disabled={loading || preview.deletableEvents <= 0}>{loading ? '清理中…' : `确认清理 ${formatNumber(preview.deletableEvents)} 条`}</button>}
+        </footer>
+      </section>
+    </div>
+  );
 }
 
 function facetOptions(analytics, key, selectedValue) {
@@ -131,6 +215,10 @@ export function StatsPage() {
   const [selectedEventID, setSelectedEventID] = useState(null);
   const [eventDetailError, setEventDetailError] = useState('');
   const [openExportSignal, setOpenExportSignal] = useState(0);
+  const [cleanupOpen, setCleanupOpen] = useState(false);
+  const [selectedProject, setSelectedProject] = useState(null);
+  const [selectedSession, setSelectedSession] = useState(null);
+  const [projectSelectionResetSignal, setProjectSelectionResetSignal] = useState(0);
 
   useEffect(() => {
     if (!selectedEventID) {
@@ -146,8 +234,8 @@ export function StatsPage() {
     return () => { active = false; };
   }, [loadRuntimeEvent, selectedEventID]);
 
-  const filters = analyticsFilters || { clientKind: '', endpointID: '', project: '', sessionID: '', model: '', requestPurpose: '', outcome: '', failureKind: '', failurePhase: '' };
-  const activeFilterCount = [filters.clientKind, filters.endpointID, filters.project, filters.sessionID, filters.model, filters.requestPurpose, filters.outcome, filters.failureKind, filters.failurePhase]
+  const filters = analyticsFilters || { clientKind: '', endpointID: '', project: '', projectID: '', sessionID: '', model: '', requestPurpose: '', outcome: '', failureKind: '', failurePhase: '' };
+  const activeFilterCount = [filters.clientKind, filters.endpointID, filters.projectID, filters.project, filters.sessionID, filters.model, filters.requestPurpose, filters.outcome, filters.failureKind, filters.failurePhase, selectedProject?.key, selectedSession?.key]
     .filter((value) => String(value || '').trim()).length;
   const facets = useMemo(() => ({
     clientKinds: facetOptions(runtimeFacets, 'clientKinds', filters.clientKind),
@@ -164,26 +252,33 @@ export function StatsPage() {
     const next = {
       ...filters,
       [key]: value,
-      ...(key === 'project' ? { sessionID: '' } : {}),
+      ...(key === 'project' ? { projectID: '', sessionID: '' } : {}),
     };
     loadRuntimeAnalytics(analyticsRange, next).catch(() => null);
   };
 
-  const resetStatistics = async () => {
-    if (!window.confirm('确定清空全部 SQLite 运行统计吗？此操作无法撤销；完整诊断捕获不会被删除。')) return;
-    try {
-      await api.resetRuntime();
-      await refreshCore();
-      addToast('运行统计已重置', 'success');
-    } catch (error) {
-      addToast(`重置失败：${error?.message || '未知错误'}`, 'error');
-    }
+  const handleProjectSelectionChange = useCallback((project) => {
+    setSelectedProject(project || null);
+  }, []);
+  const handleSessionSelectionChange = useCallback((session) => {
+    setSelectedSession(session || null);
+  }, []);
+  const clearLocalDrilldowns = useCallback(() => {
+    setProjectSelectionResetSignal((value) => value + 1);
+    setSelectedProject(null);
+    setSelectedSession(null);
+  }, []);
+
+  const clearAllFilters = () => {
+    clearLocalDrilldowns();
+    loadRuntimeAnalytics(analyticsRange, { clientKind: '', endpointID: '', project: '', projectID: '', sessionID: '', model: '', requestPurpose: '', outcome: '', failureKind: '', failurePhase: '' }).catch(() => null);
   };
 
   const recreateDatabase = async () => {
     if (!window.confirm('将删除全部 SQLite 运行统计，并用当前版本重新创建 runtime.sqlite3。旧版自动清理字段将被移除，诊断捕获不受影响，此操作无法撤销。')) return;
     try {
       await api.recreateRuntime();
+      clearLocalDrilldowns();
       await refreshCore();
       addToast('已重置并新建 SQLite 数据库', 'success');
     } catch (error) {
@@ -205,9 +300,6 @@ export function StatsPage() {
         <div className="page-actions">
           <button type="button" className="btn btn-secondary" onClick={() => setOpenExportSignal((value) => value + 1)}>
             <Icon name="download" size={15} />导出
-          </button>
-          <button type="button" className="btn btn-danger" onClick={resetStatistics}>
-            <Icon name="trash" size={15} />重置
           </button>
         </div>
       </div>
@@ -306,7 +398,7 @@ export function StatsPage() {
             type="button"
             className="btn btn-secondary analytics-v3-clear-filter"
             disabled={!activeFilterCount}
-            onClick={() => loadRuntimeAnalytics(analyticsRange, { clientKind: '', endpointID: '', project: '', projectID: '', sessionID: '', model: '', requestPurpose: '', outcome: '', failureKind: '', failurePhase: '' }).catch(() => null)}
+            onClick={clearAllFilters}
           >
             清除筛选
           </button>
@@ -321,7 +413,7 @@ export function StatsPage() {
       <AnalyticsWorkspace
         onSelectEvent={setSelectedEventID}
         addToast={addToast}
-        onManualCleanup={resetStatistics}
+        onManualCleanup={() => setCleanupOpen(true)}
         onRecreateDatabase={recreateDatabase}
         openExportSignal={openExportSignal}
         analyticsFilters={filters}
@@ -329,9 +421,19 @@ export function StatsPage() {
         onAnalyticsRangeChange={(value) => loadRuntimeAnalytics(value, filters).catch(() => null)}
         facets={runtimeFacets?.facets || null}
         analyticsRefreshSignal={analyticsRefreshSignal}
+        onProjectSelectionChange={handleProjectSelectionChange}
+        onSessionSelectionChange={handleSessionSelectionChange}
+        projectSelectionResetSignal={projectSelectionResetSignal}
         legacyAnalytics={runtimeAnalytics}
         summaryStorage={runtime?.summary?.storage || runtime?.storage || null}
         config={config}
+      />
+
+      <RuntimeCleanupDialog
+        open={cleanupOpen}
+        onClose={() => setCleanupOpen(false)}
+        onCompleted={async () => { clearLocalDrilldowns(); await refreshCore(); }}
+        addToast={addToast}
       />
 
       {selectedEventID && (

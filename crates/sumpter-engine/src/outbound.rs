@@ -163,6 +163,12 @@ impl ReqwestTransport {
             .http1_only()
             .redirect(reqwest::redirect::Policy::none())
             .tcp_nodelay(true)
+            // The data plane relays response bytes and Content-Encoding as
+            // received. Never let the HTTP client transparently decompress a
+            // provider response after a caller explicitly requested it.
+            .no_gzip()
+            .no_brotli()
+            .no_zstd()
             .no_proxy();
         // 【实验】keepAlive 入口:小池 + 90s 空闲回收,省去每次 TCP+TLS 握手
         // (远程中转实测 ~100ms);默认仍关池对齐手写栈行为面。

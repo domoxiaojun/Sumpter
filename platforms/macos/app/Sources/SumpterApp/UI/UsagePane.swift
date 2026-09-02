@@ -43,6 +43,395 @@ private struct RecreateDatabaseButton: View {
     }
 }
 
+private struct RuntimeCleanupSheet: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.sumpterPalette) private var palette
+    @State private var selection = "30"
+    @State private var customDate = Date()
+    @State private var preview: AdminWire.RuntimeCleanupPreview?
+    @State private var loading = false
+    @State private var error = ""
+
+    private enum CleanupRange: String, CaseIterable, Identifiable {
+        case sevenDays = "7"
+        case thirtyDays = "30"
+        case ninetyDays = "90"
+        case custom
+        case all
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .sevenDays: "早于 7 天"
+            case .thirtyDays: "早于 30 天"
+            case .ninetyDays: "早于 90 天"
+            case .custom: "自定义日期"
+            case .all: "全部已完成记录"
+            }
+        }
+
+        var detail: String {
+            switch self {
+            case .sevenDays: "仅清理一周以前的数据"
+            case .thirtyDays: "仅清理一个月以前的数据"
+            case .ninetyDays: "仅清理三个月以前的数据"
+            case .custom: "按指定日期作为截止点"
+            case .all: "清理所有已完成的请求组"
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .sevenDays: "calendar"
+            case .thirtyDays: "calendar.badge.clock"
+            case .ninetyDays: "calendar.badge.exclamationmark"
+            case .custom: "calendar.badge.plus"
+            case .all: "trash"
+            }
+        }
+
+        var isDestructive: Bool { self == .all }
+    }
+
+    private var selectedRange: CleanupRange {
+        CleanupRange(rawValue: selection) ?? .thirtyDays
+    }
+
+    private var olderThan: Double {
+        let now = Date().timeIntervalSinceReferenceDate
+        switch selection {
+        case "all": return now + 1
+        case "custom": return Calendar.current.startOfDay(for: customDate).timeIntervalSinceReferenceDate
+        default: return now - (Double(selection) ?? 30) * 86_400
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            Divider()
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 24) {
+                    rangeSection
+                    protectionSection
+                    previewSection
+                    if !error.isEmpty {
+                        Label(error, systemImage: "exclamationmark.triangle.fill")
+                            .font(.callout)
+                            .foregroundStyle(palette.danger)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(palette.danger.opacity(0.10), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                }
+                .padding(.horizontal, 28)
+                .padding(.vertical, 24)
+            }
+            .frame(maxHeight: 560)
+            Divider()
+            footer
+        }
+        .background(palette.surface)
+        .frame(width: 720)
+        .frame(minHeight: 560, idealHeight: 620, maxHeight: 720)
+    }
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: 14) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(palette.active)
+                Image(systemName: "externaldrive.badge.timemachine")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(palette.brand)
+            }
+            .frame(width: 46, height: 46)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text("清理运行统计")
+                    .font(.title2.weight(.semibold))
+                Text("按时间移除已完成的请求组，释放历史统计占用。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            Button(action: { if !loading { dismiss() } }) {
+                Image(systemName: "xmark")
+                    .font(.body.weight(.semibold))
+                    .frame(width: 30, height: 30)
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+            .disabled(loading)
+            .help("关闭")
+            .accessibilityLabel("关闭清理窗口")
+        }
+        .padding(.horizontal, 28)
+        .padding(.vertical, 22)
+    }
+
+    private var rangeSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("1. 选择清理范围")
+                        .font(.headline)
+                    Text("只会处理已经完成的请求组；进行中的请求始终保留。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 12)
+                Text("默认 30 天")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(palette.brand)
+            }
+
+            LazyVGrid(
+                columns: [GridItem(.flexible(minimum: 160)), GridItem(.flexible(minimum: 160)), GridItem(.flexible(minimum: 160))],
+                spacing: 10
+            ) {
+                ForEach(CleanupRange.allCases.filter { !$0.isDestructive }) { range in
+                    rangeOption(range)
+                }
+            }
+            rangeOption(.all)
+
+            if selectedRange == .custom {
+                VStack(alignment: .leading, spacing: 9) {
+                    Text("截止日期")
+                        .font(.subheadline.weight(.medium))
+                    DatePicker(
+                        "清理早于此日期的记录",
+                        selection: $customDate,
+                        in: ...Date(),
+                        displayedComponents: .date
+                    )
+                    .datePickerStyle(.field)
+                    .accessibilityLabel("清理早于此日期的记录")
+                    .onChange(of: customDate) { _, _ in
+                        preview = nil
+                        error = ""
+                    }
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(palette.inset, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(palette.borderSubtle, lineWidth: 0.8)
+                )
+            }
+
+            if selectedRange == .all {
+                Label("这是批量清理操作，但不会删除进行中的请求、诊断捕获或数据库结构。需要回收数据库文件时，请使用“重置并新建数据库”。", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(palette.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(palette.warning.opacity(0.10), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+        }
+    }
+
+    private func rangeOption(_ range: CleanupRange) -> some View {
+        let isSelected = selectedRange == range
+        let accent = range.isDestructive ? palette.danger : palette.brand
+        return Button {
+            guard !loading else { return }
+            selection = range.rawValue
+            preview = nil
+            error = ""
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: range.systemImage)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(isSelected ? accent : .secondary)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(range.title)
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.primary)
+                    Text(range.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(isSelected ? accent : palette.borderStrong)
+            }
+            .padding(13)
+            .frame(maxWidth: .infinity, minHeight: 76, alignment: .leading)
+            .background(isSelected ? accent.opacity(0.10) : palette.inset, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(isSelected ? accent : palette.borderSubtle, lineWidth: isSelected ? 1.2 : 0.8)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(loading)
+        .accessibilityLabel(range.title)
+        .accessibilityValue(isSelected ? "已选择，\(range.detail)" : range.detail)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private var protectionSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("清理边界")
+                .font(.headline)
+            LazyVGrid(
+                columns: [GridItem(.flexible(minimum: 180)), GridItem(.flexible(minimum: 180)), GridItem(.flexible(minimum: 180))],
+                spacing: 8
+            ) {
+                protectionItem("整组完成才会删除", systemImage: "checkmark.circle", color: palette.success)
+                protectionItem("进行中请求保留", systemImage: "arrow.triangle.2.circlepath", color: palette.info)
+                protectionItem("诊断捕获保留", systemImage: "waveform.path.ecg", color: palette.info)
+                protectionItem("数据库结构不变", systemImage: "externaldrive", color: palette.brand)
+                protectionItem("自动保留策略不变", systemImage: "clock.arrow.circlepath", color: palette.warning)
+            }
+        }
+    }
+
+    private func protectionItem(_ title: String, systemImage: String, color: Color) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+            .padding(.horizontal, 10)
+            .background(palette.inset, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(palette.borderSubtle, lineWidth: 0.8)
+            )
+            .symbolRenderingMode(.hierarchical)
+            .tint(color)
+    }
+
+    private var previewSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("2. 预览影响")
+                        .font(.headline)
+                    Text(preview == nil ? "先预览再执行，避免误删。" : "以下是按当前范围计算的结果。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 12)
+                Image(systemName: preview == nil ? "arrow.down.circle" : "checkmark.circle.fill")
+                    .foregroundStyle(preview == nil ? .secondary : palette.success)
+            }
+
+            if let preview {
+                HStack(spacing: 10) {
+                    previewMetric("预计删除", value: tokenNumber(preview.deletableEvents), detail: "条事件", color: palette.danger)
+                    previewMetric("涉及请求", value: tokenNumber(preview.deletableRequests), detail: "个请求组", color: palette.brand)
+                    previewMetric("清理后保留", value: tokenNumber(preview.remainingEvents), detail: "条事件", color: palette.success)
+                }
+                if preview.deletableEvents == 0 {
+                    Label("当前范围没有可清理的事件。", systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(palette.success)
+                }
+            } else {
+                Label("点击底部“预览清理范围”后，这里会显示预计删除量和保留量。", systemImage: "info.circle")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(palette.inset, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+        }
+    }
+
+    private func previewMetric(_ title: String, value: String, detail: String, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.title3.monospacedDigit().weight(.semibold))
+                .foregroundStyle(color)
+            Text(detail)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 86, alignment: .leading)
+        .padding(.horizontal, 14)
+        .background(palette.raised, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(palette.borderSubtle, lineWidth: 0.8)
+        )
+    }
+
+    private var footer: some View {
+        HStack(spacing: 12) {
+            if loading {
+                ProgressView()
+                    .controlSize(.small)
+                Text(preview == nil ? "正在计算清理范围…" : "正在清理统计…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 12)
+            Button("取消", action: dismiss.callAsFunction)
+                .keyboardShortcut(.cancelAction)
+                .disabled(loading)
+            if let preview {
+                Button(role: .destructive, action: performCleanup) {
+                    Label("确认清理 \(tokenNumber(preview.deletableEvents)) 条", systemImage: "trash")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(palette.danger)
+                .keyboardShortcut(.defaultAction)
+                .disabled(loading || preview.deletableEvents <= 0)
+            } else {
+                Button(action: requestPreview) {
+                    Label("预览清理范围", systemImage: "sparkles.rectangle.stack")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(palette.brand)
+                .keyboardShortcut(.defaultAction)
+                .disabled(loading)
+            }
+        }
+        .padding(.horizontal, 28)
+        .padding(.vertical, 18)
+    }
+
+    private func tokenNumber(_ value: Int) -> String {
+        value.formatted(.number.grouping(.automatic))
+    }
+
+    private func requestPreview() {
+        loading = true; error = ""; preview = nil
+        Task {
+            do { preview = try await model.previewRuntimeCleanup(olderThan: olderThan) }
+            catch let nextError { self.error = nextError.localizedDescription }
+            loading = false
+        }
+    }
+
+    private func performCleanup() {
+        guard preview != nil else { return }
+        loading = true; error = ""
+        Task {
+            do { _ = try await model.cleanupRuntime(olderThan: olderThan); dismiss() }
+            catch let nextError { self.error = nextError.localizedDescription }
+            loading = false
+        }
+    }
+}
+
 struct UsagePane: View {
     @Environment(\.sumpterPalette) private var palette
     private enum StatisticsBoard: String, CaseIterable, Identifiable {
@@ -92,7 +481,11 @@ struct UsagePane: View {
     }
 
     @ObservedObject var model: AppModel
-    @State private var confirmReset = false
+    /// Keep the overview KPI groups on one visual baseline.  The value is a
+    /// minimum rather than a fixed frame so larger Dynamic Type sizes can
+    /// still expand cards without clipping their details.
+    private let overviewMetricMinimumHeight: CGFloat = 112
+    @State private var cleanupPresented = false
     // 关闭自动刷新时冻结的画面快照;nil 表示跟随实时数据(后台轮询仍在更新模型)。
     @State private var frozenRuntime: RuntimeSnapshot?
     @State private var frozenHealth: ProxyHealthSummary?
@@ -115,6 +508,7 @@ struct UsagePane: View {
     @State private var runtimeEndpointTableSort: [KeyPathComparator<AdminWire.RuntimeDimensionRow>] = [KeyPathComparator(\.lastSeen, order: .reverse)]
     @State private var runtimeProjectTableSort: [KeyPathComparator<AdminWire.RuntimeDimensionRow>] = [KeyPathComparator(\.lastSeen, order: .reverse)]
     @State private var runtimeSessionTableSort: [KeyPathComparator<AdminWire.RuntimeDimensionRow>] = [KeyPathComparator(\.lastSeen, order: .reverse)]
+    @State private var runtimeModelTableSort: [KeyPathComparator<AdminWire.RuntimeDimensionRow>] = [KeyPathComparator(\.lastSeen, order: .reverse)]
     @State private var diagnosticDimension: DiagnosticDimension = .failures
     @State private var confirmDeleteSessionID: String?
     @State private var confirmUnidentifiedSessionID: String?
@@ -127,7 +521,7 @@ struct UsagePane: View {
     @State private var confirmStoredEstimate = false
     @State private var selectedBoard: StatisticsBoard = .overview
     @State private var exportExpanded = false
-    @State private var storageManagementExpanded = false
+    @State private var storageSettingsPresented = false
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var displayRuntime: RuntimeSnapshot { frozenRuntime ?? model.runtime }
@@ -229,13 +623,21 @@ struct UsagePane: View {
         .onChange(of: model.runtimeDimensionOrder) { _, order in
             runtimeDimensionTableSort = [runtimeDimensionComparator(sort: model.runtimeDimensionSort, order: order)]
         }
-        .confirmationDialog("重置使用统计？", isPresented: $confirmReset) {
-            Button("重置统计", role: .destructive) {
-                model.resetRuntimeStats()
+        .onExitCommand {
+            // Escape exits the deepest active drill-down first.  The native
+            // Table selection and the local filter stay in sync through the
+            // same model-backed binding used by the project/session rows.
+            if !model.runtimeLocalSessionID.isEmpty {
+                model.clearRuntimeLocalSession()
+            } else if !model.runtimeLocalProjectID.isEmpty || !model.runtimeLocalProjectName.isEmpty {
+                model.clearRuntimeLocalProject()
             }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("SQLite 新统计会全部清空；旧 stats.json 归档不会删除或修改。")
+        }
+        .sheet(isPresented: $storageSettingsPresented) {
+            storageSettingsSheet
+        }
+        .sheet(isPresented: $cleanupPresented) {
+            RuntimeCleanupSheet(model: model)
         }
         .confirmationDialog(
             "删除会话？",
@@ -404,13 +806,6 @@ struct UsagePane: View {
                 Label(exportExpanded ? "收起导出" : "导出", systemImage: "arrow.down.doc")
             }
             .controlSize(.small)
-            Button(role: .destructive) {
-                confirmReset = true
-            } label: {
-                Label("重置", systemImage: "trash")
-            }
-            .controlSize(.small)
-            .help("清空 SQLite 运行统计；不会删除诊断捕获")
         }
         .fixedSize(horizontal: true, vertical: false)
     }
@@ -463,7 +858,10 @@ struct UsagePane: View {
                 Text("\(item.value) · \(item.count)").tag(item.value)
             }
         }
-        Picker("最终结果", selection: $model.runtimeAnalyticsOutcome) {
+        Picker("最终结果", selection: Binding(
+            get: { model.runtimeAnalyticsOutcome },
+            set: { model.setRuntimeAnalyticsFilters(outcome: $0) }
+        )) {
             Text("不限结果").tag("")
             Text("成功").tag("succeeded")
             Text("失败").tag("failed")
@@ -499,7 +897,7 @@ struct UsagePane: View {
         Button("清除筛选") {
             model.setRuntimeAnalyticsFilters(clientKind: "", endpointID: "", project: "", sessionID: "", model: "", requestPurpose: "", outcome: "", failureKind: "", failurePhase: "")
         }
-        .disabled(model.runtimeAnalyticsClientKind.isEmpty && model.runtimeAnalyticsEndpointID.isEmpty && model.runtimeAnalyticsProject.isEmpty && model.runtimeAnalyticsSessionID.isEmpty && model.runtimeAnalyticsModel.isEmpty && model.runtimeAnalyticsRequestPurpose.isEmpty && model.runtimeAnalyticsOutcome.isEmpty && model.runtimeAnalyticsFailureKind.isEmpty && model.runtimeAnalyticsFailurePhase.isEmpty)
+        .disabled(!hasActiveRuntimeFilters)
     }
 
     private var boardPicker: some View {
@@ -595,7 +993,7 @@ struct UsagePane: View {
     private var overviewBoard: some View {
         SectionPanel(
             title: "使用概览",
-            hint: "按顺序查看数据存储、核心指标、Token 与缓存，以及入口、项目和会话使用情况。"
+            hint: "按顺序查看数据存储、核心指标、Token 与缓存，以及入口、项目、会话和模型使用情况。项目或会话行可钻取模型明细。"
         ) {
             VStack(alignment: .leading, spacing: 14) {
             storageOverviewPanel
@@ -611,14 +1009,15 @@ struct UsagePane: View {
         }
     }
 
-    /// 三张首屏对比表始终同时出现。每张表拥有独立分页、搜索与服务端
-    /// 排序状态，避免切换一个维度时覆盖另外两张表。
+    /// 四张首屏对比表始终同时出现。项目或会话行可作为本地钻取范围，
+    /// 让模型表显示该范围内的分别用量。
     @ViewBuilder
     private var overviewDimensionTables: some View {
         VStack(alignment: .leading, spacing: 16) {
             runtimeOverviewDimensionTable(kind: "endpoint", title: "入口使用情况", page: model.runtimeEndpointsPage, sortOrder: $runtimeEndpointTableSort)
             runtimeOverviewDimensionTable(kind: "project", title: "项目使用情况", page: model.runtimeProjectsPage, sortOrder: $runtimeProjectTableSort)
             runtimeOverviewDimensionTable(kind: "session", title: "会话使用情况", page: model.runtimeSessionsPage, sortOrder: $runtimeSessionTableSort)
+            runtimeOverviewDimensionTable(kind: "model", title: "模型使用情况", page: model.runtimeModelsPage, sortOrder: $runtimeModelTableSort)
         }
     }
 
@@ -663,7 +1062,7 @@ struct UsagePane: View {
     }
 
     private func runtimeOverviewUsageTable(_ page: AdminWire.RuntimeDimensionPage, kind: String, sortOrder: Binding<[KeyPathComparator<AdminWire.RuntimeDimensionRow>]>) -> some View {
-        Table(page.rows, sortOrder: sortOrder) {
+        Table(page.rows, selection: runtimeOverviewTableSelection(page: page, kind: kind), sortOrder: sortOrder) {
             TableColumn(runtimeDimensionLabel(kind), value: \.name) { row in runtimeOverviewDimensionName(row, kind: kind) }.width(min: 190, ideal: 260)
             TableColumn("请求", value: \.requests) { row in Text(tokenNumber(row.requests)).monospacedDigit() }.width(min: 76, ideal: 88)
             TableColumn("成功率", value: \.successRateForSorting) { row in Text(rateText(row.successRateForSorting >= 0 ? row.successRateForSorting : nil)).monospacedDigit() }.width(min: 92, ideal: 106)
@@ -687,7 +1086,7 @@ struct UsagePane: View {
     }
 
     private func runtimeOverviewCostTable(_ page: AdminWire.RuntimeDimensionPage, kind: String, sortOrder: Binding<[KeyPathComparator<AdminWire.RuntimeDimensionRow>]>) -> some View {
-        Table(page.rows, sortOrder: sortOrder) {
+        Table(page.rows, selection: runtimeOverviewTableSelection(page: page, kind: kind), sortOrder: sortOrder) {
             TableColumn(runtimeDimensionLabel(kind), value: \.name) { row in runtimeOverviewDimensionName(row, kind: kind) }.width(min: 210, ideal: 280)
             // Cost is calculated after the server applies its supported
             // aggregate ordering; keep it read-only here instead of sorting
@@ -705,13 +1104,31 @@ struct UsagePane: View {
 
     private func runtimeOverviewDimensionHeading(kind: String, title: String, page: AdminWire.RuntimeDimensionPage?) -> some View {
         HStack(spacing: 8) {
-            Text(kind == "session" && !model.runtimeLocalProjectName.isEmpty ? title + " · 项目：" + projectDisplayName(model.runtimeLocalProjectName) : title)
+            Text(runtimeOverviewDimensionTitle(kind: kind, title: title))
                 .font(.subheadline.weight(.semibold))
             if let page { Text("共 " + tokenNumber(page.totalCount)).font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
             if kind == "session", !model.runtimeLocalProjectID.isEmpty {
                 Button("清除项目选择") { model.clearRuntimeLocalProject() }.controlSize(.small)
             }
+            if kind == "model", !model.runtimeLocalSessionName.isEmpty {
+                Button("清除会话选择") { model.clearRuntimeLocalSession() }.controlSize(.small)
+            } else if kind == "model", !model.runtimeLocalProjectName.isEmpty {
+                Button("清除项目选择") { model.clearRuntimeLocalProject() }.controlSize(.small)
+            }
         }
+    }
+
+    private func runtimeOverviewDimensionTitle(kind: String, title: String) -> String {
+        if kind == "model", !model.runtimeLocalSessionName.isEmpty {
+            return title + " · 会话：" + sessionDisplayName(model.runtimeLocalSessionName)
+        }
+        if kind == "model", !model.runtimeLocalProjectName.isEmpty {
+            return title + " · 项目：" + projectDisplayName(model.runtimeLocalProjectName)
+        }
+        if kind == "session", !model.runtimeLocalProjectName.isEmpty {
+            return title + " · 项目：" + projectDisplayName(model.runtimeLocalProjectName)
+        }
+        return title
     }
 
     @ViewBuilder
@@ -720,10 +1137,10 @@ struct UsagePane: View {
         HStack(spacing: 6) {
             TextField("搜索" + runtimeDimensionLabel(kind), text: Binding(
                 get: {
-                    switch kind { case "endpoint": model.runtimeEndpointSearch; case "project": model.runtimeProjectSearch; default: model.runtimeSessionSearch }
+                    switch kind { case "endpoint": model.runtimeEndpointSearch; case "project": model.runtimeProjectSearch; case "session": model.runtimeSessionSearch; default: model.runtimeModelSearch }
                 },
                 set: {
-                    switch kind { case "endpoint": model.runtimeEndpointSearch = String($0.prefix(256)); case "project": model.runtimeProjectSearch = String($0.prefix(256)); default: model.runtimeSessionSearch = String($0.prefix(256)) }
+                    switch kind { case "endpoint": model.runtimeEndpointSearch = String($0.prefix(256)); case "project": model.runtimeProjectSearch = String($0.prefix(256)); case "session": model.runtimeSessionSearch = String($0.prefix(256)); default: model.runtimeModelSearch = String($0.prefix(256)) }
                 }
             ))
             .textFieldStyle(.roundedBorder)
@@ -747,20 +1164,55 @@ struct UsagePane: View {
     }
 
     private func runtimeOverviewPageSize(_ kind: String) -> Int {
-        switch kind { case "endpoint": model.runtimeEndpointPageSize; case "project": model.runtimeProjectPageSize; default: model.runtimeSessionPageSize }
+        switch kind { case "endpoint": model.runtimeEndpointPageSize; case "project": model.runtimeProjectPageSize; case "session": model.runtimeSessionPageSize; default: model.runtimeModelPageSize }
     }
 
     private func loadRuntimeOverviewPage(kind: String, page: Int) {
-        switch kind { case "endpoint": model.loadRuntimeEndpoints(page: page); case "project": model.loadRuntimeProjects(page: page); default: model.loadRuntimeSessions(page: page) }
+        switch kind { case "endpoint": model.loadRuntimeEndpoints(page: page); case "project": model.loadRuntimeProjects(page: page); case "session": model.loadRuntimeSessions(page: page); default: model.loadRuntimeModels(page: page) }
     }
 
     private func setRuntimeOverviewPageSize(kind: String, size: Int) {
-        switch kind { case "endpoint": model.setRuntimeEndpointPageSize(size); case "project": model.setRuntimeProjectPageSize(size); default: model.setRuntimeSessionPageSize(size) }
+        switch kind { case "endpoint": model.setRuntimeEndpointPageSize(size); case "project": model.setRuntimeProjectPageSize(size); case "session": model.setRuntimeSessionPageSize(size); default: model.setRuntimeModelPageSize(size) }
+    }
+
+    /// Native Table selection makes the entire row a hit target and supplies
+    /// the standard macOS full-row highlight.  Keep the selection source in
+    /// AppModel so the table, the drill-down title, and the loaded data cannot
+    /// diverge when a row is selected by keyboard or by clicking blank cells.
+    private func runtimeOverviewTableSelection(
+        page: AdminWire.RuntimeDimensionPage,
+        kind: String
+    ) -> Binding<String?> {
+        let isSelectable = kind == "project" || kind == "session"
+        return Binding(
+            get: {
+                guard isSelectable else { return nil }
+                let selectedKey = kind == "project" ? model.runtimeLocalProjectID : model.runtimeLocalSessionID
+                guard !selectedKey.isEmpty else { return nil }
+                return page.rows.first(where: { $0.key == selectedKey })?.id
+            },
+            set: { selectedID in
+                guard isSelectable else { return }
+                guard let selectedID else {
+                    if kind == "project" {
+                        model.clearRuntimeLocalProject()
+                    } else {
+                        model.clearRuntimeLocalSession()
+                    }
+                    return
+                }
+                guard let row = page.rows.first(where: { $0.id == selectedID }) else { return }
+                if kind == "project" {
+                    model.setRuntimeLocalProject(row.key, projectName: row.name)
+                } else {
+                    model.setRuntimeLocalSession(row.key, sessionName: row.name)
+                }
+            }
+        )
     }
 
     @ViewBuilder
     private func runtimeOverviewDimensionName(_ row: AdminWire.RuntimeDimensionRow, kind: String) -> some View {
-        let isSelected = kind == "project" && row.key == model.runtimeLocalProjectID
         let content = VStack(alignment: .leading, spacing: 2) {
             Text(runtimeDimensionDisplayName(row.name, kind: kind)).lineLimit(1).help(row.key)
             Text(dimensionSourceDisplayName(row.source, kind: kind)).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
@@ -768,21 +1220,25 @@ struct UsagePane: View {
         if kind == "project" {
             Button { model.setRuntimeLocalProject(row.key, projectName: row.name) } label: { content }
                 .buttonStyle(.link)
-                .padding(4)
-                .background(isSelected ? Color.accentColor.opacity(0.14) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
                 .help("仅筛选下方会话：\(row.key)")
-                .accessibilityLabel("仅查看项目 \(runtimeDimensionDisplayName(row.name, kind: kind)) 的会话")
+                .accessibilityLabel("仅查看项目 \(runtimeDimensionDisplayName(row.name, kind: kind)) 的会话和模型用量")
+        } else if kind == "session" {
+            Button { model.setRuntimeLocalSession(row.key, sessionName: row.name) } label: { content }
+                .buttonStyle(.link)
+                .help("仅查看会话：\(row.key) 的模型用量")
+                .accessibilityLabel("仅查看会话 \(runtimeDimensionDisplayName(row.name, kind: kind)) 的模型用量")
         } else { content }
     }
 
     private var costBoard: some View {
-        SectionPanel(title: "成本", hint: "先看成本摘要，再比较入口、项目和会话成本；缺少价格的请求显示为—。") {
+        SectionPanel(title: "成本", hint: "先看成本摘要，再比较入口、项目、会话和模型成本；项目或会话行可钻取模型明细。") {
             VStack(alignment: .leading, spacing: 14) {
                 costSummary
                 Divider()
                 runtimeOverviewDimensionTable(kind: "endpoint", title: "入口成本", page: model.runtimeEndpointsPage, sortOrder: $runtimeEndpointTableSort, mode: .cost)
                 runtimeOverviewDimensionTable(kind: "project", title: "项目成本", page: model.runtimeProjectsPage, sortOrder: $runtimeProjectTableSort, mode: .cost)
                 runtimeOverviewDimensionTable(kind: "session", title: "会话成本", page: model.runtimeSessionsPage, sortOrder: $runtimeSessionTableSort, mode: .cost)
+                runtimeOverviewDimensionTable(kind: "model", title: "模型成本", page: model.runtimeModelsPage, sortOrder: $runtimeModelTableSort, mode: .cost)
             }
         }
     }
@@ -832,12 +1288,12 @@ struct UsagePane: View {
                 let completed = total.clientSuccesses + total.clientFailures + total.clientCancelled
                 let pending = max(0, total.clientRequests - completed)
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
-                    MetricTile(title: "请求", value: tokenNumber(total.clientRequests), detail: "已完成 \(tokenNumber(completed)) · 待定 \(tokenNumber(pending))", systemImage: "arrow.left.arrow.right")
-                    MetricTile(title: "成功率", value: completed > 0 ? String(format: "%.1f%%", Double(total.clientSuccesses) * 100 / Double(completed)) : "—", detail: "成功 \(tokenNumber(total.clientSuccesses)) · 失败 \(tokenNumber(total.clientFailures)) · 取消 \(tokenNumber(total.clientCancelled))", systemImage: "checkmark.circle")
-                    MetricTile(title: "平均首字节", value: latencyAverage(total.ttfbMS), detail: "首次响应平均耗时", systemImage: "timer")
-                    MetricTile(title: "平均完成耗时", value: latencyAverage(total.durationMS), detail: "请求完成平均耗时", systemImage: "clock")
-                    MetricTile(title: "故障转移", value: tokenNumber(total.failovers), detail: "恢复 \(tokenNumber(total.failoverRecoveredRequests)) · 最终失败 \(tokenNumber(total.failoverTerminalRequests))", systemImage: "arrow.triangle.2.circlepath")
-                    MetricTile(title: "上游尝试", value: tokenNumber(total.upstreamAttempts), detail: "成功 \(tokenNumber(total.upstreamSuccesses)) · 失败 \(tokenNumber(total.upstreamFailures))", systemImage: "server.rack")
+                    MetricTile(title: "请求", value: tokenNumber(total.clientRequests), detail: "已完成 \(tokenNumber(completed)) · 待定 \(tokenNumber(pending))", systemImage: "arrow.left.arrow.right", minimumHeight: overviewMetricMinimumHeight)
+                    MetricTile(title: "成功率", value: completed > 0 ? String(format: "%.1f%%", Double(total.clientSuccesses) * 100 / Double(completed)) : "—", detail: "成功 \(tokenNumber(total.clientSuccesses)) · 失败 \(tokenNumber(total.clientFailures)) · 取消 \(tokenNumber(total.clientCancelled))", systemImage: "checkmark.circle", minimumHeight: overviewMetricMinimumHeight)
+                    MetricTile(title: "平均首字节", value: latencyAverage(total.ttfbMS), detail: "首次响应平均耗时", systemImage: "timer", minimumHeight: overviewMetricMinimumHeight)
+                    MetricTile(title: "平均完成耗时", value: latencyAverage(total.durationMS), detail: "请求完成平均耗时", systemImage: "clock", minimumHeight: overviewMetricMinimumHeight)
+                    MetricTile(title: "故障转移", value: tokenNumber(total.failovers), detail: "恢复 \(tokenNumber(total.failoverRecoveredRequests)) · 最终失败 \(tokenNumber(total.failoverTerminalRequests))", systemImage: "arrow.triangle.2.circlepath", minimumHeight: overviewMetricMinimumHeight)
+                    MetricTile(title: "上游尝试", value: tokenNumber(total.upstreamAttempts), detail: "成功 \(tokenNumber(total.upstreamSuccesses)) · 失败 \(tokenNumber(total.upstreamFailures))", systemImage: "server.rack", minimumHeight: overviewMetricMinimumHeight)
                 }
             } else if model.runtimeV2Loading {
                 HStack { ProgressView().controlSize(.small); Text("正在读取核心指标…").font(.caption).foregroundStyle(.secondary) }
@@ -854,10 +1310,10 @@ struct UsagePane: View {
                 .font(.subheadline.weight(.semibold))
             let usage = model.runtimeTrendSeries?.totals.tokens
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
-                MetricTile(title: "输入 Token", value: tokenText(usage?.inputTokens, presence: usage?.usageFieldPresence.inputTokens), detail: "输入用量", systemImage: "arrow.down.doc")
-                MetricTile(title: "输出 Token", value: tokenText(usage?.outputTokens, presence: usage?.usageFieldPresence.outputTokens), detail: "输出用量", systemImage: "arrow.up.doc")
-                MetricTile(title: "缓存读取", value: tokenText(usage?.cacheReadInputTokens, presence: usage?.usageFieldPresence.cacheReadInputTokens), detail: "缓存读取用量", titleAccessory: "命中率 " + rateText(usage?.cacheReadTokenRate), systemImage: "externaldrive.badge.checkmark")
-                MetricTile(title: "缓存写入", value: tokenText(usage?.cacheCreationInputTokens, presence: usage?.usageFieldPresence.cacheCreationInputTokens), detail: "缓存写入 Token", systemImage: "externaldrive.badge.plus")
+                MetricTile(title: "输入 Token", value: tokenText(usage?.inputTokens, presence: usage?.usageFieldPresence.inputTokens), detail: "输入用量", systemImage: "arrow.down.doc", minimumHeight: overviewMetricMinimumHeight)
+                MetricTile(title: "输出 Token", value: tokenText(usage?.outputTokens, presence: usage?.usageFieldPresence.outputTokens), detail: "输出用量", systemImage: "arrow.up.doc", minimumHeight: overviewMetricMinimumHeight)
+                MetricTile(title: "缓存读取", value: tokenText(usage?.cacheReadInputTokens, presence: usage?.usageFieldPresence.cacheReadInputTokens), detail: "缓存读取用量", titleAccessory: "命中率 " + rateText(usage?.cacheReadTokenRate), systemImage: "externaldrive.badge.checkmark", minimumHeight: overviewMetricMinimumHeight)
+                MetricTile(title: "缓存写入", value: tokenText(usage?.cacheCreationInputTokens, presence: usage?.usageFieldPresence.cacheCreationInputTokens), detail: "缓存写入 Token", systemImage: "externaldrive.badge.plus", minimumHeight: overviewMetricMinimumHeight)
             }
         }
     }
@@ -876,7 +1332,7 @@ struct UsagePane: View {
                     storageOverviewAction
                 }
             }
-            Text("存储上限按有效占用计算；达到上限后自动轮换最旧的已完成数据，进行中的请求不会删除。轮换不会立即缩小数据库文件；需要真正回收空间时请使用“重置并新建数据库”。仍可随时手动清理全部统计。")
+            Text("系统按滚动 24 小时的保存天数和 SQLite 有效占用上限自动轮换；任一条件先达到就触发。按请求组删除，进行中的请求组会完整保留。轮换不会立即缩小数据库文件；需要真正回收空间时请使用“重置并新建数据库”。仍可随时按时间清理已完成统计。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -893,14 +1349,11 @@ struct UsagePane: View {
                         .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
-                    MetricTile(title: "运行状态", value: live?.state == "backpressure" ? "写入积压" : (live?.state == "degraded" ? "需要关注" : (probe.projectionIndexesReady && probe.projectionBackfillComplete ? "运行正常" : "处理中")), detail: live?.lastError ?? "SQLite 统计存储", systemImage: "externaldrive.fill")
-                    MetricTile(title: "已保存事件", value: tokenNumber(probe.retainedEvents), detail: "完成 \(tokenNumber(probe.completedEvents)) · 进行中 \(tokenNumber(probe.inFlightEvents))", systemImage: "tray.full")
-                    MetricTile(title: "有效占用", value: formatBytes(probe.liveBytes), detail: "文件 \(formatBytes(probe.databaseBytes)) · WAL \(formatBytes(probe.walBytes))", systemImage: "internaldrive")
-                    MetricTile(title: "存储上限", value: probe.retention.storageLimitBytes.map(formatBytes) ?? "不限制", detail: "达到后自动轮换旧数据", systemImage: "gauge.with.dots.needle.67percent")
-                    MetricTile(title: "待写入", value: pendingEvents.map(tokenNumber) ?? "—", detail: pendingBytes.map(formatBytes) ?? (live == nil ? "暂未提供队列状态" : "队列正常"), systemImage: "arrow.down.doc")
-                }
-                if storageManagementExpanded {
-                    StorageLimitEditor(model: model, probe: probe)
+                    MetricTile(title: "运行状态", value: live?.state == "backpressure" ? "写入积压" : (live?.state == "degraded" ? "需要关注" : (probe.projectionIndexesReady && probe.projectionBackfillComplete ? "运行正常" : "处理中")), detail: live?.lastError ?? "SQLite 统计存储", systemImage: "externaldrive.fill", minimumHeight: overviewMetricMinimumHeight)
+                    MetricTile(title: "已保存事件", value: tokenNumber(probe.retainedEvents), detail: "完成 \(tokenNumber(probe.completedEvents)) · 进行中 \(tokenNumber(probe.inFlightEvents))", systemImage: "tray.full", minimumHeight: overviewMetricMinimumHeight)
+                    MetricTile(title: "有效占用", value: formatBytes(probe.liveBytes), detail: "文件 \(formatBytes(probe.databaseBytes)) · WAL \(formatBytes(probe.walBytes))", systemImage: "internaldrive", minimumHeight: overviewMetricMinimumHeight)
+                    MetricTile(title: "保留策略", value: retentionPolicyLabel(probe.retention), detail: retentionPolicyDetail(probe.retention), systemImage: "arrow.triangle.2.circlepath", minimumHeight: overviewMetricMinimumHeight)
+                    MetricTile(title: "待写入", value: pendingEvents.map(tokenNumber) ?? "—", detail: pendingBytes.map(formatBytes) ?? (live == nil ? "暂未提供队列状态" : "队列正常"), systemImage: "arrow.down.doc", minimumHeight: overviewMetricMinimumHeight)
                 }
             } else {
                 HStack(spacing: 8) {
@@ -923,12 +1376,12 @@ struct UsagePane: View {
         HStack(spacing: 8) {
             Image(systemName: "externaldrive.fill")
                 .foregroundStyle(palette.brand)
-            Text("SQLite 概览")
+            Text("运行统计存储")
                 .font(.headline)
             if model.runtimeStorageProbe != nil {
                 StatusBadge(
-                    text: model.runtimeStorageProbe?.retention.storageLimitBytes == nil ? "仅手动清理" : "自动轮换",
-                    systemImage: model.runtimeStorageProbe?.retention.storageLimitBytes == nil ? "hand.raised.fill" : "arrow.triangle.2.circlepath",
+                    text: model.runtimeStorageProbe.map { retentionPolicyLabel($0.retention) } ?? "读取中",
+                    systemImage: model.runtimeStorageProbe.map { retentionPolicyIsAutomatic($0.retention) ? "arrow.triangle.2.circlepath" : "hand.raised.fill" } ?? "hourglass",
                     color: palette.success
                 )
             }
@@ -938,19 +1391,64 @@ struct UsagePane: View {
     private var storageOverviewAction: some View {
         HStack(spacing: 8) {
             Button {
-                storageManagementExpanded.toggle()
+                storageSettingsPresented = true
             } label: {
-                Label(storageManagementExpanded ? "收起存储设置" : "存储设置", systemImage: "slider.horizontal.3")
+                Label("存储设置…", systemImage: "slider.horizontal.3")
             }
             .controlSize(.small)
             Button(role: .destructive) {
-                confirmReset = true
+                cleanupPresented = true
             } label: {
-                Label("手动清理统计", systemImage: "trash")
+                Label("按时间清理统计", systemImage: "trash")
             }
             .controlSize(.small)
-            .help("手动清空 SQLite 运行统计；不会删除诊断捕获")
+            .help("按时间清理已完成 SQLite 运行统计；不会删除诊断捕获")
             RecreateDatabaseButton(model: model)
+        }
+    }
+
+    @ViewBuilder
+    private var storageSettingsSheet: some View {
+        if let probe = model.runtimeStorageProbe {
+            StorageLimitEditor(
+                model: model,
+                probe: probe,
+                presentation: .sheet(onClose: { storageSettingsPresented = false })
+            )
+        } else {
+            SheetShell(
+                title: "运行统计存储设置",
+                primaryTitle: "关闭",
+                onCancel: { storageSettingsPresented = false },
+                onSubmit: { storageSettingsPresented = false }
+            ) {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("正在读取存储状态…")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func retentionPolicyIsAutomatic(_ retention: AdminWire.RuntimeRetention) -> Bool {
+        retention.maxAgeDays != nil || retention.storageLimitBytes != nil
+    }
+
+    private func retentionPolicyLabel(_ retention: AdminWire.RuntimeRetention) -> String {
+        retentionPolicyIsAutomatic(retention) ? "自动轮换" : "仅手动清理"
+    }
+
+    private func retentionPolicyDetail(_ retention: AdminWire.RuntimeRetention) -> String {
+        switch (retention.maxAgeDays, retention.storageLimitBytes) {
+        case let (age?, bytes?):
+            return "最长 \(age) 天 · 容量 \(formatBytes(bytes))"
+        case let (age?, nil):
+            return "最长 \(age) 天 · 容量不限制"
+        case let (nil, bytes?):
+            return "时间不限制 · 容量 \(formatBytes(bytes))"
+        case (nil, nil):
+            return "未设置自动条件"
         }
     }
 
@@ -1067,7 +1565,7 @@ struct UsagePane: View {
                     }
                     .controlSize(.small)
                 }
-                Text("配置器在仓库 platforms/linux/scripts/ 下（跨平台通用）。装完要新开一个终端才生效。")
+                Text("配置器在仓库 platforms/macos/scripts/ 下（跨平台通用）。装完要新开一个终端才生效。")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -1360,6 +1858,15 @@ struct UsagePane: View {
         }
     }
 
+    private func runtimeOutcomeDisplayName(_ value: String) -> String {
+        switch value {
+        case "succeeded": "成功"
+        case "failed": "失败"
+        case "cancelled": "已取消"
+        default: value.isEmpty ? "未记录" : value
+        }
+    }
+
     private func projectClientKindsLabel(_ kinds: [String]?) -> String {
         var labels: [String] = []
         for kind in kinds ?? [] {
@@ -1558,11 +2065,11 @@ struct UsagePane: View {
             let live = model.runtimeSummary?.storage
             HStack(spacing: 8) {
                 StatusBadge(
-                    text: probe.retention.storageLimitBytes == nil ? "仅手动清理" : "自动轮换",
-                    systemImage: probe.retention.storageLimitBytes == nil ? "hand.raised.fill" : "arrow.triangle.2.circlepath",
+                    text: retentionPolicyLabel(probe.retention),
+                    systemImage: retentionPolicyIsAutomatic(probe.retention) ? "arrow.triangle.2.circlepath" : "hand.raised.fill",
                     color: palette.success
                 )
-                Text("\(tokenNumber(probe.retainedEvents)) 条 · 待写 \(live.map { tokenNumber($0.pendingEvents) } ?? probe.pendingEvents.map(tokenNumber) ?? "—")")
+                Text("\(retentionPolicyDetail(probe.retention)) · \(tokenNumber(probe.retainedEvents)) 条 · 待写 \(live.map { tokenNumber($0.pendingEvents) } ?? probe.pendingEvents.map(tokenNumber) ?? "—")")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
@@ -1604,13 +2111,6 @@ struct UsagePane: View {
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
         }
-        Button(role: .destructive) {
-            confirmReset = true
-        } label: {
-            Label("重置", systemImage: "trash")
-        }
-        .controlSize(.small)
-        .help("清空 SQLite 运行统计；不会删除诊断捕获")
     }
 
     @ViewBuilder
@@ -1931,7 +2431,8 @@ struct UsagePane: View {
         switch kind {
         case "endpoint": model.setRuntimeEndpointSort(key, order: direction)
         case "project": model.setRuntimeProjectSort(key, order: direction)
-        default: model.setRuntimeSessionSort(key, order: direction)
+        case "session": model.setRuntimeSessionSort(key, order: direction)
+        default: model.setRuntimeModelSort(key, order: direction)
         }
     }
 
@@ -2297,12 +2798,7 @@ struct UsagePane: View {
 
     @ViewBuilder
     private var analyticsFilterStatus: some View {
-        let values = [
-            model.runtimeAnalyticsClientKind.isEmpty ? nil : "客户端=\(clientDisplayName(model.runtimeAnalyticsClientKind))",
-            model.runtimeAnalyticsEndpointID.isEmpty ? nil : "入口=\(model.runtimeAnalyticsEndpointID)",
-            model.runtimeAnalyticsProject.isEmpty ? nil : "项目=\(projectDisplayName(model.runtimeAnalyticsProject))",
-            model.runtimeAnalyticsSessionID.isEmpty ? nil : "会话=\(sessionDisplayName(model.runtimeAnalyticsSessionID))",
-        ].compactMap { $0 }
+        let values = activeRuntimeFilterLabels
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 8) {
                 filterStatusLabel(values: values)
@@ -2316,6 +2812,46 @@ struct UsagePane: View {
         .fixedSize(horizontal: false, vertical: true)
         .frame(minHeight: 22, alignment: .leading)
         .transaction { transaction in transaction.animation = nil }
+    }
+
+    /// The top-level reset must stay available for both global picker filters
+    /// and the local project/session drill-down created by clicking a table
+    /// row. The latter does not change the aggregate snapshot filter, but it
+    /// still changes the visible session/model tables and must be clearable
+    /// from the same control surface.
+    private var hasActiveRuntimeFilters: Bool {
+        let globalFilters = [
+            model.runtimeAnalyticsClientKind,
+            model.runtimeAnalyticsEndpointID,
+            model.runtimeAnalyticsProject,
+            model.runtimeAnalyticsSessionID,
+            model.runtimeAnalyticsModel,
+            model.runtimeAnalyticsRequestPurpose,
+            model.runtimeAnalyticsOutcome,
+            model.runtimeAnalyticsFailureKind,
+            model.runtimeAnalyticsFailurePhase,
+        ]
+        return globalFilters.contains { !$0.isEmpty }
+            || !model.runtimeLocalProjectID.isEmpty
+            || !model.runtimeLocalProjectName.isEmpty
+            || !model.runtimeLocalSessionID.isEmpty
+            || !model.runtimeLocalSessionName.isEmpty
+    }
+
+    private var activeRuntimeFilterLabels: [String] {
+        [
+            model.runtimeAnalyticsClientKind.isEmpty ? nil : "客户端=\(clientDisplayName(model.runtimeAnalyticsClientKind))",
+            model.runtimeAnalyticsEndpointID.isEmpty ? nil : "入口=\(model.runtimeAnalyticsEndpointID)",
+            model.runtimeAnalyticsProject.isEmpty ? nil : "项目=\(projectDisplayName(model.runtimeAnalyticsProject))",
+            model.runtimeAnalyticsSessionID.isEmpty ? nil : "会话=\(sessionDisplayName(model.runtimeAnalyticsSessionID))",
+            model.runtimeAnalyticsModel.isEmpty ? nil : "模型=\(model.runtimeAnalyticsModel)",
+            model.runtimeAnalyticsRequestPurpose.isEmpty ? nil : "用途=\(dimensionValueDisplayName(model.runtimeAnalyticsRequestPurpose, kind: "purpose"))",
+            model.runtimeAnalyticsOutcome.isEmpty ? nil : "最终结果=\(runtimeOutcomeDisplayName(model.runtimeAnalyticsOutcome))",
+            model.runtimeAnalyticsFailureKind.isEmpty ? nil : "失败类型=\(dimensionValueDisplayName(model.runtimeAnalyticsFailureKind, kind: "failure_kind"))",
+            model.runtimeAnalyticsFailurePhase.isEmpty ? nil : "失败阶段=\(dimensionValueDisplayName(model.runtimeAnalyticsFailurePhase, kind: "failure_phase"))",
+            model.runtimeLocalProjectName.isEmpty ? nil : "项目下钻=\(projectDisplayName(model.runtimeLocalProjectName))",
+            model.runtimeLocalSessionName.isEmpty ? nil : "会话下钻=\(sessionDisplayName(model.runtimeLocalSessionName))",
+        ].compactMap { $0 }
     }
 
     @ViewBuilder
@@ -2496,11 +3032,6 @@ struct UsagePane: View {
                     Label("按自动刷新间隔更新", systemImage: "arrow.clockwise")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Button(role: .destructive) {
-                        confirmReset = true
-                    } label: {
-                        Label("重置统计", systemImage: "trash")
-                    }
                 }
             }
         }

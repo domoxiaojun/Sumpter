@@ -29,27 +29,22 @@ FROM alpine:3.22 AS runtime
 # See the builder-stage note about pinning the verified base image digest.
 # hadolint ignore=DL3018
 RUN apk add --no-cache ca-certificates \
-    && addgroup -S -g 10001 sumpter \
-    && adduser -S -D -H -h /home/sumpter -u 10001 -G sumpter sumpter \
-    && mkdir -p /home/sumpter /config /opt/sumpter/web \
-    && chown -R 10001:10001 /home/sumpter /config /opt/sumpter \
-    && chmod 0700 /home/sumpter /config
+    && mkdir -p /config /opt/sumpter/web \
+    && chmod 0700 /config
 
 COPY --from=builder /out/sumpterd /usr/local/bin/sumpterd
-COPY --chown=sumpter:sumpter web/ /opt/sumpter/web/
-COPY --chown=sumpter:sumpter config.example.json /opt/sumpter/config.example.json
+COPY web/ /opt/sumpter/web/
+COPY config.example.json /opt/sumpter/config.example.json
 
 # Admin defaults (daemon reads these; CLI flags still win if provided in command:).
 # `/config/admin-password` is mandatory because CMD sets `--config-dir /config`;
 # mount it before starting. The WebUI login and API session still belong behind HTTPS publicly.
-ENV HOME=/home/sumpter \
-    RUST_LOG=info \
+ENV RUST_LOG=info \
     SUMPTER_ADMIN_HOST=127.0.0.1 \
     SUMPTER_ADMIN_PORT=57879 \
     SUMPTER_WEB_ROOT=/opt/sumpter/web
 
 WORKDIR /opt/sumpter
-USER 10001:10001
 VOLUME ["/config"]
 # Proxy default 57878 (from config.json); Admin default 57879 (overridable).
 EXPOSE 57878 57879

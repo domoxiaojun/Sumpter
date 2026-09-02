@@ -1,6 +1,6 @@
 # Sumpter使用指南
 
-给使用者，以及要帮用户「装好、配好、连上客户端」的 LLM agent。
+给第一次安装并接入 Claude Code 或 Codex 的用户。
 
 **范围**：安装入口、`config.json`、接 Claude Code / Codex、常见错误。  
 **不包含**：改源码、编译、发版、Git 远程。
@@ -10,51 +10,58 @@
 
 ## 开箱路径（固定顺序）
 
-安装/启动 → 找到配置 → 启用入口与 mapping → 配置 Claude/Codex → 首个成功请求 → 查看请求链
+第一次使用只做 3 件事：找到配置 → 填一个上游服务（Provider）→ 启动 Sumpter 并接入客户端。
+备用入口、重试和功能规则等高级配置，等基本使用后再设置。
 
-这条顺序也是 Help 页的引导顺序。每个状态只给一个主要下一步，并只依据已有的
-`status`、`config`、运行统计和请求事件判断；不会要求用户粘贴密钥或 raw 诊断。
+### 1. 找到配置文件
 
-### 状态引导
+| 平台 | 配置文件 |
+|---|---|
+| macOS App | `~/Library/Application Support/Sumpter/config.json`（仅在 macOS 客户端使用） |
+| Linux daemon | 普通用户：`$XDG_CONFIG_HOME/sumpter/config.json`，否则 `~/.config/sumpter/config.json`；system 安装：`/var/lib/sumpter/config.json` |
 
-| 状态 | 现有数据的判断 | 唯一下一步 |
-|---|---|---|
-| 未启动 | `status.running` 不是 `true`（macOS 为 sidecar 未运行） | 启动代理 |
-| 未配置 | 没有可读的 `config.json` 或没有入口 | 添加并保存 Provider 入口 |
-| 无 mapping | 有入口，但没有启用入口包含 `endpoints[].mappings[]` | 为客户端模型添加 mapping |
-| 客户端未接入 | 有可用 mapping，但 `clientRequests == 0` | 配置 Claude/Codex 的 Base URL |
-| 首次失败 | 已有客户端请求，但 `clientSuccesses == 0` 且出现失败 | 打开运行页查看请求链和失败阶段 |
-| 首次成功 | `clientSuccesses > 0` | 查看成功请求链与后续 failover |
+优先复制对应平台的 `config.example.json`，不要从零创建 JSON。`listener` 默认保持
+`127.0.0.1:57878`，先保存配置，再启动 Sumpter。
 
-### 路径矩阵
+### 2. 只填一个上游服务入口
 
-| 项目 | macOS App | Linux daemon / 发布包 |
-|---|---|---|
-| 配置文件 | `~/Library/Application Support/Sumpter/config.json`（仅在 macOS 客户端使用） | 普通用户：`$XDG_CONFIG_HOME/sumpter/config.json`，否则 `~/.config/sumpter/config.json`；system 安装：`/var/lib/sumpter/config.json` |
-| 数据面代理 | `http://127.0.0.1:57878`（以运行页/配置为准） | `http://127.0.0.1:57878`（以 `listener` 为准） |
-| Admin 地址 | sidecar 握手返回的本机动态端口（仅 macOS 客户端） | `http://127.0.0.1:57879/admin/`（可由启动参数覆盖） |
-| 入站鉴权 | `listener.authToken`（非空才启用） | `listener.authToken`（非空才启用） |
-| Admin 鉴权 | App 与 sidecar 的本机控制通道 | Admin session cookie + CSRF；不要把密码写入文档或 Issue |
-| 模型 mapping | `endpoints[].mappings[]` | `endpoints[].mappings[]` |
-| 配置字段参考 | 源码 monorepo 的 `platforms/macos/CONFIG.md`（Linux 发布包不包含 macOS 文档） | 本文第 5 节的 `listener`、入口与 mapping 说明 |
-| 项目归因脚本 | 发布包 `scripts/cc-project-attribution.sh`（通常 `/opt/sumpter/scripts/`）；必须在跑 Claude Code 的机器执行 | 发布包 `scripts/cc-project-attribution.sh`（通常 `/opt/sumpter/scripts/`）；必须在跑 Claude Code 的机器执行 |
+在 `endpoints[]`（上游服务列表）中先只启用一个入口，填 `baseURL`（上游服务地址）、`apiKey`、
+`enabled: true` 和 `mappings`。例如：
 
-本文件位于 monorepo 的 `platforms/linux/`；独立 Linux 发布包会将该目录内容提升为发布根，且不携带 macOS 文档。
+```json
+{ "clientPattern": "gpt-5.4", "upstreamModel": "gpt-5.4" }
+```
 
-### 客户端接入与安全边界
+`clientPattern` 必须和客户端实际使用的模型名一致；不确定时先用精确名称。
 
-- Claude Code 使用 `ANTHROPIC_BASE_URL`；Codex / OpenAI 兼容客户端使用 API Base，具体协议和路径见下文。
-- 代理会先做 CIDR 与入站鉴权，再读取请求体；不要用大 body 测试错误 token。
-- `apiKey`、`authToken`、Admin 密码、Cookie、请求体和 raw 捕获都只留在本机受限文件中；文档、截图和 Issue 只放脱敏后的请求 ID、时间和错误阶段。
-- 项目归因脚本必须运行在**启动 Claude Code 的客户端机器**上，而不是远程 daemon 所在机器；每台客户端机器单独配置。
+### 3. 接入客户端
 
-### macOS 统一通知（Claude Code + Codex CLI）
+Claude Code：
 
-- macOS App 的「通知」页分别管理 Claude Code Hook 与 Codex CLI Stop Hook；两者都由 Sumpter 的 `/__notify` 接收并投递系统通知。
-- Codex 默认关闭。启用后 App 会在 `CODEX_HOME/hooks.json`（未设置时为 `~/.codex/hooks.json`）写入 `Stop` Hook，并把脚本放在同目录的 `hooks/sumpter-codex-notify.zsh`；脚本只转发 Stop JSON，最多等待 2 秒，Sumpter 未运行也不会阻断 Codex。
-- 启用时会直接移除 Codex 顶层 `config.toml` 中已知的 `SkyComputerUseClient … turn-ended` legacy `notify`，不生成备份、不自动恢复。无法安全识别的自定义 `notify` 会保留并显示冲突，需手动删除后再启用。
-- 写入后在 Codex CLI 执行 `/hooks` 并信任 Sumpter Hook；设置页只有收到一次真实 Codex SSE 通知后才显示「已验证」。通知使用固定安全文案，不包含 transcript、完整 prompt、`last_assistant_message` 或原始错误详情。
-- Linux daemon 不提供通知 Hook，也不提供 `/__notify`；上述统一通知仅适用于 macOS App。
+```bash
+export ANTHROPIC_BASE_URL=http://127.0.0.1:57878
+```
+
+Codex：**Base URL 必须带 `/v1`**。
+
+```toml
+model = "gpt-5.4"                 # 改成你 mapping 里的模型名
+model_provider = "sumpter"
+
+[model_providers.sumpter]
+name = "Sumpter"
+base_url = "http://127.0.0.1:57878/v1"
+wire_api = "responses"
+experimental_bearer_token = "填 listener.authToken（未启用鉴权时删除此行）"
+```
+
+如果 `listener.authToken` 不为空，把同一个值填入 `experimental_bearer_token`；只在本机使用时可以删除这一行。
+
+启动 Sumpter 后，在客户端发一条请求即可开始使用。
+
+跨机器使用时，把 `listener.host` 改为内网可达地址并设置非空 `authToken`，不要把端口裸露到公网。
+
+不要把 `config.json`、API key、Token、Cookie 或 raw 诊断内容提交到 Git、Issue 或聊天记录。
 
 <!-- 由 scripts/sync-usage-docs.py 生成；请修改 docs/usage-onboarding.md 与 docs/usage-path-matrix.json 后同步。 -->
 
@@ -94,7 +101,7 @@ Agent：只改**本机配置目录**里的 `config.json`，不要把填好 key �
 模板：
 
 - **推荐抄** `config.example.json`（源码 monorepo 对应 `platforms/linux/config.example.json`）：域名是 `.invalid`，入口全部 `enabled: false`，secret 是合成的 `sk-test-…`。
-- `platforms/macos/config.example.json` 更像本机草稿，可能带习惯用的上游域名、且入口是启用的。复制后务必换成你的地址和 key，不要原样拿去打真实流量。
+- `platforms/macos/config.example.json` 与 Linux 使用同一份安全模板：入口全部禁用、地址使用 `.invalid`，可直接作为结构参考；启用前务必替换为你的地址和 key。
 
 Linux 首次 Admin 用户名是 `kkl`，密码在同目录 `admin-password`（不要在终端 `cat` 出去）。改密后该文件会变成 Argon2 哈希 JSON，不能再回读明文。
 
@@ -151,7 +158,9 @@ export ANTHROPIC_AUTH_TOKEN='填 config 里的 authToken'
 
 ### 3.3 接 Codex / 其它 OpenAI 客户端
 
-把客户端的 API Base 指到 `http://127.0.0.1:57878`（或你改过的 host/port）。Codex 通常要带 `/v1` 后缀；没有 `/v1` 的别名也可以，因为代理同时认 `/responses` 和 `/v1/responses`。
+把客户端的 API Base 指到 Sumpter 本机地址。**Codex 必须使用带 `/v1` 的 Base URL**，默认填写
+`http://127.0.0.1:57878/v1`；如果你改过 `listener.host` 或 `listener.port`，只替换前面的 host/port，
+仍然保留最后的 `/v1`。不要填写上游 Provider 的 `baseURL`。
 
 `~/.codex/config.toml` 可以写成：
 
@@ -163,6 +172,7 @@ model_provider = "sumpter"
 name = "Sumpter"
 base_url = "http://127.0.0.1:57878/v1"
 wire_api = "responses"
+experimental_bearer_token = "填 listener.authToken"
 ```
 
 其它 OpenAI SDK：
@@ -171,60 +181,55 @@ wire_api = "responses"
 export OPENAI_BASE_URL=http://127.0.0.1:57878/v1
 ```
 
-若 `listener.authToken` 非空，把它配成该客户端的 API key（Codex 用 provider 的 `env_key`，其它客户端用 `OPENAI_API_KEY`）。
+若 `listener.authToken` 非空，把它填入 `experimental_bearer_token`；其它 OpenAI SDK 再按各自的 API key 配置。
 
-入口协议能力在每个 `endpoints[]` 上单独声明，只有四个值：
+`endpoints[].protocol` 是入口的能力/统计元数据，保留四个配置值：
 
 | `protocol` | 含义 |
 |---|---|
-| `auto` | 自动（三协议），按入站路径选择 Anthropic、OpenAI Chat 或 OpenAI Responses；新入口默认值 |
-| `anthropic` | 只声明 Anthropic Messages |
-| `openai` | 只声明 OpenAI Chat Completions |
-| `openai-responses` | 只声明 OpenAI Responses |
+| `auto` | 默认值；不限制原始 HTTP 请求的路径或 body |
+| `anthropic` | 入口标签为 Anthropic |
+| `openai` | 入口标签为 OpenAI Chat |
+| `openai-responses` | 入口标签为 OpenAI Responses |
 
-`auto` 是入口能力模式，不会作为出站协议发送给上游。普通对话没有规则目标覆盖时，入口按入站路径原生发送；固定协议与入站协议不同时才进入 Translator。
-
-### 3.4 本机自检
-
-```bash
-curl --noproxy '*' http://127.0.0.1:57878/__status
-```
-
-Linux 还可看 Admin 是否起来：
-
-```bash
-curl --noproxy '*' -i http://127.0.0.1:57879/healthz
-curl --noproxy '*' -i http://127.0.0.1:57879/admin/
-```
+这些值不会作为出站协议发送给上游，也不会让 Sumpter 对 HTTP 请求做协议转换或拒绝。
 
 ---
 
 ## 4. 协议与路径
 
-SourceFormat 只由路径决定，不再依据 User-Agent 或 body 形状猜测协议。请求路径与 body 结构不匹配时直接返回 `invalid_request`。User-Agent 只用于客户端识别、统计和 Provider 特殊 Header。
+数据面通常不识别、重建或转换协议，也不维护路径别名白名单。除 `/__*` 本地控制接口外，任意
+HTTP 方法和任意路径都会进入同一条转发链：入站鉴权 → Provider 选择 → failover/retry →
+上游 relay。客户端的原始 path/query、可转发请求头、请求体，以及上游返回的状态、响应头和
+响应体都交给上游；仅移除 Host、连接级 hop-by-hop/传输 framing 头和入站鉴权头，再注入
+Provider 鉴权。
+唯一的窄例外是 Codex `/v1/live` bootstrap：`application/sdp`、`text/plain` 或 Codex
+multipart 请求会封装成 `sdp + session.type=quicksilver` JSON，默认模型为
+`gpt-live-1-codex`，再交给匹配该模型的 Provider。公开 `/v1/realtime` 仍是原生透传。
+Live/Realtime 只接受可用 Provider 上的精确 mapping，不使用 `*` 通配或 Anthropic 文本入口；
+缺少精确 Live mapping 时返回 `no_live_provider`，避免语音请求误发到普通模型。
 
-原生路径：`/v1/messages` 是 Anthropic，`/v1/chat/completions` 是 OpenAI Chat，`/v1/responses` 及 Codex Responses 别名是 OpenAI Responses。
+Provider 选择仍以已配置的 `mappings` 为准。JSON 只用于读取路由所需的模型元数据：请求已有
+顶层 `model` 或 `session.model` 且对应 mapping 配置了不同的 `upstreamModel` 时，才替换这一
+个模型值；不会主动新增 `model`，不会删除或重排其它字段。无论路径是否带 `/v1`、`/openai/v1`
+或其它前缀，原始路径都会按客户端写法交给 Provider，不做别名归一化。
 
-规则里的 `target.protocol`（或 API 返回的 `protocolOverride`）仍只能写三个真实协议，不能写 `auto`。Auto 入口可按规则目标解析为指定协议，固定入口只有声明的协议匹配时才参与；没有安全的协议候选时返回 `NoCompatibleProtocol`。原生候选存在时，桥接候选不会混入本次重试列表。
+因此以下请求都只是普通透传示例，不代表 Sumpter 内置了对应协议实现（Codex `/v1/live` 的
+bootstrap 封装除外）：
 
-当前 HTTP 支持面：
+- `POST /v1/responses`、`GET /v1/responses` WebSocket
+- `GET/POST /v1/realtime` 及其任意子路径
+- `GET/POST/DELETE /v1/files`、`/v1/videos` 及资源查询或内容下载
+- `GET /v1/models` 或任何其它模型目录路径
+- 未知的厂商路径、二进制请求和非 JSON 请求
 
-| 客户端路径 | 处理 |
-|---|---|
-| `/v1/messages` | Anthropic 原生 Adapter |
-| `/v1/messages/count_tokens` | Claude Count Tokens 独立原生 Adapter；入口须为 `auto` 或 `anthropic` |
-| `/v1/chat/completions` | OpenAI Chat 原生，或按固定目标协议安全桥接 |
-| `/v1/responses` | OpenAI Responses 原生，或按固定目标协议安全桥接 |
-| `/v1/responses/compact` | Responses Compact 独立原生 Adapter；入口须为 `auto` 或 `openai-responses` |
-| `/v1/completions` | Legacy Completions 独立原生 Adapter；入口须为 `auto` 或 `openai` |
-| `/v1/images/generations`、`/v1/images/edits` | 独立图片 Adapter；multipart body 与 boundary 保持原样 |
-| `/v1/alpha/search` | Codex Alpha Search 独立原生 Adapter |
-
-需要 Responses 才能执行的 Grok 检索只选择 `auto` 或 `openai-responses` 入口；固定 `openai` Chat 入口不会隐式升级。Translator 无法安全表达工具、reasoning、引用或未知内容块时会拒绝请求，不静默丢字段。
-
-除 Claude `/v1/messages` 外，表中业务路径支持无 `/v1` 别名；Responses、Compact、Alpha Search 和 Images 还支持 `/backend-api/codex/...` 直连别名。原生 JSON 请求只重写路由后的 `model`，其它字段（包括 Grok 的 `aspect_ratio`、`resolution`、`tools`、`reasoning` 和未来未知字段）都会保留；Alpha Search 会按 Codex 行为移除 `prompt_cache_key` 与 `prompt_cache_retention`。multipart 编辑为保护 boundary 与二进制图片，body 和 `Content-Type` 字节级保持不变；未填图片模型时默认 `gpt-image-2`。
-
-当前**不支持** Responses WebSocket、Realtime / Live、Videos 创建后的查询与下载、Files，以及 `/v1/models`。这些不能当作普通一次性 HTTP body 透传；命中会明确 404。
+WebSocket 只按 Upgrade 请求建立统一的双向 relay；文本、二进制、ping/pong 和关闭帧不解析、不
+改写。对 `/v1/realtime`、`/v1/live` 及其 sideband，Sumpter 会先完成候选 Provider 的上游
+握手，再向客户端返回 `101`；上游握手的 `401/404/429/5xx` 会保留为下游 HTTP 状态，不会先
+返回一个误导性的 `101`。Realtime 的短期 `ek_…` 凭证仍可用于后续 HTTP/SDP/WebSocket 请求；
+其返回的 `session` 配置会在 WebSocket 建连后以 `session.update` 发送给上游，HTTP calls 也会
+复用 voice、instructions 等字段。这是鉴权/会话绑定能力，不是本地协议实现。上游具体模型、
+权限和媒体/Realtime 能力由 Provider 决定，需用目标 Provider 实测确认。
 
 ---
 
@@ -257,7 +262,11 @@ Linux 的 Web Admin 地址 **不是** 这个字段，默认永远是 `127.0.0.1:
 开箱不必改。默认接近「可重试错误就继续试」：
 
 - `maxDeferredRounds` / `maxRetryDurationSeconds` 为 `0` = 不限轮、不限总时长
-- `sessionStickyRetries` 默认 `2`：当前线路组失败后再整组多试 2 次，仍不行才换组
+- `sessionStickyRetries` 默认 `2`：当前线路组遇到非 500 可重试故障后再整组多试 2 次，仍不行才换组
+- `max500Retries` 默认 `0`：当前入口收到 HTTP 500 后的额外重试次数；`0` 表示不额外重试
+- `failoverOn500` 默认 `true`：500 重试耗尽后切换下一个入口；设为 `false` 则在当前入口直接返回 500。500 不进入跨轮无限重试
+- `retryDelaySeconds` 可选：为最终失败响应准备的 `retry_delay` 秒数
+- `passThroughRetryDelay` 默认 `true`：是否将 `retry_delay` 与 `Retry-After` 透传给客户端；关闭后即使填写秒数也不返回
 - 两个超时为 `null` = 跟客户端，代理自己不加硬截止
 
 只有两个上限**同时为 0** 才是真无限重试。客户端一断开，代理会立刻停。
@@ -285,8 +294,7 @@ Linux 的 Web Admin 地址 **不是** 这个字段，默认永远是 `127.0.0.1:
 
 - `clientPattern`：客户端发来的模型名（可通配）
 - `upstreamModel`：空 = 同名转给上游
-- `thinking`：`disabled` / `passthrough` / `adaptive`
-- `context`：`standard`（不补不剥 1M）/ `oneMillion`（强制开 1M）/ `strip`（剥离 1M 标记）
+- `thinking` / `context`：保留在配置中的兼容字段；raw 透传不会据此改写客户端 body 或 header
 - `failoverTimeoutSeconds`：可选的映射级首响应截止；与全局 `responseTimeoutSeconds` 同时配置时取较小值，到期且尚未收到响应时尝试下一个入口
 
 同一入口同时命中精确模型名和 `prefix-*` 通配时，精确映射优先；同级按配置顺序。
@@ -297,9 +305,10 @@ Linux 的 Web Admin 地址 **不是** 这个字段，默认永远是 `127.0.0.1:
 
 - `websearch` / `webfetch` / `classifier`：只识别 Claude Code 那种独立子请求的完整形状，不会扫主会话全文。
 
-Provider 不需要另填 WebSearch 能力字段。严格识别为 WebSearch 后，代理按最终目标协议自动选择：Anthropic 保留原生 `web_search`，OpenAI Chat 使用 `web_search_options`，OpenAI Responses 使用内建 `web_search`。Grok 检索仍只允许最终目标为 Responses。
+启用规则后只影响模型/Provider 的选择；Sumpter 不会把请求改造成另一种协议，也不会注入、删除
+或重排 WebSearch、Grok、工具等字段。具体能力由上游 Provider 自己处理。
 
-要启用：设 `enabled: true`，`target.model` 必须能被某个入口的映射承接。`endpointID` 可选，钉住后只走该入口；入口失效时退回整列候选。`target.effort` 可选，支持 `none` / `auto` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`；省略时跟随客户端原请求。`target.protocol` 可选，只能写三个真实协议，不能写 `auto`。
+要启用：设 `enabled: true`，`target.model` 必须能被某个入口的映射承接。`endpointID` 可选，钉住后只走该入口；入口失效时退回整列候选。`target.effort`、`target.protocol` 仅作为兼容配置/统计元数据，不触发数据面协议转换。
 
 开箱可以全部保持关闭，先保证主对话能通。`featureRules` 也可以写成 `[]`（进程会补三条内建规则，默认停用）。
 
@@ -319,7 +328,10 @@ Provider 不需要另填 WebSearch 能力字段。严格识别为 WebSearch 后�
     "authToken": ""
   },
   "retry": {
+    "max500Retries": 0,
     "responseTimeoutSeconds": null,
+    "retryDelaySeconds": null,
+    "passThroughRetryDelay": true,
     "streamIdleTimeoutSeconds": null,
     "sessionStickyRetries": 2,
     "maxDeferredRounds": 0,
@@ -389,10 +401,8 @@ Provider 不需要另填 WebSearch 能力字段。严格识别为 WebSearch 后�
 | 平台 | 做法 |
 |---|---|
 | macOS App | 设置里保存；需要时点重启。监听地址/端口变了会重绑 |
-| Linux WebUI | 登录后改并保存（带 generation 对账） |
+| Linux WebUI | 登录后改并保存 |
 | Linux 手改文件 | 对进程 `SIGHUP`，或 `systemctl --user reload sumpter` / `sudo systemctl reload sumpter` |
-
-手改 JSON 后语法坏了：进程拒载，**不会覆盖**你磁盘上的原文件。可先用 `jq empty config.json` 检查语法。
 
 ---
 
@@ -414,23 +424,49 @@ Provider 不需要另填 WebSearch 能力字段。严格识别为 WebSearch 后�
 ### 一键配置
 
 配置器 `cc-project-attribution.sh` 随发布包分发（Linux 解包后在 `/opt/sumpter/scripts/`；macOS
-打包进 App 内的 `Sumpter.app/Contents/Resources/`；源码 monorepo 中位于 `platforms/linux/scripts/`，发布包内为 `scripts/`
+打包进 App 内的 `Sumpter.app/Contents/Resources/`；源码 monorepo 中 macOS 脚本位于
+`platforms/macos/scripts/`、Linux 脚本位于 `platforms/linux/scripts/`，发布包内为 `scripts/`
 下）。支持 zsh 与 bash，两个平台通用。
 
-两个产品的**安全页面**都有一份完整引导（当前是否已生效、三步命令、平台差异、三个陷阱、
-回退命令），命令可直接复制；macOS 那份还带「在 Finder 中显示」直接定位到脚本。
+两个产品的**安全页面**都有一份完整引导（安装命令、平台差异、常见陷阱和回退命令），命令可直接复制；
+macOS 那份还带「在 Finder 中显示」直接定位到脚本。
 
-**先体检，再安装，最后新开终端验证**——三步：
+安装配置器：
 
 ```bash
-# 1) 只读体检:看当前 shell、rc 路径、有没有 settings.json 覆盖陷阱
-./cc-project-attribution.sh status
-
-# 2) 安装(装前想预演就加 --dry-run)
+# 装前想预演就加 --dry-run
 ./cc-project-attribution.sh install
-
-# 3) 新开一个终端窗口,进任意项目发一条消息,去 Admin 统计页看「项目 Token 排行」
 ```
+
+Linux 的 Claude Code 若在另一台机器上运行，可从 **Sumpter Linux listener 的 Base URL** 取得配置器。
+这个 URL 可以是局域网监听地址，也可以是转发该路径的 Nginx HTTPS 地址；不是发布镜像地址：
+
+```bash
+SUMPTER_LISTENER_BASE_URL='http://192.168.1.20:57878'
+SUMPTER_LISTENER_BASE_URL="${SUMPTER_LISTENER_BASE_URL%/}"
+curl --fail --location \
+  "$SUMPTER_LISTENER_BASE_URL/__sumpter/cc-project-attribution.sh" \
+  -o /tmp/cc-project-attribution.sh
+bash /tmp/cc-project-attribution.sh install
+```
+
+如果 listener 配置了 `authToken`，下载时加同一个 Bearer token：
+
+```bash
+SUMPTER_LISTENER_BASE_URL="${SUMPTER_LISTENER_BASE_URL%/}"
+curl --fail --location \
+  -H "Authorization: Bearer $SUMPTER_LISTENER_TOKEN" \
+  "$SUMPTER_LISTENER_BASE_URL/__sumpter/cc-project-attribution.sh" \
+  -o /tmp/cc-project-attribution.sh
+```
+
+Nginx 反代必须把 `__sumpter/cc-project-attribution.sh` 原样转发到 proxy listener，并保留
+`Authorization`/`x-api-key`；脚本只在
+Claude Code 客户端本地执行，不会修改 daemon 主机。
+通过 Nginx 对外提供时建议（跨机器时应）设置非空 `listener.authToken`；不要把无认证的 proxy
+listener 直接暴露到公网。
+
+安装后新开终端，在项目目录发消息即可使用项目统计。
 
 出问题随时回退，装前状态有时间戳备份：
 
@@ -445,14 +481,14 @@ Provider 不需要另填 WebSearch 能力字段。严格识别为 WebSearch 后�
 非 `origin` remote、非 ASCII 目录名这些边角。
 
 **fish 用户**：自动安装只支持 zsh/bash。跑 `./cc-project-attribution.sh fish-snippet` 打印一段
-等价的 fish 配置，粘进 `~/.config/fish/config.fish`（该段未经实测，粘前先 `fish -n` 校验）。
+等价的 fish 配置，粘进 `~/.config/fish/config.fish`。
 
 ### macOS 与 Linux 的差别
 
 | | macOS | Linux |
 |---|---|---|
 | 谁在跑 CC | 本机菜单栏 App 旁边就是 CC | CC 可能在本机，也可能在别的机器上连远程 daemon |
-| 配置器位置 | App 内 `Sumpter.app/Contents/Resources/`（源码构建则是 monorepo 的 `platforms/linux/scripts/`） | 发布包解包后 `/opt/sumpter/scripts/` |
+| 配置器位置 | App 内 `Sumpter.app/Contents/Resources/`（源码构建则是 `platforms/macos/scripts/`） | 发布包解包后 `/opt/sumpter/scripts/`（源码树 `platforms/linux/scripts/`） |
 | 默认 shell | 通常 zsh | 视发行版，zsh 或 bash 都常见 |
 | 看统计 | 菜单栏 App 的「统计」页 | Web Admin 的统计页（`http://<daemon>:57879/admin`） |
 
@@ -492,7 +528,7 @@ curl 风格 `名字: 值`，**一行一个**，三个都可选。但手工设有
 | 现象 | 先查 |
 |---|---|
 | 进程起不来 | 配置路径对不对；是不是只有 `keys.json`；JSON 是否合法；权限是否 0600；`schemaVersion` 是否为 6（旧文件应能自动迁移） |
-| Claude Code 连不上 | `ANTHROPIC_BASE_URL` 是否指向当前 `host:port`；本机 `curl __status` 通不通 |
+| Claude Code 连不上 | `ANTHROPIC_BASE_URL` 是否指向当前 `host:port` |
 | 401 | `authToken` 开了但客户端没带，或带错 |
 | 400 `route_planning` | 没有任何入口的 `mappings` 声明该模型，或声明它的入口全部停用；空 `mappings` 等于不接模型 |
 | Codex 连不上 | `base_url` 是否指向当前 `host:port`（常见带 `/v1`）；模型名是否写在 `mappings`；`authToken` 开了但没配成 API key |
@@ -511,5 +547,4 @@ curl 风格 `名字: 值`，**一行一个**，三个都可选。但手工设有
 3. 向用户要：每个 Provider 入口的 baseURL + key，以及客户端实际会发的模型名。
 4. 写入 `config.json`，确认 `schemaVersion: 6`、顶层是 `endpoints`（没有 `pools`），且至少一条入口为 `enabled: true` 并带覆盖客户端模型的 `mappings`。
 5. 告诉用户怎么设 `ANTHROPIC_BASE_URL`（以及可选 `ANTHROPIC_AUTH_TOKEN`）。接 Codex 时给一份 `~/.codex/config.toml` 的 `model_providers` 片段。
-6. 让用户跑 `curl --noproxy '*' http://127.0.0.1:57878/__status`。
-7. **不要**把 key 写进回复；**不要** `git add` 配置；**不要**改源码。
+6. **不要**把 key 写进回复；**不要** `git add` 配置；**不要**改源码。

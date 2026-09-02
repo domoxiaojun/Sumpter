@@ -23,7 +23,7 @@ Linux 专属边界：
 
 源码树的 Rust 门禁在**仓库根**运行：`cargo fmt` / `check` / `test` / `clippy`，覆盖共享 crate、Linux adapter 和 `sumpterd-linux`。WebUI 在 `platforms/linux/webui/` 跑 `npm ci`、契约测试和生产构建。
 
-`platforms/linux/scripts/cross-build.sh`、`assemble-shared-tree.sh` 和 `release-preflight.sh` 仍按**独立 Linux 发布树**查找 `crates/`、`sumpterd`、`sumpter-core` 等输入，不能当成根 workspace 已经通过的证据。本机交叉构建、GHCR 镜像和真实 systemd 流量必须在目标 Linux 上按本文后半的「原生构建与打包」「真机冒烟」补齐。
+`assemble-shared-tree.sh` 和 `release-preflight.sh` 仍按**独立 Linux 发布树**查找 `crates/`、`sumpterd`、`sumpter-core` 等输入；`cross-build.sh` 已支持根 workspace，但本机交叉构建、GHCR 镜像和真实 systemd 流量仍必须在目标 Linux 上按本文后半的「原生构建与打包」「真机冒烟」补齐。
 
 ## 部署包结构
 
@@ -41,7 +41,7 @@ sumpter-linux-<arch>/
 │   ├── bootstrap-install.sh
 │   ├── bootstrap-uninstall.sh
 │   ├── uninstall.sh
-│   └── cc-project-attribution.sh   # Claude Code 项目统计配置器(可选)
+│   └── cc-project-attribution.sh        # Claude Code 项目统计配置器(可选)
 ├── specs/admin-api.md
 ├── sumpter.service
 ├── sumpter-system.service
@@ -55,13 +55,16 @@ sumpter-linux-<arch>/
 
 ## GitHub Actions 与发布资产
 
-这些 workflow 是 **Linux 发布输入**，位于源码树的 `platforms/linux/.github/workflows/`。当前 monorepo 根目录没有 `.github/`，GitHub 不会发现子目录里的 workflow。要在这个仓库跑 CI / Release，必须把工作流提升到仓库根并改路径；或者在发布阶段把 `platforms/linux/` 当成独立包根。macOS 打包不走这里，本机测试 DMG 用仓库根 `scripts/build-macos-dmg.sh`。
+GitHub 实际执行的 workflow 位于仓库根 `.github/workflows/`，已按当前 monorepo 的根 workspace 和
+`platforms/linux/` 输入适配。`platforms/linux/.github/workflows/` 保留为独立 Linux 发布树的输入，
+不会被当前 monorepo 的 GitHub 自动发现。macOS 发布工作流也位于根 `.github/workflows/`；本机测试
+DMG 用仓库根 `scripts/build-macos-dmg.sh`。
 
 包根视角下的工作流：
 
 - `ci.yml`：pull request 或手动触发；Rust 1.88.0 的 fmt/check/test，以及 WebUI 的 `npm ci`、契约测试与生产构建。普通 push 不会自动消耗 CI 额度。
-- `release.yml`：手动触发只生成 Actions artifact；推送 `v*` tag 时同时创建 GitHub Release。
-- `container.yml`：pull request 只构建不推送；手动触发只构建二进制；推送 `v*` tag 时发布 amd64/arm64 GHCR manifest。
+- `release.yml`：使用同一个已有的 `vX.Y.Z` tag 同时构建 Linux 包、GHCR 镜像和 macOS 包；只有三个构建 job 全部成功后才运行唯一的 publish job。
+- `container.yml`：只做 pull request 和手动的容器打包校验，不推送 GHCR。
 
 Release 固定提供：
 
@@ -577,8 +580,8 @@ docker compose logs --tail=200 sumpter
 docker compose down          # 保留 ./config
 ```
 
-容器内无 systemd。为避免 chown，Compose 默认 `user: "0:0"` + host 网络，权限弱于
-systemd 的 `sumpter` 系统用户。Proxy 绑 `0.0.0.0` 须配 Token/CIDR；Admin 已强制密码，
+容器内无 systemd。为避免 bind mount 的 UID 处理，镜像和 Compose 均不显式指定用户，
+容器默认以 root 运行，权限弱于 systemd 的 `sumpter` 系统用户。Proxy 绑 `0.0.0.0` 须配 Token/CIDR；Admin 已强制密码，
 但非 loopback 公网仍必须置于 HTTPS 之后。
 
 ## 配置中的重试语义
@@ -587,7 +590,11 @@ schema v6 的全局 `retry`：
 
 - `responseTimeoutSeconds:null`：代理不额外限制收到完整响应头的时间。
 - `streamIdleTimeoutSeconds:null`：流式响应可无限空闲。
-- `sessionStickyRetries:2`：同一次请求先在当前粘性调度组完成首次尝试，再额外重试 2 次；
+- `max500Retries:0`：当前入口收到 HTTP 500 后的额外重试次数；0 表示不额外重试。
+- `failoverOn500:true`：HTTP 500 重试耗尽后切换到下一个入口；设为 `false` 则在当前入口直接返回 500。
+- `retryDelaySeconds:null`：不配置透传秒数；设置正数后由 `passThroughRetryDelay` 决定是否返回该秒数并附带 `Retry-After`。
+- `passThroughRetryDelay:true`：将最终失败响应中的 `retry_delay` 与 `Retry-After` 透传给客户端；关闭则隐藏这两个字段。
+- `sessionStickyRetries:2`：同一次请求在当前粘性调度组遇到非 500 可重试故障后，再额外重试 2 次；
   三次都遇到可重试故障后才访问其它调度组。其它组成功后立即把会话改绑到成功组；0 表示首次失败后立即切换。
   WebUI 事件里的「本次已故障转移」表示该请求换过入口，成功组会立即成为后续请求的粘性归属。
 - `maxDeferredRounds:0`：所有可重试故障不设轮数上限（字段名为历史兼容保留）。
@@ -595,7 +602,8 @@ schema v6 的全局 `retry`：
 - `pinnedIPConcurrency`：pinned IP 并发竞速数，必须大于 0。
 - 备用映射的 `failoverTimeoutSeconds` 可省略；存在时必须大于 0，并与全局首响应超时取较小值。
 
-可跨轮的 HTTP 状态为 `401/402/403/429/502/503/504/520-527/529/530`，另含首响应前 Timeout
+可跨轮的 HTTP 状态为 `401/402/403/429/502/503/504/520-527/529/530`；HTTP 500 仅按 `max500Retries`
+在当前入口内重试，是否切换入口由 `failoverOn500` 控制，不进入跨轮无限重试。另含首响应前 Timeout
 和 ConnectionFailed。只有轮数与总时长**同时为 0**才真正无限。轮间按 `0.5s × 1.7` 指数
 退避，数字 `Retry-After` 与退避取较大值，均封顶 30 秒。客户端断开会取消 sleep 和上游任务树；
 499 不计成功或失败。自动测试已覆盖真实 TCP 断开，真实供应商长流仍需在目标 Linux 主机验收。
@@ -625,18 +633,36 @@ TargetFormat 自动保留 Anthropic 原生 `web_search`、为 OpenAI Chat 使用
 或为 Responses 使用内建 `web_search`。Grok 检索仍要求 Responses，固定 OpenAI Chat 入口不会
 被隐式升级。
 
-Responses WebSocket、Realtime / Live、Videos、Files 和 `/v1/models` 尚未接入；其中视频还
-涉及创建后的查询、下载和凭据绑定，不能按普通 HTTP body 透传冒充支持。更完整的使用说明见
-同目录 [`USAGE.md`](USAGE.md#4-协议与路径)（源码树里对应仓库根 `USAGE.md`）。
+Responses WebSocket、Realtime / Live、Files、Videos 与 `/v1/models` 已接入共享 engine：Sumpter 只做统一鉴权、按 mapping 选择 Provider、必要的上游模型名替换、failover 和连接 relay；资源 HTTP 的原始 path/query、请求与响应、二进制内容，以及两类 WebSocket 的 path/query 与文本/二进制/关闭帧都交给上游，不在本地重建协议或改写路径别名。Provider 的实际权限和媒体/Realtime 能力仍需目标上游实测。更完整的使用说明见同目录 [`USAGE.md`](USAGE.md#4-协议与路径)（源码树里对应仓库根 `USAGE.md`）。
 
 想让 Web Admin 的「项目 Token 排行」按项目区分 Claude Code 请求（默认全堆在「未识别项目」），
-在**跑 CC 的机器**上运行 `scripts/cc-project-attribution.sh install`。Web Admin 的**安全**页
+在**跑 CC 的机器**上运行 `scripts/cc-project-attribution.sh install`。Linux 发布包会把它安装到
+`/opt/sumpter/scripts/`（普通用户为 `~/.local/share/sumpter/scripts/`）。如果 CC 在另一台机器，
+可直接从 Linux listener 的 Base URL 下载内置脚本；这个 URL 可以是局域网地址，也可以是转发该路径
+的 Nginx HTTPS 地址。Web Admin 的**安全**页
 有一份完整引导：当前是否已生效、三步命令（可直接复制）、macOS/Linux 与 shell 差异、三个实测
 陷阱、回退命令。细节与原理见 [`USAGE.md` §8](USAGE.md#8-让-claude-code-按项目统计可选)。
 
+```bash
+SUMPTER_LISTENER_BASE_URL='http://192.168.1.20:57878'
+SUMPTER_LISTENER_BASE_URL="${SUMPTER_LISTENER_BASE_URL%/}"
+curl --fail --location \
+  "$SUMPTER_LISTENER_BASE_URL/__sumpter/cc-project-attribution.sh" \
+  -o /tmp/cc-project-attribution.sh
+bash /tmp/cc-project-attribution.sh install
+```
+
+若 listener 配置了 `authToken`，下载命令加 `-H "Authorization: Bearer $SUMPTER_LISTENER_TOKEN"`。
+Nginx 反代需原样转发 `__sumpter/cc-project-attribution.sh` 到 proxy listener，并保留
+`Authorization`/`x-api-key`；脚本始终在 CC 客户端本地执行。
+通过 Nginx 对外提供时建议（跨机器时应）设置非空 `listener.authToken`；不要把无认证的 proxy
+listener 直接暴露到公网。
+
 ## 原生构建与打包
 
-下列脚本以 **Linux 发布树** 为根（包根有自己的 `Cargo.toml`、`crates/` 和 `sumpterd`）。在当前 monorepo 里直接 `cd platforms/linux && ./scripts/cross-build.sh` **不会**构建根 workspace 的 `sumpterd-linux`。发布链适配完成前，先按仓库根 `docs/architecture.md` 做 Cargo 验证；交叉编译与打 tar.gz 仍要有一份组装好的发布树。
+`cross-build.sh` 已同时支持当前 monorepo 和独立 Linux 发布树。在当前 monorepo 根目录运行
+`./platforms/linux/scripts/cross-build.sh` 会构建根 workspace 的 `sumpterd-linux`，并把发布包放到
+`platforms/linux/dist/`；其它安装/卸载脚本仍以打包后的 Linux 发布树为运行根目录。
 
 不依赖 Docker 的双架构 musl 脚本需要人工准备：
 

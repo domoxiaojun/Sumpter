@@ -471,6 +471,22 @@ function CCAttributionGuidePanel() {
           </section>
 
           <section className="cc-guide-section">
+            <h4 className="cc-guide-heading">从 listener Base URL 取得脚本</h4>
+            <div className="cc-guide-command">
+              <code>{CC_ATTRIBUTION_GUIDE.remoteDownload.command}</code>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => copyWithToast(CC_ATTRIBUTION_GUIDE.remoteDownload.command, '远程下载命令', addToast)}
+              >
+                <Icon name="copy" size={13} />
+                <span>复制</span>
+              </button>
+            </div>
+            <p className="cc-guide-note">{CC_ATTRIBUTION_GUIDE.remoteDownload.note}</p>
+          </section>
+
+          <section className="cc-guide-section">
             <h4 className="cc-guide-heading">三步配完</h4>
             <ol className="cc-guide-steps">
               {CC_ATTRIBUTION_GUIDE.steps.map((step) => (

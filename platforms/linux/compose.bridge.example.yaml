@@ -17,7 +17,6 @@ services:
       - "${SUMPTER_ADMIN_PORT:-57879}:57879"
 
     init: true
-    user: "0:0"
     restart: unless-stopped
     stop_signal: SIGTERM
     stop_grace_period: 30s

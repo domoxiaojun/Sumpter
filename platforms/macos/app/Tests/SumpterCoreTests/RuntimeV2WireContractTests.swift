@@ -28,7 +28,17 @@ final class RuntimeV2WireContractTests: XCTestCase {
         let value = try JSONDecoder().decode(AdminWire.RuntimeRetention.self, from: data)
 
         XCTAssertEqual(value.revision, 4)
+        XCTAssertNil(value.maxAgeDays)
         XCTAssertNil(value.storageLimitBytes)
+    }
+
+    func testRuntimeRetentionDecodesTimeAndCapacityDimensions() throws {
+        let data = Data(#"{"revision":5,"maxAgeDays":30,"storageLimitBytes":8388608}"#.utf8)
+        let value = try JSONDecoder().decode(AdminWire.RuntimeRetention.self, from: data)
+
+        XCTAssertEqual(value.revision, 5)
+        XCTAssertEqual(value.maxAgeDays, 30)
+        XCTAssertEqual(value.storageLimitBytes, 8_388_608)
     }
 
     func testRuntimeStorageProbeAllowsLegacyWarningFieldToBeOmitted() throws {
