@@ -264,6 +264,33 @@ fn files_resource_plan_honors_explicit_files_capability() {
 }
 
 #[test]
+fn files_resource_plan_does_not_treat_gpt4o_chat_mapping_as_mixed_media() {
+    let mut xiao = endpoint("xiao", vec![mapping("gpt-4o", "")]);
+    xiao.protocol = EndpointProtocolMode::OpenAI;
+    xiao.priority = 0;
+    let mut cpa = endpoint("cpa", vec![mapping("gpt-live-1-codex", "")]);
+    cpa.protocol = EndpointProtocolMode::OpenAI;
+    cpa.priority = 10;
+    let config = AppConfig {
+        endpoints: vec![xiao, cpa],
+        feature_rules: vec![],
+        listener: ListenerConfig::default(),
+        retry: RetryPolicy::default(),
+        schema_version: SCHEMA_VERSION,
+    }
+    .normalized();
+
+    let plan = RoutePlanner::plan_for_resource_capability(
+        &config,
+        ProviderProtocol::OpenAI,
+        ModelCapability::Files,
+    )
+    .unwrap();
+    assert_eq!(plan.endpoints.len(), 1);
+    assert_eq!(plan.endpoints[0].endpoint_id, "cpa");
+}
+
+#[test]
 fn provider_mapping_allows_wildcard_for_every_endpoint() {
     let mut config = base_config();
     endpoint_mut(&mut config, "qwen")
@@ -1261,6 +1288,34 @@ fn video_intent_does_not_use_the_first_text_provider() {
         rejected,
         RoutePlanError::NoProviderForCapability { .. }
     ));
+}
+
+#[test]
+fn text_wildcard_cannot_steal_video_capability_traffic() {
+    let mut xiao = endpoint("xiao", vec![mapping("*", "stolen")]);
+    xiao.protocol = EndpointProtocolMode::OpenAI;
+    xiao.priority = 0;
+    let mut cpa = endpoint("cpa", vec![mapping("grok-imagine-video", "")]);
+    cpa.protocol = EndpointProtocolMode::OpenAI;
+    cpa.priority = 10;
+    let config = AppConfig {
+        endpoints: vec![xiao, cpa],
+        feature_rules: vec![],
+        listener: ListenerConfig::default(),
+        retry: RetryPolicy::default(),
+        schema_version: SCHEMA_VERSION,
+    }
+    .normalized();
+
+    let plan = RoutePlanner::plan_for_capability(
+        &request_from(json!({"model": "grok-imagine-video"})),
+        &config,
+        ProviderProtocol::OpenAI,
+        ModelCapability::Video,
+    )
+    .unwrap();
+    assert_eq!(plan.endpoints.len(), 1);
+    assert_eq!(plan.endpoints[0].endpoint_id, "cpa");
 }
 
 #[test]

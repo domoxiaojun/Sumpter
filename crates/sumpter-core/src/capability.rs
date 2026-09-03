@@ -55,12 +55,30 @@ pub fn mapping_has_capability(
     client_pattern: &str,
     wanted: ModelCapability,
 ) -> bool {
-    let caps = if declared.is_empty() {
-        inferred_capabilities(client_pattern)
-    } else {
-        declared.to_vec()
-    };
-    caps.contains(&wanted)
+    mapping_serves_capability(declared, client_pattern, client_pattern, wanted)
+}
+
+/// Like [`mapping_has_capability`], but a catch-all text pattern such as `*`
+/// or `gpt-*` cannot inherit Image/Video/Live from the *requested* model name.
+/// `grok-imagine-*` is the exception: the stem is media-family but not
+/// image-vs-video, so the actual request model still decides.
+pub fn mapping_serves_capability(
+    declared: &[ModelCapability],
+    client_pattern: &str,
+    requested_model: &str,
+    wanted: ModelCapability,
+) -> bool {
+    if !declared.is_empty() {
+        return declared.contains(&wanted);
+    }
+    let pattern_caps = inferred_capabilities(client_pattern);
+    if pattern_caps.contains(&wanted) {
+        return true;
+    }
+    if is_ambiguous_media_pattern(client_pattern) {
+        return inferred_capabilities(requested_model).contains(&wanted);
+    }
+    false
 }
 
 pub fn canonical_model_from_pattern(client_pattern: &str) -> String {
@@ -73,13 +91,21 @@ fn is_live_stem(stem: &str) -> bool {
         || stem == "gpt-realtime"
         || stem.starts_with("gpt-realtime-")
         || stem.contains("realtime-preview")
-        // OpenAI's first public Realtime deployments used gpt-4o (and
-        // gpt-4o-mini) as the session model. Keep these names voice-capable
-        // when older configs did not yet carry an explicit capability list;
-        // normal text routing is unaffected because this filter is only used
-        // by voice intent planning.
-        || stem == "gpt-4o"
-        || stem == "gpt-4o-mini"
+}
+
+/// Patterns that cover both image and video (or live) without saying which.
+fn is_ambiguous_media_pattern(client_pattern: &str) -> bool {
+    let cleaned = model_name::clean(client_pattern).to_ascii_lowercase();
+    let stem = cleaned.strip_suffix("-*").unwrap_or(&cleaned);
+    if stem.is_empty() || stem == "*" {
+        return false;
+    }
+    let imagine = stem.contains("imagine");
+    (imagine && !stem.contains("imagine-image") && !stem.contains("imagine-video"))
+        || stem == "sora"
+        || stem == "gpt-image"
+        || stem == "gpt-live"
+        || stem == "gpt-realtime"
 }
 
 fn is_video_stem(stem: &str) -> bool {
@@ -120,6 +146,15 @@ mod tests {
             inferred_capabilities("gpt-live-1-codex"),
             vec![ModelCapability::Live]
         );
+        assert_eq!(inferred_capabilities("gpt-4o"), vec![ModelCapability::Text]);
+        assert_eq!(
+            inferred_capabilities("gpt-4o-mini"),
+            vec![ModelCapability::Text]
+        );
+        assert_eq!(
+            inferred_capabilities("gpt-4o-*"),
+            vec![ModelCapability::Text]
+        );
         assert_eq!(
             inferred_capabilities("claude-fable-5"),
             vec![ModelCapability::Text]
@@ -146,6 +181,30 @@ mod tests {
             &[],
             "grok-imagine-video-*",
             ModelCapability::Video
+        ));
+        assert!(!mapping_serves_capability(
+            &[],
+            "*",
+            "grok-imagine-video",
+            ModelCapability::Video
+        ));
+        assert!(!mapping_serves_capability(
+            &[],
+            "gpt-*",
+            "gpt-realtime",
+            ModelCapability::Live
+        ));
+        assert!(mapping_serves_capability(
+            &[],
+            "grok-imagine-*",
+            "grok-imagine-video-1.5",
+            ModelCapability::Video
+        ));
+        assert!(mapping_serves_capability(
+            &[],
+            "grok-imagine-*",
+            "grok-imagine-image",
+            ModelCapability::Image
         ));
     }
 
