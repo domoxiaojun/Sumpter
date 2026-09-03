@@ -1019,6 +1019,107 @@ impl RoutePlanner {
         })
     }
 
+    /// Plan a resource request against providers that advertise a resource
+    /// capability.  Files are not tied to one conversational model, so an
+    /// endpoint may declare `capabilities: ["files"]` on any mapping and the
+    /// whole endpoint becomes eligible.  For legacy configurations that have
+    /// no explicit Files declaration, prefer endpoints exposing a non-text
+    /// mapping (the usual mixed CPA provider) before falling back to the old
+    /// provider-order behavior.  This keeps existing configs working while
+    /// preventing a text-only first entry from stealing media/resource calls
+    /// when a capable endpoint is present.
+    pub fn plan_for_resource_capability(
+        config: &AppConfig,
+        source_format: ProviderProtocol,
+        capability: crate::capability::ModelCapability,
+    ) -> Result<RoutePlan, RoutePlanError> {
+        let mut endpoints = Self::planned_endpoints(
+            &config.endpoints,
+            RESOURCE_ROUTING_MODEL,
+            source_format,
+            None,
+            None,
+            None,
+            true,
+            true,
+        )
+        .into_iter()
+        .filter(|endpoint| endpoint.protocol != ProviderProtocol::Anthropic)
+        .collect::<Vec<_>>();
+
+        let explicit = config.endpoints.iter().any(|endpoint| {
+            endpoint.enabled
+                && endpoint
+                    .mappings
+                    .iter()
+                    .any(|mapping| mapping.capabilities.contains(&capability))
+        });
+        if explicit {
+            endpoints.retain(|planned| {
+                config
+                    .endpoint(&planned.endpoint_id)
+                    .is_some_and(|endpoint| {
+                        endpoint
+                            .mappings
+                            .iter()
+                            .any(|mapping| mapping.capabilities.contains(&capability))
+                    })
+            });
+        } else if capability == crate::capability::ModelCapability::Files {
+            // No legacy mapping can infer a provider's Files surface from a
+            // model name.  Prefer a mixed media/live endpoint as the least
+            // surprising compatibility choice; if none exists, retain all
+            // configured non-Anthropic providers and let upstream auth/status
+            // determine availability.
+            let mixed_ids = config
+                .endpoints
+                .iter()
+                .filter(|endpoint| endpoint.enabled)
+                .filter(|endpoint| {
+                    endpoint.mappings.iter().any(|mapping| {
+                        let caps = if mapping.capabilities.is_empty() {
+                            crate::capability::inferred_capabilities(&mapping.client_pattern)
+                        } else {
+                            mapping.capabilities.clone()
+                        };
+                        caps.iter().any(|cap| {
+                            matches!(
+                                cap,
+                                crate::capability::ModelCapability::Image
+                                    | crate::capability::ModelCapability::Video
+                                    | crate::capability::ModelCapability::Live
+                            )
+                        })
+                    })
+                })
+                .map(|endpoint| endpoint.id.as_str())
+                .collect::<std::collections::HashSet<_>>();
+            if !mixed_ids.is_empty() {
+                endpoints.retain(|planned| mixed_ids.contains(planned.endpoint_id.as_str()));
+            } else if endpoints.len() > 1 {
+                // A legacy mapping carries no reliable Files signal.  With
+                // multiple credential surfaces, silently choosing the first
+                // text endpoint is worse than an explicit configuration
+                // error (and was the source of Files requests landing on
+                // `xiao`). Keep the single-provider compatibility fallback,
+                // but require `capabilities: ["files"]` when there is a
+                // genuine choice.
+                endpoints.clear();
+            }
+        }
+        if endpoints.is_empty() {
+            return Err(RoutePlanError::NoProviderForCapability {
+                capability: capability.as_str().into(),
+            });
+        }
+        Ok(RoutePlan {
+            client_model: RESOURCE_ROUTING_MODEL.into(),
+            effective_model: RESOURCE_ROUTING_MODEL.into(),
+            feature_rule_id: None,
+            endpoints,
+        })
+    }
+
     /// 入口路径已确定 SourceFormat 的路由规划；不读取 UA，也不从请求体猜测协议。
     pub fn plan_for_source(
         request: &RoutingRequest,

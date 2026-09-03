@@ -25,7 +25,7 @@ use sumpter_core::routing::{RequestPurpose, RouteMode};
 use crate::runtime_store::{RuntimeChange, RuntimeEventListItem};
 
 const API_VERSION: u8 = 3;
-const PROJECTION_VERSION: i64 = 4;
+const PROJECTION_VERSION: i64 = 5;
 const PAGE_SIZES: [usize; 5] = [10, 25, 50, 100, 200];
 const REQUEST_CHAIN_LIMIT: usize = 512;
 const MAX_TREND_POINTS: usize = 240;
@@ -1253,6 +1253,9 @@ struct EventListProjection {
     project_source: Option<String>,
     codex_thread_class: Option<String>,
     attribution_scope: Option<String>,
+    request_method: Option<String>,
+    request_path: Option<String>,
+    route_intent: Option<String>,
 }
 
 fn decode_projection_enum<T: DeserializeOwned>(value: Option<String>) -> Option<T> {
@@ -1292,6 +1295,9 @@ fn event_list_item_from_projection(row: EventListProjection) -> RuntimeEventList
         outcome: decode_projection_enum::<RuntimeEventOutcome>(row.outcome),
         status_code: row.status_code,
         request_id: row.request_id,
+        request_method: row.request_method,
+        request_path: row.request_path,
+        route_intent: row.route_intent,
         session_id,
         client_kind: decode_projection_enum::<ClientKind>(row.client_kind),
         request_purpose: decode_projection_enum::<RequestPurpose>(row.request_purpose),
@@ -1872,6 +1878,7 @@ pub fn events_page_on(
                 source_format,target_format,route_mode,upstream_status_code,\
                 duration_ms,ttfb_ms,failover,project_name,project_source,\
                 codex_thread_class,attribution_scope \
+                ,request_method,request_path,route_intent \
          FROM runtime_events{where_sql} ORDER BY seq DESC LIMIT ? OFFSET ?"
     );
     let events = {
@@ -1910,6 +1917,9 @@ pub fn events_page_on(
                 project_source: row.get(29)?,
                 codex_thread_class: row.get(30)?,
                 attribution_scope: row.get(31)?,
+                request_method: row.get(32)?,
+                request_path: row.get(33)?,
+                route_intent: row.get(34)?,
             })
         })?;
         rows.map(|row| row.map(event_list_item_from_projection))

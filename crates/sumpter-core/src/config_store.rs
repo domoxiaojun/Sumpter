@@ -52,6 +52,24 @@ pub struct StickySessionAssignment {
     pub updated_at: f64,
 }
 
+/// Persistent binding for a stateful data-plane resource (Codex Live call or
+/// OpenAI Video).  It intentionally contains only routing metadata; tokens,
+/// SDP, audio and request bodies never belong on disk.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceBinding {
+    pub endpoint_id: String,
+    pub model: String,
+    pub expires_at: f64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResourceBindingFile {
+    version: u32,
+    bindings: HashMap<String, ResourceBinding>,
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StickySessionFile {
@@ -120,6 +138,10 @@ impl ConfigDir {
 
     pub fn session_affinity_path(&self) -> PathBuf {
         self.root.join("session_affinity.json")
+    }
+
+    pub fn resource_bindings_path(&self) -> PathBuf {
+        self.root.join("resource_bindings.json")
     }
 
     pub fn control_token_path(&self) -> PathBuf {
@@ -466,6 +488,56 @@ impl ConfigDir {
         data.push(b'\n');
         self.ensure_exists()?;
         atomic_write(&self.session_affinity_path(), &data).map(|_| ())
+    }
+
+    /// Load short-lived Live/Video routing bindings. Missing files are an
+    /// empty set; malformed files are surfaced so the caller can refuse to
+    /// overwrite the user's last known-good snapshot.
+    pub fn load_resource_bindings(&self) -> io::Result<HashMap<String, ResourceBinding>> {
+        let path = self.resource_bindings_path();
+        let data = match std::fs::read_to_string(&path) {
+            Ok(data) => data,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(HashMap::new());
+            }
+            Err(error) => return Err(error),
+        };
+        let file: ResourceBindingFile = serde_json::from_str(&data)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        if file.version != 1
+            || file.bindings.iter().any(|(key, binding)| {
+                key.len() > 512
+                    || key.is_empty()
+                    || key.chars().any(char::is_control)
+                    || binding.endpoint_id.trim().is_empty()
+                    || binding.endpoint_id.len() > 256
+                    || binding.endpoint_id.chars().any(char::is_control)
+                    || binding.model.trim().is_empty()
+                    || binding.model.len() > 256
+                    || binding.model.chars().any(char::is_control)
+                    || !binding.expires_at.is_finite()
+            })
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "resource_bindings.json v1 格式无效",
+            ));
+        }
+        Ok(file.bindings)
+    }
+
+    pub fn save_resource_bindings(
+        &self,
+        bindings: &HashMap<String, ResourceBinding>,
+    ) -> io::Result<PersistOutcome> {
+        let mut data = serde_json::to_vec_pretty(&ResourceBindingFile {
+            version: 1,
+            bindings: bindings.clone(),
+        })
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        data.push(b'\n');
+        self.ensure_exists()?;
+        atomic_write(&self.resource_bindings_path(), &data)
     }
 
     /// Read or generate the local control token used by platform adapters.
@@ -1591,5 +1663,33 @@ mod tests {
                 raw
             );
         }
+    }
+
+    #[test]
+    fn resource_bindings_roundtrip_and_reject_corruption_without_overwrite() {
+        let dir = temp_dir("resource-bindings");
+        let mut bindings = HashMap::new();
+        bindings.insert(
+            "video:video_123".into(),
+            ResourceBinding {
+                endpoint_id: "cpa".into(),
+                model: "grok-imagine-video".into(),
+                expires_at: 1234.0,
+            },
+        );
+        let _ = dir.save_resource_bindings(&bindings).unwrap();
+        assert_eq!(dir.load_resource_bindings().unwrap(), bindings);
+        let original = std::fs::read_to_string(dir.resource_bindings_path()).unwrap();
+        std::fs::write(
+            dir.resource_bindings_path(),
+            r#"{"version":1,"bindings":{"video:x":{"endpointID":"","model":"x","expiresAt":1}}}"#,
+        )
+        .unwrap();
+        assert!(dir.load_resource_bindings().is_err());
+        // A failed load must never silently replace the corrupt file.
+        assert_ne!(
+            std::fs::read_to_string(dir.resource_bindings_path()).unwrap(),
+            original
+        );
     }
 }

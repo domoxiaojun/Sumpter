@@ -2975,6 +2975,95 @@ async fn unknown_path_404_shape() {
     assert_eq!(json["path"], "/v1/unknown");
 }
 
+async fn call_get(
+    engine: &Engine,
+    remote: Option<IpAddr>,
+    path: &str,
+    headers: Vec<(String, String)>,
+) -> (u16, Vec<u8>) {
+    let response = engine
+        .handle_request(remote, "GET", path, headers, Bytes::new())
+        .await;
+    let status = response.status().as_u16();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap_or_default();
+    (status, bytes.to_vec())
+}
+
+#[tokio::test]
+async fn models_catalog_is_local_and_does_not_hit_upstream() {
+    let fake = FakeTransport::new();
+    fake.push(
+        "a.example.com",
+        Outcome::Status {
+            status: 200,
+            headers: vec![],
+            chunks: vec![br#"{"object":"list","data":[]}"#.to_vec()],
+        },
+    );
+    let engine = engine_with(two_endpoint_config(), fake.clone());
+    let (status, resp) = call_get(&engine, loopback(), "/v1/models", vec![]).await;
+    assert_eq!(status, 200);
+    let json: Value = serde_json::from_slice(&resp).unwrap();
+    assert_eq!(json["object"], "list");
+    assert!(
+        json["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|model| model["id"] == "claude")
+    );
+    assert!(
+        fake.requests().is_empty(),
+        "catalog must not relay upstream"
+    );
+
+    let (status, resp) = call_get(
+        &engine,
+        loopback(),
+        "/v1/models?client_version=0.149.1",
+        vec![],
+    )
+    .await;
+    assert_eq!(status, 200);
+    let json: Value = serde_json::from_slice(&resp).unwrap();
+    assert!(json.get("data").is_none());
+    assert!(
+        json["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|model| model["slug"] == "claude")
+    );
+    assert!(fake.requests().is_empty());
+}
+
+#[tokio::test]
+async fn models_catalog_requires_inbound_auth_when_configured() {
+    let fake = FakeTransport::new();
+    let mut config = two_endpoint_config();
+    config.listener.auth_token = "listener-secret".into();
+    let engine = engine_with(config, fake.clone());
+    let (status, resp) = call_get(&engine, loopback(), "/v1/models", vec![]).await;
+    assert_eq!(status, 401);
+    let json: Value = serde_json::from_slice(&resp).unwrap();
+    assert_eq!(json["error"], "inbound_auth_required");
+    assert!(fake.requests().is_empty());
+
+    let (status, resp) = call_get(
+        &engine,
+        loopback(),
+        "/v1/models",
+        vec![("authorization".into(), "Bearer listener-secret".into())],
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert!(fake.requests().is_empty());
+    let json: Value = serde_json::from_slice(&resp).unwrap();
+    assert_eq!(json["object"], "list");
+}
+
 #[tokio::test]
 async fn sticky_prefers_last_successful_group() {
     let fake = FakeTransport::new();

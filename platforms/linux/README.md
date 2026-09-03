@@ -633,7 +633,7 @@ TargetFormat 自动保留 Anthropic 原生 `web_search`、为 OpenAI Chat 使用
 或为 Responses 使用内建 `web_search`。Grok 检索仍要求 Responses，固定 OpenAI Chat 入口不会
 被隐式升级。
 
-Responses WebSocket、Realtime / Live、Files、Videos 与 `/v1/models` 已接入共享 engine：Sumpter 只做统一鉴权、按 mapping 选择 Provider、必要的上游模型名替换、failover 和连接 relay；资源 HTTP 的原始 path/query、请求与响应、二进制内容，以及两类 WebSocket 的 path/query 与文本/二进制/关闭帧都交给上游，不在本地重建协议或改写路径别名。Provider 的实际权限和媒体/Realtime 能力仍需目标上游实测。更完整的使用说明见同目录 [`USAGE.md`](USAGE.md#4-协议与路径)（源码树里对应仓库根 `USAGE.md`）。
+Responses WebSocket、Realtime / Live、Files、Videos 与 `/v1/models` 已接入共享 engine。`GET /v1/models` 按本地 mapping 生成目录（Codex `client_version` 返回 `{models:[...]}`），不转发到上游。其余资源 HTTP 与 WebSocket 由 engine 做统一鉴权、按 mapping 选择 Provider、必要的上游模型名替换、failover 和连接 relay；原始 path/query、请求与响应、二进制内容，以及两类 WebSocket 的 path/query 与文本/二进制/关闭帧都交给上游，不在本地重建协议或改写路径别名。Provider 的实际权限和媒体/Realtime 能力仍需目标上游实测。更完整的使用说明见同目录 [`USAGE.md`](USAGE.md#4-协议与路径)（源码树里对应仓库根 `USAGE.md`）。
 
 想让 Web Admin 的「项目 Token 排行」按项目区分 Claude Code 请求（默认全堆在「未识别项目」），
 在**跑 CC 的机器**上运行 `scripts/cc-project-attribution.sh install`。Linux 发布包会把它安装到

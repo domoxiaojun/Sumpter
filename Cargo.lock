@@ -1381,6 +1381,7 @@ dependencies = [
  "futures-util",
  "http",
  "http-body-util",
+ "httpdate",
  "hyper",
  "md-5",
  "rand 0.9.5",

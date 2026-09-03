@@ -19,6 +19,7 @@ tokio = { workspace = true }
 axum = { workspace = true }
 hyper = { workspace = true }
 http = { workspace = true }
+httpdate = { workspace = true }
 http-body-util = { workspace = true }
 bytes = { workspace = true }
 futures-util = { workspace = true }

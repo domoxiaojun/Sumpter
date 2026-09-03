@@ -183,10 +183,25 @@ impl ClientKind {
         }
     }
 
-    /// UA 优先(claude-cli / codex / grok-shell 各有稳定产品名),UA 认不出再按入站方言兜底。
-    /// OpenAI 兼容层入站的未知 UA 记 openai_compat 而非 unknown ——
-    /// 「走哪个兼容层」本身就是排障时最想知道的信息。
+    /// UA 优先(claude-cli / codex / grok-shell 各有稳定产品名),UA 认不出再按
+    /// `Originator` 产品标识判断，最后按入站方言兜底。`Originator` 是 Codex
+    /// Desktop 在部分 WebRTC/Live 请求中唯一稳定的客户端身份；只看 UA 会把
+    /// 这些请求错误记成 `openai_compat`。
+    ///
+    /// OpenAI 兼容层入站的未知 UA 记 openai_compat 而非 unknown ——「走哪个兼容层」
+    /// 本身就是排障时最想知道的信息。
     pub fn detect(user_agent: Option<&str>, openai_inbound: bool) -> Self {
+        Self::detect_with_originator(user_agent, None, openai_inbound)
+    }
+
+    /// Detect a client using both transport identity headers.  The originator
+    /// value is deliberately treated as a product hint (not an authorization
+    /// signal); it is bounded and normalized by the caller/header parser.
+    pub fn detect_with_originator(
+        user_agent: Option<&str>,
+        originator: Option<&str>,
+        openai_inbound: bool,
+    ) -> Self {
         if let Some(ua) = user_agent {
             let ua = ua.trim();
             if ua.starts_with("claude-cli/") {
@@ -200,6 +215,19 @@ impl ClientKind {
             // `grok-pager/...`，所以按 CPA 一样匹配 UA 中的 grok-shell 产品标识。
             if lower.contains("grok-shell") {
                 return Self::GrokBuild;
+            }
+        }
+        if let Some(originator) = originator {
+            let lower = originator.trim().to_ascii_lowercase();
+            // CPA accepts both the desktop product spelling and the CLI/TUI
+            // originators.  Match a token boundary-ish substring so versioned
+            // values such as `Codex Desktop/1.2` continue to work, while not
+            // treating an arbitrary OpenAI originator as Codex.
+            if lower.contains("codex desktop")
+                || lower.contains("codex_cli_rs")
+                || lower.contains("codex-tui")
+            {
+                return Self::Codex;
             }
         }
         if openai_inbound {
@@ -1861,6 +1889,30 @@ pub struct StreamTrace {
     /// Anthropic `stop_reason` 或 OpenAI `finish_reason` 的有界值。
     #[serde(rename = "stopReason", default, skip_serializing_if = "is_none")]
     pub stop_reason: Option<String>,
+    /// 脱敏的原生 WebSocket 连接摘要。帧正文、关闭 reason、SDP 和凭据永不写入。
+    #[serde(rename = "websocketTrace", default, skip_serializing_if = "is_none")]
+    pub websocket_trace: Option<WebSocketTrace>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WebSocketTrace {
+    /// Upstream handshake status (normally 101; an HTTP rejection is kept as
+    /// the received status when the connection never became a relay).
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub handshake_status: Option<i64>,
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub bytes_sent: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub bytes_received: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub client_message_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub upstream_message_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub close_code: Option<i64>,
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub attempt_count: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2058,6 +2110,16 @@ pub struct RuntimeEvent {
     /// 一次客户端请求及其全部上游尝试共享；与每行唯一的 `id` 分工。
     #[serde(rename = "requestID", default, skip_serializing_if = "is_none")]
     pub request_id: Option<String>,
+    /// 入站 HTTP method。只保存规范化后的短 token，不含 header/body。
+    #[serde(rename = "requestMethod", default, skip_serializing_if = "is_none")]
+    pub request_method: Option<String>,
+    /// 入站 URL path；刻意去掉 query，避免把临时 token 或用户参数写入统计。
+    #[serde(rename = "requestPath", default, skip_serializing_if = "is_none")]
+    pub request_path: Option<String>,
+    /// 路径与 Live/Realtime 身份判定得到的稳定意图标签，例如 `responses`、
+    /// `live`、`video`。它描述选路面，不替代 requestPurpose 的业务用途。
+    #[serde(rename = "routeIntent", default, skip_serializing_if = "is_none")]
+    pub route_intent: Option<String>,
     /// 客户端提供的稳定会话标识（例如 Claude Code session header）。
     /// 只保存有界、无控制字符的标识，不保存会话正文。
     #[serde(rename = "sessionID", default, skip_serializing_if = "is_none")]
@@ -2343,6 +2405,9 @@ mod tests {
             pool_id: None,
             request_purpose: None,
             request_id: None,
+            request_method: None,
+            request_path: None,
+            route_intent: None,
             session_id: None,
             status_code: 200,
             timestamp: ts,
@@ -2598,6 +2663,32 @@ mod tests {
     }
 
     #[test]
+    fn client_kind_detects_codex_originator_when_user_agent_is_generic_or_missing() {
+        assert_eq!(
+            ClientKind::detect_with_originator(Some("Mozilla/5.0"), Some("Codex Desktop"), true,),
+            ClientKind::Codex
+        );
+        assert_eq!(
+            ClientKind::detect_with_originator(None, Some("Codex Desktop/1.2"), true),
+            ClientKind::Codex
+        );
+        assert_eq!(
+            ClientKind::detect_with_originator(Some("codex_cli_rs/1.0"), Some("other"), true,),
+            ClientKind::Codex
+        );
+        // UA remains authoritative when it identifies another first-party
+        // client; an untrusted Originator must not override it.
+        assert_eq!(
+            ClientKind::detect_with_originator(
+                Some("claude-cli/2.1.0"),
+                Some("Codex Desktop"),
+                true,
+            ),
+            ClientKind::ClaudeCode
+        );
+    }
+
+    #[test]
     fn client_kind_wire_values_are_stable() {
         // 字符串值是 stats/admin API 契约,Swift 侧按同名解码。
         for (kind, wire) in [
@@ -2688,6 +2779,7 @@ mod tests {
                 ..ResponseUsage::default()
             }),
             stop_reason: Some("end_turn".into()),
+            websocket_trace: None,
         });
         let encoded = serde_json::to_value(&current).unwrap();
         assert_eq!(encoded["streamTrace"]["chunkCount"], 3);
