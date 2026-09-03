@@ -2,6 +2,7 @@
 //! 请求 fixture 按 Claude Code 真实 wire 形状手造(指纹字符串必须逐字对齐)。
 
 use serde_json::{Value, json};
+use sumpter_core::capability::ModelCapability;
 use sumpter_core::config::*;
 use sumpter_core::routing::{
     RESOURCE_ROUTING_MODEL, RouteMode, RoutePlanError, RoutePlanner, RoutingRequest, inspector,
@@ -204,6 +205,62 @@ fn resource_plan_does_not_require_text_model_mapping_or_anthropic_endpoint() {
     assert_eq!(plan.endpoints.len(), 1);
     assert_eq!(plan.endpoints[0].endpoint_id, "openai");
     assert_eq!(plan.endpoints[0].upstream_model, RESOURCE_ROUTING_MODEL);
+}
+
+#[test]
+fn files_resource_plan_prefers_mixed_media_endpoint_over_first_text_provider() {
+    let mut xiao = endpoint("xiao", vec![mapping("gpt-5.6-sol", "")]);
+    xiao.protocol = EndpointProtocolMode::OpenAI;
+    xiao.priority = 0;
+    let mut cpa = endpoint("cpa", vec![mapping("gpt-live-1-codex", "")]);
+    cpa.protocol = EndpointProtocolMode::OpenAI;
+    cpa.priority = 10;
+    let config = AppConfig {
+        endpoints: vec![xiao, cpa],
+        feature_rules: vec![],
+        listener: ListenerConfig::default(),
+        retry: RetryPolicy::default(),
+        schema_version: SCHEMA_VERSION,
+    }
+    .normalized();
+
+    let plan = RoutePlanner::plan_for_resource_capability(
+        &config,
+        ProviderProtocol::OpenAI,
+        ModelCapability::Files,
+    )
+    .unwrap();
+    assert_eq!(plan.endpoints.len(), 1);
+    assert_eq!(plan.endpoints[0].endpoint_id, "cpa");
+}
+
+#[test]
+fn files_resource_plan_honors_explicit_files_capability() {
+    let mut files_mapping = mapping("gpt-5.6-sol", "");
+    files_mapping.capabilities = vec![ModelCapability::Files];
+    let mut xiao = endpoint("xiao", vec![files_mapping]);
+    xiao.protocol = EndpointProtocolMode::OpenAI;
+    xiao.priority = 0;
+    let mut cpa = endpoint("cpa", vec![mapping("gpt-live-1-codex", "")]);
+    cpa.protocol = EndpointProtocolMode::OpenAI;
+    cpa.priority = 10;
+    let config = AppConfig {
+        endpoints: vec![xiao, cpa],
+        feature_rules: vec![],
+        listener: ListenerConfig::default(),
+        retry: RetryPolicy::default(),
+        schema_version: SCHEMA_VERSION,
+    }
+    .normalized();
+
+    let plan = RoutePlanner::plan_for_resource_capability(
+        &config,
+        ProviderProtocol::OpenAI,
+        ModelCapability::Files,
+    )
+    .unwrap();
+    assert_eq!(plan.endpoints.len(), 1);
+    assert_eq!(plan.endpoints[0].endpoint_id, "xiao");
 }
 
 #[test]

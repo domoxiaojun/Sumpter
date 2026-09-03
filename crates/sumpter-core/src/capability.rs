@@ -16,11 +16,10 @@ pub enum ModelCapability {
     /// Realtime / Live 语音面。由 `has_exact_codex_live_mapping` 消费,用来确认某个
     /// 入口真的声明了 Live 模型,而不是靠名字猜。
     Live,
-    /// Files 资源面。**可以在 mapping 里声明,但当前不参与路由**:Files 与 Models
-    /// 是 provider 面的资源 API,按凭据而不是按文本模型映射选入口(见
-    /// `RoutePlanner::plan_for_resource`)。保留这个取值是因为它属于 config 的
-    /// camelCase wire 契约,删掉会让已声明 `capabilities: ["files"]` 的配置反序列化
-    /// 失败。
+    /// Files 资源面。显式 `capabilities: ["files"]` 时由
+    /// `RoutePlanner::plan_for_resource_capability` 选入口；未声明时优先混合
+    /// 媒体/Live 入口，再回退到非 Anthropic 入口顺序。GET `/v1/models` 不走这条
+    /// 路径，由数据面按 mapping 生成本地目录。
     Files,
 }
 
@@ -74,6 +73,13 @@ fn is_live_stem(stem: &str) -> bool {
         || stem == "gpt-realtime"
         || stem.starts_with("gpt-realtime-")
         || stem.contains("realtime-preview")
+        // OpenAI's first public Realtime deployments used gpt-4o (and
+        // gpt-4o-mini) as the session model. Keep these names voice-capable
+        // when older configs did not yet carry an explicit capability list;
+        // normal text routing is unaffected because this filter is only used
+        // by voice intent planning.
+        || stem == "gpt-4o"
+        || stem == "gpt-4o-mini"
 }
 
 fn is_video_stem(stem: &str) -> bool {

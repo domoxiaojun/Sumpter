@@ -30,6 +30,7 @@ tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["ws"] }
 hyper = "1"
 http = "1"
+httpdate = "1"
 http-body-util = "0.1"
 bytes = "1"
 futures-util = "0.3"

@@ -463,3 +463,21 @@ CPA 对 `POST /v1/live`、`POST /v1/realtime`、`POST /v1/realtime/calls` 使用
   与 `cargo check --workspace --locked`。
 - [x] ✅ 3. 生成隔离 arm64 DMG；未替换 `/Applications/Sumpter.app`。完整测试门禁仍有
   一个与本次改动无关的既有桥接断言失败，因此该 DMG 使用 `--skip-tests` 构建。
+
+## 本轮：闭环意图路由、归因与故障观测（2026-09-04）
+
+用户反馈仍有以下未闭环项：Codex Originator 归因、Realtime/Live 混淆、Videos
+multipart 模型读取、Files/Models 能力选路、本地 Models 目录、资源绑定重启恢复、
+拒绝事件上下文，以及 endpoint+model 冷却和 WebSocket 指标。实现保持 raw 报文透传，
+只在代理侧做认证、意图识别、能力过滤、绑定和重试调度；不替换已安装 App。
+
+- [ ] 1. 将 `Originator: Codex Desktop` 纳入 `ClientKind` 判定并补回归测试。
+- [ ] 2. 统一 `/v1/live`、`/v1/realtime` 的身份/模型/能力判定，标准 Realtime 不再
+  无条件改成 Codex Live；所有语音候选必须有 `live` capability。
+- [ ] 3. 从 Videos multipart 表单读取 `model`，并补指定模型路由测试。
+- [x] ✅ 4. 让 Files 按资源能力规划；`GET /v1/models` 改回本地 mapping 目录（OpenAI list + Codex `client_version` 形状），不再透传到第一个非 Anthropic 入口。
+- [ ] 5. 将 Live/Video 绑定持久化到 `resource_bindings.json`，启动加载、过期清理、
+  原子写入和重启恢复可测试。
+- [ ] 6. 被拒事件记录有界的 method/path/intent，并同步 runtime 投影与 wire。
+- [ ] 7. 增加 endpoint+model 冷却与 Retry-After 调度；补 WebSocket 脱敏指标字段。
+- [ ] 8. 运行格式化、workspace 测试和 clippy；只报告源码验证，不宣称安装态生效。

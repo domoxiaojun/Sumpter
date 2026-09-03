@@ -206,6 +206,10 @@ Provider 鉴权。
 唯一的窄例外是 Codex `/v1/live` bootstrap：`application/sdp`、`text/plain` 或 Codex
 multipart 请求会封装成 `sdp + session.type=quicksilver` JSON，默认模型为
 `gpt-live-1-codex`，再交给匹配该模型的 Provider。公开 `/v1/realtime` 仍是原生透传。
+另一个例外是 `GET /v1/models`（以及 `/models`、`/openai/v1/models` 和带模型 id 的子路径）：
+按当前启用入口的 `mappings` 生成本地目录，不转发到上游。普通 OpenAI 客户端拿到
+`{object:"list",data:[...]}`；Codex Desktop/CLI 带 `client_version` 时拿到 `{models:[...]}`。
+这样 Codex 的目录探测不会打到排序最前的任意 OpenAI 入口。
 Live/Realtime 只接受可用 Provider 上的精确 mapping，不使用 `*` 通配或 Anthropic 文本入口；
 缺少精确 Live mapping 时返回 `no_live_provider`，避免语音请求误发到普通模型。
 
@@ -220,7 +224,6 @@ bootstrap 封装除外）：
 - `POST /v1/responses`、`GET /v1/responses` WebSocket
 - `GET/POST /v1/realtime` 及其任意子路径
 - `GET/POST/DELETE /v1/files`、`/v1/videos` 及资源查询或内容下载
-- `GET /v1/models` 或任何其它模型目录路径
 - 未知的厂商路径、二进制请求和非 JSON 请求
 
 WebSocket 只按 Upgrade 请求建立统一的双向 relay；文本、二进制、ping/pong 和关闭帧不解析、不

@@ -755,10 +755,9 @@ async fn unknown_codex_live_sideband_call_returns_session_expired() {
 
 #[tokio::test]
 async fn cpa_resource_paths_preserve_dynamic_suffix_and_http_method() {
-    let transport = Arc::new(ReplayTransport::new([
-        Ok(ReplayReply::ok(br#"{"id":"file_123"}"#.to_vec())),
-        Ok(ReplayReply::ok(br#"{"object":"list"}"#.to_vec())),
-    ]));
+    let transport = Arc::new(ReplayTransport::new([Ok(ReplayReply::ok(
+        br#"{"id":"file_123"}"#.to_vec(),
+    ))]));
     let engine = Engine::new(
         config_with_base("https://provider.invalid", "openai"),
         None,
@@ -799,13 +798,22 @@ async fn cpa_resource_paths_preserve_dynamic_suffix_and_http_method() {
         .await
         .expect("model list");
     assert_eq!(models.status().as_u16(), 200);
+    let models_json: serde_json::Value =
+        serde_json::from_slice(&models.bytes().await.expect("model list body"))
+            .expect("model list JSON");
+    assert_eq!(models_json["object"], "list");
+    assert!(
+        models_json["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|model| model["id"] == "gpt-4o")
+    );
 
     let calls = transport.calls();
-    assert_eq!(calls.len(), 2);
+    assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].method, "DELETE");
     assert_eq!(calls[0].path_and_query, "/v1/files/file_123");
-    assert_eq!(calls[1].method, "GET");
-    assert_eq!(calls[1].path_and_query, "/v1/models?cursor=next");
 
     handle.shutdown().await;
 }

@@ -13,11 +13,11 @@
 - 默认数据面 `http://127.0.0.1:57878`
 - 入口是扁平的 `endpoints[]`，每个入口必须用 `mappings[]` 声明承接的客户端模型
 - 同一次会话尽量粘在同一 `stickyGroup`，可重试故障后再换组
-- 数据面通常不重建协议：任意 HTTP 方法/路径都按原始请求透传给选定 Provider；Codex `/v1/live` bootstrap 是 quicksilver 封装特例；WebSocket Upgrade 统一双向 relay
+- 数据面通常不重建协议：任意 HTTP 方法/路径都按原始请求透传给选定 Provider；`GET /v1/models` 按 mapping 生成本地目录，Codex `/v1/live` bootstrap 是 quicksilver 封装特例；WebSocket Upgrade 统一双向 relay
 - 密钥、Admin 密码、请求体和诊断捕获只留在本机受限文件里
 
-OpenAI 兼容客户端的 `/v1/models`、Files/Videos 资源查询与下载、Responses WebSocket 和公开
-`/v1/realtime` 都走同一条透传链。Codex 私有 `/v1/live` bootstrap 是唯一窄例外：Sumpter 会把
+OpenAI 兼容客户端的 Files/Videos 资源查询与下载、Responses WebSocket 和公开
+`/v1/realtime` 都走同一条透传链。`GET /v1/models` 按本地 mapping 生成目录，不转发到上游；Codex 带 `client_version` 时返回 `{models:[...]}`。Codex 私有 `/v1/live` bootstrap 是另一处窄例外：Sumpter 会把
 SDP/multipart 封装为 quicksilver JSON 后交给配置的 Live mapping（默认 `gpt-live-1-codex`）。
 Realtime/Live WebSocket 会先完成上游握手再向客户端返回 `101`；ephemeral client-secret
 返回的 session 配置会继续用于 `session.update` 和后续 calls 请求。

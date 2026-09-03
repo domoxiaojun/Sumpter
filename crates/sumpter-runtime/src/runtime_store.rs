@@ -25,7 +25,7 @@ use sumpter_core::events::{
 use sumpter_core::routing::{RESOURCE_ROUTING_MODEL, RequestPurpose, RouteMode};
 
 const SCHEMA_VERSION: i64 = 3;
-const PROJECTION_VERSION: i64 = 4;
+const PROJECTION_VERSION: i64 = 5;
 const PROJECTION_BACKFILL_BATCH: usize = 500;
 const BATCH_EVENTS: usize = 64;
 const BATCH_BYTES: usize = 256 * 1024;
@@ -147,6 +147,9 @@ struct EventProjection {
     token_accounting_semantics: &'static str,
     token_accounting_quality: &'static str,
     tool_calls_json: Option<String>,
+    request_method: Option<String>,
+    request_path: Option<String>,
+    route_intent: Option<String>,
 }
 
 impl EventProjection {
@@ -264,6 +267,9 @@ impl EventProjection {
                     .collect::<Vec<_>>();
                 (!bounded.is_empty()).then(|| serde_json::to_string(&bounded).unwrap_or_default())
             }),
+            request_method: event.request_method.clone(),
+            request_path: event.request_path.clone(),
+            route_intent: event.route_intent.clone(),
         }
     }
 }
@@ -347,6 +353,12 @@ pub struct RuntimeEventListItem {
     pub status_code: i64,
     #[serde(rename = "requestID")]
     pub request_id: Option<String>,
+    #[serde(rename = "requestMethod")]
+    pub request_method: Option<String>,
+    #[serde(rename = "requestPath")]
+    pub request_path: Option<String>,
+    #[serde(rename = "routeIntent")]
+    pub route_intent: Option<String>,
     #[serde(rename = "sessionID")]
     pub session_id: Option<String>,
     pub client_kind: Option<ClientKind>,
@@ -423,6 +435,9 @@ impl RuntimeEventListItem {
             outcome: event.outcome,
             status_code: event.status_code,
             request_id: event.request_id,
+            request_method: event.request_method,
+            request_path: event.request_path,
+            route_intent: event.route_intent,
             session_id: event.session_id,
             client_kind: event.client_kind,
             request_purpose: event.request_purpose,
@@ -907,6 +922,9 @@ fn ensure_v2_schema(connection: &mut Connection) -> rusqlite::Result<()> {
         ("tool_calls_json", "TEXT"),
         ("codex_thread_class", "TEXT"),
         ("attribution_scope", "TEXT"),
+        ("request_method", "TEXT"),
+        ("request_path", "TEXT"),
+        ("route_intent", "TEXT"),
     ];
     let transaction = connection.transaction()?;
     for (name, definition) in columns {
@@ -2227,7 +2245,8 @@ fn update_event_projection(
             reasoning_tokens=?30,uncached_input_tokens=?31,processed_input_tokens=?32,
             processed_total_tokens=?33,token_accounting_semantics=?34,
             token_accounting_quality=?35,tool_calls_json=?36
-            ,codex_thread_class=?37,attribution_scope=?38
+            ,codex_thread_class=?37,attribution_scope=?38,request_method=?39,
+            request_path=?40,route_intent=?41
          WHERE seq=?1",
         params![
             seq,
@@ -2268,6 +2287,9 @@ fn update_event_projection(
             projection.tool_calls_json,
             projection.codex_thread_class,
             projection.attribution_scope,
+            projection.request_method,
+            projection.request_path,
+            projection.route_intent,
         ],
     )?;
     Ok(())
@@ -2543,12 +2565,12 @@ fn write_batch(
                 output_tokens,cache_read_input_tokens,cache_creation_input_tokens,reasoning_tokens,
                 uncached_input_tokens,processed_input_tokens,processed_total_tokens,
                 token_accounting_semantics,token_accounting_quality,tool_calls_json
-                ,codex_thread_class,attribution_scope
+                ,codex_thread_class,attribution_scope,request_method,request_path,route_intent
              ) VALUES(
                 ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?16,
                 ?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,
                 ?32,?33,?34,?35,?36,?37,?38,?39,?40,?41,?42,?43,?44,?45,?46,
-                ?47,?48,?49,?50,?51,?52,?53
+                ?47,?48,?49,?50,?51,?52,?53,?54,?55,?56
              )
              ON CONFLICT(event_id) DO UPDATE SET
                 change_seq=excluded.change_seq,payload_json=excluded.payload_json,
@@ -2583,7 +2605,10 @@ fn write_batch(
                 token_accounting_quality=excluded.token_accounting_quality,
                 tool_calls_json=excluded.tool_calls_json,
                 codex_thread_class=excluded.codex_thread_class,
-                attribution_scope=excluded.attribution_scope",
+                attribution_scope=excluded.attribution_scope,
+                request_method=excluded.request_method,
+                request_path=excluded.request_path,
+                route_intent=excluded.route_intent",
             params![
                 message.seq,
                 message.change_seq,
@@ -2638,6 +2663,9 @@ fn write_batch(
                 projection.tool_calls_json,
                 projection.codex_thread_class,
                 projection.attribution_scope,
+                projection.request_method,
+                projection.request_path,
+                projection.route_intent,
             ],
         )?;
         mark_event_hourly_rollup_dirty(&transaction, &message.event)?;
