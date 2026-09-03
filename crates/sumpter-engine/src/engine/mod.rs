@@ -3399,6 +3399,11 @@ impl Engine {
                 }
             };
             for (name, value) in websocket_upstream_headers(headers) {
+                if route_intent == RealtimeRouteIntent::StandardRealtime
+                    && name.eq_ignore_ascii_case("openai-alpha")
+                {
+                    continue;
+                }
                 if let Ok(name) = http::header::HeaderName::from_bytes(name.as_bytes())
                     && let Ok(value) = http::header::HeaderValue::from_str(&value)
                 {
@@ -3606,7 +3611,7 @@ impl Engine {
                     &[("error", "inbound_auth_required")],
                 );
             }
-            return local_models_response(&config, path, query);
+            return local_models_response(&config, path, query, &headers);
         }
 
         match path {
@@ -4562,6 +4567,35 @@ impl Engine {
         // 但这是正常的 OpenAI 请求形状，不能误报为 Claude 指纹失配。
         let unmatched_no_tools =
             client_kind == ClientKind::ClaudeCode && inspector::is_unmatched_no_tools(&request);
+        let media_passthrough = client_out.as_ref().is_some_and(|client| {
+            matches!(
+                client.passthrough_kind,
+                PassthroughKind::ImagesGenerations
+                    | PassthroughKind::ImagesEdits
+                    | PassthroughKind::Videos
+                    | PassthroughKind::Files
+                    | PassthroughKind::Realtime
+                    | PassthroughKind::Models
+                    | PassthroughKind::Raw
+            )
+        });
+        if !media_passthrough && is_media_only_conversation_model(&request.model) {
+            let message = "image and video models are only supported on /v1/images and /v1/videos";
+            self.record_rejected_client_with_metadata(
+                400,
+                message,
+                Some(request.model.clone()),
+                Some(purpose),
+                client_kind,
+                codex_metadata.clone(),
+                ClientDeclaredMetadata::from_headers(&headers),
+                Some(source_format),
+            );
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                &[("error", "invalid_request"), ("message", message)],
+            );
+        }
         // dialect 入站(OpenAI chat/Responses)有两种归宿:落到同协议上游可以按字节
         // 透传,落到 Anthropic 上游必须走翻译面。所以不能一看到 passthrough body 就
         // 认定透传 —— `plan_for_passthrough` 不做协议 gate,会把 route_mode 恒定压成
@@ -7958,11 +7992,54 @@ fn supports_extended_reasoning_levels(client_version: &str) -> bool {
     (major, minor, patch) >= (0, 144, 0)
 }
 
+fn percent_decode_query_component(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                out.push(' ');
+                index += 1;
+            }
+            b'%' if index + 2 < bytes.len() => {
+                let hi = bytes[index + 1];
+                let lo = bytes[index + 2];
+                if let (Some(high), Some(low)) = (from_hex_digit(hi), from_hex_digit(lo)) {
+                    out.push(char::from((high << 4) | low));
+                    index += 3;
+                } else {
+                    out.push('%');
+                    index += 1;
+                }
+            }
+            byte => {
+                out.push(char::from(byte));
+                index += 1;
+            }
+        }
+    }
+    out
+}
+
+fn from_hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
 fn query_value<'a>(query: &'a str, key: &str) -> Option<&'a str> {
     query.split('&').find_map(|pair| {
         let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
-        (name == key).then_some(value)
+        (name == key || percent_decode_query_component(name) == key).then_some(value)
     })
+}
+
+fn decoded_query_value(query: &str, key: &str) -> Option<String> {
+    query_value(query, key).map(percent_decode_query_component)
 }
 
 fn path_without_query(path_and_query: &str) -> &str {
@@ -8062,7 +8139,7 @@ fn collect_local_models(
         for mapping in &endpoint.mappings {
             let model =
                 sumpter_core::capability::canonical_model_from_pattern(&mapping.client_pattern);
-            if model.is_empty() {
+            if model.is_empty() || model == "*" || model.contains('*') {
                 continue;
             }
             if requested_id.is_some_and(|id| id != model) {
@@ -8094,18 +8171,24 @@ fn collect_local_models(
 }
 
 fn openai_model_object(model: &LocalModelEntry) -> Value {
-    let capabilities = model
-        .capabilities
-        .iter()
-        .map(|capability| capability.as_str())
-        .collect::<Vec<_>>();
     json!({
         "id": model.id,
         "object": "model",
         "created": 0,
         "owned_by": "sumpter",
-        "capabilities": capabilities,
     })
+}
+
+fn is_media_only_conversation_model(model: &str) -> bool {
+    let capabilities = sumpter_core::capability::inferred_capabilities(model);
+    let media = capabilities.iter().any(|capability| {
+        matches!(
+            capability,
+            sumpter_core::capability::ModelCapability::Image
+                | sumpter_core::capability::ModelCapability::Video
+        )
+    });
+    media && !capabilities.contains(&sumpter_core::capability::ModelCapability::Text)
 }
 
 fn is_codex_chat_model(capabilities: &[sumpter_core::capability::ModelCapability]) -> bool {
@@ -8150,18 +8233,12 @@ fn codex_reasoning_levels(client_version: &str) -> Vec<Value> {
 }
 
 fn codex_model_entry(model: &LocalModelEntry, client_version: &str) -> Value {
-    let capabilities = model
-        .capabilities
-        .iter()
-        .map(|capability| capability.as_str())
-        .collect::<Vec<_>>();
     let mut entry = json!({
         "slug": model.id,
         "display_name": model.id,
         "description": model.id,
         "prefer_websockets": false,
         "service_tiers": [],
-        "capabilities": capabilities,
     });
     if is_codex_chat_model(&model.capabilities) {
         entry["input_modalities"] = json!(["text"]);
@@ -8173,10 +8250,32 @@ fn codex_model_entry(model: &LocalModelEntry, client_version: &str) -> Value {
     entry
 }
 
+fn grok_model_object(model: &LocalModelEntry) -> Value {
+    json!({
+        "id": model.id,
+        "model": model.id,
+        "name": model.id,
+        "api_backend": if is_codex_chat_model(&model.capabilities) {
+            "responses"
+        } else {
+            "chat"
+        },
+    })
+}
+
+fn anthropic_model_object(model: &LocalModelEntry) -> Value {
+    json!({
+        "id": model.id,
+        "type": "model",
+        "display_name": model.id,
+    })
+}
+
 fn local_models_json(
     config: &AppConfig,
     path: &str,
     query: Option<&str>,
+    headers: &[(String, String)],
 ) -> Result<Value, StatusCode> {
     let requested_capability = query
         .and_then(|query| query_value(query, "capability"))
@@ -8196,12 +8295,38 @@ fn local_models_json(
         };
         return Ok(openai_model_object(model));
     }
-    if let Some(client_version) = query.and_then(|query| query_value(query, "client_version")) {
+    if let Some(client_version) =
+        query.and_then(|query| decoded_query_value(query, "client_version"))
+    {
         return Ok(json!({
             "models": models
                 .iter()
-                .map(|model| codex_model_entry(model, client_version))
+                .map(|model| codex_model_entry(model, &client_version))
                 .collect::<Vec<_>>(),
+        }));
+    }
+    let user_agent = header_value(headers, "user-agent").unwrap_or("");
+    let grok_shell = user_agent.to_ascii_lowercase().contains("grok-shell");
+    let claude_cli = user_agent.starts_with("claude-cli/")
+        || header_value(headers, "anthropic-version").is_some();
+    if grok_shell {
+        return Ok(json!({
+            "object": "list",
+            "data": models.iter().map(grok_model_object).collect::<Vec<_>>(),
+        }));
+    }
+    if claude_cli {
+        let data = models
+            .iter()
+            .map(anthropic_model_object)
+            .collect::<Vec<_>>();
+        let first_id = data.first().and_then(|value| value["id"].as_str());
+        let last_id = data.last().and_then(|value| value["id"].as_str());
+        return Ok(json!({
+            "data": data,
+            "has_more": false,
+            "first_id": first_id,
+            "last_id": last_id,
         }));
     }
     Ok(json!({
@@ -8210,8 +8335,13 @@ fn local_models_json(
     }))
 }
 
-fn local_models_response(config: &AppConfig, path: &str, query: Option<&str>) -> Response {
-    match local_models_json(config, path, query) {
+fn local_models_response(
+    config: &AppConfig,
+    path: &str,
+    query: Option<&str>,
+    headers: &[(String, String)],
+) -> Response {
+    match local_models_json(config, path, query, headers) {
         Ok(body) => json_response(StatusCode::OK, &body),
         Err(StatusCode::NOT_FOUND) => {
             error_response(StatusCode::NOT_FOUND, &[("error", "model_not_found")])
@@ -8242,8 +8372,9 @@ fn has_exact_realtime_mapping(config: &AppConfig, endpoint_id: &str, model: &str
         endpoint.mappings.iter().any(|mapping| {
             (sumpter_core::model_name::clean(&mapping.client_pattern) == model
                 || sumpter_core::model_name::pattern_matches(&mapping.client_pattern, &model))
-                && sumpter_core::capability::mapping_has_capability(
+                && sumpter_core::capability::mapping_serves_capability(
                     &mapping.capabilities,
+                    &mapping.client_pattern,
                     &model,
                     sumpter_core::capability::ModelCapability::Live,
                 )
@@ -8401,91 +8532,44 @@ enum RealtimeRouteIntent {
     StandardRealtime,
 }
 
-/// Decide which voice protocol a request is asking for.  The path alone is
-/// insufficient because OpenAI's public Realtime API and Codex Desktop's
-/// Quicksilver bootstrap both use `/v1/realtime`; identity and explicit model
-/// markers are therefore considered before the default.  A generic request
-/// with no marker defaults to standard `gpt-realtime`, never to the private
-/// Codex Live model.
+/// CPA uses path+method, not the leaked chat model, to choose Quicksilver:
+/// POST `/v1/live`, POST `/v1/realtime`, POST `/v1/realtime/calls` are Live.
+/// GET `/v1/realtime` without `call_id` is the public Realtime WebSocket.
 fn classify_realtime_intent(
     method: &str,
     path_and_query: &str,
-    requested: Option<&str>,
-    sideband_model: Option<&str>,
-    secret_model: Option<&str>,
-    client_kind: ClientKind,
+    _requested: Option<&str>,
+    _sideband_model: Option<&str>,
+    _secret_model: Option<&str>,
+    _client_kind: ClientKind,
     body_codex_live: bool,
 ) -> RealtimeRouteIntent {
     let path = path_without_query(path_and_query);
+    let query = path_and_query
+        .split_once('?')
+        .map_or("", |(_, query)| query);
     if is_codex_live_path(path)
+        || is_codex_live_family_path(path)
         || is_codex_live_sideband_target(path_and_query)
-        || query_value(
-            path_and_query
-                .split_once('?')
-                .map_or("", |(_, query)| query),
-            "intent",
-        )
-        .is_some_and(|value| value.eq_ignore_ascii_case("quicksilver"))
-        || query_value(
-            path_and_query
-                .split_once('?')
-                .map_or("", |(_, query)| query),
-            "architecture",
-        )
-        .is_some_and(|value| value.eq_ignore_ascii_case("avas"))
+        || query_value(query, "intent")
+            .is_some_and(|value| value.eq_ignore_ascii_case("quicksilver"))
+        || query_value(query, "architecture")
+            .is_some_and(|value| value.eq_ignore_ascii_case("avas"))
         || body_codex_live
     {
         return RealtimeRouteIntent::CodexLive;
     }
-
-    // An explicit public model wins over a generic Codex identity. This lets
-    // a Codex-based client intentionally use the standard Realtime API.
-    let explicit_model = requested
-        .or(sideband_model)
-        .or(secret_model)
-        .map(str::trim)
-        .filter(|model| !model.is_empty());
-    if let Some(model) = explicit_model {
-        let cleaned = sumpter_core::model_name::clean(model).to_ascii_lowercase();
-        if cleaned == request_build::DEFAULT_CODEX_LIVE_MODEL {
-            return RealtimeRouteIntent::CodexLive;
-        }
-        if cleaned == request_build::DEFAULT_REALTIME_MODEL
-            || cleaned.starts_with("gpt-realtime-")
-            || cleaned.contains("realtime-preview")
-        {
-            return RealtimeRouteIntent::StandardRealtime;
-        }
-        let live_capable = sumpter_core::capability::inferred_capabilities(model)
-            .contains(&sumpter_core::capability::ModelCapability::Live);
-        if live_capable {
-            return if client_kind == ClientKind::Codex && is_codex_live_path(path) {
-                RealtimeRouteIntent::CodexLive
-            } else {
-                RealtimeRouteIntent::StandardRealtime
-            };
-        }
-        // Codex Desktop commonly leaks its surrounding chat model (for
-        // example `claude-fable-5`) on Live/Realtime root bootstrap. Treat
-        // that as Live so a text-only first provider cannot steal it.
-        if client_kind == ClientKind::Codex
-            || is_codex_live_path(path)
-            || is_codex_live_root_realtime_path(path)
-        {
-            return RealtimeRouteIntent::CodexLive;
-        }
-        return RealtimeRouteIntent::StandardRealtime;
+    if is_codex_live_root_realtime_path(path)
+        && query_value(query, "call_id").is_some_and(|value| !value.trim().is_empty())
+    {
+        return RealtimeRouteIntent::CodexLive;
     }
-
-    if client_kind == ClientKind::Codex {
-        RealtimeRouteIntent::CodexLive
-    } else if method.eq_ignore_ascii_case("POST") && is_realtime_call_bootstrap_path(path) {
-        // Public `/v1/realtime/calls` without a model is a standard Realtime
-        // call; callers that want Quicksilver must carry an explicit marker.
-        RealtimeRouteIntent::StandardRealtime
-    } else {
-        RealtimeRouteIntent::StandardRealtime
+    if method.eq_ignore_ascii_case("POST")
+        && (is_codex_live_root_realtime_path(path) || is_realtime_call_bootstrap_path(path))
+    {
+        return RealtimeRouteIntent::CodexLive;
     }
+    RealtimeRouteIntent::StandardRealtime
 }
 
 fn realtime_route_model(
@@ -9002,7 +9086,31 @@ mod protocol_tests {
                 ClientKind::OpenaiCompat,
                 false,
             ),
+            RealtimeRouteIntent::CodexLive
+        );
+        assert_eq!(
+            classify_realtime_intent(
+                "GET",
+                "/v1/realtime?model=gpt-realtime",
+                Some(request_build::DEFAULT_REALTIME_MODEL),
+                None,
+                None,
+                ClientKind::OpenaiCompat,
+                false,
+            ),
             RealtimeRouteIntent::StandardRealtime
+        );
+        assert_eq!(
+            classify_realtime_intent(
+                "GET",
+                "/v1/realtime?call_id=call-1",
+                None,
+                None,
+                None,
+                ClientKind::OpenaiCompat,
+                false,
+            ),
+            RealtimeRouteIntent::CodexLive
         );
         assert_eq!(
             classify_realtime_intent(
@@ -9014,7 +9122,7 @@ mod protocol_tests {
                 ClientKind::OpenaiCompat,
                 false,
             ),
-            RealtimeRouteIntent::StandardRealtime
+            RealtimeRouteIntent::CodexLive
         );
         assert_eq!(
             classify_realtime_intent(
@@ -9026,7 +9134,7 @@ mod protocol_tests {
                 ClientKind::OpenaiCompat,
                 false,
             ),
-            RealtimeRouteIntent::StandardRealtime
+            RealtimeRouteIntent::CodexLive
         );
         assert_eq!(
             classify_realtime_intent(
@@ -9074,7 +9182,7 @@ mod protocol_tests {
                 None,
                 None,
             ),
-            request_build::DEFAULT_CODEX_LIVE_MODEL
+            "claude-fable-5"
         );
         assert_eq!(
             realtime_voice_route_model(
@@ -9237,6 +9345,8 @@ mod protocol_tests {
                 "enabled": true,
                 "mappings": [
                   {"clientPattern": "gpt-5.6-sol", "upstreamModel": "gpt-5.6-sol"},
+                  {"clientPattern": "gpt-4o", "upstreamModel": "gpt-4o"},
+                  {"clientPattern": "*", "upstreamModel": "star"},
                   {"clientPattern": "gpt-image-2", "upstreamModel": "gpt-image-2"}
                 ]
               }]
@@ -9248,7 +9358,7 @@ mod protocol_tests {
 
     #[test]
     fn local_models_catalog_uses_openai_list_shape() {
-        let json = local_models_json(&catalog_config(), "/v1/models", None).expect("catalog");
+        let json = local_models_json(&catalog_config(), "/v1/models", None, &[]).expect("catalog");
         assert_eq!(json["object"], "list");
         let ids: Vec<&str> = json["data"]
             .as_array()
@@ -9256,13 +9366,10 @@ mod protocol_tests {
             .iter()
             .filter_map(|model| model["id"].as_str())
             .collect();
-        assert_eq!(ids, vec!["gpt-5.6-sol", "gpt-image-2"]);
+        assert_eq!(ids, vec!["gpt-4o", "gpt-5.6-sol", "gpt-image-2"]);
         assert!(json["data"][0].get("endpointIDs").is_none());
-        assert_eq!(json["data"][0]["capabilities"], serde_json::json!(["text"]));
-        assert_eq!(
-            json["data"][1]["capabilities"],
-            serde_json::json!(["image"])
-        );
+        assert!(json["data"][0].get("capabilities").is_none());
+        assert_eq!(json["data"][0]["owned_by"], "sumpter");
     }
 
     #[test]
@@ -9271,6 +9378,7 @@ mod protocol_tests {
             &catalog_config(),
             "/v1/models",
             Some("client_version=0.149.1"),
+            &[],
         )
         .expect("catalog");
         assert!(json.get("data").is_none());
@@ -9281,6 +9389,15 @@ mod protocol_tests {
             .expect("chat model");
         assert_eq!(chat["display_name"], "gpt-5.6-sol");
         assert_eq!(chat["default_reasoning_level"], "medium");
+        assert!(chat.get("capabilities").is_none());
+        let gpt4o = models
+            .iter()
+            .find(|model| model["slug"] == "gpt-4o")
+            .expect("gpt-4o stays a chat model");
+        assert_ne!(
+            gpt4o.get("visibility").and_then(Value::as_str),
+            Some("hide")
+        );
         let efforts: Vec<&str> = chat["supported_reasoning_levels"]
             .as_array()
             .expect("levels")
@@ -9294,6 +9411,7 @@ mod protocol_tests {
             .find(|model| model["slug"] == "gpt-image-2")
             .expect("image model");
         assert_eq!(image["visibility"], "hide");
+        assert!(models.iter().all(|model| model["slug"] != "*"));
     }
 
     #[test]
@@ -9302,6 +9420,7 @@ mod protocol_tests {
             &catalog_config(),
             "/v1/models",
             Some("client_version=0.143.9"),
+            &[],
         )
         .expect("catalog");
         let chat = json["models"]
@@ -9323,16 +9442,49 @@ mod protocol_tests {
 
     #[test]
     fn local_models_catalog_lookup_and_unknown_id() {
-        let found = local_models_json(&catalog_config(), "/v1/models/gpt-5.6-sol", None)
+        let found = local_models_json(&catalog_config(), "/v1/models/gpt-5.6-sol", None, &[])
             .expect("known model");
         assert_eq!(found["id"], "gpt-5.6-sol");
         assert_eq!(
-            local_models_json(&catalog_config(), "/v1/models/not-a-model", None).unwrap_err(),
+            local_models_json(&catalog_config(), "/v1/models/not-a-model", None, &[]).unwrap_err(),
             StatusCode::NOT_FOUND
         );
-        let cursor = local_models_json(&catalog_config(), "/v1/models", Some("cursor=next"))
+        let cursor = local_models_json(&catalog_config(), "/v1/models", Some("cursor=next"), &[])
             .expect("cursor stays local");
         assert_eq!(cursor["object"], "list");
+        let grok = local_models_json(
+            &catalog_config(),
+            "/v1/models",
+            None,
+            &[("user-agent".into(), "grok-shell/1.0".into())],
+        )
+        .expect("grok catalog");
+        assert_eq!(grok["data"][0]["api_backend"], "responses");
+        let claude = local_models_json(
+            &catalog_config(),
+            "/v1/models",
+            None,
+            &[("anthropic-version".into(), "2023-06-01".into())],
+        )
+        .expect("anthropic catalog");
+        assert_eq!(claude["has_more"], false);
+        assert!(claude["data"].as_array().is_some());
+        let decoded = local_models_json(
+            &catalog_config(),
+            "/v1/models",
+            Some("client_version=0.149.1"),
+            &[],
+        )
+        .expect("plain version");
+        let encoded = local_models_json(
+            &catalog_config(),
+            "/v1/models",
+            Some("client_version=0%2E149%2E1"),
+            &[],
+        )
+        .expect("encoded version");
+        assert_eq!(decoded["models"][0]["default_reasoning_level"], "medium");
+        assert_eq!(encoded["models"][0]["default_reasoning_level"], "medium");
     }
 }
 #[derive(Debug, PartialEq, Eq)]

@@ -962,14 +962,9 @@ impl RoutePlanner {
                     configured
                         .mapping_for(&request.model)
                         .is_some_and(|mapping| {
-                            crate::capability::mapping_has_capability(
+                            crate::capability::mapping_serves_capability(
                                 &mapping.capabilities,
-                                // 显式声明缺省时按**请求的实际模型**推断,不按
-                                // pattern:`grok-imagine-*` 这种通配同时覆盖 image
-                                // 与 video 模型,它的 stem 里没有区分信息,只会落到
-                                // Text 而把整类请求挡掉。用实际模型推断既能分出
-                                // image/video,也仍然拦得住 `claude-opus-*` 这类
-                                // 文本通配去抢媒体流量(它匹配到的模型仍推断为 Text)。
+                                &mapping.client_pattern,
                                 &request.model,
                                 capability,
                             )

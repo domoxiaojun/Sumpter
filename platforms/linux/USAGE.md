@@ -203,9 +203,10 @@ HTTP 方法和任意路径都会进入同一条转发链：入站鉴权 → Prov
 上游 relay。客户端的原始 path/query、可转发请求头、请求体，以及上游返回的状态、响应头和
 响应体都交给上游；仅移除 Host、连接级 hop-by-hop/传输 framing 头和入站鉴权头，再注入
 Provider 鉴权。
-唯一的窄例外是 Codex `/v1/live` bootstrap：`application/sdp`、`text/plain` 或 Codex
-multipart 请求会封装成 `sdp + session.type=quicksilver` JSON，默认模型为
-`gpt-live-1-codex`，再交给匹配该模型的 Provider。公开 `/v1/realtime` 仍是原生透传。
+唯一的窄例外是 Codex Live bootstrap：`POST /v1/live`、`POST /v1/realtime` 和
+`POST /v1/realtime/calls` 与 CPA 一样走 Quicksilver（`application/sdp` / multipart
+封装成 `sdp + session.type=quicksilver` JSON，默认模型 `gpt-live-1-codex`）。
+无 `call_id` 的 `GET /v1/realtime` 才是公开 Realtime WebSocket，出站会去掉 `OpenAI-Alpha`。
 另一个例外是 `GET /v1/models`（以及 `/models`、`/openai/v1/models` 和带模型 id 的子路径）：
 按当前启用入口的 `mappings` 生成本地目录，不转发到上游。普通 OpenAI 客户端拿到
 `{object:"list",data:[...]}`；Codex Desktop/CLI 带 `client_version` 时拿到 `{models:[...]}`。

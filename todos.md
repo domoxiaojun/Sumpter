@@ -1,3 +1,19 @@
+# 审查后续：意图 / 归因 / 分流全部收口（2026-09-04）
+
+对照 CPA：POST `/v1/live`、`/v1/realtime`、`/v1/realtime/calls` 都是 Quicksilver；
+只有无 `call_id` 的 GET `/v1/realtime` 才是标准 Realtime。Sumpter 按 mapping 选入口，
+泄漏的聊天模型必须改写成 `gpt-live-1-codex`，不能按名字打到 xiao。
+
+- [x] `gpt-4o`/`gpt-4o-mini` 不再从名字推断为 Live；通配 `*` 不能靠请求模型名冒充 video/live
+- [x] POST `/v1/realtime` 与 `/calls` 对齐 CPA 为 Codex Live；GET 无 call_id 才是标准 Realtime
+- [x] 标准 Realtime WS 去掉 `OpenAI-Alpha`；侧带 `?call_id=` 走 Live
+- [x] OpenAI `/v1/models` 只保留 id/object/created/owned_by；跳过 `*`；Codex 不隐藏 gpt-4o
+- [x] 目录按 UA 分流：client_version→Codex，grok-shell→Grok，claude-cli/Anthropic-Version→Anthropic
+- [x] query 值做百分号解码；聊天/Responses 拒绝 image/video-only 模型
+- [x] 补 routing/engine/websocket 回归；fmt/check/clippy/focused tests；提交
+
+---
+
 # 修复 Codex `/v1/models` 被透传到 xiao（2026-09-04）
 
 对照 `/Users/kkl/.claude/automode-proxy`：原来 `GET /v1/models` 是未知路径 404，不会打上游。

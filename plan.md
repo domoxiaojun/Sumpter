@@ -471,11 +471,13 @@ multipart 模型读取、Files/Models 能力选路、本地 Models 目录、资�
 拒绝事件上下文，以及 endpoint+model 冷却和 WebSocket 指标。实现保持 raw 报文透传，
 只在代理侧做认证、意图识别、能力过滤、绑定和重试调度；不替换已安装 App。
 
-- [ ] 1. 将 `Originator: Codex Desktop` 纳入 `ClientKind` 判定并补回归测试。
-- [ ] 2. 统一 `/v1/live`、`/v1/realtime` 的身份/模型/能力判定，标准 Realtime 不再
-  无条件改成 Codex Live；所有语音候选必须有 `live` capability。
-- [ ] 3. 从 Videos multipart 表单读取 `model`，并补指定模型路由测试。
-- [x] ✅ 4. 让 Files 按资源能力规划；`GET /v1/models` 改回本地 mapping 目录（OpenAI list + Codex `client_version` 形状），不再透传到第一个非 Anthropic 入口。
+- [x] ✅ 1. 将 `Originator: Codex Desktop` 纳入 `ClientKind` 判定并补回归测试。
+- [x] ✅ 2. 对齐 CPA：POST `/v1/live`、`/v1/realtime`、`/v1/realtime/calls` 为 Codex Live；
+  GET `/v1/realtime` 无 `call_id` 才是标准 Realtime。`gpt-4o` 不再从名字推断 Live；
+  文本通配不能靠请求模型名冒充 video/live。标准 Realtime WS 去掉 `OpenAI-Alpha`。
+- [x] ✅ 3. 从 Videos multipart 表单读取 `model`，并补指定模型路由测试。
+- [x] ✅ 4. Files 按资源能力规划；`GET /v1/models` 本地目录：OpenAI 四字段、Codex
+  `client_version`、Grok/Claude UA 形状；`gpt-4o` 不隐藏；跳过 `*`。
 - [ ] 5. 将 Live/Video 绑定持久化到 `resource_bindings.json`，启动加载、过期清理、
   原子写入和重启恢复可测试。
 - [ ] 6. 被拒事件记录有界的 method/path/intent，并同步 runtime 投影与 wire。

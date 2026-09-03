@@ -1,6 +1,6 @@
 # Sumpter 当前架构
 
-维护基线是「一份共享引擎，多端适配器」：Linux 和 macOS 共用同一套数据面、请求透传、模型映射、重试和运行时存储；平台差异只出现在 adapter、app 和 `platforms/`。Codex `/v1/live` 的 SDP/multipart bootstrap 是共享引擎内唯一的 quicksilver 封装特例，公开 `/v1/realtime` 仍保持原生透传。
+维护基线是「一份共享引擎，多端适配器」：Linux 和 macOS 共用同一套数据面、请求透传、模型映射、重试和运行时存储；平台差异只出现在 adapter、app 和 `platforms/`。Codex Live 的 SDP/multipart bootstrap（`POST /v1/live`、`POST /v1/realtime`、`POST /v1/realtime/calls`）是共享引擎内的 quicksilver 封装特例；无 `call_id` 的 `GET /v1/realtime` 仍是公开 Realtime WebSocket 原生透传。
 
 ## 结构树
 
