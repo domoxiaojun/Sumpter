@@ -161,7 +161,7 @@ enum NotificationSoundPreference: Hashable, Identifiable, Sendable {
     }
 }
 
-/// Claude Code 与 Codex CLI 在协议层事件名不同，但在用户侧只有同一组
+/// Claude Code、Codex CLI 与 Grok Build 在协议层事件名不同，但在用户侧只有同一组
 /// 通知意图。这个分类集中维护，避免设置页出现两套重复开关。
 enum UnifiedNotificationCategory: String, CaseIterable, Identifiable, Sendable {
     case actionRequired = "action_required"
@@ -386,6 +386,8 @@ final class AppModel: ObservableObject {
     @Published var codexNotificationArguments: Set<String> = []
     @Published private(set) var codexNotificationHookStatus: CodexNotificationHookStatus = .notConfigured
     @Published private(set) var codexNotificationHookPath = "~/.codex/hooks.json"
+    @Published var grokNotificationsEnabled = false
+    @Published private(set) var grokNotificationHookPath = "~/.grok/hooks/sumpter-notify.json"
     /// 统一客户端通知类别开关。行动/完成/失败默认开启；普通状态默认关闭，
     /// 避免 auth_success、computer_use_exit 等高频状态把真正需要处理的
     /// 权限/选择和最终失败淹没。类别过滤对 Claude 与 Codex 共用。
@@ -868,6 +870,8 @@ final class AppModel: ObservableObject {
             guard notificationsEnabled else { return }
             if clientKind == "codex" {
                 guard codexNotificationsEnabled else { return }
+            } else if clientKind == "grok_build" {
+                guard grokNotificationsEnabled else { return }
             } else {
                 guard claudeNotificationsEnabled else { return }
             }
@@ -889,6 +893,16 @@ final class AppModel: ObservableObject {
                     // even the workspace basename as a subtitle.
                     cwd: nil,
                     clientKind: "codex"
+                )
+            } else if clientKind == "grok_build" {
+                await deliverNotification(
+                    title: title,
+                    message: message,
+                    kind: kind,
+                    category: category,
+                    sessionID: sessionID,
+                    cwd: cwd,
+                    clientKind: "grok_build"
                 )
             } else {
                 await deliverNotification(
@@ -952,10 +966,12 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// 用户侧只有一个通知总开关；Claude/Codex 的配置文件仍由各自安全编辑器
-    /// 维护，但一次操作会同步安装或移除两边的通知 Hook。
+    /// 用户侧只有一个通知总开关；Claude/Codex/Grok 的配置文件仍由各自安全编辑器
+    /// 维护，但一次操作会同步安装或移除三边的通知 Hook。
     var notificationsEnabled: Bool {
-        !claudeNotificationArguments.isEmpty || !codexNotificationArguments.isEmpty
+        !claudeNotificationArguments.isEmpty
+            || !codexNotificationArguments.isEmpty
+            || grokNotificationsEnabled
     }
 
     func refresh() {
@@ -2939,6 +2955,7 @@ final class AppModel: ObservableObject {
         do {
             try ClaudeNotificationHooks.setEnabled(enabled, port: config.listener.port)
             try CodexNotificationHooks.setEnabled(enabled, port: config.listener.port)
+            try GrokNotificationHooks.setEnabled(enabled, port: config.listener.port)
             refreshNotificationHookState()
             if enabled {
                 requestNotificationAuthorization()
@@ -2989,6 +3006,8 @@ final class AppModel: ObservableObject {
         codexNotificationArguments = CodexNotificationHooks.enabledArguments()
         codexNotificationHookStatus = CodexNotificationHooks.currentStatus()
         codexNotificationsEnabled = !codexNotificationArguments.isEmpty
+        grokNotificationHookPath = GrokNotificationHooks.resolvedHooksJSONPath()
+        grokNotificationsEnabled = GrokNotificationHooks.isEnabled()
     }
 
     func sendTestNotification() {
@@ -3592,6 +3611,7 @@ final class AppModel: ObservableObject {
                     do {
                         try ClaudeNotificationHooks.rewriteScriptIfEnabled(port: port)
                         try CodexNotificationHooks.rewriteScriptIfEnabled(port: port)
+                        try GrokNotificationHooks.rewriteScriptIfEnabled(port: port)
                         refreshNotificationHookState()
                     } catch {
                         flash("通知脚本更新失败,请重新切换一次通知开关")
@@ -3707,6 +3727,11 @@ final class AppModel: ObservableObject {
             try? ClaudeNotificationHooks.rewriteScriptIfEnabled(port: config.listener.port)
             if codexNotificationsEnabled {
                 try? CodexNotificationHooks.rewriteScriptIfEnabled(port: config.listener.port)
+            }
+            if grokNotificationsEnabled {
+                try? GrokNotificationHooks.rewriteScriptIfEnabled(port: config.listener.port)
+            }
+            if codexNotificationsEnabled || grokNotificationsEnabled {
                 refreshNotificationHookState()
             }
             refreshLoginItemStatus()

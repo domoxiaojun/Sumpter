@@ -55,16 +55,16 @@ struct NotificationsPane: View {
         }
     }
 
-    /// Claude/Codex 任一接入已配置即视为统一通知已启用。
+    /// Claude/Codex/Grok 任一接入已配置即视为统一通知已启用。
     private var hookEnabled: Bool {
         model.notificationsEnabled
     }
 
     private var hookPanel: some View {
-        SectionPanel(title: "通知接入", hint: "一套开关同时管理 Claude Code 与 Codex CLI。两者的协议事件名不同，但都会归入下面同一组通知类别；Sumpter 只转发客户端已经产生的事件。") {
+        SectionPanel(title: "通知接入", hint: "一套开关同时管理 Claude Code、Codex CLI 与 Grok Build。协议事件名不同，但都会归入下面同一组通知类别；Sumpter 只转发客户端已经产生的事件。") {
             VStack(alignment: .leading, spacing: 12) {
                 SumpterWrappingLayout(horizontalSpacing: 10, verticalSpacing: 8) {
-                    Toggle("启用 Claude Code / Codex CLI 通知", isOn: Binding(
+                    Toggle("启用 Claude Code / Codex CLI / Grok Build 通知", isOn: Binding(
                         get: { hookEnabled },
                         set: { model.setNotifications(enabled: $0) }
                     ))
@@ -99,6 +99,23 @@ struct NotificationsPane: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
+                        HStack {
+                            Label("Grok Build", systemImage: "terminal")
+                            Spacer()
+                            StatusBadge(
+                                text: model.grokNotificationsEnabled ? "已配置" : "未配置",
+                                systemImage: model.grokNotificationsEnabled ? "checkmark.circle" : "minus.circle",
+                                color: model.grokNotificationsEnabled ? .green : .secondary
+                            )
+                        }
+                        Text("Grok 配置文件：\(model.grokNotificationHookPath)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                        Text("Grok 全局 hook 默认受信任，无需再跑 /hooks。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                         switch model.codexNotificationHookStatus {
                         case .pendingTrust:
                             Text("首次使用请在 Codex CLI 输入 /hooks，信任 Sumpter 的通知 Hook；收到一次真实通知后会显示“已验证”。")
@@ -142,7 +159,7 @@ struct NotificationsPane: View {
     }
 
     private var categoryPanel: some View {
-        SectionPanel(title: "统一通知类别", hint: "这些开关同时适用于 Claude Code 与 Codex CLI；关闭普通状态不会影响失败、完成或需要你操作的事件。") {
+        SectionPanel(title: "统一通知类别", hint: "这些开关同时适用于 Claude Code、Codex CLI 与 Grok Build；关闭普通状态不会影响失败、完成或需要你操作的事件。") {
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(UnifiedNotificationCategory.allCases) { row in
                     HStack(alignment: .top) {

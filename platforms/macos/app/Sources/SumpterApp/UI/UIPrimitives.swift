@@ -95,7 +95,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .providers: "上游入口、优先级、粘性分组与入口显式模型映射。"
         case .routing: "Claude Code 内部子请求分流与 effort 覆盖。"
         case .security: "监听、入站认证、入站方言和登录项。"
-        case .notifications: "Claude Code 与 Codex CLI hook 统一系统通知。"
+        case .notifications: "Claude Code、Codex CLI 与 Grok Build hook 统一系统通知。"
         case .statistics: "按请求用途、入口和模型看成功率、延迟与成本。"
         case .diagnostics: "配置路径、最近请求和诊断捕获。"
         case .help: "快速开始、客户端接入、常见问题与安全边界。"

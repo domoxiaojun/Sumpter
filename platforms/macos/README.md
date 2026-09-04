@@ -33,9 +33,9 @@ sidecar 支持 Claude `/v1/messages`，OpenAI Chat / Responses 的 Native Adapte
 
 ## 统一通知
 
-通知设置同时支持 Claude Code 与 Codex CLI，并共用一套总开关、通知类别、系统授权、声音和测试入口。Claude 的 Hook 写入 `~/.claude/settings.json`；Codex 的 Hook 写入 `CODEX_HOME/hooks.json`（未设置时 `~/.codex/hooks.json`），同一个 `hooks/sumpter-codex-notify.zsh` 脚本覆盖 `PermissionRequest`、`Stop`、`SubagentStop`、`Interrupt` 四个有用户价值的生命周期事件。普通工具、压缩和会话生命周期事件不默认弹系统通知，避免噪声。Codex 写入后仍需在 Codex CLI 执行 `/hooks` 信任，收到真实 SSE 后才会显示「已验证」。Codex 通知只使用 Sumpter 生成的固定安全文案，不转发 transcript、prompt、`last_assistant_message`、工具参数或原始错误详情。
+通知设置同时支持 Claude Code、Codex CLI 与 Grok Build，并共用一套总开关、通知类别、系统授权、声音和测试入口。Claude 的 Hook 写入 `~/.claude/settings.json`；Codex 的 Hook 写入 `CODEX_HOME/hooks.json`（未设置时 `~/.codex/hooks.json`），同一个 `hooks/sumpter-codex-notify.zsh` 脚本覆盖 `PermissionRequest`、`Stop`、`SubagentStop`、`Interrupt` 四个有用户价值的生命周期事件；Grok 写入独占的 `$GROK_HOME/hooks/sumpter-notify.json`（默认 `~/.grok/hooks/`），覆盖 `Notification`（`permission_prompt` / `idle_prompt` / `task_complete`）、`Stop`、`StopFailure`、`StopCancelled`、`SubagentStop`。不改 `~/.grok/config.toml`，也不安装 Grok 终端 OSC `[ui.notifications.hooks]`。普通工具、压缩和会话生命周期事件不默认弹系统通知，避免噪声。Codex 写入后仍需在 Codex CLI 执行 `/hooks` 信任，收到真实 SSE 后才会显示「已验证」。Grok 全局 hook 默认受信任，无需再跑 `/hooks`。Codex 与 Grok 通知只使用 Sumpter 生成的固定安全文案，不转发 transcript、prompt、`lastAssistantMessage`、工具参数或原始错误详情。Grok 的 `Stop` 只作观察，脚本不打印 JSON，避免挡住回合结束。
 
-启用 Codex 通知时，App 会直接移除 `config.toml` 中已知的 `SkyComputerUseClient … turn-ended` legacy `notify`，不保留备份也不自动恢复；自定义或无法安全解析的 legacy 配置会保留并显示冲突。Claude 与 Codex 的通知线程按客户端来源隔离。Linux daemon 不提供通知 Hook 和 `/__notify`。
+启用 Codex 通知时，App 会直接移除 `config.toml` 中已知的 `SkyComputerUseClient … turn-ended` legacy `notify`，不保留备份也不自动恢复；自定义或无法安全解析的 legacy 配置会保留并显示冲突。Claude、Codex 与 Grok 的通知线程按客户端来源隔离。若 Grok 因 `compat.claude.hooks` 扫到 Claude 的 notify 脚本，脚本会把 `GROK_*` 环境改标为 `clientKind=grok_build`，避免横幅写成 Claude。Linux daemon 不提供通知 Hook 和 `/__notify`。
 
 ## 分层
 

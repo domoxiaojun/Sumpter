@@ -1,3 +1,18 @@
+# Grok Build 系统通知（2026-09-04）
+
+macOS 通知已接 Claude Code / Codex CLI，Grok Build 缺 hook → `/__notify`。
+用 `~/.grok/hooks/sumpter-notify.json`（不改 grok-build、不写 config.toml）。
+Linux `/__notify` 仍 404。不替换已安装 App。
+
+- [x] macOS `/__notify` 识别 `grok_build`：事件白名单、固定文案、camelCase、session-end Stop 过滤
+- [x] adapter engine 测试
+- [x] `GrokNotifyScript` + `GrokNotificationHooks`；Claude 脚本遇 `GROK_*` 改标
+- [x] AppModel 总开关三路；NotificationsPane；端口刷新
+- [x] macOS README（USAGE 未提通知，只改 macos README + 根 README）
+- [x] Rust + Swift 测试；提交
+
+---
+
 # 安全页能找到 Grok 归因脚本（2026-09-04）
 
 脚本在 `platforms/macos/scripts/grok-project-attribution.sh`，但 App 只查 Bundle

@@ -33,7 +33,7 @@ relay；上游是否真正提供相应能力仍取决于你配置的 Provider。
 | 管理界面 | App 设置窗 | 浏览器 `http://127.0.0.1:57879/admin/` |
 | 入站鉴权 | `listener.authToken`（非空才启用） | 同左 |
 | 热重载 | App 里保存 / 重启 | WebUI 保存，或 `SIGHUP` |
-| 平台能力 | Claude Code / Codex 系统通知 | systemd、静态 musl 包、Docker |
+| 平台能力 | Claude Code / Codex / Grok Build 系统通知 | systemd、静态 musl 包、Docker |
 
 Linux 配置目录、systemd 单元、发布包二进制和协议 header 现已统一为 `sumpter` / `Sumpter`（例如 `~/.config/sumpter`、`sumpter.service`、`X-Sumpter-*`）。旧的 `kekulv` 名字不再识别，需卸载后重装。
 
