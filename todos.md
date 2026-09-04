@@ -1,3 +1,13 @@
+# Codex hook 显示名（2026-09-04）
+
+Codex 用户配置里 Sumpter 条目显示成「钩子 1」，因为 hooks.json 只有
+`statusMessage`，没有 `name`。补上显示名「Sumpter 通知」。
+
+- [x] CodexHookEditing 写入 name；校验允许该字段
+- [x] 测试、提交。重新安装/启动后才会改已有 hooks.json
+
+---
+
 # 通知页：三客户端安装 / 移除配置（2026-09-04）
 
 总开关开着时 Grok 仍显示「未配置」，接入状态也没有安装按钮。

@@ -28,6 +28,25 @@ final class CodexHookEditingTests: XCTestCase {
         XCTAssertEqual((merged["description"] as? String), "user config")
     }
 
+    func testUpsertWritesDisplayNameInsteadOfAnonymousHook() throws {
+        let merged = try CodexHookEditing.upsertStopCommand(
+            "/tmp/\(marker)", matching: marker, into: [:]
+        )
+        XCTAssertEqual(merged["description"] as? String, CodexHookEditing.hookDisplayName)
+        let rows = try XCTUnwrap((merged["hooks"] as? [String: Any])?["Stop"] as? [[String: Any]])
+        XCTAssertEqual(rows.last?["name"] as? String, CodexHookEditing.hookDisplayName)
+        let handlers = try XCTUnwrap(rows.last?["hooks"] as? [[String: Any]])
+        XCTAssertEqual(handlers.first?["name"] as? String, CodexHookEditing.hookDisplayName)
+        XCTAssertEqual(handlers.first?["statusMessage"] as? String, CodexHookEditing.hookDisplayName)
+    }
+
+    func testUpsertDoesNotOverwriteExistingRootDescription() throws {
+        let merged = try CodexHookEditing.upsertStopCommand(
+            "/tmp/\(marker)", matching: marker, into: root()
+        )
+        XCTAssertEqual(merged["description"] as? String, "user config")
+    }
+
     func testUpsertReplacesStaleSumpterCommand() throws {
         let old: [[String: Any]] = [["hooks": [["type": "command", "command": "/old/\(marker)"]]]]
         let merged = try CodexHookEditing.upsertStopCommand("/new/\(marker)", matching: marker, into: root(old))
