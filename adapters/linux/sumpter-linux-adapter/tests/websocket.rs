@@ -439,12 +439,19 @@ async fn websocket_paths_keep_http_methods_on_the_engine_fallback() {
         .build()
         .expect("http client");
 
+    let live_boundary = "codex-live-boundary";
+    let live_body = format!(
+        "--{live_boundary}\r\nContent-Disposition: form-data; name=\"sdp\"\r\n\r\nv=0\r\n--{live_boundary}\r\nContent-Disposition: form-data; name=\"session\"\r\n\r\n{{\"model\":\"gpt-live-1-codex\",\"voice\":\"marin\"}}\r\n--{live_boundary}\r\nContent-Disposition: form-data; name=\"future_field\"\r\n\r\nkeep-me\r\n--{live_boundary}--\r\n"
+    );
     let live = client
         .post(format!("http://{address}/v1/live"))
         .header("Authorization", "Bearer listener-secret")
-        .header("Content-Type", "application/sdp")
+        .header(
+            "Content-Type",
+            format!("multipart/form-data; boundary={live_boundary}"),
+        )
         .header("Accept", "application/sdp")
-        .body("v=0\r\n")
+        .body(live_body.clone())
         .send()
         .await
         .expect("live bootstrap response");
@@ -466,27 +473,18 @@ async fn websocket_paths_keep_http_methods_on_the_engine_fallback() {
     let calls = transport.calls();
     assert_eq!(calls.len(), 2);
     assert_eq!(calls[0].method, "POST");
-    assert_eq!(
-        calls[0].path_and_query,
-        "/v1/live?intent=quicksilver&architecture=avas"
-    );
-    let live_body: serde_json::Value =
-        serde_json::from_slice(&calls[0].body).expect("Codex Live JSON envelope");
-    assert_eq!(live_body["session"]["type"], "quicksilver");
-    assert_eq!(live_body["session"]["model"], "gpt-live-1-codex");
+    assert_eq!(calls[0].path_and_query, "/v1/live");
+    assert_eq!(calls[0].body, live_body.as_bytes());
     assert_eq!(
         calls[0]
             .headers
             .iter()
             .find(|(name, _)| name == "content-type")
             .map(|(_, value)| value.as_str()),
-        Some("application/json")
+        Some("multipart/form-data; boundary=codex-live-boundary")
     );
     assert_eq!(calls[1].method, "POST");
-    assert_eq!(
-        calls[1].path_and_query,
-        "/v1/realtime/calls?intent=quicksilver&architecture=avas"
-    );
+    assert_eq!(calls[1].path_and_query, "/v1/realtime/calls");
     assert_eq!(calls[1].body, b"v=0\r\n");
     assert!(
         calls[1]
@@ -710,20 +708,13 @@ async fn realtime_bootstrap_does_not_follow_a_leaked_chat_model() {
             .iter()
             .all(|call| call.base_url != "https://anyrouter.invalid")
     );
-    assert_eq!(
-        calls[0].path_and_query,
-        "/v1/live?model=gpt-live-1-codex&intent=quicksilver&architecture=avas"
-    );
+    assert_eq!(calls[0].path_and_query, "/v1/live?model=gpt-live-1-codex");
     assert_eq!(
         calls[1].path_and_query,
-        "/v1/realtime/calls?model=gpt-live-1-codex&intent=quicksilver&architecture=avas"
+        "/v1/realtime?model=gpt-live-1-codex"
     );
-    let live_body: serde_json::Value =
-        serde_json::from_slice(&calls[0].body).expect("Codex Live JSON envelope");
-    assert_eq!(live_body["session"]["model"], "gpt-live-1-codex");
-    let realtime_body: serde_json::Value =
-        serde_json::from_slice(&calls[1].body).expect("Codex Realtime JSON envelope");
-    assert_eq!(realtime_body["session"]["model"], "gpt-live-1-codex");
+    assert_eq!(calls[0].body, b"v=0\r\n");
+    assert_eq!(calls[1].body, b"v=0\r\n");
     handle.shutdown().await;
 }
 
