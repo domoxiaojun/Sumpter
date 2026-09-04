@@ -40,6 +40,22 @@ import Testing
         #expect(!status.canRestore)
     }
 
+    @Test func parsesGrokStatusWithoutClaudeSettingsLine() throws {
+        let status = try ClaudeAttributionInstaller.parseStatus(
+            """
+            shell:            zsh
+            rc:               /Users/kkl/.zshrc
+            rc 内标记块:      已安装
+            snippet:          /Users/kkl/.local/share/sumpter/grok-project-attribution.sh
+            GROK_CONFIG_PATH: 无(正确)
+            备份:
+              /Users/kkl/.zshrc.sumpter-grok-bak-20260904-120000
+            """)
+        #expect(status.condition == .installed)
+        #expect(status.backupCount == 1)
+        #expect(!status.settingsConflict)
+    }
+
     @Test func detectsMissingSnippetAndSettingsConflict() throws {
         let incomplete = try ClaudeAttributionInstaller.parseStatus(
             """

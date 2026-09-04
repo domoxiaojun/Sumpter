@@ -587,6 +587,72 @@ export function shouldPromptCCAttribution(rows, clientKindFacets) {
   return ccAttributionState(rows, clientKindFacets) === CC_ATTRIBUTION_STATE.unconfigured;
 }
 
+export function grokAttributionState(rows, clientKindFacets) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (list.some((row) => (
+    (cleanText(row?.source ?? row?.projectSource) === 'client_declared'
+      || cleanText(row?.source ?? row?.projectSource) === 'workspace_local')
+    && rowHasClientKind(row, 'grok_build')
+  ))) {
+    return CC_ATTRIBUTION_STATE.configured;
+  }
+  const facets = Array.isArray(clientKindFacets) ? clientKindFacets : [];
+  const facetsHaveGrok = facets.some(
+    (item) => cleanText(item?.value) === 'grok_build' && Number(item?.count ?? 0) > 0,
+  );
+  const unidentified = list.filter((row) => {
+    const name = cleanText(row?.name);
+    const source = cleanText(row?.source ?? row?.projectSource);
+    const requests = Number(row?.requests ?? row?.attempts ?? 0);
+    return requests > 0
+      && (name === 'unidentified_project' || source === 'missing_workspace_metadata');
+  });
+  const hasUnattributedGrok = unidentified.some((row) => {
+    const kinds = Array.isArray(row?.clientKinds) ? row.clientKinds.map(cleanText) : null;
+    return kinds ? kinds.includes('grok_build') : facetsHaveGrok;
+  });
+  return hasUnattributedGrok
+    ? CC_ATTRIBUTION_STATE.unconfigured
+    : CC_ATTRIBUTION_STATE.unknown;
+}
+
+export const GROK_ATTRIBUTION_GUIDE = {
+  title: 'Grok Build 项目归因',
+  subtitle: '让统计能按项目区分 Grok Build 请求。只影响项目维度。',
+  statusLabels: CC_ATTRIBUTION_GUIDE.statusLabels,
+  statusDetails: {
+    configured: '统计里已出现 Grok Build 的本地项目行，归因链路是通的。',
+    unconfigured: '有 Grok Build 请求落进「未识别项目」，且没有任何一行来自 Grok 的工作区声明。',
+    unknown: '当前时间窗口内没有 Grok Build 流量，或分析数据还没取到 —— 无法判定。',
+  },
+  whereToRun: '配置必须在启动 grok 的那台机器执行，不是只运行 sidecar/daemon 的机器。每台跑 Grok Build 的主机各装一次；装完要新开终端。',
+  steps: [
+    {
+      title: '只读体检',
+      command: './grok-project-attribution.sh status',
+      note: '在运行 grok 的主机执行。看当前 shell、要改哪个 rc、GROK_CONFIG_PATH 会不会挡住 overlay。',
+    },
+    {
+      title: '安装 wrapper',
+      command: './grok-project-attribution.sh install',
+      note: '仍在 grok 主机执行。想先预演加 --dry-run。装前自动备份 rc。',
+    },
+    {
+      title: '新开终端验证',
+      command: '',
+      note: 'wrapper 是 grok() 函数。新开终端后再启动 grok，进项目发一条消息，回本页看状态变成「已生效」。',
+    },
+  ],
+  remoteDownload: {
+    command: "SUMPTER_LISTENER_BASE_URL='http://192.168.1.20:57878'\nSUMPTER_LISTENER_BASE_URL=\"${SUMPTER_LISTENER_BASE_URL%/}\"\ncurl --fail --location \"$SUMPTER_LISTENER_BASE_URL/__sumpter/grok-project-attribution.sh\" -o /tmp/grok-project-attribution.sh\nbash /tmp/grok-project-attribution.sh install",
+    note: 'Base URL 是 Sumpter Linux listener 地址。脚本只在 Grok Build 客户端本地执行。',
+  },
+  rollback: [
+    { command: './grok-project-attribution.sh restore', note: '还原 rc 到装前' },
+    { command: './grok-project-attribution.sh uninstall', note: '移除 wrapper，保留备份' },
+  ],
+};
+
 // 投影里的合成桶名是机器可读的,展示前翻成中文,与 StatsPage 的 projectLabel 一致。
 export function projectLabelText(value) {
   const text = cleanText(value);

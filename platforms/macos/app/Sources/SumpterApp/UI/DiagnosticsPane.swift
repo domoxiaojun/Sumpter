@@ -152,6 +152,20 @@ struct SecurityPane: View {
             authPanel
             launchPanel
             attributionGuidePanel
+            ProjectAttributionInstallerPanel(
+                title: GrokAttributionHint.Guide.title,
+                subtitle: GrokAttributionHint.Guide.subtitle,
+                scriptResource: "grok-project-attribution",
+                clientName: "Grok Build",
+                observedState: GrokAttributionHint.state(projects: attributionRows),
+                whereToRun: GrokAttributionHint.Guide.whereToRun,
+                privacy: GrokAttributionHint.Guide.privacy,
+                steps: GrokAttributionHint.Guide.steps,
+                rollback: GrokAttributionHint.Guide.rollback,
+                installSuccessMessage: "配置已完成。请新开终端窗口，再启动 grok。",
+                missingScriptMessage: "App 资源中缺少 grok-project-attribution.sh，请重新安装完整 App。",
+                statusDetail: GrokAttributionHint.Guide.statusDetail
+            )
         }
         .onAppear { loadDraftIfNeeded() }
         .task(id: attributionScriptURL?.path) {

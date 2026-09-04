@@ -151,4 +151,18 @@ private func row(
         #expect(ClaudeAttributionHint.Guide.whereToRun.contains("daemon"))
         #expect(ClaudeAttributionHint.Guide.privacy.contains("CLAUDE.md"))
     }
+
+    @Test func grokUnidentifiedTrafficIsUnconfigured() {
+        #expect(
+            GrokAttributionHint.state(projects: [
+                row("unidentified_project", kinds: ["grok_build"]),
+            ]) == .unconfigured
+        )
+        #expect(
+            GrokAttributionHint.state(projects: [
+                row("sumpter", source: "workspace_local", kinds: ["grok_build"]),
+            ]) == .configured
+        )
+        #expect(GrokAttributionHint.command.contains("grok-project-attribution.sh install"))
+    }
 }

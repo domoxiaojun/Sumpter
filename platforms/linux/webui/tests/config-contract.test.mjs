@@ -1239,6 +1239,30 @@ test('CC 归因提示判定:项目行与 clientKinds facets 合起来判', async
   assert.match(CC_ATTRIBUTION_HINT.command, /cc-project-attribution\.sh install/);
 });
 
+test('Grok 归因提示判定:未识别 grok_build 行才提示', async () => {
+  const { grokAttributionState, GROK_ATTRIBUTION_GUIDE, CC_ATTRIBUTION_STATE } =
+    await import('../src/utils/helpers.js');
+  assert.equal(
+    grokAttributionState(
+      [{ name: 'unidentified_project', requests: 3, clientKinds: ['grok_build'] }],
+    ),
+    CC_ATTRIBUTION_STATE.unconfigured,
+  );
+  assert.equal(
+    grokAttributionState(
+      [{ name: 'sumpter', source: 'workspace_local', requests: 3, clientKinds: ['grok_build'] }],
+    ),
+    CC_ATTRIBUTION_STATE.configured,
+  );
+  assert.equal(
+    grokAttributionState(
+      [{ name: 'unidentified_project', requests: 3, clientKinds: ['codex'] }],
+    ),
+    CC_ATTRIBUTION_STATE.unknown,
+  );
+  assert.match(GROK_ATTRIBUTION_GUIDE.steps[1].command, /grok-project-attribution\.sh install/);
+});
+
 test('项目行副标题显示对应客户端且不把项目来源冒充客户端', async () => {
   const { projectClientKindsLabel } = await import('../src/utils/helpers.js');
   assert.equal(projectClientKindsLabel(['codex']), 'Codex');

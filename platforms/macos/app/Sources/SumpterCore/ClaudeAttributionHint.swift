@@ -94,6 +94,13 @@ public enum ClaudeAttributionHint {
             /// 空串表示这一步没有命令(例如"新开终端验证")。
             public let command: String
             public let note: String
+
+            public init(id: Int, title: String, command: String, note: String) {
+                self.id = id
+                self.title = title
+                self.command = command
+                self.note = note
+            }
         }
 
         public struct MatrixRow: Identifiable, Sendable {
@@ -113,6 +120,12 @@ public enum ClaudeAttributionHint {
             public let id: Int
             public let command: String
             public let note: String
+
+            public init(id: Int, command: String, note: String) {
+                self.id = id
+                self.command = command
+                self.note = note
+            }
         }
 
         public static let title = "Claude Code 项目归因"

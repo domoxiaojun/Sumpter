@@ -2049,9 +2049,11 @@ final class AppModel: ObservableObject {
         runtimeRequestChain = nil
         runtimeRequestChainError = nil
         guard let eventID, !eventID.isEmpty else { return }
-        let item = runtimeHistoryPage?.events.first(where: { $0.id == eventID })
+        let item = runHistoryPage?.events.first(where: { $0.id == eventID })
+            ?? runtimeHistoryPage?.events.first(where: { $0.id == eventID })
         let requestID = item?.requestID
             ?? runtime.recentEvents.first(where: { $0.id == eventID })?.requestID
+            ?? runtimeEventDetail?.event.requestID
         guard let requestID, !requestID.isEmpty, let admin else { return }
         runtimeRequestChainLoading = true
         let snapshotGeneration = runtimeV2RequestGeneration
