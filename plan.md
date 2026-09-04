@@ -496,6 +496,14 @@ HTTP 400，229 字节 `architecture="avas" is only supported for quicksilver Rea
 - [x] ✅ 3. 标准 Realtime WebSocket 出站剥掉 `intent`/`architecture`，避免 GET 握手泄漏 avas。
 - [x] ✅ 4. focused tests、fmt/check/clippy、USAGE/README/architecture；提交源码。不替换 `/Applications/Sumpter.app`。
 
+## 本轮：修复运行页历史事件表空白（2026-09-04）
+
+截图：进行中两行正常，下方「请求 / 模型 / 路由 / 结果 / 说明」只剩表头。SwiftUI `Table`
+在 SSE / 进行中 overlay 刷新后会留下 NSTableView 表头、行被裁掉。
+
+- [x] ✅ 1. 历史事件改用与进行中相同的 SwiftUI 四列行，去掉原生 `Table`。
+- [x] ✅ 2. Swift 测试与构建；提交。不替换 `/Applications/Sumpter.app`。
+
 ## 本轮：意图路由问题闭环（2026-09-04）
 
 - [ ] 1. 在原始 body 解析阶段先确定 Codex Originator，再做 Live 标准化与路由。

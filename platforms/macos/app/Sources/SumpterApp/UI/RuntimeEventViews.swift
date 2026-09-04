@@ -445,10 +445,9 @@ private struct RuntimeEventTraceExport: Encodable {
     }
 }
 
-/// Mirrors the native event table's min/ideal column sizing for the separate
-/// live-request stack. The live rows cannot live inside `Table` because their
-/// shared animated background must span an arbitrary number of in-flight rows,
-/// so resolve the same four-column proportions against the measured width.
+/// Four-column proportions for the run-page event rows. Live and history
+/// lists share this layout so in-flight overlay and paged history stay aligned
+/// without an NSTableView-backed `Table`.
 private struct RuntimeEventColumnWidths {
     let request: CGFloat
     let route: CGFloat
@@ -643,17 +642,19 @@ struct RecentEventsPanel: View {
 
     private var eventsTableContainer: some View {
         ZStack(alignment: .topTrailing) {
-            // `Table` is backed by NSTableView on macOS.  It does not reliably
-            // mount row hosts while participating in SwiftUI transitions:
-            // after a page refresh the header can remain while every row is
-            // clipped away.  Keep the table's identity reset, but let the
-            // native view appear directly in its fixed viewport.
+            // Do not use SwiftUI `Table` here.  It is NSTableView-backed and
+            // regularly keeps the column header while clipping every row away
+            // after an SSE/live-overlay refresh — the run page then looks
+            // like an empty history table under the in-flight stack.
             ViewThatFits(in: .horizontal) {
-                eventsTable
+                eventsHistoryTable
                 compactEventsList
             }
             .id(pageIdentity)
             .opacity(pageLoading ? 0.66 : 1)
+            .transaction { transaction in
+                transaction.animation = nil
+            }
 
             if pageLoading {
                 HStack(spacing: 6) {
@@ -866,29 +867,55 @@ struct RecentEventsPanel: View {
 
     private func liveEventRow(_ event: RuntimeEvent) -> some View {
         GeometryReader { proxy in
-            let outerInset: CGFloat = 8
-            let widths = RuntimeEventColumnWidths.resolve(
-                availableWidth: proxy.size.width - outerInset * 2
+            wideEventRow(
+                event,
+                widths: RuntimeEventColumnWidths.resolve(
+                    availableWidth: proxy.size.width - 16
+                )
             )
-            HStack(alignment: .center, spacing: 0) {
-                eventRequestCell(event)
-                    .padding(.horizontal, 12)
-                    .frame(width: widths.request, alignment: .leading)
-                eventRouteCell(event)
-                    .padding(.horizontal, 12)
-                    .frame(width: widths.route, alignment: .leading)
-                eventResultCell(event)
-                    .padding(.horizontal, 12)
-                    .frame(width: widths.result, alignment: .leading)
-                eventMessageCell(event)
-                    .padding(.horizontal, 12)
-                    .frame(width: widths.message, alignment: .leading)
-            }
-            .padding(.horizontal, outerInset)
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
         }
         .frame(height: eventRowHeight)
         .contentShape(Rectangle())
+    }
+
+    private func wideEventRow(_ event: RuntimeEvent, widths: RuntimeEventColumnWidths) -> some View {
+        HStack(alignment: .center, spacing: 0) {
+            eventRequestCell(event)
+                .padding(.horizontal, 12)
+                .frame(width: widths.request, alignment: .leading)
+            eventRouteCell(event)
+                .padding(.horizontal, 12)
+                .frame(width: widths.route, alignment: .leading)
+            eventResultCell(event)
+                .padding(.horizontal, 12)
+                .frame(width: widths.result, alignment: .leading)
+            eventMessageCell(event)
+                .padding(.horizontal, 12)
+                .frame(width: widths.message, alignment: .leading)
+        }
+        .padding(.horizontal, 8)
+        .frame(height: eventRowHeight)
+        .contentShape(Rectangle())
+    }
+
+    private func eventColumnHeader(widths: RuntimeEventColumnWidths) -> some View {
+        HStack(alignment: .center, spacing: 0) {
+            columnHeaderLabel("请求", width: widths.request)
+            columnHeaderLabel("模型 / 路由", width: widths.route)
+            columnHeaderLabel("结果", width: widths.result)
+            columnHeaderLabel("说明", width: widths.message)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .foregroundStyle(.secondary)
+    }
+
+    private func columnHeaderLabel(_ title: String, width: CGFloat) -> some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .padding(.horizontal, 12)
+            .frame(width: width, alignment: .leading)
     }
 
     /// Narrow windows use a readable vertical summary instead of forcing the
@@ -953,28 +980,44 @@ struct RecentEventsPanel: View {
         }
     }
 
-    private var eventsTable: some View {
-        Table(visibleEvents, selection: $selectedEventID) {
-            TableColumn("请求") { event in
-                eventRequestCell(event)
+    private var eventsHistoryTable: some View {
+        GeometryReader { proxy in
+            let widths = RuntimeEventColumnWidths.resolve(
+                availableWidth: proxy.size.width - 16
+            )
+            VStack(spacing: 0) {
+                eventColumnHeader(widths: widths)
+                Divider().opacity(0.35)
+                ScrollView(.vertical, showsIndicators: true) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(visibleEvents) { event in
+                            Button {
+                                selectedEventID = event.id
+                            } label: {
+                                wideEventRow(event, widths: widths)
+                            }
+                            .buttonStyle(.plain)
+                            .background(selectedEventID == event.id ? palette.brand.opacity(0.08) : .clear)
+                            .accessibilityLabel("事件：\(RuntimeEventDisplay.requestSummary(event))")
+                            .accessibilityAddTraits(selectedEventID == event.id ? .isSelected : [])
+                            if event.id != visibleEvents.last?.id {
+                                Divider().opacity(0.28)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
-            .width(min: 150, ideal: 178)
-            TableColumn("模型 / 路由") { event in
-                eventRouteCell(event)
-            }
-            .width(min: 180, ideal: 230)
-            TableColumn("结果") { event in
-                eventResultCell(event)
-            }
-            .width(min: 150, ideal: 170)
-            TableColumn("说明") { event in
-                eventMessageCell(event)
-            }
-            .width(min: 160, ideal: 260)
         }
-        .sumpterTableSurface()
-        .frame(minWidth: 920)
+        .frame(minWidth: 720)
+        .frame(maxWidth: .infinity)
         .frame(height: eventTableHeight)
+        .background(palette.inset)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(palette.borderSubtle, lineWidth: 0.8)
+        }
     }
 
     /// 事件表当前可见的行:按类型筛选 + 按时间倒序(引擎侧原地更新不移动行位置,排序在这里做)。
