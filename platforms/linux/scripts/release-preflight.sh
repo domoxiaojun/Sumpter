@@ -157,6 +157,8 @@ ok "admin session auth/diagnostics"
 need_file scripts/install.sh
 need_file scripts/cc-project-attribution.sh
 [[ -x scripts/cc-project-attribution.sh ]] || fail "scripts/cc-project-attribution.sh must be executable"
+need_file scripts/grok-project-attribution.sh
+[[ -x scripts/grok-project-attribution.sh ]] || fail "scripts/grok-project-attribution.sh must be executable"
 need_text scripts/install.sh "--admin-host"
 need_text scripts/install.sh "--admin-password-file"
 need_text scripts/install.sh "ensure_admin_password_file"

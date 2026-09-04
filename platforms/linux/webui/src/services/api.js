@@ -197,6 +197,7 @@ function runtimeEventListItem(event, sequence) {
     projectID: event.projectID,
     projectName: event.projectName ?? event.project,
     projectSource: event.projectSource ?? event.project_source,
+    localUser: event.localUser ?? event.local_user,
     codexThreadClass: event.codexThreadClass ?? event.codex_thread_class,
     attributionScope: event.attributionScope ?? event.attribution_scope,
     // Keep the mock and older daemon projections compatible with the UI's

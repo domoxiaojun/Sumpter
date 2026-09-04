@@ -1,3 +1,18 @@
+# Grok / Claude Code 项目归因：本地(kkl)（2026-09-04）
+
+CC 和 Grok 都用 wrapper 按启动目录分项目。有工作区路径时来源升格为 `workspace_local`，
+运行页显示 `sumpter 本地(kkl)`。出站只认 `X-Sumpter-*`，不再保留 `x-kekulv-*`。
+
+- [x] core：`X-Sumpter-User` → `ClientDeclaredMetadata.user`
+- [x] runtime：声明了 workspace 则 `workspace_local`；列表投影带 `localUser`
+- [x] engine：出站剥离 `x-sumpter-user`；去掉 `x-kekulv-*` 黑名单
+- [x] `cc-project-attribution.sh` 补 User；新增 grok wrapper / 自测 / Linux 端点
+- [x] 发布包与 DMG 带 grok 脚本
+- [x] 双端 UI / USAGE / 引导
+- [x] 测试、门禁、提交。不宣称已安装 App 已更新
+
+---
+
 # 修复运行页历史事件表只剩表头（2026-09-04）
 
 截图：进行中两行正常，下面「请求 / 模型 / 路由 / 结果 / 说明」表头还在，行是空白。

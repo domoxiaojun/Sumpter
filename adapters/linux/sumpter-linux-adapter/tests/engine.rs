@@ -2078,6 +2078,32 @@ async fn linux_listener_serves_builtin_attribution_script() {
 }
 
 #[tokio::test]
+async fn linux_listener_serves_builtin_grok_attribution_script() {
+    let fake = FakeTransport::new();
+    let engine = engine_with(two_endpoint_config(), fake);
+
+    let response = engine
+        .handle_request(
+            loopback(),
+            "GET",
+            sumpter_linux_adapter::engine::GROK_ATTRIBUTION_SCRIPT_PATH,
+            vec![],
+            Body::from("request body must not be read"),
+        )
+        .await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.headers().get("cache-control").unwrap(), "no-store");
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(body.starts_with(b"#!/usr/bin/env bash\n"));
+    assert!(
+        body.windows(b"GROK_CONFIG".len())
+            .any(|window| window == b"GROK_CONFIG")
+    );
+}
+
+#[tokio::test]
 async fn linux_attribution_script_obeys_listener_access_policy() {
     let fake = FakeTransport::new();
     let mut config = two_endpoint_config();

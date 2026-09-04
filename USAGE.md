@@ -206,13 +206,12 @@ HTTP 方法和任意路径都会进入同一条转发链：入站鉴权 → Prov
 上游 relay。客户端的原始 path/query、可转发请求头、请求体，以及上游返回的状态、响应头和
 响应体都交给上游；仅移除 Host、连接级 hop-by-hop/传输 framing 头和入站鉴权头，再注入
 Provider 鉴权。
-唯一的窄例外是 Codex Live bootstrap：`POST /v1/live`、`POST /v1/realtime` 和
-`POST /v1/realtime/calls` 与 CPA 一样走 Quicksilver（`application/sdp` / multipart
-封装成 `sdp + session.type=quicksilver` JSON，默认模型 `gpt-live-1-codex`）。
-出站把 POST `/v1/realtime` 改写到 `/v1/realtime/calls?intent=quicksilver&architecture=avas`，
-因为 `architecture=avas` 只允许出现在 WebRTC `/calls`，加在根路径会被上游以
-`invalid_architecture` 拒绝。无 `call_id` 的 `GET /v1/realtime` 才是公开 Realtime
-WebSocket，出站会去掉 `OpenAI-Alpha` 以及 `intent`/`architecture` query。
+Codex Live/Realtime 是选路例外，不是报文例外：`POST /v1/live`、`POST /v1/realtime` 和
+`POST /v1/realtime/calls` 会忽略当前文本会话泄漏的模型名，按 Live 意图选择
+`gpt-live-1-codex` 的精确 mapping；原始 path/query、SDP 或 multipart body 和媒体类型仍原样
+交给 Provider。Sumpter 不把 `/v1/realtime` 改成 `/v1/realtime/calls`，也不二次封装
+Quicksilver JSON；CPA 一类 Provider 自己负责对应协议。无 `call_id` 的 `GET /v1/realtime`
+仍归类为公开 Realtime WebSocket，带 call id 的后续请求则钉回创建会话的入口。
 另一个例外是 `GET /v1/models`（以及 `/models`、`/openai/v1/models` 和带模型 id 的子路径）：
 按当前启用入口的 `mappings` 生成本地目录，不转发到上游。普通 OpenAI 客户端拿到
 `{object:"list",data:[...]}`；Codex Desktop/CLI 带 `client_version` 时拿到 `{models:[...]}`。
@@ -312,6 +311,8 @@ Codex Desktop 语音需要在可用 Provider（例如 CPA）额外声明
 `/v1/live` 会固定按这个 Live 模型选入口，不会继承当前文本会话的模型。
 Live/Realtime 不使用 `*` 通配 mapping，也不会选择 Anthropic 文本入口；未声明精确
 Live mapping 时返回 `no_live_provider`，避免语音请求误发到普通模型（例如 `claude-fable-5`）。
+即使全局 `responseTimeoutSeconds` 保持 `null`，原生 Live/Realtime 启动仍有 15 秒响应头保护；
+当前入口候选耗尽后直接结束，不会按普通请求的无限跨轮策略继续挂起。
 
 ### 5.5 featureRules — 分流（可先全关）
 
@@ -420,16 +421,19 @@ Live mapping 时返回 `no_live_provider`，避免语音请求误发到普通模
 
 ---
 
-## 8. 让 Claude Code 按项目统计（可选）
+## 8. 让 Claude Code / Grok Build 按项目统计（可选）
 
-统计页有「项目 Token 排行」。Codex 会自己上行工作区信息，天生分好项目；**Claude Code 不会**
-——它的 `cwd` / `project_dir` 只给本机 statusLine 和 hook 用，不进发给代理的请求，所以默认
-所有 CC 请求都堆在「未识别项目」里。会话维度不受影响：CC 无条件发 `X-Claude-Code-Session-Id`，
-**会话统计零配置就有**，这里配的只是项目维度。
+统计页有「项目 Token 排行」。Codex 会自己上行工作区信息，天生分好项目；**Claude Code 和 Grok
+Build 默认不会**——工作目录不进发给代理的推理请求，所以未配置时都堆在「未识别项目」里。
 
-要分项目，就让 CC 把项目名随请求带上。Sumpter认三个入站 header：`X-Sumpter-Project` /
-`X-Sumpter-Workspace` / `X-Sumpter-Git-Remote`（代理读完即从出站剥离，中转站看不到）。不用改 CC、
-不用装东西——一个 shell 配置器按你**当前目录**自动生成这三个值。
+要分项目，让客户端按启动目录带上 `X-Sumpter-Project` / `X-Sumpter-Workspace` /
+`X-Sumpter-Git-Remote` / `X-Sumpter-User`（代理读完即从出站剥离）。有工作区路径时来源是
+**本地项目**，带用户名时运行页显示例如 `sumpter 本地(kkl)`。只有项目名、没有路径时仍是
+「客户端声明」。
+
+### Claude Code
+
+CC 的 `cwd` 只给本机 statusLine/hook 用。会话统计零配置就有（`X-Claude-Code-Session-Id`）。
 
 > **在哪台机器配？** 在**跑 Claude Code 的那台机器**上，不是跑 daemon 的那台。daemon 常在远程
 > 或容器里（比如你连的是 `192.168.0.8`），但归因 header 是 CC 进程的环境变量，只能在 CC 本地设。
@@ -507,12 +511,36 @@ listener 直接暴露到公网。
 
 配置器两边命令完全一样，自己会探测 shell 与平台。
 
+### Grok Build
+
+Grok 没有 `ANTHROPIC_CUSTOM_HEADERS`。配置器注入 `grok()`，每次启动用 `GROK_CONFIG` overlay
+写入 `[models].extra_headers`，**不改** `~/.grok/config.toml`。
+
+```bash
+./grok-project-attribution.sh install
+```
+
+Linux 也可从 listener 下载：
+
+```bash
+curl --fail --location \
+  "$SUMPTER_LISTENER_BASE_URL/__sumpter/grok-project-attribution.sh" \
+  -o /tmp/grok-project-attribution.sh
+bash /tmp/grok-project-attribution.sh install
+```
+
+已设置 `GROK_CONFIG_PATH` 时默认拒装（`--force` 才继续），因为 `GROK_CONFIG` 会挡住 path overlay。
+归因的是启动 grok 时所在目录；`grok-desktop` / 绝对路径不走 shell 函数。值必须是可见 ASCII。
+
 ### 手工配置（不想用配置器时）
+
+Claude Code：
 
 ```bash
 export ANTHROPIC_CUSTOM_HEADERS="X-Sumpter-Project: $(basename "$PWD")
 X-Sumpter-Workspace: $PWD
-X-Sumpter-Git-Remote: $(git remote get-url origin 2>/dev/null)"
+X-Sumpter-Git-Remote: $(git remote get-url origin 2>/dev/null)
+X-Sumpter-User: $USER"
 ```
 
 curl 风格 `名字: 值`，**一行一个**，三个都可选。但手工设有几个坑配置器已经替你处理，自己写要注意：
@@ -529,7 +557,7 @@ curl 风格 `名字: 值`，**一行一个**，三个都可选。但手工设有
 ### 几个要知道的
 
 - 工作区在界面上只显示**尾两段**（`.../claude/automode-proxy`），完整绝对路径不落盘，故意的。
-- 项目来源标成「客户端声明」，和 Codex 的「本地项目」分开显示——这值是客户端自己说的，可信度不同。
+- 带了工作区路径时来源是「本地项目」，有 `X-Sumpter-User` 时显示 `本地(用户名)`。只有项目名时仍是「客户端声明」。
 - **这三个 header 被剥，不代表路径没外泄。** CC 每条请求的 body 里本来就带工作目录绝对路径、
   源项目开发规则与 `git status` 摘要，代理对 `system` / `messages` 一字不改地转发。配不配这三个
   header 对外泄面**毫无影响**，只决定代理能不能按项目统计。真在意就只能换可信上游。

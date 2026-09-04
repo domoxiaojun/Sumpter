@@ -69,14 +69,15 @@ chmod +x "$WORK/bin/claude"
 run_snip_pwd() { # $1=shell $2=cd目标 $3=伪造的 PWD(复现父进程传入带尾随斜杠的 cwd)
     local sh="$1" dir="$2" fake="$3" runner="$WORK/runner.sh"
     printf 'cd "%s" || exit 1\nPWD="%s"\n. "%s"\nclaude\n' "$dir" "$fake" "$SNIP" > "$runner"
-    HOME="$FAKE_HOME" PATH="$WORK/bin:$PATH" GIT_CEILING_DIRECTORIES="$WORK" "$sh" "$runner"
+    USER=kkl LOGNAME=kkl HOME="$FAKE_HOME" PATH="$WORK/bin:$PATH" \
+        GIT_CEILING_DIRECTORIES="$WORK" "$sh" "$runner"
 }
 
 run_snip() { # $1=shell $2=cwd $3=预置 ANTHROPIC_CUSTOM_HEADERS
     local sh="$1" dir="$2" preset="${3:-}" runner="$WORK/runner.sh"
     printf 'cd "%s" || exit 1\n. "%s"\nclaude\n' "$dir" "$SNIP" > "$runner"
-    ANTHROPIC_CUSTOM_HEADERS="$preset" HOME="$FAKE_HOME" PATH="$WORK/bin:$PATH" \
-        GIT_CEILING_DIRECTORIES="$WORK" "$sh" "$runner"
+    ANTHROPIC_CUSTOM_HEADERS="$preset" USER=kkl LOGNAME=kkl HOME="$FAKE_HOME" \
+        PATH="$WORK/bin:$PATH" GIT_CEILING_DIRECTORIES="$WORK" "$sh" "$runner"
 }
 
 printf '== 安装器 ==\n'
@@ -223,26 +224,30 @@ for sh in "${TEST_SHELLS[@]}"; do
     name="$(basename "$sh")"
 
     out="$(run_snip "$sh" "$GITDIR")"
-    check "[$name] git 仓库发 3 条" "$(printf '%s\n' "$out" | grep -c '^X-Sumpter-')" 3
+    check "[$name] git 仓库发 4 条" "$(printf '%s\n' "$out" | grep -c '^X-Sumpter-')" 4
     check "[$name] 项目名取目录末段" \
         "$(printf '%s\n' "$out" | grep '^X-Sumpter-Project:')" 'X-Sumpter-Project: proj-git'
     check "[$name] git remote 正确" \
         "$(printf '%s\n' "$out" | grep '^X-Sumpter-Git-Remote:')" \
         'X-Sumpter-Git-Remote: https://example.invalid/probe.git'
+    check "[$name] 本机用户名" \
+        "$(printf '%s\n' "$out" | grep '^X-Sumpter-User:')" 'X-Sumpter-User: kkl'
 
     out="$(run_snip "$sh" "$PLAINDIR")"
-    check "[$name] 非 git 目录发 2 条" "$(printf '%s\n' "$out" | grep -c '^X-Sumpter-')" 2
+    check "[$name] 非 git 目录发 3 条" "$(printf '%s\n' "$out" | grep -c '^X-Sumpter-')" 3
     check "[$name] 非 git 不发 Git-Remote" \
         "$(printf '%s\n' "$out" | grep -c 'Git-Remote' || true)" 0
 
-    # 非 ASCII:一条都不能发,否则 CC 会拒绝启动
+    # 非 ASCII 路径不能塞进 Project/Workspace，否则 CC 会拒绝启动；用户名仍可发。
     out="$(run_snip "$sh" "$CJKDIR")"
-    check "[$name] 中文目录名不发任何 header" "$out" ''
+    check "[$name] 中文目录不发项目路径" \
+        "$(printf '%s\n' "$out" | grep -c 'Project:\|Workspace:' || true)" 0
+    check "[$name] 中文目录仍发用户名" "$out" 'X-Sumpter-User: kkl'
 
     # 合并:保留外部 header
     out="$(run_snip "$sh" "$GITDIR" 'X-Foo: keep-me')"
     check "[$name] 保留外部 header" "$(printf '%s\n' "$out" | grep -c '^X-Foo: keep-me')" 1
-    check "[$name] 外部+自身共 4 条" "$(printf '%s\n' "$out" | grep -c '^X-')" 4
+    check "[$name] 外部+自身共 5 条" "$(printf '%s\n' "$out" | grep -c '^X-')" 5
 
     # PWD 带尾随斜杠时项目名不能变空(实测踩到过:只发 workspace 不发 project)
     out="$(run_snip_pwd "$sh" "$GITDIR" "$GITDIR/")"
@@ -259,9 +264,10 @@ for sh in "${TEST_SHELLS[@]}"; do
 
     # 非 ASCII 目录下也不能把继承的过期归因透传出去
     out="$(run_snip "$sh" "$CJKDIR" 'X-Sumpter-Project: stale')"
-    check "[$name] 中文目录+继承过期值 → 清除" "$out" ''
+    check "[$name] 中文目录+继承过期值 → 只留用户名" "$out" 'X-Sumpter-User: kkl'
     out="$(run_snip "$sh" "$CJKDIR" 'X-Foo: keep-me')"
-    check "[$name] 中文目录仍保留外部 header" "$out" 'X-Foo: keep-me'
+    check "[$name] 中文目录仍保留外部 header" \
+        "$(printf '%s\n' "$out" | grep -c '^X-Foo: keep-me')" 1
 
     # upsert:替换而非叠加已有的 X-Sumpter-*
     out="$(run_snip "$sh" "$GITDIR" 'X-Sumpter-Project: stale')"

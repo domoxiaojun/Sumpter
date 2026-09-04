@@ -473,10 +473,21 @@ export const CC_ATTRIBUTION_STATE = {
   unknown: 'unknown',
 };
 
+function rowHasClientKind(row, kind) {
+  const kinds = Array.isArray(row?.clientKinds) ? row.clientKinds.map(cleanText) : [];
+  return kinds.includes(kind);
+}
+
 export function ccAttributionState(rows, clientKindFacets) {
   const list = Array.isArray(rows) ? rows : [];
-  // 出现任何 client_declared 行就是配好了:剩下的未识别行是配置生效前的历史事件。
+  // 纯项目名声明仍是 client_declared；wrapper 带工作区后升格 workspace_local。
   if (list.some((row) => cleanText(row?.source ?? row?.projectSource) === 'client_declared')) {
+    return CC_ATTRIBUTION_STATE.configured;
+  }
+  if (list.some((row) => (
+    cleanText(row?.source ?? row?.projectSource) === 'workspace_local'
+      && rowHasClientKind(row, 'claude_code')
+  ))) {
     return CC_ATTRIBUTION_STATE.configured;
   }
   const facets = Array.isArray(clientKindFacets) ? clientKindFacets : [];
@@ -515,7 +526,11 @@ export function projectLabelText(value) {
   return text;
 }
 
-export function projectSourceLabel(source) {
+export function projectSourceLabel(source, localUser) {
+  const user = cleanText(localUser);
+  if (cleanText(source) === 'workspace_local' && user) {
+    return `本地(${user})`;
+  }
   const labels = {
     workspace_local: '本地项目',
     client_declared: '客户端声明',
@@ -580,26 +595,43 @@ export function eventProjectContext(event) {
   // 否则(SSE 推送、单事件详情、旧 daemon)按下面的完整字段自行推导。
   const projectedName = cleanText(event?.projectName);
   const projectedSource = cleanText(event?.projectSource);
+  const projectedLocalUser = cleanText(event?.localUser ?? event?.local_user);
   if (projectedName) {
+    const sourceLabel = projectSourceLabel(projectedSource, projectedLocalUser);
+    const nameLabel = projectLabelText(projectedName);
+    const compact = projectedSource === 'workspace_local' && projectedLocalUser
+      ? `${nameLabel} 本地(${projectedLocalUser})`
+      : `${nameLabel} · ${sourceLabel}`;
     return {
       applicable: true,
       name: projectedName,
       source: projectedSource || 'missing_workspace_metadata',
-      label: `${projectLabelText(projectedName)} · ${projectSourceLabel(projectedSource)}`,
+      localUser: projectedLocalUser,
+      label: compact,
     };
   }
 
   const metadata = eventCodexMetadata(event);
   const entries = codexWorkspaceEntries(metadata);
   if (!metadata || !entries.length) {
-    // Codex 没给结构化 workspace 时才看客户端自称的归因(Claude Code 走这条)。
     const declared = clientDeclaredProject(event);
     if (declared) {
+      const user = cleanText(event?.localUser ?? event?.local_user ?? event?.clientDeclared?.user);
+      const source = declared.workspace
+        ? 'workspace_local'
+        : declared.remote
+          ? 'workspace_remote_fallback'
+          : 'client_declared';
+      const sourceLabel = projectSourceLabel(source, user);
+      const compact = source === 'workspace_local' && user
+        ? `${declared.name} 本地(${user})`
+        : `${declared.label} · ${sourceLabel}`;
       return {
         applicable: true,
         name: declared.name,
-        source: 'client_declared',
-        label: `${declared.label} · ${projectSourceLabel('client_declared')}`,
+        source,
+        localUser: user,
+        label: compact,
       };
     }
     return {

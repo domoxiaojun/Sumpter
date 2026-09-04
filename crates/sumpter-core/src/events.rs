@@ -265,6 +265,7 @@ fn is_none<T>(v: &Option<T>) -> bool {
 pub const CODEX_METADATA_MAX_JSON_BYTES: usize = 64 * 1024;
 const CODEX_METADATA_MAX_ID_BYTES: usize = 128;
 const CODEX_METADATA_MAX_LABEL_BYTES: usize = 128;
+const LOCAL_USER_MAX_BYTES: usize = 32;
 const CODEX_METADATA_MAX_AGENT_NAME_BYTES: usize = 256;
 const CODEX_METADATA_MAX_PATH_BYTES: usize = 256;
 const CODEX_METADATA_MAX_URL_BYTES: usize = 256;
@@ -347,15 +348,13 @@ pub struct CodexCompactionMetadata {
     pub strategy: Option<String>,
 }
 
-/// 客户端自己声明的项目归因，来自入站 `X-Sumpter-*` header。
+/// 客户端用入站 `X-Sumpter-*` header 补上的项目归因。
 ///
-/// 用途是给 Claude Code 之类**不上行 workspace 结构**的客户端补项目维度：CC 的
-/// `cwd`/`workspace.project_dir` 只存在于 statusLine/hook 的 stdin JSON，不进请求体也不进
-/// header，代理在 HTTP 层看不到，所以只能由用户通过 `ANTHROPIC_CUSTOM_HEADERS` 主动带上。
+/// 给 Claude Code / Grok Build 这类**不上行 Codex workspace 结构**的客户端用：cwd 只在
+/// 本机，不进推理请求，所以由 wrapper 按启动目录带上。带了工作区路径时 runtime 会升格成
+/// `workspace_local`（界面「本地(user)」）；只有项目名、没有路径时仍是 `client_declared`。
 ///
-/// 与 [`CodexMetadata`] 的关键区别是**可信度**：这里的值是客户端自称的，不是客户端结构化采集
-/// 的，因此归因时排在 Codex workspace 之后，并在 analytics 里标成独立来源。三个 header 都在
-/// 出站黑名单里，读完即剥离，不会外泄给上游。
+/// 排在 Codex 结构化 `workspaces` 之后。四个 header 都在出站黑名单里，读完即剥离。
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientDeclaredMetadata {
@@ -368,20 +367,26 @@ pub struct ClientDeclaredMetadata {
     /// Git remote，已去掉凭据与 query/fragment。
     #[serde(rename = "gitRemote", default, skip_serializing_if = "is_none")]
     pub git_remote: Option<String>,
+    /// 本机用户名（`X-Sumpter-User`），只用于来源文案「本地(kkl)」，不进项目 identity。
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub user: Option<String>,
     /// 有界源项目名，仅用于本地 SQLite 复盘；显示/统计仍使用 `project`。
     #[serde(rename = "sourceProject", default, skip_serializing_if = "is_none")]
     pub source_project: Option<String>,
     /// 有界源工作区路径，仅用于本地 SQLite 复盘；不把原始 Git remote 凭据复制进来。
     #[serde(rename = "sourceWorkspace", default, skip_serializing_if = "is_none")]
     pub source_workspace: Option<String>,
+    /// 有界源用户名，仅用于本地 SQLite 复盘。
+    #[serde(rename = "sourceUser", default, skip_serializing_if = "is_none")]
+    pub source_user: Option<String>,
 }
 
 impl ClientDeclaredMetadata {
-    /// 从入站 header 解析客户端声明的项目归因。三个值全缺时返回 `None`，
-    /// 让未配置的用户与历史事件保持紧凑 wire 形状。
+    /// 从入站 header 解析客户端声明的项目归因。项目/工作区/remote/user 全缺时返回
+    /// `None`，让未配置的用户与历史事件保持紧凑 wire 形状。
     ///
-    /// 畸形输入（控制字符、超长、空值）一律丢弃该字段而不是报错——归因是观测能力，
-    /// 不能影响请求转发。
+    /// 畸形输入（控制字符、超长、空值、非法用户名）一律丢弃该字段而不是报错——归因是
+    /// 观测能力，不能影响请求转发。
     pub fn from_headers(headers: &[(String, String)]) -> Option<Self> {
         // 一次性 state：这些脱敏函数的 flags 服务于 Codex 观测口径，客户端声明不复用它的
         // redacted/conflict 报告，所以就地丢弃。
@@ -389,6 +394,7 @@ impl ClientDeclaredMetadata {
 
         let project_raw = Self::clean_header(headers, "x-sumpter-project", &mut state);
         let workspace_raw = Self::clean_header(headers, "x-sumpter-workspace", &mut state);
+        let user_raw = Self::clean_header(headers, "x-sumpter-user", &mut state);
         let project = project_raw
             .as_deref()
             .and_then(|raw| bounded_nonempty(raw, CODEX_METADATA_MAX_LABEL_BYTES, &mut state));
@@ -403,12 +409,21 @@ impl ClientDeclaredMetadata {
         });
         let git_remote = Self::clean_header(headers, "x-sumpter-git-remote", &mut state)
             .and_then(|raw| sanitize_remote_url(&raw, &mut state));
+        let user = user_raw
+            .as_deref()
+            .and_then(|raw| sanitize_local_user(raw, &mut state));
+        let source_user = user_raw.as_deref().and_then(|raw| {
+            source_bounded_nonempty(raw, CODEX_METADATA_MAX_SOURCE_LABEL_BYTES, &mut state)
+                .and_then(|raw| sanitize_local_user(&raw, &mut state))
+        });
 
         if project.is_none()
             && workspace.is_none()
             && git_remote.is_none()
+            && user.is_none()
             && source_project.is_none()
             && source_workspace.is_none()
+            && source_user.is_none()
         {
             return None;
         }
@@ -416,8 +431,10 @@ impl ClientDeclaredMetadata {
             project,
             workspace,
             git_remote,
+            user,
             source_project,
             source_workspace,
+            source_user,
         })
     }
 
@@ -659,8 +676,7 @@ impl CodexMetadata {
         }
 
         if let Some(client_metadata) = body.and_then(Value::as_object).and_then(|body| {
-            body.get("client_metadata")
-                .or_else(|| body.get("clientMetadata"))
+            object_value(body, "client_metadata").or_else(|| object_value(body, "clientMetadata"))
         }) {
             match client_metadata {
                 Value::Object(object) => {
@@ -1333,7 +1349,7 @@ fn object_string(
     max_bytes: usize,
     state: &mut CodexMetadataParseState,
 ) -> Option<String> {
-    let value = object.get(key)?;
+    let value = object_value(object, key)?;
     if value.is_null() {
         return None;
     }
@@ -1342,6 +1358,19 @@ fn object_string(
         return None;
     };
     bounded_nonempty(raw, max_bytes, state)
+}
+
+/// Look up metadata keys case-insensitively.  Codex Desktop has emitted both
+/// canonical snake_case keys and transport-normalized variants such as
+/// `Originator`/`ClientMetadata`; accepting the latter affects observation
+/// only and never changes the bytes sent upstream.
+fn object_value<'a>(object: &'a Map<String, Value>, key: &str) -> Option<&'a Value> {
+    object.get(key).or_else(|| {
+        object
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(key))
+            .map(|(_, value)| value)
+    })
 }
 
 fn object_bool(
@@ -1731,6 +1760,19 @@ fn sanitize_workspace_path(raw: &str, state: &mut CodexMetadataParseState) -> St
     }
     bounded_nonempty(&display, CODEX_METADATA_MAX_PATH_BYTES, state)
         .unwrap_or_else(|| "workspace".to_string())
+}
+
+/// POSIX-ish 用户名：可见 ASCII、无路径分隔，只用于「本地(kkl)」来源文案。
+fn sanitize_local_user(raw: &str, state: &mut CodexMetadataParseState) -> Option<String> {
+    let value = bounded_nonempty(raw, LOCAL_USER_MAX_BYTES, state)?;
+    if value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        Some(value)
+    } else {
+        None
+    }
 }
 
 fn sanitize_remote_url(raw: &str, state: &mut CodexMetadataParseState) -> Option<String> {
@@ -2913,6 +2955,28 @@ mod tests {
             Some("https://github.com/domoxiaojun/sumpter.git")
         );
 
+        let with_user = ClientDeclaredMetadata::from_headers(&[
+            ("x-sumpter-project".into(), "sumpter".into()),
+            (
+                "x-sumpter-workspace".into(),
+                "/Users/kkl/Documents/claude/sumpter".into(),
+            ),
+            ("x-sumpter-user".into(), "kkl".into()),
+        ])
+        .expect("declared");
+        assert_eq!(with_user.user.as_deref(), Some("kkl"));
+        assert_eq!(with_user.source_user.as_deref(), Some("kkl"));
+        assert!(
+            ClientDeclaredMetadata::from_headers(&[("x-sumpter-user".into(), "kkl/root".into())])
+                .is_none(),
+            "带路径分隔的用户名必须丢弃"
+        );
+        assert!(
+            ClientDeclaredMetadata::from_headers(&[("x-sumpter-user".into(), "用户".into())])
+                .is_none(),
+            "非 ASCII 用户名必须丢弃"
+        );
+
         // 空值、纯空白、含控制字符一律丢弃该字段。
         let bad = vec![
             ("x-sumpter-project".into(), "   ".into()),
@@ -2946,8 +3010,10 @@ mod tests {
             project: Some("demo".into()),
             workspace: None,
             git_remote: None,
+            user: None,
             source_project: None,
             source_workspace: None,
+            source_user: None,
         });
         let json = serde_json::to_value(&event).expect("encode");
         assert_eq!(

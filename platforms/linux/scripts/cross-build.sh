@@ -134,6 +134,7 @@ check_file "$ROOT/scripts/smoke.sh"
 check_file "$ROOT/scripts/install.sh"
 check_file "$ROOT/scripts/uninstall.sh"
 check_file "$ROOT/scripts/cc-project-attribution.sh"
+check_file "$ROOT/scripts/grok-project-attribution.sh"
 check_directory "$ROOT/web"
 check_file "$ROOT/web/index.html"
 
@@ -193,7 +194,7 @@ for entry in "${TARGETS[@]}"; do
     chmod 0755 "$stage/sumpterd"
     cp -R "$ROOT/web/." "$stage/web/"
     for script in start.sh stop.sh smoke.sh install.sh bootstrap-install.sh uninstall.sh \
-        bootstrap-uninstall.sh cc-project-attribution.sh; do
+        bootstrap-uninstall.sh cc-project-attribution.sh grok-project-attribution.sh; do
         cp "$ROOT/scripts/$script" "$stage/scripts/$script"
         chmod 0755 "$stage/scripts/$script"
     done

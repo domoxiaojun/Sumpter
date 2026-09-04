@@ -17,14 +17,22 @@ public enum RuntimeEventPresentation {
         /// 事件详情「项目来源」行的文案。UsagePane 的维度表带「来源：」前缀,
         /// 这里由 InfoRow 标题承担,所以只给值。
         public var label: String {
+            displayLabel(localUser: nil)
+        }
+
+        public func displayLabel(localUser: String?) -> String {
+            if self == .workspaceLocal, let user = localUser?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !user.isEmpty {
+                return "本地(\(user))"
+            }
             switch self {
-            case .workspaceLocal: "本地项目"
-            case .workspaceRemoteFallback: "远程仓库回退"
-            case .workspaceUnidentified: "未识别"
-            case .multipleWorkspaces: "多个项目，未拆分"
-            case .clientDeclared: "客户端声明"
-            case .missingWorkspaceMetadata: "未记录"
-            case .internalFeature: "后台功能"
+            case .workspaceLocal: return "本地项目"
+            case .workspaceRemoteFallback: return "远程仓库回退"
+            case .workspaceUnidentified: return "未识别"
+            case .multipleWorkspaces: return "多个项目，未拆分"
+            case .clientDeclared: return "客户端声明"
+            case .missingWorkspaceMetadata: return "未记录"
+            case .internalFeature: return "后台功能"
             }
         }
     }
@@ -34,11 +42,13 @@ public enum RuntimeEventPresentation {
         public let name: String
         public let source: ProjectSource
         public let detail: String?
+        public let localUser: String?
 
-        public init(name: String, source: ProjectSource, detail: String? = nil) {
+        public init(name: String, source: ProjectSource, detail: String? = nil, localUser: String? = nil) {
             self.name = name
             self.source = source
             self.detail = detail
+            self.localUser = localUser
         }
     }
 
@@ -57,9 +67,11 @@ public enum RuntimeEventPresentation {
         declared: ClientDeclaredMetadata?,
         projectedName: String? = nil,
         projectedSource: String? = nil,
+        projectedLocalUser: String? = nil,
         attributionScope: String? = nil
     ) -> ProjectContext? {
         guard eventKind == "client" else { return nil }
+        let localUser = nonEmpty(projectedLocalUser) ?? nonEmpty(declared?.user)
 
         if attributionScope == ProjectSource.internalFeature.rawValue
             || projectedSource == ProjectSource.internalFeature.rawValue {
@@ -78,7 +90,8 @@ public enum RuntimeEventPresentation {
                 ?? .missingWorkspaceMetadata
             return ProjectContext(
                 name: projected == "unidentified_project" ? unidentifiedProjectName : projected,
-                source: source
+                source: source,
+                localUser: localUser
             )
         }
 
@@ -100,23 +113,32 @@ public enum RuntimeEventPresentation {
             return ProjectContext(
                 name: projects[0],
                 source: source,
-                detail: remotes.first ?? (path.isEmpty ? nil : path)
+                detail: remotes.first ?? (path.isEmpty ? nil : path),
+                localUser: localUser
             )
         }
 
-        // Codex 没给结构化 workspace 时才看客户端自称的归因(Claude Code 走这条)。
         if let declared, !declared.isEmpty {
             let project = nonEmpty(declared.project)
             let workspace = nonEmpty(declared.workspace)
             let remote = nonEmpty(declared.gitRemote)
+            let source: ProjectSource
+            if workspace != nil {
+                source = .workspaceLocal
+            } else if remote != nil {
+                source = .workspaceRemoteFallback
+            } else {
+                source = .clientDeclared
+            }
             if let name = project ?? workspace ?? remote {
                 let detail = [workspace, remote]
                     .compactMap { $0 }
                     .filter { $0 != name }
                 return ProjectContext(
                     name: name,
-                    source: .clientDeclared,
-                    detail: detail.isEmpty ? nil : detail.joined(separator: " · ")
+                    source: source,
+                    detail: detail.isEmpty ? nil : detail.joined(separator: " · "),
+                    localUser: localUser
                 )
             }
         }
@@ -124,13 +146,14 @@ public enum RuntimeEventPresentation {
         return ProjectContext(name: unidentifiedProjectName, source: .missingWorkspaceMetadata)
     }
 
-    /// 列表行摘要用的一行归因。未识别与 Codex 情形的文案保持历史口径不变。
+    /// 列表行摘要用的一行归因。有本机用户时显示 `sumpter 本地(kkl)`。
     public static func projectAttribution(
         eventKind: String,
         metadata: CodexMetadata?,
         declared: ClientDeclaredMetadata? = nil,
         projectedName: String? = nil,
         projectedSource: String? = nil,
+        projectedLocalUser: String? = nil,
         attributionScope: String? = nil
     ) -> String? {
         guard let context = projectContext(
@@ -139,6 +162,7 @@ public enum RuntimeEventPresentation {
             declared: declared,
             projectedName: projectedName,
             projectedSource: projectedSource,
+            projectedLocalUser: projectedLocalUser,
             attributionScope: attributionScope
         )
         else { return nil }
@@ -147,6 +171,11 @@ public enum RuntimeEventPresentation {
             return "未识别项目 · 来源未记录"
         case .clientDeclared:
             return "项目: \(context.name)（客户端声明）"
+        case .workspaceLocal:
+            if let user = context.localUser, !user.isEmpty {
+                return "\(context.name) 本地(\(user))"
+            }
+            return "项目: " + context.name
         default:
             return "项目: " + context.name
         }

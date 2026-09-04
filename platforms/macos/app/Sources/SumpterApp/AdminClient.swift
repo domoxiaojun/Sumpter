@@ -699,6 +699,7 @@ public enum AdminWire {
         public let clientDeclared: ClientDeclaredMetadata?
         public let projectName: String?
         public let projectSource: String?
+        public let localUser: String?
         public let codexThreadClass: String?
         public let attributionScope: String?
         public let failover: Bool
@@ -745,6 +746,7 @@ public enum AdminWire {
             clientDeclared = event.clientDeclared
             projectName = event.projectName
             projectSource = event.projectSource
+            localUser = event.localUser
             codexThreadClass = event.codexThreadClass
             attributionScope = event.attributionScope
             failover = event.failover
@@ -791,6 +793,7 @@ public enum AdminWire {
                 clientDeclared: clientDeclared,
                 projectName: projectName,
                 projectSource: projectSource,
+                localUser: localUser,
                 codexThreadClass: codexThreadClass,
                 attributionScope: attributionScope
             )
@@ -842,6 +845,7 @@ public enum AdminWire {
             if let clientDeclared { event.clientDeclared = clientDeclared }
             if let projectName { event.projectName = projectName }
             if let projectSource { event.projectSource = projectSource }
+            if let localUser { event.localUser = localUser }
             if let codexThreadClass { event.codexThreadClass = codexThreadClass }
             if let attributionScope { event.attributionScope = attributionScope }
             return event

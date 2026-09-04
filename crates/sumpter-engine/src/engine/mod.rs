@@ -71,6 +71,16 @@ const SESSION_STICKY_MAX_ENTRIES: usize = 2000;
 const RETRY_BACKOFF_INITIAL_SECS: f64 = 0.5;
 const RETRY_BACKOFF_FACTOR: f64 = 1.7;
 const RETRY_BACKOFF_MAX_SECS: f64 = 30.0;
+/// Native Realtime/Live bootstraps must not wait forever for response headers.
+/// This is intentionally separate from the user-configurable ordinary request
+/// timeout: `null` keeps the historical "client decides" behavior for text
+/// and streaming APIs, while voice setup needs a proxy-side safety bound so a
+/// dead upstream cannot leave an `inFlight` event forever.
+const REALTIME_RESPONSE_TIMEOUT_SECS: f64 = 15.0;
+/// A WebSocket upgrade has no HTTP response-body relay where the ordinary
+/// response-header timeout can be applied, so protect the upstream TCP/TLS/
+/// handshake independently.
+const REALTIME_WEBSOCKET_CONNECT_TIMEOUT_SECS: f64 = 15.0;
 /// Provider/model health is intentionally shorter-lived than the persisted
 /// session affinity.  A transient 429/5xx should move traffic away from the
 /// bad mapping, but it must not make a provider disappear until the sidecar
@@ -169,6 +179,7 @@ fn client_declared_size(declared: &ClientDeclaredMetadata) -> usize {
     declared.project.as_ref().map_or(0, String::len)
         + declared.workspace.as_ref().map_or(0, String::len)
         + declared.git_remote.as_ref().map_or(0, String::len)
+        + declared.user.as_ref().map_or(0, String::len)
 }
 
 fn diagnostic_attempt_size(attempt: &DiagnosticAttemptCapture) -> usize {
@@ -2399,11 +2410,27 @@ impl Engine {
         {
             return;
         }
-        if let Err(error) = self.flush_resource_bindings() {
-            self.inner
+        // Snapshotting and writing happen without holding the session maps.
+        // A registration can race with the write; consume the dirty bit only
+        // after a successful snapshot and immediately flush again when a
+        // mutation was observed during the write.  On failure restore the bit
+        // so the background flusher can retry instead of silently losing the
+        // binding across a restart.
+        loop {
+            if let Err(error) = self.flush_resource_bindings() {
+                self.inner
+                    .resource_bindings_dirty
+                    .store(true, Ordering::Release);
+                tracing::warn!("resource_bindings.json 落盘失败: {error}");
+                return;
+            }
+            if !self
+                .inner
                 .resource_bindings_dirty
-                .store(true, Ordering::Release);
-            tracing::warn!("resource_bindings.json 落盘失败: {error}");
+                .swap(false, Ordering::AcqRel)
+            {
+                return;
+            }
         }
     }
 
@@ -2748,6 +2775,7 @@ impl Engine {
             status,
             message,
             None,
+            None,
         );
     }
 
@@ -2762,6 +2790,7 @@ impl Engine {
         status: u16,
         message: &str,
         frame_metadata: Option<CodexMetadata>,
+        frame_model: Option<String>,
     ) {
         let context = self.inbound_request_context("GET", path_and_query, headers);
         let header_metadata = CodexMetadata::from_request(headers, None);
@@ -2775,10 +2804,15 @@ impl Engine {
             .split_once('?')
             .and_then(|(_, query)| decoded_query_value(query, "model"))
             .filter(|model| !model.trim().is_empty());
+        let frame_model = frame_model.and_then(|model| {
+            let model = model.trim();
+            (!model.is_empty() && model.len() <= 256 && !model.chars().any(char::is_control))
+                .then(|| model.to_string())
+        });
         self.record_rejected_client_with_context(
             i64::from(status),
             message,
-            query_model,
+            query_model.or(frame_model),
             Some(RequestPurpose::Standard),
             client_kind,
             codex_metadata,
@@ -3421,6 +3455,7 @@ impl Engine {
                 400,
                 "websocket model is required (query model or first response.create frame)",
                 frame_metadata,
+                initial_message.as_ref().and_then(websocket_message_model),
             );
             let _ = send_websocket_json_error(
                 &mut socket,
@@ -3441,6 +3476,7 @@ impl Engine {
                 400,
                 "invalid websocket model",
                 frame_metadata,
+                initial_message.as_ref().and_then(websocket_message_model),
             );
             let _ = send_websocket_json_error(
                 &mut socket,
@@ -3761,8 +3797,13 @@ impl Engine {
                     upstream_request.headers_mut().insert(name, value);
                 }
             }
-            match tokio_tungstenite::connect_async(upstream_request).await {
-                Ok((mut upstream, _)) => {
+            let connect_result = tokio::time::timeout(
+                Duration::from_secs_f64(REALTIME_WEBSOCKET_CONNECT_TIMEOUT_SECS),
+                tokio_tungstenite::connect_async(upstream_request),
+            )
+            .await;
+            match connect_result {
+                Ok(Ok((mut upstream, _))) => {
                     if let Some(session) = session.as_ref()
                         && let Err(error) = send_realtime_session_update(
                             &mut upstream,
@@ -3796,7 +3837,7 @@ impl Engine {
                         handshake_ttfb_ms: attempt_started.elapsed().as_millis() as i64,
                     });
                 }
-                Err(error) => {
+                Ok(Err(error)) => {
                     let (status, message) = websocket_connect_error(&error);
                     let retry_after = websocket_connect_retry_after(&error);
                     if status == 0 || RetryPolicy::is_endpoint_retryable_status(status) {
@@ -3818,6 +3859,17 @@ impl Engine {
                         return Err(prepared_error);
                     }
                     last_error = Some(prepared_error);
+                }
+                Err(_) => {
+                    self.note_provider_model_failure(endpoint, None, None, now_unix());
+                    last_error = Some(
+                        WebSocketPrepareError::new(
+                            0,
+                            "upstream_error",
+                            "upstream websocket connect timed out",
+                        )
+                        .with_attempt(endpoint, attempt_count, None, None),
+                    );
                 }
             }
         }
@@ -3924,6 +3976,16 @@ impl Engine {
                 headers: &headers,
             }) == AccessDecision::Deny
         {
+            self.record_rejected_client_with_metadata(
+                403,
+                self.inner.platform.status_denied_error(),
+                None,
+                Some(RequestPurpose::Standard),
+                detect_client_kind(&headers, true),
+                CodexMetadata::from_request(&headers, None),
+                ClientDeclaredMetadata::from_headers(&headers),
+                Some(ProviderProtocol::OpenAI),
+            );
             return error_response(
                 StatusCode::FORBIDDEN,
                 &[("error", self.inner.platform.status_denied_error())],
@@ -3931,6 +3993,16 @@ impl Engine {
         }
 
         if !path.starts_with("/__") && self.runtime_storage_backpressured() {
+            self.record_rejected_client_with_metadata(
+                503,
+                "runtime_storage_backpressure",
+                None,
+                Some(RequestPurpose::Standard),
+                detect_client_kind(&headers, true),
+                CodexMetadata::from_request(&headers, None),
+                ClientDeclaredMetadata::from_headers(&headers),
+                Some(ProviderProtocol::OpenAI),
+            );
             return error_response(
                 StatusCode::SERVICE_UNAVAILABLE,
                 &[("error", "runtime_storage_backpressure")],
@@ -3986,12 +4058,32 @@ impl Engine {
                 );
             }
             if !is_local_models_path(path) {
+                self.record_rejected_client_with_metadata(
+                    404,
+                    "model path not found",
+                    None,
+                    Some(RequestPurpose::Standard),
+                    detect_client_kind(&headers, true),
+                    CodexMetadata::from_request(&headers, None),
+                    ClientDeclaredMetadata::from_headers(&headers),
+                    Some(ProviderProtocol::OpenAI),
+                );
                 return error_response(
                     StatusCode::NOT_FOUND,
                     &[("error", "not_found"), ("path", path)],
                 );
             }
             if !method.eq_ignore_ascii_case("GET") {
+                self.record_rejected_client_with_metadata(
+                    405,
+                    "method not allowed for models",
+                    None,
+                    Some(RequestPurpose::Standard),
+                    detect_client_kind(&headers, true),
+                    CodexMetadata::from_request(&headers, None),
+                    ClientDeclaredMetadata::from_headers(&headers),
+                    Some(ProviderProtocol::OpenAI),
+                );
                 return method_not_allowed_response("GET");
             }
             return local_models_response(&config, path, query, &headers);
@@ -4578,11 +4670,13 @@ impl Engine {
         // openai_compat client during route classification and rejection
         // accounting.  Keep this metadata as the authoritative attribution
         // source for the whole request; normalization must never erase it.
-        let metadata_body_before_normalization = content_type
-            .as_deref()
-            .is_some_and(content_type_is_json)
-            .then(|| serde_json::from_slice::<Value>(&body).ok())
-            .flatten();
+        // Metadata is observational and must not make an opaque request less
+        // opaque.  For JSON requests we parse a bounded body; when a client
+        // omitted Content-Type we only sniff a JSON-looking object prefix so
+        // Codex Desktop's body-only `originator` still contributes to
+        // attribution.  The original bytes are retained for the relay.
+        let metadata_body_before_normalization =
+            metadata_json_body_hint(&body, content_type.as_deref());
         let codex_metadata =
             CodexMetadata::from_request(&headers, metadata_body_before_normalization.as_ref());
         if let Some(originator) = codex_metadata
@@ -4629,42 +4723,12 @@ impl Engine {
                 );
             }
         }
-        // CPA uses the same Live handler for POST /v1/live and POST /v1/realtime.
-        // Codex Desktop may also send the current chat model on those paths;
-        // wrap the SDP/multipart bootstrap so routing cannot inherit it.
-        if kind == PassthroughKind::Realtime
-            && should_normalize_codex_live_request(
-                method,
-                path_and_query,
-                &body,
-                content_type.as_deref(),
-                client_kind,
-            )
-        {
-            set_current_route_intent("live");
-            let (normalized_body, normalized_content_type) =
-                match prepare_codex_live_request(&body, content_type.as_deref().unwrap_or("")) {
-                    Ok(request) => request,
-                    Err(reason) => {
-                        self.record_rejected_client_with_metadata(
-                            400,
-                            reason,
-                            None,
-                            Some(purpose),
-                            client_kind,
-                            codex_metadata.clone(),
-                            ClientDeclaredMetadata::from_headers(&headers),
-                            Some(source_format),
-                        );
-                        return error_response(
-                            StatusCode::BAD_REQUEST,
-                            &[("error", "invalid_request"), ("message", reason)],
-                        );
-                    }
-                };
-            body = normalized_body;
-            content_type = Some(normalized_content_type);
-        }
+        // Live/Realtime intent affects provider selection only.  CPA already
+        // owns the Codex WebRTC/Quicksilver protocol adapter, so converting a
+        // multipart or SDP bootstrap here would make the second proxy see a
+        // different request than a direct Codex -> CPA connection.  Keep the
+        // original path, media type and body; only the routing model below is
+        // forced away from a leaked surrounding chat model.
         if kind == PassthroughKind::Realtime
             && is_realtime_call_bootstrap_path(path_without_query(path_and_query))
             && let Some(session) = self.realtime_client_secret_session(&headers)
@@ -5941,7 +6005,13 @@ impl Engine {
                     )
                 };
 
-                let response_timeout = effective_response_timeout(retry, endpoint);
+                let response_timeout = effective_response_timeout_for_request(
+                    retry,
+                    endpoint,
+                    client_out
+                        .as_ref()
+                        .is_some_and(|client| client.passthrough_kind == PassthroughKind::Realtime),
+                );
                 let concurrency = retry.pinned_ip_concurrency.max(1) as usize;
                 let capture_realtime_secret = client_out
                     .as_ref()
@@ -6073,7 +6143,16 @@ impl Engine {
 
             // 整轮结束：只要出现过明确可重试 HTTP 状态或首响应前网络故障，就可
             // 跨轮重试。历史字段 maxDeferredRounds 保留磁盘兼容，现约束全部可重试故障。
-            let retry_allowed = round_state.retryable_failures > 0
+            // Realtime/Live bootstrap requests create or negotiate a call and
+            // must terminate after the endpoint candidates in this round have
+            // been exhausted.  Allowing the ordinary `maxDeferredRounds: 0`
+            // default here would turn a dead voice Provider into an endless
+            // sequence of retries, leaving the client waiting forever.
+            let realtime_request = client_out
+                .as_ref()
+                .is_some_and(|client| client.passthrough_kind == PassthroughKind::Realtime);
+            let retry_allowed = !realtime_request
+                && round_state.retryable_failures > 0
                 && (retry.max_deferred_rounds <= 0 || round < retry.max_deferred_rounds)
                 && (retry.max_retry_duration_seconds <= 0.0
                     || forward_started.elapsed().as_secs_f64() < retry.max_retry_duration_seconds);
@@ -6185,11 +6264,12 @@ impl Engine {
             let attempt_started = Instant::now();
             let capture_id =
                 self.capture_attempt_started(request_id, endpoint, &build.request, attempt_started);
-            let result = self
-                .inner
-                .transport
-                .send_streaming(build.request, response_timeout.map(Duration::from_secs_f64))
-                .await;
+            let result = send_streaming_with_deadline(
+                &self.inner.transport,
+                build.request,
+                response_timeout,
+            )
+            .await;
             self.capture_attempt_result(request_id, &capture_id, &result);
             match self.note_attempt(
                 endpoint,
@@ -6257,7 +6337,6 @@ impl Engine {
                 let capture_engine = self.clone();
                 let capture_request_id = request_id.to_string();
                 let capture_endpoint = endpoint.clone();
-                let timeout = response_timeout.map(Duration::from_secs_f64);
                 let candidate = candidate.clone();
                 in_flight.push(async move {
                     let started = Instant::now();
@@ -6268,7 +6347,9 @@ impl Engine {
                         &capture_request,
                         started,
                     );
-                    let result = transport.send_streaming(build.request, timeout).await;
+                    let result =
+                        send_streaming_with_deadline(&transport, build.request, response_timeout)
+                            .await;
                     capture_engine.capture_attempt_result(
                         &capture_request_id,
                         &capture_id,
@@ -6681,10 +6762,12 @@ impl Engine {
             SseTerminalTracker::new(dialect)
         });
 
-        let idle_timeout = config
-            .retry
-            .stream_idle_timeout_seconds
-            .map(Duration::from_secs_f64);
+        let realtime_request = client_out
+            .as_ref()
+            .is_some_and(|client| client.passthrough_kind == PassthroughKind::Realtime);
+        let idle_timeout =
+            effective_stream_idle_timeout_for_request(&config.retry, realtime_request)
+                .map(Duration::from_secs_f64);
         // Native conversation endpoints have a JSON-level terminal contract
         // even when the caller requested `stream: false`.  A 200 response
         // whose body is malformed, truncated, or still in progress must not
@@ -7011,9 +7094,7 @@ fn websocket_upstream_headers(headers: &[(String, String)]) -> Vec<(String, Stri
                     "x-sumpter-project"
                         | "x-sumpter-workspace"
                         | "x-sumpter-git-remote"
-                        | "x-kekulv-project"
-                        | "x-kekulv-workspace"
-                        | "x-kekulv-git-remote"
+                        | "x-sumpter-user"
                 )
         })
         .collect()
@@ -7757,6 +7838,68 @@ fn effective_response_timeout(retry: &RetryPolicy, endpoint: &PlannedEndpoint) -
         (Some(a), None) => Some(a),
         (None, Some(b)) => Some(b),
         (None, None) => None,
+    }
+}
+
+/// Resolve the response-header deadline for one outbound request.  Ordinary
+/// requests preserve the configured `null` semantics; native Realtime/Live
+/// requests always receive a bounded fallback so a provider that accepts the
+/// TCP connection but never emits headers cannot strand the client request.
+fn effective_response_timeout_for_request(
+    retry: &RetryPolicy,
+    endpoint: &PlannedEndpoint,
+    realtime_request: bool,
+) -> Option<f64> {
+    let configured = effective_response_timeout(retry, endpoint);
+    if !realtime_request {
+        return configured;
+    }
+    Some(
+        configured
+            .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+            .unwrap_or(REALTIME_RESPONSE_TIMEOUT_SECS),
+    )
+}
+
+/// Realtime/Live HTTP bootstraps are short setup exchanges, not long-lived
+/// token streams.  Give their response body the same bounded idle guard when
+/// the global stream setting is `null`; otherwise a provider that sends 200
+/// headers and then stalls would still leave the client waiting forever.
+fn effective_stream_idle_timeout_for_request(
+    retry: &RetryPolicy,
+    realtime_request: bool,
+) -> Option<f64> {
+    if realtime_request {
+        Some(
+            retry
+                .stream_idle_timeout_seconds
+                .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+                .unwrap_or(REALTIME_RESPONSE_TIMEOUT_SECS),
+        )
+    } else {
+        retry.stream_idle_timeout_seconds
+    }
+}
+
+/// Enforce the response-header deadline at the engine boundary as well as in
+/// the concrete transport.  The built-in reqwest transport already honors the
+/// argument, but keeping this guard here makes the contract robust for replay
+/// and platform test transports too: a provider future that ignores the hint
+/// still cannot keep a Live request in flight forever.
+async fn send_streaming_with_deadline(
+    transport: &Arc<dyn UpstreamTransport>,
+    request: crate::outbound::OutboundRequest,
+    timeout_seconds: Option<f64>,
+) -> Result<crate::outbound::UpstreamResponse, TransportError> {
+    let timeout = timeout_seconds.and_then(|seconds| {
+        (seconds.is_finite() && seconds >= 0.0).then(|| Duration::from_secs_f64(seconds))
+    });
+    let send = transport.send_streaming(request, timeout);
+    match timeout {
+        Some(deadline) => tokio::time::timeout(deadline, send)
+            .await
+            .map_err(|_| TransportError::Timeout)?,
+        None => send.await,
     }
 }
 
@@ -9091,26 +9234,45 @@ fn collect_local_models(
             if requested_id.is_some_and(|id| id != model) {
                 continue;
             }
-            // Directory classification follows the same precedence as normal
-            // model routing: one effective mapping per endpoint/model, exact
-            // before wildcard. Do not union a broad `gpt-*` text mapping with
-            // a more specific `gpt-image-*` mapping and advertise a capability
-            // combination the planner will never select.
-            let Some(mapping) = endpoint.mapping_for(&model) else {
-                continue;
-            };
-            let capabilities = sumpter_core::capability::capabilities_for_model(
-                &mapping.capabilities,
-                &mapping.client_pattern,
-                &model,
-            );
-            if requested_capability.is_some_and(|wanted| !capabilities.contains(&wanted)) {
-                continue;
+            // Directory classification must use the same capability-aware
+            // precedence as the planner.  A precise text mapping must not
+            // hide a broader image/video/live mapping for the same logical
+            // model, and a mapping can intentionally advertise more than one
+            // capability.  Resolve each capability independently, then union
+            // only the capabilities that are actually routable.
+            let wanted_capabilities = requested_capability
+                .map(|wanted| vec![wanted])
+                .unwrap_or_else(|| {
+                    vec![
+                        sumpter_core::capability::ModelCapability::Text,
+                        sumpter_core::capability::ModelCapability::Image,
+                        sumpter_core::capability::ModelCapability::Video,
+                        sumpter_core::capability::ModelCapability::Live,
+                        sumpter_core::capability::ModelCapability::Files,
+                    ]
+                });
+            let mut resolved_capabilities = Vec::new();
+            for wanted in wanted_capabilities {
+                let Some(mapping) = endpoint.mapping_for_capability(&model, wanted) else {
+                    continue;
+                };
+                let capabilities = sumpter_core::capability::capabilities_for_model(
+                    &mapping.capabilities,
+                    &mapping.client_pattern,
+                    &model,
+                );
+                for capability in capabilities {
+                    if !resolved_capabilities.contains(&capability) {
+                        resolved_capabilities.push(capability);
+                    }
+                }
             }
-            let entry = models.entry(model).or_default();
-            for capability in capabilities {
-                if !entry.contains(&capability) {
-                    entry.push(capability);
+            if !resolved_capabilities.is_empty() {
+                let entry = models.entry(model).or_default();
+                for capability in resolved_capabilities {
+                    if !entry.contains(&capability) {
+                        entry.push(capability);
+                    }
                 }
             }
         }
@@ -9310,15 +9472,13 @@ fn local_models_response(
 fn has_exact_codex_live_mapping(config: &AppConfig, endpoint_id: &str) -> bool {
     let live_model = request_build::DEFAULT_CODEX_LIVE_MODEL;
     config.endpoint(endpoint_id).is_some_and(|endpoint| {
-        endpoint.mappings.iter().any(|mapping| {
-            sumpter_core::model_name::clean(&mapping.client_pattern) == live_model
-                && sumpter_core::capability::mapping_serves_capability(
-                    &mapping.capabilities,
-                    &mapping.client_pattern,
-                    live_model,
-                    sumpter_core::capability::ModelCapability::Live,
-                )
-        })
+        // Capability filtering must happen before mapping precedence.  This
+        // accepts an explicitly declared `gpt-live-*`/`*` Live mapping while
+        // still rejecting a text-only mapping that merely shares the model
+        // prefix; the endpoint is eligible only for the Live surface.
+        endpoint
+            .mapping_for_capability(live_model, sumpter_core::capability::ModelCapability::Live)
+            .is_some()
     })
 }
 
@@ -9933,38 +10093,32 @@ fn realtime_voice_route_model(
 }
 
 fn body_indicates_codex_live(body: &[u8], content_type: Option<&str>) -> bool {
-    if !content_type.is_some_and(content_type_is_json) {
-        return false;
-    }
-    let Ok(value) = serde_json::from_slice::<Value>(body) else {
+    let Some(value) = metadata_json_body_hint(body, content_type) else {
         return false;
     };
     let Some(object) = value.as_object() else {
         return false;
     };
-    let session = object.get("session").and_then(Value::as_object);
-    object
-        .get("intent")
+    let session = json_object_value(object, "session").and_then(Value::as_object);
+    json_object_value(object, "intent")
         .and_then(Value::as_str)
         .is_some_and(|value| value.eq_ignore_ascii_case("quicksilver"))
-        || object
-            .get("architecture")
+        || json_object_value(object, "architecture")
             .and_then(Value::as_str)
             .is_some_and(|value| value.eq_ignore_ascii_case("avas"))
         || session
-            .and_then(|session| session.get("type"))
+            .and_then(|session| json_object_value(session, "type"))
             .and_then(Value::as_str)
             .is_some_and(|value| value.eq_ignore_ascii_case("quicksilver"))
         || session
-            .and_then(|session| session.get("model"))
+            .and_then(|session| json_object_value(session, "model"))
             .and_then(Value::as_str)
             .is_some_and(|value| {
                 sumpter_core::model_name::clean(value) == request_build::DEFAULT_CODEX_LIVE_MODEL
             })
-        || object
-            .get("client_metadata")
+        || json_object_value(object, "client_metadata")
             .and_then(Value::as_object)
-            .and_then(|metadata| metadata.get("originator"))
+            .and_then(|metadata| json_object_value(metadata, "originator"))
             .and_then(Value::as_str)
             .is_some_and(|value| {
                 let value = value.to_ascii_lowercase();
@@ -9974,37 +10128,16 @@ fn body_indicates_codex_live(body: &[u8], content_type: Option<&str>) -> bool {
             })
 }
 
-fn should_normalize_codex_live_request(
-    method: &str,
-    path_and_query: &str,
-    body: &[u8],
-    content_type: Option<&str>,
-    client_kind: ClientKind,
-) -> bool {
-    let path = path_without_query(path_and_query);
-    // Only the two root POST bootstrap families may be converted into CPA's
-    // Quicksilver JSON envelope. Call creation (`/realtime/calls`) already has
-    // its own SDP/JSON contract, and every id/control child is opaque
-    // sideband data that must remain byte-for-byte unchanged.
-    if !method.eq_ignore_ascii_case("POST")
-        || !(is_codex_live_path(path) || is_realtime_root_path(path))
-        || live_call_id_from_target(path_and_query).is_some()
-    {
-        return false;
-    }
-    let query_model = path_and_query
-        .split_once('?')
-        .and_then(|(_, query)| decoded_query_value(query, "model"));
-    let body_model = realtime_body_model(body, content_type);
-    classify_realtime_intent(
-        method,
-        path_and_query,
-        query_model.as_deref().or(body_model.as_deref()),
-        None,
-        None,
-        client_kind,
-        body_indicates_codex_live(body, content_type),
-    ) == RealtimeRouteIntent::CodexLive
+fn json_object_value<'a>(
+    object: &'a serde_json::Map<String, Value>,
+    key: &str,
+) -> Option<&'a Value> {
+    object.get(key).or_else(|| {
+        object
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(key))
+            .map(|(_, value)| value)
+    })
 }
 
 fn is_codex_live_family_path(path: &str) -> bool {
@@ -10484,43 +10617,6 @@ mod protocol_tests {
     use super::*;
 
     #[test]
-    fn codex_live_sdp_is_wrapped_as_quicksilver_json() {
-        let (body, content_type) =
-            prepare_codex_live_request(b"v=0\r\na=setup:actpass\r\n", "application/sdp")
-                .expect("valid SDP");
-        assert_eq!(content_type, "application/json");
-        let value: Value = serde_json::from_slice(&body).expect("JSON envelope");
-        assert_eq!(value["sdp"], "v=0\r\na=setup:actpass\r\n");
-        assert_eq!(value["session"]["type"], "quicksilver");
-        assert_eq!(
-            value["session"]["model"],
-            request_build::DEFAULT_CODEX_LIVE_MODEL
-        );
-    }
-
-    #[test]
-    fn codex_live_multipart_preserves_session_fields_and_overrides_text_model() {
-        let boundary = "live-boundary";
-        let body = format!(
-            "--{boundary}\r\nContent-Disposition: form-data; name=\"sdp\"\r\n\r\nv=0\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"session\"\r\n\r\n{{\"instructions\":\"hello\",\"model\":\"claude-fable-5\"}}\r\n--{boundary}--\r\n"
-        );
-        let (body, content_type) = prepare_codex_live_request(
-            body.as_bytes(),
-            &format!("multipart/form-data; boundary={boundary}"),
-        )
-        .expect("valid multipart Live request");
-        assert_eq!(content_type, "application/json");
-        let value: Value = serde_json::from_slice(&body).expect("JSON envelope");
-        assert_eq!(value["sdp"], "v=0");
-        assert_eq!(value["session"]["instructions"], "hello");
-        assert_eq!(value["session"]["type"], "quicksilver");
-        assert_eq!(
-            value["session"]["model"],
-            request_build::DEFAULT_CODEX_LIVE_MODEL
-        );
-    }
-
-    #[test]
     fn video_lookup_paths_extract_resource_ids() {
         assert_eq!(
             video_id_from_path("/v1/videos/video_123/content"),
@@ -10754,6 +10850,25 @@ mod protocol_tests {
                 .and_then(|metadata| metadata.originator.as_deref()),
             Some("Codex Desktop")
         );
+    }
+
+    #[test]
+    fn body_only_codex_originator_is_used_without_content_type() {
+        let body = br#"{"clientMetadata":{"Originator":"Codex Desktop"}}"#;
+        let value = metadata_json_body_hint(body, None).expect("JSON body hint");
+        let metadata = CodexMetadata::from_request(&[], Some(&value)).expect("metadata");
+        assert_eq!(metadata.originator.as_deref(), Some("Codex Desktop"));
+        assert_eq!(
+            ClientKind::detect_with_originator(
+                Some("Mozilla/5.0"),
+                metadata.originator.as_deref(),
+                true,
+            ),
+            ClientKind::Codex
+        );
+        // An explicit non-JSON media type remains opaque even if its bytes
+        // happen to start with a JSON object.
+        assert!(metadata_json_body_hint(body, Some("application/sdp")).is_none());
     }
 
     #[test]
@@ -11147,7 +11262,7 @@ mod protocol_tests {
         let forwarded = websocket_upstream_headers(&[
             ("authorization".into(), "Bearer listener-secret".into()),
             ("x-sumpter-project".into(), "private-workspace".into()),
-            ("x-kekulv-workspace".into(), "/Users/example/project".into()),
+            ("x-sumpter-user".into(), "kkl".into()),
             ("openai-beta".into(), "realtime=v1".into()),
             ("sec-websocket-protocol".into(), "realtime".into()),
         ]);
@@ -11160,7 +11275,7 @@ mod protocol_tests {
             !forwarded
                 .iter()
                 .any(|(name, _)| name.eq_ignore_ascii_case("x-sumpter-project")
-                    || name.eq_ignore_ascii_case("x-kekulv-workspace"))
+                    || name.eq_ignore_ascii_case("x-sumpter-user"))
         );
         assert!(forwarded.iter().any(
             |(name, value)| name.eq_ignore_ascii_case("openai-beta") && value == "realtime=v1"
@@ -11371,6 +11486,41 @@ mod protocol_tests {
         assert_eq!(decoded["models"][0]["default_reasoning_level"], "medium");
         assert_eq!(encoded["models"][0]["default_reasoning_level"], "medium");
     }
+
+    #[test]
+    fn local_models_catalog_resolves_each_capability_independently() {
+        let config: AppConfig = serde_json::from_value::<AppConfig>(json!({
+            "schemaVersion": 6,
+            "listener": {"host": "127.0.0.1", "port": 0},
+            "endpoints": [{
+                "id": "mixed",
+                "name": "mixed",
+                "baseURL": "https://provider.invalid",
+                "protocol": "openai",
+                "enabled": true,
+                "apiKey": "",
+                "catalog": {"models": ["gpt-image-2"]},
+                "mappings": [
+                    {"clientPattern": "gpt-image-2", "capabilities": ["text"]},
+                    {"clientPattern": "gpt-image-*", "capabilities": ["image"]}
+                ]
+            }]
+        }))
+        .expect("catalog config")
+        .normalized();
+        let all = local_models_json(&config, "/v1/models", None, &[]).expect("catalog");
+        let entry = all["data"]
+            .as_array()
+            .and_then(|models| models.iter().find(|model| model["id"] == "gpt-image-2"))
+            .expect("image model");
+        let capabilities = entry["capabilities"].as_array().expect("capabilities");
+        assert!(capabilities.iter().any(|value| value == "text"));
+        assert!(capabilities.iter().any(|value| value == "image"));
+
+        let image_only = local_models_json(&config, "/v1/models", Some("capability=image"), &[])
+            .expect("image catalog");
+        assert_eq!(image_only["data"][0]["id"], "gpt-image-2");
+    }
 }
 #[derive(Debug, PartialEq, Eq)]
 struct NativePassthroughFields {
@@ -11384,11 +11534,12 @@ fn realtime_body_model(body: &[u8], content_type: Option<&str>) -> Option<String
         return None;
     }
     let value = serde_json::from_slice::<Value>(body).ok()?;
+    let object = value.as_object()?;
     [
-        value.get("model"),
-        value
-            .get("session")
-            .and_then(|session| session.get("model")),
+        json_object_value(object, "model"),
+        json_object_value(object, "session")
+            .and_then(Value::as_object)
+            .and_then(|session| json_object_value(session, "model")),
     ]
     .into_iter()
     .flatten()
@@ -11477,120 +11628,6 @@ fn realtime_client_secret_request_session(path_and_query: &str, body: &[u8]) -> 
     Some(Value::Object(session))
 }
 
-/// Normalize Codex Desktop's Live/Quicksilver bootstrap to the JSON envelope
-/// used by CPA. Called for `/v1/live` and POST `/v1/realtime`; `/v1/realtime/calls`
-/// keeps the public SDP/JSON body and only the routing model is forced.
-fn prepare_codex_live_request(
-    body: &[u8],
-    content_type: &str,
-) -> Result<(Bytes, String), &'static str> {
-    let media_type = content_type
-        .split(';')
-        .next()
-        .map(str::trim)
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    match media_type.as_str() {
-        "application/sdp" | "text/plain" => {
-            let sdp = std::str::from_utf8(body).map_err(|_| "Codex Live SDP must be UTF-8")?;
-            if sdp.trim().is_empty() {
-                return Err("Codex Live request requires an SDP offer");
-            }
-            encode_codex_live_envelope(sdp, None)
-        }
-        "multipart/form-data" => prepare_codex_live_multipart(body, content_type),
-        "application/json" => {
-            let mut value: Value =
-                serde_json::from_slice(body).map_err(|_| "Codex Live JSON body is invalid")?;
-            let object = value
-                .as_object_mut()
-                .ok_or("Codex Live JSON body must be an object")?;
-            let sdp = object
-                .get("sdp")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or("Codex Live request requires an SDP offer")?
-                .to_string();
-            let mut session = match object.remove("session") {
-                Some(Value::Object(session)) => session,
-                Some(_) => return Err("Codex Live session must be an object"),
-                None => serde_json::Map::new(),
-            };
-            // The desktop voice route is Codex's quicksilver protocol even
-            // when the surrounding text session currently uses another model.
-            session.insert("type".into(), Value::String("quicksilver".into()));
-            session.insert(
-                "model".into(),
-                Value::String(request_build::DEFAULT_CODEX_LIVE_MODEL.into()),
-            );
-            // A root model is not the Live session model. Removing it avoids
-            // routing the call by a stale Claude text model from Codex headers.
-            object.remove("model");
-            object.insert("sdp".into(), Value::String(sdp));
-            object.insert("session".into(), Value::Object(session));
-            let encoded =
-                serde_json::to_vec(&value).map_err(|_| "Codex Live JSON encoding failed")?;
-            Ok((Bytes::from(encoded), "application/json".into()))
-        }
-        _ => Err("unsupported Content-Type for Codex Live request"),
-    }
-}
-
-fn prepare_codex_live_multipart(
-    body: &[u8],
-    content_type: &str,
-) -> Result<(Bytes, String), &'static str> {
-    let mut sdp = None;
-    let mut session = None;
-    for (headers, field) in multipart_parts(body, content_type)? {
-        if let Some(name) = multipart_field_name(headers) {
-            match name.as_str() {
-                "sdp" => {
-                    let value = std::str::from_utf8(field)
-                        .map_err(|_| "Codex Live SDP must be UTF-8")?
-                        .trim();
-                    if value.is_empty() {
-                        return Err("Codex Live request requires an SDP offer");
-                    }
-                    sdp = Some(value.to_string());
-                }
-                "session" => {
-                    let value: Value = serde_json::from_slice(field)
-                        .map_err(|_| "Codex Live session field must contain valid JSON")?;
-                    session = Some(
-                        value
-                            .as_object()
-                            .cloned()
-                            .ok_or("Codex Live session must be an object")?,
-                    );
-                }
-                _ => {}
-            }
-        }
-    }
-    let sdp = sdp.ok_or("Codex Live multipart body requires an sdp field")?;
-    encode_codex_live_envelope(&sdp, session)
-}
-
-fn encode_codex_live_envelope(
-    sdp: &str,
-    session: Option<serde_json::Map<String, Value>>,
-) -> Result<(Bytes, String), &'static str> {
-    let mut session = session.unwrap_or_default();
-    session.insert("type".into(), Value::String("quicksilver".into()));
-    session.insert(
-        "model".into(),
-        Value::String(request_build::DEFAULT_CODEX_LIVE_MODEL.into()),
-    );
-    let value = json!({
-        "sdp": sdp,
-        "session": session,
-    });
-    let encoded = serde_json::to_vec(&value).map_err(|_| "Codex Live JSON encoding failed")?;
-    Ok((Bytes::from(encoded), "application/json".into()))
-}
-
 fn content_type_is_json(content_type: &str) -> bool {
     content_type
         .trim()
@@ -11649,6 +11686,29 @@ fn raw_request_body_hint(method: &str, headers: &[(String, String)]) -> bool {
 /// limited to a small prefix and only attempted for JSON-looking bytes (or an
 /// explicit JSON content type), avoiding a full parse of opaque/binary uploads.
 const RAW_MODEL_SNIFF_BYTES: usize = 1024 * 1024;
+
+/// Bounded JSON sniff used only for client attribution and route hints.  An
+/// explicit non-JSON media type wins over a JSON-looking prefix; without a
+/// media type we require the first non-whitespace byte to be `{`.
+fn metadata_json_body_hint(body: &[u8], content_type: Option<&str>) -> Option<Value> {
+    const MAX_BYTES: usize = sumpter_core::events::CODEX_METADATA_MAX_JSON_BYTES;
+    if body.is_empty() || body.len() > MAX_BYTES {
+        return None;
+    }
+    if let Some(content_type) = content_type {
+        if !content_type_is_json(content_type) {
+            return None;
+        }
+    } else if body
+        .iter()
+        .copied()
+        .find(|byte| !byte.is_ascii_whitespace())
+        != Some(b'{')
+    {
+        return None;
+    }
+    serde_json::from_slice::<Value>(body).ok()
+}
 
 fn raw_body_model_hint(body: &[u8], content_type: Option<&str>) -> Option<String> {
     if body.is_empty() || body.len() > RAW_MODEL_SNIFF_BYTES {

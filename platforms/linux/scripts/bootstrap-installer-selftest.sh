@@ -57,6 +57,8 @@ EOF
 chmod 0755 "$PACKAGE_ROOT/scripts/install.sh"
 printf '%s\n' '#!/usr/bin/env bash' >"$PACKAGE_ROOT/scripts/cc-project-attribution.sh"
 chmod 0755 "$PACKAGE_ROOT/scripts/cc-project-attribution.sh"
+printf '%s\n' '#!/usr/bin/env bash' >"$PACKAGE_ROOT/scripts/grok-project-attribution.sh"
+chmod 0755 "$PACKAGE_ROOT/scripts/grok-project-attribution.sh"
 cat >"$PACKAGE_ROOT/CHANGELOG.md" <<'EOF'
 # v9.8.7
 

@@ -146,6 +146,7 @@ exercise_user_scope() {
     run_user install.sh
     [[ -x "$USER_HOME/.local/share/sumpter/sumpterd" ]]
     [[ -x "$USER_HOME/.local/share/sumpter/scripts/cc-project-attribution.sh" ]]
+    [[ -x "$USER_HOME/.local/share/sumpter/scripts/grok-project-attribution.sh" ]]
     [[ -f "$USER_HOME/.config/sumpter/config.json" ]]
     [[ -s "$USER_HOME/.config/sumpter/admin-password" ]]
     [[ "$(wc -l <"$USER_HOME/.config/sumpter/admin-password")" -eq 1 ]]
@@ -225,6 +226,7 @@ exercise_system_scope() {
     run_system install.sh
     [[ -x "$SYSTEM_ROOT/opt/sumpter/sumpterd" ]]
     [[ -x "$SYSTEM_ROOT/opt/sumpter/scripts/cc-project-attribution.sh" ]]
+    [[ -x "$SYSTEM_ROOT/opt/sumpter/scripts/grok-project-attribution.sh" ]]
     [[ -f "$SYSTEM_ROOT/var/lib/sumpter/config.json" ]]
     [[ -s "$SYSTEM_ROOT/var/lib/sumpter/admin-password" ]]
     [[ "$(wc -l <"$SYSTEM_ROOT/var/lib/sumpter/admin-password")" -eq 1 ]]

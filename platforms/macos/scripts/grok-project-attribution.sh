@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# 为 Claude Code 配置项目归因:注入一个 claude() wrapper,按当前目录逐次设置
-# ANTHROPIC_CUSTOM_HEADERS(X-Sumpter-Project / -Workspace / -Git-Remote)。
+# 为 Grok Build 配置项目归因:注入 grok() wrapper,按当前目录把
+# X-Sumpter-Project / -Workspace / -Git-Remote / -User 写入 GROK_CONFIG overlay
+# ([models].extra_headers)。不改 ~/.grok/config.toml。
 #
 # 支持 macOS 与 Linux、zsh 与 bash。改动只有两处:一个独立 snippet 文件,
 # 以及 rc 文件里一段带标记的 source 行(装前自动备份,可一键还原)。
 #
-# 用法: cc-project-attribution.sh [install|uninstall|restore|status|snippet] [选项]
+# 用法: grok-project-attribution.sh [install|uninstall|restore|status|snippet] [选项]
 #   --shell zsh|bash  跳过自动探测
 #   --rc <path>       指定 rc 文件
 #   --dry-run         只打印将要做的改动
-#   --force           settings.json 里已写死该 header 时仍继续(装了也不会生效)
+#   --force           GROK_CONFIG_PATH 已设置时仍继续
 set -euo pipefail
 
-MARK_BEGIN='# >>> sumpter cc-project-attribution >>>'
-MARK_END='# <<< sumpter cc-project-attribution <<<'
-SNIPPET_DEFAULT="${XDG_DATA_HOME:-$HOME/.local/share}/sumpter/cc-project-attribution.sh"
-SETTINGS="$HOME/.claude/settings.json"
+MARK_BEGIN='# >>> sumpter grok-project-attribution >>>'
+MARK_END='# <<< sumpter grok-project-attribution <<<'
+SNIPPET_DEFAULT="${XDG_DATA_HOME:-$HOME/.local/share}/sumpter/grok-project-attribution.sh"
 
 ACTION=install
 SHELL_KIND=""
@@ -27,7 +27,7 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 run() { if [ "$DRY_RUN" -eq 1 ]; then printf '  [dry-run] %s\n' "$*"; else eval "$*"; fi; }
 
-usage() { sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -42,9 +42,8 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-SNIPPET="${SUMPTER_CC_SNIPPET:-$SNIPPET_DEFAULT}"
+SNIPPET="${SUMPTER_GROK_SNIPPET:-$SNIPPET_DEFAULT}"
 
-# ---- shell 探测:$SHELL 决定哪个 rc 会被读,比脚本自身的 shell 可靠 ----
 detect_shell() {
     [ -n "$SHELL_KIND" ] && { printf '%s' "$SHELL_KIND"; return; }
     case "$(basename "${SHELL:-}")" in
@@ -57,7 +56,6 @@ detect_shell() {
     esac
 }
 
-# ---- rc 路径:macOS 的 bash 登录 shell 读 .bash_profile 而不是 .bashrc ----
 resolve_rc() {
     [ -n "$RC_FILE" ] && { printf '%s' "$RC_FILE"; return; }
     case "$1" in
@@ -76,7 +74,7 @@ resolve_rc() {
 
 has_block() { [ -f "$1" ] && grep -Fq "$MARK_BEGIN" "$1"; }
 
-strip_block() { # $1=rc  → stdout 去掉标记块后的内容
+strip_block() {
     awk -v b="$MARK_BEGIN" -v e="$MARK_END" '
         index($0, b) { skip = 1; next }
         index($0, e) { skip = 0; next }
@@ -84,49 +82,35 @@ strip_block() { # $1=rc  → stdout 去掉标记块后的内容
     ' "$1"
 }
 
-# 备份名带 YYYYmmdd-HHMMSS,字典序即时间序,不需要按 mtime 排。
 list_backups() {
     find "$(dirname "$1")" -maxdepth 1 -type f \
-        -name "$(basename "$1").sumpter-bak-*" 2> /dev/null | sort -r
+        -name "$(basename "$1").sumpter-grok-bak-*" 2> /dev/null | sort -r
 }
 
 newest_backup() {
     list_backups "$1" | head -1
 }
 
-# settings.json 的 env 一旦写死该 header,就会覆盖进程环境变量,wrapper 永久失效。
-settings_has_header() {
-    [ -f "$SETTINGS" ] || return 1
-    if command -v jq > /dev/null 2>&1; then
-        [ "$(jq -r '.env.ANTHROPIC_CUSTOM_HEADERS // empty' "$SETTINGS" 2> /dev/null)" != "" ]
-    else
-        grep -q 'ANTHROPIC_CUSTOM_HEADERS' "$SETTINGS"
-    fi
-}
+path_overlay_set() { [ -n "${GROK_CONFIG_PATH:-}" ]; }
 
-# fish 的等价配置。fish 不支持自动安装(语法与 POSIX shell 不同),打印供手工粘贴。
-# 行为与 POSIX 版一致:纯 ASCII 才发、合并保留外部 header、非 origin 退回首个 remote。
 fish_snippet_body() {
     cat <<'FISH_EOF'
-# Sumpter · Claude Code 项目归因(fish)。粘进 ~/.config/fish/config.fish。
+# Sumpter · Grok Build 项目归因(fish)。粘进 ~/.config/fish/config.fish。
 #
-# !! 未经实测 !! 作者机器上没有 fish,这段没跑过,自测也覆盖不到(zsh/bash 版有 55 条
-# 断言钉死)。粘之前先 `fish -n` 校验语法,粘之后先跑一次 `claude --version` 确认没把
-# shell 弄坏。有问题请以 zsh/bash 版的行为为准自行调整。
-# 注意:不要把 ANTHROPIC_CUSTOM_HEADERS 写进 ~/.claude/settings.json 的 env,
-# 那会覆盖这里设的值且不做插值。
-function __sumpter_cc_is_ascii
+# !! 未经实测 !! 作者机器上没有 fish。粘之前先 `fish -n` 校验语法。
+# 注意:若已设置 GROK_CONFIG_PATH,本 wrapper 设置的 GROK_CONFIG 会挡住它。
+function __sumpter_grok_is_ascii
     string match -qr '^[ -~]+$' -- $argv[1]
 end
 
-function __sumpter_cc_local_user
+function __sumpter_grok_local_user
     set -l u $USER
     test -n "$u"; or set u $LOGNAME
     test -n "$u"; or set u (command id -un 2>/dev/null)
     string match -qr '^[A-Za-z0-9._-]+$' -- $u; and echo $u
 end
 
-function claude
+function grok
     set -l dir (string trim -r -c / -- $PWD)
     test -z "$dir"; and set dir /
     set -l proj (basename $dir)
@@ -135,45 +119,55 @@ function claude
         set -l first (command git remote 2>/dev/null)[1]
         test -n "$first"; and set remote (command git remote get-url $first 2>/dev/null)
     end
-
-    set -l hdrs
-    # 保留调用方已有的非 X-Sumpter-* 行
-    if set -q ANTHROPIC_CUSTOM_HEADERS
-        for line in (string split \n -- $ANTHROPIC_CUSTOM_HEADERS)
-            test -z "$line"; and continue
-            string match -qir '^x-sumpter-' -- $line; and continue
-            set -a hdrs $line
-        end
+    set -l user (__sumpter_grok_local_user)
+    set -l pairs
+    __sumpter_grok_is_ascii "$proj"; and set -a pairs "X-Sumpter-Project" "$proj"
+    __sumpter_grok_is_ascii "$dir"; and set -a pairs "X-Sumpter-Workspace" "$dir"
+    __sumpter_grok_is_ascii "$remote"; and set -a pairs "X-Sumpter-Git-Remote" "$remote"
+    test -n "$user"; and set -a pairs "X-Sumpter-User" "$user"
+    if test (count $pairs) -eq 0
+        command grok $argv
+        return
     end
-    __sumpter_cc_is_ascii "$proj"; and set -a hdrs "X-Sumpter-Project: $proj"
-    __sumpter_cc_is_ascii "$dir"; and set -a hdrs "X-Sumpter-Workspace: $dir"
-    __sumpter_cc_is_ascii "$remote"; and set -a hdrs "X-Sumpter-Git-Remote: $remote"
-    set -l user (__sumpter_cc_local_user)
-    test -n "$user"; and set -a hdrs "X-Sumpter-User: $user"
-
-    if test (count $hdrs) -gt 0
-        ANTHROPIC_CUSTOM_HEADERS=(string join \n -- $hdrs) command claude $argv
-    else if set -q ANTHROPIC_CUSTOM_HEADERS
-        # 过滤后为空但继承了旧值:显式清除,不透传过期归因
-        set -e ANTHROPIC_CUSTOM_HEADERS
-        command claude $argv
+    set -l overlay (python3 -c 'import json,sys
+pairs=sys.argv[1:]
+headers={pairs[i]:pairs[i+1] for i in range(0,len(pairs),2)}
+print(json.dumps({"models":{"extra_headers":headers}},separators=(",",":")))
+' $pairs)
+    if test -n "$GROK_CONFIG"
+        set -x GROK_CONFIG (SUMPTER_GROK_OVERLAY="$overlay" python3 -c 'import json,os
+overlay=json.loads(os.environ["SUMPTER_GROK_OVERLAY"])
+try:
+    cfg=json.loads(os.environ.get("GROK_CONFIG") or "{}")
+except json.JSONDecodeError:
+    cfg={}
+if not isinstance(cfg, dict):
+    cfg={}
+models=cfg.get("models")
+if not isinstance(models, dict):
+    models={}
+    cfg["models"]=models
+headers=models.get("extra_headers")
+if not isinstance(headers, dict):
+    headers={}
+    models["extra_headers"]=headers
+headers.update(overlay.get("models",{}).get("extra_headers",{}))
+print(json.dumps(cfg,separators=(",",":")))
+')
     else
-        command claude $argv
+        set -x GROK_CONFIG $overlay
     end
+    command grok $argv
 end
 FISH_EOF
 }
 
 snippet_body() {
     cat <<'SNIPPET_EOF'
-# Sumpter · Claude Code 项目归因(自动生成,勿手改)
-# 由 cc-project-attribution.sh 管理。bash 与 zsh 通用。
+# Sumpter · Grok Build 项目归因(自动生成,勿手改)
+# 由 grok-project-attribution.sh 管理。bash 与 zsh 通用。
 
-# 值必须是纯 ASCII:Claude Code 见到非 ASCII 的 ANTHROPIC_CUSTOM_HEADERS 会
-# 直接报错退出(整个会话起不来),所以这里宁可不发也不能让它拒启。
-sumpter_cc_is_ascii() {
-    # 必须锁 C:bash 3.2 在 en_*.UTF-8 下把 [ -~] 按排序序求值,连 "abc" 都会被
-    # 判成含非 ASCII 字符(守卫全程假阴性)。local 只在本函数内生效,不污染外层。
+sumpter_grok_is_ascii() {
     local LC_ALL=C
     case "$1" in
         "") return 1 ;;
@@ -182,7 +176,7 @@ sumpter_cc_is_ascii() {
     esac
 }
 
-sumpter_cc_local_user() {
+sumpter_grok_local_user() {
     local LC_ALL=C u
     u="${USER:-${LOGNAME:-}}"
     [ -n "$u" ] || u="$(command id -un 2>/dev/null || true)"
@@ -193,23 +187,15 @@ sumpter_cc_local_user() {
     esac
 }
 
-sumpter_cc_headers() {
-    local out="" line dir proj ws remote first_remote user
-    # 合并而非覆盖:保留调用方已有的非 X-Sumpter-* 行
-    if [ -n "${ANTHROPIC_CUSTOM_HEADERS:-}" ]; then
-        while IFS= read -r line; do
-            [ -z "$line" ] && continue
-            case "$line" in
-                [Xx]-[Ss][Uu][Mm][Pp][Tt][Ee][Rr]-*) continue ;;
-            esac
-            out="${out}${line}"$'\n'
-        done <<SUMPTER_EOF
-${ANTHROPIC_CUSTOM_HEADERS}
-SUMPTER_EOF
-    fi
+sumpter_grok_json_escape() {
+    local s=$1
+    s=${s//\\/\\\\}
+    s=${s//\"/\\\"}
+    printf '%s' "$s"
+}
 
-    # PWD 可能带尾随斜杠(父进程传入的 cwd 常见如此),不先剥掉的话 ${dir##*/}
-    # 会得到空字符串,项目名整条被丢掉 —— 只发 workspace 不发 project。
+sumpter_grok_overlay() {
+    local dir proj remote user json="" sep=""
     dir="$PWD"
     while :; do
         case "$dir" in
@@ -217,39 +203,82 @@ SUMPTER_EOF
             *) break ;;
         esac
     done
+    [ -n "$dir" ] || dir="/"
     proj="${dir##*/}"
-    ws="$dir"
-
-    # 优先 origin;没有 origin 的仓库(例如只有一个自定义 remote)退回第一个。
     remote="$(command git remote get-url origin 2> /dev/null || true)"
     if [ -z "$remote" ]; then
+        local first_remote
         first_remote="$(command git remote 2> /dev/null | head -1)"
         if [ -n "$first_remote" ]; then
             remote="$(command git remote get-url "$first_remote" 2> /dev/null || true)"
         fi
     fi
-
-    sumpter_cc_is_ascii "$proj" && out="${out}X-Sumpter-Project: ${proj}"$'\n'
-    sumpter_cc_is_ascii "$ws" && out="${out}X-Sumpter-Workspace: ${ws}"$'\n'
-    sumpter_cc_is_ascii "$remote" && out="${out}X-Sumpter-Git-Remote: ${remote}"$'\n'
-    user="$(sumpter_cc_local_user || true)"
-    [ -n "$user" ] && out="${out}X-Sumpter-User: ${user}"$'\n'
-
-    # 去掉尾随换行
-    printf '%s' "${out%$'\n'}"
+    user="$(sumpter_grok_local_user || true)"
+    json='{"models":{"extra_headers":{'
+    if sumpter_grok_is_ascii "$proj"; then
+        json="${json}${sep}\"X-Sumpter-Project\":\"$(sumpter_grok_json_escape "$proj")\""
+        sep=","
+    fi
+    if sumpter_grok_is_ascii "$dir"; then
+        json="${json}${sep}\"X-Sumpter-Workspace\":\"$(sumpter_grok_json_escape "$dir")\""
+        sep=","
+    fi
+    if sumpter_grok_is_ascii "$remote"; then
+        json="${json}${sep}\"X-Sumpter-Git-Remote\":\"$(sumpter_grok_json_escape "$remote")\""
+        sep=","
+    fi
+    if [ -n "$user" ]; then
+        json="${json}${sep}\"X-Sumpter-User\":\"$(sumpter_grok_json_escape "$user")\""
+    fi
+    json="${json}}}}"
+    if [ "$json" = '{"models":{"extra_headers":{}}}' ]; then
+        return 1
+    fi
+    printf '%s' "$json"
 }
 
-claude() {
-    local sumpter_hdrs
-    sumpter_hdrs="$(sumpter_cc_headers)"
-    if [ -n "$sumpter_hdrs" ]; then
-        ANTHROPIC_CUSTOM_HEADERS="$sumpter_hdrs" command claude "$@"
-    elif [ -n "${ANTHROPIC_CUSTOM_HEADERS:-}" ]; then
-        # 过滤后什么都不剩(例如目录名非 ASCII 被跳过),而继承值里还留着旧的
-        # X-Sumpter-*:显式清除,不能把过期归因带给 CC。
-        command env -u ANTHROPIC_CUSTOM_HEADERS claude "$@"
+sumpter_grok_merge_config() {
+    local overlay=$1
+    if [ -z "${GROK_CONFIG:-}" ]; then
+        printf '%s' "$overlay"
+        return 0
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        printf 'ERROR: GROK_CONFIG 已设置但找不到 python3,无法合并 overlay\n' >&2
+        return 1
+    fi
+    SUMPTER_GROK_OVERLAY="$overlay" python3 -c '
+import json, os
+overlay = json.loads(os.environ["SUMPTER_GROK_OVERLAY"])
+try:
+    cfg = json.loads(os.environ.get("GROK_CONFIG") or "{}")
+except json.JSONDecodeError:
+    cfg = {}
+if not isinstance(cfg, dict):
+    cfg = {}
+models = cfg.get("models")
+if not isinstance(models, dict):
+    models = {}
+    cfg["models"] = models
+headers = models.get("extra_headers")
+if not isinstance(headers, dict):
+    headers = {}
+    models["extra_headers"] = headers
+headers.update((overlay.get("models") or {}).get("extra_headers") or {})
+print(json.dumps(cfg, separators=(",", ":"), ensure_ascii=True))
+'
+}
+
+grok() {
+    local overlay merged
+    if overlay="$(sumpter_grok_overlay)"; then
+        if ! merged="$(sumpter_grok_merge_config "$overlay")"; then
+            command grok "$@"
+            return
+        fi
+        GROK_CONFIG="$merged" command grok "$@"
     else
-        command claude "$@"
+        command grok "$@"
     fi
 }
 SNIPPET_EOF
@@ -270,23 +299,22 @@ do_install() {
     kind="$(detect_shell)"
     rc="$(resolve_rc "$kind")"
 
-    if settings_has_header; then
+    if path_overlay_set; then
         if [ "$FORCE" -eq 0 ]; then
-            die "$SETTINGS 的 env 里已写有 ANTHROPIC_CUSTOM_HEADERS。
-       它会覆盖进程环境变量,wrapper 装了也永远不生效。
-       请先从 settings.json 删掉该键,或加 --force 强行安装。"
+            die "当前环境已设置 GROK_CONFIG_PATH。
+       grok() 写入的 GROK_CONFIG 会挡住这份 path overlay。
+       请先确认不需要 GROK_CONFIG_PATH,或加 --force 强行安装。"
         fi
-        info "警告:settings.json 已写死该 header,安装后不会生效（--force）"
+        info "警告:GROK_CONFIG_PATH 已设置,GROK_CONFIG overlay 会优先于它（--force）"
     fi
 
     if [ "$kind" = bash ] && [ "$(uname -s)" = Darwin ] && [ "$rc" = "$HOME/.bashrc" ]; then
         info "提示:macOS 的 bash 登录 shell 读 .bash_profile;写到 .bashrc 可能不被加载。"
     fi
 
-    # 已有同名 claude 函数/别名(非本脚本所装)时给出警告,不擅自覆盖判断
     if [ -f "$rc" ] && ! has_block "$rc" \
-        && grep -Eq '^[[:space:]]*(alias[[:space:]]+claude=|claude[[:space:]]*\(\))' "$rc"; then
-        info "警告:$rc 里已存在 claude 别名或函数,本 wrapper 会在其后定义并生效。"
+        && grep -Eq '^[[:space:]]*(alias[[:space:]]+grok=|grok[[:space:]]*\(\))' "$rc"; then
+        info "警告:$rc 里已存在 grok 别名或函数,本 wrapper 会在其后定义并生效。"
     fi
 
     info "shell: $kind"
@@ -294,7 +322,7 @@ do_install() {
     info "snippet: $SNIPPET"
 
     if [ -f "$rc" ]; then
-        backup="$rc.sumpter-bak-$(date +%Y%m%d-%H%M%S)"
+        backup="$rc.sumpter-grok-bak-$(date +%Y%m%d-%H%M%S)"
         run "cp -p \"$rc\" \"$backup\""
         info "已备份: $backup"
     else
@@ -348,13 +376,13 @@ do_restore() {
     kind="$(detect_shell)"
     rc="$(resolve_rc "$kind")"
     backup="$(newest_backup "$rc" || true)"
-    [ -n "$backup" ] || die "找不到 $rc 的备份（$rc.sumpter-bak-*）"
+    [ -n "$backup" ] || die "找不到 $rc 的备份（$rc.sumpter-grok-bak-*）"
     info "还原: $backup → $rc"
     if [ "$DRY_RUN" -eq 1 ]; then
-        printf '  [dry-run] 先把当前 rc 存为 .sumpter-prerestore-*,再覆盖\n'
+        printf '  [dry-run] 先把当前 rc 存为 .sumpter-grok-prerestore-*,再覆盖\n'
         return
     fi
-    [ -f "$rc" ] && cp -p "$rc" "$rc.sumpter-prerestore-$(date +%Y%m%d-%H%M%S)"
+    [ -f "$rc" ] && cp -p "$rc" "$rc.sumpter-grok-prerestore-$(date +%Y%m%d-%H%M%S)"
     cat "$backup" > "$rc"
     info "已还原。snippet 未删除,如需一并清理请先跑 uninstall。"
 }
@@ -367,8 +395,8 @@ do_status() {
     printf 'rc:               %s%s\n' "$rc" "$([ -f "$rc" ] || printf ' (不存在)')"
     printf 'rc 内标记块:      %s\n' "$(has_block "$rc" && printf '已安装' || printf '未安装')"
     printf 'snippet:          %s%s\n' "$SNIPPET" "$([ -f "$SNIPPET" ] || printf ' (不存在)')"
-    printf 'settings.json 键: %s\n' \
-        "$(settings_has_header && printf '存在(会覆盖 wrapper,必须删)' || printf '无(正确)')"
+    printf 'GROK_CONFIG_PATH: %s\n' \
+        "$(path_overlay_set && printf '已设置(会与 GROK_CONFIG overlay 冲突)' || printf '无(正确)')"
     printf '备份:\n'
     if [ -n "$(list_backups "$rc")" ]; then
         list_backups "$rc" | sed 's/^/  /'

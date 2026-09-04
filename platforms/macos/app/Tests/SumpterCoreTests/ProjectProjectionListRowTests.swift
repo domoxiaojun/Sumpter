@@ -81,6 +81,18 @@ import Testing
         #expect(summary == "项目: automode-proxy（客户端声明）")
     }
 
+    @Test func localUserFormatsWorkspaceAsNameAndLocalUser() {
+        let summary = RuntimeEventPresentation.projectAttribution(
+            eventKind: "client",
+            metadata: nil,
+            declared: nil,
+            projectedName: "sumpter",
+            projectedSource: "workspace_local",
+            projectedLocalUser: "kkl"
+        )
+        #expect(summary == "sumpter 本地(kkl)")
+    }
+
     @Test func internalFeatureProjectionIsNotPresentedAsAProject() {
         let context = RuntimeEventPresentation.projectContext(
             eventKind: "client",

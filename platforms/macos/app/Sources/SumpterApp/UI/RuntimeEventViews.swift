@@ -132,10 +132,17 @@ enum RuntimeEventDisplay {
                 metadata: metadata,
                 declared: event.clientDeclared,
                 projectedName: event.projectName,
-                projectedSource: event.projectSource
+                projectedSource: event.projectSource,
+                projectedLocalUser: event.localUser
             ),
             kind(event.kind), clientKind(event),
-            metadata.map { "代理: \(codexAgentRole($0))" },
+            metadata.flatMap { meta in
+                let role = codexAgentRole(meta)
+                if event.clientKind == .grokBuild && role == "代理身份未确定" {
+                    return nil
+                }
+                return "代理: \(role)"
+            },
             purpose(event),
             toolCalls(event).map { "工具: \($0)" },
             metadata?.agentName.map { "路径: \($0)" },
@@ -1242,6 +1249,7 @@ private struct RuntimeEventDetail: View {
                     declared: event.clientDeclared,
                     projectedName: event.projectName,
                     projectedSource: event.projectSource,
+                    projectedLocalUser: event.localUser,
                     attributionScope: event.attributionScope
                 ) {
                     let unidentified = project.source == .missingWorkspaceMetadata
@@ -1260,7 +1268,11 @@ private struct RuntimeEventDetail: View {
                         copyable: !unidentified,
                         muted: unidentified
                     )
-                    InfoRow(title: "项目来源", value: project.source.label, muted: unidentified)
+                    InfoRow(
+                        title: "项目来源",
+                        value: project.source.displayLabel(localUser: project.localUser),
+                        muted: unidentified
+                    )
                 }
                 if let thread = event.codexThreadClass {
                     InfoRow(title: "功能线程", value: thread)

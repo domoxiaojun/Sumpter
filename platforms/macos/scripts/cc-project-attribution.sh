@@ -119,6 +119,13 @@ function __sumpter_cc_is_ascii
     string match -qr '^[ -~]+$' -- $argv[1]
 end
 
+function __sumpter_cc_local_user
+    set -l u $USER
+    test -n "$u"; or set u $LOGNAME
+    test -n "$u"; or set u (command id -un 2>/dev/null)
+    string match -qr '^[A-Za-z0-9._-]+$' -- $u; and echo $u
+end
+
 function claude
     set -l dir (string trim -r -c / -- $PWD)
     test -z "$dir"; and set dir /
@@ -141,6 +148,8 @@ function claude
     __sumpter_cc_is_ascii "$proj"; and set -a hdrs "X-Sumpter-Project: $proj"
     __sumpter_cc_is_ascii "$dir"; and set -a hdrs "X-Sumpter-Workspace: $dir"
     __sumpter_cc_is_ascii "$remote"; and set -a hdrs "X-Sumpter-Git-Remote: $remote"
+    set -l user (__sumpter_cc_local_user)
+    test -n "$user"; and set -a hdrs "X-Sumpter-User: $user"
 
     if test (count $hdrs) -gt 0
         ANTHROPIC_CUSTOM_HEADERS=(string join \n -- $hdrs) command claude $argv
@@ -173,8 +182,19 @@ sumpter_cc_is_ascii() {
     esac
 }
 
+sumpter_cc_local_user() {
+    local LC_ALL=C u
+    u="${USER:-${LOGNAME:-}}"
+    [ -n "$u" ] || u="$(command id -un 2>/dev/null || true)"
+    case "$u" in
+        "") return 1 ;;
+        *[!A-Za-z0-9._-]*) return 1 ;;
+        *) printf '%s' "$u" ;;
+    esac
+}
+
 sumpter_cc_headers() {
-    local out="" line dir proj ws remote first_remote
+    local out="" line dir proj ws remote first_remote user
     # 合并而非覆盖:保留调用方已有的非 X-Sumpter-* 行
     if [ -n "${ANTHROPIC_CUSTOM_HEADERS:-}" ]; then
         while IFS= read -r line; do
@@ -212,6 +232,8 @@ SUMPTER_EOF
     sumpter_cc_is_ascii "$proj" && out="${out}X-Sumpter-Project: ${proj}"$'\n'
     sumpter_cc_is_ascii "$ws" && out="${out}X-Sumpter-Workspace: ${ws}"$'\n'
     sumpter_cc_is_ascii "$remote" && out="${out}X-Sumpter-Git-Remote: ${remote}"$'\n'
+    user="$(sumpter_cc_local_user || true)"
+    [ -n "$user" ] && out="${out}X-Sumpter-User: ${user}"$'\n'
 
     # 去掉尾随换行
     printf '%s' "${out%$'\n'}"

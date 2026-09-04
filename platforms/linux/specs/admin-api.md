@@ -143,8 +143,9 @@ Admin 与 proxy 是两个 listener：proxy 地址来自 `config.listener`，停�
 
 ### 1.0.1 Linux proxy 内置归因脚本
 
-Linux proxy listener 固定提供 `GET /__sumpter/cc-project-attribution.sh`，响应为编译期内置的
-`cc-project-attribution.sh`，并带 `Content-Type: text/x-shellscript` 与 `Cache-Control: no-store`。
+Linux proxy listener 固定提供 `GET /__sumpter/cc-project-attribution.sh` 与
+`GET /__sumpter/grok-project-attribution.sh`，响应为编译期内置的对应脚本，并带
+`Content-Type: text/x-shellscript` 与 `Cache-Control: no-store`。
 它不读取运行目录中的脚本文件，也不会修改 daemon 主机；调用方应下载后在实际运行 Claude Code
 的客户端执行。该路径遵守 `listener.allowedCIDRs`；当 `listener.authToken` 非空时，必须带相同的
 `Authorization: Bearer <token>` 或 `x-api-key`。除 `GET` 外返回 405。macOS sidecar 不提供该路径。
@@ -158,6 +159,7 @@ curl --fail --location \
   "http://192.168.1.20:57878/__sumpter/cc-project-attribution.sh" \
   -o /tmp/cc-project-attribution.sh
 bash /tmp/cc-project-attribution.sh install
+# Grok Build 把路径换成 /__sumpter/grok-project-attribution.sh
 ```
 
 通过 Nginx 对外提供时建议（跨机器时应）设置非空 `listener.authToken`；不要把无认证的 proxy

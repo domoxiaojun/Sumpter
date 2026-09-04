@@ -1075,7 +1075,7 @@ test('客户端声明的项目归因与 Codex workspace 同形状且来源可区
   const context = eventProjectContext(declaredEvent);
   assert.equal(context.applicable, true);
   assert.equal(context.name, 'demo');
-  assert.equal(context.source, 'client_declared');
+  assert.equal(context.source, 'workspace_local');
 
   // Codex 结构化 workspace 必须优先，声明值不得把来源降级。
   const bothEvent = {
@@ -1132,6 +1132,14 @@ test('列表投影行只带 projectName/projectSource 时仍能正确归因', as
   });
   assert.equal(conflicting.name, 'server-wins');
   assert.equal(conflicting.source, 'workspace_local');
+
+  const localNamed = eventProjectContext({
+    kind: 'client',
+    projectName: 'sumpter',
+    projectSource: 'workspace_local',
+    localUser: 'kkl',
+  });
+  assert.equal(localNamed.label, 'sumpter 本地(kkl)');
 });
 
 test('统一 runtime dimensions endpoint accepts every v3 dimension kind', async () => {

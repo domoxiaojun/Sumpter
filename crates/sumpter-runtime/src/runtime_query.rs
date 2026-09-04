@@ -25,7 +25,7 @@ use sumpter_core::routing::{RequestPurpose, RouteMode};
 use crate::runtime_store::{RuntimeChange, RuntimeEventListItem};
 
 const API_VERSION: u8 = 3;
-const PROJECTION_VERSION: i64 = 5;
+const PROJECTION_VERSION: i64 = 6;
 const PAGE_SIZES: [usize; 5] = [10, 25, 50, 100, 200];
 const REQUEST_CHAIN_LIMIT: usize = 512;
 const MAX_TREND_POINTS: usize = 240;
@@ -1251,6 +1251,7 @@ struct EventListProjection {
     failover: i64,
     project_name: Option<String>,
     project_source: Option<String>,
+    local_user: Option<String>,
     codex_thread_class: Option<String>,
     attribution_scope: Option<String>,
     request_method: Option<String>,
@@ -1285,6 +1286,7 @@ fn event_list_item_from_projection(row: EventListProjection) -> RuntimeEventList
         // 投影快路径不解 payload_json,归因只能靠这两个投影列(见 RuntimeEventListItem 注释)。
         project_name: row.project_name,
         project_source: row.project_source,
+        local_user: row.local_user,
         codex_thread_class: row.codex_thread_class,
         attribution_scope: row.attribution_scope,
         client_model: row.client_model,
@@ -1876,7 +1878,7 @@ pub fn events_page_on(
                 endpoint_id,endpoint_name,feature_rule_id,client_model,\
                 effective_model,upstream_model,failure_kind,failure_phase,\
                 source_format,target_format,route_mode,upstream_status_code,\
-                duration_ms,ttfb_ms,failover,project_name,project_source,\
+                duration_ms,ttfb_ms,failover,project_name,project_source,local_user,\
                 codex_thread_class,attribution_scope \
                 ,request_method,request_path,route_intent \
          FROM runtime_events{where_sql} ORDER BY seq DESC LIMIT ? OFFSET ?"
@@ -1915,11 +1917,12 @@ pub fn events_page_on(
                 failover: row.get::<_, Option<i64>>(27)?.unwrap_or_default(),
                 project_name: row.get(28)?,
                 project_source: row.get(29)?,
-                codex_thread_class: row.get(30)?,
-                attribution_scope: row.get(31)?,
-                request_method: row.get(32)?,
-                request_path: row.get(33)?,
-                route_intent: row.get(34)?,
+                local_user: row.get(30)?,
+                codex_thread_class: row.get(31)?,
+                attribution_scope: row.get(32)?,
+                request_method: row.get(33)?,
+                request_path: row.get(34)?,
+                route_intent: row.get(35)?,
             })
         })?;
         rows.map(|row| row.map(event_list_item_from_projection))
@@ -5009,7 +5012,7 @@ mod tests {
                    is_in_flight INTEGER NOT NULL,payload_json TEXT NOT NULL,
                    projection_version INTEGER NOT NULL DEFAULT 0,
                    payload_bytes INTEGER NOT NULL DEFAULT 0,session_key TEXT,session_source TEXT,
-                   project_id TEXT,project_name TEXT,project_source TEXT,workspace_paths_json TEXT,
+                   project_id TEXT,project_name TEXT,project_source TEXT,local_user TEXT,workspace_paths_json TEXT,
                    endpoint_name TEXT,pool_id TEXT,feature_rule_id TEXT,client_model TEXT,
                    effective_model TEXT,upstream_model TEXT,failure_phase TEXT,
                    source_format TEXT,target_format TEXT,route_mode TEXT,
@@ -5113,7 +5116,7 @@ mod tests {
                    seq,change_seq,event_id,request_id,timestamp,kind,phase,outcome,status_code,
                    client_kind,request_purpose,endpoint_id,is_in_flight,payload_json,
                    projection_version,endpoint_name
-                 ) VALUES (?1,?1,?2,?3,1.0,?4,'completed',?5,?6,?7,?8,?9,0,'{}',5,?10)",
+                 ) VALUES (?1,?1,?2,?3,1.0,?4,'completed',?5,?6,?7,?8,?9,0,'{}',6,?10)",
                 params![
                     seq,
                     format!("endpoint-test-{seq}"),
@@ -5156,7 +5159,7 @@ mod tests {
                    'endpoint-a',CASE WHEN seq%10=0 THEN 'upstream_http_status' END,0,
                    CASE WHEN seq>99975 THEN '{\"id\":\"page-event\",\"kind\":\"client\"}'
                         ELSE '{not-json' END,
-                   5,80,printf('session-%03d',seq%500),'header',printf('project-%03d',seq%100),
+                   6,80,printf('session-%03d',seq%500),'header',printf('project-%03d',seq%100),
                    printf('Project %03d',seq%100),'workspace_local','[\".../projects/test\"]',
                    'Endpoint A','gpt-test',CASE WHEN seq%10=0 THEN 'response' END,
                    'openai-responses','openai-responses','native',

@@ -65,14 +65,12 @@ const ANTHROPIC_BETA_EFFORT: &str = "effort-2025-11-24";
 ///
 /// `x-sumpter-*` 是客户端声明项目归因用的入站专用 header(见 `ClientDeclaredMetadata`):
 /// 代理读完就必须剥掉,否则项目名与本机工作区路径会跟着请求外泄给上游中转站。
-const HEADER_BLOCKLIST: [&str; 20] = [
+const HEADER_BLOCKLIST: [&str; 18] = [
     "host",
     "x-sumpter-project",
     "x-sumpter-workspace",
     "x-sumpter-git-remote",
-    "x-kekulv-project",
-    "x-kekulv-workspace",
-    "x-kekulv-git-remote",
+    "x-sumpter-user",
     "authorization",
     "x-api-key",
     "content-length",
@@ -329,16 +327,11 @@ pub fn build_outbound(
                 passthrough.body.to_vec()
             };
         let path_and_query = if passthrough.kind == PassthroughKind::Realtime {
-            let path_and_query = rewrite_realtime_model_query(
+            rewrite_realtime_model_query(
                 &openai_resource_path(&base_path, inbound_path_and_query),
                 &request.model,
                 &endpoint.upstream_model,
-            );
-            // Codex Desktop WebRTC bootstrap uses `/v1/realtime`, but OpenAI
-            // only accepts `architecture=avas` on `/v1/realtime/calls`.
-            // Rewrite that root onto `/calls` and declare the Quicksilver
-            // query. Ordinary Realtime and sideband/control stay opaque.
-            rewrite_codex_live_bootstrap_query(&path_and_query, inbound_method, &request.model)
+            )
         } else {
             openai_resource_path(&base_path, inbound_path_and_query)
         };
@@ -629,7 +622,7 @@ pub(crate) fn rewrite_realtime_model_query(
         .split('&')
         .map(|pair| {
             let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
-            if name == "model" && value != replacement {
+            if query_name_is_model(name) && value != replacement {
                 changed = true;
                 format!("{name}={replacement}")
             } else {
@@ -645,74 +638,47 @@ pub(crate) fn rewrite_realtime_model_query(
     }
 }
 
-/// CPA's Live handler always posts WebRTC offers to
-/// `/v1/realtime/calls?intent=quicksilver&architecture=avas`.  OpenAI rejects
-/// `architecture=avas` on any other Realtime surface (`invalid_architecture`:
-/// avas is only for Quicksilver WebRTC sessions).  Map POST `/v1/realtime`
-/// onto `/calls` before adding the markers when the routed model is Codex
-/// Live; leave `/v1/live` and `/calls` on their inbound paths.  Ordinary
-/// Realtime (including client-secret `/calls` follow-ups) and GET/WS never
-/// receive these markers.
-pub(crate) fn rewrite_codex_live_bootstrap_query(
-    path_and_query: &str,
-    inbound_method: &str,
-    routed_model: &str,
-) -> String {
-    if !inbound_method.eq_ignore_ascii_case("POST")
-        || model_name::clean(routed_model) != DEFAULT_CODEX_LIVE_MODEL
-    {
-        return path_and_query.to_string();
-    }
-    let (path, query) = path_and_query
-        .split_once('?')
-        .map_or((path_and_query, None), |(path, query)| (path, Some(query)));
-    let is_root = matches!(
-        path,
-        "/v1/live"
-            | "/live"
-            | "/openai/v1/live"
-            | "/v1/realtime"
-            | "/realtime"
-            | "/openai/v1/realtime"
-            | "/v1/realtime/calls"
-            | "/realtime/calls"
-            | "/openai/v1/realtime/calls"
-    );
-    if !is_root {
-        return path_and_query.to_string();
-    }
-    let outbound_path = if matches!(path, "/v1/realtime" | "/realtime" | "/openai/v1/realtime") {
-        format!("{path}/calls")
-    } else {
-        path.to_string()
-    };
-
-    let mut found_intent = false;
-    let mut found_architecture = false;
-    let mut pairs = query
-        .unwrap_or_default()
-        .split('&')
-        .filter(|pair| !pair.is_empty())
-        .map(|pair| {
-            let (name, _) = pair.split_once('=').unwrap_or((pair, ""));
-            if name.eq_ignore_ascii_case("intent") {
-                found_intent = true;
-                "intent=quicksilver".to_string()
-            } else if name.eq_ignore_ascii_case("architecture") {
-                found_architecture = true;
-                "architecture=avas".to_string()
-            } else {
-                pair.to_string()
+/// Match a query key without normalizing or re-encoding the query string.
+/// Percent escapes are decoded strictly; malformed escapes do not match and
+/// are preserved verbatim.  The original key spelling (including casing and
+/// escapes) is retained when its value is replaced.
+fn query_name_is_model(raw_name: &str) -> bool {
+    let bytes = raw_name.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'%' => {
+                if index + 2 >= bytes.len() {
+                    return false;
+                }
+                let Some(high) = hex_digit(bytes[index + 1]) else {
+                    return false;
+                };
+                let Some(low) = hex_digit(bytes[index + 2]) else {
+                    return false;
+                };
+                decoded.push((high << 4) | low);
+                index += 3;
             }
-        })
-        .collect::<Vec<_>>();
-    if !found_intent {
-        pairs.push("intent=quicksilver".into());
+            byte => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
     }
-    if !found_architecture {
-        pairs.push("architecture=avas".into());
+    std::str::from_utf8(&decoded)
+        .ok()
+        .is_some_and(|name| name.eq_ignore_ascii_case("model"))
+}
+
+fn hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
     }
-    format!("{outbound_path}?{}", pairs.join("&"))
 }
 
 /// Drop `intent` / `architecture` so a Codex Desktop GET `/v1/realtime`
@@ -998,10 +964,7 @@ mod tests {
                 "X-Sumpter-Git-Remote".to_string(),
                 "https://github.com/domoxiaojun/sumpter.git".to_string(),
             ),
-            (
-                "X-Kekulv-Project".to_string(),
-                "legacy-should-not-leak".to_string(),
-            ),
+            ("X-Sumpter-User".to_string(), "kkl".to_string()),
             ("anthropic-version".to_string(), "2023-06-01".to_string()),
         ];
         let build = build_outbound(
@@ -1024,9 +987,7 @@ mod tests {
             "x-sumpter-project",
             "x-sumpter-workspace",
             "x-sumpter-git-remote",
-            "x-kekulv-project",
-            "x-kekulv-workspace",
-            "x-kekulv-git-remote",
+            "x-sumpter-user",
         ] {
             assert!(
                 HEADER_BLOCKLIST.contains(&name),
@@ -1738,56 +1699,39 @@ mod tests {
                 stream: false,
             }),
         );
-        assert_eq!(
-            leaked.request.path_and_query,
-            "/v1/realtime/calls?model=up-model&intent=quicksilver&architecture=avas"
-        );
+        assert_eq!(leaked.request.path_and_query, "/v1/realtime?model=up-model");
         let body: Value = serde_json::from_slice(&build.request.body).unwrap();
         assert_eq!(body["session"]["model"], "up-model");
     }
 
     #[test]
-    fn codex_live_bootstrap_query_declares_quicksilver_without_touching_standard_realtime() {
+    fn realtime_query_rewrite_handles_encoded_duplicate_and_malformed_keys() {
         assert_eq!(
-            rewrite_codex_live_bootstrap_query(
-                "/v1/realtime?model=gpt-live-1-codex",
-                "POST",
-                "gpt-live-1-codex",
+            rewrite_realtime_model_query(
+                "/v1/realtime?MODEL=old&voice=alloy&m%6fdel=old2",
+                "client",
+                "upstream",
             ),
-            "/v1/realtime/calls?model=gpt-live-1-codex&intent=quicksilver&architecture=avas"
+            "/v1/realtime?MODEL=upstream&voice=alloy&m%6fdel=upstream"
+        );
+        // A malformed escape is not a model key and must remain byte-for-byte
+        // unchanged along with all unrelated query parameters.
+        assert_eq!(
+            rewrite_realtime_model_query("/v1/realtime?m%6odel=old&trace=1", "client", "upstream",),
+            "/v1/realtime?m%6odel=old&trace=1"
         );
         assert_eq!(
-            rewrite_codex_live_bootstrap_query(
-                "/v1/live?model=gpt-live-1-codex&intent=other&architecture=other&trace=1",
-                "POST",
-                "gpt-live-1-codex",
+            rewrite_realtime_model_query(
+                "/v1/realtime?model=upstream&model=old",
+                "client",
+                "upstream",
             ),
-            "/v1/live?model=gpt-live-1-codex&intent=quicksilver&architecture=avas&trace=1"
+            "/v1/realtime?model=upstream&model=upstream"
         );
-        assert_eq!(
-            rewrite_codex_live_bootstrap_query(
-                "/v1/realtime?model=gpt-realtime",
-                "POST",
-                "gpt-realtime",
-            ),
-            "/v1/realtime?model=gpt-realtime"
-        );
-        assert_eq!(
-            rewrite_codex_live_bootstrap_query(
-                "/openai/v1/realtime?model=gpt-live-1-codex",
-                "POST",
-                "gpt-live-1-codex",
-            ),
-            "/openai/v1/realtime/calls?model=gpt-live-1-codex&intent=quicksilver&architecture=avas"
-        );
-        assert_eq!(
-            rewrite_codex_live_bootstrap_query(
-                "/v1/realtime/calls?model=gpt-live-1-codex",
-                "POST",
-                "gpt-live-1-codex",
-            ),
-            "/v1/realtime/calls?model=gpt-live-1-codex&intent=quicksilver&architecture=avas"
-        );
+    }
+
+    #[test]
+    fn websocket_sideband_query_strips_http_only_quicksilver_markers() {
         assert_eq!(
             strip_codex_live_query(
                 "/v1/realtime?model=gpt-live-1-codex&intent=quicksilver&architecture=avas&trace=1",
