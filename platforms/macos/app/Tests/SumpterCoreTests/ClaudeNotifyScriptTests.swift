@@ -12,8 +12,11 @@ final class ClaudeNotifyScriptTests: XCTestCase {
         // 空 stdin 兜底 {},老 sumpterd 收到也能解析。
         XCTAssertTrue(script.contains(#"[[ -z "$payload" ]] && payload="{}""#))
         // 事件名经查询参数传递;token 鉴权与端口内嵌。
-        XCTAssertTrue(script.contains("http://127.0.0.1:8484/__notify?token=tok-abc&event=$event"))
+        XCTAssertTrue(script.contains("http://127.0.0.1:8484/__notify?token=tok-abc&event=$event&clientKind=$clientKind"))
         XCTAssertTrue(script.contains(#"event="${1:-notification}""#))
+        XCTAssertTrue(script.contains(#"clientKind="claude_code""#))
+        XCTAssertTrue(script.contains("GROK_HOOK_EVENT"))
+        XCTAssertTrue(script.contains(#"clientKind="grok_build""#))
         // 快速失败,不阻塞 Claude Code 的 hook 执行。
         XCTAssertTrue(script.contains("--max-time 2"))
         XCTAssertTrue(script.hasPrefix("#!/bin/zsh"))

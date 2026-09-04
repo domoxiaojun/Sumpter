@@ -2859,6 +2859,257 @@ async fn codex_notification_events_share_categories_and_stay_payload_safe() {
 }
 
 #[tokio::test]
+async fn grok_notification_events_share_categories_and_stay_payload_safe() {
+    use sumpter_core::events::ClientKind;
+    use sumpter_engine::PlatformNotice;
+    use sumpter_macos_adapter::engine::EngineNotice;
+
+    let fake = FakeTransport::new();
+    let engine = engine_with(two_endpoint_config(), fake);
+    let mut rx = engine.subscribe();
+
+    async fn next_notify(
+        rx: &mut tokio::sync::broadcast::Receiver<EngineNotice>,
+    ) -> (
+        ClientKind,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+    ) {
+        loop {
+            match rx.recv().await.unwrap() {
+                EngineNotice::PlatformNotice(PlatformNotice::Notify {
+                    client_kind,
+                    title,
+                    message,
+                    kind,
+                    category,
+                    cwd,
+                    ..
+                }) => break (client_kind, title, message, kind, category, cwd),
+                _ => continue,
+            }
+        }
+    }
+
+    let cases = [
+        (
+            json!({
+                "hookEventName": "Stop",
+                "sessionId": "grok-session-stop",
+                "promptId": "prompt-1",
+                "reason": "end_turn",
+                "cwd": "/Users/kkl/projects/private-work",
+                "lastAssistantMessage": "PRIVATE TRANSCRIPT MUST NOT ESCAPE",
+                "message": "PRIVATE PROMPT MUST NOT ESCAPE",
+            }),
+            "stop",
+            "turn_completed",
+            "Grok Build · 回合完成",
+            "Grok Build 主回合已完成",
+        ),
+        (
+            json!({
+                "hookEventName": "notification",
+                "sessionId": "grok-session-permission",
+                "notificationType": "permission_prompt",
+                "message": "PRIVATE PERMISSION TEXT MUST NOT ESCAPE",
+                "toolInput": {"command": "PRIVATE"},
+            }),
+            "notification",
+            "action_required",
+            "Grok Build · 需要你处理",
+            "Grok Build 正在等待你的授权或确认",
+        ),
+        (
+            json!({
+                "hookEventName": "Notification",
+                "sessionId": "grok-session-idle",
+                "notificationType": "idle_prompt",
+                "message": "PRIVATE IDLE TEXT MUST NOT ESCAPE",
+            }),
+            "notification",
+            "action_required",
+            "Grok Build · 等待继续",
+            "Grok Build 正在等待你继续输入",
+        ),
+        (
+            json!({
+                "hookEventName": "notification",
+                "sessionId": "grok-session-task",
+                "notificationType": "task_complete",
+                "message": "PRIVATE TASK TEXT MUST NOT ESCAPE",
+            }),
+            "notification",
+            "subtask_completed",
+            "Grok Build · 任务完成",
+            "Grok Build 后台任务已完成",
+        ),
+        (
+            json!({
+                "hookEventName": "StopCancelled",
+                "sessionId": "grok-session-cancel",
+                "reason": "user_interrupt",
+                "lastAssistantMessage": "PRIVATE TRANSCRIPT MUST NOT ESCAPE",
+            }),
+            "stop_cancelled",
+            "turn_failed",
+            "Grok Build · 回合中断",
+            "Grok Build 回合被中断，未完成",
+        ),
+        (
+            json!({
+                "hookEventName": "SubagentStop",
+                "sessionId": "grok-session-sub",
+                "subagentType": "explore",
+                "lastAssistantMessage": "PRIVATE TRANSCRIPT MUST NOT ESCAPE",
+            }),
+            "subagent_stop",
+            "subtask_completed",
+            "Grok Build · 子任务结束",
+            "Grok Build 子任务已完成",
+        ),
+        (
+            json!({
+                "hookEventName": "StopFailure",
+                "sessionId": "grok-session-fail",
+                "error": "rate_limit",
+                "errorDetails": "PRIVATE ERROR DETAILS MUST NOT ESCAPE",
+            }),
+            "stop_failure",
+            "turn_failed",
+            "Grok Build · 回合异常",
+            "上游限流，回合未完成",
+        ),
+    ];
+    for (payload, kind, category, title, message) in cases {
+        let (status, _) = call(
+            &engine,
+            loopback(),
+            "/__notify?token=test-token&clientKind=grok_build",
+            vec![],
+            Bytes::from(serde_json::to_vec(&payload).unwrap()),
+        )
+        .await;
+        assert_eq!(status, 200);
+        let notice = next_notify(&mut rx).await;
+        assert_eq!(notice.0, ClientKind::GrokBuild);
+        assert_eq!(notice.3, kind);
+        assert_eq!(notice.4.as_deref(), Some(category));
+        assert_eq!(notice.1, title);
+        assert_eq!(notice.2, message);
+        assert!(!notice.2.contains("PRIVATE"));
+        if kind == "stop" {
+            assert_eq!(
+                notice.5.as_deref(),
+                Some("/Users/kkl/projects/private-work")
+            );
+        }
+    }
+
+    let notify_count_before = runtime_of(&engine)
+        .await
+        .recent_events
+        .iter()
+        .filter(|event| event.kind == "notify")
+        .count();
+
+    // Session-end Stop is observe-only and must not look like a finished turn.
+    let (status, _) = call(
+        &engine,
+        loopback(),
+        "/__notify?token=test-token&clientKind=grok_build",
+        vec![],
+        Bytes::from(
+            serde_json::to_vec(&json!({
+                "hookEventName": "stop",
+                "sessionId": "grok-session-end",
+                "reason": "channel_closed",
+            }))
+            .unwrap(),
+        ),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert!(rx.try_recv().is_err());
+
+    // Tool/session hooks stay out of the notification stream.
+    let (status, _) = call(
+        &engine,
+        loopback(),
+        "/__notify?token=test-token&clientKind=grok_build",
+        vec![],
+        Bytes::from(serde_json::to_vec(&json!({"hookEventName": "SessionStart"})).unwrap()),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert!(rx.try_recv().is_err());
+
+    let (status, _) = call(
+        &engine,
+        loopback(),
+        "/__notify?token=test-token&clientKind=grok_build",
+        vec![],
+        Bytes::from(
+            serde_json::to_vec(&json!({
+                "hookEventName": "notification",
+                "notificationType": "auth_success",
+                "message": "PRIVATE",
+            }))
+            .unwrap(),
+        ),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert!(rx.try_recv().is_err());
+
+    let runtime = runtime_of(&engine).await;
+    assert_eq!(
+        runtime
+            .recent_events
+            .iter()
+            .filter(|event| event.kind == "notify")
+            .count(),
+        notify_count_before
+    );
+
+    // Duplicate Stop for the same prompt is collapsed; a new prompt still fires.
+    let round = json!({
+        "sessionId": "grok-session-dedup",
+        "promptId": "prompt-repeat",
+        "hookEventName": "Stop",
+        "reason": "end_turn",
+    });
+    let (_, _) = call(
+        &engine,
+        loopback(),
+        "/__notify?token=test-token&clientKind=grok_build",
+        vec![],
+        Bytes::from(serde_json::to_vec(&round).unwrap()),
+    )
+    .await;
+    let _ = next_notify(&mut rx).await;
+    let (_, _) = call(
+        &engine,
+        loopback(),
+        "/__notify?token=test-token&clientKind=grok_build",
+        vec![],
+        Bytes::from(serde_json::to_vec(&round).unwrap()),
+    )
+    .await;
+    let duplicate = loop {
+        match rx.try_recv() {
+            Ok(EngineNotice::PlatformNotice(PlatformNotice::Notify { .. })) => break true,
+            Ok(_) => continue,
+            Err(_) => break false,
+        }
+    };
+    assert!(!duplicate);
+}
+
+#[tokio::test]
 async fn notify_classifies_client_actions_and_suppresses_duplicate_hooks() {
     use sumpter_macos_adapter::engine::EngineNotice;
 

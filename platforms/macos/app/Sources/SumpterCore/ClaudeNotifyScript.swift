@@ -13,7 +13,11 @@ public enum ClaudeNotifyScript {
         event="${1:-notification}"
         payload="$(cat 2>/dev/null || true)"
         [[ -z "$payload" ]] && payload="{}"
-        /usr/bin/curl -sS --max-time 2 -X POST "http://127.0.0.1:\(port)/__notify?token=\(token)&event=$event" -H "Content-Type: application/json" --data-binary "$payload" >/dev/null 2>&1
+        clientKind="claude_code"
+        if [[ -n "${GROK_HOOK_EVENT:-}" || -n "${GROK_SESSION_ID:-}" ]]; then
+          clientKind="grok_build"
+        fi
+        /usr/bin/curl -sS --max-time 2 -X POST "http://127.0.0.1:\(port)/__notify?token=\(token)&event=$event&clientKind=$clientKind" -H "Content-Type: application/json" --data-binary "$payload" >/dev/null 2>&1
         exit 0
         """
     }

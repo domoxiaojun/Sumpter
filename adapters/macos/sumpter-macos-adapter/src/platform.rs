@@ -111,6 +111,7 @@ impl Platform {
             .and_then(|value| match value {
                 "codex" => Some(ClientKind::Codex),
                 "claude_code" => Some(ClientKind::ClaudeCode),
+                "grok_build" => Some(ClientKind::GrokBuild),
                 _ => None,
             })
             .unwrap_or(ClientKind::ClaudeCode);
@@ -126,13 +127,15 @@ impl Platform {
             .map(str::to_string)
             .filter(|value| !value.is_empty())
             .or_else(|| pick("hook_event_name"))
+            .or_else(|| pick("hookEventName"))
             .or_else(|| pick("type"))
             .unwrap_or_else(|| "notification".into());
         let event_kind = normalize_hook_event(&event_kind);
         let payload_event_kind = pick("hook_event_name")
+            .or_else(|| pick("hookEventName"))
             .or_else(|| pick("type"))
             .map(|value| normalize_hook_event(&value));
-        // Codex integration only accepts notification-worthy lifecycle events.
+        // Codex/Grok only accept notification-worthy lifecycle events.
         // Tool/compaction/session hooks remain available to users, but are not
         // converted into system notifications and their payloads are ignored.
         if client_kind == ClientKind::Codex
@@ -144,8 +147,10 @@ impl Platform {
             return sumpter_engine::engine::json_response(StatusCode::OK, &json!({"ok": "true"}));
         }
         let session_id = pick("session_id").or_else(|| pick("sessionId"));
-        let turn_id = pick("turn_id").or_else(|| pick("turnId"));
-        let cwd = pick("cwd");
+        let turn_id = pick("turn_id")
+            .or_else(|| pick("turnId"))
+            .or_else(|| pick("promptId"));
+        let cwd = pick("cwd").or_else(|| pick("workspaceRoot"));
         let project = cwd
             .as_deref()
             .and_then(|value| std::path::Path::new(value).file_name())
@@ -153,9 +158,21 @@ impl Platform {
         let notification_type = (event_kind == "notification")
             .then(|| pick("notification_type").or_else(|| pick("notificationType")))
             .flatten();
+        let reason = pick("reason");
+        if client_kind == ClientKind::GrokBuild
+            && (!grok_notification_should_emit(
+                &event_kind,
+                notification_type.as_deref(),
+                reason.as_deref(),
+            ) || payload_event_kind
+                .as_deref()
+                .is_some_and(|value| value != event_kind.as_str()))
+        {
+            return sumpter_engine::engine::json_response(StatusCode::OK, &json!({"ok": "true"}));
+        }
         let (category, priority) = notify_category(&event_kind, notification_type.as_deref());
         let matched_failure = (event_kind == "stop_failure")
-            .then(|| recent_claude_failure(engine.as_ref(), session_id.as_deref()))
+            .then(|| recent_client_failure(engine.as_ref(), session_id.as_deref(), client_kind))
             .flatten();
         let (default_title, default_message) = notify_presentation(
             client_kind,
@@ -164,9 +181,9 @@ impl Platform {
             notification_type.as_deref(),
             matched_failure.as_ref(),
         );
-        let message = if client_kind == ClientKind::Codex {
-            // Codex Stop payloads can contain transcript/prompt/error fields;
-            // never copy them into the system notification.
+        let message = if uses_fixed_notify_copy(client_kind) {
+            // Codex/Grok Stop payloads can contain transcript/prompt/error
+            // fields; never copy them into the system notification.
             default_message.clone()
         } else {
             pick("message")
@@ -179,7 +196,7 @@ impl Platform {
         } else {
             sanitize_notification_text(&message, 512)
         };
-        let title = if client_kind == ClientKind::Codex || event_kind == "stop_failure" {
+        let title = if uses_fixed_notify_copy(client_kind) || event_kind == "stop_failure" {
             default_title
         } else {
             pick("title")
@@ -188,9 +205,10 @@ impl Platform {
                 .unwrap_or(default_title)
         };
         let sound = pick("sound").map(|value| sanitize_notification_text(&value, 80));
-        let action_id = if client_kind == ClientKind::Codex {
+        let action_id = if uses_fixed_notify_copy(client_kind) {
             // Do not echo arbitrary identifiers from the Stop payload.  The
-            // private turn id is used only below for in-memory deduplication.
+            // private turn/prompt id is used only below for in-memory
+            // deduplication.
             None
         } else {
             [
@@ -269,7 +287,7 @@ impl Platform {
             category,
             session_id.as_deref(),
             action_id.as_deref().or_else(|| {
-                (client_kind == ClientKind::Codex)
+                uses_fixed_notify_copy(client_kind)
                     .then_some(turn_id.as_deref())
                     .flatten()
             }),
@@ -411,10 +429,15 @@ fn normalize_hook_event(event: &str) -> String {
         "PermissionRequest" => "permission_request".into(),
         "Stop" => "stop".into(),
         "StopFailure" => "stop_failure".into(),
-        "SubagentStop" => "subagent_stop".into(),
+        "StopCancelled" => "stop_cancelled".into(),
+        "SubagentStop" | "SubagentEnd" => "subagent_stop".into(),
         "Interrupt" => "interrupt".into(),
         other => other.to_string(),
     }
+}
+
+fn uses_fixed_notify_copy(client_kind: ClientKind) -> bool {
+    matches!(client_kind, ClientKind::Codex | ClientKind::GrokBuild)
 }
 
 fn codex_notification_event_supported(event: &str) -> bool {
@@ -424,12 +447,28 @@ fn codex_notification_event_supported(event: &str) -> bool {
     )
 }
 
+fn grok_notification_should_emit(
+    event: &str,
+    notification_type: Option<&str>,
+    reason: Option<&str>,
+) -> bool {
+    match event {
+        "stop" => reason.map(|value| value == "end_turn").unwrap_or(true),
+        "stop_failure" | "stop_cancelled" | "subagent_stop" => true,
+        "notification" => matches!(
+            notification_type,
+            None | Some("permission_prompt" | "idle_prompt" | "task_complete")
+        ),
+        _ => false,
+    }
+}
+
 fn notify_category(event: &str, notification_type: Option<&str>) -> (&'static str, &'static str) {
     match event {
         "stop_failure" => ("turn_failed", "high"),
         "subagent_stop" => ("subtask_completed", "normal"),
         "stop" => ("turn_completed", "normal"),
-        "interrupt" => ("turn_failed", "high"),
+        "interrupt" | "stop_cancelled" => ("turn_failed", "high"),
         "permission_request" => ("action_required", "high"),
         "notification" => match notification_type {
             None
@@ -440,6 +479,7 @@ fn notify_category(event: &str, notification_type: Option<&str>) -> (&'static st
                 | "elicitation_url_dialog"
                 | "idle_prompt",
             ) => ("action_required", "high"),
+            Some("task_complete") => ("subtask_completed", "normal"),
             _ => ("status", "low"),
         },
         _ => ("status", "low"),
@@ -470,6 +510,38 @@ fn notify_presentation(
             _ => (
                 "Codex CLI · 回合完成".into(),
                 "Codex CLI 主回合已完成".into(),
+            ),
+        };
+    }
+    if client_kind == ClientKind::GrokBuild {
+        return match (event, notification_type) {
+            ("notification", Some("idle_prompt")) => (
+                "Grok Build · 等待继续".into(),
+                "Grok Build 正在等待你继续输入".into(),
+            ),
+            ("notification", Some("task_complete")) => (
+                "Grok Build · 任务完成".into(),
+                "Grok Build 后台任务已完成".into(),
+            ),
+            ("notification", _) => (
+                "Grok Build · 需要你处理".into(),
+                "Grok Build 正在等待你的授权或确认".into(),
+            ),
+            ("subagent_stop", _) => (
+                "Grok Build · 子任务结束".into(),
+                "Grok Build 子任务已完成".into(),
+            ),
+            ("stop_cancelled", _) => (
+                "Grok Build · 回合中断".into(),
+                "Grok Build 回合被中断，未完成".into(),
+            ),
+            ("stop_failure", _) => (
+                "Grok Build · 回合异常".into(),
+                "上游返回异常，回合未完成".into(),
+            ),
+            _ => (
+                "Grok Build · 回合完成".into(),
+                "Grok Build 主回合已完成".into(),
             ),
         };
     }
@@ -510,9 +582,10 @@ fn notify_presentation(
     }
 }
 
-fn recent_claude_failure(
+fn recent_client_failure(
     engine: &dyn EngineCapabilities,
     session_id: Option<&str>,
+    client_kind: ClientKind,
 ) -> Option<RuntimeEvent> {
     let session_id = session_id?;
     let now = unix_to_apple_epoch(now_unix());
@@ -522,7 +595,7 @@ fn recent_claude_failure(
         .iter()
         .filter(|event| {
             event.kind == KIND_CLIENT
-                && event.client_kind == Some(ClientKind::ClaudeCode)
+                && event.client_kind == Some(client_kind)
                 && event.session_id.as_deref() == Some(session_id)
                 && event.outcome == Some(RuntimeEventOutcome::Failed)
                 && now - event.timestamp <= NOTIFY_RUNTIME_MATCH_WINDOW_SECS
