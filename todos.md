@@ -1,3 +1,13 @@
+# Codex 通知状态：已信任仍显示等待（2026-09-04）
+
+Sumpter 用「收到一次 SSE」当 /hooks 已信任的证据，启动时 rewrite 还会
+`clearVerified()`。Codex 桌面开关已经打开时仍显示「等待 /hooks 信任」。
+
+- [x] 已写入即「已配置」；启动/重新安装不清验证
+- [x] 测试、提交
+
+---
+
 # Codex hook 显示名（2026-09-04）
 
 Codex 用户配置里 Sumpter 条目显示成「钩子 1」，因为 hooks.json 只有

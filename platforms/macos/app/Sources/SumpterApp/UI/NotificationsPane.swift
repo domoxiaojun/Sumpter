@@ -135,12 +135,11 @@ struct NotificationsPane: View {
                             badgeColor: codexStatusColor,
                             detail: "Codex 配置文件：\(model.codexNotificationHookPath)"
                         )
+                        Text("Codex 桌面在用户配置打开这些钩子即可。CLI 若从未信任过，运行一次 /hooks。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                         switch model.codexNotificationHookStatus {
-                        case .pendingTrust:
-                            Text("首次使用请在 Codex CLI 输入 /hooks，信任 Sumpter 的通知 Hook；收到一次真实通知后会显示“已验证”。")
-                                .font(.caption)
-                                .foregroundStyle(.orange)
-                                .fixedSize(horizontal: false, vertical: true)
                         case .legacyConflict:
                             Text("检测到无法安全判断的 legacy notify。为避免误删，请先在 config.toml 中手动处理后再启用。")
                                 .font(.caption)
@@ -151,7 +150,7 @@ struct NotificationsPane: View {
                                 .font(.caption)
                                 .foregroundStyle(.red)
                                 .fixedSize(horizontal: false, vertical: true)
-                        case .notConfigured, .verified:
+                        case .notConfigured, .configured, .verified:
                             EmptyView()
                         }
                         Divider()
@@ -217,7 +216,7 @@ struct NotificationsPane: View {
     private var codexStatusImage: String {
         switch model.codexNotificationHookStatus {
         case .notConfigured: "bell.slash"
-        case .pendingTrust: "clock"
+        case .configured: "checkmark.circle"
         case .verified: "checkmark.seal.fill"
         case .legacyConflict: "exclamationmark.triangle.fill"
         case .writeFailed: "xmark.octagon.fill"
@@ -227,8 +226,7 @@ struct NotificationsPane: View {
     private var codexStatusColor: Color {
         switch model.codexNotificationHookStatus {
         case .notConfigured: .secondary
-        case .pendingTrust: .orange
-        case .verified: .green
+        case .configured, .verified: .green
         case .legacyConflict, .writeFailed: .red
         }
     }
