@@ -43,7 +43,12 @@ struct OverviewPane: View {
                 onPageSizeChange: model.setRunHistoryPageSize,
                 initialKindFilter: RuntimeEventKindFilter(rawValue: model.runHistoryKindFilter),
                 onKindFilterChange: { model.setRunHistoryKindFilter($0.rawValue) },
-                onSelectEvent: { model.loadRuntimeEvent(id: $0) },
+                requestChainEvents: runRequestChainEvents,
+                requestChainLoading: model.runtimeRequestChainLoading,
+                onSelectEvent: { eventID in
+                    model.loadRuntimeEvent(id: eventID)
+                    model.loadRuntimeRequestChain(for: eventID)
+                },
                 onLoadMore: {
                     guard model.runHistoryPage == nil else { return }
                     model.loadMoreRuntimeEvents()
@@ -90,6 +95,15 @@ struct OverviewPane: View {
             return page.events.map { $0.mergedRuntimeEvent(with: existing[$0.id]) }
         }
         return displayRuntime.recentEvents.filter { !$0.isInFlight }
+    }
+
+    /// 运行页默认只拉「客户端」分页；上游尝试要通过 request-chain 端点补齐。
+    private var runRequestChainEvents: [RuntimeEvent]? {
+        guard let chain = model.runtimeRequestChain else { return nil }
+        let existing = Dictionary(
+            uniqueKeysWithValues: (runPersistedEvents + runLiveEvents).map { ($0.id, $0) }
+        )
+        return chain.events.map { $0.mergedRuntimeEvent(with: existing[$0.id]) }
     }
 
     private var runLiveEvents: [RuntimeEvent] {

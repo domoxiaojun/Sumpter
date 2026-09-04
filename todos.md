@@ -1,3 +1,14 @@
+# Grok 运行页：补上游请求链 + 归因配置入口（2026-09-04）
+
+截图：Grok 请求已打到 CPA、有上游请求 ID，但请求链写「0 次上游尝试」；项目仍是未识别。
+原因一：运行页「客户端」筛选下没拉 `/request-chain`。原因二：安全页只有 CC 归因引导。
+
+- [x] 运行页选中事件时加载完整请求链（含上游尝试）
+- [x] 双端安全页补 Grok 归因配置（与 CC 并列）
+- [x] 测试、todos/plan、提交。不宣称已安装 App 已更新
+
+---
+
 # Codex 事件来源也显示本地(kkl)（2026-09-04）
 
 Codex 结构化 workspace 已经是 `workspace_local`，但没有 wrapper 的 `X-Sumpter-User`，

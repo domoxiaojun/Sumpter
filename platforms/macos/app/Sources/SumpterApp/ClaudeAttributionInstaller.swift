@@ -125,19 +125,23 @@ enum ClaudeAttributionInstaller {
         guard let shell = value(after: "shell:"),
               let rc = value(after: "rc:"),
               let marker = value(after: "rc 内标记块:"),
-              let snippet = value(after: "snippet:"),
-              let settings = value(after: "settings.json 键:")
+              let snippet = value(after: "snippet:")
         else {
             throw ClaudeAttributionInstallerError.invalidStatusOutput
         }
+        let conflict = value(after: "settings.json 键:")
+            ?? value(after: "GROK_CONFIG_PATH:")
+            ?? "无(正确)"
 
         return ClaudeAttributionInstallationStatus(
             shell: shell,
             rcPath: rc.replacingOccurrences(of: " (不存在)", with: ""),
             markerInstalled: marker.contains("已安装"),
             snippetExists: !snippet.contains("(不存在)"),
-            settingsConflict: settings.contains("存在("),
-            backupCount: lines.filter { $0.contains(".sumpter-bak-") }.count
+            settingsConflict: conflict.contains("存在(") || conflict.contains("已设置"),
+            backupCount: lines.filter {
+                $0.contains(".sumpter-bak-") || $0.contains(".sumpter-grok-bak-")
+            }.count
         )
     }
 

@@ -1,5 +1,17 @@
 # 执行记录（2026-08-31 起）
 
+## 本轮：Grok 运行页补请求链 + 归因配置入口（2026-09-04）
+
+运行页默认「客户端」筛选时没拉 request-chain，Grok 成功请求也会显示「0 次上游尝试」。
+安全页原先只有 Claude Code 归因引导。脚本 `grok-project-attribution.sh` 已有，补 UI。
+
+- [x] 运行页选中事件加载完整请求链
+- [x] 双端安全页 Grok 归因配置
+- [x] 测试与提交。不宣称已安装 App 已更新
+
+---
+
+
 ## 本轮：Codex 事件来源显示本地(kkl)（2026-09-04）
 
 Codex 结构化 workspace 已是 `workspace_local`，但没有 wrapper 用户名。从

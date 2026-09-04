@@ -6,7 +6,8 @@ import { Icon } from '../utils/icons.jsx';
 import { api } from '../services/api.js';
 import {
   clone, isLoopback, parseList,
-  ccAttributionState, CC_ATTRIBUTION_STATE, CC_ATTRIBUTION_GUIDE,
+  ccAttributionState, grokAttributionState, CC_ATTRIBUTION_STATE,
+  CC_ATTRIBUTION_GUIDE, GROK_ATTRIBUTION_GUIDE,
 } from '../utils/helpers.js';
 import { copyWithToast } from '../utils/clipboard.js';
 
@@ -333,6 +334,7 @@ export function SecurityPage() {
       </div>
 
       <CCAttributionGuidePanel />
+      <GrokAttributionGuidePanel />
     </div>
   );
 }
@@ -570,6 +572,119 @@ function CCAttributionGuidePanel() {
           </section>
 
           <p className="cc-guide-privacy">{CC_ATTRIBUTION_GUIDE.privacy}</p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function GrokAttributionGuidePanel() {
+  const { runtimeAnalytics, addToast } = useApp();
+  const [advancedExpanded, setAdvancedExpanded] = useState(false);
+  const [copying, setCopying] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState('');
+  const state = grokAttributionState(
+    runtimeAnalytics?.projects,
+    runtimeAnalytics?.facets?.clientKinds,
+  );
+  const badgeKind = state === CC_ATTRIBUTION_STATE.configured
+    ? 'good'
+    : (state === CC_ATTRIBUTION_STATE.unconfigured ? 'warning' : 'muted');
+  const attributionCommand = GROK_ATTRIBUTION_GUIDE.steps
+    .map((step) => step.command)
+    .filter(Boolean)
+    .join('\n');
+
+  const handleCopySetup = async () => {
+    if (copying) return;
+    setCopying(true);
+    setCopyFeedback('');
+    const result = await copyWithToast(attributionCommand, 'Grok 配置命令', addToast);
+    setCopying(false);
+    if (result) setCopyFeedback('命令已复制。请在运行 grok 的主机终端执行。');
+  };
+
+  const stateIcon = state === CC_ATTRIBUTION_STATE.configured
+    ? 'check'
+    : (state === CC_ATTRIBUTION_STATE.unconfigured ? 'warning' : 'activity');
+
+  return (
+    <div className="glass-panel cc-guide cc-guide-compact">
+      <div className="cc-guide-head">
+        <div className="panel-title">
+          <Icon name="book" size={18} style={{ color: 'var(--accent-cyan)' }} />
+          <span>{GROK_ATTRIBUTION_GUIDE.title}</span>
+        </div>
+        <StatusBadge text={GROK_ATTRIBUTION_GUIDE.statusLabels[state]} kind={badgeKind} />
+      </div>
+      <p className="cc-guide-lead">{GROK_ATTRIBUTION_GUIDE.subtitle}</p>
+      <div className="cc-guide-local-status" role="status">
+        <Icon name={stateIcon} size={17} />
+        <div>
+          <strong>Linux 配置助手</strong>
+          <span>WebUI 只复制命令；请在启动 grok 的主机执行，不要装到只跑 daemon 的机器上</span>
+        </div>
+      </div>
+      <div className="cc-guide-actions">
+        <button type="button" className="btn btn-primary" onClick={handleCopySetup} disabled={copying}>
+          <Icon name={copying ? 'refresh' : 'copy'} size={15} className={copying ? 'animate-spin' : ''} />
+          <span>{copying ? '正在复制…' : '一键复制 Grok 配置命令'}</span>
+        </button>
+        <button
+          type="button"
+          className="btn btn-ghost"
+          onClick={() => setAdvancedExpanded((expanded) => !expanded)}
+          aria-expanded={advancedExpanded}
+        >
+          <span>高级说明与手动命令</span>
+        </button>
+      </div>
+      {copyFeedback ? <p className="cc-guide-feedback" role="status">{copyFeedback}</p> : null}
+      <div className="cc-guide-callout" role="note">
+        <Icon name="warning" size={15} />
+        <span>{GROK_ATTRIBUTION_GUIDE.whereToRun}</span>
+      </div>
+      <div className="cc-guide-observed">
+        <div className="cc-guide-observed-title">请求验证：{GROK_ATTRIBUTION_GUIDE.statusLabels[state]}</div>
+        <p className="cc-guide-state">{GROK_ATTRIBUTION_GUIDE.statusDetails[state]}</p>
+      </div>
+      {advancedExpanded ? (
+        <div className="cc-guide-advanced">
+          {GROK_ATTRIBUTION_GUIDE.steps.map((step) => (
+            <section className="cc-guide-section" key={step.title}>
+              <h4 className="cc-guide-heading">{step.title}</h4>
+              {step.command ? (
+                <div className="cc-guide-command">
+                  <code>{step.command}</code>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => copyWithToast(step.command, '配置命令', addToast)}>
+                    <Icon name="copy" size={13} />
+                    <span>复制</span>
+                  </button>
+                </div>
+              ) : null}
+              <p className="cc-guide-note">{step.note}</p>
+            </section>
+          ))}
+          <section className="cc-guide-section">
+            <h4 className="cc-guide-heading">从 listener Base URL 取得脚本</h4>
+            <div className="cc-guide-command">
+              <code>{GROK_ATTRIBUTION_GUIDE.remoteDownload.command}</code>
+            </div>
+            <p className="cc-guide-note">{GROK_ATTRIBUTION_GUIDE.remoteDownload.note}</p>
+          </section>
+          <section className="cc-guide-section">
+            <h4 className="cc-guide-heading">出问题就回退</h4>
+            <ul className="cc-guide-rollback">
+              {GROK_ATTRIBUTION_GUIDE.rollback.map((item) => (
+                <li key={item.command}>
+                  <div className="cc-guide-command">
+                    <code>{item.command}</code>
+                  </div>
+                  <p className="cc-guide-note">{item.note}</p>
+                </li>
+              ))}
+            </ul>
+          </section>
         </div>
       ) : null}
     </div>
