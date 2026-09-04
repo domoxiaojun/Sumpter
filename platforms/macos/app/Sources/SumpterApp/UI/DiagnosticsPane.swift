@@ -669,13 +669,7 @@ struct SecurityPane: View {
     /// 打包进 .app 的配置器路径;源码构建(`swift run`)时 bundle 里没有 Resources,
     /// 回退到仓库里的那一份,免得开发时按钮是死的。两处都不存在时 UI 会明确报错并禁用。
     private var attributionScriptURL: URL? {
-        let candidates = [
-            Bundle.main.url(forResource: "cc-project-attribution", withExtension: "sh"),
-            Bundle.main.bundleURL
-                .deletingLastPathComponent()
-                .appendingPathComponent("platforms/macos/scripts/cc-project-attribution.sh"),
-        ]
-        return candidates.compactMap { $0 }.first { FileManager.default.fileExists(atPath: $0.path) }
+        ClaudeAttributionInstaller.locateScript(named: "cc-project-attribution")
     }
 
     private func runAttributionAction(_ action: ClaudeAttributionScriptAction) {

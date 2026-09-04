@@ -1,5 +1,18 @@
 # 执行记录（2026-08-31 起）
 
+## 本轮：安全页能找到 Grok 归因脚本（2026-09-04）
+
+脚本早已在 `platforms/*/scripts/grok-project-attribution.sh`。App 只查 Bundle
+资源和一层相对路径，开发运行会显示「配置器不可用」。改为向上搜索仓库 scripts，
+并把 cc/grok 脚本作为 Swift 包资源拷进 bundle。
+
+- [x] `ClaudeAttributionInstaller.locateScript`
+- [x] Package.swift resources；测试能定位 grok 脚本
+- [x] 提交。不宣称已安装 App 已更新
+
+---
+
+
 ## 本轮：Grok 运行页补请求链 + 归因配置入口（2026-09-04）
 
 运行页默认「客户端」筛选时没拉 request-chain，Grok 成功请求也会显示「0 次上游尝试」。

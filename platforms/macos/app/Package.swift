@@ -22,6 +22,10 @@ let package = Package(
             dependencies: [
                 "SumpterCore",
                 .product(name: "Sparkle", package: "Sparkle")
+            ],
+            resources: [
+                .copy("Resources/cc-project-attribution.sh"),
+                .copy("Resources/grok-project-attribution.sh"),
             ]
         ),
         .testTarget(

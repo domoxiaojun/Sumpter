@@ -88,4 +88,13 @@ import Testing
             try ClaudeAttributionInstaller.parseStatus("unexpected")
         }
     }
+
+    @Test func locatesGrokAttributionScriptInRepo() {
+        let url = ClaudeAttributionInstaller.locateScript(named: "grok-project-attribution")
+        #expect(url != nil)
+        #expect(url?.lastPathComponent == "grok-project-attribution.sh")
+        let cc = ClaudeAttributionInstaller.locateScript(named: "cc-project-attribution")
+        #expect(cc != nil)
+        #expect(cc?.lastPathComponent == "cc-project-attribution.sh")
+    }
 }
