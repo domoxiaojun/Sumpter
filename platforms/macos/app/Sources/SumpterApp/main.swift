@@ -2930,10 +2930,13 @@ final class AppModel: ObservableObject {
             refreshNotificationHookState()
             if enabled {
                 requestNotificationAuthorization()
+                flash("已安装 Claude Code 通知")
+            } else {
+                flash("已移除 Claude Code 通知")
             }
         } catch {
             lastError = "\(error)"
-            flash("通知设置失败")
+            flash("Claude Code 通知设置失败")
         }
     }
 
@@ -2943,6 +2946,9 @@ final class AppModel: ObservableObject {
             refreshNotificationHookState()
             if enabled {
                 requestNotificationAuthorization()
+                flash("已安装 Codex CLI 通知")
+            } else {
+                flash("已移除 Codex CLI 通知")
             }
         } catch {
             refreshNotificationHookState()
@@ -2951,19 +2957,64 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func setNotifications(enabled: Bool) {
+    func setGrokNotifications(enabled: Bool) {
         do {
-            try ClaudeNotificationHooks.setEnabled(enabled, port: config.listener.port)
-            try CodexNotificationHooks.setEnabled(enabled, port: config.listener.port)
             try GrokNotificationHooks.setEnabled(enabled, port: config.listener.port)
+            GrokNotificationHooks.markRemovedByUser(!enabled)
             refreshNotificationHookState()
             if enabled {
                 requestNotificationAuthorization()
+                flash("已安装 Grok Build 通知")
+            } else {
+                flash("已移除 Grok Build 通知")
             }
         } catch {
             refreshNotificationHookState()
             lastError = "\(error)"
-            flash("通知设置失败")
+            flash("Grok Build 通知设置失败")
+        }
+    }
+
+    func setNotificationClient(_ client: NotificationHookClient, enabled: Bool) {
+        switch client {
+        case .claude:
+            setClaudeNotifications(enabled: enabled)
+        case .codex:
+            setCodexNotifications(enabled: enabled)
+        case .grok:
+            setGrokNotifications(enabled: enabled)
+        }
+    }
+
+    func setNotifications(enabled: Bool) {
+        var failed: [String] = []
+        do {
+            try ClaudeNotificationHooks.setEnabled(enabled, port: config.listener.port)
+        } catch {
+            failed.append("Claude Code")
+            lastError = "\(error)"
+        }
+        do {
+            try CodexNotificationHooks.setEnabled(enabled, port: config.listener.port)
+        } catch {
+            failed.append("Codex CLI")
+            lastError = "\(error)"
+        }
+        do {
+            try GrokNotificationHooks.setEnabled(enabled, port: config.listener.port)
+            GrokNotificationHooks.markRemovedByUser(!enabled)
+        } catch {
+            failed.append("Grok Build")
+            lastError = "\(error)"
+        }
+        refreshNotificationHookState()
+        if enabled {
+            requestNotificationAuthorization()
+        }
+        if failed.isEmpty {
+            flash(enabled ? "已启用全部客户端通知" : "已移除全部客户端通知")
+        } else {
+            flash("部分通知配置失败：\(failed.joined(separator: "、"))")
         }
     }
 
@@ -3730,10 +3781,13 @@ final class AppModel: ObservableObject {
             }
             if grokNotificationsEnabled {
                 try? GrokNotificationHooks.rewriteScriptIfEnabled(port: config.listener.port)
+            } else if (claudeNotificationsEnabled || codexNotificationsEnabled)
+                && !GrokNotificationHooks.wasRemovedByUser()
+            {
+                // 升级前总开关已开、还没有 Grok hook：补装一次。用户手动移除后不再强行写回。
+                try? GrokNotificationHooks.setEnabled(true, port: config.listener.port)
             }
-            if codexNotificationsEnabled || grokNotificationsEnabled {
-                refreshNotificationHookState()
-            }
+            refreshNotificationHookState()
             refreshLoginItemStatus()
             if FileManager.default.fileExists(atPath: try SumpterPaths.autostartURL().path) {
                 await startSidecar()
