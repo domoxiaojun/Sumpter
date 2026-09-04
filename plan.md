@@ -1,5 +1,34 @@
 # 执行记录（2026-08-31 起）
 
+## 本轮：Sumpter Codex Live 401 同请求恢复（2026-09-04）
+
+官方 CPA 的 Live OAuth 账号选择发生在上游；Sumpter 首次收到 `401 token_revoked`
+时不能把 CPA 入口冷却或直接结束，否则 CPA 无法在后续请求中切换可用账号。本轮
+只修改 Sumpter 路由/重试，不替换 App、不依赖修改 CPA 源码：仅对尚未建立 call 的
+Codex Live bootstrap 使用配置中的有限 `sessionStickyRetries`，普通 Realtime 控制、
+sideband 和 client-secret 请求保持单次转发。
+
+- [x] ✅ 1. 从源码确认 401 的入口冷却与 Realtime sticky 重试边界。
+- [x] ✅ 2. 恢复 Codex Live bootstrap 的有限同请求重试，并保留 endpoint key 与能力路由。
+- [x] ✅ 3. 增加 401→201 成功及普通 Realtime 不重试的回放回归测试。
+- [x] ✅ 4. 通过 `cargo fmt --all -- --check`、workspace 测试与 `cargo check --workspace --locked`。
+- [x] ✅ 5. 未替换已安装 App，未声称远端 CPA 或线上账号状态已验证。
+
+## 本轮：Codex Live 撤销账号有限切换（2026-09-04）
+
+CPA 的 Live bootstrap 目前只选一个 Codex OAuth 账号；当该账号已被撤销时，
+上游返回 `401 token_revoked`，请求不会像普通 Codex 请求一样切换账号。目标是
+仅在响应阶段确认 401、尚未建立 call 时排除当前账号并有限次重选，避免重复提交
+已经成功的 SDP，同时保留单账号 401 的原样错误语义。修改 CPA 源码，不安装或替换
+现有 Sumpter.app。
+
+- [x] ✅ 1. 盘点 Live handler 与 auth selector 的可复用排除账号接口，确定 Home/本地路径边界。
+- [x] ✅ 2. 实现 Live 401 撤销账号有限 failover，并补充多账号成功与单账号保留测试。
+- [x] ✅ 3. 运行 CPA 定向测试、全量 Go 测试及 Sumpter 最小回归验证。
+- [x] ✅ 4. 检查差异边界并交付；未取得远端部署和真实 2xx 前不宣称线上语音已恢复。
+- [x] ✅ 5. 将 CPA 工作树以 autostash 安全快进到 v7.2.149，重放 Live failover 补丁并补齐 multipart SDP 与选择失败诊断。
+- [x] ✅ 6. 在 v7.2.149 上重新通过定向测试、全量 Go 测试、关键用例 race 连跑和 arm64 临时二进制构建；未替换 App、未部署远端。
+
 ## 本轮：安全页能找到 Grok 归因脚本（2026-09-04）
 
 脚本早已在 `platforms/*/scripts/grok-project-attribution.sh`。App 只查 Bundle

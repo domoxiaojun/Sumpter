@@ -2855,6 +2855,23 @@ impl Engine {
             .remove(&key);
     }
 
+    fn clear_realtime_unauthorized_cooldowns(&self, candidates: &[PlannedEndpoint]) {
+        if candidates.is_empty() {
+            return;
+        }
+        let candidate_keys: Vec<(String, String)> =
+            candidates.iter().map(provider_model_key).collect();
+        self.inner
+            .state
+            .lock()
+            .unwrap()
+            .provider_model_health
+            .retain(|key, health| {
+                !(health.last_status == Some(401)
+                    && candidate_keys.iter().any(|candidate| candidate == key))
+            });
+    }
+
     fn note_provider_model_failure(
         &self,
         endpoint: &PlannedEndpoint,
@@ -5005,6 +5022,26 @@ impl Engine {
         {
             fields.model = fallback;
         }
+        // CPA's Codex Live handler parses a multipart `session` part before
+        // selecting an OAuth account and normalizes its model there.  A
+        // Codex Desktop bootstrap can carry a leaked surrounding chat model
+        // (for example `claude-fable-5`) in that JSON part.  The route model
+        // above is already forced to `gpt-live-1-codex`, but forwarding the
+        // stale multipart field would make CPA dispatch using the wrong
+        // logical model.  Normalize only the Live session/model field; keep
+        // SDP, MIME boundaries, and every unrelated part byte-for-byte.
+        if kind == PassthroughKind::Realtime
+            && fields.model == request_build::DEFAULT_CODEX_LIVE_MODEL
+            && content_type
+                .as_deref()
+                .is_some_and(content_type_is_multipart)
+        {
+            body = rewrite_realtime_multipart_model(
+                &body,
+                content_type.as_deref().unwrap_or_default(),
+                &fields.model,
+            );
+        }
         let routing_value = json!({
             "model": fields.model,
             "stream": fields.stream,
@@ -5838,11 +5875,27 @@ impl Engine {
         let passthrough_active = client_out
             .as_ref()
             .is_some_and(|client| client.passthrough.is_some());
+        let realtime_request = client_out
+            .as_ref()
+            .is_some_and(|client| client.passthrough_kind == PassthroughKind::Realtime);
+        // Only a Codex Live/Quicksilver bootstrap is safe to replay inside
+        // the same admitted request.  Public Realtime control/sideband
+        // requests must remain single-shot because replaying them can create
+        // duplicate sessions or mutate an already established call.
+        let live_bootstrap_request =
+            realtime_request && is_live_bootstrap_request(method, path_and_query);
         guard.set_passthrough(
             client_out
                 .as_ref()
                 .and_then(|client| client.passthrough.as_ref().map(|_| client.passthrough_kind)),
         );
+        if realtime_request {
+            // A prior binary may have recorded a Live 401 before the
+            // account-level cooldown rule was installed. Clear only those
+            // stale entries at admission so a hot reload can recover without
+            // weakening cooldowns created by 429/5xx/transport failures.
+            self.clear_realtime_unauthorized_cooldowns(&candidates);
+        }
         // Keep the full, translation-compatible candidate set. Cooldown is a
         // dispatch-time concern and is intentionally recomputed below for
         // every retry round; passing an already-filtered vector here would
@@ -5888,11 +5941,17 @@ impl Engine {
         } else {
             0
         };
-        let sticky_retry_limit = if sticky_endpoint_count > 0 {
-            retry.session_sticky_retries.max(0)
-        } else {
-            0
-        };
+        let sticky_retry_limit =
+            if sticky_endpoint_count > 0 && (!realtime_request || live_bootstrap_request) {
+                // CPA's Live handler owns OAuth-account selection.  Replaying a
+                // failed bootstrap gives CPA a chance to exclude the revoked
+                // OAuth credential and select the next account, while retaining
+                // the configured finite bound.  Other Realtime requests remain
+                // single-shot (see `live_bootstrap_request` above).
+                retry.session_sticky_retries.max(0)
+            } else {
+                0
+            };
         let forward_started = Instant::now();
         let mut last_attempt_endpoint: Option<String> = None;
         let mut round: i64 = 0;
@@ -5986,12 +6045,27 @@ impl Engine {
                     .endpoint(&endpoint.endpoint_id)
                     .map(|e| e.api_key.clone())
                     .unwrap_or_default();
-                // A registered `ek_…` token is a valid Realtime credential in
-                // its own right. Preserve it for native HTTP bootstrap calls
-                // instead of silently replacing it with the endpoint key;
-                // ordinary APIs always use the configured Provider key.
-                let api_key = if is_realtime_http_path(path_without_query(path_and_query)) {
-                    realtime_ephemeral_token(headers).unwrap_or(configured_api_key)
+                // A registered `ek_…` token is a valid *standard Realtime*
+                // credential in its own right.  The dedicated Codex Live
+                // family (`/v1/live`) is different: CPA authenticates that
+                // route with the endpoint API key and selects its OAuth
+                // account internally.  Forwarding a Codex client's unrelated
+                // `ek_…` token to `/v1/live` makes CPA reject the request (or
+                // bypass its account selection) even when the endpoint key
+                // and OAuth pool are valid.  Preserve ephemeral credentials
+                // only on the public Realtime surface; ordinary APIs always
+                // use the configured Provider key.
+                let path = path_without_query(path_and_query);
+                let registered_realtime_secret = (is_realtime_http_path(path)
+                    && !is_codex_live_family_path(path))
+                .then(|| {
+                    self.realtime_client_secret_authorized(headers)
+                        .then(|| realtime_ephemeral_token(headers))
+                        .flatten()
+                })
+                .flatten();
+                let api_key = if let Some(secret) = registered_realtime_secret {
+                    secret
                 } else {
                     configured_api_key
                 };
@@ -6041,7 +6115,6 @@ impl Engine {
                         stream: client.stream,
                     })
                 });
-
                 // 候选 >1 且并发 >1 → pinned IP 赛跑;否则串行逐个尝试。
                 let attempt = if candidates.len() > 1 && concurrency > 1 {
                     self.race_candidates(
@@ -6059,6 +6132,7 @@ impl Engine {
                         guard.meta.client_kind,
                         &request_id,
                         passthrough,
+                        realtime_request,
                         &mut round_state,
                     )
                     .await
@@ -6077,6 +6151,7 @@ impl Engine {
                         guard.meta.client_kind,
                         &request_id,
                         passthrough,
+                        realtime_request,
                         &mut round_state,
                     )
                     .await
@@ -6165,9 +6240,6 @@ impl Engine {
             // been exhausted.  Allowing the ordinary `maxDeferredRounds: 0`
             // default here would turn a dead voice Provider into an endless
             // sequence of retries, leaving the client waiting forever.
-            let realtime_request = client_out
-                .as_ref()
-                .is_some_and(|client| client.passthrough_kind == PassthroughKind::Realtime);
             let retry_allowed = !realtime_request
                 && round_state.retryable_failures > 0
                 && (retry.max_deferred_rounds <= 0 || round < retry.max_deferred_rounds)
@@ -6259,6 +6331,7 @@ impl Engine {
         client_kind: ClientKind,
         request_id: &str,
         passthrough: Option<PassthroughRequest<'_>>,
+        realtime_request: bool,
         round_state: &mut RoundState,
     ) -> Option<(
         crate::outbound::UpstreamResponse,
@@ -6298,6 +6371,7 @@ impl Engine {
                 request_id,
                 response_timeout,
                 result,
+                realtime_request,
                 round_state,
             ) {
                 Some(response) => return Some((response, attempt_started, candidate, capture_id)),
@@ -6327,6 +6401,7 @@ impl Engine {
         client_kind: ClientKind,
         request_id: &str,
         passthrough: Option<PassthroughRequest<'_>>,
+        realtime_request: bool,
         round_state: &mut RoundState,
     ) -> Option<(
         crate::outbound::UpstreamResponse,
@@ -6386,6 +6461,7 @@ impl Engine {
                     request_id,
                     response_timeout,
                     result,
+                    realtime_request,
                     round_state,
                 ) {
                     // drop in_flight → 掐掉批内其余候选,输家零记账。
@@ -6411,6 +6487,7 @@ impl Engine {
         request_id: &str,
         response_timeout: Option<f64>,
         result: Result<crate::outbound::UpstreamResponse, TransportError>,
+        realtime_request: bool,
         round_state: &mut RoundState,
     ) -> Option<crate::outbound::UpstreamResponse> {
         let now = now_unix();
@@ -6454,12 +6531,23 @@ impl Engine {
                 if RetryPolicy::is_endpoint_retryable_status(response.status) {
                     let attempt_ttfb_ms = attempt_started.elapsed().as_millis() as i64;
                     let retry_after = retry_after_seconds(&response.headers);
-                    self.note_provider_model_failure(
-                        endpoint,
-                        Some(response.status),
-                        retry_after,
-                        now,
-                    );
+                    // A CPA Live/Realtime 401 belongs to the OAuth account
+                    // selected inside CPA, not to the CPA endpoint or model
+                    // mapping. CPA marks that account unavailable and selects
+                    // another account on the next client bootstrap. Cooling
+                    // the whole endpoint here prevents that request from ever
+                    // reaching CPA and turns the next attempt into a local
+                    // 503. Keep the 401 event/client response, but delegate
+                    // account health to CPA. Other statuses and non-Realtime
+                    // requests retain the ordinary provider/model cooldown.
+                    if !(realtime_request && response.status == 401) {
+                        self.note_provider_model_failure(
+                            endpoint,
+                            Some(response.status),
+                            retry_after,
+                            now,
+                        );
+                    }
                     let failure = FailureInfo::upstream_http(
                         response.status,
                         upstream_request_id(&response.headers),
@@ -10761,6 +10849,24 @@ mod protocol_tests {
     }
 
     #[test]
+    fn realtime_multipart_model_normalizes_session_without_touching_sdp_or_parts() {
+        let boundary = "live-model-boundary";
+        let body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"sdp\"\r\nContent-Type: application/sdp\r\n\r\nv=0\\r\\no=offer\\r\\n\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"session\"\r\nContent-Type: application/json\r\n\r\n{{\"model\":\"claude-fable-5\",\"instructions\":\"keep me\"}}\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"opaque\"\r\n\r\nbytes--{boundary}\r\n\r\n--{boundary}--\r\n"
+        );
+        let rewritten = rewrite_realtime_multipart_model(
+            body.as_bytes(),
+            &format!("multipart/form-data; boundary=\"{boundary}\""),
+            request_build::DEFAULT_CODEX_LIVE_MODEL,
+        );
+        let rewritten = std::str::from_utf8(&rewritten).expect("multipart remains UTF-8");
+        assert!(rewritten.contains("v=0\\r\\no=offer\\r\\n"));
+        assert!(rewritten.contains("\"model\":\"gpt-live-1-codex\""));
+        assert!(rewritten.contains("\"instructions\":\"keep me\""));
+        assert!(rewritten.contains(&format!("bytes--{boundary}")));
+    }
+
+    #[test]
     fn multipart_parser_requires_real_line_delimiters_and_closing_boundary() {
         let boundary = "safe-boundary";
         // The uploaded bytes contain boundary-looking text, but neither
@@ -11294,6 +11400,18 @@ mod protocol_tests {
             Some("gpt-realtime")
         );
         assert_eq!(realtime_body_model(b"{}", Some("application/sdp")), None);
+        let boundary = "model-extraction-boundary";
+        let multipart = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"sdp\"\r\n\r\nv=0\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"session\"\r\n\r\n{{\"model\":\"claude-fable-5\",\"voice\":\"marin\"}}\r\n--{boundary}--\r\n"
+        );
+        assert_eq!(
+            realtime_body_model(
+                multipart.as_bytes(),
+                Some(&format!("multipart/form-data; boundary={boundary}")),
+            )
+            .as_deref(),
+            Some("claude-fable-5")
+        );
     }
 
     #[test]
@@ -11589,6 +11707,9 @@ struct NativePassthroughFields {
 
 fn realtime_body_model(body: &[u8], content_type: Option<&str>) -> Option<String> {
     let content_type = content_type?;
+    if content_type_is_multipart(content_type) {
+        return realtime_multipart_model(body, content_type);
+    }
     if !content_type_is_json(content_type) {
         return None;
     }
@@ -11613,12 +11734,46 @@ fn realtime_body_model_hint(body: &[u8], content_type: Option<&str>) -> Option<S
         return realtime_body_model(body, content_type);
     }
     if content_type.is_some_and(content_type_is_multipart) {
-        return native_multipart_fields_with_default(body, content_type.unwrap_or_default(), "")
-            .ok()
-            .map(|fields| fields.model)
-            .filter(|model| !model.trim().is_empty());
+        return realtime_multipart_model(body, content_type.unwrap_or_default());
     }
     None
+}
+
+/// Codex Live multipart requests carry the model in the JSON `session` part
+/// (CPA's `modelFromJSON` gives that value precedence over a top-level model
+/// part). Read it for routing and normalization without rebuilding any MIME
+/// framing or binary content.
+fn realtime_multipart_model(body: &[u8], content_type: &str) -> Option<String> {
+    let parts = multipart_parts(body, content_type).ok()?;
+    let mut top_level = None;
+    for (headers, field) in parts {
+        let Some(name) = multipart_field_name(headers) else {
+            continue;
+        };
+        match name.as_str() {
+            "session" => {
+                let value = serde_json::from_slice::<Value>(field).ok()?;
+                if let Some(model) = value
+                    .as_object()
+                    .and_then(|object| object.get("model"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|model| !model.is_empty())
+                {
+                    return Some(model.to_string());
+                }
+            }
+            "model" if top_level.is_none() => {
+                top_level = std::str::from_utf8(field)
+                    .ok()
+                    .map(str::trim)
+                    .filter(|model| !model.is_empty())
+                    .map(str::to_string);
+            }
+            _ => {}
+        }
+    }
+    top_level
 }
 
 /// Apply the session configuration bound to an ephemeral Realtime key to a
@@ -11894,6 +12049,11 @@ struct MultipartDelimiter {
 
 type MultipartPart<'a> = (&'a [u8], &'a [u8]);
 
+struct MultipartPartRange {
+    headers: std::ops::Range<usize>,
+    content: std::ops::Range<usize>,
+}
+
 /// Parse multipart framing without ever rebuilding the body. A boundary-like
 /// byte sequence inside uploaded binary data is accepted as a delimiter only
 /// when it begins a MIME line and is followed by a valid delimiter suffix.
@@ -11903,6 +12063,18 @@ fn multipart_parts<'a>(
     body: &'a [u8],
     content_type: &str,
 ) -> Result<Vec<MultipartPart<'a>>, &'static str> {
+    multipart_part_ranges(body, content_type).map(|parts| {
+        parts
+            .into_iter()
+            .map(|part| (&body[part.headers], &body[part.content]))
+            .collect()
+    })
+}
+
+fn multipart_part_ranges(
+    body: &[u8],
+    content_type: &str,
+) -> Result<Vec<MultipartPartRange>, &'static str> {
     let boundary = multipart_boundary(content_type).ok_or("multipart boundary is required")?;
     let marker = format!("--{boundary}").into_bytes();
     let mut delimiter = next_multipart_delimiter(body, &marker, 0)
@@ -11919,7 +12091,7 @@ fn multipart_parts<'a>(
         if header_offset > 16 * 1024 {
             return Err("multipart headers are too large");
         }
-        let headers = &body[part_start..part_start + header_offset];
+        let headers = part_start..part_start + header_offset;
         let content_start = part_start + header_offset + separator_len;
         let next = next_multipart_delimiter(body, &marker, content_start)
             .ok_or("multipart closing boundary is missing")?;
@@ -11934,9 +12106,96 @@ fn multipart_parts<'a>(
         if content_end < content_start {
             return Err("malformed multipart body");
         }
-        parts.push((headers, &body[content_start..content_end]));
+        parts.push(MultipartPartRange {
+            headers,
+            content: content_start..content_end,
+        });
         delimiter = next;
     }
+}
+
+/// Normalize a Codex Live multipart model without reconstructing the request.
+/// CPA performs this normalization in its Live handler before selecting an
+/// OAuth account.  Sumpter must do the same when the client leaked a chat
+/// model into the `session` part, otherwise CPA can select using that stale
+/// model even though the route was classified as Live.
+fn rewrite_realtime_multipart_model(body: &[u8], content_type: &str, target: &str) -> Bytes {
+    if target.trim().is_empty() {
+        return Bytes::copy_from_slice(body);
+    }
+    let Ok(parts) = multipart_part_ranges(body, content_type) else {
+        // Let the upstream parser report malformed multipart framing.  This
+        // helper is observational unless a valid JSON/model field is found.
+        return Bytes::copy_from_slice(body);
+    };
+
+    let mut replacements: Vec<(std::ops::Range<usize>, Vec<u8>)> = Vec::new();
+    for part in parts {
+        let name = multipart_field_name(&body[part.headers.clone()]);
+        match name.as_deref() {
+            Some("model") => {
+                let value = &body[part.content.clone()];
+                let trimmed_start = value
+                    .iter()
+                    .position(|byte| !byte.is_ascii_whitespace())
+                    .unwrap_or(value.len());
+                let trimmed_end = value
+                    .iter()
+                    .rposition(|byte| !byte.is_ascii_whitespace())
+                    .map_or(trimmed_start, |index| index + 1);
+                if trimmed_start < trimmed_end {
+                    let mut replacement = Vec::with_capacity(value.len());
+                    replacement.extend_from_slice(&value[..trimmed_start]);
+                    replacement.extend_from_slice(target.as_bytes());
+                    replacement.extend_from_slice(&value[trimmed_end..]);
+                    replacements.push((part.content, replacement));
+                }
+            }
+            Some("session") => {
+                let value = &body[part.content.clone()];
+                let Ok(mut session) = serde_json::from_slice::<Value>(value) else {
+                    continue;
+                };
+                let Some(object) = session.as_object_mut() else {
+                    continue;
+                };
+                let Some(model) = object.get("model").and_then(Value::as_str) else {
+                    continue;
+                };
+                if model == target {
+                    continue;
+                }
+                object.insert("model".into(), json!(target));
+                let Ok(replacement) = serde_json::to_vec(&session) else {
+                    continue;
+                };
+                replacements.push((part.content, replacement));
+            }
+            _ => {}
+        }
+    }
+    if replacements.is_empty() {
+        return Bytes::copy_from_slice(body);
+    }
+    replacements.sort_by_key(|(range, _)| range.start);
+    let mut output = Vec::with_capacity(
+        body.len()
+            + replacements
+                .iter()
+                .map(|(range, replacement)| replacement.len().saturating_sub(range.len()))
+                .sum::<usize>(),
+    );
+    let mut cursor = 0;
+    for (range, replacement) in replacements {
+        if range.start < cursor || range.end > body.len() {
+            return Bytes::copy_from_slice(body);
+        }
+        output.extend_from_slice(&body[cursor..range.start]);
+        output.extend_from_slice(&replacement);
+        cursor = range.end;
+    }
+    output.extend_from_slice(&body[cursor..]);
+    Bytes::from(output)
 }
 
 fn next_multipart_delimiter(body: &[u8], marker: &[u8], from: usize) -> Option<MultipartDelimiter> {

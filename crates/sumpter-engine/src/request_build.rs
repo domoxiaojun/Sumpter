@@ -117,6 +117,27 @@ pub enum PassthroughKind {
     Models,
 }
 
+/// CPA's Codex Live handler authenticates the downstream request with the
+/// configured API key and then selects a Codex OAuth account itself. Keep the
+/// Live hop identical to a direct CPA call: a single Bearer credential is
+/// sufficient and avoids presenting the same key through two auth schemes to
+/// gateways that treat `x-api-key` as a separate credential.
+fn auth_headers_for_kind(
+    api_key: &str,
+    kind: Option<PassthroughKind>,
+) -> Vec<(&'static str, String)> {
+    if kind == Some(PassthroughKind::Realtime) {
+        let key = api_key.trim();
+        if key.is_empty() {
+            Vec::new()
+        } else {
+            vec![("authorization", format!("Bearer {key}"))]
+        }
+    } else {
+        provider_auth_headers(api_key)
+    }
+}
+
 impl PassthroughKind {
     fn suffix(self) -> &'static str {
         match self {
@@ -229,7 +250,9 @@ pub fn build_outbound(
 
     // 2. 强制写入(先删同名再写,严防双份 —— DashScope 对重复 MIME 直接 500)。
     //    空 key = 无鉴权上游:不发任何鉴权头(入站的 authorization/x-api-key 已被黑名单剥除)。
-    for (name, value) in provider_auth_headers(api_key) {
+    for (name, value) in
+        auth_headers_for_kind(api_key, passthrough.as_ref().map(|request| request.kind))
+    {
         set_header(&mut headers, name, &value);
     }
     set_header(&mut headers, "accept-encoding", IDENTITY_ACCEPT_ENCODING);
@@ -257,7 +280,9 @@ pub fn build_outbound(
             }
             headers.push((lower, value.clone()));
         }
-        for (name, value) in provider_auth_headers(api_key) {
+        for (name, value) in
+            auth_headers_for_kind(api_key, passthrough.as_ref().map(|request| request.kind))
+        {
             headers.push((name.to_string(), value));
         }
     }
@@ -944,6 +969,33 @@ mod tests {
             ephemeral,
             vec![("authorization", "Bearer ek_short_lived".into())]
         );
+    }
+
+    #[test]
+    fn realtime_passthrough_uses_direct_cpa_bearer_auth() {
+        let ep = endpoint(
+            ProviderProtocol::OpenAI,
+            ContextMode::Standard,
+            ThinkingMode::Disabled,
+        );
+        let build = build_outbound(
+            &ep,
+            &request("gpt-live-1-codex"),
+            &[],
+            "POST",
+            "/v1/live",
+            "cpa-key",
+            None,
+            RequestPurpose::Standard,
+            Some(PassthroughRequest {
+                kind: PassthroughKind::Realtime,
+                body: b"v=0\r\n",
+                content_type: Some("application/sdp"),
+                stream: false,
+            }),
+        );
+        assert_eq!(header(&build, "authorization"), vec!["Bearer cpa-key"]);
+        assert!(header(&build, "x-api-key").is_empty());
     }
 
     #[test]

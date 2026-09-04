@@ -230,7 +230,8 @@ impl Default for ListenerConfig {
 }
 
 /// 全局转发/重试参数。语义(见 specs/spec-engine.md §2-3):
-/// - `response_timeout_seconds`:流式 = 响应头截止;非流式 = 整响应截止。None = 不限。
+/// - `response_timeout_seconds`:流式 = 响应头截止;非流式 = 整响应截止。None = 普通请求不限；
+///   原生 Realtime/Live 启动由引擎额外施加有界保护。
 /// - `stream_idle_timeout_seconds`:流式两次吐字最大间隔。None = 不限。
 /// - `max_deferred_rounds`:历史 JSON 键名；现为跨轮可重试故障的最大轮数,0 = 不限。
 /// - `max_retry_duration_seconds`:跨轮可重试故障的墙钟总闸,0 = 不限（HTTP 500 不跨轮）。
@@ -529,14 +530,13 @@ impl Endpoint {
             && crate::capability::is_realtime_model_name(&cleaned)
         {
             let live_model = "gpt-live-1-codex";
-            return self.mappings.iter().find(|mapping| {
-                model_name::clean(&mapping.client_pattern) == live_model
-                    && crate::capability::mapping_serves_capability(
-                        &mapping.capabilities,
-                        &mapping.client_pattern,
-                        live_model,
-                        capability,
-                    )
+            return best_mapping(&self.mappings, live_model, |mapping| {
+                crate::capability::mapping_serves_capability(
+                    &mapping.capabilities,
+                    &mapping.client_pattern,
+                    live_model,
+                    capability,
+                )
             });
         }
         None
