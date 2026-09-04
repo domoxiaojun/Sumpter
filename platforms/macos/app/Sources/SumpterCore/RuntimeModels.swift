@@ -233,28 +233,34 @@ public struct ClientDeclaredMetadata: Codable, Equatable, Sendable {
     public var project: String?
     public var workspace: String?
     public var gitRemote: String?
+    public var user: String?
     /// Source attribution retained by the local runtime SQLite detail payload.
     /// Display/analytics continue to use the compact fields above.
     public var sourceProject: String?
     public var sourceWorkspace: String?
+    public var sourceUser: String?
 
     public init(
         project: String? = nil,
         workspace: String? = nil,
         gitRemote: String? = nil,
+        user: String? = nil,
         sourceProject: String? = nil,
-        sourceWorkspace: String? = nil
+        sourceWorkspace: String? = nil,
+        sourceUser: String? = nil
     ) {
         self.project = project
         self.workspace = workspace
         self.gitRemote = gitRemote
+        self.user = user
         self.sourceProject = sourceProject
         self.sourceWorkspace = sourceWorkspace
+        self.sourceUser = sourceUser
     }
 
     public var isEmpty: Bool {
-        project == nil && workspace == nil && gitRemote == nil
-            && sourceProject == nil && sourceWorkspace == nil
+        project == nil && workspace == nil && gitRemote == nil && user == nil
+            && sourceProject == nil && sourceWorkspace == nil && sourceUser == nil
     }
 }
 
@@ -482,6 +488,8 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
     /// codexMetadata / clientDeclared,只带这两个;缺了就会恒显示「未识别项目」。
     public var projectName: String?
     public var projectSource: String?
+    /// Wrapper 采集的本机用户名，用于「本地(kkl)」；分页列表靠这个字段，不依赖 clientDeclared。
+    public var localUser: String?
     /// Stable server-side Codex thread classification (for example `ambient`).
     public var codexThreadClass: String?
     /// `project`, `internal_feature`, or `unknown`; never inferred from IDs.
@@ -495,7 +503,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         case failureDetail, failureKind, failurePhase, requestPurpose, requestID
         case requestMethod, requestPath, routeIntent
         case sessionID, ttfbMS, timeoutMS, upstreamStatusCode, upstreamRequestID
-        case codexMetadata, clientDeclared, projectName, projectSource, codexThreadClass, attributionScope
+        case codexMetadata, clientDeclared, projectName, projectSource, localUser, codexThreadClass, attributionScope
     }
 
     /// Runtime JSON has existed in three timestamp dialects over its lifetime:
@@ -562,6 +570,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         clientDeclared = try c.decodeIfPresent(ClientDeclaredMetadata.self, forKey: .clientDeclared)
         projectName = try c.decodeIfPresent(String.self, forKey: .projectName)
         projectSource = try c.decodeIfPresent(String.self, forKey: .projectSource)
+        localUser = try c.decodeIfPresent(String.self, forKey: .localUser)
         codexThreadClass = try c.decodeIfPresent(String.self, forKey: .codexThreadClass)
         attributionScope = try c.decodeIfPresent(String.self, forKey: .attributionScope)
     }
@@ -609,6 +618,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         try c.encodeIfPresent(clientDeclared, forKey: .clientDeclared)
         try c.encodeIfPresent(projectName, forKey: .projectName)
         try c.encodeIfPresent(projectSource, forKey: .projectSource)
+        try c.encodeIfPresent(localUser, forKey: .localUser)
         try c.encodeIfPresent(codexThreadClass, forKey: .codexThreadClass)
         try c.encodeIfPresent(attributionScope, forKey: .attributionScope)
     }
@@ -673,6 +683,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         clientDeclared: ClientDeclaredMetadata? = nil,
         projectName: String? = nil,
         projectSource: String? = nil,
+        localUser: String? = nil,
         codexThreadClass: String? = nil,
         attributionScope: String? = nil
     ) {
@@ -714,6 +725,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         self.upstreamRequestID = upstreamRequestID
         self.projectName = projectName
         self.projectSource = projectSource
+        self.localUser = localUser
         self.codexThreadClass = codexThreadClass
         self.attributionScope = attributionScope
         self.codexMetadata = codexMetadata

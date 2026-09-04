@@ -25,7 +25,7 @@ use sumpter_core::events::{
 use sumpter_core::routing::{RESOURCE_ROUTING_MODEL, RequestPurpose, RouteMode};
 
 const SCHEMA_VERSION: i64 = 3;
-const PROJECTION_VERSION: i64 = 5;
+const PROJECTION_VERSION: i64 = 6;
 const PROJECTION_BACKFILL_BATCH: usize = 500;
 const BATCH_EVENTS: usize = 64;
 const BATCH_BYTES: usize = 256 * 1024;
@@ -117,6 +117,7 @@ struct EventProjection {
     project_id: String,
     project_name: String,
     project_source: &'static str,
+    local_user: Option<String>,
     codex_thread_class: Option<&'static str>,
     attribution_scope: Option<&'static str>,
     workspace_paths_json: String,
@@ -224,6 +225,7 @@ impl EventProjection {
             project_id,
             project_name,
             project_source,
+            local_user: event_local_user(event),
             codex_thread_class,
             attribution_scope,
             workspace_paths_json,
@@ -336,6 +338,9 @@ pub struct RuntimeEventListItem {
     pub project_name: Option<String>,
     #[serde(rename = "projectSource", skip_serializing_if = "Option::is_none")]
     pub project_source: Option<String>,
+    /// Wrapper 采集的本机用户名，只用于「本地(kkl)」展示，不进项目 identity。
+    #[serde(rename = "localUser", skip_serializing_if = "Option::is_none")]
+    pub local_user: Option<String>,
     #[serde(rename = "codexThreadClass", skip_serializing_if = "Option::is_none")]
     pub codex_thread_class: Option<String>,
     #[serde(rename = "attributionScope", skip_serializing_if = "Option::is_none")]
@@ -406,6 +411,7 @@ impl RuntimeEventListItem {
         // 必须在 event 被逐字段移动之前算:两个投影值都要借用整个 event。
         let projected_name = project_base(&project_identity(&event));
         let projected_source = project_source(&event).to_string();
+        let local_user = event_local_user(&event);
         let is_codex_event = event.kind == KIND_CLIENT
             && (event.codex_metadata.is_some() || event.client_kind == Some(ClientKind::Codex));
         let codex_thread_class = is_codex_event.then(|| {
@@ -423,6 +429,7 @@ impl RuntimeEventListItem {
             kind: event.kind,
             project_name: Some(projected_name),
             project_source: Some(projected_source),
+            local_user,
             codex_thread_class,
             attribution_scope,
             codex_metadata: event.codex_metadata,
@@ -892,6 +899,7 @@ fn ensure_v2_schema(connection: &mut Connection) -> rusqlite::Result<()> {
         ("project_id", "TEXT"),
         ("project_name", "TEXT"),
         ("project_source", "TEXT"),
+        ("local_user", "TEXT"),
         ("workspace_paths_json", "TEXT"),
         ("endpoint_name", "TEXT"),
         ("feature_rule_id", "TEXT"),
@@ -2235,18 +2243,18 @@ fn update_event_projection(
     connection.execute(
         "UPDATE runtime_events SET
             projection_version=?2,payload_bytes=?3,session_key=?4,session_source=?5,
-            project_id=?6,project_name=?7,project_source=?8,workspace_paths_json=?9,
-            endpoint_name=?10,feature_rule_id=?11,client_model=?12,
-            effective_model=?13,upstream_model=?14,failure_phase=?15,source_format=?16,
-            target_format=?17,route_mode=?18,upstream_status_code=?19,duration_ms=?20,
-            ttfb_ms=?21,failover=?22,stream_terminal=?23,codex_metadata_present=?24,
-            usage_present=?25,input_tokens=?26,output_tokens=?27,
-            cache_read_input_tokens=?28,cache_creation_input_tokens=?29,
-            reasoning_tokens=?30,uncached_input_tokens=?31,processed_input_tokens=?32,
-            processed_total_tokens=?33,token_accounting_semantics=?34,
-            token_accounting_quality=?35,tool_calls_json=?36
-            ,codex_thread_class=?37,attribution_scope=?38,request_method=?39,
-            request_path=?40,route_intent=?41
+            project_id=?6,project_name=?7,project_source=?8,local_user=?9,workspace_paths_json=?10,
+            endpoint_name=?11,feature_rule_id=?12,client_model=?13,
+            effective_model=?14,upstream_model=?15,failure_phase=?16,source_format=?17,
+            target_format=?18,route_mode=?19,upstream_status_code=?20,duration_ms=?21,
+            ttfb_ms=?22,failover=?23,stream_terminal=?24,codex_metadata_present=?25,
+            usage_present=?26,input_tokens=?27,output_tokens=?28,
+            cache_read_input_tokens=?29,cache_creation_input_tokens=?30,
+            reasoning_tokens=?31,uncached_input_tokens=?32,processed_input_tokens=?33,
+            processed_total_tokens=?34,token_accounting_semantics=?35,
+            token_accounting_quality=?36,tool_calls_json=?37
+            ,codex_thread_class=?38,attribution_scope=?39,request_method=?40,
+            request_path=?41,route_intent=?42
          WHERE seq=?1",
         params![
             seq,
@@ -2257,6 +2265,7 @@ fn update_event_projection(
             projection.project_id,
             projection.project_name,
             projection.project_source,
+            projection.local_user,
             projection.workspace_paths_json,
             projection.endpoint_name,
             projection.feature_rule_id,
@@ -2558,7 +2567,7 @@ fn write_batch(
                 seq,change_seq,event_id,request_id,timestamp,kind,phase,outcome,status_code,
                 client_kind,request_purpose,endpoint_id,failure_kind,is_in_flight,payload_json,
                 created_at,updated_at,projection_version,payload_bytes,session_key,session_source,
-                project_id,project_name,project_source,workspace_paths_json,endpoint_name,
+                project_id,project_name,project_source,local_user,workspace_paths_json,endpoint_name,
                 feature_rule_id,client_model,effective_model,upstream_model,failure_phase,
                 source_format,target_format,route_mode,upstream_status_code,duration_ms,ttfb_ms,
                 failover,stream_terminal,codex_metadata_present,usage_present,input_tokens,
@@ -2570,7 +2579,7 @@ fn write_batch(
                 ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?16,
                 ?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,
                 ?32,?33,?34,?35,?36,?37,?38,?39,?40,?41,?42,?43,?44,?45,?46,
-                ?47,?48,?49,?50,?51,?52,?53,?54,?55,?56
+                ?47,?48,?49,?50,?51,?52,?53,?54,?55,?56,?57
              )
              ON CONFLICT(event_id) DO UPDATE SET
                 change_seq=excluded.change_seq,payload_json=excluded.payload_json,
@@ -2583,6 +2592,7 @@ fn write_batch(
                 session_key=excluded.session_key,session_source=excluded.session_source,
                 project_id=excluded.project_id,project_name=excluded.project_name,
                 project_source=excluded.project_source,
+                local_user=excluded.local_user,
                 workspace_paths_json=excluded.workspace_paths_json,
                 endpoint_name=excluded.endpoint_name,
                 feature_rule_id=excluded.feature_rule_id,client_model=excluded.client_model,
@@ -2633,6 +2643,7 @@ fn write_batch(
                 projection.project_id,
                 projection.project_name,
                 projection.project_source,
+                projection.local_user,
                 projection.workspace_paths_json,
                 projection.endpoint_name,
                 projection.feature_rule_id,
@@ -4329,7 +4340,7 @@ fn project_identity(event: &RuntimeEvent) -> String {
             .collect::<Vec<_>>()
             .join("|");
     }
-    // Codex 没给结构化 workspace 时才看客户端自称的归因(Claude Code 走这条)。
+    // Wrapper 带了工作区路径时按路径归并（与 Codex 同一套末段规则），用户名不进 identity。
     event
         .client_declared
         .as_ref()
@@ -4351,8 +4362,8 @@ fn event_attribution_scope(event: &RuntimeEvent) -> sumpter_core::events::CodexA
     )
 }
 
-/// 客户端声明的项目身份。显式 project 名优先于 workspace 路径与 git remote,
-/// 输出前缀与 [`workspace_identity`] 对齐,好让 `project_base` 用同一套末段规则。
+/// 客户端声明的项目身份。工作区路径优先（升格为本地项目），否则 git remote，
+/// 再否则裸项目名。用户名不进 identity。前缀与 [`workspace_identity`] 对齐。
 fn declared_identity(declared: &sumpter_core::events::ClientDeclaredMetadata) -> Option<String> {
     let nonempty = |value: &Option<String>| {
         value
@@ -4361,41 +4372,26 @@ fn declared_identity(declared: &sumpter_core::events::ClientDeclaredMetadata) ->
             .filter(|value| !value.is_empty())
             .map(str::to_string)
     };
-    if let Some(project) = nonempty(&declared.project) {
-        return Some(format!("declared:{project}"));
-    }
     if let Some(workspace) = nonempty(&declared.workspace) {
         return Some(format!("path:{workspace}"));
     }
-    nonempty(&declared.git_remote).map(|remote| {
-        format!(
+    if let Some(remote) = nonempty(&declared.git_remote) {
+        return Some(format!(
             "remote:{}",
             remote.trim_end_matches('/').trim_end_matches(".git")
-        )
-    })
+        ));
+    }
+    nonempty(&declared.project).map(|project| format!("declared:{project}"))
 }
 
-/// Explain why the project key is trustworthy.  This is deliberately derived
-/// only from the structured Codex workspace metadata; model names, paths in
-/// prompts, and client guesses are never used as a source.
+/// Explain why the project key is trustworthy.  Codex structured workspaces
+/// still win.  Wrapper-supplied workspace paths (Claude Code / Grok Build)
+/// are treated as local collection, not as a free-form project nickname.
 fn project_source(event: &RuntimeEvent) -> &'static str {
     if is_internal_resource_event(event) {
         return "internal_feature";
     }
-    // 客户端自称的归因可信度低于 Codex 结构化采集,所以只在后者缺位时才作为来源,
-    // 并且用独立词标出来,不能和 workspace_local 混为一类。
-    let declared_source = || {
-        if event
-            .client_declared
-            .as_ref()
-            .and_then(declared_identity)
-            .is_some()
-        {
-            "client_declared"
-        } else {
-            "missing_workspace_metadata"
-        }
-    };
+    let declared_source = || declared_project_source(event.client_declared.as_ref());
     let Some(metadata) = event.codex_metadata.as_ref() else {
         return declared_source();
     };
@@ -4417,6 +4413,40 @@ fn project_source(event: &RuntimeEvent) -> &'static str {
         return "workspace_remote_fallback";
     }
     "workspace_unidentified"
+}
+
+fn declared_project_source(
+    declared: Option<&sumpter_core::events::ClientDeclaredMetadata>,
+) -> &'static str {
+    let Some(declared) = declared else {
+        return "missing_workspace_metadata";
+    };
+    let nonempty = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
+    };
+    if nonempty(&declared.workspace) {
+        "workspace_local"
+    } else if nonempty(&declared.git_remote) {
+        "workspace_remote_fallback"
+    } else if nonempty(&declared.project) {
+        "client_declared"
+    } else {
+        "missing_workspace_metadata"
+    }
+}
+
+fn event_local_user(event: &RuntimeEvent) -> Option<String> {
+    event
+        .client_declared
+        .as_ref()
+        .and_then(|declared| declared.user.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn workspace_identity(
@@ -6803,8 +6833,7 @@ mod tests {
         let path = dir.join("runtime.sqlite3");
         let (store, _) = RuntimeStore::new(&path).unwrap();
 
-        // 只有客户端声明(Claude Code 的典型情形):项目名用声明值,来源标 client_declared,
-        // 工作区仍只暴露脱敏尾段。
+        // wrapper 带了工作区路径时升格为本地项目，不再标 client_declared。
         let mut declared = event(
             "declared-only",
             KIND_CLIENT,
@@ -6851,7 +6880,7 @@ mod tests {
         };
 
         let declared_row = row("automode-proxy");
-        assert_eq!(declared_row["projectSource"], "client_declared");
+        assert_eq!(declared_row["projectSource"], "workspace_local");
         assert_eq!(
             declared_row["workspacePaths"],
             json!([".../.claude/automode-proxy"]),
@@ -7663,11 +7692,16 @@ mod tests {
             "project": "automode-proxy",
             "workspace": ".../.claude/automode-proxy",
             "gitRemote": "https://github.com/domoxiaojun/sumpter.git",
+            "user": "kkl",
         }))
         .ok();
         let wire = serde_json::to_value(RuntimeEventListItem::from_change(1, 2, value)).unwrap();
 
+        assert_eq!(wire["projectName"], "automode-proxy");
+        assert_eq!(wire["projectSource"], "workspace_local");
+        assert_eq!(wire["localUser"], "kkl");
         assert_eq!(wire["clientDeclared"]["project"], "automode-proxy");
+        assert_eq!(wire["clientDeclared"]["user"], "kkl");
         assert_eq!(
             wire["clientDeclared"]["workspace"],
             ".../.claude/automode-proxy"

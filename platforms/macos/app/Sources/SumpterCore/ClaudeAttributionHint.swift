@@ -41,7 +41,10 @@ public enum ClaudeAttributionHint {
     }
 
     public static func state(projects: [ProjectRow]) -> State {
-        if projects.contains(where: { $0.projectSource == declaredSource }) {
+        if projects.contains(where: { row in
+            (row.projectSource == declaredSource || row.projectSource == "workspace_local")
+                && row.clientKinds.contains("claude_code")
+        }) {
             return .configured
         }
         let hasUnattributedClaudeCode = projects.contains { row in

@@ -504,6 +504,13 @@ HTTP 400，229 字节 `architecture="avas" is only supported for quicksilver Rea
 - [x] ✅ 1. 历史事件改用与进行中相同的 SwiftUI 四列行，去掉原生 `Table`。
 - [x] ✅ 2. Swift 测试与构建；提交。不替换 `/Applications/Sumpter.app`。
 
+## 本轮：CC / Grok 项目归因显示「sumpter 本地(kkl)」（2026-09-04）
+
+- [x] ✅ 1. `X-Sumpter-User` 写入 `ClientDeclaredMetadata`；带 workspace 的声明升格 `workspace_local`；列表投影带 `localUser`。
+- [x] ✅ 2. 出站黑名单只留 `x-sumpter-*`，去掉 `x-kekulv-*`。
+- [x] ✅ 3. CC wrapper 补 User；新增 `grok-project-attribution.sh`（`GROK_CONFIG` overlay）及 Linux `GET /__sumpter/grok-project-attribution.sh`。
+- [x] ✅ 4. 运行页文案 `sumpter 本地(kkl)`；USAGE / 双端 UI / 发布包脚本。不替换已安装 App。
+
 ## 本轮：意图路由问题闭环（2026-09-04）
 
 - [ ] 1. 在原始 body 解析阶段先确定 Codex Originator，再做 Live 标准化与路由。

@@ -122,6 +122,8 @@ APP_PATH="$DIST_DIR/Sumpter.app"
 [[ -d "$APP_PATH" ]] || die "App 产物缺失: $APP_PATH"
 [[ -f "$APP_PATH/Contents/Resources/cc-project-attribution.sh" ]] \
   || die "App 未内置 Claude Code 项目归因配置器"
+[[ -f "$APP_PATH/Contents/Resources/grok-project-attribution.sh" ]] \
+  || die "App 未内置 Grok Build 项目归因配置器"
 
 echo "本地 DMG 构建完成"
 echo "  App: $APP_PATH"

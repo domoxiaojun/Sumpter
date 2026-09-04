@@ -197,6 +197,8 @@ package_root="$WORK_DIR/extracted/$package_name"
     || die "发布包缺少包内安装器:scripts/install.sh"
 [[ -f "$package_root/scripts/cc-project-attribution.sh" && ! -L "$package_root/scripts/cc-project-attribution.sh" ]] \
     || die "发布包缺少 Claude Code 项目归因配置器:scripts/cc-project-attribution.sh"
+[[ -f "$package_root/scripts/grok-project-attribution.sh" && ! -L "$package_root/scripts/grok-project-attribution.sh" ]] \
+    || die "发布包缺少 Grok Build 项目归因配置器:scripts/grok-project-attribution.sh"
 
 # 首次安装时，包内安装器会先探测旧 unit 的状态。Fedora/systemd 对不存在的
 # unit 会把这条正常探测结果写到 stderr；只过滤这一条固定文案，保留安装器的

@@ -40,7 +40,7 @@ final class RuntimeEventPresentationTests: XCTestCase {
                 metadata: nil,
                 declared: declared
             ),
-            "项目: automode-proxy（客户端声明）"
+            "项目: automode-proxy"
         )
         let context = try XCTUnwrap(
             RuntimeEventPresentation.projectContext(
@@ -50,9 +50,9 @@ final class RuntimeEventPresentationTests: XCTestCase {
             )
         )
         XCTAssertEqual(context.name, "automode-proxy")
-        XCTAssertEqual(context.source, .clientDeclared)
-        XCTAssertEqual(context.source.rawValue, "client_declared")
-        XCTAssertEqual(context.source.label, "客户端声明")
+        XCTAssertEqual(context.source, .workspaceLocal)
+        XCTAssertEqual(context.source.rawValue, "workspace_local")
+        XCTAssertEqual(context.source.label, "本地项目")
         XCTAssertEqual(
             context.detail,
             ".../.claude/automode-proxy · https://github.com/domoxiaojun/sumpter.git"

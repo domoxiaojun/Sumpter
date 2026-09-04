@@ -24,8 +24,12 @@ pub use sumpter_engine::{EngineNotice, MAX_BODY_BYTES};
 
 /// Linux listener 上提供给远程 Claude Code 客户端的内置配置器路径。
 pub const ATTRIBUTION_SCRIPT_PATH: &str = "/__sumpter/cc-project-attribution.sh";
+/// Linux listener 上提供给远程 Grok Build 客户端的内置配置器路径。
+pub const GROK_ATTRIBUTION_SCRIPT_PATH: &str = "/__sumpter/grok-project-attribution.sh";
 const ATTRIBUTION_SCRIPT: &str =
     include_str!("../../../../platforms/linux/scripts/cc-project-attribution.sh");
+const GROK_ATTRIBUTION_SCRIPT: &str =
+    include_str!("../../../../platforms/linux/scripts/grok-project-attribution.sh");
 
 #[derive(Clone)]
 pub struct Engine {
@@ -138,9 +142,13 @@ fn attribution_script_response(
     let path = path_and_query
         .split_once('?')
         .map_or(path_and_query, |(path, _)| path);
-    if path != ATTRIBUTION_SCRIPT_PATH {
+    let (filename, script) = if path == ATTRIBUTION_SCRIPT_PATH {
+        ("cc-project-attribution.sh", ATTRIBUTION_SCRIPT)
+    } else if path == GROK_ATTRIBUTION_SCRIPT_PATH {
+        ("grok-project-attribution.sh", GROK_ATTRIBUTION_SCRIPT)
+    } else {
         return None;
-    }
+    };
 
     if !access::is_allowed(
         remote.map(|ip| ip.to_string()).as_deref(),
@@ -183,10 +191,10 @@ fn attribution_script_response(
             .header(header::CACHE_CONTROL, "no-store")
             .header(
                 header::CONTENT_DISPOSITION,
-                "inline; filename=cc-project-attribution.sh",
+                format!("inline; filename={filename}"),
             )
-            .body(Body::from(ATTRIBUTION_SCRIPT))
-            .unwrap_or_else(|_| Response::new(Body::from(ATTRIBUTION_SCRIPT))),
+            .body(Body::from(script))
+            .unwrap_or_else(|_| Response::new(Body::from(script))),
     )
 }
 
