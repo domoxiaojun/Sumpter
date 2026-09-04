@@ -132,6 +132,36 @@ final class RuntimeEventPresentationTests: XCTestCase {
         }
         """#.utf8))
         XCTAssertNil(event.codexMetadata)
+        XCTAssertNil(event.grokMetadata)
+    }
+
+    func testGrokMetadataSummaryAndJSONExposeSamplingHeaders() throws {
+        let data = Data(#"""
+        {
+          "sessionID":"sess-1",
+          "convID":"conv-1",
+          "requestID":"req-1",
+          "clientIdentifier":"grok-shell",
+          "clientVersion":"0.2.119",
+          "clientMode":"interactive",
+          "turnIndex":"3"
+        }
+        """#.utf8)
+        let metadata = try JSONDecoder().decode(GrokMetadata.self, from: data)
+        XCTAssertEqual(RuntimeEventPresentation.grokSummary(metadata), "Grok · grok-shell · 0.2.119 · interactive · 会话 sess-1 · 对话 conv-1")
+        let json = try XCTUnwrap(RuntimeEventPresentation.grokJSON(metadata))
+        XCTAssertTrue(json.contains("sess-1"))
+        XCTAssertTrue(json.contains("grok-shell"))
+        XCTAssertEqual(metadata.turnIndex, "3")
+    }
+
+    func testEmptyCodexMetadataFromTraceparentIsNotIdentity() throws {
+        let metadata = try JSONDecoder().decode(
+            CodexMetadata.self,
+            from: Data(#"{"sources":["headers"],"redactedFields":["traceparent"]}"#.utf8)
+        )
+        XCTAssertFalse(metadata.hasRequestIdentity)
+        XCTAssertNil(RuntimeEventPresentation.codexSummary(metadata))
     }
 
     func testIsClientDisconnect() {

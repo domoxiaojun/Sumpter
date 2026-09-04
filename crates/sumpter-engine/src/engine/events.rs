@@ -1,8 +1,9 @@
 //! Runtime-event seam shared by the data plane and replay tooling.
 
 pub use sumpter_core::events::{
-    ClientDeclaredMetadata, ClientKind, CodexMetadata, RuntimeEvent, RuntimeEventOutcome,
-    RuntimeEventPhase, RuntimeFailureKind, RuntimeFailurePhase, RuntimeSnapshot, StreamTrace,
+    ClientDeclaredMetadata, ClientKind, CodexMetadata, GrokMetadata, RuntimeEvent,
+    RuntimeEventOutcome, RuntimeEventPhase, RuntimeFailureKind, RuntimeFailurePhase,
+    RuntimeSnapshot, StreamTrace,
 };
 
 /// Fields generated per request are intentionally excluded from conformance

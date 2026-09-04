@@ -87,6 +87,7 @@ mod tests {
             client_kind: None,
             codex_metadata: None,
             client_declared: None,
+            grok_metadata: None,
             client_model: None,
             source_format: None,
             target_format: None,

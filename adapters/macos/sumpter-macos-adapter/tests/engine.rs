@@ -2255,6 +2255,97 @@ async fn client_declared_project_headers_reach_both_forwarded_and_rejected_event
 }
 
 #[tokio::test]
+async fn grok_sampling_headers_reach_event_details() {
+    let fake = FakeTransport::new();
+    let headers = vec![
+        ("User-Agent".into(), "grok-shell/0.2.119".into()),
+        ("x-grok-session-id".into(), "sess-1".into()),
+        ("x-grok-conv-id".into(), "conv-1".into()),
+        ("x-grok-req-id".into(), "req-1".into()),
+        ("x-grok-agent-id".into(), "agent-1".into()),
+        ("x-grok-turn-idx".into(), "3".into()),
+        ("x-grok-model-override".into(), "grok-4.6".into()),
+        ("x-grok-client-identifier".into(), "grok-shell".into()),
+        ("x-grok-client-version".into(), "0.2.119".into()),
+        ("x-grok-client-mode".into(), "interactive".into()),
+        ("x-compactions-remaining".into(), "1".into()),
+        (
+            "traceparent".into(),
+            "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01".into(),
+        ),
+    ];
+
+    let engine = engine_with(two_endpoint_config().normalized(), fake.clone());
+    fake.push("a.example.com", sse_ok(&["data: {}\n\n"]));
+    assert_eq!(
+        call(&engine, loopback(), "/v1/messages", headers.clone(), body())
+            .await
+            .0,
+        200
+    );
+    let runtime = engine.runtime_snapshot();
+    let event = runtime
+        .recent_events
+        .iter()
+        .find(|event| event.kind == "client" && event.status_code == 200)
+        .expect("forwarded client event");
+    assert_eq!(event.client_kind, Some(ClientKind::GrokBuild));
+    assert_eq!(event.session_id.as_deref(), Some("sess-1"));
+    let grok = event.grok_metadata.as_ref().expect("grok metadata");
+    assert_eq!(grok.session_id.as_deref(), Some("sess-1"));
+    assert_eq!(grok.conv_id.as_deref(), Some("conv-1"));
+    assert_eq!(grok.request_id.as_deref(), Some("req-1"));
+    assert_eq!(grok.agent_id.as_deref(), Some("agent-1"));
+    assert_eq!(grok.turn_index.as_deref(), Some("3"));
+    assert_eq!(grok.model_override.as_deref(), Some("grok-4.6"));
+    assert_eq!(grok.client_identifier.as_deref(), Some("grok-shell"));
+    assert_eq!(grok.client_version.as_deref(), Some("0.2.119"));
+    assert_eq!(grok.client_mode.as_deref(), Some("interactive"));
+    assert_eq!(grok.compactions_remaining.as_deref(), Some("1"));
+    assert_eq!(grok.user_agent.as_deref(), Some("grok-shell/0.2.119"));
+    assert!(
+        event.codex_metadata.is_none(),
+        "Grok 只有 OTel traceparent 时不应落空 Codex 元数据: {:?}",
+        event.codex_metadata
+    );
+    let upstream = fake.requests();
+    let sent = &upstream.first().expect("upstream request").headers;
+    assert!(
+        sent.iter().any(|(name, value)| {
+            name.eq_ignore_ascii_case("x-grok-session-id") && value == "sess-1"
+        }),
+        "x-grok-* 是官方采样 header，出站应保留: {sent:?}"
+    );
+
+    let mut rejecting = two_endpoint_config();
+    rejecting.listener.auth_token = "sk-inbound".into();
+    let engine = engine_with(rejecting, FakeTransport::new());
+    let (status, _) = call(
+        &engine,
+        loopback(),
+        "/v1/messages",
+        headers,
+        Bytes::from_static(b"not-json"),
+    )
+    .await;
+    assert_eq!(status, 401);
+    let runtime = engine.runtime_snapshot();
+    let event = runtime
+        .recent_events
+        .iter()
+        .find(|event| event.kind == "client" && event.status_code == 401)
+        .expect("rejected client event");
+    assert_eq!(
+        event
+            .grok_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.session_id.as_deref()),
+        Some("sess-1")
+    );
+    assert_eq!(event.session_id.as_deref(), Some("sess-1"));
+}
+
+#[tokio::test]
 async fn rejected_requests_preserve_codex_metadata() {
     let fake = FakeTransport::new();
     let mut config = two_endpoint_config();

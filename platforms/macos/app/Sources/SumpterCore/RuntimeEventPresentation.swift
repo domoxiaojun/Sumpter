@@ -205,7 +205,7 @@ public enum RuntimeEventPresentation {
 
     /// Compact list label, retaining authoritative evidence for subagent rows.
     public static func codexSummary(_ metadata: CodexMetadata?) -> String? {
-        guard let metadata, !metadata.isEmpty else { return nil }
+        guard let metadata, metadata.hasRequestIdentity else { return nil }
         if metadata.isSubagent || metadata.subagentKind != nil || metadata.subagentHeader != nil {
             let kind = metadata.subagentKind ?? metadata.subagentHeader ?? "subagent"
             return ["Codex · 子代理(\(kind))", metadata.agentName]
@@ -219,6 +219,25 @@ public enum RuntimeEventPresentation {
 
     public static func codexJSON(_ metadata: CodexMetadata?) -> String? {
         guard let metadata else { return nil }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        return try? String(decoding: encoder.encode(metadata), as: UTF8.self)
+    }
+
+    public static func grokSummary(_ metadata: GrokMetadata?) -> String? {
+        guard let metadata, !metadata.isEmpty else { return nil }
+        let parts = [
+            metadata.clientIdentifier,
+            metadata.clientVersion,
+            metadata.clientMode,
+            metadata.sessionID.map { "会话 \($0)" },
+            metadata.convID.map { "对话 \($0)" }
+        ].compactMap { $0 }
+        return parts.isEmpty ? "Grok 客户端" : "Grok · " + parts.joined(separator: " · ")
+    }
+
+    public static func grokJSON(_ metadata: GrokMetadata?) -> String? {
+        guard let metadata, !metadata.isEmpty else { return nil }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         return try? String(decoding: encoder.encode(metadata), as: UTF8.self)

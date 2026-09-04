@@ -453,6 +453,235 @@ impl ClientDeclaredMetadata {
     }
 }
 
+/// Grok Build 采样客户端在推理请求上带的身份 / 会话 header。
+///
+/// 对照 grok-build `xai-grok-sampler::client::GrokRequestHeaders` 与进程级
+/// `x-grok-client-*`：会话、对话、请求、agent、回合、模型覆盖、客户端标识/版本/模式。
+/// cwd 与 git 不进推理请求（走 GCS `metadata.json`），项目归因仍靠 wrapper 的
+/// `X-Sumpter-*`，本结构只做事件详情观测。
+///
+/// 不保存凭据、OTel `traceparent`、MCP `x-grok-managed-gateway`、OAuth
+/// `x-grok-client-surface`；响应侧 `x-grok-context-window` 也不是客户端身份。
+/// `ChatCompletionRequest` 上的 `x_grok_*` 字段在 grok-build 里是
+/// `#[serde(skip)]`，wire 身份以 header 为准。
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GrokMetadata {
+    #[serde(rename = "sessionID", default, skip_serializing_if = "is_none")]
+    pub session_id: Option<String>,
+    #[serde(rename = "convID", default, skip_serializing_if = "is_none")]
+    pub conv_id: Option<String>,
+    #[serde(rename = "requestID", default, skip_serializing_if = "is_none")]
+    pub request_id: Option<String>,
+    #[serde(rename = "agentID", default, skip_serializing_if = "is_none")]
+    pub agent_id: Option<String>,
+    #[serde(rename = "turnIndex", default, skip_serializing_if = "is_none")]
+    pub turn_index: Option<String>,
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub transient_retry: Option<String>,
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub model_override: Option<String>,
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub client_identifier: Option<String>,
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub client_version: Option<String>,
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub client_mode: Option<String>,
+    #[serde(rename = "deploymentID", default, skip_serializing_if = "is_none")]
+    pub deployment_id: Option<String>,
+    /// xAI 账号 ID 观测值，不是 API key。
+    #[serde(rename = "userID", default, skip_serializing_if = "is_none")]
+    pub user_id: Option<String>,
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub user_agent: Option<String>,
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub compactions_remaining: Option<String>,
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub compaction_at: Option<String>,
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub doom_loop_check: Option<String>,
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub exact_repetition_check: Option<String>,
+}
+
+impl GrokMetadata {
+    /// 从入站 header 解析 Grok 客户端观测字段。全部缺省时返回 `None`，保持旧事件
+    /// 紧凑 wire。畸形/超长输入丢弃该字段，不影响转发。
+    pub fn from_headers(headers: &[(String, String)]) -> Option<Self> {
+        let mut state = CodexMetadataParseState::default();
+        let session_id = grok_header(
+            headers,
+            "x-grok-session-id",
+            CODEX_METADATA_MAX_ID_BYTES,
+            &mut state,
+        );
+        let conv_id = grok_header(
+            headers,
+            "x-grok-conv-id",
+            CODEX_METADATA_MAX_ID_BYTES,
+            &mut state,
+        );
+        let request_id = grok_header(
+            headers,
+            "x-grok-req-id",
+            CODEX_METADATA_MAX_ID_BYTES,
+            &mut state,
+        );
+        let agent_id = grok_header(
+            headers,
+            "x-grok-agent-id",
+            CODEX_METADATA_MAX_ID_BYTES,
+            &mut state,
+        );
+        let turn_index = grok_header(
+            headers,
+            "x-grok-turn-idx",
+            CODEX_METADATA_MAX_LABEL_BYTES,
+            &mut state,
+        );
+        let transient_retry = grok_header(
+            headers,
+            "x-grok-transient-retry",
+            CODEX_METADATA_MAX_LABEL_BYTES,
+            &mut state,
+        );
+        let model_override = grok_header(
+            headers,
+            "x-grok-model-override",
+            CODEX_METADATA_MAX_LABEL_BYTES,
+            &mut state,
+        );
+        let client_identifier = grok_header(
+            headers,
+            "x-grok-client-identifier",
+            CODEX_METADATA_MAX_LABEL_BYTES,
+            &mut state,
+        );
+        let client_version = grok_header(
+            headers,
+            "x-grok-client-version",
+            CODEX_METADATA_MAX_LABEL_BYTES,
+            &mut state,
+        );
+        let client_mode = grok_header(
+            headers,
+            "x-grok-client-mode",
+            CODEX_METADATA_MAX_LABEL_BYTES,
+            &mut state,
+        );
+        let deployment_id = grok_header(
+            headers,
+            "x-grok-deployment-id",
+            CODEX_METADATA_MAX_ID_BYTES,
+            &mut state,
+        );
+        let user_id = grok_header(
+            headers,
+            "x-grok-user-id",
+            CODEX_METADATA_MAX_ID_BYTES,
+            &mut state,
+        );
+        let compactions_remaining = grok_header(
+            headers,
+            "x-compactions-remaining",
+            CODEX_METADATA_MAX_LABEL_BYTES,
+            &mut state,
+        );
+        let compaction_at = grok_header(
+            headers,
+            "x-compaction-at",
+            CODEX_METADATA_MAX_LABEL_BYTES,
+            &mut state,
+        );
+        let doom_loop_check = grok_header(
+            headers,
+            "x-grok-doom-loop-check",
+            CODEX_METADATA_MAX_LABEL_BYTES,
+            &mut state,
+        );
+        let exact_repetition_check = grok_header(
+            headers,
+            "x-grok-exact-repetition-check",
+            CODEX_METADATA_MAX_LABEL_BYTES,
+            &mut state,
+        );
+
+        let has_grok_fields = session_id.is_some()
+            || conv_id.is_some()
+            || request_id.is_some()
+            || agent_id.is_some()
+            || turn_index.is_some()
+            || transient_retry.is_some()
+            || model_override.is_some()
+            || client_identifier.is_some()
+            || client_version.is_some()
+            || client_mode.is_some()
+            || deployment_id.is_some()
+            || user_id.is_some()
+            || compactions_remaining.is_some()
+            || compaction_at.is_some()
+            || doom_loop_check.is_some()
+            || exact_repetition_check.is_some();
+
+        let user_agent = grok_header(
+            headers,
+            "user-agent",
+            CODEX_METADATA_MAX_AGENT_NAME_BYTES,
+            &mut state,
+        )
+        .filter(|ua| grok_user_agent_is_relevant(ua, has_grok_fields));
+
+        if !has_grok_fields && user_agent.is_none() {
+            return None;
+        }
+        Some(Self {
+            session_id,
+            conv_id,
+            request_id,
+            agent_id,
+            turn_index,
+            transient_retry,
+            model_override,
+            client_identifier,
+            client_version,
+            client_mode,
+            deployment_id,
+            user_id,
+            user_agent,
+            compactions_remaining,
+            compaction_at,
+            doom_loop_check,
+            exact_repetition_check,
+        })
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+fn grok_header(
+    headers: &[(String, String)],
+    name: &str,
+    max_bytes: usize,
+    state: &mut CodexMetadataParseState,
+) -> Option<String> {
+    let value = first_header_value(headers, name, state)?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.chars().any(char::is_control) {
+        return None;
+    }
+    bounded_nonempty(trimmed, max_bytes, state)
+}
+
+fn grok_user_agent_is_relevant(user_agent: &str, has_grok_fields: bool) -> bool {
+    let lower = user_agent.to_ascii_lowercase();
+    has_grok_fields
+        || lower.contains("grok-shell")
+        || lower.contains("grok-pager")
+        || lower.contains("grok-desktop")
+}
+
 /// Codex 0.148 Responses 的安全观测形状。
 ///
 /// canonical 来源是请求体 `client_metadata["x-codex-turn-metadata"]`；flat body 与
@@ -772,6 +1001,31 @@ impl CodexMetadata {
             is_subagent,
             parent_thread_id_inferred,
         })
+    }
+
+    /// 是否有可展示的 Codex 身份。Grok 请求常带 OTel `traceparent`，解析器会因此
+    /// 落一条只有 redacted/sources 的空 Codex 元数据；事件详情不能把它当成代理身份。
+    pub fn has_request_identity(&self) -> bool {
+        self.installation_id.is_some()
+            || self.source_installation_id.is_some()
+            || self.session_id.is_some()
+            || self.thread_id.is_some()
+            || self.agent_name.is_some()
+            || self.turn_id.is_some()
+            || self.window_id.is_some()
+            || self.request_kind.is_some()
+            || self.forked_from_thread_id.is_some()
+            || self.parent_thread_id.is_some()
+            || self.parent_turn_id.is_some()
+            || self.root_turn_id.is_some()
+            || self.subagent_header.is_some()
+            || self.subagent_kind.is_some()
+            || self.thread_source.is_some()
+            || self.sandbox.is_some()
+            || self.sandbox_mode.is_some()
+            || !self.workspaces.is_empty()
+            || self.originator.is_some()
+            || self.is_subagent
     }
 }
 
@@ -2138,6 +2392,9 @@ pub struct RuntimeEvent {
     /// 可信度低于 `codex_metadata`，归因时只作兜底。
     #[serde(rename = "clientDeclared", default, skip_serializing_if = "is_none")]
     pub client_declared: Option<ClientDeclaredMetadata>,
+    /// Grok Build 采样请求的客户端/会话观测字段；非 Grok 或旧事件为 None。
+    #[serde(rename = "grokMetadata", default, skip_serializing_if = "is_none")]
+    pub grok_metadata: Option<GrokMetadata>,
     #[serde(rename = "clientModel", default, skip_serializing_if = "is_none")]
     pub client_model: Option<String>,
     /// 入站路径确定的真实协议；None 仅表示旧 stats 或尚未完成路由定型。
@@ -2469,6 +2726,7 @@ mod tests {
             client_kind: None,
             codex_metadata: None,
             client_declared: None,
+            grok_metadata: None,
             client_model: None,
             source_format: None,
             target_format: None,
@@ -3023,6 +3281,101 @@ mod tests {
         );
         let back: RuntimeEvent = serde_json::from_value(json).expect("decode");
         assert_eq!(back.client_declared, event.client_declared);
+    }
+
+    #[test]
+    fn grok_metadata_parses_sampling_headers_and_is_omitted_when_absent() {
+        let headers = vec![
+            ("X-Grok-Session-Id".into(), "  sess-1  ".into()),
+            ("x-grok-conv-id".into(), "conv-1".into()),
+            ("x-grok-req-id".into(), "req-1".into()),
+            ("x-grok-agent-id".into(), "agent-1".into()),
+            ("x-grok-turn-idx".into(), "3".into()),
+            ("x-grok-transient-retry".into(), "1".into()),
+            ("x-grok-model-override".into(), "grok-4.6".into()),
+            ("x-grok-client-identifier".into(), "grok-shell".into()),
+            ("x-grok-client-version".into(), "0.2.119".into()),
+            ("x-grok-client-mode".into(), "interactive".into()),
+            ("x-grok-deployment-id".into(), "deploy-1".into()),
+            ("x-grok-user-id".into(), "user-1".into()),
+            ("x-compactions-remaining".into(), "1".into()),
+            ("x-compaction-at".into(), "80000".into()),
+            ("x-grok-doom-loop-check".into(), "1024".into()),
+            ("x-grok-exact-repetition-check".into(), "64".into()),
+            (
+                "User-Agent".into(),
+                "grok-pager/0.2.119 grok-shell/0.2.119 (macos; aarch64)".into(),
+            ),
+            (
+                "traceparent".into(),
+                "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01".into(),
+            ),
+            ("authorization".into(), "Bearer do-not-store".into()),
+        ];
+        let grok = GrokMetadata::from_headers(&headers).expect("grok metadata");
+        assert_eq!(grok.session_id.as_deref(), Some("sess-1"));
+        assert_eq!(grok.conv_id.as_deref(), Some("conv-1"));
+        assert_eq!(grok.request_id.as_deref(), Some("req-1"));
+        assert_eq!(grok.agent_id.as_deref(), Some("agent-1"));
+        assert_eq!(grok.turn_index.as_deref(), Some("3"));
+        assert_eq!(grok.transient_retry.as_deref(), Some("1"));
+        assert_eq!(grok.model_override.as_deref(), Some("grok-4.6"));
+        assert_eq!(grok.client_identifier.as_deref(), Some("grok-shell"));
+        assert_eq!(grok.client_version.as_deref(), Some("0.2.119"));
+        assert_eq!(grok.client_mode.as_deref(), Some("interactive"));
+        assert_eq!(grok.deployment_id.as_deref(), Some("deploy-1"));
+        assert_eq!(grok.user_id.as_deref(), Some("user-1"));
+        assert_eq!(grok.compactions_remaining.as_deref(), Some("1"));
+        assert_eq!(grok.compaction_at.as_deref(), Some("80000"));
+        assert_eq!(grok.doom_loop_check.as_deref(), Some("1024"));
+        assert_eq!(grok.exact_repetition_check.as_deref(), Some("64"));
+        assert_eq!(
+            grok.user_agent.as_deref(),
+            Some("grok-pager/0.2.119 grok-shell/0.2.119 (macos; aarch64)")
+        );
+
+        assert!(
+            GrokMetadata::from_headers(&[("x-grok-session-id".into(), "bad\nsession".into())])
+                .is_none()
+        );
+        assert!(GrokMetadata::from_headers(&[]).is_none());
+        assert!(
+            GrokMetadata::from_headers(&[("user-agent".into(), "curl/8.0".into(),)]).is_none(),
+            "非 Grok UA 且无 x-grok-* 时不应落元数据"
+        );
+
+        let ua_only =
+            GrokMetadata::from_headers(&[("user-agent".into(), "grok-shell/0.2.119".into())])
+                .expect("ua only");
+        assert_eq!(ua_only.user_agent.as_deref(), Some("grok-shell/0.2.119"));
+        assert!(ua_only.session_id.is_none());
+
+        let mut event = event("E-GROK", KIND_CLIENT, 1.0);
+        let json = serde_json::to_value(&event).expect("encode");
+        assert!(
+            json.get("grokMetadata").is_none(),
+            "缺省不落键,旧事件 round-trip 形状不变"
+        );
+        event.grok_metadata = Some(grok.clone());
+        let json = serde_json::to_value(&event).expect("encode");
+        assert_eq!(json["grokMetadata"]["sessionID"], "sess-1");
+        assert_eq!(json["grokMetadata"]["convID"], "conv-1");
+        assert!(json["grokMetadata"].get("authorization").is_none());
+        let back: RuntimeEvent = serde_json::from_value(json).expect("decode");
+        assert_eq!(back.grok_metadata, event.grok_metadata);
+
+        let empty_codex = CodexMetadata::from_request(
+            &[(
+                "traceparent".into(),
+                "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01".into(),
+            )],
+            None,
+        )
+        .expect("otel still marks Codex parser observed");
+        assert!(
+            !empty_codex.has_request_identity(),
+            "只有 redacted OTel 不能当成 Codex 代理身份"
+        );
     }
 
     #[test]

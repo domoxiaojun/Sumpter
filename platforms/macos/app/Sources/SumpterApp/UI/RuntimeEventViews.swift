@@ -136,7 +136,11 @@ enum RuntimeEventDisplay {
                 projectedLocalUser: event.localUser
             ),
             kind(event.kind), clientKind(event),
+            RuntimeEventPresentation.grokSummary(event.grokMetadata),
             metadata.flatMap { meta in
+                if event.clientKind == .grokBuild && !meta.hasRequestIdentity {
+                    return nil
+                }
                 let role = codexAgentRole(meta)
                 if event.clientKind == .grokBuild && role == "代理身份未确定" {
                     return nil
@@ -408,6 +412,7 @@ private struct RuntimeEventTraceExport: Encodable {
     let upstreamRequestID: String?
     let streamTrace: StreamTrace?
     let codexMetadata: CodexMetadata?
+    let grokMetadata: GrokMetadata?
 
     init(event: RuntimeEvent) {
         id = event.id
@@ -443,6 +448,7 @@ private struct RuntimeEventTraceExport: Encodable {
         upstreamRequestID = event.upstreamRequestID
         streamTrace = event.streamTrace
         codexMetadata = event.codexMetadata
+        grokMetadata = event.grokMetadata
     }
 
     func prettyJSON() -> String? {
@@ -1288,7 +1294,26 @@ private struct RuntimeEventDetail: View {
                         InfoRow(title: "源工作区", value: sourceWorkspace, copyable: true)
                     }
                 }
-                if let metadata = event.codexMetadata {
+                if let grok = event.grokMetadata, !grok.isEmpty {
+                    if let identifier = grok.clientIdentifier, !identifier.isEmpty {
+                        let version = grok.clientVersion.map { " \($0)" } ?? ""
+                        let mode = grok.clientMode.map { " · \($0)" } ?? ""
+                        InfoRow(title: "Grok 客户端", value: "\(identifier)\(version)\(mode)")
+                    }
+                    if let session = grok.sessionID, !session.isEmpty {
+                        InfoRow(title: "Grok 会话", value: session, copyable: true)
+                    }
+                    if let conv = grok.convID, !conv.isEmpty {
+                        InfoRow(title: "Grok 对话", value: conv, copyable: true)
+                    }
+                    if let request = grok.requestID, !request.isEmpty {
+                        InfoRow(title: "Grok 请求", value: request, copyable: true)
+                    }
+                    if let turn = grok.turnIndex, !turn.isEmpty {
+                        InfoRow(title: "Grok 回合", value: turn)
+                    }
+                }
+                if let metadata = event.codexMetadata, metadata.hasRequestIdentity {
                     InfoRow(title: "代理身份", value: RuntimeEventDisplay.codexAgentRole(metadata))
                     InfoRow(title: "代理路径", value: metadata.agentName ?? "未记录代理路径", copyable: metadata.agentName != nil)
                     if let remote = RuntimeEventDisplay.codexWorkspaceRemoteSummary(metadata) {
@@ -1386,7 +1411,11 @@ private struct RuntimeEventDetail: View {
                 }
             }
 
-            if let codex = event.codexMetadata {
+            if let grok = event.grokMetadata, !grok.isEmpty {
+                grokDisclosure(grok)
+            }
+
+            if let codex = event.codexMetadata, codex.hasRequestIdentity {
                 codexDisclosure(codex)
             }
 
@@ -1466,6 +1495,44 @@ private struct RuntimeEventDetail: View {
         }
     }
 
+    private func grokDisclosure(_ metadata: GrokMetadata) -> some View {
+        FullRowDisclosure(label: {
+            Label("Grok 请求上下文", systemImage: "terminal")
+                .font(.callout.weight(.semibold))
+        }) {
+            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 6) {
+                grokRows(metadata)
+            }
+            .padding(.top, 8)
+        }
+    }
+
+    @ViewBuilder
+    private func grokRows(_ metadata: GrokMetadata) -> some View {
+        let rows: [(String, String?)] = [
+            ("会话 ID", metadata.sessionID),
+            ("对话 ID", metadata.convID),
+            ("Grok 请求 ID", metadata.requestID),
+            ("Agent ID", metadata.agentID),
+            ("回合序号", metadata.turnIndex),
+            ("瞬时重试", metadata.transientRetry),
+            ("模型覆盖", metadata.modelOverride),
+            ("客户端标识", metadata.clientIdentifier),
+            ("客户端版本", metadata.clientVersion),
+            ("客户端模式", metadata.clientMode),
+            ("部署 ID", metadata.deploymentID),
+            ("账号 ID", metadata.userID),
+            ("User-Agent", metadata.userAgent),
+            ("剩余压缩次数", metadata.compactionsRemaining),
+            ("压缩阈值", metadata.compactionAt),
+            ("Doom loop 窗口", metadata.doomLoopCheck),
+            ("精确重复检测", metadata.exactRepetitionCheck)
+        ]
+        ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+            if let value = row.1, !value.isEmpty { InfoRow(title: row.0, value: value, copyable: true) }
+        }
+    }
+
     private func codexDisclosure(_ metadata: CodexMetadata) -> some View {
         FullRowDisclosure(label: {
             Label("Codex 请求上下文", systemImage: "shippingbox")
@@ -1534,8 +1601,8 @@ private struct RuntimeEventDetail: View {
     private var exportButtons: some View {
         VStack(alignment: .leading, spacing: 6) {
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { eventExportButton; codexExportButton }
-                VStack(alignment: .leading, spacing: 8) { eventExportButton; codexExportButton }
+                HStack(spacing: 8) { eventExportButton; grokExportButton; codexExportButton }
+                VStack(alignment: .leading, spacing: 8) { eventExportButton; grokExportButton; codexExportButton }
             }
             if let copyFeedback {
                 Label(copyFeedback, systemImage: copyFeedback == "已复制" ? "checkmark.circle" : "exclamationmark.triangle")
@@ -1556,6 +1623,19 @@ private struct RuntimeEventDetail: View {
             }
             .buttonStyle(.bordered)
             .help("复制事件、路由、状态、失败、工具调用、流诊断与有界源归属元数据；不包含请求或响应正文与凭据")
+        }
+    }
+
+    @ViewBuilder
+    private var grokExportButton: some View {
+        if let payload = RuntimeEventPresentation.grokJSON(event.grokMetadata) {
+            Button {
+                copyToPasteboard(payload)
+            } label: {
+                Label("复制 Grok 客户端元数据 JSON", systemImage: "doc.on.doc")
+            }
+            .buttonStyle(.bordered)
+            .help("复制已记录的 Grok 会话、对话、请求和客户端标识字段")
         }
     }
 

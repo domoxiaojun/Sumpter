@@ -1,3 +1,17 @@
+# Grok 事件详情：采样客户端/会话字段（2026-09-04）
+
+Grok Build 推理请求的身份在 `x-grok-*` header，不在 Codex `client_metadata`。
+cwd/git 仍不进推理请求。事件详情要展示会话/对话/请求/客户端，不能再把
+OTel `traceparent` 当成空 Codex「代理身份未确定」。
+
+- [x] core：`GrokMetadata::from_headers`，挂到 `RuntimeEvent.grokMetadata`
+- [x] engine：ClientMeta / 拒绝路径 / websocket 贯通；`x-grok-session-id` 进 sessionID
+- [x] Grok 请求若只有 redacted OTel、没有 Codex 身份，不落空的 `codexMetadata`
+- [x] 双端运行页详情展示 Grok 字段；列表摘要不再写空 Codex 代理
+- [x] 测试、todos/plan、提交。不宣称已安装 App 已更新
+
+---
+
 # Grok / Claude Code 项目归因：本地(kkl)（2026-09-04）
 
 CC 和 Grok 都用 wrapper 按启动目录分项目。有工作区路径时来源升格为 `workspace_local`，

@@ -17,8 +17,8 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sumpter_core::config::ProviderProtocol;
 use sumpter_core::events::{
-    APPLE_EPOCH_OFFSET_SECS, ClientDeclaredMetadata, ClientKind, CodexMetadata, KIND_CLIENT,
-    KIND_NOTIFY, KIND_UPSTREAM, RuntimeEvent, RuntimeEventOutcome, RuntimeEventPhase,
+    APPLE_EPOCH_OFFSET_SECS, ClientDeclaredMetadata, ClientKind, CodexMetadata, GrokMetadata,
+    KIND_CLIENT, KIND_NOTIFY, KIND_UPSTREAM, RuntimeEvent, RuntimeEventOutcome, RuntimeEventPhase,
     RuntimeFailureKind, RuntimeFailurePhase, RuntimeSnapshot, STATUS_CLIENT_DISCONNECTED,
     StreamTrace, codex_attribution_scope, codex_thread_class,
 };
@@ -328,6 +328,8 @@ pub struct RuntimeEventListItem {
     /// 端点加载事件(单事件详情仅在选中时拉),字段缺了那边就恒显示「未识别项目」。
     #[serde(rename = "clientDeclared")]
     pub client_declared: Option<ClientDeclaredMetadata>,
+    #[serde(rename = "grokMetadata")]
+    pub grok_metadata: Option<GrokMetadata>,
     /// 服务端算好的项目归因(投影列)。分页列表走 SQLite 投影快路径,不解
     /// `payload_json`,因此 `codex_metadata` / `client_declared` 恒为 None ——
     /// 客户端若只按那两个字段判断,翻页拿到的行会全部显示「未识别项目」,而 SSE
@@ -434,6 +436,7 @@ impl RuntimeEventListItem {
             attribution_scope,
             codex_metadata: event.codex_metadata,
             client_declared: event.client_declared,
+            grok_metadata: event.grok_metadata,
             client_model: event.client_model,
             source_format: event.source_format,
             target_format: event.target_format,
@@ -7714,6 +7717,30 @@ mod tests {
             wire.get("client_declared").is_none(),
             "列表投影只能是 camelCase 形状"
         );
+    }
+
+    #[test]
+    fn list_item_wire_carries_grok_client_metadata() {
+        let mut value = event(
+            "wire-grok",
+            KIND_CLIENT,
+            200,
+            RuntimeEventPhase::Completed,
+            Some(RuntimeEventOutcome::Succeeded),
+            event_now(),
+        );
+        value.grok_metadata = serde_json::from_value(json!({
+            "sessionID": "sess-1",
+            "convID": "conv-1",
+            "clientIdentifier": "grok-shell",
+            "clientVersion": "0.2.119",
+        }))
+        .ok();
+        let wire = serde_json::to_value(RuntimeEventListItem::from_change(1, 2, value)).unwrap();
+        assert_eq!(wire["grokMetadata"]["sessionID"], "sess-1");
+        assert_eq!(wire["grokMetadata"]["convID"], "conv-1");
+        assert_eq!(wire["grokMetadata"]["clientIdentifier"], "grok-shell");
+        assert!(wire.get("grok_metadata").is_none());
     }
 
     #[test]

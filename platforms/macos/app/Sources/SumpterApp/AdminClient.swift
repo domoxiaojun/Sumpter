@@ -697,6 +697,7 @@ public enum AdminWire {
         /// event list is this app's primary load path; without it a Claude Code
         /// request would render as an unidentified project until its detail is fetched.
         public let clientDeclared: ClientDeclaredMetadata?
+        public let grokMetadata: GrokMetadata?
         public let projectName: String?
         public let projectSource: String?
         public let localUser: String?
@@ -744,6 +745,7 @@ public enum AdminWire {
             upstreamRequestID = event.upstreamRequestID
             codexMetadata = event.codexMetadata
             clientDeclared = event.clientDeclared
+            grokMetadata = event.grokMetadata
             projectName = event.projectName
             projectSource = event.projectSource
             localUser = event.localUser
@@ -791,6 +793,7 @@ public enum AdminWire {
                 upstreamRequestID: upstreamRequestID,
                 codexMetadata: codexMetadata,
                 clientDeclared: clientDeclared,
+                grokMetadata: grokMetadata,
                 projectName: projectName,
                 projectSource: projectSource,
                 localUser: localUser,
@@ -843,6 +846,7 @@ public enum AdminWire {
             if let upstreamRequestID { event.upstreamRequestID = upstreamRequestID }
             if let codexMetadata { event.codexMetadata = codexMetadata }
             if let clientDeclared { event.clientDeclared = clientDeclared }
+            if let grokMetadata { event.grokMetadata = grokMetadata }
             if let projectName { event.projectName = projectName }
             if let projectSource { event.projectSource = projectSource }
             if let localUser { event.localUser = localUser }
