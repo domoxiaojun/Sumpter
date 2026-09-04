@@ -5021,7 +5021,8 @@ mod tests {
                    processed_input_tokens INTEGER,processed_total_tokens INTEGER,
                    token_accounting_semantics TEXT,token_accounting_quality TEXT,
                    tool_calls_json TEXT,
-                   codex_thread_class TEXT,attribution_scope TEXT
+                   codex_thread_class TEXT,attribution_scope TEXT,
+                   request_method TEXT,request_path TEXT,route_intent TEXT
                  );
                  CREATE INDEX runtime_events_kind_seq ON runtime_events(kind,seq DESC);
                  CREATE INDEX runtime_events_request_id ON runtime_events(request_id);
@@ -5112,7 +5113,7 @@ mod tests {
                    seq,change_seq,event_id,request_id,timestamp,kind,phase,outcome,status_code,
                    client_kind,request_purpose,endpoint_id,is_in_flight,payload_json,
                    projection_version,endpoint_name
-                 ) VALUES (?1,?1,?2,?3,1.0,?4,'completed',?5,?6,?7,?8,?9,0,'{}',4,?10)",
+                 ) VALUES (?1,?1,?2,?3,1.0,?4,'completed',?5,?6,?7,?8,?9,0,'{}',5,?10)",
                 params![
                     seq,
                     format!("endpoint-test-{seq}"),
@@ -5155,7 +5156,7 @@ mod tests {
                    'endpoint-a',CASE WHEN seq%10=0 THEN 'upstream_http_status' END,0,
                    CASE WHEN seq>99975 THEN '{\"id\":\"page-event\",\"kind\":\"client\"}'
                         ELSE '{not-json' END,
-                   4,80,printf('session-%03d',seq%500),'header',printf('project-%03d',seq%100),
+                   5,80,printf('session-%03d',seq%500),'header',printf('project-%03d',seq%100),
                    printf('Project %03d',seq%100),'workspace_local','[\".../projects/test\"]',
                    'Endpoint A','gpt-test',CASE WHEN seq%10=0 THEN 'response' END,
                    'openai-responses','openai-responses','native',

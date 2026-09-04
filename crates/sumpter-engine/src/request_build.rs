@@ -334,11 +334,10 @@ pub fn build_outbound(
                 &request.model,
                 &endpoint.upstream_model,
             );
-            // The Codex Desktop WebRTC bootstrap is carried over the
-            // `/v1/realtime` compatibility path, but CPA deployments may
-            // require the private Quicksilver intent to be explicit in the
-            // query.  Scope this to the fixed Live model and POST root paths;
-            // ordinary Realtime and sideband/control requests stay opaque.
+            // Codex Desktop WebRTC bootstrap uses `/v1/realtime`, but OpenAI
+            // only accepts `architecture=avas` on `/v1/realtime/calls`.
+            // Rewrite that root onto `/calls` and declare the Quicksilver
+            // query. Ordinary Realtime and sideband/control stay opaque.
             rewrite_codex_live_bootstrap_query(&path_and_query, inbound_method, &request.model)
         } else {
             openai_resource_path(&base_path, inbound_path_and_query)
@@ -646,10 +645,14 @@ pub(crate) fn rewrite_realtime_model_query(
     }
 }
 
-/// Add the CPA Quicksilver markers required by some deployed Codex Live
-/// gateways.  CPA's current source hard-codes these upstream, while older
-/// or remote deployments inspect the inbound query; sending them here keeps
-/// both versions compatible without changing standard Realtime traffic.
+/// CPA's Live handler always posts WebRTC offers to
+/// `/v1/realtime/calls?intent=quicksilver&architecture=avas`.  OpenAI rejects
+/// `architecture=avas` on any other Realtime surface (`invalid_architecture`:
+/// avas is only for Quicksilver WebRTC sessions).  Map POST `/v1/realtime`
+/// onto `/calls` before adding the markers when the routed model is Codex
+/// Live; leave `/v1/live` and `/calls` on their inbound paths.  Ordinary
+/// Realtime (including client-secret `/calls` follow-ups) and GET/WS never
+/// receive these markers.
 pub(crate) fn rewrite_codex_live_bootstrap_query(
     path_and_query: &str,
     inbound_method: &str,
@@ -678,6 +681,11 @@ pub(crate) fn rewrite_codex_live_bootstrap_query(
     if !is_root {
         return path_and_query.to_string();
     }
+    let outbound_path = if matches!(path, "/v1/realtime" | "/realtime" | "/openai/v1/realtime") {
+        format!("{path}/calls")
+    } else {
+        path.to_string()
+    };
 
     let mut found_intent = false;
     let mut found_architecture = false;
@@ -704,7 +712,30 @@ pub(crate) fn rewrite_codex_live_bootstrap_query(
     if !found_architecture {
         pairs.push("architecture=avas".into());
     }
-    format!("{path}?{}", pairs.join("&"))
+    format!("{outbound_path}?{}", pairs.join("&"))
+}
+
+/// Drop `intent` / `architecture` so a Codex Desktop GET `/v1/realtime`
+/// handshake cannot leak Quicksilver WebRTC markers onto standard Realtime WS.
+pub(crate) fn strip_codex_live_query(path_and_query: &str) -> String {
+    let Some((path, query)) = path_and_query.split_once('?') else {
+        return path_and_query.to_string();
+    };
+    let pairs = query
+        .split('&')
+        .filter(|pair| {
+            if pair.is_empty() {
+                return false;
+            }
+            let name = pair.split_once('=').map_or(*pair, |(name, _)| name);
+            !name.eq_ignore_ascii_case("intent") && !name.eq_ignore_ascii_case("architecture")
+        })
+        .collect::<Vec<_>>();
+    if pairs.is_empty() {
+        path.to_string()
+    } else {
+        format!("{path}?{}", pairs.join("&"))
+    }
 }
 
 /// `anthropic-beta` 组装:以客户端原值为基底,再补齐代理需要的 base token。
@@ -1709,7 +1740,7 @@ mod tests {
         );
         assert_eq!(
             leaked.request.path_and_query,
-            "/v1/realtime?model=up-model&intent=quicksilver&architecture=avas"
+            "/v1/realtime/calls?model=up-model&intent=quicksilver&architecture=avas"
         );
         let body: Value = serde_json::from_slice(&build.request.body).unwrap();
         assert_eq!(body["session"]["model"], "up-model");
@@ -1723,7 +1754,7 @@ mod tests {
                 "POST",
                 "gpt-live-1-codex",
             ),
-            "/v1/realtime?model=gpt-live-1-codex&intent=quicksilver&architecture=avas"
+            "/v1/realtime/calls?model=gpt-live-1-codex&intent=quicksilver&architecture=avas"
         );
         assert_eq!(
             rewrite_codex_live_bootstrap_query(
@@ -1743,11 +1774,29 @@ mod tests {
         );
         assert_eq!(
             rewrite_codex_live_bootstrap_query(
+                "/openai/v1/realtime?model=gpt-live-1-codex",
+                "POST",
+                "gpt-live-1-codex",
+            ),
+            "/openai/v1/realtime/calls?model=gpt-live-1-codex&intent=quicksilver&architecture=avas"
+        );
+        assert_eq!(
+            rewrite_codex_live_bootstrap_query(
                 "/v1/realtime/calls?model=gpt-live-1-codex",
                 "POST",
                 "gpt-live-1-codex",
             ),
             "/v1/realtime/calls?model=gpt-live-1-codex&intent=quicksilver&architecture=avas"
+        );
+        assert_eq!(
+            strip_codex_live_query(
+                "/v1/realtime?model=gpt-live-1-codex&intent=quicksilver&architecture=avas&trace=1",
+            ),
+            "/v1/realtime?model=gpt-live-1-codex&trace=1"
+        );
+        assert_eq!(
+            strip_codex_live_query("/v1/realtime?architecture=avas"),
+            "/v1/realtime"
         );
     }
 

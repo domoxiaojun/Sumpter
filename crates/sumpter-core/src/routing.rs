@@ -4,8 +4,8 @@
 use serde_json::{Map, Value};
 
 use crate::config::{
-    AppConfig, ContextMode, Endpoint, EndpointProtocolMode, FeatureRule, ProviderProtocol,
-    RequestKind, ThinkingMode,
+    AppConfig, ContextMode, Endpoint, EndpointProtocolMode, FeatureRule, ModelMapping,
+    ProviderProtocol, RequestKind, ThinkingMode,
 };
 use crate::model_name;
 
@@ -918,7 +918,7 @@ impl RoutePlanner {
         config: &AppConfig,
         source_format: ProviderProtocol,
     ) -> Result<RoutePlan, RoutePlanError> {
-        Self::plan_for_source_mode(request, config, source_format, true)
+        Self::plan_for_source_mode(request, config, source_format, true, None)
     }
 
     /// First configured mapping that can serve `capability`.
@@ -931,11 +931,42 @@ impl RoutePlanner {
                 continue;
             }
             for mapping in &endpoint.mappings {
-                if crate::capability::mapping_has_capability(
-                    &mapping.capabilities,
-                    &mapping.client_pattern,
-                    capability,
-                ) {
+                // A family wildcard such as `grok-imagine-*` does not by
+                // itself identify image vs video.  Prefer a concrete model
+                // from this endpoint's catalog when one is available; this
+                // prevents the no-model Videos fallback from fabricating the
+                // ambiguous stem `grok-imagine` and then missing its mapping.
+                if !mapping.capabilities.is_empty() {
+                    if mapping.capabilities.contains(&capability) {
+                        return Some(default_model_for_mapping(endpoint, mapping));
+                    }
+                    continue;
+                }
+                let concrete = endpoint
+                    .catalog
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|catalog| catalog.models.iter())
+                    .map(|model| crate::model_name::clean(model))
+                    .filter(|model| {
+                        !model.is_empty()
+                            && !model.contains('*')
+                            && crate::model_name::pattern_matches(&mapping.client_pattern, model)
+                    })
+                    .find(|model| {
+                        crate::capability::capabilities_for_model(
+                            &mapping.capabilities,
+                            &mapping.client_pattern,
+                            model,
+                        )
+                        .contains(&capability)
+                    });
+                if let Some(model) = concrete {
+                    return Some(model);
+                }
+                if crate::capability::inferred_capabilities(&mapping.client_pattern)
+                    .contains(&capability)
+                {
                     return Some(crate::capability::canonical_model_from_pattern(
                         &mapping.client_pattern,
                     ));
@@ -954,29 +985,7 @@ impl RoutePlanner {
         source_format: ProviderProtocol,
         capability: crate::capability::ModelCapability,
     ) -> Result<RoutePlan, RoutePlanError> {
-        let mut plan = Self::plan_for_passthrough(request, config, source_format)?;
-        plan.endpoints.retain(|endpoint| {
-            config
-                .endpoint(&endpoint.endpoint_id)
-                .is_some_and(|configured| {
-                    configured
-                        .mapping_for(&request.model)
-                        .is_some_and(|mapping| {
-                            crate::capability::mapping_serves_capability(
-                                &mapping.capabilities,
-                                &mapping.client_pattern,
-                                &request.model,
-                                capability,
-                            )
-                        })
-                })
-        });
-        if plan.endpoints.is_empty() {
-            return Err(RoutePlanError::NoProviderForCapability {
-                capability: capability.as_str().into(),
-            });
-        }
-        Ok(plan)
+        Self::plan_for_source_mode(request, config, source_format, true, Some(capability))
     }
 
     /// Plan a native resource request that has no model field.  CPA routes
@@ -997,6 +1006,7 @@ impl RoutePlanner {
             None,
             true,
             true,
+            None,
         )
         .into_iter()
         .filter(|endpoint| endpoint.protocol != ProviderProtocol::Anthropic)
@@ -1014,15 +1024,12 @@ impl RoutePlanner {
         })
     }
 
-    /// Plan a resource request against providers that advertise a resource
-    /// capability.  Files are not tied to one conversational model, so an
-    /// endpoint may declare `capabilities: ["files"]` on any mapping and the
-    /// whole endpoint becomes eligible.  For legacy configurations that have
-    /// no explicit Files declaration, prefer endpoints exposing a non-text
-    /// mapping (the usual mixed CPA provider) before falling back to the old
-    /// provider-order behavior.  This keeps existing configs working while
-    /// preventing a text-only first entry from stealing media/resource calls
-    /// when a capable endpoint is present.
+    /// Plan a resource request against providers that explicitly advertise a
+    /// resource capability. Files do not carry a model and no model name can
+    /// reliably imply upload/storage support, so `files` is fail-closed: an
+    /// endpoint becomes eligible only when one of its mappings declares
+    /// `capabilities: ["files"]`. This avoids silently sending a file or
+    /// deletion request to the first text/media credential surface.
     pub fn plan_for_resource_capability(
         config: &AppConfig,
         source_format: ProviderProtocol,
@@ -1037,71 +1044,23 @@ impl RoutePlanner {
             None,
             true,
             true,
+            None,
         )
         .into_iter()
         .filter(|endpoint| endpoint.protocol != ProviderProtocol::Anthropic)
         .collect::<Vec<_>>();
 
-        let explicit = config.endpoints.iter().any(|endpoint| {
-            endpoint.enabled
-                && endpoint
-                    .mappings
-                    .iter()
-                    .any(|mapping| mapping.capabilities.contains(&capability))
-        });
-        if explicit {
-            endpoints.retain(|planned| {
-                config
-                    .endpoint(&planned.endpoint_id)
-                    .is_some_and(|endpoint| {
-                        endpoint
+        endpoints.retain(|planned| {
+            config
+                .endpoint(&planned.endpoint_id)
+                .is_some_and(|endpoint| {
+                    endpoint.enabled
+                        && endpoint
                             .mappings
                             .iter()
                             .any(|mapping| mapping.capabilities.contains(&capability))
-                    })
-            });
-        } else if capability == crate::capability::ModelCapability::Files {
-            // No legacy mapping can infer a provider's Files surface from a
-            // model name.  Prefer a mixed media/live endpoint as the least
-            // surprising compatibility choice; if none exists, retain all
-            // configured non-Anthropic providers and let upstream auth/status
-            // determine availability.
-            let mixed_ids = config
-                .endpoints
-                .iter()
-                .filter(|endpoint| endpoint.enabled)
-                .filter(|endpoint| {
-                    endpoint.mappings.iter().any(|mapping| {
-                        let caps = if mapping.capabilities.is_empty() {
-                            crate::capability::inferred_capabilities(&mapping.client_pattern)
-                        } else {
-                            mapping.capabilities.clone()
-                        };
-                        caps.iter().any(|cap| {
-                            matches!(
-                                cap,
-                                crate::capability::ModelCapability::Image
-                                    | crate::capability::ModelCapability::Video
-                                    | crate::capability::ModelCapability::Live
-                            )
-                        })
-                    })
                 })
-                .map(|endpoint| endpoint.id.as_str())
-                .collect::<std::collections::HashSet<_>>();
-            if !mixed_ids.is_empty() {
-                endpoints.retain(|planned| mixed_ids.contains(planned.endpoint_id.as_str()));
-            } else if endpoints.len() > 1 {
-                // A legacy mapping carries no reliable Files signal.  With
-                // multiple credential surfaces, silently choosing the first
-                // text endpoint is worse than an explicit configuration
-                // error (and was the source of Files requests landing on
-                // `xiao`). Keep the single-provider compatibility fallback,
-                // but require `capabilities: ["files"]` when there is a
-                // genuine choice.
-                endpoints.clear();
-            }
-        }
+        });
         if endpoints.is_empty() {
             return Err(RoutePlanError::NoProviderForCapability {
                 capability: capability.as_str().into(),
@@ -1121,7 +1080,7 @@ impl RoutePlanner {
         config: &AppConfig,
         source_format: ProviderProtocol,
     ) -> Result<RoutePlan, RoutePlanError> {
-        Self::plan_for_source_mode(request, config, source_format, false)
+        Self::plan_for_source_mode(request, config, source_format, false, None)
     }
 
     fn plan_for_source_mode(
@@ -1129,6 +1088,7 @@ impl RoutePlanner {
         config: &AppConfig,
         source_format: ProviderProtocol,
         passthrough: bool,
+        capability: Option<crate::capability::ModelCapability>,
     ) -> Result<RoutePlan, RoutePlanError> {
         let base_model = model_name::clean(&request.model);
         let feature_rule = config
@@ -1137,13 +1097,38 @@ impl RoutePlanner {
             .find(|rule| inspector::feature_rule_matches(rule, request));
 
         if let Some(rule) = feature_rule
-            && let Some(result) =
-                Self::feature_plan(config, rule, &base_model, source_format, passthrough)
+            && let Some(result) = Self::feature_plan(
+                config,
+                rule,
+                &base_model,
+                source_format,
+                passthrough,
+                capability,
+            )
         {
             return result;
         }
-        if !config.matches_model(&base_model) {
-            return Err(RoutePlanError::NoProviderForModel(base_model.clone()));
+        // Capability routes may use CPA's public Realtime aliases even when
+        // the configuration intentionally declares only the private
+        // `gpt-live-1-codex` mapping.  Check the capability-aware mapping
+        // surface instead of the text-model union in that case; a broad text
+        // wildcard still cannot satisfy image/video/live requests.
+        let model_is_mapped = match capability {
+            Some(wanted) => config.endpoints.iter().any(|endpoint| {
+                endpoint.enabled
+                    && endpoint
+                        .mapping_for_capability(&base_model, wanted)
+                        .is_some()
+            }),
+            None => config.matches_model(&base_model),
+        };
+        if !model_is_mapped {
+            return Err(match capability {
+                Some(capability) => RoutePlanError::NoProviderForCapability {
+                    capability: capability.as_str().into(),
+                },
+                None => RoutePlanError::NoProviderForModel(base_model.clone()),
+            });
         }
         let endpoints = Self::planned_endpoints(
             &config.endpoints,
@@ -1154,11 +1139,17 @@ impl RoutePlanner {
             None,
             passthrough,
             false,
+            capability,
         );
 
         if endpoints.is_empty() {
-            return Err(RoutePlanError::NoCompatibleProvider {
-                source_format: source_format.token().into(),
+            return Err(match capability {
+                Some(capability) => RoutePlanError::NoProviderForCapability {
+                    capability: capability.as_str().into(),
+                },
+                None => RoutePlanError::NoCompatibleProvider {
+                    source_format: source_format.token().into(),
+                },
             });
         }
 
@@ -1177,6 +1168,7 @@ impl RoutePlanner {
         base_model: &str,
         source_format: ProviderProtocol,
         passthrough: bool,
+        capability: Option<crate::capability::ModelCapability>,
     ) -> Option<Result<RoutePlan, RoutePlanError>> {
         let target = &rule.target;
         let effective_model = model_name::clean(&target.model);
@@ -1216,6 +1208,7 @@ impl RoutePlanner {
             target.effort,
             passthrough,
             false,
+            capability,
         );
         // 规则钉住的入口被停用/删除时降级为候选序列 failover,而不是让整条规则失效。
         if endpoints.is_empty() && target.endpoint_id.is_some() && !pinned_endpoint_available {
@@ -1228,11 +1221,17 @@ impl RoutePlanner {
                 target.effort,
                 passthrough,
                 false,
+                capability,
             );
         }
         if endpoints.is_empty() {
-            return Some(Err(RoutePlanError::NoCompatibleProvider {
-                source_format: source_format.token().into(),
+            return Some(Err(match capability {
+                Some(capability) => RoutePlanError::NoProviderForCapability {
+                    capability: capability.as_str().into(),
+                },
+                None => RoutePlanError::NoCompatibleProvider {
+                    source_format: source_format.token().into(),
+                },
             }));
         }
         Some(Ok(RoutePlan {
@@ -1255,6 +1254,7 @@ impl RoutePlanner {
         effort_override: Option<model_name::ReasoningEffort>,
         passthrough: bool,
         allow_unmapped: bool,
+        capability: Option<crate::capability::ModelCapability>,
     ) -> Vec<PlannedEndpoint> {
         let candidates: Vec<PlannedEndpoint> = endpoints
             .iter()
@@ -1262,8 +1262,19 @@ impl RoutePlanner {
             .filter(|e| pinned_endpoint_id.is_none_or(|id| e.id == id))
             .filter_map(|endpoint| {
                 // 每个入口都通过显式 mappings 声明承接范围。
-                let mapping = endpoint.mapping_for(effective_model).cloned();
-                if pinned_endpoint_id.is_none() && mapping.is_none() && !allow_unmapped {
+                let mapping = match capability {
+                    Some(wanted) => endpoint.mapping_for_capability(effective_model, wanted),
+                    None => endpoint.mapping_for(effective_model),
+                }
+                .cloned();
+                // A feature rule may pin an endpoint for ordinary passthrough
+                // even when its model is intentionally unmapped (legacy
+                // behavior).  Capability routes are different: allowing the
+                // pin to bypass the mapping check would reintroduce the exact
+                // text-provider-stealing bug this planner is meant to stop.
+                if mapping.is_none()
+                    && (capability.is_some() || (pinned_endpoint_id.is_none() && !allow_unmapped))
+                {
                     return None;
                 }
                 let failover_timeout = mapping.as_ref().and_then(|m| m.failover_timeout_seconds);
@@ -1275,10 +1286,25 @@ impl RoutePlanner {
                 } else {
                     configured_protocol.resolve(source_format, protocol_override)?
                 };
-                let upstream_model = mapping
+                let mut upstream_model = mapping
                     .as_ref()
                     .map(|m| m.upstream_model_for(effective_model))
                     .unwrap_or_else(|| effective_model.to_string());
+                // A legacy/compact config often leaves `upstreamModel` empty
+                // on the private Live mapping.  When that mapping is being
+                // used as the alias target for a public Realtime model, the
+                // OAuth upstream still expects its canonical Codex model.
+                // Keep `routed_model` (and therefore event attribution) as
+                // the caller's logical `gpt-realtime` value.
+                if capability == Some(crate::capability::ModelCapability::Live)
+                    && upstream_model == effective_model
+                    && crate::capability::is_realtime_model_name(effective_model)
+                    && mapping.as_ref().is_some_and(|mapping| {
+                        model_name::clean(&mapping.client_pattern) == "gpt-live-1-codex"
+                    })
+                {
+                    upstream_model = "gpt-live-1-codex".into();
+                }
                 Some(PlannedEndpoint {
                     endpoint_id: endpoint.id.clone(),
                     endpoint_name: endpoint.name.clone(),
@@ -1326,4 +1352,19 @@ impl RoutePlanner {
         };
         Self::order_endpoints(&selected)
     }
+}
+
+fn default_model_for_mapping(endpoint: &Endpoint, mapping: &ModelMapping) -> String {
+    endpoint
+        .catalog
+        .as_ref()
+        .into_iter()
+        .flat_map(|catalog| catalog.models.iter())
+        .map(|model| crate::model_name::clean(model))
+        .find(|model| {
+            !model.is_empty()
+                && !model.contains('*')
+                && crate::model_name::pattern_matches(&mapping.client_pattern, model)
+        })
+        .unwrap_or_else(|| crate::capability::canonical_model_from_pattern(&mapping.client_pattern))
 }

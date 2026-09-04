@@ -661,6 +661,9 @@ public enum AdminWire {
         public let outcome: RuntimeEventOutcome?
         public let statusCode: Int
         public let requestID: String?
+        public let requestMethod: String?
+        public let requestPath: String?
+        public let routeIntent: String?
         public let sessionID: String?
         public let clientKind: ClientKind?
         /// The compact projection mirrors the high-signal routing fields so
@@ -711,6 +714,9 @@ public enum AdminWire {
             outcome = event.outcome
             statusCode = event.statusCode
             requestID = event.requestID
+            requestMethod = event.requestMethod
+            requestPath = event.requestPath
+            routeIntent = event.routeIntent
             sessionID = event.sessionID
             clientKind = event.clientKind
             clientModel = event.clientModel
@@ -773,6 +779,9 @@ public enum AdminWire {
                 failurePhase: failurePhase,
                 requestPurpose: requestPurpose,
                 requestID: requestID,
+                requestMethod: requestMethod,
+                requestPath: requestPath,
+                routeIntent: routeIntent,
                 sessionID: sessionID,
                 ttfbMS: ttfbMS,
                 timeoutMS: timeoutMS,
@@ -803,6 +812,9 @@ public enum AdminWire {
             if let phase { event.phase = phase }
             if let outcome { event.outcome = outcome }
             if let requestID { event.requestID = requestID }
+            if let requestMethod { event.requestMethod = requestMethod }
+            if let requestPath { event.requestPath = requestPath }
+            if let routeIntent { event.routeIntent = routeIntent }
             if let sessionID { event.sessionID = sessionID }
             if let clientKind { event.clientKind = clientKind }
             if let clientModel { event.clientModel = clientModel }

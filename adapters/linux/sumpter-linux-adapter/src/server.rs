@@ -8,7 +8,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::extract::ws::rejection::WebSocketUpgradeRejection;
 use axum::extract::{ConnectInfo, State, WebSocketUpgrade};
-use axum::http::{HeaderMap, Request, StatusCode, Uri};
+use axum::http::{HeaderMap, Method, Request, StatusCode, Uri};
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use futures_util::StreamExt;
@@ -63,7 +63,12 @@ async fn dispatch(
 ) -> Response {
     let pairs = sumpter_engine::engine::inbound::header_pairs(&headers);
     let remote_ip = Some(remote.ip());
-    if let Ok(upgrade) = upgrade {
+    // RFC 6455 upgrades are GET requests. A POST Live/Realtime bootstrap may
+    // carry upgrade-like headers from an intermediary, but it must retain its
+    // HTTP method and reach the engine's CPA-compatible bootstrap path.
+    if request.method() == Method::GET
+        && let Ok(upgrade) = upgrade
+    {
         let path_and_query = uri
             .path_and_query()
             .map(|value| value.as_str().to_string())
@@ -78,6 +83,16 @@ async fn dispatch(
             let cidr_allowed = access::is_allowed(
                 remote_ip.map(|ip| ip.to_string()).as_deref(),
                 &engine.config().listener.allowed_cidrs,
+            );
+            engine.record_rejected_websocket(
+                &path_and_query,
+                &pairs,
+                if cidr_allowed { 401 } else { 403 },
+                if cidr_allowed {
+                    "inbound_auth_required"
+                } else {
+                    "client_forbidden"
+                },
             );
             return Response::builder()
                 .status(if cidr_allowed {
@@ -167,9 +182,11 @@ fn is_realtime_path(path_and_query: &str) -> bool {
         "/v1/realtime",
         "/realtime",
         "/openai/v1/realtime",
+        "/backend-api/codex/realtime",
         "/v1/live",
         "/live",
         "/openai/v1/live",
+        "/backend-api/codex/live",
     ]
     .iter()
     .any(|prefix| {

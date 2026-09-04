@@ -3332,12 +3332,18 @@ final class AppModel: ObservableObject {
             guard !endpoint.hasMapping(clientPattern: client, excluding: mappingID) else {
                 throw AppModelError.invalidInput("该入口已存在客户端模型映射: \(client)")
             }
+            // Capability declarations are part of the routing contract. The
+            // editor currently does not expose a picker, so an update must
+            // carry the existing values forward instead of silently turning
+            // an explicit video/live/files mapping back into name inference.
+            let existingCapabilities = endpoint.mappings[mappingIndex].capabilities
             config.endpoints[location.endpoint].mappings[mappingIndex] = ModelMapping(
                 clientPattern: ModelPattern(client),
                 upstreamModel: upstream,
                 thinking: thinking,
                 context: context,
-                failoverTimeoutSeconds: failoverTimeoutSeconds
+                failoverTimeoutSeconds: failoverTimeoutSeconds,
+                capabilities: existingCapabilities
             )
         }
     }
