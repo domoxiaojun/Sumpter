@@ -28,6 +28,9 @@ public enum CodexHookEditing {
         "PermissionRequest", "Stop", "SubagentStop", "Interrupt"
     ]
 
+    /// Codex 设置页的条目标题。缺省会显示成「钩子 1」。
+    public static let hookDisplayName = "Sumpter 通知"
+
     public static func loadRoot(data: Data) throws -> [String: Any] {
         guard let object = try? JSONSerialization.jsonObject(with: data),
               let root = object as? [String: Any] else {
@@ -79,16 +82,21 @@ public enum CodexHookEditing {
         var rows = try eventRows(in: hooks, key: event, required: false) ?? []
         rows = removingCommands(matching: marker, from: rows)
         rows.append([
+            "name": hookDisplayName,
             "hooks": [[
                 "type": "command",
+                "name": hookDisplayName,
                 "command": command,
                 "async": true,
                 "timeout": 3,
-                "statusMessage": "Sumpter 通知"
+                "statusMessage": hookDisplayName
             ]]
         ])
         hooks[event] = rows
         result["hooks"] = hooks
+        if result["description"] == nil {
+            result["description"] = hookDisplayName
+        }
         return result
     }
 
@@ -233,6 +241,9 @@ public enum CodexHookEditing {
             if let matcher = row["matcher"], !(matcher is String || matcher is NSNull) {
                 throw CodexHookEditingError.invalidField("hooks.\(key)[\(index)].matcher")
             }
+            if let name = row["name"], !(name is String || name is NSNull) {
+                throw CodexHookEditingError.invalidField("hooks.\(key)[\(index)].name")
+            }
             guard let handlers = row["hooks"] else { continue }
             guard let handlers = handlers as? [[String: Any]] else {
                 throw CodexHookEditingError.invalidField("hooks.\(key)[\(index)].hooks")
@@ -262,6 +273,7 @@ public enum CodexHookEditing {
             try optionalUnsignedInteger(handler, key: "timeout", path: path)
             try optionalBool(handler, key: "async", path: path)
             try optionalString(handler, key: "statusMessage", path: path)
+            try optionalString(handler, key: "name", path: path)
             try optionalUnsignedInteger(handler, key: "additionalContextLimit", path: path)
         case "mcp_tool":
             try requireString(handler, key: "server", path: path)
