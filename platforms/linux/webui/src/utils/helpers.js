@@ -595,6 +595,32 @@ export function projectLabelText(value) {
   return text;
 }
 
+export function localUserFromWorkspacePath(path) {
+  const parts = cleanText(path).replace(/\\/g, '/').split('/').filter(Boolean);
+  for (let index = 0; index < parts.length - 1; index += 1) {
+    const home = parts[index];
+    const user = parts[index + 1];
+    if (!/^(users|home)$/i.test(home)) continue;
+    if (/^(shared|public)$/i.test(user)) continue;
+    if (user.length > 32) continue;
+    if (!/^[A-Za-z0-9._-]+$/.test(user)) continue;
+    return user;
+  }
+  return '';
+}
+
+function localUserFromCodexMetadata(metadata) {
+  if (!metadata || typeof metadata !== 'object') return '';
+  const sourcePaths = metadata.sourceWorkspacePaths ?? metadata.source_workspace_paths ?? [];
+  const workspaceKeys = Object.keys(codexMetadataField(metadata, 'workspaces') || {});
+  const paths = [...(Array.isArray(sourcePaths) ? sourcePaths : []), ...workspaceKeys];
+  for (const path of paths) {
+    const user = localUserFromWorkspacePath(path);
+    if (user) return user;
+  }
+  return '';
+}
+
 export function projectSourceLabel(source, localUser) {
   const user = cleanText(localUser);
   if (cleanText(source) === 'workspace_local' && user) {
@@ -662,9 +688,11 @@ export function eventProjectContext(event) {
   // 分页列表走服务端投影快路径,不带 codexMetadata / clientDeclared,只带算好的
   // projectName + projectSource。有它们就直接用——优先级已由服务端统一决定;
   // 否则(SSE 推送、单事件详情、旧 daemon)按下面的完整字段自行推导。
+  const metadata = eventCodexMetadata(event);
   const projectedName = cleanText(event?.projectName);
   const projectedSource = cleanText(event?.projectSource);
-  const projectedLocalUser = cleanText(event?.localUser ?? event?.local_user);
+  const projectedLocalUser = cleanText(event?.localUser ?? event?.local_user)
+    || localUserFromCodexMetadata(metadata);
   if (projectedName) {
     const sourceLabel = projectSourceLabel(projectedSource, projectedLocalUser);
     const nameLabel = projectLabelText(projectedName);
@@ -680,7 +708,6 @@ export function eventProjectContext(event) {
     };
   }
 
-  const metadata = eventCodexMetadata(event);
   const entries = codexWorkspaceEntries(metadata);
   if (!metadata || !entries.length) {
     const declared = clientDeclaredProject(event);
@@ -730,11 +757,17 @@ export function eventProjectContext(event) {
     : remotes.some((value) => cleanText(value))
       ? 'workspace_remote_fallback'
       : 'workspace_unidentified';
+  const user = cleanText(event?.localUser ?? event?.local_user) || localUserFromCodexMetadata(metadata);
+  const sourceLabel = projectSourceLabel(source, user);
+  const compact = source === 'workspace_local' && user
+    ? `${entry.projectName} 本地(${user})`
+    : `${entry.projectName} · ${sourceLabel}`;
   return {
     applicable: true,
     name: entry.projectName,
     source,
-    label: `${entry.projectName} · ${projectSourceLabel(source)}`,
+    localUser: user,
+    label: compact,
   };
 }
 

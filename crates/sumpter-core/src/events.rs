@@ -2016,6 +2016,37 @@ fn sanitize_workspace_path(raw: &str, state: &mut CodexMetadataParseState) -> St
         .unwrap_or_else(|| "workspace".to_string())
 }
 
+/// 从本机工作区路径取出 POSIX 用户名，只用于「本地(kkl)」展示。
+///
+/// 认 `/Users/<user>/…`、`/home/<user>/…` 以及 Windows `C:\Users\<user>\…`。
+/// `Shared`/`Public` 不是账号。脱敏后的 `.../parent/child` 没有 home 段，返回 None。
+pub fn local_user_from_workspace_path(path: &str) -> Option<String> {
+    let normalized = path.replace('\\', "/");
+    let parts: Vec<&str> = normalized
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect();
+    for window in parts.windows(2) {
+        let (home, user) = (window[0], window[1]);
+        if !home.eq_ignore_ascii_case("Users") && !home.eq_ignore_ascii_case("home") {
+            continue;
+        }
+        if user.eq_ignore_ascii_case("Shared") || user.eq_ignore_ascii_case("Public") {
+            continue;
+        }
+        if user.len() > LOCAL_USER_MAX_BYTES {
+            continue;
+        }
+        if user
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        {
+            return Some(user.to_string());
+        }
+    }
+    None
+}
+
 /// POSIX-ish 用户名：可见 ASCII、无路径分隔，只用于「本地(kkl)」来源文案。
 fn sanitize_local_user(raw: &str, state: &mut CodexMetadataParseState) -> Option<String> {
     let value = bounded_nonempty(raw, LOCAL_USER_MAX_BYTES, state)?;
@@ -3253,6 +3284,30 @@ mod tests {
             truncated.project.as_deref().map(str::len),
             Some(CODEX_METADATA_MAX_LABEL_BYTES)
         );
+    }
+
+    #[test]
+    fn local_user_from_workspace_path_reads_home_segments() {
+        assert_eq!(
+            local_user_from_workspace_path("/Users/kkl/Documents/claude/sumpter").as_deref(),
+            Some("kkl")
+        );
+        assert_eq!(
+            local_user_from_workspace_path("/home/kkl/.codex/work").as_deref(),
+            Some("kkl")
+        );
+        assert_eq!(
+            local_user_from_workspace_path(r"C:\Users\kkl\src\app").as_deref(),
+            Some("kkl")
+        );
+        assert_eq!(
+            local_user_from_workspace_path("/Users/user.name-1/proj").as_deref(),
+            Some("user.name-1")
+        );
+        assert!(local_user_from_workspace_path("/Users/Shared/Documents").is_none());
+        assert!(local_user_from_workspace_path(".../claude/sumpter").is_none());
+        assert!(local_user_from_workspace_path("/opt/sumpter").is_none());
+        assert!(local_user_from_workspace_path("/Users/kkl/root").is_some());
     }
 
     #[test]

@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 
 @testable import SumpterCore
@@ -91,6 +92,33 @@ import Testing
             projectedLocalUser: "kkl"
         )
         #expect(summary == "sumpter 本地(kkl)")
+    }
+
+    @Test func codexSourceWorkspacePathFormatsAsLocalUser() throws {
+        let metadata = try JSONDecoder().decode(
+            CodexMetadata.self,
+            from: Data(#"""
+            {
+              "workspaces": {".../claude/sumpter": {}},
+              "sourceWorkspacePaths": ["/Users/kkl/Documents/claude/sumpter"]
+            }
+            """#.utf8)
+        )
+        let context = RuntimeEventPresentation.projectContext(
+            eventKind: "client",
+            metadata: metadata,
+            declared: nil
+        )
+        #expect(context?.name == "sumpter")
+        #expect(context?.source == .workspaceLocal)
+        #expect(context?.localUser == "kkl")
+        #expect(context?.source.displayLabel(localUser: context?.localUser) == "本地(kkl)")
+        #expect(
+            RuntimeEventPresentation.projectAttribution(
+                eventKind: "client",
+                metadata: metadata
+            ) == "sumpter 本地(kkl)"
+        )
     }
 
     @Test func internalFeatureProjectionIsNotPresentedAsAProject() {

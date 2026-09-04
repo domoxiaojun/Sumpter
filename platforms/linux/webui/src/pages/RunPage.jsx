@@ -63,6 +63,9 @@ function recentEventProjectSummary(event) {
   const context = eventProjectContext(event);
   if (!context?.applicable) return null;
   if (context.name && context.name !== 'unidentified_project') {
+    if (context.source === 'workspace_local' && context.localUser) {
+      return `${context.name} 本地(${context.localUser})`;
+    }
     const declared = context.source === 'client_declared' ? '（客户端声明）' : '';
     return `项目: ${context.name}${declared}`;
   }
@@ -1009,7 +1012,7 @@ export function RunPage() {
                 </div>
                 <div>
                   <span>项目来源</span>
-                  <strong>{selectedProjectContext.applicable ? projectSourceLabel(selectedProjectContext.source) : '不适用'}</strong>
+                  <strong>{selectedProjectContext.applicable ? projectSourceLabel(selectedProjectContext.source, selectedProjectContext.localUser) : '不适用'}</strong>
                 </div>
                 {selectedSourceProject && (
                   <div>

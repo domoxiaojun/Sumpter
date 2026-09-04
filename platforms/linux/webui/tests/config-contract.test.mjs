@@ -1082,7 +1082,7 @@ test('runtime mock session export and delete update the visible aggregate', asyn
 });
 
 test('客户端声明的项目归因与 Codex workspace 同形状且来源可区分', async () => {
-  const { eventProjectContext, clientDeclaredProject, projectSourceLabel } =
+  const { eventProjectContext, clientDeclaredProject, projectSourceLabel, localUserFromWorkspacePath } =
     await import('../src/utils/helpers.js');
 
   // mock 的项目行必须和 Rust analytics 同形状：脱敏尾段 workspacePaths + 独立来源词。
@@ -1113,6 +1113,22 @@ test('客户端声明的项目归因与 Codex workspace 同形状且来源可区
     clientDeclared: { project: 'declared-loser' },
   };
   assert.equal(eventProjectContext(bothEvent).source, 'workspace_local');
+  assert.equal(eventProjectContext(bothEvent).localUser, 'x');
+  assert.equal(eventProjectContext(bothEvent).label, 'codex-demo 本地(x)');
+  assert.equal(projectSourceLabel('workspace_local', 'kkl'), '本地(kkl)');
+  assert.equal(localUserFromWorkspacePath('/Users/kkl/Documents/claude/sumpter'), 'kkl');
+  assert.equal(localUserFromWorkspacePath('.../claude/sumpter'), '');
+
+  const codexEvent = {
+    kind: 'client',
+    codexMetadata: {
+      workspaces: { '.../claude/sumpter': {} },
+      sourceWorkspacePaths: ['/Users/kkl/Documents/claude/sumpter'],
+    },
+  };
+  assert.equal(eventProjectContext(codexEvent).source, 'workspace_local');
+  assert.equal(eventProjectContext(codexEvent).localUser, 'kkl');
+  assert.equal(eventProjectContext(codexEvent).label, 'sumpter 本地(kkl)');
 
   // 两者都没有仍归入未识别，且不为空对象误报。
   assert.equal(clientDeclaredProject({ kind: 'client', clientDeclared: {} }), null);
