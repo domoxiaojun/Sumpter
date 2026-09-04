@@ -38,7 +38,7 @@ use sumpter_core::config_store::{ConfigDir, ResourceBinding, StickySessionAssign
 use sumpter_core::events::{
     ClientDeclaredMetadata, ClientKind, CodexMetadata, DiagnosticAttemptCapture,
     DiagnosticCaptureSnapshot, DiagnosticChunk, DiagnosticHeader, DiagnosticRequestCapture,
-    KIND_CLIENT, KIND_UPSTREAM, RuntimeEvent, RuntimeEventOutcome, RuntimeEventPhase,
+    GrokMetadata, KIND_CLIENT, KIND_UPSTREAM, RuntimeEvent, RuntimeEventOutcome, RuntimeEventPhase,
     RuntimeFailureKind, RuntimeFailurePhase, RuntimeSnapshot, STATUS_CLIENT_DISCONNECTED,
     StreamTrace, WebSocketTrace, message_tokens, unix_to_apple_epoch,
 };
@@ -112,6 +112,7 @@ struct InboundRequestContext {
     /// intentionally header-only at this layer; body metadata is merged by
     /// the request handler when it is available.
     session_id: Option<String>,
+    grok_metadata: Option<GrokMetadata>,
 }
 
 tokio::task_local! {
@@ -428,6 +429,7 @@ struct WebSocketEventContext {
     model: String,
     codex_metadata: Option<CodexMetadata>,
     client_declared: Option<ClientDeclaredMetadata>,
+    grok_metadata: Option<GrokMetadata>,
     session_id: Option<String>,
     started: Instant,
 }
@@ -2625,6 +2627,7 @@ impl Engine {
                 event.route_intent = event.route_intent.or(client.route_intent);
                 event.codex_metadata = event.codex_metadata.or(client.codex_metadata);
                 event.client_declared = event.client_declared.or(client.client_declared);
+                event.grok_metadata = event.grok_metadata.or(client.grok_metadata);
             }
         }
         let snapshot = {
@@ -2684,16 +2687,18 @@ impl Engine {
         request_context: Option<InboundRequestContext>,
     ) {
         let event_id = new_event_id();
-        let (request_method, request_path, route_intent, context_session_id) = request_context
-            .map(|context| {
-                (
-                    Some(context.method),
-                    Some(context.path),
-                    Some(context.route_intent),
-                    context.session_id,
-                )
-            })
-            .unwrap_or((None, None, None, None));
+        let (request_method, request_path, route_intent, context_session_id, grok_metadata) =
+            request_context
+                .map(|context| {
+                    (
+                        Some(context.method),
+                        Some(context.path),
+                        Some(context.route_intent),
+                        context.session_id,
+                        context.grok_metadata,
+                    )
+                })
+                .unwrap_or((None, None, None, None, None));
         // A body/header Codex metadata projection is safe to use for
         // attribution even when the caller passed a stale header-only kind.
         // Never let it override a positively identified Claude/Grok client.
@@ -2707,16 +2712,23 @@ impl Engine {
         } else {
             client_kind
         };
-        let session_id = context_session_id.or_else(|| {
-            codex_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.session_id.clone())
-        });
+        let session_id = context_session_id
+            .or_else(|| {
+                grok_metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.session_id.clone().or(metadata.conv_id.clone()))
+            })
+            .or_else(|| {
+                codex_metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.session_id.clone())
+            });
         let message = bounded_failure_detail(message);
         let event = RuntimeEvent {
             client_kind: Some(client_kind),
-            codex_metadata,
+            codex_metadata: retain_codex_metadata_for_client(client_kind, codex_metadata),
             client_declared,
+            grok_metadata,
             client_model,
             // 即使请求在解析/规划前被拒,入口路径已经足以确定入站方言。
             // target/route 仍保持 None,因为没有真实上游尝试。
@@ -3138,6 +3150,7 @@ impl Engine {
             );
             upstream.codex_metadata = context.codex_metadata.clone();
             upstream.client_declared = context.client_declared.clone();
+            upstream.grok_metadata = context.grok_metadata.clone();
             upstream.request_method = Some("GET".into());
             upstream.request_path = Some(context.request_path.clone());
             upstream.route_intent = Some(context.route_intent.clone());
@@ -3195,6 +3208,7 @@ impl Engine {
         );
         upstream.codex_metadata = context.codex_metadata.clone();
         upstream.client_declared = context.client_declared.clone();
+        upstream.grok_metadata = context.grok_metadata.clone();
         upstream.request_method = Some("GET".into());
         upstream.request_path = Some(context.request_path.clone());
         upstream.route_intent = Some(context.route_intent.clone());
@@ -3914,6 +3928,7 @@ impl Engine {
             path,
             route_intent: route_intent.to_string(),
             session_id: observed_session_id(headers),
+            grok_metadata: GrokMetadata::from_headers(headers),
         }
     }
 
@@ -5586,8 +5601,9 @@ impl Engine {
             purpose,
             unmatched_no_tools,
             session_id: observed_session_id.clone(),
-            codex_metadata,
+            codex_metadata: retain_codex_metadata_for_client(client_kind, codex_metadata),
             client_declared: ClientDeclaredMetadata::from_headers(&headers),
+            grok_metadata: GrokMetadata::from_headers(&headers),
             request_context: current_request_context(),
         };
         self.capture_start(
@@ -5619,6 +5635,7 @@ impl Engine {
             tool_calls: None,
             codex_metadata: client_meta.codex_metadata.clone(),
             client_declared: client_meta.client_declared.clone(),
+            grok_metadata: client_meta.grok_metadata.clone(),
             outcome: None,
             phase: Some(RuntimeEventPhase::InFlight),
             pool_id: None,
@@ -6495,6 +6512,7 @@ impl Engine {
             client_kind: Some(client_kind),
             codex_metadata: None,
             client_declared: None,
+            grok_metadata: None,
             client_model: None,
             source_format: Some(endpoint.source_format),
             target_format: Some(endpoint.protocol),
@@ -6640,6 +6658,7 @@ impl Engine {
         in_flight.feature_rule_id = guard.meta.feature_rule_id.clone();
         in_flight.codex_metadata = guard.meta.codex_metadata.clone();
         in_flight.client_declared = guard.meta.client_declared.clone();
+        in_flight.grok_metadata = guard.meta.grok_metadata.clone();
         self.record_event(in_flight);
 
         guard.attach_upstream(UpstreamAttempt {
@@ -7482,14 +7501,19 @@ fn websocket_event_context(
     } else {
         "websocket"
     };
+    let client_kind = detect_client_kind(headers, true);
     WebSocketEventContext {
         request_id: new_event_id(),
         request_path: bounded_request_path(path),
         route_intent: route_intent.into(),
-        client_kind: detect_client_kind(headers, true),
+        client_kind,
         model: model.trim().to_string(),
-        codex_metadata: CodexMetadata::from_request(headers, None),
+        codex_metadata: retain_codex_metadata_for_client(
+            client_kind,
+            CodexMetadata::from_request(headers, None),
+        ),
         client_declared: ClientDeclaredMetadata::from_headers(headers),
+        grok_metadata: GrokMetadata::from_headers(headers),
         session_id: observed_session_id(headers),
         started,
     }
@@ -7632,6 +7656,7 @@ fn websocket_client_event(
         client_kind: Some(context.client_kind),
         codex_metadata: context.codex_metadata.clone(),
         client_declared: context.client_declared.clone(),
+        grok_metadata: context.grok_metadata.clone(),
         client_model: Some(context.model.clone()),
         source_format: Some(ProviderProtocol::OpenAI),
         target_format: endpoint.map(|endpoint| endpoint.protocol),
@@ -8010,6 +8035,7 @@ struct ClientMeta {
     codex_metadata: Option<CodexMetadata>,
     /// 客户端用 `X-Sumpter-*` 声明的项目归因；可信度低于 codex_metadata。
     client_declared: Option<ClientDeclaredMetadata>,
+    grok_metadata: Option<GrokMetadata>,
     /// Bounded inbound request identity retained for stream/WS completion,
     /// which may be polled after the original HTTP task-local scope ends.
     request_context: Option<InboundRequestContext>,
@@ -8543,6 +8569,7 @@ impl CompletionGuard {
             tool_calls: self.tool_calls_option(),
             codex_metadata: self.meta.codex_metadata.clone(),
             client_declared: self.meta.client_declared.clone(),
+            grok_metadata: self.meta.grok_metadata.clone(),
             outcome: if status == 0 {
                 None
             } else if status == STATUS_CLIENT_DISCONNECTED {
@@ -8628,6 +8655,7 @@ impl CompletionGuard {
         event.tool_calls = self.tool_calls_option();
         event.codex_metadata = self.meta.codex_metadata.clone();
         event.client_declared = self.meta.client_declared.clone();
+        event.grok_metadata = self.meta.grok_metadata.clone();
         event.stream_trace = self.stream_trace.snapshot();
         event.outcome = Some(outcome);
         event.upstream_status_code = (self.status > 0).then_some(self.status);
@@ -8914,6 +8942,9 @@ fn apply_current_request_context(event: &mut RuntimeEvent) {
     if event.session_id.is_none() {
         event.session_id = context.session_id;
     }
+    if event.grok_metadata.is_none() {
+        event.grok_metadata = context.grok_metadata;
+    }
 }
 
 /// Stable high-level route intent used in runtime diagnostics.  This is kept
@@ -9002,20 +9033,38 @@ fn route_intent_for_path(
 /// Extract a stable client session identifier for analytics. Values are
 /// bounded and rejected when they contain controls; request bodies are never
 /// used as a fallback here.
+fn retain_codex_metadata_for_client(
+    client_kind: ClientKind,
+    metadata: Option<CodexMetadata>,
+) -> Option<CodexMetadata> {
+    let metadata = metadata?;
+    if client_kind == ClientKind::GrokBuild && !metadata.has_request_identity() {
+        None
+    } else {
+        Some(metadata)
+    }
+}
+
 fn observed_session_id(headers: &[(String, String)]) -> Option<String> {
-    ["x-claude-code-session-id", "session_id", "session-id"]
-        .iter()
-        .find_map(|name| {
-            let value = header_value(headers, name)?.trim();
-            if value.is_empty() || value.chars().any(char::is_control) {
-                return None;
-            }
-            let mut end = value.len().min(256);
-            while !value.is_char_boundary(end) {
-                end -= 1;
-            }
-            Some(value[..end].to_string())
-        })
+    [
+        "x-claude-code-session-id",
+        "x-grok-session-id",
+        "x-grok-conv-id",
+        "session_id",
+        "session-id",
+    ]
+    .iter()
+    .find_map(|name| {
+        let value = header_value(headers, name)?.trim();
+        if value.is_empty() || value.chars().any(char::is_control) {
+            return None;
+        }
+        let mut end = value.len().min(256);
+        while !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        Some(value[..end].to_string())
+    })
 }
 
 fn supports_extended_reasoning_levels(client_version: &str) -> bool {
@@ -10602,6 +10651,14 @@ mod retry_delay_tests {
             Some("claude-session")
         );
 
+        let grok = vec![("x-grok-session-id".into(), "  grok-sess  ".into())];
+        assert_eq!(observed_session_id(&grok).as_deref(), Some("grok-sess"));
+        let grok_conv = vec![("x-grok-conv-id".into(), "conv-only".into())];
+        assert_eq!(
+            observed_session_id(&grok_conv).as_deref(),
+            Some("conv-only")
+        );
+
         let control = vec![("session_id".into(), "bad\nsession".into())];
         assert_eq!(observed_session_id(&control), None);
 
@@ -10670,6 +10727,7 @@ mod protocol_tests {
                     path: "/v1/realtime".into(),
                     route_intent: "live".into(),
                     session_id: None,
+                    grok_metadata: None,
                 }),
                 async {
                     assert!(is_live_bootstrap_request(
@@ -10838,6 +10896,7 @@ mod protocol_tests {
             model: "gpt-4o".into(),
             codex_metadata: None,
             client_declared: None,
+            grok_metadata: None,
             session_id: None,
             started: Instant::now(),
         };

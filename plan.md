@@ -1,5 +1,21 @@
 # 执行记录（2026-08-31 起）
 
+## 本轮：Grok 事件详情补采样客户端/会话字段（2026-09-04）
+
+对照 grok-build `xai-grok-sampler`：推理请求身份在 `x-grok-*` header，不在 Codex
+`client_metadata`。cwd/git 仍不进推理请求。事件详情新增 `grokMetadata`，展示会话、
+对话、请求、客户端标识/版本/模式等。OTel `traceparent` 不再让 Grok 请求显示空的
+Codex「代理身份未确定」。`x-grok-*` 出站保留（官方采样 header）。不宣称已安装 App
+已更新。
+
+- [x] core `GrokMetadata::from_headers` → `RuntimeEvent.grokMetadata`
+- [x] engine 贯通转发/拒绝/websocket；`x-grok-session-id`/`x-grok-conv-id` 进 sessionID
+- [x] 双端运行页详情与列表摘要
+- [x] 测试与提交
+
+---
+
+
 本文是按轮次追加的工作日志，**不是**当前架构说明。当前结构以 [`docs/architecture.md`](docs/architecture.md) 为准，用户开箱以根 [`README.md`](README.md) 和 [`USAGE.md`](USAGE.md) 为准。下文出现的 `kekulv-core` / `linux/crates` 等名字属于当时任务描述，不要当作活动路径。
 
 - [x] ✅ 1. 盘点仓库结构、构建约束、依赖与当前工作区状态

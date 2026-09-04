@@ -264,6 +264,75 @@ public struct ClientDeclaredMetadata: Codable, Equatable, Sendable {
     }
 }
 
+/// Grok Build 采样请求的客户端/会话观测字段。来源是入站 `x-grok-*` header，
+/// 不是 Codex `client_metadata`。项目归因仍走 `X-Sumpter-*`。
+public struct GrokMetadata: Codable, Equatable, Sendable {
+    public var sessionID: String?
+    public var convID: String?
+    public var requestID: String?
+    public var agentID: String?
+    public var turnIndex: String?
+    public var transientRetry: String?
+    public var modelOverride: String?
+    public var clientIdentifier: String?
+    public var clientVersion: String?
+    public var clientMode: String?
+    public var deploymentID: String?
+    public var userID: String?
+    public var userAgent: String?
+    public var compactionsRemaining: String?
+    public var compactionAt: String?
+    public var doomLoopCheck: String?
+    public var exactRepetitionCheck: String?
+
+    public init(
+        sessionID: String? = nil,
+        convID: String? = nil,
+        requestID: String? = nil,
+        agentID: String? = nil,
+        turnIndex: String? = nil,
+        transientRetry: String? = nil,
+        modelOverride: String? = nil,
+        clientIdentifier: String? = nil,
+        clientVersion: String? = nil,
+        clientMode: String? = nil,
+        deploymentID: String? = nil,
+        userID: String? = nil,
+        userAgent: String? = nil,
+        compactionsRemaining: String? = nil,
+        compactionAt: String? = nil,
+        doomLoopCheck: String? = nil,
+        exactRepetitionCheck: String? = nil
+    ) {
+        self.sessionID = sessionID
+        self.convID = convID
+        self.requestID = requestID
+        self.agentID = agentID
+        self.turnIndex = turnIndex
+        self.transientRetry = transientRetry
+        self.modelOverride = modelOverride
+        self.clientIdentifier = clientIdentifier
+        self.clientVersion = clientVersion
+        self.clientMode = clientMode
+        self.deploymentID = deploymentID
+        self.userID = userID
+        self.userAgent = userAgent
+        self.compactionsRemaining = compactionsRemaining
+        self.compactionAt = compactionAt
+        self.doomLoopCheck = doomLoopCheck
+        self.exactRepetitionCheck = exactRepetitionCheck
+    }
+
+    public var isEmpty: Bool {
+        sessionID == nil && convID == nil && requestID == nil && agentID == nil
+            && turnIndex == nil && transientRetry == nil && modelOverride == nil
+            && clientIdentifier == nil && clientVersion == nil && clientMode == nil
+            && deploymentID == nil && userID == nil && userAgent == nil
+            && compactionsRemaining == nil && compactionAt == nil
+            && doomLoopCheck == nil && exactRepetitionCheck == nil
+    }
+}
+
 public struct CodexMetadata: Codable, Equatable, Sendable {
     public var installationID: String?
     /// Unprojected, bounded installation ID kept for local session review.
@@ -422,6 +491,16 @@ public struct CodexMetadata: Codable, Equatable, Sendable {
             && !malformed && !truncated && !hasConflicts && !isSubagent
             && !parentThreadIDInferred
     }
+
+    public var hasRequestIdentity: Bool {
+        installationID != nil || sourceInstallationID != nil || sessionID != nil
+            || threadID != nil || agentName != nil || turnID != nil || windowID != nil
+            || requestKind != nil || forkedFromThreadID != nil || parentThreadID != nil
+            || parentTurnID != nil || rootTurnID != nil || subagentHeader != nil
+            || subagentKind != nil || threadSource != nil || sandbox != nil
+            || sandboxMode != nil || !workspaces.isEmpty || originator != nil
+            || isSubagent
+    }
 }
 
 public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
@@ -484,6 +563,8 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
     public var codexMetadata: CodexMetadata?
     /// 客户端声明的项目归因；未配置或旧事件为 nil。
     public var clientDeclared: ClientDeclaredMetadata?
+    /// Grok Build 采样客户端/会话观测字段；非 Grok 或旧事件为 nil。
+    public var grokMetadata: GrokMetadata?
     /// 服务端算好的项目归因(投影列)。分页列表走 SQLite 投影快路径,不带
     /// codexMetadata / clientDeclared,只带这两个;缺了就会恒显示「未识别项目」。
     public var projectName: String?
@@ -503,7 +584,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         case failureDetail, failureKind, failurePhase, requestPurpose, requestID
         case requestMethod, requestPath, routeIntent
         case sessionID, ttfbMS, timeoutMS, upstreamStatusCode, upstreamRequestID
-        case codexMetadata, clientDeclared, projectName, projectSource, localUser, codexThreadClass, attributionScope
+        case codexMetadata, clientDeclared, grokMetadata, projectName, projectSource, localUser, codexThreadClass, attributionScope
     }
 
     /// Runtime JSON has existed in three timestamp dialects over its lifetime:
@@ -568,6 +649,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         upstreamRequestID = try c.decodeIfPresent(String.self, forKey: .upstreamRequestID)
         codexMetadata = try c.decodeIfPresent(CodexMetadata.self, forKey: .codexMetadata)
         clientDeclared = try c.decodeIfPresent(ClientDeclaredMetadata.self, forKey: .clientDeclared)
+        grokMetadata = try c.decodeIfPresent(GrokMetadata.self, forKey: .grokMetadata)
         projectName = try c.decodeIfPresent(String.self, forKey: .projectName)
         projectSource = try c.decodeIfPresent(String.self, forKey: .projectSource)
         localUser = try c.decodeIfPresent(String.self, forKey: .localUser)
@@ -616,6 +698,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         try c.encodeIfPresent(upstreamRequestID, forKey: .upstreamRequestID)
         try c.encodeIfPresent(codexMetadata, forKey: .codexMetadata)
         try c.encodeIfPresent(clientDeclared, forKey: .clientDeclared)
+        try c.encodeIfPresent(grokMetadata, forKey: .grokMetadata)
         try c.encodeIfPresent(projectName, forKey: .projectName)
         try c.encodeIfPresent(projectSource, forKey: .projectSource)
         try c.encodeIfPresent(localUser, forKey: .localUser)
@@ -681,6 +764,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         upstreamRequestID: String? = nil,
         codexMetadata: CodexMetadata? = nil,
         clientDeclared: ClientDeclaredMetadata? = nil,
+        grokMetadata: GrokMetadata? = nil,
         projectName: String? = nil,
         projectSource: String? = nil,
         localUser: String? = nil,
@@ -730,6 +814,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         self.attributionScope = attributionScope
         self.codexMetadata = codexMetadata
         self.clientDeclared = clientDeclared
+        self.grokMetadata = grokMetadata
     }
 }
 

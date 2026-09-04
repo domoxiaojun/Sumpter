@@ -43,6 +43,11 @@ const {
   codexMetadataSummary,
   codexMetadataJSON,
   eventCodexMetadata,
+  eventGrokMetadata,
+  grokMetadataSummary,
+  grokMetadataJSON,
+  grokMetadataField,
+  codexHasRequestIdentity,
   codexAgentPath,
   codexAgentRoleLabel,
   codexWorkspaceEntries,
@@ -463,6 +468,30 @@ test('Codex metadata summary and full JSON tolerate legacy wire forms', () => {
   assert.match(codexMetadataJSON(event), /"workspaces"/);
   assert.doesNotThrow(() => codexMetadataSummary({ id: 'old' }));
   assert.equal(codexMetadataSummary({ id: 'old', codex_metadata: { thread_id: 'legacy' } }), '主代理 · 线程 legacy');
+});
+
+test('Grok metadata summary exposes sampling headers and empty Codex OTel is not identity', () => {
+  const event = {
+    id: 'grok',
+    clientKind: 'grok_build',
+    grokMetadata: {
+      sessionID: 'sess-1',
+      convID: 'conv-1',
+      clientIdentifier: 'grok-shell',
+      clientVersion: '0.2.119',
+      clientMode: 'interactive',
+    },
+    codexMetadata: { sources: ['headers'], redactedFields: ['traceparent'] },
+  };
+  assert.equal(eventGrokMetadata(event).sessionID, 'sess-1');
+  assert.equal(grokMetadataField(eventGrokMetadata(event), 'convID', 'conv_id'), 'conv-1');
+  assert.equal(
+    grokMetadataSummary(event),
+    'grok-shell · 0.2.119 · interactive · 会话 sess-1 · 对话 conv-1',
+  );
+  assert.match(grokMetadataJSON(event), /"sessionID"/);
+  assert.equal(codexHasRequestIdentity(event.codexMetadata), false);
+  assert.equal(codexHasRequestIdentity({ threadID: 'thr-1' }), true);
 });
 
 test('Codex workspace context prefers local project names and keeps remote as secondary metadata', () => {

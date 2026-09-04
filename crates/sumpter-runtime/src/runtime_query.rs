@@ -1283,6 +1283,7 @@ fn event_list_item_from_projection(row: EventListProjection) -> RuntimeEventList
         kind: row.kind,
         codex_metadata: None,
         client_declared: None,
+        grok_metadata: None,
         // 投影快路径不解 payload_json,归因只能靠这两个投影列(见 RuntimeEventListItem 注释)。
         project_name: row.project_name,
         project_source: row.project_source,

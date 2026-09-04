@@ -19,13 +19,13 @@ import {
   eventUpstreamHost, eventUpstreamModel, eventFeatureRuleID,
   eventRequestID, eventSessionID, eventUpstreamRequestID, eventMessage,
   eventFailureDetail, eventTimeoutMS, eventTTFBMS, eventDurationMS, eventOutcome,
-  eventFailover, eventField, eventCodexMetadata, codexMetadataSummary, eventIsInFlight,
-  codexMetadataJSON, codexMetadataField,
+  eventFailover, eventField, eventCodexMetadata, eventGrokMetadata, codexMetadataSummary, eventIsInFlight,
+  codexMetadataJSON, codexMetadataField, grokMetadataJSON, grokMetadataField, grokMetadataSummary,
   eventFailureSummaryLabel, eventProtocolRouteLabel, eventResultKind,
   eventStreamTrace, eventToolCallsLabel, eventUpstreamStatusLabel,
   codexAgentPath, codexAgentRoleLabel, codexWorkspaceEntries, codexWorkspaceSummary,
   eventProjectContext, projectSourceLabel, eventCodexThreadClass,
-  codexThreadClassLabel, attributionScopeLabel,
+  codexThreadClassLabel, attributionScopeLabel, codexHasRequestIdentity,
 } from '../utils/helpers.js';
 
 function traceField(value, camel, snake) {
@@ -111,15 +111,19 @@ function recentEventStatusDetail(event) {
 
 function recentEventRequestSummary(event) {
   const metadata = eventCodexMetadata(event);
+  const grok = eventGrokMetadata(event);
+  const grokClient = eventField(event, 'clientKind', 'client_kind') === 'grok_build';
+  const showCodexAgent = metadata && !(grokClient && !codexHasRequestIdentity(metadata));
   const tools = eventToolCalls(event);
   return [
     recentEventProjectSummary(event),
     eventKindLabel(event.kind),
     eventClientKindLabel(event),
-    metadata ? `代理: ${codexAgentRoleLabel(metadata)}` : null,
+    grok ? `Grok: ${grokMetadataSummary(grok)}` : null,
+    showCodexAgent ? `代理: ${codexAgentRoleLabel(metadata)}` : null,
     recentEventPurposeLabel(event),
     tools.length ? `工具: ${tools.join('、')}` : null,
-    metadata ? `路径: ${codexAgentPath(metadata)}` : null,
+    showCodexAgent ? `路径: ${codexAgentPath(metadata)}` : null,
     eventCodexThreadClass(event) ? `功能线程: ${codexThreadClassLabel(eventCodexThreadClass(event))}` : null,
     eventField(event, 'attributionScope', 'attribution_scope') === 'internal_feature'
       ? `归因范围: ${attributionScopeLabel('internal_feature')}` : null,
@@ -229,6 +233,41 @@ const CODEX_METADATA_LABELS = {
   wsStreamRequestStartMS: 'WebSocket 请求开始（ms）', malformed: '格式异常', truncated: '已截断',
   hasConflicts: '字段冲突', isSubagent: '是否子代理', parentThreadIDInferred: '父线程是否推断',
 };
+
+const GROK_METADATA_LABELS = {
+  sessionID: '会话 ID', convID: '对话 ID', requestID: 'Grok 请求 ID',
+  agentID: 'Agent ID', turnIndex: '回合序号', transientRetry: '瞬时重试',
+  modelOverride: '模型覆盖', clientIdentifier: '客户端标识',
+  clientVersion: '客户端版本', clientMode: '客户端模式',
+  deploymentID: '部署 ID', userID: '账号 ID', userAgent: 'User-Agent',
+  compactionsRemaining: '剩余压缩次数', compactionAt: '压缩阈值',
+  doomLoopCheck: 'Doom loop 窗口', exactRepetitionCheck: '精确重复检测',
+};
+
+function GrokMetadataDetails({ metadata, onCopy }) {
+  if (!metadata) return null;
+  const scalarEntries = Object.entries(GROK_METADATA_LABELS)
+    .map(([camel, label]) => [label, grokMetadataField(metadata, camel)])
+    .filter(([, value]) => value !== undefined && value !== null && value !== '');
+  if (!scalarEntries.length) return null;
+  return (
+    <details className="codex-metadata-details">
+      <summary style={{ cursor: 'pointer', color: 'var(--text-primary)', fontWeight: 600 }}>Grok 客户端 / 会话全部元数据</summary>
+      <div className="grid-3col codex-metadata-grid" style={{ marginTop: '8px', gap: '8px', fontSize: '0.78rem' }}>
+        {scalarEntries.map(([label, value]) => <div key={label}><span style={{ color: 'var(--text-muted)' }}>{label}：</span><span className="mono-cell">{String(value)}</span></div>)}
+      </div>
+      <details className="codex-raw-details">
+        <summary>完整 Grok 元数据 JSON</summary>
+        <pre className="mono-cell technical-pre" style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>
+          {grokMetadataJSON(metadata)}
+        </pre>
+      </details>
+      <button type="button" className="btn btn-ghost" style={{ marginTop: '8px', padding: '4px 8px', fontSize: '0.75rem' }} onClick={() => onCopy(grokMetadataJSON(metadata), 'Grok 元数据 JSON')}>
+        <Icon name="copy" size={12} /> 复制完整 Grok 元数据 JSON
+      </button>
+    </details>
+  );
+}
 
 function CodexMetadataDetails({ metadata, onCopy }) {
   if (!metadata) return null;
@@ -438,6 +477,8 @@ export function RunPage() {
       || baseEventContext.find((e) => e.id === currentSelectedID)
       || visibleEvents.find((e) => e.id === currentSelectedID));
   const selectedCodexMetadata = eventCodexMetadata(selectedEvent);
+  const selectedGrokMetadata = eventGrokMetadata(selectedEvent);
+  const selectedCodexHasIdentity = codexHasRequestIdentity(selectedCodexMetadata);
   const selectedClientDeclared = eventField(selectedEvent, 'clientDeclared', 'client_declared') || {};
   const selectedSourceProject = String(selectedClientDeclared.sourceProject ?? selectedClientDeclared.source_project ?? '').trim();
   const selectedSourceWorkspace = String(selectedClientDeclared.sourceWorkspace ?? selectedClientDeclared.source_workspace ?? '').trim();
@@ -924,7 +965,33 @@ export function RunPage() {
               </div>
 
               <div className="event-project-context" data-event-detail-tier="primary">
-                {selectedCodexMetadata && (
+                {selectedGrokMetadata && (
+                  <>
+                    {grokMetadataField(selectedGrokMetadata, 'clientIdentifier', 'client_identifier') && (
+                      <div>
+                        <span>Grok 客户端</span>
+                        <strong className="mono-cell">{[
+                          grokMetadataField(selectedGrokMetadata, 'clientIdentifier', 'client_identifier'),
+                          grokMetadataField(selectedGrokMetadata, 'clientVersion', 'client_version'),
+                          grokMetadataField(selectedGrokMetadata, 'clientMode', 'client_mode'),
+                        ].filter(Boolean).join(' · ')}</strong>
+                      </div>
+                    )}
+                    {grokMetadataField(selectedGrokMetadata, 'sessionID', 'session_id') && (
+                      <div>
+                        <span>Grok 会话</span>
+                        <strong className="mono-cell">{grokMetadataField(selectedGrokMetadata, 'sessionID', 'session_id')}</strong>
+                      </div>
+                    )}
+                    {grokMetadataField(selectedGrokMetadata, 'convID', 'conv_id') && (
+                      <div>
+                        <span>Grok 对话</span>
+                        <strong className="mono-cell">{grokMetadataField(selectedGrokMetadata, 'convID', 'conv_id')}</strong>
+                      </div>
+                    )}
+                  </>
+                )}
+                {selectedCodexHasIdentity && (
                   <>
                     <div>
                       <span>代理身份</span>
@@ -956,7 +1023,7 @@ export function RunPage() {
                     <strong className="mono-cell">{selectedSourceWorkspace}</strong>
                   </div>
                 )}
-                {selectedCodexMetadata && (
+                {selectedCodexHasIdentity && (
                   <div className="event-project-context-meta">
                     {codexWorkspaceEntries(selectedCodexMetadata).map((workspace) => (
                       <span key={workspace.path} className="mono-cell">
@@ -1042,7 +1109,10 @@ export function RunPage() {
                 </div>
               </details>
 
-              {selectedCodexMetadata && (
+              {selectedGrokMetadata && (
+                <GrokMetadataDetails metadata={selectedGrokMetadata} onCopy={copyText} />
+              )}
+              {selectedCodexHasIdentity && (
                 <CodexMetadataDetails metadata={selectedCodexMetadata} onCopy={copyText} />
               )}
             </div>

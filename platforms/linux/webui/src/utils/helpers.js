@@ -288,6 +288,75 @@ export function eventCodexMetadata(event) {
   return value && typeof value === 'object' ? value : null;
 }
 
+export function eventGrokMetadata(event) {
+  const value = eventField(event, 'grokMetadata', 'grok_metadata');
+  return value && typeof value === 'object' ? value : null;
+}
+
+function grokMetadataValue(metadataOrEvent) {
+  const isEvent = metadataOrEvent && typeof metadataOrEvent === 'object'
+    && (Object.prototype.hasOwnProperty.call(metadataOrEvent, 'id')
+      || Object.prototype.hasOwnProperty.call(metadataOrEvent, 'kind')
+      || Object.prototype.hasOwnProperty.call(metadataOrEvent, 'statusCode')
+      || Object.prototype.hasOwnProperty.call(metadataOrEvent, 'status_code'));
+  return isEvent ? eventGrokMetadata(metadataOrEvent) : metadataOrEvent;
+}
+
+export function grokMetadataField(metadata, camelName, snakeName = camelName) {
+  if (!metadata || typeof metadata !== 'object') return undefined;
+  return metadata[camelName] ?? metadata[snakeName] ?? metadata[camelToSnake(camelName)];
+}
+
+export function grokMetadataJSON(metadataOrEvent) {
+  const metadata = grokMetadataValue(metadataOrEvent);
+  return metadata && typeof metadata === 'object' ? JSON.stringify(metadata, null, 2) : '';
+}
+
+export function grokMetadataSummary(metadataOrEvent) {
+  const metadata = grokMetadataValue(metadataOrEvent);
+  if (!metadata || typeof metadata !== 'object') return null;
+  const identifier = cleanText(grokMetadataField(metadata, 'clientIdentifier', 'client_identifier'));
+  const version = cleanText(grokMetadataField(metadata, 'clientVersion', 'client_version'));
+  const mode = cleanText(grokMetadataField(metadata, 'clientMode', 'client_mode'));
+  const sessionID = cleanText(grokMetadataField(metadata, 'sessionID', 'session_id'));
+  const convID = cleanText(grokMetadataField(metadata, 'convID', 'conv_id'));
+  const parts = [];
+  if (identifier) parts.push(identifier);
+  if (version) parts.push(version);
+  if (mode) parts.push(mode);
+  if (sessionID) parts.push(`会话 ${sessionID}`);
+  if (convID) parts.push(`对话 ${convID}`);
+  return parts.join(' · ') || 'Grok 客户端';
+}
+
+export function codexHasRequestIdentity(metadata) {
+  if (!metadata || typeof metadata !== 'object') return false;
+  const workspaces = codexMetadataField(metadata, 'workspaces');
+  return Boolean(
+    codexMetadataField(metadata, 'installationID', 'installation_id')
+    || codexMetadataField(metadata, 'sourceInstallationID', 'source_installation_id')
+    || codexMetadataField(metadata, 'sessionID', 'session_id')
+    || codexMetadataField(metadata, 'threadID', 'thread_id')
+    || codexMetadataField(metadata, 'agentName', 'agent_name')
+    || codexMetadataField(metadata, 'turnID', 'turn_id')
+    || codexMetadataField(metadata, 'windowID', 'window_id')
+    || codexMetadataField(metadata, 'requestKind', 'request_kind')
+    || codexMetadataField(metadata, 'forkedFromThreadID', 'forked_from_thread_id')
+    || codexMetadataField(metadata, 'parentThreadID', 'parent_thread_id')
+    || codexMetadataField(metadata, 'parentTurnID', 'parent_turn_id')
+    || codexMetadataField(metadata, 'rootTurnID', 'root_turn_id')
+    || codexMetadataField(metadata, 'subagentHeader', 'subagent_header')
+    || codexMetadataField(metadata, 'subagentKind', 'subagent_kind')
+    || codexMetadataField(metadata, 'threadSource', 'thread_source')
+    || codexMetadataField(metadata, 'sandbox')
+    || codexMetadataField(metadata, 'sandboxMode', 'sandbox_mode')
+    || codexMetadataField(metadata, 'originator')
+    || metadata.isSubagent
+    || metadata.is_subagent
+    || (workspaces && typeof workspaces === 'object' && Object.keys(workspaces).length)
+  );
+}
+
 function codexMetadataValue(metadataOrEvent) {
   const isEvent = metadataOrEvent && typeof metadataOrEvent === 'object'
     && (Object.prototype.hasOwnProperty.call(metadataOrEvent, 'id')
