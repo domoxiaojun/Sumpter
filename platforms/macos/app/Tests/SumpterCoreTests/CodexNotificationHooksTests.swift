@@ -25,6 +25,15 @@ final class CodexNotificationHooksTests: XCTestCase {
         )
     }
 
+    func testWrittenHooksAreConfiguredWithoutWaitingForSSE() {
+        XCTAssertEqual(CodexNotificationHookStatus.configured.title, "已配置")
+        XCTAssertEqual(CodexNotificationHookStatus.verified.title, "已验证")
+        XCTAssertNotEqual(
+            CodexNotificationHookStatus.configured.title,
+            "已写入，等待 /hooks 信任"
+        )
+    }
+
     func testEmptyCodexHomeFallsBackToUserCodexDirectory() {
         let path = CodexNotificationHooks.resolvedHomePath(environment: ["CODEX_HOME": ""])
         XCTAssertTrue(path.hasSuffix("/.codex"))

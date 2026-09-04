@@ -4,7 +4,7 @@ import SumpterCore
 
 enum CodexNotificationHookStatus: String, Sendable {
     case notConfigured
-    case pendingTrust
+    case configured
     case verified
     case legacyConflict
     case writeFailed
@@ -12,7 +12,7 @@ enum CodexNotificationHookStatus: String, Sendable {
     var title: String {
         switch self {
         case .notConfigured: "未配置"
-        case .pendingTrust: "已写入，等待 /hooks 信任"
+        case .configured: "已配置"
         case .verified: "已验证"
         case .legacyConflict: "legacy 通知冲突"
         case .writeFailed: "写入失败"
@@ -79,7 +79,7 @@ enum CodexNotificationHooks {
             guard !enabledArguments(in: root).isEmpty else {
                 return .notConfigured
             }
-            return isVerified() ? .verified : .pendingTrust
+            return isVerified() ? .verified : .configured
         } catch {
             return .writeFailed
         }
@@ -156,7 +156,10 @@ enum CodexNotificationHooks {
             to: locations.hooksJSON,
             permissions: 0o600
         )
-        clearVerified()
+        // 命令路径没变时 Codex 信任仍然有效。只有卸掉 Sumpter hook 才清验证。
+        if selected.isEmpty {
+            clearVerified()
+        }
     }
 
     static func rewriteScriptIfEnabled(port: Int) throws {
@@ -187,7 +190,6 @@ enum CodexNotificationHooks {
             to: locations.hooksJSON,
             permissions: 0o600
         )
-        clearVerified()
     }
 
     private struct Locations {
