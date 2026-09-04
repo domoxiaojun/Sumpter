@@ -65,6 +65,39 @@ enum ClaudeAttributionInstallerError: LocalizedError, Equatable {
 }
 
 enum ClaudeAttributionInstaller {
+    /// 定位 cc/grok 归因脚本：打包进 App 的 Resources，或源码树 `platforms/macos/scripts/`。
+    static func locateScript(named resource: String) -> URL? {
+        let fileName = "\(resource).sh"
+        var candidates: [URL] = []
+        if let bundled = Bundle.main.url(forResource: resource, withExtension: "sh") {
+            candidates.append(bundled)
+        }
+        if let resources = Bundle.main.resourceURL {
+            candidates.append(resources.appendingPathComponent(fileName))
+        }
+        candidates.append(
+            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/\(fileName)")
+        )
+
+        let roots = [
+            URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true),
+            Bundle.main.bundleURL,
+            URL(fileURLWithPath: #filePath).deletingLastPathComponent(),
+        ]
+        for root in roots {
+            var directory = root
+            for _ in 0..<10 {
+                candidates.append(directory.appendingPathComponent("platforms/macos/scripts/\(fileName)"))
+                candidates.append(directory.appendingPathComponent("scripts/\(fileName)"))
+                directory.deleteLastPathComponent()
+            }
+        }
+
+        return candidates.first { url in
+            FileManager.default.isReadableFile(atPath: url.path)
+        }
+    }
+
     static func run(
         scriptURL: URL,
         action: ClaudeAttributionScriptAction

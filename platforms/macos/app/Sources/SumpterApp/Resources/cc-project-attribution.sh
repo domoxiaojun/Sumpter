@@ -1,0 +1,1 @@
+../../../../scripts/cc-project-attribution.sh

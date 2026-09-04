@@ -60,13 +60,7 @@ struct ProjectAttributionInstallerPanel: View {
     }
 
     private var scriptURL: URL? {
-        let candidates = [
-            Bundle.main.url(forResource: scriptResource, withExtension: "sh"),
-            Bundle.main.bundleURL
-                .deletingLastPathComponent()
-                .appendingPathComponent("platforms/macos/scripts/\(scriptResource).sh"),
-        ]
-        return candidates.compactMap { $0 }.first { FileManager.default.fileExists(atPath: $0.path) }
+        ClaudeAttributionInstaller.locateScript(named: scriptResource)
     }
 
     private var statusRow: some View {

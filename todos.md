@@ -1,3 +1,14 @@
+# 安全页能找到 Grok 归因脚本（2026-09-04）
+
+脚本在 `platforms/macos/scripts/grok-project-attribution.sh`，但 App 只查 Bundle
+资源和一层相对路径，开发运行/未重打包的 App 会显示「配置器不可用」。
+
+- [x] 统一脚本定位：Bundle Resources + 向上找仓库 scripts/
+- [x] Swift 包打进 grok/cc 脚本资源；CC 与 Grok 面板共用定位
+- [x] 测试、提交。不宣称已安装 App 已更新
+
+---
+
 # Grok 运行页：补上游请求链 + 归因配置入口（2026-09-04）
 
 截图：Grok 请求已打到 CPA、有上游请求 ID，但请求链写「0 次上游尝试」；项目仍是未识别。
