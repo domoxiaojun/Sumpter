@@ -20,12 +20,12 @@ use sumpter_core::events::{
     APPLE_EPOCH_OFFSET_SECS, ClientDeclaredMetadata, ClientKind, CodexMetadata, GrokMetadata,
     KIND_CLIENT, KIND_NOTIFY, KIND_UPSTREAM, RuntimeEvent, RuntimeEventOutcome, RuntimeEventPhase,
     RuntimeFailureKind, RuntimeFailurePhase, RuntimeSnapshot, STATUS_CLIENT_DISCONNECTED,
-    StreamTrace, codex_attribution_scope, codex_thread_class,
+    StreamTrace, codex_attribution_scope, codex_thread_class, local_user_from_workspace_path,
 };
 use sumpter_core::routing::{RESOURCE_ROUTING_MODEL, RequestPurpose, RouteMode};
 
 const SCHEMA_VERSION: i64 = 3;
-const PROJECTION_VERSION: i64 = 6;
+const PROJECTION_VERSION: i64 = 7;
 const PROJECTION_BACKFILL_BATCH: usize = 500;
 const BATCH_EVENTS: usize = 64;
 const BATCH_BYTES: usize = 256 * 1024;
@@ -4443,13 +4443,21 @@ fn declared_project_source(
 }
 
 fn event_local_user(event: &RuntimeEvent) -> Option<String> {
-    event
+    if let Some(user) = event
         .client_declared
         .as_ref()
         .and_then(|declared| declared.user.as_deref())
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(str::to_string)
+    {
+        return Some(user.to_string());
+    }
+    let metadata = event.codex_metadata.as_ref()?;
+    metadata
+        .source_workspace_paths
+        .iter()
+        .chain(metadata.workspaces.keys())
+        .find_map(|path| local_user_from_workspace_path(path))
 }
 
 fn workspace_identity(
@@ -7741,6 +7749,28 @@ mod tests {
         assert_eq!(wire["grokMetadata"]["convID"], "conv-1");
         assert_eq!(wire["grokMetadata"]["clientIdentifier"], "grok-shell");
         assert!(wire.get("grok_metadata").is_none());
+    }
+
+    #[test]
+    fn list_item_wire_carries_codex_local_user_from_source_workspace_path() {
+        let mut value = event(
+            "wire-codex-local",
+            KIND_CLIENT,
+            200,
+            RuntimeEventPhase::Completed,
+            Some(RuntimeEventOutcome::Succeeded),
+            event_now(),
+        );
+        value.client_kind = Some(ClientKind::Codex);
+        value.codex_metadata = serde_json::from_value(json!({
+            "workspaces": {".../claude/sumpter": {}},
+            "sourceWorkspacePaths": ["/Users/kkl/Documents/claude/sumpter"],
+        }))
+        .ok();
+        let wire = serde_json::to_value(RuntimeEventListItem::from_change(1, 2, value)).unwrap();
+        assert_eq!(wire["projectName"], "sumpter");
+        assert_eq!(wire["projectSource"], "workspace_local");
+        assert_eq!(wire["localUser"], "kkl");
     }
 
     #[test]

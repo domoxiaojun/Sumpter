@@ -53,6 +53,7 @@ final class RuntimeEventPresentationTests: XCTestCase {
         XCTAssertEqual(context.source, .workspaceLocal)
         XCTAssertEqual(context.source.rawValue, "workspace_local")
         XCTAssertEqual(context.source.label, "本地项目")
+        XCTAssertEqual(context.source.displayLabel(localUser: "kkl"), "本地(kkl)")
         XCTAssertEqual(
             context.detail,
             ".../.claude/automode-proxy · https://github.com/domoxiaojun/sumpter.git"

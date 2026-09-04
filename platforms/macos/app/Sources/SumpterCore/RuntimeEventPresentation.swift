@@ -71,7 +71,9 @@ public enum RuntimeEventPresentation {
         attributionScope: String? = nil
     ) -> ProjectContext? {
         guard eventKind == "client" else { return nil }
-        let localUser = nonEmpty(projectedLocalUser) ?? nonEmpty(declared?.user)
+        let localUser = nonEmpty(projectedLocalUser)
+            ?? nonEmpty(declared?.user)
+            ?? localUser(from: metadata)
 
         if attributionScope == ProjectSource.internalFeature.rawValue
             || projectedSource == ProjectSource.internalFeature.rawValue {
@@ -185,6 +187,47 @@ public enum RuntimeEventPresentation {
         guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
               !trimmed.isEmpty else { return nil }
         return trimmed
+    }
+
+    /// Codex 不发 `X-Sumpter-User`，从 `/Users/<user>` / `/home/<user>` 源路径补展示名。
+    static func localUser(from metadata: CodexMetadata?) -> String? {
+        guard let metadata else { return nil }
+        let paths = metadata.sourceWorkspacePaths + Array(metadata.workspaces.keys)
+        for path in paths {
+            if let user = localUser(fromWorkspacePath: path) {
+                return user
+            }
+        }
+        return nil
+    }
+
+    static func localUser(fromWorkspacePath path: String) -> String? {
+        let parts = path
+            .replacingOccurrences(of: "\\", with: "/")
+            .split(whereSeparator: { $0 == "/" })
+            .filter { !$0.isEmpty }
+            .map(String.init)
+        guard parts.count >= 2 else { return nil }
+        for index in 0..<(parts.count - 1) {
+            let home = parts[index]
+            let user = parts[index + 1]
+            guard home.compare("Users", options: .caseInsensitive) == .orderedSame
+                || home.compare("home", options: .caseInsensitive) == .orderedSame else {
+                continue
+            }
+            if user.compare("Shared", options: .caseInsensitive) == .orderedSame
+                || user.compare("Public", options: .caseInsensitive) == .orderedSame {
+                continue
+            }
+            guard user.count <= 32,
+                  user.allSatisfy({ char in
+                      char.isASCII && (char.isLetter || char.isNumber || char == "." || char == "_" || char == "-")
+                  }) else {
+                continue
+            }
+            return user
+        }
+        return nil
     }
 
     private static func workspaceProjectName(path: String, workspace: CodexWorkspaceMetadata?) -> String {

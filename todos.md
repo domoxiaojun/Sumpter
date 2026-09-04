@@ -1,3 +1,16 @@
+# Codex 事件来源也显示本地(kkl)（2026-09-04）
+
+Codex 结构化 workspace 已经是 `workspace_local`，但没有 wrapper 的 `X-Sumpter-User`，
+运行页就停在「本地项目」。从 `/Users/kkl`、`/home/kkl` 这类源路径取出用户名，
+和 CC/Grok 一样显示 `本地(kkl)`。用户名仍只用于展示，不进项目 identity。
+
+- [x] core：从工作区源路径解析本机用户名
+- [x] runtime：投影 `localUser`；升 projection 让历史 Codex 行回填
+- [x] 双端运行页：详情「项目来源」和列表摘要用 `本地(kkl)`
+- [x] 测试、todos/plan、提交。不宣称已安装 App 已更新
+
+---
+
 # Grok 事件详情：采样客户端/会话字段（2026-09-04）
 
 Grok Build 推理请求的身份在 `x-grok-*` header，不在 Codex `client_metadata`。

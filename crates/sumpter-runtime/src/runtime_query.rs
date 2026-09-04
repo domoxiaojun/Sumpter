@@ -25,7 +25,7 @@ use sumpter_core::routing::{RequestPurpose, RouteMode};
 use crate::runtime_store::{RuntimeChange, RuntimeEventListItem};
 
 const API_VERSION: u8 = 3;
-const PROJECTION_VERSION: i64 = 6;
+const PROJECTION_VERSION: i64 = 7;
 const PAGE_SIZES: [usize; 5] = [10, 25, 50, 100, 200];
 const REQUEST_CHAIN_LIMIT: usize = 512;
 const MAX_TREND_POINTS: usize = 240;
@@ -5117,7 +5117,7 @@ mod tests {
                    seq,change_seq,event_id,request_id,timestamp,kind,phase,outcome,status_code,
                    client_kind,request_purpose,endpoint_id,is_in_flight,payload_json,
                    projection_version,endpoint_name
-                 ) VALUES (?1,?1,?2,?3,1.0,?4,'completed',?5,?6,?7,?8,?9,0,'{}',6,?10)",
+                 ) VALUES (?1,?1,?2,?3,1.0,?4,'completed',?5,?6,?7,?8,?9,0,'{}',7,?10)",
                 params![
                     seq,
                     format!("endpoint-test-{seq}"),
@@ -5160,7 +5160,7 @@ mod tests {
                    'endpoint-a',CASE WHEN seq%10=0 THEN 'upstream_http_status' END,0,
                    CASE WHEN seq>99975 THEN '{\"id\":\"page-event\",\"kind\":\"client\"}'
                         ELSE '{not-json' END,
-                   6,80,printf('session-%03d',seq%500),'header',printf('project-%03d',seq%100),
+                   7,80,printf('session-%03d',seq%500),'header',printf('project-%03d',seq%100),
                    printf('Project %03d',seq%100),'workspace_local','[\".../projects/test\"]',
                    'Endpoint A','gpt-test',CASE WHEN seq%10=0 THEN 'response' END,
                    'openai-responses','openai-responses','native',
