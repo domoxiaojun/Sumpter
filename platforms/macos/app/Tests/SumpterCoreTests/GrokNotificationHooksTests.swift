@@ -31,4 +31,20 @@ final class GrokNotificationHooksTests: XCTestCase {
         let path = GrokNotificationHooks.resolvedHomePath(environment: ["GROK_HOME": ""])
         XCTAssertTrue(path.hasSuffix("/.grok"))
     }
+
+    func testNotificationHookClientsCoverClaudeCodexAndGrok() {
+        XCTAssertEqual(
+            NotificationHookClient.allCases.map(\.title),
+            ["Claude Code", "Codex CLI", "Grok Build"]
+        )
+    }
+
+    func testRemovedByUserFlagRoundTrips() {
+        let previous = GrokNotificationHooks.wasRemovedByUser()
+        defer { GrokNotificationHooks.markRemovedByUser(previous) }
+        GrokNotificationHooks.markRemovedByUser(true)
+        XCTAssertTrue(GrokNotificationHooks.wasRemovedByUser())
+        GrokNotificationHooks.markRemovedByUser(false)
+        XCTAssertFalse(GrokNotificationHooks.wasRemovedByUser())
+    }
 }

@@ -1,3 +1,15 @@
+# 通知页：三客户端安装 / 移除配置（2026-09-04）
+
+总开关开着时 Grok 仍显示「未配置」，接入状态也没有安装按钮。
+给 Claude Code、Codex CLI、Grok Build 各加「安装配置」「移除配置」。
+启动时若 Claude/Codex 已开且用户没手动移除过 Grok，则补装 Grok hook。
+
+- [x] AppModel：`setGrokNotifications`；三路独立安装/移除；升级补装
+- [x] NotificationsPane：每行安装/移除 + 确认；Codex 提示跟在 Codex 下面
+- [x] 测试、提交。不宣称已安装 App 已更新
+
+---
+
 # Grok Build 系统通知（2026-09-04）
 
 macOS 通知已接 Claude Code / Codex CLI，Grok Build 缺 hook → `/__notify`。

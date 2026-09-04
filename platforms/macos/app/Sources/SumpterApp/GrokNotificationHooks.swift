@@ -17,6 +17,15 @@ enum GrokNotificationHooksError: Error, LocalizedError {
 /// 文件由 Sumpter 独占；卸载时删除该 JSON 和脚本，不改 `config.toml`。
 enum GrokNotificationHooks {
     static var marker: String { GrokNotifyScript.fileName }
+    private static let removedByUserDefaultsKey = "grokNotificationHooksRemovedByUser"
+
+    static func wasRemovedByUser() -> Bool {
+        UserDefaults.standard.bool(forKey: removedByUserDefaultsKey)
+    }
+
+    static func markRemovedByUser(_ removed: Bool) {
+        UserDefaults.standard.set(removed, forKey: removedByUserDefaultsKey)
+    }
 
     static func resolvedHomePath(
         environment: [String: String] = ProcessInfo.processInfo.environment

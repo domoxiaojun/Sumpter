@@ -1,7 +1,31 @@
 import SwiftUI
 
+enum NotificationHookClient: String, Identifiable, CaseIterable {
+    case claude, codex, grok
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .claude: "Claude Code"
+        case .codex: "Codex CLI"
+        case .grok: "Grok Build"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .claude: "terminal"
+        case .codex: "terminal.fill"
+        case .grok: "terminal"
+        }
+    }
+}
+
 struct NotificationsPane: View {
     @ObservedObject var model: AppModel
+    @State private var clientPendingRemoval: NotificationHookClient?
+    @State private var clientsExpanded = true
 
     var body: some View {
         SettingsPage(title: SettingsSection.notifications.title, subtitle: SettingsSection.notifications.subtitle) {
@@ -9,6 +33,23 @@ struct NotificationsPane: View {
             hookPanel
             categoryPanel
             soundPanel
+        }
+        .confirmationDialog(
+            clientPendingRemoval.map { "移除 \($0.title) 通知配置？" } ?? "移除通知配置？",
+            isPresented: Binding(
+                get: { clientPendingRemoval != nil },
+                set: { if !$0 { clientPendingRemoval = nil } }
+            )
+        ) {
+            Button("移除配置", role: .destructive) {
+                if let client = clientPendingRemoval {
+                    model.setNotificationClient(client, enabled: false)
+                }
+                clientPendingRemoval = nil
+            }
+            Button("取消", role: .cancel) { clientPendingRemoval = nil }
+        } message: {
+            Text("只删除 Sumpter 写入的通知 Hook，其它自定义 Hook 会保留。")
         }
     }
 
@@ -75,66 +116,100 @@ struct NotificationsPane: View {
                     )
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                DisclosureGroup("各客户端接入状态") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Label("Claude Code", systemImage: "terminal")
-                            Spacer()
-                            StatusBadge(
-                                text: model.claudeNotificationArguments.isEmpty ? "未配置" : "已配置",
-                                systemImage: model.claudeNotificationArguments.isEmpty ? "minus.circle" : "checkmark.circle",
-                                color: model.claudeNotificationArguments.isEmpty ? .secondary : .green
-                            )
-                        }
-                        HStack {
-                            Label("Codex CLI", systemImage: "terminal.fill")
-                            Spacer()
-                            StatusBadge(
-                                text: model.codexNotificationHookStatus.title,
-                                systemImage: codexStatusImage,
-                                color: codexStatusColor
-                            )
-                        }
-                        Text("Codex 配置文件：\(model.codexNotificationHookPath)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                        HStack {
-                            Label("Grok Build", systemImage: "terminal")
-                            Spacer()
-                            StatusBadge(
-                                text: model.grokNotificationsEnabled ? "已配置" : "未配置",
-                                systemImage: model.grokNotificationsEnabled ? "checkmark.circle" : "minus.circle",
-                                color: model.grokNotificationsEnabled ? .green : .secondary
-                            )
-                        }
-                        Text("Grok 配置文件：\(model.grokNotificationHookPath)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                        Text("Grok 全局 hook 默认受信任，无需再跑 /hooks。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                DisclosureGroup("各客户端接入状态", isExpanded: $clientsExpanded) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        clientInstallRow(
+                            .claude,
+                            configured: !model.claudeNotificationArguments.isEmpty,
+                            badgeText: model.claudeNotificationArguments.isEmpty ? "未配置" : "已配置",
+                            badgeImage: model.claudeNotificationArguments.isEmpty ? "minus.circle" : "checkmark.circle",
+                            badgeColor: model.claudeNotificationArguments.isEmpty ? .secondary : .green,
+                            detail: "写入 ~/.claude/settings.json 与 sumpter-notify.sh。"
+                        )
+                        Divider()
+                        clientInstallRow(
+                            .codex,
+                            configured: !model.codexNotificationArguments.isEmpty,
+                            badgeText: model.codexNotificationHookStatus.title,
+                            badgeImage: codexStatusImage,
+                            badgeColor: codexStatusColor,
+                            detail: "Codex 配置文件：\(model.codexNotificationHookPath)"
+                        )
                         switch model.codexNotificationHookStatus {
                         case .pendingTrust:
                             Text("首次使用请在 Codex CLI 输入 /hooks，信任 Sumpter 的通知 Hook；收到一次真实通知后会显示“已验证”。")
                                 .font(.caption)
                                 .foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
                         case .legacyConflict:
                             Text("检测到无法安全判断的 legacy notify。为避免误删，请先在 config.toml 中手动处理后再启用。")
                                 .font(.caption)
                                 .foregroundStyle(.red)
+                                .fixedSize(horizontal: false, vertical: true)
                         case .writeFailed:
                             Text("Codex 写入失败；请检查 CODEX_HOME、文件权限和 hooks.json 格式。")
                                 .font(.caption)
                                 .foregroundStyle(.red)
+                                .fixedSize(horizontal: false, vertical: true)
                         case .notConfigured, .verified:
                             EmptyView()
                         }
+                        Divider()
+                        clientInstallRow(
+                            .grok,
+                            configured: model.grokNotificationsEnabled,
+                            badgeText: model.grokNotificationsEnabled ? "已配置" : "未配置",
+                            badgeImage: model.grokNotificationsEnabled ? "checkmark.circle" : "minus.circle",
+                            badgeColor: model.grokNotificationsEnabled ? .green : .secondary,
+                            detail: "Grok 配置文件：\(model.grokNotificationHookPath)"
+                        )
+                        Text("Grok 全局 hook 默认受信任，无需再跑 /hooks。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(.top, 6)
                 }
+            }
+        }
+    }
+
+    private func clientInstallRow(
+        _ client: NotificationHookClient,
+        configured: Bool,
+        badgeText: String,
+        badgeImage: String,
+        badgeColor: Color,
+        detail: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label(client.title, systemImage: client.systemImage)
+                Spacer()
+                StatusBadge(
+                    text: badgeText,
+                    systemImage: badgeImage,
+                    color: badgeColor
+                )
+            }
+            Text(detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+            SumpterWrappingLayout(horizontalSpacing: 8, verticalSpacing: 8) {
+                Button {
+                    model.setNotificationClient(client, enabled: true)
+                } label: {
+                    Label(configured ? "重新安装" : "安装配置", systemImage: "hammer")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                Button("移除配置…", role: .destructive) {
+                    clientPendingRemoval = client
+                }
+                .controlSize(.small)
+                .disabled(!configured)
             }
         }
     }
