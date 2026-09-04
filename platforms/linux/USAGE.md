@@ -206,7 +206,10 @@ Provider 鉴权。
 唯一的窄例外是 Codex Live bootstrap：`POST /v1/live`、`POST /v1/realtime` 和
 `POST /v1/realtime/calls` 与 CPA 一样走 Quicksilver（`application/sdp` / multipart
 封装成 `sdp + session.type=quicksilver` JSON，默认模型 `gpt-live-1-codex`）。
-无 `call_id` 的 `GET /v1/realtime` 才是公开 Realtime WebSocket，出站会去掉 `OpenAI-Alpha`。
+出站把 POST `/v1/realtime` 改写到 `/v1/realtime/calls?intent=quicksilver&architecture=avas`，
+因为 `architecture=avas` 只允许出现在 WebRTC `/calls`，加在根路径会被上游以
+`invalid_architecture` 拒绝。无 `call_id` 的 `GET /v1/realtime` 才是公开 Realtime
+WebSocket，出站会去掉 `OpenAI-Alpha` 以及 `intent`/`architecture` query。
 另一个例外是 `GET /v1/models`（以及 `/models`、`/openai/v1/models` 和带模型 id 的子路径）：
 按当前启用入口的 `mappings` 生成本地目录，不转发到上游。普通 OpenAI 客户端拿到
 `{object:"list",data:[...]}`；Codex Desktop/CLI 带 `client_version` 时拿到 `{models:[...]}`。

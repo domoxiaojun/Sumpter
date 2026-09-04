@@ -1,4 +1,20 @@
+# 修复 Codex Desktop 语音 400 invalid_architecture（2026-09-04）
+
+运行页：`passthrough realtime` → CPA `ccc.domob.org`，`gpt-live-1-codex`，HTTP 400，
+229 字节 `architecture="avas" is only supported for quicksilver Realtime WebRTC sessions.`
+上一轮把 `intent=quicksilver&architecture=avas` 加在了 POST `/v1/realtime` 根上，
+没有改到 `/v1/realtime/calls`。OpenAI/CPA 兼容面只允许 avas 出现在 WebRTC `/calls`。
+
+- [x] POST `/v1/realtime` WebRTC bootstrap 出站改写到 `/v1/realtime/calls?intent=quicksilver&architecture=avas`
+- [x] POST `/v1/live`、`/v1/realtime/calls` 保持原路径并补齐 avas
+- [x] 标准 Realtime GET/WS 剥掉 `intent`/`architecture`，不向非 WebRTC 面泄漏 avas
+- [x] 补 request_build / engine / linux websocket 回归；fmt/check/clippy/focused tests
+- [x] 更新 USAGE / README / architecture / plan.md；提交。不宣称已安装 App 已更新
+
+---
+
 # 审查后续：意图 / 归因 / 分流全部收口（2026-09-04）
+
 
 对照 CPA：POST `/v1/live`、`/v1/realtime`、`/v1/realtime/calls` 都是 Quicksilver；
 只有无 `call_id` 的 GET `/v1/realtime` 才是标准 Realtime。Sumpter 按 mapping 选入口，

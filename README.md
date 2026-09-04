@@ -18,7 +18,7 @@
 
 OpenAI 兼容客户端的 Files/Videos 资源查询与下载、Responses WebSocket 和无 `call_id` 的
 `GET /v1/realtime` 都走同一条透传链。`GET /v1/models` 按本地 mapping 生成目录，不转发到上游；Codex 带 `client_version` 时返回 `{models:[...]}`。`POST /v1/live`、`POST /v1/realtime` 和 `POST /v1/realtime/calls` 是 Codex Live 特例：Sumpter 会把
-SDP/multipart 封装为 quicksilver JSON 后交给配置的 Live mapping（默认 `gpt-live-1-codex`）。
+SDP/multipart 封装为 quicksilver JSON 后交给配置的 Live mapping（默认 `gpt-live-1-codex`），并把 POST `/v1/realtime` 出站改写到 `/v1/realtime/calls?intent=quicksilver&architecture=avas`。无 `call_id` 的 GET `/v1/realtime` 会去掉这些 WebRTC query。
 Realtime/Live WebSocket 会先完成上游握手再向客户端返回 `101`；ephemeral client-secret
 返回的 session 配置会继续用于 `session.update` 和后续 calls 请求。
 除此之外只做入站鉴权、Provider 选择、已配置模型 mapping 的必要替换、failover/retry 和连接

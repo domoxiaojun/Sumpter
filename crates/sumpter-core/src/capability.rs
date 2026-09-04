@@ -17,9 +17,9 @@ pub enum ModelCapability {
     /// 入口真的声明了 Live 模型,而不是靠名字猜。
     Live,
     /// Files 资源面。显式 `capabilities: ["files"]` 时由
-    /// `RoutePlanner::plan_for_resource_capability` 选入口；未声明时优先混合
-    /// 媒体/Live 入口，再回退到非 Anthropic 入口顺序。GET `/v1/models` 不走这条
-    /// 路径，由数据面按 mapping 生成本地目录。
+    /// `RoutePlanner::plan_for_resource_capability` 选入口；模型名无法可靠推断
+    /// 上传/存储能力，未声明时明确失败而不回退其它入口。GET `/v1/models`
+    /// 不走这条路径，由数据面按 mapping 生成本地目录。
     Files,
 }
 
@@ -58,6 +58,21 @@ pub fn mapping_has_capability(
     mapping_serves_capability(declared, client_pattern, client_pattern, wanted)
 }
 
+/// The public OpenAI Realtime model family and Codex's private Live model
+/// share one OAuth capability surface.  Keep this alias deliberately narrow:
+/// ordinary `gpt-4o`/custom models must not be granted Live merely because
+/// their name happens to contain `live`.
+pub fn is_realtime_model_name(model: &str) -> bool {
+    let model = model_name::clean(model).to_ascii_lowercase();
+    model == "gpt-realtime"
+        || model.starts_with("gpt-realtime-")
+        || model.starts_with("realtime-preview")
+}
+
+pub fn is_codex_live_model_name(model: &str) -> bool {
+    model_name::clean(model).eq_ignore_ascii_case("gpt-live-1-codex")
+}
+
 /// Like [`mapping_has_capability`], but a catch-all text pattern such as `*`
 /// or `gpt-*` cannot inherit Image/Video/Live from the *requested* model name.
 /// `grok-imagine-*` is the exception: the stem is media-family but not
@@ -79,6 +94,30 @@ pub fn mapping_serves_capability(
         return inferred_capabilities(requested_model).contains(&wanted);
     }
     false
+}
+
+/// Return the capability set to expose for one concrete model entry in the
+/// local directory. Explicit declarations are authoritative. For an
+/// ambiguous media-family wildcard (for example `grok-imagine-*`), classify
+/// the concrete catalog model instead of advertising both text and media;
+/// broad text wildcards such as `gpt-*` remain text-only.
+pub fn capabilities_for_model(
+    declared: &[ModelCapability],
+    client_pattern: &str,
+    concrete_model: &str,
+) -> Vec<ModelCapability> {
+    let mut capabilities = if declared.is_empty() {
+        if is_ambiguous_media_pattern(client_pattern) {
+            inferred_capabilities(concrete_model)
+        } else {
+            inferred_capabilities(client_pattern)
+        }
+    } else {
+        declared.to_vec()
+    };
+    capabilities.sort_by_key(|capability| capability.as_str());
+    capabilities.dedup();
+    capabilities
 }
 
 pub fn canonical_model_from_pattern(client_pattern: &str) -> String {
@@ -206,6 +245,26 @@ mod tests {
             "grok-imagine-image",
             ModelCapability::Image
         ));
+    }
+
+    #[test]
+    fn concrete_catalog_models_resolve_ambiguous_media_wildcards() {
+        assert_eq!(
+            capabilities_for_model(&[], "grok-imagine-*", "grok-imagine-image-1"),
+            vec![ModelCapability::Image]
+        );
+        assert_eq!(
+            capabilities_for_model(&[], "grok-imagine-*", "grok-imagine-video-1"),
+            vec![ModelCapability::Video]
+        );
+        assert_eq!(
+            capabilities_for_model(&[], "gpt-*", "gpt-image-2"),
+            vec![ModelCapability::Text]
+        );
+        assert_eq!(
+            capabilities_for_model(&[ModelCapability::Files], "gpt-*", "gpt-image-2"),
+            vec![ModelCapability::Files]
+        );
     }
 
     #[test]

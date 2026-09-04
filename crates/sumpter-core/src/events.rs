@@ -634,10 +634,34 @@ impl CodexMetadata {
         let mut state = CodexMetadataParseState::default();
         let mut merged = CodexMetadataCandidate::default();
 
-        if let Some(client_metadata) = body
-            .and_then(Value::as_object)
-            .and_then(|body| body.get("client_metadata"))
+        // WebSocket `response.create` frames and a few Live clients put the
+        // product marker directly on the envelope instead of inside
+        // `client_metadata`.  It is still only an observational hint, but
+        // retaining it here lets client attribution survive a generic UA.
+        if let Some(object) = body.and_then(Value::as_object)
+            && let Some(originator) = object_string(
+                object,
+                "originator",
+                CODEX_METADATA_MAX_LABEL_BYTES,
+                &mut state,
+            )
         {
+            state.source("bodyOriginator");
+            merge_candidate(
+                &mut merged,
+                CodexMetadataCandidate {
+                    originator: Some(originator),
+                    ..CodexMetadataCandidate::default()
+                },
+                "bodyOriginator",
+                &mut state,
+            );
+        }
+
+        if let Some(client_metadata) = body.and_then(Value::as_object).and_then(|body| {
+            body.get("client_metadata")
+                .or_else(|| body.get("clientMetadata"))
+        }) {
             match client_metadata {
                 Value::Object(object) => {
                     record_redacted_client_metadata(object, &mut state);
@@ -970,6 +994,10 @@ fn parse_metadata_object(
         compaction: object
             .get("compaction")
             .and_then(|value| parse_compaction(value, state)),
+        // Canonical Codex metadata may carry the product identity in the
+        // body.  Keep it bounded just like the header/flat projections so a
+        // body-only Live request is still attributable to Codex Desktop.
+        originator: object_string(object, "originator", CODEX_METADATA_MAX_LABEL_BYTES, state),
         ..CodexMetadataCandidate::default()
     };
 
@@ -1768,6 +1796,7 @@ fn is_known_canonical_key(key: &str) -> bool {
     matches!(
         key,
         "installation_id"
+            | "originator"
             | "session_id"
             | "thread_id"
             | "agent_name"
@@ -1911,6 +1940,21 @@ pub struct WebSocketTrace {
     pub upstream_message_count: Option<u64>,
     #[serde(default, skip_serializing_if = "is_none")]
     pub close_code: Option<i64>,
+    /// Close code observed from the downstream/client side.
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub client_close_code: Option<i64>,
+    /// Close code observed from the selected upstream Provider.
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub upstream_close_code: Option<i64>,
+    /// Which side ended the relay: `client`, `upstream`, or `relay_error`.
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub closed_by: Option<String>,
+    /// Bounded, control-character-free relay error token. Frame/body/reason
+    /// text is never persisted.
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub relay_error: Option<String>,
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub abnormal_close: Option<bool>,
     #[serde(default, skip_serializing_if = "is_none")]
     pub attempt_count: Option<u64>,
 }
@@ -2117,7 +2161,7 @@ pub struct RuntimeEvent {
     #[serde(rename = "requestPath", default, skip_serializing_if = "is_none")]
     pub request_path: Option<String>,
     /// 路径与 Live/Realtime 身份判定得到的稳定意图标签，例如 `responses`、
-    /// `live`、`video`。它描述选路面，不替代 requestPurpose 的业务用途。
+    /// `live`、`videos`。它描述选路面，不替代 requestPurpose 的业务用途。
     #[serde(rename = "routeIntent", default, skip_serializing_if = "is_none")]
     pub route_intent: Option<String>,
     /// 客户端提供的稳定会话标识（例如 Claude Code session header）。
@@ -2685,6 +2729,26 @@ mod tests {
                 true,
             ),
             ClientKind::ClaudeCode
+        );
+    }
+
+    #[test]
+    fn codex_metadata_reads_originator_from_canonical_body() {
+        let body = serde_json::json!({
+            "client_metadata": {
+                "x-codex-turn-metadata":
+                    "{\"originator\":\"Codex Desktop/1.2\",\"thread_source\":\"user\"}"
+            }
+        });
+        let metadata = CodexMetadata::from_request(&[], Some(&body)).expect("metadata");
+        assert_eq!(metadata.originator.as_deref(), Some("Codex Desktop/1.2"));
+        assert_eq!(
+            ClientKind::detect_with_originator(
+                Some("Mozilla/5.0"),
+                metadata.originator.as_deref(),
+                true,
+            ),
+            ClientKind::Codex
         );
     }
 

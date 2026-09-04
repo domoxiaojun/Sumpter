@@ -199,6 +199,9 @@ async fn run(
     if let Err(error) = engine.flush_session_affinity() {
         tracing::warn!("会话粘性落盘失败: {error}");
     }
+    if let Err(error) = engine.flush_resource_bindings() {
+        tracing::warn!("资源绑定落盘失败: {error}");
+    }
     let _ = std::fs::remove_file(dir.pid_path());
     ExitCode::SUCCESS
 }

@@ -14,7 +14,7 @@ fn config() -> AppConfig {
           "listener": {"host":"127.0.0.1", "port":0, "authToken":"listener-secret"},
           "retry": {"maxDeferredRounds":0, "sessionStickyRetries":0, "pinnedIPConcurrency":1},
           "endpoints": [{"id":"openai", "name":"OpenAI", "baseURL":"https://provider.invalid", "apiKey":"provider-key", "protocol":"openai-responses", "enabled":true,
-             "mappings":[{"clientPattern":"gpt-4o", "upstreamModel":"gpt-4o-mini"}, {"clientPattern":"gpt-live-1-codex", "upstreamModel":"gpt-live-1-codex"}, {"clientPattern":"gpt-realtime", "upstreamModel":"gpt-realtime"}, {"clientPattern":"grok-imagine-video", "upstreamModel":"grok-imagine-video"}, {"clientPattern":"gpt-image-2", "upstreamModel":"gpt-image-2"}] }]
+             "mappings":[{"clientPattern":"gpt-4o", "upstreamModel":"gpt-4o-mini", "capabilities":["live"]}, {"clientPattern":"gpt-live-1-codex", "upstreamModel":"gpt-live-1-codex"}, {"clientPattern":"gpt-realtime", "upstreamModel":"gpt-realtime"}, {"clientPattern":"grok-imagine-video", "upstreamModel":"grok-imagine-video"}, {"clientPattern":"gpt-image-2", "upstreamModel":"gpt-image-2"}, {"clientPattern":"file-*", "upstreamModel":"file-*", "capabilities":["files"]}] }]
         }"#,
     )
     .expect("fixture config is valid")

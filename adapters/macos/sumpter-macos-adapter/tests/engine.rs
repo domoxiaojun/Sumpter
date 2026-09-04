@@ -3490,7 +3490,16 @@ async fn models_catalog_is_local_and_does_not_hit_upstream() {
             chunks: vec![br#"{"object":"list","data":[]}"#.to_vec()],
         },
     );
-    let engine = engine_with(two_endpoint_config(), fake.clone());
+    let mut config = two_endpoint_config();
+    // Wildcard mappings are directory patterns; only concrete models observed
+    // in an endpoint catalog belong in the local `/v1/models` response.
+    for endpoint in &mut config.endpoints {
+        endpoint.catalog = Some(EndpointCatalog {
+            models: vec!["claude-opus-5".into()],
+            ..EndpointCatalog::default()
+        });
+    }
+    let engine = engine_with(config, fake.clone());
     let (status, resp) = call_get(&engine, loopback(), "/v1/models", vec![]).await;
     assert_eq!(status, 200);
     let json: Value = serde_json::from_slice(&resp).unwrap();
@@ -3500,7 +3509,7 @@ async fn models_catalog_is_local_and_does_not_hit_upstream() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|model| model["id"] == "claude")
+            .any(|model| model["id"] == "claude-opus-5")
     );
     assert!(
         fake.requests().is_empty(),
@@ -3522,7 +3531,7 @@ async fn models_catalog_is_local_and_does_not_hit_upstream() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|model| model["slug"] == "claude")
+            .any(|model| model["slug"] == "claude-opus-5")
     );
     assert!(fake.requests().is_empty());
 }
@@ -3702,7 +3711,9 @@ async fn priority_failover_does_not_create_account_cooldown_for_next_session() {
             .collect::<Vec<_>>(),
         vec!["a.example.com", "b.example.com"]
     );
-    fake.push("a.example.com", sse_ok(&["data: {}\n\n"]));
+    // A 503 cools the endpoint+model pair. The next session therefore starts
+    // at the healthy B entry instead of immediately hammering A again.
+    fake.push("b.example.com", sse_ok(&["data: {}\n\n"]));
     assert_eq!(
         call(
             &engine,
@@ -3715,7 +3726,7 @@ async fn priority_failover_does_not_create_account_cooldown_for_next_session() {
         .0,
         200
     );
-    assert_eq!(fake.requests().last().unwrap().host, "a.example.com");
+    assert_eq!(fake.requests().last().unwrap().host, "b.example.com");
 }
 
 #[tokio::test]

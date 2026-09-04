@@ -280,6 +280,9 @@ async fn run(options: Options) -> ExitCode {
             if let Err(error) = engine.flush_session_affinity() {
                 tracing::warn!("启动失败时会话粘性落盘失败: {error}");
             }
+            if let Err(error) = engine.flush_resource_bindings() {
+                tracing::warn!("启动失败时资源绑定落盘失败: {error}");
+            }
             return ExitCode::FAILURE;
         }
     };
@@ -294,6 +297,9 @@ async fn run(options: Options) -> ExitCode {
             if let Err(error) = engine.flush_session_affinity() {
                 tracing::warn!("启动失败时会话粘性落盘失败: {error}");
             }
+            if let Err(error) = engine.flush_resource_bindings() {
+                tracing::warn!("启动失败时资源绑定落盘失败: {error}");
+            }
             return ExitCode::FAILURE;
         }
     };
@@ -304,6 +310,9 @@ async fn run(options: Options) -> ExitCode {
             eprintln!("安装 SIGINT handler 失败: {error}");
             if let Err(error) = engine.flush_stats() {
                 tracing::warn!("启动失败时统计落盘失败: {error}");
+            }
+            if let Err(error) = engine.flush_resource_bindings() {
+                tracing::warn!("启动失败时资源绑定落盘失败: {error}");
             }
             return ExitCode::FAILURE;
         }
@@ -395,6 +404,9 @@ async fn run(options: Options) -> ExitCode {
     }
     if let Err(error) = engine.flush_session_affinity() {
         tracing::warn!("关停会话粘性落盘失败: {error}");
+    }
+    if let Err(error) = engine.flush_resource_bindings() {
+        tracing::warn!("关停资源绑定落盘失败: {error}");
     }
     let _ = std::fs::remove_file(config_dir.pid_path());
     ExitCode::SUCCESS

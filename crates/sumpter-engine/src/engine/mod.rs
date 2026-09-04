@@ -84,6 +84,7 @@ const SESSION_STICKY_TTL_SECS: f64 = 30.0 * 24.0 * 3600.0;
 const SESSION_STICKY_PRUNE_INTERVAL_SECS: f64 = 60.0;
 pub const DEFAULT_CAPTURE_MAX_BYTES: usize = 512 * 1024 * 1024;
 const MAX_CAPTURE_INDEX_RECORDS: usize = 200;
+const MAX_WEBSOCKET_METADATA_FRAME_BYTES: usize = 64 * 1024;
 const CAPTURE_STOP_MANUAL: &str = "manual";
 const CAPTURE_STOP_CAPACITY: &str = "capacity_limit";
 
@@ -97,6 +98,10 @@ struct InboundRequestContext {
     method: String,
     path: String,
     route_intent: String,
+    /// Bounded client/session identity captured before body parsing.  This is
+    /// intentionally header-only at this layer; body metadata is merged by
+    /// the request handler when it is available.
+    session_id: Option<String>,
 }
 
 tokio::task_local! {
@@ -366,6 +371,11 @@ const MAX_REALTIME_CLIENT_SECRETS: usize = 256;
 const DEFAULT_REALTIME_CLIENT_SECRET_TTL_SECS: f64 = 300.0;
 const MAX_LIVE_SESSIONS: usize = 256;
 const DEFAULT_LIVE_SESSION_TTL_SECS: f64 = 900.0;
+/// Video objects remain addressable while an asynchronous render is queued;
+/// keep their binding for a day, independently from the short Live call TTL.
+const DEFAULT_VIDEO_SESSION_TTL_SECS: f64 = 24.0 * 3600.0;
+const MAX_RESOURCE_BINDING_ID_BYTES: usize = 128;
+const MAX_RESOURCE_BINDING_TEXT_BYTES: usize = 256;
 
 #[derive(Clone)]
 struct RealtimeClientSecretEntry {
@@ -418,7 +428,13 @@ struct WebSocketRelayCounters {
     client_message_count: AtomicU64,
     upstream_message_count: AtomicU64,
     failed: AtomicBool,
-    close_code: Mutex<Option<i64>>,
+    abnormal_close: AtomicBool,
+    client_close_code: Mutex<Option<i64>>,
+    upstream_close_code: Mutex<Option<i64>>,
+    closed_by: Mutex<Option<String>>,
+    relay_error: Mutex<Option<String>>,
+    first_client_text_seen: AtomicBool,
+    first_client_codex_metadata: Mutex<Option<CodexMetadata>>,
 }
 
 struct WebSocketRelayMetrics {
@@ -426,8 +442,13 @@ struct WebSocketRelayMetrics {
     bytes_received: u64,
     client_message_count: u64,
     upstream_message_count: u64,
-    close_code: Option<i64>,
+    client_close_code: Option<i64>,
+    upstream_close_code: Option<i64>,
+    closed_by: Option<String>,
+    relay_error: Option<String>,
+    abnormal_close: bool,
     failed: bool,
+    first_client_codex_metadata: Option<CodexMetadata>,
     duration_ms: i64,
 }
 
@@ -459,12 +480,12 @@ impl WebSocketPrepareError {
         mut self,
         endpoint: &PlannedEndpoint,
         attempts: u64,
-        ttfb_ms: i64,
+        ttfb_ms: Option<i64>,
         retry_after_seconds: Option<f64>,
     ) -> Self {
         self.attempts = attempts;
         self.endpoint = Some(endpoint.clone());
-        self.ttfb_ms = Some(ttfb_ms);
+        self.ttfb_ms = ttfb_ms;
         self.retry_after_seconds = retry_after_seconds;
         self
     }
@@ -489,11 +510,25 @@ pub fn websocket_prepare_error_response(error: &WebSocketPrepareError) -> Respon
         "message": error.message(),
     }))
     .unwrap_or_else(|_| b"{\"error\":\"upstream_error\"}".to_vec());
-    Response::builder()
+    let mut response = Response::builder()
         .status(status)
         .header("content-type", "application/json")
         .body(Body::from(body))
-        .unwrap_or_else(|_| Response::new(Body::empty()))
+        .unwrap_or_else(|_| Response::new(Body::empty()));
+    // A failed WebSocket upgrade has no `CompletionGuard`/normal HTTP retry
+    // response path, so preserve the bounded provider hint here as well.  A
+    // client that receives a 429/5xx during the handshake should observe the
+    // same Retry-After contract as an ordinary request.
+    if let Some(seconds) = error
+        .retry_after_seconds
+        .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+    {
+        let delay = seconds.ceil().min(MAX_RETRY_AFTER_SECS) as u64;
+        if let Ok(value) = HeaderValue::from_str(&delay.to_string()) {
+            response.headers_mut().insert("retry-after", value);
+        }
+    }
+    response
 }
 
 #[derive(Clone)]
@@ -597,6 +632,23 @@ fn now_unix() -> f64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0)
+}
+
+fn valid_resource_binding_text(value: &str) -> bool {
+    let trimmed = value.trim();
+    value == trimmed
+        && !trimmed.is_empty()
+        && trimmed.len() <= MAX_RESOURCE_BINDING_TEXT_BYTES
+        && !trimmed.chars().any(char::is_control)
+}
+
+fn valid_resource_binding_id(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && value.len() <= MAX_RESOURCE_BINDING_ID_BYTES
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
 fn provider_model_key(endpoint: &PlannedEndpoint) -> (String, String) {
@@ -798,7 +850,7 @@ impl Engine {
             None => (DiagnosticCaptureState::default(), true),
         };
         let (notices, _) = tokio::sync::broadcast::channel(512);
-        Self {
+        let engine = Self {
             inner: Arc::new(EngineInner {
                 config: RwLock::new(Arc::new(config)),
                 generation: RwLock::new(generation),
@@ -835,7 +887,13 @@ impl Engine {
                 live_sessions: Mutex::new(live_sessions),
                 video_sessions: Mutex::new(video_sessions),
             }),
-        }
+        };
+        // Loading is authoritative at construction time. If stale entries
+        // were pruned, persist the cleaned snapshot immediately rather than
+        // leaving expired bindings on disk until a background task starts or
+        // an unrelated request happens to flush state.
+        engine.flush_resource_bindings_if_dirty();
+        engine
     }
 
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<EngineNotice> {
@@ -999,14 +1057,19 @@ impl Engine {
 
     fn register_live_session(&self, call_id: &str, endpoint_id: &str, model: &str) {
         let call_id = call_id.trim();
-        if call_id.is_empty()
-            || call_id.len() > 256
-            || call_id.chars().any(char::is_control)
-            || endpoint_id.trim().is_empty()
+        let now = now_unix();
+        if !valid_resource_binding_id(call_id)
+            || !valid_resource_binding_text(endpoint_id)
+            || !valid_resource_binding_text(model)
+            || !DEFAULT_LIVE_SESSION_TTL_SECS.is_finite()
+            || DEFAULT_LIVE_SESSION_TTL_SECS <= 0.0
+            || !now.is_finite()
         {
             return;
         }
-        let now = now_unix();
+        if !(now + DEFAULT_LIVE_SESSION_TTL_SECS).is_finite() {
+            return;
+        }
         {
             let mut sessions = self.inner.live_sessions.lock().unwrap();
             sessions.retain(|_, entry| entry.expires_at > now);
@@ -1045,12 +1108,22 @@ impl Engine {
         let mut sessions = self.inner.live_sessions.lock().unwrap();
         let before = sessions.len();
         sessions.retain(|_, entry| entry.expires_at > now);
-        if sessions.len() != before {
+        let pruned = sessions.len() != before;
+        if pruned {
             self.inner
                 .resource_bindings_dirty
                 .store(true, Ordering::Release);
         }
-        Some(sessions.get(call_id).map(|entry| entry.endpoint_id.clone()))
+        let result = Some(
+            sessions
+                .get(&call_id)
+                .map(|entry| entry.endpoint_id.clone()),
+        );
+        drop(sessions);
+        if pruned {
+            self.flush_resource_bindings_if_dirty();
+        }
+        result
     }
 
     fn live_session_model(&self, path_and_query: &str) -> Option<Option<String>> {
@@ -1059,16 +1132,28 @@ impl Engine {
         let mut sessions = self.inner.live_sessions.lock().unwrap();
         let before = sessions.len();
         sessions.retain(|_, entry| entry.expires_at > now);
-        if sessions.len() != before {
+        let pruned = sessions.len() != before;
+        if pruned {
             self.inner
                 .resource_bindings_dirty
                 .store(true, Ordering::Release);
         }
-        Some(sessions.get(call_id).map(|entry| entry.model.clone()))
+        let result = Some(sessions.get(&call_id).map(|entry| entry.model.clone()));
+        drop(sessions);
+        if pruned {
+            self.flush_resource_bindings_if_dirty();
+        }
+        result
     }
 
     fn register_video_session(&self, video_id: &str, endpoint_id: &str, model: &str) {
-        self.register_live_session_into(&self.inner.video_sessions, video_id, endpoint_id, model);
+        self.register_live_session_into(
+            &self.inner.video_sessions,
+            video_id,
+            endpoint_id,
+            model,
+            DEFAULT_VIDEO_SESSION_TTL_SECS,
+        );
     }
 
     fn register_live_session_into(
@@ -1077,16 +1162,21 @@ impl Engine {
         session_id: &str,
         endpoint_id: &str,
         model: &str,
+        ttl_secs: f64,
     ) {
         let session_id = session_id.trim();
-        if session_id.is_empty()
-            || session_id.len() > 256
-            || session_id.chars().any(char::is_control)
-            || endpoint_id.trim().is_empty()
+        if !valid_resource_binding_id(session_id)
+            || !valid_resource_binding_text(endpoint_id)
+            || !valid_resource_binding_text(model)
+            || !ttl_secs.is_finite()
+            || ttl_secs <= 0.0
         {
             return;
         }
         let now = now_unix();
+        if !now.is_finite() || !(now + ttl_secs).is_finite() {
+            return;
+        }
         {
             let mut sessions = store.lock().unwrap();
             sessions.retain(|_, entry| entry.expires_at > now);
@@ -1102,7 +1192,7 @@ impl Engine {
             sessions.insert(
                 session_id.to_string(),
                 LiveSessionEntry {
-                    expires_at: now + DEFAULT_LIVE_SESSION_TTL_SECS,
+                    expires_at: now + ttl_secs,
                     endpoint_id: endpoint_id.trim().to_string(),
                     model: model.trim().to_string(),
                 },
@@ -1120,16 +1210,22 @@ impl Engine {
         let mut sessions = self.inner.video_sessions.lock().unwrap();
         let before = sessions.len();
         sessions.retain(|_, entry| entry.expires_at > now);
-        if sessions.len() != before {
+        let pruned = sessions.len() != before;
+        if pruned {
             self.inner
                 .resource_bindings_dirty
                 .store(true, Ordering::Release);
         }
-        Some(
+        let result = Some(
             sessions
                 .get(video_id)
                 .map(|entry| entry.endpoint_id.clone()),
-        )
+        );
+        drop(sessions);
+        if pruned {
+            self.flush_resource_bindings_if_dirty();
+        }
+        result
     }
 
     fn video_session_model(&self, path: &str) -> Option<Option<String>> {
@@ -1138,12 +1234,18 @@ impl Engine {
         let mut sessions = self.inner.video_sessions.lock().unwrap();
         let before = sessions.len();
         sessions.retain(|_, entry| entry.expires_at > now);
-        if sessions.len() != before {
+        let pruned = sessions.len() != before;
+        if pruned {
             self.inner
                 .resource_bindings_dirty
                 .store(true, Ordering::Release);
         }
-        Some(sessions.get(video_id).map(|entry| entry.model.clone()))
+        let result = Some(sessions.get(video_id).map(|entry| entry.model.clone()));
+        drop(sessions);
+        if pruned {
+            self.flush_resource_bindings_if_dirty();
+        }
+        result
     }
 
     pub fn runtime_snapshot(&self) -> RuntimeSnapshot {
@@ -2491,6 +2593,9 @@ impl Engine {
                 event.effective_model = event.effective_model.or(client.effective_model);
                 event.feature_rule_id = event.feature_rule_id.or(client.feature_rule_id);
                 event.session_id = event.session_id.or(client.session_id);
+                event.request_method = event.request_method.or(client.request_method);
+                event.request_path = event.request_path.or(client.request_path);
+                event.route_intent = event.route_intent.or(client.route_intent);
                 event.codex_metadata = event.codex_metadata.or(client.codex_metadata);
                 event.client_declared = event.client_declared.or(client.client_declared);
             }
@@ -2525,7 +2630,62 @@ impl Engine {
         client_declared: Option<ClientDeclaredMetadata>,
         source_format: Option<ProviderProtocol>,
     ) {
+        self.record_rejected_client_with_context(
+            status,
+            message,
+            client_model,
+            purpose,
+            client_kind,
+            codex_metadata,
+            client_declared,
+            source_format,
+            current_request_context(),
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_rejected_client_with_context(
+        &self,
+        status: i64,
+        message: &str,
+        client_model: Option<String>,
+        purpose: Option<RequestPurpose>,
+        client_kind: ClientKind,
+        codex_metadata: Option<CodexMetadata>,
+        client_declared: Option<ClientDeclaredMetadata>,
+        source_format: Option<ProviderProtocol>,
+        request_context: Option<InboundRequestContext>,
+    ) {
         let event_id = new_event_id();
+        let (request_method, request_path, route_intent, context_session_id) = request_context
+            .map(|context| {
+                (
+                    Some(context.method),
+                    Some(context.path),
+                    Some(context.route_intent),
+                    context.session_id,
+                )
+            })
+            .unwrap_or((None, None, None, None));
+        // A body/header Codex metadata projection is safe to use for
+        // attribution even when the caller passed a stale header-only kind.
+        // Never let it override a positively identified Claude/Grok client.
+        let client_kind = if matches!(client_kind, ClientKind::OpenaiCompat | ClientKind::Unknown)
+            && codex_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.originator.as_deref())
+                .is_some_and(is_codex_originator)
+        {
+            ClientKind::Codex
+        } else {
+            client_kind
+        };
+        let session_id = context_session_id.or_else(|| {
+            codex_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.session_id.clone())
+        });
+        let message = bounded_failure_detail(message);
         let event = RuntimeEvent {
             client_kind: Some(client_kind),
             codex_metadata,
@@ -2542,22 +2702,22 @@ impl Engine {
             endpoint_name: None,
             failover: false,
             feature_rule_id: None,
-            failure_detail: Some(message.to_string()),
+            failure_detail: Some(message.clone()),
             failure_kind: Some(RuntimeFailureKind::ClientRequestRejected),
             failure_phase: Some(RuntimeFailurePhase::BeforeResponse),
             id: event_id.clone(),
             kind: KIND_CLIENT.into(),
-            message: Some(message.to_string()),
+            message: Some(message.clone()),
             tool_calls: None,
             outcome: Some(RuntimeEventOutcome::Failed),
             phase: Some(RuntimeEventPhase::Completed),
             pool_id: None,
             request_purpose: purpose,
             request_id: Some(event_id),
-            request_method: None,
-            request_path: None,
-            route_intent: None,
-            session_id: None,
+            request_method,
+            request_path,
+            route_intent,
+            session_id,
             status_code: status,
             timestamp: unix_to_apple_epoch(now_unix()),
             // 请求在规划/鉴权阶段就被拒,从未 accepted。
@@ -2569,7 +2729,63 @@ impl Engine {
             upstream_request_id: None,
             upstream_status_code: None,
         };
-        self.complete_client(event, Some(message.to_string()));
+        self.complete_client(event, Some(message));
+    }
+
+    /// Record an early WebSocket rejection before a CompletionGuard exists.
+    /// The event keeps only bounded path/method/intent metadata and never
+    /// stores query values, frame bodies, SDP, or credentials.
+    pub fn record_rejected_websocket(
+        &self,
+        path_and_query: &str,
+        headers: &[(String, String)],
+        status: u16,
+        message: &str,
+    ) {
+        self.record_rejected_websocket_with_metadata(
+            path_and_query,
+            headers,
+            status,
+            message,
+            None,
+        );
+    }
+
+    /// Variant used after a Responses WebSocket first frame has been buffered.
+    /// Codex Desktop may put the only `originator`/`session_id` marker in that
+    /// frame; preserving the bounded metadata keeps an early model/path
+    /// rejection attributable without storing the frame body.
+    fn record_rejected_websocket_with_metadata(
+        &self,
+        path_and_query: &str,
+        headers: &[(String, String)],
+        status: u16,
+        message: &str,
+        frame_metadata: Option<CodexMetadata>,
+    ) {
+        let context = self.inbound_request_context("GET", path_and_query, headers);
+        let header_metadata = CodexMetadata::from_request(headers, None);
+        let codex_metadata = merge_codex_metadata(header_metadata, frame_metadata);
+        let client_kind = codex_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.originator.as_deref())
+            .filter(|originator| is_codex_originator(originator))
+            .map_or_else(|| detect_client_kind(headers, true), |_| ClientKind::Codex);
+        let query_model = path_and_query
+            .split_once('?')
+            .and_then(|(_, query)| decoded_query_value(query, "model"))
+            .filter(|model| !model.trim().is_empty());
+        self.record_rejected_client_with_context(
+            i64::from(status),
+            message,
+            query_model,
+            Some(RequestPurpose::Standard),
+            client_kind,
+            codex_metadata,
+            ClientDeclaredMetadata::from_headers(headers),
+            Some(ProviderProtocol::OpenAI),
+            Some(context),
+        );
     }
 
     fn touch_ip(&self, ip: &str, connected: bool, now: f64) {
@@ -2824,6 +3040,10 @@ impl Engine {
         } else {
             i64::from(error.status)
         };
+        // Keep the upstream event's status at zero when no HTTP handshake
+        // response existed. The client still receives a conventional 502,
+        // but diagnostics must not claim that the provider returned HTTP 502.
+        let upstream_status = i64::from(error.status);
         let mut failure = if error.status > 0 {
             FailureInfo::upstream_http(error.status, None)
         } else {
@@ -2839,7 +3059,19 @@ impl Engine {
         };
         failure.detail = Some(error.message.clone());
         failure.retry_after_seconds = error.retry_after_seconds;
-        let trace = websocket_trace(error.status.into(), 0, 0, 0, 0, None, error.attempts);
+        let trace = websocket_trace(
+            error.status.into(),
+            0,
+            0,
+            0,
+            0,
+            None,
+            None,
+            None,
+            None,
+            false,
+            error.attempts,
+        );
         let endpoint = error.endpoint.as_ref();
         let mut client = websocket_client_event(
             context,
@@ -2850,23 +3082,34 @@ impl Engine {
             Some(&failure),
         );
         client.message = Some(error.message.clone());
+        // Keep the client-side latency distinct from an upstream attempt's
+        // TTFB.  When the provider returned an HTTP response, the attempt
+        // TTFB is the best bounded handshake signal available; when the
+        // connection failed before response headers it must remain unknown.
+        client.ttfb_ms = error.ttfb_ms;
         self.complete_client(client, Some(error.message.clone()));
         if let Some(endpoint) = endpoint {
+            let upstream_duration = error.ttfb_ms.unwrap_or_else(|| {
+                context.started.elapsed().as_millis().min(i64::MAX as u128) as i64
+            });
             let mut upstream = self.upstream_event(
                 endpoint,
-                status,
-                error.ttfb_ms.unwrap_or_default(),
+                upstream_status,
+                upstream_duration,
                 error.attempts > 1,
                 Some("websocket handshake failed".into()),
                 RequestPurpose::Standard,
                 context.client_kind,
                 &context.request_id,
             );
+            upstream.codex_metadata = context.codex_metadata.clone();
+            upstream.client_declared = context.client_declared.clone();
             upstream.request_method = Some("GET".into());
             upstream.request_path = Some(context.request_path.clone());
             upstream.route_intent = Some(context.route_intent.clone());
             upstream.client_model = Some(context.model.clone());
             upstream.effective_model = Some(context.model.clone());
+            upstream.ttfb_ms = error.ttfb_ms;
             upstream.stream_trace = Some(trace);
             failure.apply_to(&mut upstream);
             self.complete_upstream(upstream);
@@ -2879,6 +3122,10 @@ impl Engine {
         connection: &ConnectedWebSocket,
         metrics: &WebSocketRelayMetrics,
     ) {
+        let context = websocket_context_with_first_frame(
+            context,
+            metrics.first_client_codex_metadata.as_ref(),
+        );
         let status = 101_i64;
         let trace = websocket_trace(
             101,
@@ -2886,7 +3133,11 @@ impl Engine {
             metrics.bytes_received,
             metrics.client_message_count,
             metrics.upstream_message_count,
-            metrics.close_code,
+            metrics.client_close_code,
+            metrics.upstream_close_code,
+            metrics.closed_by.clone(),
+            metrics.relay_error.clone(),
+            metrics.abnormal_close,
             connection.attempt_count,
         );
         let failure = metrics.failed.then(|| FailureInfo {
@@ -2908,11 +3159,14 @@ impl Engine {
             context.client_kind,
             &context.request_id,
         );
+        upstream.codex_metadata = context.codex_metadata.clone();
+        upstream.client_declared = context.client_declared.clone();
         upstream.request_method = Some("GET".into());
         upstream.request_path = Some(context.request_path.clone());
         upstream.route_intent = Some(context.route_intent.clone());
         upstream.client_model = Some(context.model.clone());
         upstream.effective_model = Some(context.model.clone());
+        upstream.ttfb_ms = Some(connection.handshake_ttfb_ms);
         upstream.stream_trace = Some(trace.clone());
         if let Some(failure) = &failure {
             failure.apply_to(&mut upstream);
@@ -2922,7 +3176,7 @@ impl Engine {
         self.complete_upstream(upstream);
 
         let mut client = websocket_client_event(
-            context,
+            &context,
             Some(&connection.endpoint),
             status,
             connection.failover,
@@ -2949,11 +3203,19 @@ impl Engine {
         let started = Instant::now();
         let path = path_without_query(path_and_query);
         if !is_realtime_http_path(path) {
-            return Err(WebSocketPrepareError::new(
+            let error = WebSocketPrepareError::new(
                 400,
                 "invalid_request",
                 "websocket path is not a Realtime endpoint",
-            ));
+            );
+            self.record_rejected_websocket(path_and_query, headers, error.status, error.message());
+            return Err(error);
+        }
+        if let Err(error) = validate_realtime_call_target(path_and_query) {
+            let (status, code, message) = realtime_call_path_error(error);
+            let prepared = WebSocketPrepareError::new(status.as_u16(), code, message);
+            self.record_rejected_websocket(path_and_query, headers, prepared.status, message);
+            return Err(prepared);
         }
         let sideband_model = self
             .live_session_model(path_and_query)
@@ -2961,9 +3223,8 @@ impl Engine {
             .filter(|model| !model.trim().is_empty());
         let query_model = path_and_query
             .split_once('?')
-            .and_then(|(_, query)| query_value(query, "model"))
-            .filter(|model| !model.trim().is_empty())
-            .map(str::to_string);
+            .and_then(|(_, query)| decoded_query_value(query, "model"))
+            .filter(|model| !model.trim().is_empty());
         let secret_model = self.realtime_client_secret_model(headers);
         let client_kind = detect_client_kind(headers, true);
         let intent = classify_realtime_intent(
@@ -2975,7 +3236,8 @@ impl Engine {
             client_kind,
             false,
         );
-        let model = realtime_route_model(
+        let model = resolve_realtime_route_model(
+            &self.config(),
             "GET",
             path_and_query,
             query_model,
@@ -2983,9 +3245,20 @@ impl Engine {
             secret_model,
             intent,
         );
-        let request = RoutingRequest::from_value(&json!({"model": model})).ok_or_else(|| {
-            WebSocketPrepareError::new(400, "invalid_request", "invalid websocket model")
-        })?;
+        let request = match RoutingRequest::from_value(&json!({"model": model})) {
+            Some(request) => request,
+            None => {
+                let error =
+                    WebSocketPrepareError::new(400, "invalid_request", "invalid websocket model");
+                self.record_rejected_websocket(
+                    path_and_query,
+                    headers,
+                    error.status,
+                    error.message(),
+                );
+                return Err(error);
+            }
+        };
         let context =
             websocket_event_context(path_and_query, headers, &request.model, intent, started);
         match self
@@ -3069,12 +3342,17 @@ impl Engine {
         headers: Vec<(String, String)>,
     ) {
         let path = path_without_query(&path_and_query);
+        if let Err(error) = validate_realtime_call_target(&path_and_query) {
+            let (status, code, message) = realtime_call_path_error(error);
+            self.record_rejected_websocket(&path_and_query, &headers, status.as_u16(), message);
+            let _ = send_websocket_json_error(&mut socket, code, message).await;
+            return;
+        }
         let mut initial_message = None;
         let query_model = path_and_query
             .split_once('?')
-            .and_then(|(_, query)| query_value(query, "model"))
-            .filter(|model| !model.trim().is_empty())
-            .map(str::to_string);
+            .and_then(|(_, query)| decoded_query_value(query, "model"))
+            .filter(|model| !model.trim().is_empty());
         let sideband_model = self
             .live_session_model(&path_and_query)
             .flatten()
@@ -3091,7 +3369,8 @@ impl Engine {
                 client_kind,
                 false,
             );
-            Some(realtime_route_model(
+            Some(resolve_realtime_route_model(
+                &self.config(),
                 "GET",
                 &path_and_query,
                 query_model,
@@ -3112,6 +3391,12 @@ impl Engine {
                     model
                 }
                 Some(Err(error)) => {
+                    self.record_rejected_websocket(
+                        &path_and_query,
+                        &headers,
+                        400,
+                        &format!("invalid websocket frame: {error}"),
+                    );
                     let _ = send_websocket_json_error(
                         &mut socket,
                         "invalid_request",
@@ -3127,6 +3412,16 @@ impl Engine {
             None
         };
         let Some(model) = model else {
+            let frame_metadata = initial_message
+                .as_ref()
+                .and_then(websocket_message_codex_metadata);
+            self.record_rejected_websocket_with_metadata(
+                &path_and_query,
+                &headers,
+                400,
+                "websocket model is required (query model or first response.create frame)",
+                frame_metadata,
+            );
             let _ = send_websocket_json_error(
                 &mut socket,
                 "invalid_request",
@@ -3137,6 +3432,16 @@ impl Engine {
         };
         let request = RoutingRequest::from_value(&json!({"model": model}));
         let Some(request) = request else {
+            let frame_metadata = initial_message
+                .as_ref()
+                .and_then(websocket_message_codex_metadata);
+            self.record_rejected_websocket_with_metadata(
+                &path_and_query,
+                &headers,
+                400,
+                "invalid websocket model",
+                frame_metadata,
+            );
             let _ = send_websocket_json_error(
                 &mut socket,
                 "invalid_request",
@@ -3167,6 +3472,14 @@ impl Engine {
             intent,
             Instant::now(),
         );
+        // Responses WebSocket clients may put the only Codex identity marker
+        // on the buffered `response.create` frame.  Merge the bounded
+        // metadata before dialing upstream so handshake failures are
+        // attributed the same way as successful relays.
+        let first_frame_metadata = initial_message
+            .as_ref()
+            .and_then(websocket_message_codex_metadata);
+        let context = websocket_context_with_first_frame(&context, first_frame_metadata.as_ref());
         let mut connection = match self
             .connect_native_websocket(path, &path_and_query, &headers, &request)
             .await
@@ -3195,6 +3508,10 @@ impl Engine {
         headers: &[(String, String)],
         request: &RoutingRequest,
     ) -> Result<ConnectedWebSocket, WebSocketPrepareError> {
+        if let Err(error) = validate_realtime_call_target(path_and_query) {
+            let (status, code, message) = realtime_call_path_error(error);
+            return Err(WebSocketPrepareError::new(status.as_u16(), code, message));
+        }
         if matches!(self.live_session_endpoint(path_and_query), Some(None)) {
             return Err(WebSocketPrepareError::new(
                 if is_codex_live_sideband_target(path_and_query) {
@@ -3210,11 +3527,17 @@ impl Engine {
                 "Realtime session is unknown or expired",
             ));
         }
-        let mut plan = match RoutePlanner::plan_for_passthrough(
-            request,
-            &self.config(),
-            ProviderProtocol::OpenAI,
-        ) {
+        let config = self.config();
+        let mut plan = match if is_realtime_http_path(path) {
+            RoutePlanner::plan_for_capability(
+                request,
+                &config,
+                ProviderProtocol::OpenAI,
+                sumpter_core::capability::ModelCapability::Live,
+            )
+        } else {
+            RoutePlanner::plan_for_passthrough(request, &config, ProviderProtocol::OpenAI)
+        } {
             Ok(plan) => plan,
             Err(error) => {
                 return Err(WebSocketPrepareError::new(
@@ -3238,20 +3561,19 @@ impl Engine {
             let client_kind = detect_client_kind(headers, true);
             let query_model = path_and_query
                 .split_once('?')
-                .and_then(|(_, query)| query_value(query, "model"));
+                .and_then(|(_, query)| decoded_query_value(query, "model"));
             let sideband_model = self.live_session_model(path_and_query).flatten();
             let secret_model = self.realtime_client_secret_model(headers);
             let intent = classify_realtime_intent(
                 "GET",
                 path_and_query,
-                query_model,
+                query_model.as_deref(),
                 sideband_model.as_deref(),
                 secret_model.as_deref(),
                 client_kind,
                 false,
             );
             let codex_live = intent == RealtimeRouteIntent::CodexLive;
-            let config = self.config();
             plan.endpoints.retain(|endpoint| {
                 endpoint.protocol != ProviderProtocol::Anthropic
                     && has_exact_realtime_mapping(&config, &endpoint.endpoint_id, &request.model)
@@ -3308,8 +3630,7 @@ impl Engine {
             }
         }
         if let Some(expected_model) = self.realtime_client_secret_model(headers)
-            && sumpter_core::model_name::clean(&expected_model)
-                != sumpter_core::model_name::clean(&request.model)
+            && !realtime_client_secret_models_match(&expected_model, &request.model)
         {
             return Err(WebSocketPrepareError::new(
                 403,
@@ -3335,7 +3656,8 @@ impl Engine {
             path_and_query,
             path_and_query
                 .split_once('?')
-                .and_then(|(_, query)| query_value(query, "model")),
+                .and_then(|(_, query)| decoded_query_value(query, "model"))
+                .as_deref(),
             self.live_session_model(path_and_query).flatten().as_deref(),
             self.realtime_client_secret_model(headers).as_deref(),
             detect_client_kind(headers, true),
@@ -3346,24 +3668,33 @@ impl Engine {
             persistent: false,
         };
         let ordered = self.ordered_endpoints(&plan, &ordering_key);
+        if ordered.is_empty()
+            && let Some(retry_after) = self.provider_model_cooldown_retry_after(&plan.endpoints)
+        {
+            let mut error = WebSocketPrepareError::new(
+                503,
+                "provider_cooldown",
+                "all compatible providers are cooling down",
+            );
+            error.retry_after_seconds = Some(retry_after);
+            return Err(error);
+        }
         let mut last_error = None;
         let mut attempt_count = 0_u64;
         for endpoint in &ordered {
             attempt_count = attempt_count.saturating_add(1);
             let attempt_started = Instant::now();
-            let Some(url) = websocket_url(&endpoint.base_url, path_and_query) else {
+            // avas/quicksilver query markers are WebRTC HTTP-only.  Forwarding
+            // them on GET `/v1/realtime` makes OpenAI/CPA reply
+            // `invalid_architecture` instead of opening a standard Realtime WS.
+            let outbound_path_and_query = request_build::strip_codex_live_query(path_and_query);
+            let Some(url) = websocket_url(&endpoint.base_url, &outbound_path_and_query) else {
                 let error = WebSocketPrepareError::new(
-                    502,
+                    0,
                     "upstream_error",
                     "invalid realtime upstream URL",
                 )
-                .with_attempt(
-                    endpoint,
-                    attempt_count,
-                    attempt_started.elapsed().as_millis() as i64,
-                    None,
-                );
-                self.note_provider_model_failure(endpoint, None, None, now_unix());
+                .with_attempt(endpoint, attempt_count, None, None);
                 last_error = Some(error);
                 continue;
             };
@@ -3383,18 +3714,13 @@ impl Engine {
                 .endpoint(&endpoint.endpoint_id)
                 .map(|endpoint| endpoint.api_key.clone())
                 .unwrap_or_default();
-            let mut upstream_request = match url.into_client_request().map_err(|error| {
-                WebSocketPrepareError::new(502, "upstream_error", error.to_string())
-            }) {
+            let mut upstream_request = match url
+                .into_client_request()
+                .map_err(|error| WebSocketPrepareError::new(0, "upstream_error", error.to_string()))
+            {
                 Ok(request) => request,
                 Err(error) => {
-                    last_error = Some(error.with_attempt(
-                        endpoint,
-                        attempt_count,
-                        attempt_started.elapsed().as_millis() as i64,
-                        None,
-                    ));
-                    self.note_provider_model_failure(endpoint, None, None, now_unix());
+                    last_error = Some(error.with_attempt(endpoint, attempt_count, None, None));
                     continue;
                 }
             };
@@ -3409,6 +3735,20 @@ impl Engine {
                 {
                     upstream_request.headers_mut().append(name, value);
                 }
+            }
+            if route_intent == RealtimeRouteIntent::CodexLive {
+                // Match CPA's Live protocol identity even when the client did
+                // not include the optional headers.  This is scoped to the
+                // classified Live connection; standard Realtime remains free
+                // of the Quicksilver alpha marker.
+                upstream_request.headers_mut().insert(
+                    http::header::HeaderName::from_static("originator"),
+                    http::header::HeaderValue::from_static("Codex Desktop"),
+                );
+                upstream_request.headers_mut().insert(
+                    http::header::HeaderName::from_static("openai-alpha"),
+                    http::header::HeaderValue::from_static("quicksilver=v2"),
+                );
             }
             let provider_headers = ephemeral
                 .as_deref()
@@ -3433,14 +3773,14 @@ impl Engine {
                     {
                         last_error = Some(
                             WebSocketPrepareError::new(
-                                502,
+                                0,
                                 "upstream_error",
                                 format!("failed to apply Realtime session: {error}"),
                             )
                             .with_attempt(
                                 endpoint,
                                 attempt_count,
-                                attempt_started.elapsed().as_millis() as i64,
+                                Some(attempt_started.elapsed().as_millis() as i64),
                                 None,
                             ),
                         );
@@ -3471,7 +3811,7 @@ impl Engine {
                         WebSocketPrepareError::new(status, "upstream_error", message).with_attempt(
                             endpoint,
                             attempt_count,
-                            attempt_started.elapsed().as_millis() as i64,
+                            (status > 0).then(|| attempt_started.elapsed().as_millis() as i64),
                             retry_after,
                         );
                     if status > 0 && !RetryPolicy::is_endpoint_retryable_status(status) {
@@ -3482,7 +3822,7 @@ impl Engine {
             }
         }
         let error = last_error.unwrap_or_else(|| {
-            WebSocketPrepareError::new(502, "upstream_error", "upstream websocket unavailable")
+            WebSocketPrepareError::new(0, "upstream_error", "upstream websocket unavailable")
         });
         Err(error)
     }
@@ -3514,12 +3854,14 @@ impl Engine {
         let client_kind = detect_client_kind(headers, true);
         let query_model = path_and_query
             .split_once('?')
-            .and_then(|(_, query)| query_value(query, "model"));
-        let route_intent = route_intent_for_path(method, path_and_query, query_model, client_kind);
+            .and_then(|(_, query)| decoded_query_value(query, "model"));
+        let route_intent =
+            route_intent_for_path(method, path_and_query, query_model.as_deref(), client_kind);
         InboundRequestContext {
             method: bounded_request_method(method),
             path,
             route_intent: route_intent.to_string(),
+            session_id: observed_session_id(headers),
         }
     }
 
@@ -3540,6 +3882,16 @@ impl Engine {
         // CIDR 对所有路径最先执行;环回恒放行。
         let config = self.config();
         if !access::is_allowed(remote_text.as_deref(), &config.listener.allowed_cidrs) {
+            self.record_rejected_client_with_metadata(
+                403,
+                "client_forbidden",
+                None,
+                Some(RequestPurpose::Standard),
+                detect_client_kind(&headers, true),
+                CodexMetadata::from_request(&headers, None),
+                ClientDeclaredMetadata::from_headers(&headers),
+                Some(ProviderProtocol::OpenAI),
+            );
             return error_response(StatusCode::FORBIDDEN, &[("error", "client_forbidden")]);
         }
 
@@ -3585,13 +3937,35 @@ impl Engine {
             );
         }
 
+        // Validate CPA's call-resource grammar before the dynamic Realtime
+        // dispatcher can mistake a malformed child for a standard Realtime
+        // resource.  The path is the only input echoed into diagnostics;
+        // query values and request bodies remain untouched.
+        if let Err(error) = validate_realtime_call_target(path_and_query) {
+            let (status, code, message) = realtime_call_path_error(error);
+            self.record_rejected_client_with_metadata(
+                status.as_u16().into(),
+                message,
+                None,
+                Some(RequestPurpose::Standard),
+                detect_client_kind(&headers, true),
+                CodexMetadata::from_request(&headers, None),
+                ClientDeclaredMetadata::from_headers(&headers),
+                Some(ProviderProtocol::OpenAI),
+            );
+            return error_response(status, &[("error", code), ("message", message)]);
+        }
+
         // `/v1/models` is a local capability directory. Codex Desktop probes
         // this path without a model field; forwarding it as a resource request
         // sent the catalog to whichever non-Anthropic provider happened to be
         // first. Serve configured mappings instead so the visible list does
         // not depend on provider order, and so Codex `client_version` gets
         // the `{models:[...]}` shape rather than a foreign OpenAI catalog.
-        if method.eq_ignore_ascii_case("GET") && is_local_models_path(path) {
+        // Claim the complete models route tree here. Otherwise POST
+        // `/v1/models` and malformed nested paths fall through to the generic
+        // resource/raw dispatcher and can leak a request to a Provider.
+        if is_openai_resource_tree(path, "models") {
             if config.listener.has_inbound_auth()
                 && !inbound_auth_ok(&headers, &config.listener.auth_token)
             {
@@ -3610,6 +3984,15 @@ impl Engine {
                     StatusCode::UNAUTHORIZED,
                     &[("error", "inbound_auth_required")],
                 );
+            }
+            if !is_local_models_path(path) {
+                return error_response(
+                    StatusCode::NOT_FOUND,
+                    &[("error", "not_found"), ("path", path)],
+                );
+            }
+            if !method.eq_ignore_ascii_case("GET") {
+                return method_not_allowed_response("GET");
             }
             return local_models_response(&config, path, query, &headers);
         }
@@ -3722,15 +4105,19 @@ impl Engine {
             "/v1/realtime/client_secrets"
             | "/realtime/client_secrets"
             | "/openai/v1/realtime/client_secrets"
+            | "/backend-api/codex/realtime/client_secrets"
             | "/v1/realtime"
             | "/realtime"
             | "/openai/v1/realtime"
+            | "/backend-api/codex/realtime"
             | "/v1/realtime/calls"
             | "/realtime/calls"
             | "/openai/v1/realtime/calls"
+            | "/backend-api/codex/realtime/calls"
             | "/v1/live"
             | "/live"
-            | "/openai/v1/live" => {
+            | "/openai/v1/live"
+            | "/backend-api/codex/live" => {
                 self.handle_native_openai_passthrough(
                     &config,
                     PassthroughKind::Realtime,
@@ -3758,13 +4145,16 @@ impl Engine {
                 // 路径:直接 404,既不做鉴权也不碰请求体,否则 /healthz、/favicon.ico
                 // 这类探测会先吃到 401/400 并计进「被拒客户端」统计,把那块面板淹掉。
                 //
-                // 只认 query 里的 model:判定必须早于读 body(bodyless 的未知路径
-                // 不能被迫分配 payload),所以 body 里的 model 不参与这道判定。
-                if kind == PassthroughKind::Raw
-                    && query
-                        .and_then(|query| query_value(query, "model"))
-                        .is_none_or(|model| model.trim().is_empty())
-                {
+                // Query model is the cheap path.  JSON raw requests may carry
+                // the model only in their body, so let those reach the native
+                // handler (which already enforces MAX_BODY_BYTES and validates
+                // the field).  Opaque/non-JSON unknown paths still short-cut
+                // to 404 without consuming arbitrary probe payloads.
+                let query_model = query
+                    .and_then(|query| decoded_query_value(query, "model"))
+                    .filter(|model| !model.trim().is_empty());
+                let body_hint = raw_request_body_hint(method, &headers);
+                if kind == PassthroughKind::Raw && query_model.is_none() && !body_hint {
                     return error_response(
                         StatusCode::NOT_FOUND,
                         &[("error", "not_found"), ("path", path)],
@@ -4180,6 +4570,65 @@ impl Engine {
         {
             content_type = Some("application/json".into());
         }
+        // Resolve the client identity from the *original* payload before any
+        // Live/Realtime compatibility envelope is applied.  Codex Desktop
+        // sometimes puts `originator` only in
+        // `client_metadata.x-codex-turn-metadata`; waiting until after the
+        // SDP/body normalization made the request look like a generic
+        // openai_compat client during route classification and rejection
+        // accounting.  Keep this metadata as the authoritative attribution
+        // source for the whole request; normalization must never erase it.
+        let metadata_body_before_normalization = content_type
+            .as_deref()
+            .is_some_and(content_type_is_json)
+            .then(|| serde_json::from_slice::<Value>(&body).ok())
+            .flatten();
+        let codex_metadata =
+            CodexMetadata::from_request(&headers, metadata_body_before_normalization.as_ref());
+        if let Some(originator) = codex_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.originator.as_deref())
+        {
+            client_kind = ClientKind::detect_with_originator(
+                header_value(&headers, "user-agent"),
+                Some(originator),
+                kind != PassthroughKind::ClaudeCountTokens,
+            );
+        }
+        // An ephemeral client secret is scoped to the model requested when it
+        // was issued.  Check an explicit query/body model before the Live
+        // normalizer can replace it with `gpt-live-1-codex`; otherwise a
+        // conflicting model could be hidden by the protocol bootstrap rewrite.
+        if kind == PassthroughKind::Realtime
+            && let Some(expected_model) = self.realtime_client_secret_model(&headers)
+        {
+            let explicit_model = path_and_query
+                .split_once('?')
+                .and_then(|(_, query)| decoded_query_value(query, "model"))
+                .or_else(|| realtime_body_model_hint(&body, content_type.as_deref()));
+            if let Some(explicit_model) = explicit_model
+                && !realtime_client_secret_models_match(&expected_model, &explicit_model)
+            {
+                let message = "Realtime client secret is not valid for the requested model";
+                self.record_rejected_client_with_metadata(
+                    403,
+                    message,
+                    Some(explicit_model),
+                    Some(purpose),
+                    client_kind,
+                    codex_metadata.clone(),
+                    ClientDeclaredMetadata::from_headers(&headers),
+                    Some(source_format),
+                );
+                return error_response(
+                    StatusCode::FORBIDDEN,
+                    &[
+                        ("error", "realtime_client_secret_scope_mismatch"),
+                        ("message", message),
+                    ],
+                );
+            }
+        }
         // CPA uses the same Live handler for POST /v1/live and POST /v1/realtime.
         // Codex Desktop may also send the current chat model on those paths;
         // wrap the SDP/multipart bootstrap so routing cannot inherit it.
@@ -4187,9 +4636,9 @@ impl Engine {
             && should_normalize_codex_live_request(
                 method,
                 path_and_query,
-                &headers,
                 &body,
                 content_type.as_deref(),
+                client_kind,
             )
         {
             set_current_route_intent("live");
@@ -4203,7 +4652,7 @@ impl Engine {
                             None,
                             Some(purpose),
                             client_kind,
-                            header_codex_metadata.clone(),
+                            codex_metadata.clone(),
                             ClientDeclaredMetadata::from_headers(&headers),
                             Some(source_format),
                         );
@@ -4234,7 +4683,7 @@ impl Engine {
                             None,
                             Some(purpose),
                             client_kind,
-                            header_codex_metadata.clone(),
+                            codex_metadata.clone(),
                             ClientDeclaredMetadata::from_headers(&headers),
                             Some(source_format),
                         );
@@ -4247,46 +4696,22 @@ impl Engine {
             body = normalized_body;
             content_type = Some(normalized_content_type);
         }
-        let metadata_body = content_type
-            .as_deref()
-            .is_some_and(content_type_is_json)
-            .then(|| serde_json::from_slice::<Value>(&body).ok())
-            .flatten();
-        let codex_metadata = CodexMetadata::from_request(&headers, metadata_body.as_ref());
-        if let Some(originator) = codex_metadata
-            .as_ref()
-            .and_then(|metadata| metadata.originator.as_deref())
-        {
-            client_kind = ClientKind::detect_with_originator(
-                header_value(&headers, "user-agent"),
-                Some(originator),
-                kind != PassthroughKind::ClaudeCountTokens,
-            );
-        }
         let fields = if resource_intent {
             NativePassthroughFields {
                 model: sumpter_core::routing::RESOURCE_ROUTING_MODEL.into(),
                 stream: false,
             }
         } else if kind == PassthroughKind::Raw {
-            let body_model = content_type
-                .as_deref()
-                .filter(|content_type| content_type_is_json(content_type))
-                .and_then(|_| serde_json::from_slice::<Value>(&body).ok())
-                .and_then(|value| {
-                    value
-                        .get("model")
-                        .and_then(Value::as_str)
-                        .map(str::trim)
-                        .filter(|model| !model.is_empty())
-                        .map(str::to_string)
-                });
+            // Raw requests are relayed byte-for-byte.  We only perform a
+            // bounded, read-only JSON sniff to discover a top-level `model`
+            // used for selecting the mapping; the original bytes are passed
+            // unchanged to `request_build`.
+            let body_model = raw_body_model_hint(&body, content_type.as_deref());
             let model = path_and_query
                 .split_once('?')
-                .and_then(|(_, query)| query_value(query, "model"))
-                .map(str::trim)
+                .and_then(|(_, query)| decoded_query_value(query, "model"))
+                .map(|model| model.trim().to_string())
                 .filter(|model| !model.is_empty())
-                .map(str::to_string)
                 .or(body_model);
             let Some(model) = model else {
                 let reason = "model is required for raw passthrough";
@@ -4316,10 +4741,9 @@ impl Engine {
             // the surrounding chat model (the original fable-5 failure).
             let query_model = path_and_query
                 .split_once('?')
-                .and_then(|(_, query)| query_value(query, "model"))
-                .map(str::trim)
-                .filter(|model| !model.is_empty())
-                .map(str::to_string);
+                .and_then(|(_, query)| decoded_query_value(query, "model"))
+                .map(|model| model.trim().to_string())
+                .filter(|model| !model.is_empty());
             let body_model = realtime_body_model(&body, content_type.as_deref());
             let sideband_model = self.live_session_model(path_and_query).flatten();
             let secret_model = self.realtime_client_secret_model(&headers);
@@ -4336,7 +4760,8 @@ impl Engine {
                 RealtimeRouteIntent::CodexLive => "live",
                 RealtimeRouteIntent::StandardRealtime => "realtime",
             });
-            let model = realtime_route_model(
+            let model = resolve_realtime_route_model(
+                config,
                 method,
                 path_and_query,
                 query_model.or_else(|| realtime_body_model(&body, content_type.as_deref())),
@@ -4382,10 +4807,9 @@ impl Engine {
             };
             let requested = path_and_query
                 .split_once('?')
-                .and_then(|(_, query)| query_value(query, "model"))
-                .map(str::trim)
+                .and_then(|(_, query)| decoded_query_value(query, "model"))
+                .map(|model| model.trim().to_string())
                 .filter(|model| !model.is_empty())
-                .map(str::to_string)
                 .or_else(|| realtime_body_model(&body, content_type.as_deref()))
                 .or(multipart_model);
             let model = if is_videos_lookup_path(path) {
@@ -4671,6 +5095,16 @@ impl Engine {
                 source_format,
                 sumpter_core::capability::ModelCapability::Video,
             )
+        } else if passthrough_kind == Some(PassthroughKind::Realtime) {
+            // Both public Realtime and Codex Live use the voice capability;
+            // the classifier below decides the protocol variant, while the
+            // planner must select a capability-qualified mapping first.
+            RoutePlanner::plan_for_capability(
+                &request,
+                config,
+                source_format,
+                sumpter_core::capability::ModelCapability::Live,
+            )
         } else if passthrough_intent {
             RoutePlanner::plan_for_passthrough(&request, config, source_format)
         } else {
@@ -4702,6 +5136,8 @@ impl Engine {
                     (StatusCode::SERVICE_UNAVAILABLE, "no_video_provider")
                 } else if capability_error == Some("image") {
                     (StatusCode::BAD_REQUEST, "no_image_provider")
+                } else if capability_error == Some("files") {
+                    (StatusCode::SERVICE_UNAVAILABLE, "no_files_provider")
                 } else {
                     (StatusCode::BAD_REQUEST, "route_planning")
                 };
@@ -4883,8 +5319,7 @@ impl Engine {
         if passthrough_intent
             && is_realtime_http_path(path_without_query(path_and_query))
             && let Some(expected_model) = self.realtime_client_secret_model(&headers)
-            && sumpter_core::model_name::clean(&expected_model)
-                != sumpter_core::model_name::clean(&request.model)
+            && !realtime_client_secret_models_match(&expected_model, &request.model)
         {
             let message = "Realtime client secret is not valid for the requested model";
             self.record_rejected_client_with_metadata(
@@ -5011,13 +5446,16 @@ impl Engine {
             plan.feature_rule_id.clone(),
         );
         let session_key = sticky_key.session_key();
-        let ordered = self.ordered_endpoints(&plan, &session_key);
         // 出站桥无法无损表达的请求不能悄悄降级成残缺翻译:把承接不了的入口从候选里
         // 剔除,failover 仍有机会落到能原生承接的入口;全都承接不了才回 400,并带上
         // 具体字段名 —— 否则这类失败在客户端侧完全不可诊断(只表现为模型不听话)。
-        // native 入口按字节转发,不过出站桥,所以不参与这道校验。
+        // native 入口按字节转发,不过出站桥,所以不参与这道校验。这里刻意从完整
+        // `plan.endpoints` 开始，而不是先套 endpoint/model 冷却；forward 会在首轮和
+        // 每个后续轮次重新应用冷却，避免一个尚在冷却的入口从候选集中永久消失。
         let mut translation_error: Option<bridge::TranslationError> = None;
-        let ordered: Vec<PlannedEndpoint> = ordered
+        let candidates: Vec<PlannedEndpoint> = plan
+            .endpoints
+            .clone()
             .into_iter()
             .filter(|endpoint| {
                 if endpoint.route_mode != RouteMode::Translated {
@@ -5038,7 +5476,7 @@ impl Engine {
                 }
             })
             .collect();
-        if ordered.is_empty() {
+        if candidates.is_empty() {
             let message = translation_error
                 .map(|error| error.to_string())
                 .unwrap_or_else(|| "no endpoint can serve this request".into());
@@ -5057,10 +5495,15 @@ impl Engine {
                 &[("error", "unsupported_translation"), ("message", &message)],
             );
         }
+        // Apply the persistent provider/model cooldown at request admission.
+        // Once admitted, this request's explicit retry/failover policy must be
+        // allowed to run to completion; otherwise its first retryable response
+        // would quarantine every candidate and short-circuit recovery.
+        let initial_ordered = self.ordered_endpoint_candidates(&candidates, &session_key, true);
         // 路由计划定型且粘性排序已完成：此时首选入口已经确定，虽然尚未真正
         // 发起网络尝试。先写入候选协议，accepted/failover 后仍由 guard 用实际
         // 胜出入口覆盖，避免长时间等待首响应时三元组一直为空。
-        let preferred_endpoint = ordered.first();
+        let preferred_endpoint = initial_ordered.first();
 
         // 路由定型后先插 in-flight client 事件(不计数),长流请求即时可见。
         let client_event_id = new_event_id();
@@ -5117,9 +5560,18 @@ impl Engine {
             pool_id: None,
             request_purpose: Some(purpose),
             request_id: Some(client_event_id.clone()),
-            request_method: None,
-            request_path: None,
-            route_intent: None,
+            request_method: client_meta
+                .request_context
+                .as_ref()
+                .map(|context| context.method.clone()),
+            request_path: client_meta
+                .request_context
+                .as_ref()
+                .map(|context| context.path.clone()),
+            route_intent: client_meta
+                .request_context
+                .as_ref()
+                .map(|context| context.route_intent.clone()),
             session_id: observed_session_id,
             status_code: 0,
             timestamp: client_timestamp,
@@ -5144,7 +5596,7 @@ impl Engine {
         self.forward(
             config,
             &request,
-            ordered,
+            candidates,
             session_key,
             guard,
             method,
@@ -5160,11 +5612,21 @@ impl Engine {
         plan: &sumpter_core::routing::RoutePlan,
         session_key: &sticky::SessionKey,
     ) -> Vec<PlannedEndpoint> {
-        if plan.endpoints.len() <= 1 {
-            return plan.endpoints.clone();
-        }
+        self.ordered_endpoint_candidates(&plan.endpoints, session_key, true)
+    }
+
+    /// Apply provider/model cooldown (when requested) and sticky-group
+    /// ordering to a stable route candidate list. Cooldown is an admission
+    /// gate for new requests; an already admitted request may explicitly
+    /// retry the same candidate according to its retry policy.
+    fn ordered_endpoint_candidates(
+        &self,
+        candidates: &[PlannedEndpoint],
+        session_key: &sticky::SessionKey,
+        respect_cooldown: bool,
+    ) -> Vec<PlannedEndpoint> {
         let now = now_unix();
-        let (eligible_endpoints, sticky_preferred, all_cooling) = {
+        let (eligible_endpoints, sticky_preferred) = {
             let mut state = self.inner.state.lock().unwrap();
             state.provider_model_health.retain(|_, health| {
                 health
@@ -5172,54 +5634,42 @@ impl Engine {
                     .is_some_and(|until| until.is_finite() && until > now)
             });
             let mut available = Vec::new();
-            let mut cooling = Vec::new();
-            for endpoint in &plan.endpoints {
-                if provider_model_cooling_until(&state.provider_model_health, endpoint, now)
-                    .is_some()
+            for endpoint in candidates {
+                if !respect_cooldown
+                    || provider_model_cooling_until(&state.provider_model_health, endpoint, now)
+                        .is_none()
                 {
-                    cooling.push(endpoint.clone());
-                } else {
                     available.push(endpoint.clone());
                 }
             }
-            // A cooling endpoint is excluded only when another candidate can
-            // serve the same intent. If every candidate is cooling, use the
-            // one recovering first instead of turning a temporary outage into
-            // an unconditional 503.
-            let all_cooling = available.is_empty();
-            let eligible = if all_cooling { cooling } else { available };
+            // Never admit a new request to a cooling provider/model pair. If
+            // every candidate is cooling, the caller returns a bounded
+            // 503/Retry-After instead of defeating the health gate by probing
+            // the earliest recovering endpoint immediately.
+            let eligible = available;
             let preferred = state
                 .session_sticky
                 .get(&session_key.value)
                 .map(|entry| entry.label.clone());
-            (eligible, preferred, all_cooling)
+            (eligible, preferred)
         };
         if eligible_endpoints.is_empty() {
-            return plan.endpoints.clone();
+            // An empty result is meaningful: every candidate is currently
+            // cooling down.  Returning the original list here would bypass
+            // the admission check in `forward`/WebSocket preparation and
+            // immediately probe the very provider we just quarantined.
+            return Vec::new();
         }
         let mut groups: Vec<(String, i64, usize, f64)> = Vec::new();
         for (index, endpoint) in eligible_endpoints.iter().enumerate() {
             let group = endpoint.scheduling_group().to_string();
-            let cooling_until = {
-                let state = self.inner.state.lock().unwrap();
-                provider_model_cooling_until(&state.provider_model_health, endpoint, now)
-                    .unwrap_or(f64::INFINITY)
-            };
             if let Some(existing) = groups.iter_mut().find(|item| item.0 == group) {
                 existing.1 = existing.1.min(endpoint.priority);
-                existing.3 = existing.3.min(cooling_until);
             } else {
-                groups.push((group, endpoint.priority, index, cooling_until));
+                groups.push((group, endpoint.priority, index, f64::INFINITY));
             }
         }
         groups.sort_by(|a, b| {
-            if all_cooling {
-                return a
-                    .3
-                    .total_cmp(&b.3)
-                    .then_with(|| a.1.cmp(&b.1))
-                    .then_with(|| a.2.cmp(&b.2));
-            }
             let a_preferred = sticky_preferred.as_deref() == Some(a.0.as_str());
             let b_preferred = sticky_preferred.as_deref() == Some(b.0.as_str());
             b_preferred
@@ -5228,7 +5678,7 @@ impl Engine {
                 .then_with(|| a.2.cmp(&b.2))
         });
 
-        let mut output: Vec<PlannedEndpoint> = Vec::with_capacity(plan.endpoints.len());
+        let mut output: Vec<PlannedEndpoint> = Vec::with_capacity(candidates.len());
         for (group, _, _, _) in &groups {
             for endpoint in &eligible_endpoints {
                 if endpoint.scheduling_group() == group {
@@ -5239,12 +5689,52 @@ impl Engine {
         output
     }
 
+    /// Return the shortest remaining provider/model cooldown only when every
+    /// candidate is currently cooling. `None` means at least one candidate is
+    /// dispatchable (or the route has no candidates at all).
+    fn provider_model_cooldown_retry_after(&self, candidates: &[PlannedEndpoint]) -> Option<f64> {
+        if candidates.is_empty() {
+            return None;
+        }
+        let now = now_unix();
+        let state = self.inner.state.lock().unwrap();
+        let mut shortest = None;
+        for endpoint in candidates {
+            let until = provider_model_cooling_until(&state.provider_model_health, endpoint, now)?;
+            let remaining = (until - now).clamp(0.0, MAX_RETRY_AFTER_SECS);
+            shortest = Some(shortest.map_or(remaining, |current: f64| current.min(remaining)));
+        }
+        shortest
+    }
+
+    fn provider_cooldown_response(
+        &self,
+        mut guard: CompletionGuard,
+        retry_after: f64,
+        message: &str,
+    ) -> Response {
+        let request_id = guard.request_id().to_string();
+        let failure = FailureInfo::provider_cooldown(retry_after);
+        guard.complete(503, Some(message.to_string()), failure.clone());
+        // Cooldown is a local admission decision, so Retry-After remains
+        // mandatory even when the user's ordinary upstream retry-delay
+        // passthrough option is disabled.
+        proxy_failure_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "provider_cooldown",
+            &request_id,
+            &failure,
+            None,
+            true,
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn forward(
         &self,
         config: &AppConfig,
         request: &RoutingRequest,
-        ordered: Vec<PlannedEndpoint>,
+        candidates: Vec<PlannedEndpoint>,
         session_key: sticky::SessionKey,
         mut guard: CompletionGuard,
         method: &str,
@@ -5272,6 +5762,20 @@ impl Engine {
                 .as_ref()
                 .and_then(|client| client.passthrough.as_ref().map(|_| client.passthrough_kind)),
         );
+        // Keep the full, translation-compatible candidate set. Cooldown is a
+        // dispatch-time concern and is intentionally recomputed below for
+        // every retry round; passing an already-filtered vector here would
+        // make a cooling endpoint disappear until process restart.
+        let ordered = self.ordered_endpoint_candidates(&candidates, &session_key, true);
+        if ordered.is_empty()
+            && let Some(retry_after) = self.provider_model_cooldown_retry_after(&candidates)
+        {
+            return self.provider_cooldown_response(
+                guard,
+                retry_after,
+                "all compatible providers are cooling down",
+            );
+        }
         let initial_group = ordered
             .first()
             .map(|endpoint| endpoint.scheduling_group().to_string())
@@ -5328,6 +5832,20 @@ impl Engine {
         loop {
             round += 1;
             guard.set_round(round);
+            // This is still the same admitted request. Do not re-apply the
+            // cross-request cooldown here: configured deferred/sticky retries
+            // must be able to probe the provider again and recover from a
+            // transient 429/5xx. The cooldown remains active for the next
+            // request admission.
+            let round_ordered = self.ordered_endpoint_candidates(&candidates, &session_key, false);
+            let round_sticky_endpoint_count = if sticky_enabled {
+                round_ordered
+                    .iter()
+                    .take_while(|endpoint| endpoint.scheduling_group() == initial_group)
+                    .count()
+            } else {
+                0
+            };
             let mut round_state = RoundState {
                 retryable_failures: 0,
                 sticky_retryable_failures: 0,
@@ -5338,10 +5856,10 @@ impl Engine {
             let mut endpoint_index = 0usize;
             let mut sticky_retry_number = 0i64;
             let mut sticky_pass_checkpoint = round_state.sticky_retryable_failures;
-            while endpoint_index < ordered.len() {
+            while endpoint_index < round_ordered.len() {
                 // 即使组内某个候选因桥能力被跳过，也要在进入其它组前执行边界判断。
-                if sticky_endpoint_count > 0
-                    && endpoint_index == sticky_endpoint_count
+                if round_sticky_endpoint_count > 0
+                    && endpoint_index == round_sticky_endpoint_count
                     && sticky_retry_number < sticky_retry_limit
                     && round_state.sticky_retryable_failures > sticky_pass_checkpoint
                 {
@@ -5353,7 +5871,7 @@ impl Engine {
                     endpoint_index = 0;
                     continue;
                 }
-                let endpoint = &ordered[endpoint_index];
+                let endpoint = &round_ordered[endpoint_index];
                 endpoint_index += 1;
                 // client 完成事件只有一个协议三元组：尚未 accepted 时记录最后一个
                 // 实际进入调度判断的入口；accepted 后 attach_upstream 会覆盖为胜出入口。
@@ -5494,6 +6012,7 @@ impl Engine {
                         endpoint,
                         response,
                         guard,
+                        method,
                         path_and_query,
                         attempt_started,
                         is_failover,
@@ -5531,14 +6050,14 @@ impl Engine {
                     consecutive_500_retries = 0;
                     if !retry.failover_on_500 {
                         // 保留当前入口的最终 500，跳过其它入口与跨轮重试。
-                        endpoint_index = ordered.len();
+                        endpoint_index = round_ordered.len();
                     }
                 } else {
                     consecutive_500_endpoint = None;
                     consecutive_500_retries = 0;
                 }
-                if sticky_endpoint_count > 0
-                    && endpoint_index == sticky_endpoint_count
+                if round_sticky_endpoint_count > 0
+                    && endpoint_index == round_sticky_endpoint_count
                     && sticky_retry_number < sticky_retry_limit
                     && round_state.sticky_retryable_failures > sticky_pass_checkpoint
                 {
@@ -5803,10 +6322,13 @@ impl Engine {
                 if let Some(ip) = candidate {
                     self.touch_ip(ip, false, now);
                 }
-                // Connection/timeout failures are endpoint+model failures as
-                // well; otherwise a dead provider can remain the sticky
-                // winner while only its individual pinned IP is cooled.
-                self.note_provider_model_failure(endpoint, None, None, now);
+                // Only retryable connection/timeout failures describe
+                // provider health. A deterministic InvalidResponse is a
+                // local request/decoder contract failure and must not cool an
+                // otherwise healthy endpoint+model pair.
+                if e.is_retryable_before_response() {
+                    self.note_provider_model_failure(endpoint, None, None, now);
+                }
                 let failure = FailureInfo::from_transport(&e, response_timeout);
                 let mut event = self.upstream_event(
                     endpoint,
@@ -5945,6 +6467,7 @@ impl Engine {
         endpoint: &PlannedEndpoint,
         response: crate::outbound::UpstreamResponse,
         mut guard: CompletionGuard,
+        method: &str,
         path_and_query: &str,
         attempt_started: Instant,
         is_failover: bool,
@@ -5957,18 +6480,26 @@ impl Engine {
         capture_realtime_secret: bool,
         realtime_secret_request_session: Option<Value>,
     ) -> Response {
-        if (is_codex_live_path(path_without_query(path_and_query))
-            || is_realtime_call_bootstrap_path(path_without_query(path_and_query)))
+        let live_bootstrap = is_live_bootstrap_request(method, path_and_query);
+        let video_create = is_videos_create_request(method, path_and_query);
+        let live_header_id = if live_bootstrap && (200..=299).contains(&response.status) {
+            live_call_id_from_headers(&response.headers)
+        } else {
+            None
+        };
+        if live_bootstrap
             && (200..=299).contains(&response.status)
-            && let Some(call_id) = live_call_id_from_headers(&response.headers)
+            && let Some(call_id) = live_header_id.as_deref()
         {
-            self.register_live_session(&call_id, &endpoint.endpoint_id, &endpoint.routed_model);
+            self.register_live_session(call_id, &endpoint.endpoint_id, &endpoint.routed_model);
         }
-        if is_videos_create_path(path_without_query(path_and_query))
-            && (200..=299).contains(&response.status)
-            && let Some(video_id) = video_id_from_headers(&response.headers)
-        {
-            self.register_video_session(&video_id, &endpoint.endpoint_id, &endpoint.routed_model);
+        let video_header_id = if video_create && (200..=299).contains(&response.status) {
+            video_id_from_headers(&response.headers)
+        } else {
+            None
+        };
+        if let Some(video_id) = video_header_id.as_deref() {
+            self.register_video_session(video_id, &endpoint.endpoint_id, &endpoint.routed_model);
         }
         let passthrough = client_out
             .as_ref()
@@ -6192,19 +6723,31 @@ impl Engine {
                 .then(|| endpoint.endpoint_id.clone()),
             realtime_secret_model: capture_realtime_secret.then(|| endpoint.routed_model.clone()),
             realtime_secret_session: realtime_secret_request_session,
-            video_session_body: (is_videos_create_path(path_without_query(path_and_query))
-                && (200..=299).contains(&response.status))
+            live_session_body: (live_bootstrap
+                && (200..=299).contains(&response.status)
+                && live_header_id.is_none())
             .then(Vec::new),
-            video_session_endpoint_id: is_videos_create_path(path_without_query(path_and_query))
-                .then(|| endpoint.endpoint_id.clone()),
-            video_session_model: is_videos_create_path(path_without_query(path_and_query))
-                .then(|| endpoint.routed_model.clone()),
+            live_session_endpoint_id: live_bootstrap.then(|| endpoint.endpoint_id.clone()),
+            live_session_model: live_bootstrap.then(|| endpoint.routed_model.clone()),
+            video_session_body: (video_create
+                && (200..=299).contains(&response.status)
+                && video_header_id.is_none())
+            .then(Vec::new),
+            video_session_endpoint_id: video_create.then(|| endpoint.endpoint_id.clone()),
+            video_session_model: video_create.then(|| endpoint.routed_model.clone()),
             idle_timeout,
             guard,
             finished: false,
         };
         let body_stream = futures_util::stream::unfold(state, |mut st| async move {
             if st.finished {
+                // A protocol terminal may have been observed in the same
+                // chunk that was returned to the client.  In that case the
+                // next poll reaches this fast path instead of the EOF arm;
+                // finalize bounded response metadata here as an idempotent
+                // safety net so Live/Video bindings (and client secrets) are
+                // not lost.
+                st.finalize_response_metadata();
                 return None;
             }
             loop {
@@ -6228,6 +6771,19 @@ impl Engine {
                                 video_body.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
                             }
                         }
+                        if let Some(live_body) = &mut st.live_session_body {
+                            const MAX_LIVE_RESPONSE_BYTES: usize = 64 * 1024;
+                            let remaining = MAX_LIVE_RESPONSE_BYTES.saturating_sub(live_body.len());
+                            if remaining > 0 {
+                                live_body.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+                            }
+                        }
+                        // Register stateful resource bindings at first
+                        // observation rather than waiting for EOF.  A client
+                        // may disconnect immediately after receiving the
+                        // creation object; the binding must still be usable
+                        // for its subsequent lookup/sideband request.
+                        st.observe_resource_metadata();
                         if let Some(attempt_id) = st.guard.capture_attempt_id() {
                             st.guard.engine.capture_upstream_chunk(
                                 st.guard.request_id(),
@@ -6267,6 +6823,11 @@ impl Engine {
                             st.finished = true;
                             st.guard.record_stream_terminal(&terminal);
                             st.guard.complete_from_protocol_terminal(terminal);
+                            // `finished` is set before the chunk is yielded,
+                            // so the next poll would otherwise skip the EOF
+                            // finalizer.  Register IDs immediately while the
+                            // complete terminal chunk is still available.
+                            st.finalize_response_metadata();
                         }
                         if !out.is_empty() {
                             st.guard.engine.capture_client_chunk(
@@ -6282,25 +6843,7 @@ impl Engine {
                     }
                     Ok(None) => {
                         st.finished = true;
-                        if let Some(secret_body) = st.realtime_secret_body.take() {
-                            st.guard.engine.register_realtime_client_secret_from_body(
-                                &secret_body,
-                                st.realtime_secret_endpoint_id.as_deref(),
-                                st.realtime_secret_model.as_deref(),
-                                st.realtime_secret_session.take(),
-                            );
-                        }
-                        if let Some(video_body) = st.video_session_body.take()
-                            && let (Some(endpoint_id), Some(model)) = (
-                                st.video_session_endpoint_id.as_deref(),
-                                st.video_session_model.as_deref(),
-                            )
-                            && let Some(video_id) = video_id_from_json(&video_body)
-                        {
-                            st.guard
-                                .engine
-                                .register_video_session(&video_id, endpoint_id, model);
-                        }
+                        st.finalize_response_metadata();
                         let mut tail = st.bridge.as_mut().map(|b| b.finish()).unwrap_or_default();
                         if let Some(client) = &mut st.client_bridge {
                             let mut client_tail = client.feed(&tail);
@@ -6340,6 +6883,14 @@ impl Engine {
                     }
                     Err(e) => {
                         st.finished = true;
+                        // If a provider closed after sending a complete JSON
+                        // object but before a protocol terminal/EOF, the
+                        // bounded parsers can still recover a resource ID.
+                        // They are deliberately idempotent and only accept a
+                        // validated ID, so attempting finalization here is
+                        // safe and avoids losing a binding on a late stream
+                        // error.
+                        st.finalize_response_metadata();
                         let display = e.to_string();
                         st.guard.complete_from_stream(Some(e));
                         return Some((Err(std::io::Error::other(display)), st));
@@ -6511,13 +7062,14 @@ async fn relay_native_websocket(
     let (mut downstream_tx, mut downstream_rx) = socket.split();
     let (mut upstream_tx, mut upstream_rx) = upstream.split();
     if let Some(message) = initial_message {
+        counters.observe_first_client_text(&message);
         let bytes = websocket_message_size(&message);
         if upstream_tx
             .send(websocket_message_to_tungstenite(message))
             .await
             .is_err()
         {
-            counters.failed.store(true, Ordering::Release);
+            counters.record_error("initial_frame_send_failed", "relay_error");
             let _ = downstream_tx.close().await;
             return counters.snapshot(started);
         }
@@ -6526,16 +7078,37 @@ async fn relay_native_websocket(
             .client_message_count
             .fetch_add(1, Ordering::Relaxed);
     }
+    let cancellation = tokio_util::sync::CancellationToken::new();
     let downstream_counters = counters.clone();
+    let downstream_cancel = cancellation.clone();
     let downstream_to_upstream = async {
-        while let Some(Ok(message)) = downstream_rx.next().await {
+        loop {
+            let next = tokio::select! {
+                _ = downstream_cancel.cancelled() => None,
+                message = downstream_rx.next() => message,
+            };
+            let Some(next) = next else {
+                // A clean WebSocket close frame is surfaced as a message;
+                // EOF without one is an abnormal client-side termination.
+                if !downstream_cancel.is_cancelled() {
+                    downstream_counters.record_error("client_eof_without_close", "client");
+                }
+                break;
+            };
+            let message = match next {
+                Ok(message) => message,
+                Err(_) => {
+                    downstream_counters.record_error("client_receive_failed", "client");
+                    break;
+                }
+            };
+            downstream_counters.observe_first_client_text(&message);
             let bytes = websocket_message_size(&message);
-            if upstream_tx
-                .send(websocket_message_to_tungstenite(message))
-                .await
-                .is_err()
-            {
-                downstream_counters.failed.store(true, Ordering::Release);
+            let close_code = axum_close_code(&message);
+            let is_close = matches!(&message, WebSocketMessage::Close(_));
+            let converted = websocket_message_to_tungstenite(message);
+            if upstream_tx.send(converted).await.is_err() {
+                downstream_counters.record_error("client_to_upstream_send_failed", "relay_error");
                 break;
             }
             downstream_counters
@@ -6544,16 +7117,39 @@ async fn relay_native_websocket(
             downstream_counters
                 .client_message_count
                 .fetch_add(1, Ordering::Relaxed);
+            if is_close {
+                if let Some(code) = close_code {
+                    *downstream_counters.client_close_code.lock().unwrap() = Some(code);
+                }
+                downstream_counters.set_closed_by("client");
+                break;
+            }
         }
         let _ = upstream_tx.close().await;
+        downstream_cancel.cancel();
     };
     let upstream_counters = counters.clone();
+    let upstream_cancel = cancellation.clone();
     let upstream_to_downstream = async {
-        while let Some(Ok(message)) = upstream_rx.next().await {
+        loop {
+            let next = tokio::select! {
+                _ = upstream_cancel.cancelled() => None,
+                message = upstream_rx.next() => message,
+            };
+            let Some(next) = next else {
+                if !upstream_cancel.is_cancelled() {
+                    upstream_counters.record_error("upstream_eof_without_close", "upstream");
+                }
+                break;
+            };
+            let message = match next {
+                Ok(message) => message,
+                Err(_) => {
+                    upstream_counters.record_error("upstream_receive_failed", "upstream");
+                    break;
+                }
+            };
             let (bytes, close_code) = tungstenite_message_stats(&message);
-            if let Some(code) = close_code {
-                *upstream_counters.close_code.lock().unwrap() = Some(code);
-            }
             let converted = match message {
                 tokio_tungstenite::tungstenite::Message::Text(text) => {
                     WebSocketMessage::Text(text.to_string().into())
@@ -6575,8 +7171,15 @@ async fn relay_native_websocket(
                 }
                 tokio_tungstenite::tungstenite::Message::Frame(_) => continue,
             };
+            let is_close = matches!(&converted, WebSocketMessage::Close(_));
+            if is_close {
+                if let Some(code) = close_code {
+                    *upstream_counters.upstream_close_code.lock().unwrap() = Some(code);
+                }
+                upstream_counters.set_closed_by("upstream");
+            }
             if downstream_tx.send(converted).await.is_err() {
-                upstream_counters.failed.store(true, Ordering::Release);
+                upstream_counters.record_error("upstream_to_client_send_failed", "relay_error");
                 break;
             }
             upstream_counters
@@ -6585,27 +7188,70 @@ async fn relay_native_websocket(
             upstream_counters
                 .upstream_message_count
                 .fetch_add(1, Ordering::Relaxed);
+            if is_close {
+                break;
+            }
         }
         let _ = downstream_tx.close().await;
+        upstream_cancel.cancel();
     };
-    tokio::select! {
-        _ = downstream_to_upstream => {},
-        _ = upstream_to_downstream => {},
-    }
+    let (_downstream_result, _upstream_result) =
+        tokio::join!(downstream_to_upstream, upstream_to_downstream,);
     counters.snapshot(started)
 }
 
 impl WebSocketRelayCounters {
+    fn observe_first_client_text(&self, message: &WebSocketMessage) {
+        if !matches!(message, WebSocketMessage::Text(_))
+            || self.first_client_text_seen.swap(true, Ordering::AcqRel)
+        {
+            return;
+        }
+        let Some(metadata) = websocket_message_codex_metadata(message) else {
+            return;
+        };
+        *self.first_client_codex_metadata.lock().unwrap() = Some(metadata);
+    }
+
+    fn set_closed_by(&self, side: &str) {
+        let mut closed_by = self.closed_by.lock().unwrap();
+        if closed_by.is_none() {
+            *closed_by = Some(side.to_string());
+        }
+    }
+
+    fn record_error(&self, detail: &str, closed_by: &str) {
+        self.failed.store(true, Ordering::Release);
+        self.abnormal_close.store(true, Ordering::Release);
+        self.set_closed_by(closed_by);
+        let mut relay_error = self.relay_error.lock().unwrap();
+        if relay_error.is_none() {
+            *relay_error = Some(detail.to_string());
+        }
+    }
+
     fn snapshot(&self, started: Instant) -> WebSocketRelayMetrics {
         WebSocketRelayMetrics {
             bytes_sent: self.bytes_sent.load(Ordering::Relaxed),
             bytes_received: self.bytes_received.load(Ordering::Relaxed),
             client_message_count: self.client_message_count.load(Ordering::Relaxed),
             upstream_message_count: self.upstream_message_count.load(Ordering::Relaxed),
-            close_code: *self.close_code.lock().unwrap(),
+            client_close_code: *self.client_close_code.lock().unwrap(),
+            upstream_close_code: *self.upstream_close_code.lock().unwrap(),
+            closed_by: self.closed_by.lock().unwrap().clone(),
+            relay_error: self.relay_error.lock().unwrap().clone(),
+            abnormal_close: self.abnormal_close.load(Ordering::Acquire),
             failed: self.failed.load(Ordering::Acquire),
+            first_client_codex_metadata: self.first_client_codex_metadata.lock().unwrap().clone(),
             duration_ms: started.elapsed().as_millis().min(i64::MAX as u128) as i64,
         }
+    }
+}
+
+fn axum_close_code(message: &WebSocketMessage) -> Option<i64> {
+    match message {
+        WebSocketMessage::Close(frame) => frame.as_ref().map(|frame| frame.code as i64),
+        _ => None,
     }
 }
 
@@ -6615,7 +7261,48 @@ fn websocket_message_size(message: &WebSocketMessage) -> u64 {
         WebSocketMessage::Binary(bytes)
         | WebSocketMessage::Ping(bytes)
         | WebSocketMessage::Pong(bytes) => bytes.len() as u64,
-        WebSocketMessage::Close(_) => 0,
+        WebSocketMessage::Close(frame) => frame
+            .as_ref()
+            .map_or(0, |frame| 2 + frame.reason.len() as u64),
+    }
+}
+
+/// Parse only the first bounded client text frame for attribution. The frame
+/// is never retained; this returns the same redacted Codex metadata projection
+/// used by HTTP request bodies. Responses WebSocket implementations have used
+/// both a top-level envelope and a nested `response` object, so accept either
+/// shape without inspecting arbitrary frame fields.
+fn websocket_message_codex_metadata(message: &WebSocketMessage) -> Option<CodexMetadata> {
+    let WebSocketMessage::Text(text) = message else {
+        return None;
+    };
+    if text.len() > MAX_WEBSOCKET_METADATA_FRAME_BYTES {
+        return None;
+    }
+    let value = serde_json::from_str::<Value>(text).ok()?;
+    let direct = CodexMetadata::from_request(&[], Some(&value));
+    let nested = value
+        .get("response")
+        .filter(|response| response.is_object())
+        .and_then(|response| CodexMetadata::from_request(&[], Some(response)));
+    match (direct, nested) {
+        (Some(mut direct), Some(nested)) => {
+            if direct.originator.is_none() {
+                direct.originator = nested.originator;
+            }
+            if direct.session_id.is_none() {
+                direct.session_id = nested.session_id;
+            }
+            if direct.thread_id.is_none() {
+                direct.thread_id = nested.thread_id;
+            }
+            if direct.turn_id.is_none() {
+                direct.turn_id = nested.turn_id;
+            }
+            Some(direct)
+        }
+        (Some(metadata), None) | (None, Some(metadata)) => Some(metadata),
+        (None, None) => None,
     }
 }
 
@@ -6674,7 +7361,11 @@ fn websocket_connect_error(error: &tokio_tungstenite::tungstenite::Error) -> (u1
             response.status().as_u16(),
             "upstream websocket handshake rejected".into(),
         ),
-        _ => (502, "upstream websocket unavailable".into()),
+        // Zero means there was no upstream HTTP response. The downstream
+        // adapter still returns 502, while runtime attribution keeps this as
+        // a connection failure with null upstreamStatusCode/ttfbMS instead of
+        // fabricating an upstream HTTP 502.
+        _ => (0, "upstream websocket unavailable".into()),
     }
 }
 
@@ -6723,13 +7414,101 @@ fn websocket_event_context(
     }
 }
 
+/// Merge the bounded metadata projection observed in a first client frame
+/// into the handshake context. A Responses WebSocket may use a generic
+/// browser-like User-Agent and put `originator` only in `response.create`;
+/// that frame must still be attributable as Codex without persisting its
+/// prompt or raw JSON. Handshake identity remains authoritative when both
+/// sources disagree.
+fn websocket_context_with_first_frame(
+    context: &WebSocketEventContext,
+    frame: Option<&CodexMetadata>,
+) -> WebSocketEventContext {
+    let Some(frame) = frame else {
+        return context.clone();
+    };
+    let mut merged = context.clone();
+    merged.codex_metadata = merge_codex_metadata(merged.codex_metadata.take(), Some(frame.clone()));
+    if merged.session_id.is_none() {
+        merged.session_id = merged
+            .codex_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.session_id.clone());
+    }
+    if matches!(
+        merged.client_kind,
+        ClientKind::OpenaiCompat | ClientKind::Unknown
+    ) && merged
+        .codex_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.originator.as_deref())
+        .is_some_and(is_codex_originator)
+    {
+        merged.client_kind = ClientKind::Codex;
+    }
+    merged
+}
+
+/// Merge two bounded Codex metadata projections without allowing a later
+/// WebSocket frame to overwrite authoritative handshake/header values.  The
+/// helper intentionally copies only identity/diagnostic fields that are safe
+/// to retain; prompt and transport payload fields are never introduced here.
+fn merge_codex_metadata(
+    base: Option<CodexMetadata>,
+    overlay: Option<CodexMetadata>,
+) -> Option<CodexMetadata> {
+    let Some(overlay) = overlay else {
+        return base;
+    };
+    let Some(mut base) = base else {
+        return Some(overlay);
+    };
+    if base.originator.is_none() {
+        base.originator = overlay.originator.clone();
+    }
+    if base.session_id.is_none() {
+        base.session_id = overlay.session_id.clone();
+    }
+    if base.thread_id.is_none() {
+        base.thread_id = overlay.thread_id.clone();
+    }
+    if base.turn_id.is_none() {
+        base.turn_id = overlay.turn_id.clone();
+    }
+    base.malformed |= overlay.malformed;
+    base.truncated |= overlay.truncated;
+    base.has_conflicts |= overlay.has_conflicts;
+    base.is_subagent |= overlay.is_subagent;
+    for source in &overlay.sources {
+        if !base.sources.contains(source) {
+            base.sources.push(source.clone());
+        }
+    }
+    for field in &overlay.redacted_fields {
+        if !base.redacted_fields.contains(field) {
+            base.redacted_fields.push(field.clone());
+        }
+    }
+    Some(base)
+}
+
+fn is_codex_originator(value: &str) -> bool {
+    let value = value.trim().to_ascii_lowercase();
+    value.contains("codex desktop") || value.contains("codex_cli_rs") || value.contains("codex-tui")
+}
+
+#[allow(clippy::too_many_arguments)]
 fn websocket_trace(
     handshake_status: i64,
     bytes_sent: u64,
     bytes_received: u64,
     client_message_count: u64,
     upstream_message_count: u64,
-    close_code: Option<i64>,
+    client_close_code: Option<i64>,
+    upstream_close_code: Option<i64>,
+    closed_by: Option<String>,
+    relay_error: Option<String>,
+    abnormal_close: bool,
     attempt_count: u64,
 ) -> StreamTrace {
     StreamTrace {
@@ -6746,7 +7525,15 @@ fn websocket_trace(
             bytes_received: Some(bytes_received),
             client_message_count: Some(client_message_count),
             upstream_message_count: Some(upstream_message_count),
-            close_code,
+            // Keep the historical aggregate field for old UI versions: an
+            // upstream close is more authoritative, otherwise use the client
+            // close code.
+            close_code: upstream_close_code.or(client_close_code),
+            client_close_code,
+            upstream_close_code,
+            closed_by,
+            relay_error,
+            abnormal_close: Some(abnormal_close),
             attempt_count: Some(attempt_count),
         }),
     }
@@ -6849,12 +7636,94 @@ struct RelayState {
     realtime_secret_endpoint_id: Option<String>,
     realtime_secret_model: Option<String>,
     realtime_secret_session: Option<Value>,
+    live_session_body: Option<Vec<u8>>,
+    live_session_endpoint_id: Option<String>,
+    live_session_model: Option<String>,
     video_session_body: Option<Vec<u8>>,
     video_session_endpoint_id: Option<String>,
     video_session_model: Option<String>,
     idle_timeout: Option<Duration>,
     guard: CompletionGuard,
     finished: bool,
+}
+
+impl RelayState {
+    /// Inspect a newly received resource chunk as soon as it arrives.  Live
+    /// and Video providers are not consistent about framing: some return one
+    /// JSON object, others emit SSE/NDJSON and may split the id across many
+    /// chunks.  The bounded capture buffers let us recognize all of those
+    /// forms without changing the bytes sent to the caller.
+    fn observe_resource_metadata(&mut self) {
+        if let Some(body) = self.video_session_body.as_deref()
+            && let Some(video_id) = video_id_from_payload(body)
+            && let (Some(endpoint_id), Some(model)) = (
+                self.video_session_endpoint_id.as_deref(),
+                self.video_session_model.as_deref(),
+            )
+        {
+            let endpoint_id = endpoint_id.to_string();
+            let model = model.to_string();
+            self.video_session_body = None;
+            self.guard
+                .engine
+                .register_video_session(&video_id, &endpoint_id, &model);
+        }
+        if let Some(body) = self.live_session_body.as_deref()
+            && let Some(call_id) = live_call_id_from_payload(body)
+            && let (Some(endpoint_id), Some(model)) = (
+                self.live_session_endpoint_id.as_deref(),
+                self.live_session_model.as_deref(),
+            )
+        {
+            let endpoint_id = endpoint_id.to_string();
+            let model = model.to_string();
+            self.live_session_body = None;
+            self.guard
+                .engine
+                .register_live_session(&call_id, &endpoint_id, &model);
+        }
+    }
+
+    /// Finalize bounded response metadata exactly once.
+    ///
+    /// Native resource responses can be delivered as a single chunk that
+    /// already contains a protocol terminal event.  The relay marks itself
+    /// finished before yielding that chunk, which means a later poll may not
+    /// reach the ordinary EOF branch.  Taking each capture buffer here makes
+    /// registration independent of chunking and keeps duplicate header/body
+    /// observations harmless.
+    fn finalize_response_metadata(&mut self) {
+        if let Some(secret_body) = self.realtime_secret_body.take() {
+            self.guard.engine.register_realtime_client_secret_from_body(
+                &secret_body,
+                self.realtime_secret_endpoint_id.as_deref(),
+                self.realtime_secret_model.as_deref(),
+                self.realtime_secret_session.take(),
+            );
+        }
+        if let Some(video_body) = self.video_session_body.take()
+            && let (Some(endpoint_id), Some(model)) = (
+                self.video_session_endpoint_id.as_deref(),
+                self.video_session_model.as_deref(),
+            )
+            && let Some(video_id) = video_id_from_payload(&video_body)
+        {
+            self.guard
+                .engine
+                .register_video_session(&video_id, endpoint_id, model);
+        }
+        if let Some(live_body) = self.live_session_body.take()
+            && let (Some(endpoint_id), Some(model)) = (
+                self.live_session_endpoint_id.as_deref(),
+                self.live_session_model.as_deref(),
+            )
+            && let Some(call_id) = live_call_id_from_payload(&live_body)
+        {
+            self.guard
+                .engine
+                .register_live_session(&call_id, endpoint_id, model);
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -7134,6 +8003,18 @@ impl FailureInfo {
             upstream_status_code: None,
             upstream_request_id: None,
             retry_after_seconds: None,
+        }
+    }
+
+    fn provider_cooldown(retry_after_seconds: f64) -> Self {
+        Self {
+            kind: RuntimeFailureKind::EndpointsExhausted,
+            phase: RuntimeFailurePhase::BeforeResponse,
+            detail: Some("all compatible providers are cooling down".into()),
+            timeout_ms: None,
+            upstream_status_code: None,
+            upstream_request_id: None,
+            retry_after_seconds: Some(retry_after_seconds),
         }
     }
 
@@ -7813,9 +8694,18 @@ fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a s
 }
 
 fn detect_client_kind(headers: &[(String, String)], openai_inbound: bool) -> ClientKind {
+    // `Originator` is not consistently emitted as a standalone header by
+    // Codex Desktop.  The same value commonly lives in the bounded canonical
+    // `x-codex-turn-metadata` header, so use the parser as a transport-level
+    // fallback before applying the dialect default.  This helper is used by
+    // early rejection and WebSocket paths where the request body is not yet
+    // available; body-aware handlers merge their parsed metadata below.
+    let canonical_originator = CodexMetadata::from_request(headers, None)
+        .and_then(|metadata| metadata.originator)
+        .or_else(|| header_value(headers, "originator").map(str::to_string));
     ClientKind::detect_with_originator(
         header_value(headers, "user-agent"),
-        header_value(headers, "originator"),
+        canonical_originator.as_deref(),
         openai_inbound,
     )
 }
@@ -7844,6 +8734,18 @@ fn bounded_request_path(path: &str) -> String {
     }
 }
 
+fn bounded_failure_detail(detail: &str) -> String {
+    let mut out = detail
+        .chars()
+        .filter(|character| !character.is_control() || *character == '\t')
+        .take(2048)
+        .collect::<String>();
+    if out.is_empty() {
+        out.push_str("request rejected");
+    }
+    out
+}
+
 fn current_request_context() -> Option<InboundRequestContext> {
     INBOUND_REQUEST_CONTEXT
         .try_with(|context| context.borrow().clone())
@@ -7866,6 +8768,9 @@ fn apply_current_request_context(event: &mut RuntimeEvent) {
     event.request_method.get_or_insert(context.method);
     event.request_path.get_or_insert(context.path);
     event.route_intent.get_or_insert(context.route_intent);
+    if event.session_id.is_none() {
+        event.session_id = context.session_id;
+    }
 }
 
 /// Stable high-level route intent used in runtime diagnostics.  This is kept
@@ -8064,9 +8969,11 @@ fn is_realtime_http_path(path: &str) -> bool {
         "/v1/realtime",
         "/realtime",
         "/openai/v1/realtime",
+        "/backend-api/codex/realtime",
         "/v1/live",
         "/live",
         "/openai/v1/live",
+        "/backend-api/codex/live",
     ]
     .iter()
     .any(|prefix| {
@@ -8104,22 +9011,39 @@ fn is_resource_passthrough_kind(kind: PassthroughKind) -> bool {
 }
 
 fn is_local_models_path(path: &str) -> bool {
-    if ["/v1/models", "/models", "/openai/v1/models"].contains(&path) {
+    if [
+        "/v1/models",
+        "/models",
+        "/openai/v1/models",
+        "/backend-api/codex/models",
+    ]
+    .contains(&path)
+    {
         return true;
     }
-    ["/v1/models/", "/models/", "/openai/v1/models/"]
-        .iter()
-        .any(|prefix| {
-            path.strip_prefix(prefix)
-                .is_some_and(|id| !id.is_empty() && !id.contains('/'))
-        })
+    [
+        "/v1/models/",
+        "/models/",
+        "/openai/v1/models/",
+        "/backend-api/codex/models/",
+    ]
+    .iter()
+    .any(|prefix| {
+        path.strip_prefix(prefix)
+            .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+    })
 }
 
 fn local_model_id_from_path(path: &str) -> Option<&str> {
-    ["/v1/models/", "/models/", "/openai/v1/models/"]
-        .iter()
-        .find_map(|prefix| path.strip_prefix(prefix))
-        .filter(|id| !id.is_empty() && !id.contains('/'))
+    [
+        "/v1/models/",
+        "/models/",
+        "/openai/v1/models/",
+        "/backend-api/codex/models/",
+    ]
+    .iter()
+    .find_map(|prefix| path.strip_prefix(prefix))
+    .filter(|id| !id.is_empty() && !id.contains('/'))
 }
 
 #[derive(Clone)]
@@ -8136,20 +9060,50 @@ fn collect_local_models(
     let mut models =
         std::collections::BTreeMap::<String, Vec<sumpter_core::capability::ModelCapability>>::new();
     for endpoint in config.endpoints.iter().filter(|endpoint| endpoint.enabled) {
+        let mut concrete_models = std::collections::BTreeSet::new();
         for mapping in &endpoint.mappings {
-            let model =
-                sumpter_core::capability::canonical_model_from_pattern(&mapping.client_pattern);
-            if model.is_empty() || model == "*" || model.contains('*') {
-                continue;
+            let pattern = mapping.client_pattern.trim();
+            let cleaned_pattern = sumpter_core::model_name::clean(pattern);
+            if cleaned_pattern.contains('*') {
+                for model in endpoint
+                    .catalog
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|catalog| catalog.models.iter())
+                    .map(|model| sumpter_core::model_name::clean(model))
+                    .filter(|model| {
+                        !model.is_empty()
+                            && !model.contains('*')
+                            && sumpter_core::model_name::pattern_matches(&cleaned_pattern, model)
+                    })
+                {
+                    concrete_models.insert(model);
+                }
+            } else {
+                let model = sumpter_core::capability::canonical_model_from_pattern(pattern);
+                if !model.is_empty() && !model.contains('*') {
+                    concrete_models.insert(model);
+                }
             }
+        }
+
+        for model in concrete_models {
             if requested_id.is_some_and(|id| id != model) {
                 continue;
             }
-            let capabilities = if mapping.capabilities.is_empty() {
-                sumpter_core::capability::inferred_capabilities(&mapping.client_pattern)
-            } else {
-                mapping.capabilities.clone()
+            // Directory classification follows the same precedence as normal
+            // model routing: one effective mapping per endpoint/model, exact
+            // before wildcard. Do not union a broad `gpt-*` text mapping with
+            // a more specific `gpt-image-*` mapping and advertise a capability
+            // combination the planner will never select.
+            let Some(mapping) = endpoint.mapping_for(&model) else {
+                continue;
             };
+            let capabilities = sumpter_core::capability::capabilities_for_model(
+                &mapping.capabilities,
+                &mapping.client_pattern,
+                &model,
+            );
             if requested_capability.is_some_and(|wanted| !capabilities.contains(&wanted)) {
                 continue;
             }
@@ -8176,6 +9130,7 @@ fn openai_model_object(model: &LocalModelEntry) -> Value {
         "object": "model",
         "created": 0,
         "owned_by": "sumpter",
+        "capabilities": model.capabilities.iter().map(|capability| capability.as_str()).collect::<Vec<_>>(),
     })
 }
 
@@ -8255,6 +9210,7 @@ fn grok_model_object(model: &LocalModelEntry) -> Value {
         "id": model.id,
         "model": model.id,
         "name": model.id,
+        "capabilities": model.capabilities.iter().map(|capability| capability.as_str()).collect::<Vec<_>>(),
         "api_backend": if is_codex_chat_model(&model.capabilities) {
             "responses"
         } else {
@@ -8268,6 +9224,7 @@ fn anthropic_model_object(model: &LocalModelEntry) -> Value {
         "id": model.id,
         "type": "model",
         "display_name": model.id,
+        "capabilities": model.capabilities.iter().map(|capability| capability.as_str()).collect::<Vec<_>>(),
     })
 }
 
@@ -8278,7 +9235,7 @@ fn local_models_json(
     headers: &[(String, String)],
 ) -> Result<Value, StatusCode> {
     let requested_capability = query
-        .and_then(|query| query_value(query, "capability"))
+        .and_then(|query| decoded_query_value(query, "capability"))
         .and_then(|value| match value.to_ascii_lowercase().as_str() {
             "text" => Some(sumpter_core::capability::ModelCapability::Text),
             "image" => Some(sumpter_core::capability::ModelCapability::Image),
@@ -8355,11 +9312,10 @@ fn has_exact_codex_live_mapping(config: &AppConfig, endpoint_id: &str) -> bool {
     config.endpoint(endpoint_id).is_some_and(|endpoint| {
         endpoint.mappings.iter().any(|mapping| {
             sumpter_core::model_name::clean(&mapping.client_pattern) == live_model
-                && (mapping.upstream_model.trim().is_empty()
-                    || sumpter_core::model_name::clean(&mapping.upstream_model) == live_model)
-                && sumpter_core::capability::mapping_has_capability(
+                && sumpter_core::capability::mapping_serves_capability(
                     &mapping.capabilities,
                     &mapping.client_pattern,
+                    live_model,
                     sumpter_core::capability::ModelCapability::Live,
                 )
         })
@@ -8369,16 +9325,9 @@ fn has_exact_codex_live_mapping(config: &AppConfig, endpoint_id: &str) -> bool {
 fn has_exact_realtime_mapping(config: &AppConfig, endpoint_id: &str, model: &str) -> bool {
     let model = sumpter_core::model_name::clean(model);
     config.endpoint(endpoint_id).is_some_and(|endpoint| {
-        endpoint.mappings.iter().any(|mapping| {
-            (sumpter_core::model_name::clean(&mapping.client_pattern) == model
-                || sumpter_core::model_name::pattern_matches(&mapping.client_pattern, &model))
-                && sumpter_core::capability::mapping_serves_capability(
-                    &mapping.capabilities,
-                    &mapping.client_pattern,
-                    &model,
-                    sumpter_core::capability::ModelCapability::Live,
-                )
-        })
+        endpoint
+            .mapping_for_capability(&model, sumpter_core::capability::ModelCapability::Live)
+            .is_some()
     })
 }
 
@@ -8404,6 +9353,7 @@ fn is_openai_resource_tree(path: &str, resource: &str) -> bool {
         format!("/v1/{resource}"),
         format!("/{resource}"),
         format!("/openai/v1/{resource}"),
+        format!("/backend-api/codex/{resource}"),
     ]
     .iter()
     .any(|prefix| is_path_or_child(path, prefix))
@@ -8415,24 +9365,59 @@ fn is_videos_create_path(path: &str) -> bool {
         "/v1/videos"
             | "/videos"
             | "/openai/v1/videos"
+            | "/backend-api/codex/videos"
             | "/v1/videos/generations"
             | "/videos/generations"
             | "/openai/v1/videos/generations"
+            | "/backend-api/codex/videos/generations"
             | "/v1/videos/edits"
             | "/videos/edits"
             | "/openai/v1/videos/edits"
+            | "/backend-api/codex/videos/edits"
             | "/v1/videos/extensions"
             | "/videos/extensions"
             | "/openai/v1/videos/extensions"
+            | "/backend-api/codex/videos/extensions"
     )
 }
 
+fn is_videos_create_request(method: &str, path_and_query: &str) -> bool {
+    method.eq_ignore_ascii_case("POST") && is_videos_create_path(path_without_query(path_and_query))
+}
+
+fn is_live_bootstrap_path(path: &str) -> bool {
+    is_codex_live_path(path) || is_realtime_call_bootstrap_path(path)
+}
+
+/// Identify an HTTP response that creates a Live call. The `/v1/realtime`
+/// root is shared with public Realtime, so it is considered a bootstrap only
+/// when the request was classified as Live and carries no existing call id.
+/// Keeping this method-aware prevents a standard GET/POST Realtime resource
+/// response from being persisted as a new Live binding.
+fn is_live_bootstrap_request(method: &str, path_and_query: &str) -> bool {
+    let path = path_without_query(path_and_query);
+    if is_live_bootstrap_path(path) {
+        return method.eq_ignore_ascii_case("POST")
+            && (is_realtime_call_bootstrap_path(path)
+                || live_call_id_from_target(path_and_query).is_none());
+    }
+    method.eq_ignore_ascii_case("POST")
+        && is_realtime_root_path(path)
+        && live_call_id_from_target(path_and_query).is_none()
+        && current_request_context().is_some_and(|context| context.route_intent == "live")
+}
+
 fn video_id_from_path(path: &str) -> Option<&str> {
-    ["/v1/videos/", "/videos/", "/openai/v1/videos/"]
-        .iter()
-        .find_map(|prefix| path.strip_prefix(prefix))
-        .map(|rest| rest.split('/').next().unwrap_or_default())
-        .filter(|id| !id.is_empty() && !matches!(*id, "generations" | "edits" | "extensions"))
+    [
+        "/v1/videos/",
+        "/videos/",
+        "/openai/v1/videos/",
+        "/backend-api/codex/videos/",
+    ]
+    .iter()
+    .find_map(|prefix| path.strip_prefix(prefix))
+    .map(|rest| rest.split('/').next().unwrap_or_default())
+    .filter(|id| !id.is_empty() && !matches!(*id, "generations" | "edits" | "extensions"))
 }
 
 fn is_videos_lookup_path(path: &str) -> bool {
@@ -8440,13 +9425,43 @@ fn is_videos_lookup_path(path: &str) -> bool {
 }
 
 fn video_id_from_headers(headers: &[(String, String)]) -> Option<String> {
+    // Header names have a semantic priority independent of wire order. Some
+    // providers emit both an internal session id and a public video id; the
+    // latter must win even when it appeared earlier in the response.
+    for header_name in ["x-video-id", "x-video-session-id"] {
+        if let Some((_, value)) = headers.iter().rev().find(|(name, value)| {
+            name.eq_ignore_ascii_case(header_name) && !value.trim().is_empty()
+        }) && let Some(id) = valid_video_resource_id(value)
+        {
+            return Some(id);
+        }
+    }
     headers.iter().rev().find_map(|(name, value)| {
         if !name.eq_ignore_ascii_case("location") {
             return None;
         }
-        let path = path_without_query(value.trim());
-        video_id_from_path(path).map(str::to_string)
+        let location = value.trim();
+        let path = reqwest::Url::parse(location)
+            .map(|url| url.path().to_string())
+            .unwrap_or_else(|_| path_without_query(location).to_string());
+        video_id_from_path(&path)
+            .and_then(valid_video_resource_id)
+            .or_else(|| {
+                (!location.contains('/') && !location.contains('?'))
+                    .then(|| valid_video_resource_id(location))
+                    .flatten()
+            })
     })
+}
+
+fn valid_video_resource_id(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')))
+    .then(|| value.to_string())
 }
 
 fn video_id_from_json(body: &[u8]) -> Option<String> {
@@ -8455,17 +9470,135 @@ fn video_id_from_json(body: &[u8]) -> Option<String> {
         .into_iter()
         .filter_map(|key| value.get(key).and_then(Value::as_str))
         .map(str::trim)
-        .find(|id| !id.is_empty())
-        .map(str::to_string)
+        .find_map(valid_video_resource_id)
         .or_else(|| {
             value
                 .get("data")
                 .and_then(|data| data.get("id"))
                 .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|id| !id.is_empty())
-                .map(str::to_string)
+                .and_then(valid_video_resource_id)
         })
+}
+
+/// Extract a resource id from a bounded response payload that may contain a
+/// plain JSON object, SSE `data:` records, or newline-delimited JSON.  The
+/// parser accepts a JSON value prefix so trailing SSE framing does not make a
+/// complete object look malformed.  Callers cap the accumulated payload at
+/// 64 KiB; the scan itself is additionally bounded to avoid adversarial work.
+fn resource_id_from_payload<F>(payload: &[u8], mut extract: F) -> Option<String>
+where
+    F: FnMut(&Value) -> Option<String>,
+{
+    const MAX_CANDIDATE_OFFSETS: usize = 2048;
+    let mut offsets = Vec::with_capacity(32);
+    offsets.push(0);
+    if let Ok(text) = std::str::from_utf8(payload) {
+        // SSE data records can span multiple physical lines.  Start parsing
+        // immediately after every `data:` marker as well as at each line
+        // boundary for NDJSON and ordinary pretty-printed JSON.
+        for (offset, _) in text.match_indices("data:") {
+            if offsets.len() >= MAX_CANDIDATE_OFFSETS {
+                break;
+            }
+            offsets.push(offset + "data:".len());
+        }
+        if offsets.len() < MAX_CANDIDATE_OFFSETS {
+            for (offset, byte) in payload.iter().enumerate() {
+                if *byte == b'\n' && offset + 1 < payload.len() {
+                    offsets.push(offset + 1);
+                    if offsets.len() >= MAX_CANDIDATE_OFFSETS {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    offsets.sort_unstable();
+    offsets.dedup();
+    for offset in offsets {
+        let candidate = payload.get(offset..).unwrap_or_default();
+        let candidate = trim_ascii_whitespace(candidate);
+        if candidate.is_empty() || candidate.starts_with(b"[DONE]") {
+            continue;
+        }
+        let mut deserializer = serde_json::Deserializer::from_slice(candidate);
+        let Ok(value) = <Value as serde::Deserialize>::deserialize(&mut deserializer) else {
+            continue;
+        };
+        if let Some(id) = extract(&value) {
+            return Some(id);
+        }
+    }
+    None
+}
+
+fn trim_ascii_whitespace(mut bytes: &[u8]) -> &[u8] {
+    while let Some(byte) = bytes.first() {
+        if !byte.is_ascii_whitespace() {
+            break;
+        }
+        bytes = &bytes[1..];
+    }
+    bytes
+}
+
+fn video_id_from_payload(body: &[u8]) -> Option<String> {
+    resource_id_from_payload(body, |value| {
+        let encoded = serde_json::to_vec(value).ok()?;
+        video_id_from_json(&encoded)
+    })
+}
+
+fn live_call_id_from_json(body: &[u8]) -> Option<String> {
+    let value = serde_json::from_slice::<Value>(body).ok()?;
+    let from_object = |object: &serde_json::Map<String, Value>| {
+        // Explicit call fields are authoritative and follow CPA's bounded
+        // `[A-Za-z0-9_-]{1,128}` contract (including `rtc_*` IDs). A generic
+        // `id` is accepted only for a call-shaped response to avoid binding a
+        // request/job/video id as a Live session by accident.
+        let explicit = ["call_id", "callId", "call"]
+            .into_iter()
+            .find_map(|key| object.get(key).and_then(Value::as_str))
+            .and_then(valid_live_resource_id);
+        explicit.or_else(|| {
+            let call_shape = object
+                .get("object")
+                .and_then(Value::as_str)
+                .is_some_and(|object| {
+                    let lower = object.to_ascii_lowercase();
+                    lower.contains("call") || lower.contains("realtime")
+                })
+                || object.contains_key("sdp")
+                || object.contains_key("session");
+            call_shape
+                .then(|| object.get("id").and_then(Value::as_str))
+                .flatten()
+                .and_then(valid_live_resource_id)
+        })
+    };
+    value.as_object().and_then(from_object).or_else(|| {
+        value
+            .get("data")
+            .and_then(Value::as_object)
+            .and_then(from_object)
+    })
+}
+
+fn live_call_id_from_payload(body: &[u8]) -> Option<String> {
+    resource_id_from_payload(body, |value| {
+        let encoded = serde_json::to_vec(value).ok()?;
+        live_call_id_from_json(&encoded)
+    })
+}
+
+fn valid_live_resource_id(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')))
+    .then(|| value.to_string())
 }
 
 fn websocket_message_model(message: &WebSocketMessage) -> Option<String> {
@@ -8519,11 +9652,10 @@ fn websocket_message_to_tungstenite(
 }
 
 fn is_codex_live_path(path: &str) -> bool {
-    matches!(path, "/v1/live" | "/live" | "/openai/v1/live")
-}
-
-fn is_codex_live_root_realtime_path(path: &str) -> bool {
-    matches!(path, "/v1/realtime" | "/realtime" | "/openai/v1/realtime")
+    matches!(
+        path,
+        "/v1/live" | "/live" | "/openai/v1/live" | "/backend-api/codex/live"
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -8532,15 +9664,28 @@ enum RealtimeRouteIntent {
     StandardRealtime,
 }
 
-/// CPA uses path+method, not the leaked chat model, to choose Quicksilver:
-/// POST `/v1/live`, POST `/v1/realtime`, POST `/v1/realtime/calls` are Live.
-/// GET `/v1/realtime` without `call_id` is the public Realtime WebSocket.
+/// Distinguish the public OpenAI Realtime surface from Codex's Quicksilver
+/// bootstrap.  The distinction is intentionally method/path first, matching
+/// CPA's route table:
+///
+/// * POST `/v1/live`, `/v1/realtime`, and `/v1/realtime/calls` are Live
+///   bootstraps;
+/// * GET `/v1/realtime` without a Quicksilver marker/call id is standard
+///   Realtime (including a Codex client's WebSocket handshake);
+/// * call-id children and explicit Quicksilver markers are Live sideband;
+/// * client-secrets/sessions/transcription/translation/control paths are
+///   standard Realtime resource calls, never a Live bootstrap.
+///
+/// Model and client identity are only compatibility hints after those route
+/// rules.  In particular, a leaked Claude/chat model cannot turn a generic
+/// request into Live, and Codex identity cannot turn a public GET WebSocket
+/// into Live merely because its UA is Codex.
 fn classify_realtime_intent(
     method: &str,
     path_and_query: &str,
-    _requested: Option<&str>,
-    _sideband_model: Option<&str>,
-    _secret_model: Option<&str>,
+    requested: Option<&str>,
+    sideband_model: Option<&str>,
+    secret_model: Option<&str>,
     _client_kind: ClientKind,
     body_codex_live: bool,
 ) -> RealtimeRouteIntent {
@@ -8548,27 +9693,87 @@ fn classify_realtime_intent(
     let query = path_and_query
         .split_once('?')
         .map_or("", |(_, query)| query);
-    if is_codex_live_path(path)
-        || is_codex_live_family_path(path)
-        || is_codex_live_sideband_target(path_and_query)
-        || query_value(query, "intent")
-            .is_some_and(|value| value.eq_ignore_ascii_case("quicksilver"))
-        || query_value(query, "architecture")
-            .is_some_and(|value| value.eq_ignore_ascii_case("avas"))
-        || body_codex_live
-    {
+    let is_post = method.eq_ignore_ascii_case("POST");
+    let is_get = method.eq_ignore_ascii_case("GET");
+
+    // `/live` is a dedicated Codex Live family.  Its children are sideband
+    // resources and therefore remain Live even when the method is GET/POST.
+    if is_codex_live_family_path(path) {
         return RealtimeRouteIntent::CodexLive;
     }
-    if is_codex_live_root_realtime_path(path)
-        && query_value(query, "call_id").is_some_and(|value| !value.trim().is_empty())
-    {
+
+    // Realtime call children are Live sideband; the root is a Live bootstrap
+    // on POST.  CPA registers this route with the Codex Live handler, while
+    // the public standard Realtime WebSocket uses GET on the same root.
+    // Keep this method/path rule independent of the surrounding chat model or
+    // UA: Codex Desktop has been observed sending `model=claude-*` here, and
+    // allowing that value to choose the route recreates the Fable failure.
+    if is_realtime_call_path_prefix(path) {
         return RealtimeRouteIntent::CodexLive;
     }
-    if method.eq_ignore_ascii_case("POST")
-        && (is_codex_live_root_realtime_path(path) || is_realtime_call_bootstrap_path(path))
-    {
+    if is_realtime_call_bootstrap_path(path) && is_post {
         return RealtimeRouteIntent::CodexLive;
     }
+    if is_realtime_root_path(path) && is_post {
+        return RealtimeRouteIntent::CodexLive;
+    }
+
+    // These endpoints issue/operate standard Realtime credentials/sessions.
+    // Keep them out of the Live bootstrap branch even if a body happens to
+    // contain a Codex-looking metadata field.
+    if is_realtime_control_path(path) {
+        return RealtimeRouteIntent::StandardRealtime;
+    }
+
+    // The WebSocket root is the public Realtime surface.  A GET handshake is
+    // never upgraded to Codex Live because of a leaked chat model, Codex UA,
+    // `intent=quicksilver`, or `architecture=avas`; only an explicit call id
+    // turns it into a Live sideband target.  Path validation runs before this
+    // classifier and rejects an empty/illegal call id with 400.
+    if is_get && is_realtime_root_path(path) {
+        return if live_call_id_from_target(path_and_query).is_some() {
+            RealtimeRouteIntent::CodexLive
+        } else {
+            RealtimeRouteIntent::StandardRealtime
+        };
+    }
+
+    let quicksilver_marker = decoded_query_value(query, "intent")
+        .is_some_and(|value| value.eq_ignore_ascii_case("quicksilver"))
+        || decoded_query_value(query, "architecture")
+            .is_some_and(|value| value.eq_ignore_ascii_case("avas"));
+    if quicksilver_marker || is_codex_live_sideband_target(path_and_query) {
+        return RealtimeRouteIntent::CodexLive;
+    }
+
+    // A JSON quicksilver envelope is a positive protocol marker, but only on
+    // a bootstrap-capable POST route.  Do not let an arbitrary standard
+    // Realtime control payload switch protocol families.
+    if is_post && is_realtime_bootstrap_root(path) && body_codex_live {
+        return RealtimeRouteIntent::CodexLive;
+    }
+
+    let explicit_model = requested
+        .or(sideband_model)
+        .or(secret_model)
+        .map(sumpter_core::model_name::clean)
+        .filter(|model| !model.is_empty());
+    if let Some(model) = explicit_model {
+        if model == request_build::DEFAULT_CODEX_LIVE_MODEL {
+            return RealtimeRouteIntent::CodexLive;
+        }
+        // Public Realtime model families (including older gpt-4o sessions)
+        // stay on the standard protocol, even when the caller is Codex.
+        if model == request_build::DEFAULT_REALTIME_MODEL
+            || model.starts_with("gpt-realtime-")
+            || model.contains("realtime-preview")
+            || model == "gpt-4o"
+            || model == "gpt-4o-mini"
+        {
+            return RealtimeRouteIntent::StandardRealtime;
+        }
+    }
+
     RealtimeRouteIntent::StandardRealtime
 }
 
@@ -8587,7 +9792,38 @@ fn realtime_route_model(
                 .or(secret_model)
                 .unwrap_or_else(|| request_build::DEFAULT_CODEX_LIVE_MODEL.to_string());
         }
-        return request_build::DEFAULT_CODEX_LIVE_MODEL.to_string();
+        // `/v1/live` and a model-less quicksilver bootstrap are always bound
+        // to the private Codex Live model.  A client-secret call may instead
+        // carry a standard model such as `gpt-4o`; CPA keeps that logical
+        // model and only rewrites it through the configured mapping.  Keep
+        // that distinction here so the secret scope check does not compare a
+        // client model with an unrelated forced model.
+        let candidate = requested
+            .or(sideband_model)
+            .or(secret_model)
+            .filter(|model| !model.trim().is_empty());
+        let Some(candidate) = candidate else {
+            return request_build::DEFAULT_CODEX_LIVE_MODEL.to_string();
+        };
+        let cleaned = sumpter_core::model_name::clean(&candidate);
+        return if is_codex_live_family_path(path_without_query(path_and_query))
+            || cleaned == request_build::DEFAULT_REALTIME_MODEL
+            || cleaned.starts_with("gpt-realtime-")
+            || cleaned.contains("realtime-preview")
+            || cleaned == request_build::DEFAULT_CODEX_LIVE_MODEL
+        {
+            request_build::DEFAULT_CODEX_LIVE_MODEL.to_string()
+        } else if cleaned.starts_with("gpt-4o") || cleaned.contains("live") {
+            // Standard Realtime sessions and explicitly named custom Live
+            // models remain selectable when the configuration has a matching
+            // capability mapping.  The config-aware resolver below falls
+            // back to the private Live mapping when they do not.
+            candidate
+        } else {
+            // A leaked chat model (Claude/Fable, GPT text, etc.) must never
+            // select a text provider for a Live bootstrap.
+            request_build::DEFAULT_CODEX_LIVE_MODEL.to_string()
+        };
     }
     requested
         .or(secret_model)
@@ -8596,6 +9832,75 @@ fn realtime_route_model(
             let _ = method;
             request_build::DEFAULT_REALTIME_MODEL.to_string()
         })
+}
+
+/// Client-secret sessions expose a public Realtime model while the Codex
+/// OAuth surface may normalize that model to `gpt-live-1-codex`.  Treat those
+/// two names as the same authorization scope only for known Realtime model
+/// families; an arbitrary text model must still fail closed.
+fn realtime_client_secret_models_match(expected: &str, requested: &str) -> bool {
+    let expected = sumpter_core::model_name::clean(expected);
+    let requested = sumpter_core::model_name::clean(requested);
+    if expected.is_empty() || requested.is_empty() {
+        return false;
+    }
+    if expected == requested {
+        return true;
+    }
+    let expected_realtime = is_standard_realtime_model_name(&expected)
+        || expected == request_build::DEFAULT_CODEX_LIVE_MODEL;
+    let requested_realtime = is_standard_realtime_model_name(&requested)
+        || requested == request_build::DEFAULT_CODEX_LIVE_MODEL;
+    expected_realtime && requested_realtime
+}
+
+fn is_standard_realtime_model_name(model: &str) -> bool {
+    sumpter_core::capability::is_realtime_model_name(model)
+}
+
+/// Resolve a logical Realtime/Live model against the configured capability
+/// catalog.  CPA accepts a standard client-facing model (for example
+/// `gpt-4o`) but may send it through the Codex Live OAuth surface.  If that
+/// logical model has no `live` mapping in this installation, use the explicit
+/// `gpt-live-1-codex` mapping instead of allowing the request to fall into a
+/// text-only wildcard or an arbitrary first endpoint.
+fn resolve_realtime_route_model(
+    config: &AppConfig,
+    method: &str,
+    path_and_query: &str,
+    requested: Option<String>,
+    sideband_model: Option<String>,
+    secret_model: Option<String>,
+    intent: RealtimeRouteIntent,
+) -> String {
+    let candidate = realtime_route_model(
+        method,
+        path_and_query,
+        requested,
+        sideband_model,
+        secret_model,
+        intent,
+    );
+    let has_mapping = |model: &str| {
+        config.endpoints.iter().any(|endpoint| {
+            endpoint.enabled
+                && endpoint
+                    .mapping_for_capability(model, sumpter_core::capability::ModelCapability::Live)
+                    .is_some()
+        })
+    };
+    if has_mapping(&candidate) {
+        return candidate;
+    }
+    if intent == RealtimeRouteIntent::CodexLive
+        && let Some(default) = RoutePlanner::default_model_for_capability(
+            config,
+            sumpter_core::capability::ModelCapability::Live,
+        )
+    {
+        return default;
+    }
+    candidate
 }
 
 /// Test helper for a Codex voice bootstrap. Production paths pass the detected
@@ -8672,102 +9977,278 @@ fn body_indicates_codex_live(body: &[u8], content_type: Option<&str>) -> bool {
 fn should_normalize_codex_live_request(
     method: &str,
     path_and_query: &str,
-    headers: &[(String, String)],
     body: &[u8],
     content_type: Option<&str>,
+    client_kind: ClientKind,
 ) -> bool {
     let path = path_without_query(path_and_query);
+    // Only the two root POST bootstrap families may be converted into CPA's
+    // Quicksilver JSON envelope. Call creation (`/realtime/calls`) already has
+    // its own SDP/JSON contract, and every id/control child is opaque
+    // sideband data that must remain byte-for-byte unchanged.
     if !method.eq_ignore_ascii_case("POST")
-        || is_realtime_client_secret_path(path_and_query)
-        || is_realtime_call_bootstrap_path(path)
+        || !(is_codex_live_path(path) || is_realtime_root_path(path))
+        || live_call_id_from_target(path_and_query).is_some()
     {
         return false;
     }
     let query_model = path_and_query
         .split_once('?')
-        .and_then(|(_, query)| query_value(query, "model"));
+        .and_then(|(_, query)| decoded_query_value(query, "model"));
     let body_model = realtime_body_model(body, content_type);
     classify_realtime_intent(
         method,
         path_and_query,
-        query_model.or(body_model.as_deref()),
+        query_model.as_deref().or(body_model.as_deref()),
         None,
         None,
-        detect_client_kind(headers, true),
+        client_kind,
         body_indicates_codex_live(body, content_type),
     ) == RealtimeRouteIntent::CodexLive
 }
 
 fn is_codex_live_family_path(path: &str) -> bool {
-    ["/v1/live", "/live", "/openai/v1/live"]
-        .iter()
-        .any(|prefix| is_path_or_child(path, prefix))
+    [
+        "/v1/live",
+        "/live",
+        "/openai/v1/live",
+        "/backend-api/codex/live",
+    ]
+    .iter()
+    .any(|prefix| is_path_or_child(path, prefix))
+}
+
+fn is_realtime_root_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/v1/realtime" | "/realtime" | "/openai/v1/realtime" | "/backend-api/codex/realtime"
+    )
+}
+
+fn is_realtime_bootstrap_root(path: &str) -> bool {
+    is_realtime_root_path(path) || is_realtime_call_bootstrap_path(path)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RealtimeCallPathError {
+    InvalidId,
+    UnsupportedAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RealtimeCallTarget {
+    call_id: String,
+    action: Option<String>,
+}
+
+/// Parse and validate CPA's `/realtime/calls/:call_id[/action]` surface and
+/// root `?call_id=` sideband form. `Ok(None)` means the target is not a call
+/// resource. Percent decoding is deliberately strict: malformed escapes,
+/// decoded separators and control bytes are rejected rather than falling
+/// through to an unrelated Realtime route.
+fn validate_realtime_call_target(
+    path_and_query: &str,
+) -> Result<Option<RealtimeCallTarget>, RealtimeCallPathError> {
+    let path = path_without_query(path_and_query);
+    for prefix in [
+        "/v1/realtime/calls/",
+        "/realtime/calls/",
+        "/openai/v1/realtime/calls/",
+        "/backend-api/codex/realtime/calls/",
+        "/v1/live/",
+        "/live/",
+        "/openai/v1/live/",
+        "/backend-api/codex/live/",
+    ] {
+        let Some(rest) = path.strip_prefix(prefix) else {
+            continue;
+        };
+        let mut segments = rest.split('/');
+        let raw_id = segments.next().unwrap_or_default();
+        let Some(call_id) =
+            percent_decode_path_segment(raw_id).and_then(|value| valid_live_resource_id(&value))
+        else {
+            return Err(RealtimeCallPathError::InvalidId);
+        };
+        let action = segments.next();
+        if segments.next().is_some()
+            || action.is_some_and(|action| {
+                action.is_empty() || !matches!(action, "hangup" | "accept" | "reject" | "refer")
+            })
+        {
+            return Err(RealtimeCallPathError::UnsupportedAction);
+        }
+        return Ok(Some(RealtimeCallTarget {
+            call_id,
+            action: action.map(str::to_string),
+        }));
+    }
+
+    if is_realtime_root_path(path)
+        && let Some(query) = path_and_query.split_once('?').map(|(_, query)| query)
+        && query_has_key(query, "call_id")
+    {
+        let Some(call_id) = strict_decoded_query_value(query, "call_id")
+            .and_then(|value| valid_live_resource_id(&value))
+        else {
+            return Err(RealtimeCallPathError::InvalidId);
+        };
+        return Ok(Some(RealtimeCallTarget {
+            call_id,
+            action: None,
+        }));
+    }
+    Ok(None)
+}
+
+fn realtime_call_path_error(
+    error: RealtimeCallPathError,
+) -> (StatusCode, &'static str, &'static str) {
+    match error {
+        RealtimeCallPathError::InvalidId => (
+            StatusCode::BAD_REQUEST,
+            "invalid_realtime_call_id",
+            "Realtime call id is invalid",
+        ),
+        RealtimeCallPathError::UnsupportedAction => (
+            StatusCode::NOT_FOUND,
+            "unsupported_realtime_call_action",
+            "Realtime call action is not supported",
+        ),
+    }
+}
+
+fn query_has_key(query: &str, key: &str) -> bool {
+    query.split('&').any(|pair| {
+        let (raw_name, _) = pair.split_once('=').unwrap_or((pair, ""));
+        strict_percent_decode(raw_name, true).as_deref() == Some(key)
+    })
+}
+
+fn strict_decoded_query_value(query: &str, key: &str) -> Option<String> {
+    query.split('&').find_map(|pair| {
+        let (raw_name, raw_value) = pair.split_once('=').unwrap_or((pair, ""));
+        (strict_percent_decode(raw_name, true).as_deref() == Some(key))
+            .then(|| strict_percent_decode(raw_value, true))
+            .flatten()
+    })
+}
+
+fn percent_decode_path_segment(value: &str) -> Option<String> {
+    let decoded = strict_percent_decode(value, false)?;
+    (!decoded.contains('/') && !decoded.contains('\\')).then_some(decoded)
+}
+
+fn strict_percent_decode(value: &str, plus_as_space: bool) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' if plus_as_space => {
+                decoded.push(b' ');
+                index += 1;
+            }
+            b'%' => {
+                if index + 2 >= bytes.len() {
+                    return None;
+                }
+                let high = from_hex_digit(bytes[index + 1])?;
+                let low = from_hex_digit(bytes[index + 2])?;
+                decoded.push((high << 4) | low);
+                index += 3;
+            }
+            byte => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
+fn is_realtime_call_path_prefix(path: &str) -> bool {
+    [
+        "/v1/realtime/calls/",
+        "/realtime/calls/",
+        "/openai/v1/realtime/calls/",
+        "/backend-api/codex/realtime/calls/",
+    ]
+    .iter()
+    .any(|prefix| path.starts_with(prefix))
+}
+
+#[cfg(test)]
+fn unsupported_realtime_call_action(path: &str) -> bool {
+    validate_realtime_call_target(path) == Err(RealtimeCallPathError::UnsupportedAction)
+}
+
+/// Realtime credential/session and SIP/control surfaces.  They share the
+/// `live` capability in the mapping catalog, but are not Codex Live
+/// bootstraps and must never be wrapped as Quicksilver.
+fn is_realtime_control_path(path: &str) -> bool {
+    [
+        "/v1/realtime/client_secrets",
+        "/realtime/client_secrets",
+        "/openai/v1/realtime/client_secrets",
+        "/backend-api/codex/realtime/client_secrets",
+        "/v1/realtime/sessions",
+        "/realtime/sessions",
+        "/openai/v1/realtime/sessions",
+        "/backend-api/codex/realtime/sessions",
+        "/v1/realtime/transcription_sessions",
+        "/realtime/transcription_sessions",
+        "/openai/v1/realtime/transcription_sessions",
+        "/backend-api/codex/realtime/transcription_sessions",
+        "/v1/realtime/translations",
+        "/realtime/translations",
+        "/openai/v1/realtime/translations",
+        "/backend-api/codex/realtime/translations",
+        "/v1/realtime/translations/client_secrets",
+        "/realtime/translations/client_secrets",
+        "/openai/v1/realtime/translations/client_secrets",
+        "/backend-api/codex/realtime/translations/client_secrets",
+    ]
+    .iter()
+    .any(|prefix| is_path_or_child(path, prefix))
 }
 
 fn is_realtime_call_bootstrap_path(path: &str) -> bool {
     matches!(
         path,
-        "/v1/realtime/calls" | "/realtime/calls" | "/openai/v1/realtime/calls"
+        "/v1/realtime/calls"
+            | "/realtime/calls"
+            | "/openai/v1/realtime/calls"
+            | "/backend-api/codex/realtime/calls"
     )
 }
 
-fn live_call_id_from_path(path: &str) -> Option<&str> {
-    [
-        "/v1/live/",
-        "/live/",
-        "/openai/v1/live/",
-        "/v1/realtime/calls/",
-        "/realtime/calls/",
-        "/openai/v1/realtime/calls/",
-    ]
-    .iter()
-    .find_map(|prefix| path.strip_prefix(prefix))
-    .map(|rest| rest.split('/').next().unwrap_or_default())
-    .filter(|call_id| !call_id.is_empty())
-}
-
-/// CPA also exposes a frameless quicksilver sideband at
-/// `/v1/realtime?intent=quicksilver&call_id=…`; treat it as the same session
-/// target as `/v1/live/{call_id}` while leaving ordinary Realtime connections
-/// untouched.
-fn live_call_id_from_target(path_and_query: &str) -> Option<&str> {
-    let path = path_without_query(path_and_query);
-    if let Some(call_id) = live_call_id_from_path(path) {
-        return Some(call_id);
-    }
-    if !is_realtime_http_path(path) || is_codex_live_family_path(path) {
-        return None;
-    }
-    let query = path_and_query.split_once('?').map(|(_, query)| query)?;
-    let intent = query_value(query, "intent")?;
-    if !intent.eq_ignore_ascii_case("quicksilver") {
-        return None;
-    }
-    query_value(query, "call_id").filter(|call_id| !call_id.trim().is_empty())
+/// CPA treats any valid `call_id` on the Realtime root as a sideband target
+/// (the query `intent=quicksilver` is not required).  Keep that behavior so a
+/// sideband cannot accidentally open a fresh standard Realtime session.
+fn live_call_id_from_target(path_and_query: &str) -> Option<String> {
+    validate_realtime_call_target(path_and_query)
+        .ok()
+        .flatten()
+        .map(|target| target.call_id)
 }
 
 fn is_codex_live_sideband_target(path_and_query: &str) -> bool {
     let path = path_without_query(path_and_query);
     (is_codex_live_family_path(path) && live_call_id_from_target(path_and_query).is_some())
-        || (is_realtime_http_path(path)
-            && query_value(
-                path_and_query
-                    .split_once('?')
-                    .map_or("", |(_, query)| query),
-                "intent",
-            )
-            .is_some_and(|intent| intent.eq_ignore_ascii_case("quicksilver"))
-            && live_call_id_from_target(path_and_query).is_some())
+        || (is_realtime_root_path(path) && live_call_id_from_target(path_and_query).is_some())
 }
 
 fn live_call_id_from_headers(headers: &[(String, String)]) -> Option<String> {
-    headers.iter().rev().find_map(|(name, value)| {
-        if name.eq_ignore_ascii_case("x-live-call-id")
-            || name.eq_ignore_ascii_case("x-live-session")
-            || name.eq_ignore_ascii_case("x-call-id")
+    for header_name in ["x-live-call-id", "x-live-session", "x-call-id"] {
+        if let Some((_, value)) = headers.iter().rev().find(|(name, value)| {
+            name.eq_ignore_ascii_case(header_name) && !value.trim().is_empty()
+        }) && let Some(id) = valid_live_resource_id(value)
         {
-            return (!value.trim().is_empty()).then(|| value.trim().to_string());
+            return Some(id);
         }
+    }
+    headers.iter().rev().find_map(|(name, value)| {
         if !name.eq_ignore_ascii_case("location") {
             return None;
         }
@@ -8782,11 +10263,11 @@ fn live_call_id_from_headers(headers: &[(String, String)]) -> Option<String> {
                 target
             })
             .unwrap_or_else(|_| location.to_string());
-        live_call_id_from_target(&target)
-            .map(str::to_string)
-            .or_else(|| {
-                (!location.contains('/') && !location.contains('?')).then(|| location.to_string())
-            })
+        live_call_id_from_target(&target).or_else(|| {
+            (!location.contains('/') && !location.contains('?'))
+                .then(|| valid_live_resource_id(location))
+                .flatten()
+        })
     })
 }
 
@@ -8797,12 +10278,15 @@ fn is_realtime_client_secret_path(path_and_query: &str) -> bool {
         "/v1/realtime/client_secrets"
             | "/realtime/client_secrets"
             | "/openai/v1/realtime/client_secrets"
+            | "/backend-api/codex/realtime/client_secrets"
             | "/v1/realtime/sessions"
             | "/realtime/sessions"
             | "/openai/v1/realtime/sessions"
+            | "/backend-api/codex/realtime/sessions"
             | "/v1/realtime/translations/client_secrets"
             | "/realtime/translations/client_secrets"
             | "/openai/v1/realtime/translations/client_secrets"
+            | "/backend-api/codex/realtime/translations/client_secrets"
     )
 }
 
@@ -8826,6 +10310,17 @@ pub fn error_response(status: StatusCode, pairs: &[(&str, &str)]) -> Response {
         map.insert((*k).to_string(), Value::String((*v).to_string()));
     }
     json_response(status, &Value::Object(map))
+}
+
+fn method_not_allowed_response(allow: &str) -> Response {
+    let mut response = error_response(
+        StatusCode::METHOD_NOT_ALLOWED,
+        &[("error", "method_not_allowed")],
+    );
+    if let Ok(value) = HeaderValue::from_str(allow) {
+        response.headers_mut().insert("allow", value);
+    }
+    response
 }
 
 fn proxy_failure_response(
@@ -8877,6 +10372,7 @@ fn proxy_failure_response(
                 RuntimeFailureKind::ResponseTimeout
                     | RuntimeFailureKind::ConnectionFailed
                     | RuntimeFailureKind::UpstreamHttpStatus
+                    | RuntimeFailureKind::EndpointsExhausted
             )
             .then(|| match (configured_retry_delay, provider_retry_delay) {
                 (Some(configured), Some(provider)) => Some(configured.max(provider)),
@@ -9038,10 +10534,60 @@ mod protocol_tests {
         assert!(is_videos_create_path("/v1/videos"));
         assert!(is_videos_create_path("/v1/videos/generations"));
         assert!(!is_videos_create_path("/v1/videos/video_123"));
+        assert!(is_videos_create_request("POST", "/v1/videos"));
+        assert!(is_videos_create_request("POST", "/v1/videos/edits"));
+        assert!(!is_videos_create_request("GET", "/v1/videos"));
+        assert!(!is_videos_create_request("GET", "/v1/videos/generations"));
+        assert!(!is_videos_create_request("POST", "/v1/videos/video_123"));
         assert_eq!(
             video_id_from_json(br#"{"id":"video_abc","object":"video"}"#).as_deref(),
             Some("video_abc")
         );
+        assert_eq!(
+            video_id_from_headers(&[("Location".into(), "video_abc".into())]).as_deref(),
+            Some("video_abc")
+        );
+        assert_eq!(
+            video_id_from_headers(&[
+                ("X-Video-ID".into(), "video_public".into()),
+                ("X-Video-Session-ID".into(), "session_internal".into()),
+            ])
+            .as_deref(),
+            Some("video_public")
+        );
+        assert_eq!(
+            video_id_from_headers(&[
+                ("X-Video-Session-ID".into(), "session_internal".into()),
+                ("X-Video-ID".into(), "video_public".into()),
+            ])
+            .as_deref(),
+            Some("video_public")
+        );
+    }
+
+    #[tokio::test]
+    async fn realtime_root_live_bootstrap_is_the_only_root_that_registers_a_call() {
+        INBOUND_REQUEST_CONTEXT
+            .scope(
+                RefCell::new(InboundRequestContext {
+                    method: "POST".into(),
+                    path: "/v1/realtime".into(),
+                    route_intent: "live".into(),
+                    session_id: None,
+                }),
+                async {
+                    assert!(is_live_bootstrap_request(
+                        "POST",
+                        "/v1/realtime?intent=quicksilver"
+                    ));
+                    assert!(!is_live_bootstrap_request("GET", "/v1/realtime"));
+                    assert!(!is_live_bootstrap_request(
+                        "POST",
+                        "/v1/realtime?intent=quicksilver&call_id=rtc_1"
+                    ));
+                },
+            )
+            .await;
     }
 
     #[test]
@@ -9058,6 +10604,235 @@ mod protocol_tests {
         .expect("valid video multipart");
         assert_eq!(fields.model, "grok-imagine-video-1.5");
         assert!(!fields.stream);
+    }
+
+    #[test]
+    fn multipart_parser_requires_real_line_delimiters_and_closing_boundary() {
+        let boundary = "safe-boundary";
+        // The uploaded bytes contain boundary-looking text, but neither
+        // occurrence is a valid delimiter (bad line position/suffix). The
+        // parser must retain the complete binary field and still find the
+        // actual closing delimiter.
+        let mut body =
+            format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"\r\n\r\n")
+                .into_bytes();
+        body.extend_from_slice(b"binary--safe-boundaryX\r\n");
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngrok-imagine-video\r\n"
+            )
+            .as_bytes(),
+        );
+        body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+        let fields = native_multipart_fields_with_default(
+            &body,
+            &format!("multipart/form-data; boundary={boundary}"),
+            "",
+        )
+        .expect("valid multipart");
+        assert_eq!(fields.model, "grok-imagine-video");
+
+        let truncated = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngrok-imagine-video\r\n"
+        );
+        assert_eq!(
+            native_multipart_fields_with_default(
+                truncated.as_bytes(),
+                &format!("multipart/form-data; boundary={boundary}"),
+                "",
+            )
+            .unwrap_err(),
+            "multipart closing boundary is missing"
+        );
+    }
+
+    #[test]
+    fn multipart_field_names_are_case_insensitive() {
+        let boundary = "case-boundary";
+        let body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"MODEL\"\r\n\r\ngrok-imagine-video\r\n--{boundary}--\r\n"
+        );
+        let fields = native_multipart_fields_with_default(
+            body.as_bytes(),
+            &format!("multipart/form-data; boundary={boundary}"),
+            "",
+        )
+        .expect("valid multipart");
+        assert_eq!(fields.model, "grok-imagine-video");
+    }
+
+    #[test]
+    fn raw_dispatch_hints_require_framing_and_bound_model_sniffing() {
+        assert!(raw_request_body_hint(
+            "POST",
+            &[("content-length".into(), "12".into())]
+        ));
+        assert!(!raw_request_body_hint("POST", &[]));
+        assert!(!raw_request_body_hint(
+            "GET",
+            &[("content-length".into(), "0".into())]
+        ));
+        assert!(raw_request_body_hint(
+            "POST",
+            &[("transfer-encoding".into(), "chunked".into())]
+        ));
+
+        assert_eq!(
+            raw_body_model_hint(br#" {"model":"vendor-model","x":1} "#, None).as_deref(),
+            Some("vendor-model")
+        );
+        assert_eq!(raw_body_model_hint(b"\0{\"model\":\"nope\"}", None), None);
+        assert_eq!(
+            raw_body_model_hint(&vec![b' '; RAW_MODEL_SNIFF_BYTES + 1], None),
+            None
+        );
+    }
+
+    #[test]
+    fn websocket_close_metrics_have_one_byte_contract_and_eof_is_failure() {
+        let axum_close = WebSocketMessage::Close(Some(axum::extract::ws::CloseFrame {
+            code: 1000,
+            reason: "bye".into(),
+        }));
+        assert_eq!(websocket_message_size(&axum_close), 5);
+        assert_eq!(websocket_message_size(&WebSocketMessage::Close(None)), 0);
+
+        let tungstenite_close = tokio_tungstenite::tungstenite::Message::Close(Some(
+            tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                code: tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Normal,
+                reason: "bye".into(),
+            },
+        ));
+        assert_eq!(
+            tungstenite_message_stats(&tungstenite_close),
+            (5, Some(1000))
+        );
+
+        let counters = WebSocketRelayCounters::default();
+        counters.record_error("upstream_eof_without_close", "upstream");
+        let metrics = counters.snapshot(Instant::now());
+        assert!(metrics.failed);
+        assert!(metrics.abnormal_close);
+        assert_eq!(metrics.closed_by.as_deref(), Some("upstream"));
+        assert_eq!(
+            metrics.relay_error.as_deref(),
+            Some("upstream_eof_without_close")
+        );
+    }
+
+    #[test]
+    fn websocket_non_http_connect_error_has_no_upstream_status() {
+        let (status, _) = websocket_connect_error(&tokio_tungstenite::tungstenite::Error::Io(
+            std::io::Error::other("dial failed"),
+        ));
+        assert_eq!(status, 0);
+    }
+
+    #[test]
+    fn websocket_first_frame_originator_upgrades_generic_attribution() {
+        let frame = WebSocketMessage::Text(
+            r#"{"type":"response.create","model":"gpt-4o","originator":"Codex Desktop"}"#.into(),
+        );
+        let metadata = websocket_message_codex_metadata(&frame).expect("frame metadata");
+        let context = WebSocketEventContext {
+            request_id: "request".into(),
+            request_path: "/v1/responses".into(),
+            route_intent: "responses_websocket".into(),
+            client_kind: ClientKind::OpenaiCompat,
+            model: "gpt-4o".into(),
+            codex_metadata: None,
+            client_declared: None,
+            session_id: None,
+            started: Instant::now(),
+        };
+        let merged = websocket_context_with_first_frame(&context, Some(&metadata));
+        assert_eq!(merged.client_kind, ClientKind::Codex);
+        assert_eq!(
+            merged
+                .codex_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.originator.as_deref()),
+            Some("Codex Desktop")
+        );
+    }
+
+    #[test]
+    fn live_path_uses_the_same_strict_call_target_validator() {
+        let target = validate_realtime_call_target("/v1/live/rtc_1").expect("valid target");
+        assert_eq!(target.unwrap().call_id, "rtc_1");
+        let target = validate_realtime_call_target("/openai/v1/live/rtc-1/hangup")
+            .expect("valid action target")
+            .expect("target");
+        assert_eq!(target.action.as_deref(), Some("hangup"));
+        assert_eq!(
+            validate_realtime_call_target("/v1/live/rtc%2F1"),
+            Err(RealtimeCallPathError::InvalidId)
+        );
+        assert_eq!(
+            validate_realtime_call_target("/v1/live/rtc_1/content"),
+            Err(RealtimeCallPathError::UnsupportedAction)
+        );
+        assert_eq!(
+            validate_realtime_call_target("/v1/live/"),
+            Err(RealtimeCallPathError::InvalidId)
+        );
+    }
+
+    #[test]
+    fn resource_bindings_survive_engine_restart_and_expired_entries_are_pruned() {
+        let root = std::env::temp_dir().join(format!(
+            "sumpter-engine-resource-bindings-{}",
+            new_event_id()
+        ));
+        let dir = ConfigDir::new(root.clone());
+        let first = Engine::new(
+            AppConfig::bootstrap(),
+            Some(dir.clone()),
+            Arc::new(crate::outbound::ReqwestTransport::new()),
+        );
+        first.register_live_session("rtc_restart", "cpa", "gpt-live-1-codex");
+        first.register_video_session("video_restart", "grok", "grok-imagine-video");
+        assert!(dir.load_resource_bindings().unwrap().len() == 2);
+        drop(first);
+
+        let second = Engine::new(
+            AppConfig::bootstrap(),
+            Some(dir.clone()),
+            Arc::new(crate::outbound::ReqwestTransport::new()),
+        );
+        assert_eq!(
+            second.live_session_endpoint("/v1/live/rtc_restart"),
+            Some(Some("cpa".into()))
+        );
+        assert_eq!(
+            second.live_session_model("/v1/live/rtc_restart"),
+            Some(Some("gpt-live-1-codex".into()))
+        );
+        assert_eq!(
+            second.video_session_endpoint("/v1/videos/video_restart/content"),
+            Some(Some("grok".into()))
+        );
+        drop(second);
+
+        let mut expired = std::collections::HashMap::new();
+        expired.insert(
+            "live:expired".into(),
+            ResourceBinding {
+                endpoint_id: "cpa".into(),
+                model: "gpt-live-1-codex".into(),
+                expires_at: 1.0,
+            },
+        );
+        let _ = dir.save_resource_bindings(&expired).unwrap();
+        let third = Engine::new(
+            AppConfig::bootstrap(),
+            Some(dir.clone()),
+            Arc::new(crate::outbound::ReqwestTransport::new()),
+        );
+        assert_eq!(third.live_session_endpoint("/v1/live/expired"), Some(None));
+        assert!(dir.load_resource_bindings().unwrap().is_empty());
+        drop(third);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -9096,6 +10871,30 @@ mod protocol_tests {
                 None,
                 None,
                 ClientKind::OpenaiCompat,
+                false,
+            ),
+            RealtimeRouteIntent::StandardRealtime
+        );
+        assert_eq!(
+            classify_realtime_intent(
+                "GET",
+                "/v1/realtime?model=gpt-live-1-codex&intent=quicksilver",
+                Some(request_build::DEFAULT_CODEX_LIVE_MODEL),
+                None,
+                None,
+                ClientKind::Codex,
+                true,
+            ),
+            RealtimeRouteIntent::StandardRealtime
+        );
+        assert_eq!(
+            classify_realtime_intent(
+                "GET",
+                "/v1/realtime?architecture=avas",
+                None,
+                None,
+                None,
+                ClientKind::Codex,
                 false,
             ),
             RealtimeRouteIntent::StandardRealtime
@@ -9150,6 +10949,18 @@ mod protocol_tests {
         );
         assert_eq!(
             classify_realtime_intent(
+                "GET",
+                "/v1/realtime?model=claude-fable-5",
+                Some("claude-fable-5"),
+                None,
+                None,
+                ClientKind::Codex,
+                false,
+            ),
+            RealtimeRouteIntent::StandardRealtime
+        );
+        assert_eq!(
+            classify_realtime_intent(
                 "POST",
                 "/v1/realtime/client_secrets",
                 Some("gpt-4o"),
@@ -9159,6 +10970,18 @@ mod protocol_tests {
                 false,
             ),
             RealtimeRouteIntent::StandardRealtime
+        );
+        assert_eq!(
+            classify_realtime_intent(
+                "POST",
+                "/v1/realtime/calls/call-1/hangup",
+                Some(request_build::DEFAULT_CODEX_LIVE_MODEL),
+                None,
+                None,
+                ClientKind::Codex,
+                true,
+            ),
+            RealtimeRouteIntent::CodexLive
         );
     }
 
@@ -9214,12 +11037,26 @@ mod protocol_tests {
             Some("call-header")
         );
         assert_eq!(
-            live_call_id_from_target("/v1/live/call-path"),
+            live_call_id_from_headers(&[
+                ("X-Call-ID".into(), "fallback-call".into()),
+                ("X-Live-Session".into(), "live-session".into()),
+                ("X-Live-Call-ID".into(), "live-call".into()),
+            ])
+            .as_deref(),
+            Some("live-call")
+        );
+        assert_eq!(
+            live_call_id_from_target("/v1/live/call-path").as_deref(),
             Some("call-path")
         );
         assert_eq!(
-            live_call_id_from_target("/v1/realtime?intent=quicksilver&call_id=call-query"),
+            live_call_id_from_target("/v1/realtime?intent=quicksilver&call_id=call-query")
+                .as_deref(),
             Some("call-query")
+        );
+        assert_eq!(
+            live_call_id_from_target("/v1/realtime?intent=quicksilver&call_id=rtc_1").as_deref(),
+            Some("rtc_1")
         );
         assert_eq!(
             live_call_id_from_headers(&[(
@@ -9233,9 +11070,43 @@ mod protocol_tests {
         assert!(is_codex_live_sideband_target(
             "/v1/realtime?intent=quicksilver&call_id=call-query"
         ));
-        assert!(!is_codex_live_sideband_target(
+        assert!(is_codex_live_sideband_target(
             "/v1/realtime?call_id=ordinary-realtime"
         ));
+        assert!(!unsupported_realtime_call_action(
+            "/v1/realtime/calls/rtc_1/hangup"
+        ));
+        assert!(!unsupported_realtime_call_action(
+            "/v1/realtime/calls/rtc_1"
+        ));
+        assert!(unsupported_realtime_call_action(
+            "/v1/realtime/calls/rtc_1/unknown"
+        ));
+        assert_eq!(
+            validate_realtime_call_target("/v1/realtime/calls/%%%").unwrap_err(),
+            RealtimeCallPathError::InvalidId
+        );
+        assert_eq!(
+            validate_realtime_call_target("/v1/realtime/calls/").unwrap_err(),
+            RealtimeCallPathError::InvalidId
+        );
+        assert_eq!(
+            validate_realtime_call_target("/v1/realtime/calls/call-1/hangup/extra").unwrap_err(),
+            RealtimeCallPathError::UnsupportedAction
+        );
+        assert_eq!(
+            validate_realtime_call_target("/v1/realtime?call_id=call%2F1").unwrap_err(),
+            RealtimeCallPathError::InvalidId
+        );
+        let target = validate_realtime_call_target("/v1/realtime/calls/call%2D1/hangup")
+            .expect("decoded call target")
+            .expect("call target");
+        assert_eq!(target.call_id, "call-1");
+        assert_eq!(target.action.as_deref(), Some("hangup"));
+        assert_eq!(
+            live_call_id_from_json(br#"{"object":"realtime.call","id":"rtc_1"}"#).as_deref(),
+            Some("rtc_1")
+        );
     }
 
     #[test]
@@ -9319,6 +11190,15 @@ mod protocol_tests {
             ),
             Some("wss://provider.invalid/v1/backend-api/codex/responses?model=gpt-4o".into())
         );
+        assert_eq!(
+            websocket_url(
+                "https://ccc.domob.org",
+                &request_build::strip_codex_live_query(
+                    "/v1/realtime?model=gpt-live-1-codex&intent=quicksilver&architecture=avas",
+                ),
+            ),
+            Some("wss://ccc.domob.org/v1/realtime?model=gpt-live-1-codex".into())
+        );
     }
 
     #[test]
@@ -9340,10 +11220,13 @@ mod protocol_tests {
                 "id": "cpa",
                 "name": "CPA",
                 "baseURL": "https://cpa.example.invalid",
-                "apiKey": "sk",
-                "protocol": "openai",
-                "enabled": true,
-                "mappings": [
+                  "apiKey": "sk",
+                  "protocol": "openai",
+                  "enabled": true,
+                  "catalog": {
+                    "models": ["gpt-4o", "gpt-5.6-sol", "gpt-image-2", "gpt-ignored-other"]
+                  },
+                  "mappings": [
                   {"clientPattern": "gpt-5.6-sol", "upstreamModel": "gpt-5.6-sol"},
                   {"clientPattern": "gpt-4o", "upstreamModel": "gpt-4o"},
                   {"clientPattern": "*", "upstreamModel": "star"},
@@ -9366,9 +11249,12 @@ mod protocol_tests {
             .iter()
             .filter_map(|model| model["id"].as_str())
             .collect();
-        assert_eq!(ids, vec!["gpt-4o", "gpt-5.6-sol", "gpt-image-2"]);
+        assert_eq!(
+            ids,
+            vec!["gpt-4o", "gpt-5.6-sol", "gpt-ignored-other", "gpt-image-2"]
+        );
         assert!(json["data"][0].get("endpointIDs").is_none());
-        assert!(json["data"][0].get("capabilities").is_none());
+        assert_eq!(json["data"][0]["capabilities"], json!(["text"]));
         assert_eq!(json["data"][0]["owned_by"], "sumpter");
     }
 
@@ -9389,7 +11275,6 @@ mod protocol_tests {
             .expect("chat model");
         assert_eq!(chat["display_name"], "gpt-5.6-sol");
         assert_eq!(chat["default_reasoning_level"], "medium");
-        assert!(chat.get("capabilities").is_none());
         let gpt4o = models
             .iter()
             .find(|model| model["slug"] == "gpt-4o")
@@ -9513,6 +11398,19 @@ fn realtime_body_model(body: &[u8], content_type: Option<&str>) -> Option<String
     .map(str::to_string)
 }
 
+fn realtime_body_model_hint(body: &[u8], content_type: Option<&str>) -> Option<String> {
+    if content_type.is_some_and(content_type_is_json) {
+        return realtime_body_model(body, content_type);
+    }
+    if content_type.is_some_and(content_type_is_multipart) {
+        return native_multipart_fields_with_default(body, content_type.unwrap_or_default(), "")
+            .ok()
+            .map(|fields| fields.model)
+            .filter(|model| !model.trim().is_empty());
+    }
+    None
+}
+
 /// Apply the session configuration bound to an ephemeral Realtime key to a
 /// subsequent `/v1/realtime/calls` request.  This is the HTTP counterpart of
 /// CPA's `session.update` WebSocket frame and preserves SDP callers as well as
@@ -9558,11 +11456,15 @@ fn realtime_client_secret_request_session(path_and_query: &str, body: &[u8]) -> 
         "/v1/realtime/client_secrets"
             | "/realtime/client_secrets"
             | "/openai/v1/realtime/client_secrets"
+            | "/backend-api/codex/realtime/client_secrets"
     ) {
         value.get("session")?.as_object()?.clone()
     } else if matches!(
         path,
-        "/v1/realtime/sessions" | "/realtime/sessions" | "/openai/v1/realtime/sessions"
+        "/v1/realtime/sessions"
+            | "/realtime/sessions"
+            | "/openai/v1/realtime/sessions"
+            | "/backend-api/codex/realtime/sessions"
     ) {
         value.as_object()?.clone()
     } else {
@@ -9639,38 +11541,10 @@ fn prepare_codex_live_multipart(
     body: &[u8],
     content_type: &str,
 ) -> Result<(Bytes, String), &'static str> {
-    let boundary = multipart_boundary(content_type).ok_or("multipart boundary is required")?;
-    let marker = format!("--{boundary}").into_bytes();
-    let mut cursor = 0usize;
     let mut sdp = None;
     let mut session = None;
-    while let Some(relative) = find_bytes(&body[cursor..], &marker) {
-        let mut part_start = cursor + relative + marker.len();
-        if body.get(part_start..part_start + 2) == Some(b"--") {
-            break;
-        }
-        if body.get(part_start..part_start + 2) == Some(b"\r\n") {
-            part_start += 2;
-        } else if body.get(part_start) == Some(&b'\n') {
-            part_start += 1;
-        }
-        let Some((header_offset, separator_len)) = multipart_header_end(&body[part_start..]) else {
-            return Err("malformed multipart headers");
-        };
-        if header_offset > 16 * 1024 {
-            return Err("multipart headers are too large");
-        }
-        let headers = &body[part_start..part_start + header_offset];
-        let content_start = part_start + header_offset + separator_len;
-        let Some(next_relative) = find_bytes(&body[content_start..], &marker) else {
-            return Err("multipart closing boundary is missing");
-        };
-        let mut content_end = content_start + next_relative;
-        while content_end > content_start && matches!(body[content_end - 1], b'\r' | b'\n') {
-            content_end -= 1;
-        }
+    for (headers, field) in multipart_parts(body, content_type)? {
         if let Some(name) = multipart_field_name(headers) {
-            let field = &body[content_start..content_end];
             match name.as_str() {
                 "sdp" => {
                     let value = std::str::from_utf8(field)
@@ -9694,7 +11568,6 @@ fn prepare_codex_live_multipart(
                 _ => {}
             }
         }
-        cursor = content_start + next_relative;
     }
     let sdp = sdp.ok_or("Codex Live multipart body requires an sdp field")?;
     encode_codex_live_envelope(&sdp, session)
@@ -9730,6 +11603,72 @@ fn content_type_is_multipart(content_type: &str) -> bool {
         .trim()
         .to_ascii_lowercase()
         .starts_with("multipart/form-data")
+}
+
+/// Whether an unknown Raw request is plausibly carrying a body.  We cannot
+/// peek an `axum::Body` without consuming it, so use the HTTP framing headers
+/// (and the body-capable method) as a bounded dispatch hint.  An explicit
+/// `Content-Length: 0` is respected; a non-empty content type or chunked
+/// transfer still gets to the native handler, where the model requirement is
+/// enforced.  This keeps body-only JSON model requests working even when a
+/// client forgot `Content-Type`, while GET/HEAD probes without a body remain a
+/// cheap 404.
+fn raw_request_body_hint(method: &str, headers: &[(String, String)]) -> bool {
+    if let Some(length) = header_value(headers, "content-length") {
+        if let Ok(length) = length.trim().parse::<u64>() {
+            if length > 0 {
+                return true;
+            }
+            // An explicit zero Content-Length is authoritative for normal
+            // requests. Transfer-Encoding is the one exception: chunked
+            // framing may still carry a body and should reach the handler.
+            return header_value(headers, "transfer-encoding")
+                .is_some_and(|value| !value.trim().is_empty());
+        }
+        // Invalid framing must not make us discard a request that may contain
+        // a model; the body limit and parser provide the final validation.
+        return true;
+    }
+    if header_value(headers, "transfer-encoding").is_some_and(|value| !value.trim().is_empty())
+        || header_value(headers, "content-type").is_some_and(|value| !value.trim().is_empty())
+    {
+        return true;
+    }
+    // Without framing headers there is no safe way to know whether an
+    // unknown-path request actually carries a body without polling/consuming
+    // it. Keep the ingress preflight cheap (and preserve a real 404 for
+    // bodyless probes); clients that send a body will normally provide either
+    // Content-Length or Transfer-Encoding, both handled above. The method is
+    // intentionally not used as a guess here.
+    let _ = method;
+    false
+}
+
+/// Read only the top-level JSON `model` field used to select a Raw mapping.
+/// The payload itself is never serialized back or changed.  Sniffing is
+/// limited to a small prefix and only attempted for JSON-looking bytes (or an
+/// explicit JSON content type), avoiding a full parse of opaque/binary uploads.
+const RAW_MODEL_SNIFF_BYTES: usize = 1024 * 1024;
+
+fn raw_body_model_hint(body: &[u8], content_type: Option<&str>) -> Option<String> {
+    if body.is_empty() || body.len() > RAW_MODEL_SNIFF_BYTES {
+        return None;
+    }
+    let first = body
+        .iter()
+        .copied()
+        .find(|byte| !byte.is_ascii_whitespace());
+    if !content_type.is_some_and(content_type_is_json) && first != Some(b'{') {
+        return None;
+    }
+    serde_json::from_slice::<Value>(body)
+        .ok()?
+        .as_object()?
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(str::to_string)
 }
 
 fn native_json_fields(
@@ -9797,40 +11736,12 @@ fn native_multipart_fields_with_default(
     content_type: &str,
     default_model: &str,
 ) -> Result<NativePassthroughFields, &'static str> {
-    let boundary = multipart_boundary(content_type).ok_or("multipart boundary is required")?;
     let mut model = None;
     let mut stream = false;
-    let marker = format!("--{boundary}").into_bytes();
-    let mut cursor = 0usize;
-    while let Some(relative) = find_bytes(&body[cursor..], &marker) {
-        let mut part_start = cursor + relative + marker.len();
-        if body.get(part_start..part_start + 2) == Some(b"--") {
-            break;
-        }
-        if body.get(part_start..part_start + 2) == Some(b"\r\n") {
-            part_start += 2;
-        } else if body.get(part_start) == Some(&b'\n') {
-            part_start += 1;
-        }
-        let Some((header_offset, separator_len)) = multipart_header_end(&body[part_start..]) else {
-            return Err("malformed multipart headers");
-        };
-        if header_offset > 16 * 1024 {
-            return Err("multipart headers are too large");
-        }
-        let headers = &body[part_start..part_start + header_offset];
-        let content_start = part_start + header_offset + separator_len;
-        let Some(next_relative) = find_bytes(&body[content_start..], &marker) else {
-            return Err("multipart closing boundary is missing");
-        };
-        let mut content_end = content_start + next_relative;
-        while content_end > content_start && matches!(body[content_end - 1], b'\r' | b'\n') {
-            content_end -= 1;
-        }
+    for (headers, field) in multipart_parts(body, content_type)? {
         if let Some(name) = multipart_field_name(headers)
             && matches!(name.as_str(), "model" | "stream")
         {
-            let field = &body[content_start..content_end];
             if field.len() > 1024 {
                 return Err("multipart routing field is too large");
             }
@@ -9848,12 +11759,111 @@ fn native_multipart_fields_with_default(
                 _ => {}
             }
         }
-        cursor = content_start + next_relative;
     }
     Ok(NativePassthroughFields {
         model: model.unwrap_or_else(|| default_model.to_string()),
         stream,
     })
+}
+
+#[derive(Clone, Copy)]
+struct MultipartDelimiter {
+    start: usize,
+    content_start: usize,
+    closing: bool,
+}
+
+type MultipartPart<'a> = (&'a [u8], &'a [u8]);
+
+/// Parse multipart framing without ever rebuilding the body. A boundary-like
+/// byte sequence inside uploaded binary data is accepted as a delimiter only
+/// when it begins a MIME line and is followed by a valid delimiter suffix.
+/// The final closing delimiter is mandatory so a truncated upload cannot
+/// silently yield a misleading routing model.
+fn multipart_parts<'a>(
+    body: &'a [u8],
+    content_type: &str,
+) -> Result<Vec<MultipartPart<'a>>, &'static str> {
+    let boundary = multipart_boundary(content_type).ok_or("multipart boundary is required")?;
+    let marker = format!("--{boundary}").into_bytes();
+    let mut delimiter = next_multipart_delimiter(body, &marker, 0)
+        .ok_or("multipart opening boundary is missing")?;
+    let mut parts = Vec::new();
+    loop {
+        if delimiter.closing {
+            return Ok(parts);
+        }
+        let part_start = delimiter.content_start;
+        let Some((header_offset, separator_len)) = multipart_header_end(&body[part_start..]) else {
+            return Err("malformed multipart headers");
+        };
+        if header_offset > 16 * 1024 {
+            return Err("multipart headers are too large");
+        }
+        let headers = &body[part_start..part_start + header_offset];
+        let content_start = part_start + header_offset + separator_len;
+        let next = next_multipart_delimiter(body, &marker, content_start)
+            .ok_or("multipart closing boundary is missing")?;
+        let content_end =
+            if next.start >= 2 && body.get(next.start - 2..next.start) == Some(b"\r\n") {
+                next.start - 2
+            } else if next.start >= 1 && body.get(next.start - 1) == Some(&b'\n') {
+                next.start - 1
+            } else {
+                next.start
+            };
+        if content_end < content_start {
+            return Err("malformed multipart body");
+        }
+        parts.push((headers, &body[content_start..content_end]));
+        delimiter = next;
+    }
+}
+
+fn next_multipart_delimiter(body: &[u8], marker: &[u8], from: usize) -> Option<MultipartDelimiter> {
+    if marker.is_empty() || from > body.len() {
+        return None;
+    }
+    let mut cursor = from;
+    while cursor <= body.len().saturating_sub(marker.len()) {
+        let relative = find_bytes(&body[cursor..], marker)?;
+        let start = cursor + relative;
+        let at_line_start = start == 0
+            || (start >= 2 && body.get(start - 2..start) == Some(b"\r\n"))
+            || (start >= 1 && body.get(start - 1) == Some(&b'\n'));
+        if !at_line_start {
+            cursor = start.saturating_add(1);
+            continue;
+        }
+        let suffix = start + marker.len();
+        if body.get(suffix..suffix + 2) == Some(b"--") {
+            let after = suffix + 2;
+            if after == body.len()
+                || body.get(after..after + 2) == Some(b"\r\n")
+                || body.get(after) == Some(&b'\n')
+            {
+                return Some(MultipartDelimiter {
+                    start,
+                    content_start: after,
+                    closing: true,
+                });
+            }
+        } else if body.get(suffix..suffix + 2) == Some(b"\r\n") {
+            return Some(MultipartDelimiter {
+                start,
+                content_start: suffix + 2,
+                closing: false,
+            });
+        } else if body.get(suffix) == Some(&b'\n') {
+            return Some(MultipartDelimiter {
+                start,
+                content_start: suffix + 1,
+                closing: false,
+            });
+        }
+        cursor = start.saturating_add(1);
+    }
+    None
 }
 
 fn multipart_boundary(content_type: &str) -> Option<String> {
@@ -9898,7 +11908,7 @@ fn multipart_field_name(headers: &[u8]) -> Option<String> {
                 .trim()
                 .trim_matches('"')
                 .trim_matches('\'')
-                .to_string()
+                .to_ascii_lowercase()
         })
     })
 }

@@ -128,6 +128,65 @@ fn exact_mapping_precedes_migrated_wildcard_mapping() {
 }
 
 #[test]
+fn most_specific_wildcard_precedes_broad_mapping_even_when_declared_later() {
+    let endpoint = endpoint(
+        "mixed",
+        vec![
+            mapping("gpt-*", "broad"),
+            mapping("gpt-image-*", "image"),
+            mapping("gpt-image-2-*", "image-specific"),
+        ],
+    );
+    assert_eq!(
+        endpoint
+            .mapping_for("gpt-image-2-preview")
+            .unwrap()
+            .upstream_model,
+        "image-specific"
+    );
+    assert_eq!(
+        endpoint.mapping_for("gpt-image-1").unwrap().upstream_model,
+        "image"
+    );
+    assert_eq!(
+        endpoint.mapping_for("gpt-5").unwrap().upstream_model,
+        "broad"
+    );
+}
+
+#[test]
+fn capability_filtering_also_uses_wildcard_specificity_and_stable_ties() {
+    let endpoint = endpoint(
+        "mixed",
+        vec![
+            ModelMapping {
+                capabilities: vec![ModelCapability::Text],
+                ..mapping("gpt-*", "text")
+            },
+            ModelMapping {
+                capabilities: vec![ModelCapability::Image],
+                ..mapping("gpt-image-*", "image")
+            },
+            ModelMapping {
+                capabilities: vec![ModelCapability::Image],
+                ..mapping("gpt-image-*", "image-later")
+            },
+        ],
+    );
+    assert_eq!(
+        endpoint
+            .mapping_for_capability("gpt-image-2", ModelCapability::Image)
+            .unwrap()
+            .upstream_model,
+        "image"
+    );
+    assert_eq!(
+        endpoint.mapping_for_capability("gpt-5", ModelCapability::Image),
+        None
+    );
+}
+
+#[test]
 fn primary_wildcard_routes_to_primary_with_global_rule_defaults() {
     let config = base_config();
     let plan = RoutePlanner::plan(&plain_request("claude-opus-5[1m]"), &config).unwrap();
@@ -208,7 +267,7 @@ fn resource_plan_does_not_require_text_model_mapping_or_anthropic_endpoint() {
 }
 
 #[test]
-fn files_resource_plan_prefers_mixed_media_endpoint_over_first_text_provider() {
+fn files_resource_plan_requires_explicit_files_capability() {
     let mut xiao = endpoint("xiao", vec![mapping("gpt-5.6-sol", "")]);
     xiao.protocol = EndpointProtocolMode::OpenAI;
     xiao.priority = 0;
@@ -224,14 +283,18 @@ fn files_resource_plan_prefers_mixed_media_endpoint_over_first_text_provider() {
     }
     .normalized();
 
-    let plan = RoutePlanner::plan_for_resource_capability(
+    let error = RoutePlanner::plan_for_resource_capability(
         &config,
         ProviderProtocol::OpenAI,
         ModelCapability::Files,
     )
-    .unwrap();
-    assert_eq!(plan.endpoints.len(), 1);
-    assert_eq!(plan.endpoints[0].endpoint_id, "cpa");
+    .unwrap_err();
+    assert_eq!(
+        error,
+        RoutePlanError::NoProviderForCapability {
+            capability: "files".into()
+        }
+    );
 }
 
 #[test]
@@ -264,7 +327,7 @@ fn files_resource_plan_honors_explicit_files_capability() {
 }
 
 #[test]
-fn files_resource_plan_does_not_treat_gpt4o_chat_mapping_as_mixed_media() {
+fn files_resource_plan_does_not_treat_live_or_chat_mapping_as_files() {
     let mut xiao = endpoint("xiao", vec![mapping("gpt-4o", "")]);
     xiao.protocol = EndpointProtocolMode::OpenAI;
     xiao.priority = 0;
@@ -280,14 +343,18 @@ fn files_resource_plan_does_not_treat_gpt4o_chat_mapping_as_mixed_media() {
     }
     .normalized();
 
-    let plan = RoutePlanner::plan_for_resource_capability(
+    let error = RoutePlanner::plan_for_resource_capability(
         &config,
         ProviderProtocol::OpenAI,
         ModelCapability::Files,
     )
-    .unwrap();
-    assert_eq!(plan.endpoints.len(), 1);
-    assert_eq!(plan.endpoints[0].endpoint_id, "cpa");
+    .unwrap_err();
+    assert_eq!(
+        error,
+        RoutePlanError::NoProviderForCapability {
+            capability: "files".into()
+        }
+    );
 }
 
 #[test]
@@ -1352,4 +1419,46 @@ fn explicit_mapping_capabilities_override_name_inference_for_routing() {
         error,
         RoutePlanError::NoProviderForCapability { .. }
     ));
+}
+
+#[test]
+fn realtime_public_model_aliases_use_private_codex_live_mapping() {
+    let mut endpoint = endpoint(
+        "cpa",
+        vec![ModelMapping {
+            client_pattern: "gpt-live-1-codex".into(),
+            upstream_model: String::new(),
+            capabilities: vec![ModelCapability::Live],
+            ..mapping("gpt-live-1-codex", "")
+        }],
+    );
+    endpoint.protocol = EndpointProtocolMode::OpenAI;
+    let config = AppConfig {
+        endpoints: vec![endpoint],
+        feature_rules: vec![],
+        listener: ListenerConfig::default(),
+        retry: RetryPolicy::default(),
+        schema_version: SCHEMA_VERSION,
+    }
+    .normalized();
+
+    let plan = RoutePlanner::plan_for_capability(
+        &request_from(json!({"model": "gpt-realtime"})),
+        &config,
+        ProviderProtocol::OpenAI,
+        ModelCapability::Live,
+    )
+    .expect("private Live mapping should serve public Realtime alias");
+    assert_eq!(plan.client_model, "gpt-realtime");
+    assert_eq!(plan.endpoints[0].routed_model, "gpt-realtime");
+    assert_eq!(plan.endpoints[0].upstream_model, "gpt-live-1-codex");
+
+    let preview = RoutePlanner::plan_for_capability(
+        &request_from(json!({"model": "realtime-preview-2025"})),
+        &config,
+        ProviderProtocol::OpenAI,
+        ModelCapability::Live,
+    )
+    .expect("realtime-preview should share the alias scope");
+    assert_eq!(preview.endpoints[0].upstream_model, "gpt-live-1-codex");
 }

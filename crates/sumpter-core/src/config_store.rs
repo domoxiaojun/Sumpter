@@ -84,6 +84,69 @@ fn is_affinity_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+const RESOURCE_BINDING_ID_MAX_BYTES: usize = 128;
+const RESOURCE_BINDING_FIELD_MAX_BYTES: usize = 256;
+const RESOURCE_BINDINGS_PER_KIND_MAX: usize = 256;
+const RESOURCE_BINDINGS_MAX: usize = RESOURCE_BINDINGS_PER_KIND_MAX * 2;
+
+fn is_resource_binding_key(value: &str) -> bool {
+    let Some((kind, id)) = value.split_once(':') else {
+        return false;
+    };
+    matches!(kind, "live" | "video")
+        && !id.is_empty()
+        && id.len() <= RESOURCE_BINDING_ID_MAX_BYTES
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+fn valid_resource_binding_text(value: &str) -> bool {
+    let trimmed = value.trim();
+    value == trimmed
+        && !trimmed.is_empty()
+        && trimmed.len() <= RESOURCE_BINDING_FIELD_MAX_BYTES
+        && !trimmed.chars().any(char::is_control)
+}
+
+fn valid_resource_binding(key: &str, binding: &ResourceBinding) -> bool {
+    key.len() <= 512
+        && !key.is_empty()
+        && !key.chars().any(char::is_control)
+        && is_resource_binding_key(key)
+        && valid_resource_binding_text(&binding.endpoint_id)
+        && valid_resource_binding_text(&binding.model)
+        // Expired entries are intentionally accepted here so Engine can load
+        // and prune them atomically on startup. Zero/negative/NaN values are
+        // never valid persisted timestamps.
+        && binding.expires_at.is_finite()
+        && binding.expires_at > 0.0
+}
+
+fn valid_resource_bindings(bindings: &HashMap<String, ResourceBinding>) -> bool {
+    if bindings.len() > RESOURCE_BINDINGS_MAX {
+        return false;
+    }
+    let mut live_count = 0usize;
+    let mut video_count = 0usize;
+    for (key, binding) in bindings {
+        if !valid_resource_binding(key, binding) {
+            return false;
+        }
+        if key.starts_with("live:") {
+            live_count += 1;
+        } else {
+            video_count += 1;
+        }
+        if live_count > RESOURCE_BINDINGS_PER_KIND_MAX
+            || video_count > RESOURCE_BINDINGS_PER_KIND_MAX
+        {
+            return false;
+        }
+    }
+    true
+}
+
 /// Linux 默认配置目录：`$XDG_CONFIG_HOME/sumpter`，否则 `~/.config/sumpter`。
 pub fn default_config_dir() -> Option<PathBuf> {
     if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()) {
@@ -504,20 +567,7 @@ impl ConfigDir {
         };
         let file: ResourceBindingFile = serde_json::from_str(&data)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        if file.version != 1
-            || file.bindings.iter().any(|(key, binding)| {
-                key.len() > 512
-                    || key.is_empty()
-                    || key.chars().any(char::is_control)
-                    || binding.endpoint_id.trim().is_empty()
-                    || binding.endpoint_id.len() > 256
-                    || binding.endpoint_id.chars().any(char::is_control)
-                    || binding.model.trim().is_empty()
-                    || binding.model.len() > 256
-                    || binding.model.chars().any(char::is_control)
-                    || !binding.expires_at.is_finite()
-            })
-        {
+        if file.version != 1 || !valid_resource_bindings(&file.bindings) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "resource_bindings.json v1 格式无效",
@@ -530,6 +580,12 @@ impl ConfigDir {
         &self,
         bindings: &HashMap<String, ResourceBinding>,
     ) -> io::Result<PersistOutcome> {
+        if !valid_resource_bindings(bindings) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "resource_bindings.json v1 格式无效",
+            ));
+        }
         let mut data = serde_json::to_vec_pretty(&ResourceBindingFile {
             version: 1,
             bindings: bindings.clone(),
@@ -1691,5 +1747,40 @@ mod tests {
             std::fs::read_to_string(dir.resource_bindings_path()).unwrap(),
             original
         );
+    }
+
+    #[test]
+    fn resource_bindings_reject_unsafe_ids_and_bounded_counts() {
+        let dir = temp_dir("resource-bindings-bounds");
+        let binding = ResourceBinding {
+            endpoint_id: "cpa".into(),
+            model: "grok-imagine-video".into(),
+            expires_at: 1234.0,
+        };
+
+        let mut unsafe_id = HashMap::new();
+        unsafe_id.insert("video:with/slash".into(), binding.clone());
+        assert!(dir.save_resource_bindings(&unsafe_id).is_err());
+
+        let mut too_long = HashMap::new();
+        too_long.insert(format!("video:{}", "x".repeat(129)), binding.clone());
+        assert!(dir.save_resource_bindings(&too_long).is_err());
+
+        let mut too_many = HashMap::new();
+        for index in 0..=RESOURCE_BINDINGS_PER_KIND_MAX {
+            too_many.insert(format!("video:v{index}"), binding.clone());
+        }
+        assert!(dir.save_resource_bindings(&too_many).is_err());
+
+        // The same constraints apply when loading a file supplied by an
+        // external process; do not accept it and later overwrite it during a
+        // startup prune.
+        dir.ensure_exists().unwrap();
+        std::fs::write(
+            dir.resource_bindings_path(),
+            r#"{"version":1,"bindings":{"live:bad/id":{"endpointID":"cpa","model":"gpt-live-1-codex","expiresAt":1234}}}"#,
+        )
+        .unwrap();
+        assert!(dir.load_resource_bindings().is_err());
     }
 }

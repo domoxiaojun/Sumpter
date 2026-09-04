@@ -84,6 +84,7 @@ public struct StreamTrace: Codable, Equatable, Sendable {
     public var terminalEvent: String?
     public var usage: ResponseUsage?
     public var stopReason: String?
+    public var websocketTrace: WebSocketTrace?
 
     public init(
         chunkCount: Int? = nil,
@@ -92,7 +93,8 @@ public struct StreamTrace: Codable, Equatable, Sendable {
         lastChunkAtMS: Int? = nil,
         terminalEvent: String? = nil,
         usage: ResponseUsage? = nil,
-        stopReason: String? = nil
+        stopReason: String? = nil,
+        websocketTrace: WebSocketTrace? = nil
     ) {
         self.chunkCount = chunkCount
         self.bytesReceived = bytesReceived
@@ -101,6 +103,53 @@ public struct StreamTrace: Codable, Equatable, Sendable {
         self.terminalEvent = terminalEvent
         self.usage = usage
         self.stopReason = stopReason
+        self.websocketTrace = websocketTrace
+    }
+}
+
+/// Bounded, protocol-level WebSocket relay metrics.  Close reasons and frame
+/// payloads are intentionally absent; the Rust engine records only close
+/// codes, side attribution and a safe error token.
+public struct WebSocketTrace: Codable, Equatable, Sendable {
+    public var handshakeStatus: Int?
+    public var bytesSent: Int?
+    public var bytesReceived: Int?
+    public var clientMessageCount: Int?
+    public var upstreamMessageCount: Int?
+    public var closeCode: Int?
+    public var clientCloseCode: Int?
+    public var upstreamCloseCode: Int?
+    public var closedBy: String?
+    public var relayError: String?
+    public var abnormalClose: Bool?
+    public var attemptCount: Int?
+
+    public init(
+        handshakeStatus: Int? = nil,
+        bytesSent: Int? = nil,
+        bytesReceived: Int? = nil,
+        clientMessageCount: Int? = nil,
+        upstreamMessageCount: Int? = nil,
+        closeCode: Int? = nil,
+        clientCloseCode: Int? = nil,
+        upstreamCloseCode: Int? = nil,
+        closedBy: String? = nil,
+        relayError: String? = nil,
+        abnormalClose: Bool? = nil,
+        attemptCount: Int? = nil
+    ) {
+        self.handshakeStatus = handshakeStatus
+        self.bytesSent = bytesSent
+        self.bytesReceived = bytesReceived
+        self.clientMessageCount = clientMessageCount
+        self.upstreamMessageCount = upstreamMessageCount
+        self.closeCode = closeCode
+        self.clientCloseCode = clientCloseCode
+        self.upstreamCloseCode = upstreamCloseCode
+        self.closedBy = closedBy
+        self.relayError = relayError
+        self.abnormalClose = abnormalClose
+        self.attemptCount = attemptCount
     }
 }
 
@@ -408,6 +457,10 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
     public var requestPurpose: RequestPurpose?
     /// 一次客户端请求和它的全部上游尝试共享。
     public var requestID: String?
+    /// 原始入站 HTTP method/path 与稳定意图标签，用于被拒请求排障。
+    public var requestMethod: String?
+    public var requestPath: String?
+    public var routeIntent: String?
     /// 客户端提供的稳定会话标识（例如 Claude Code session header）。
     /// 只保存有界、无控制字符的标识，不保存会话正文。
     public var sessionID: String?
@@ -440,6 +493,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         case upstreamModel, effectiveModel, statusCode, durationMS, failover
         case message, toolCalls, streamTrace, outcome, phase, featureRuleID
         case failureDetail, failureKind, failurePhase, requestPurpose, requestID
+        case requestMethod, requestPath, routeIntent
         case sessionID, ttfbMS, timeoutMS, upstreamStatusCode, upstreamRequestID
         case codexMetadata, clientDeclared, projectName, projectSource, codexThreadClass, attributionScope
     }
@@ -496,6 +550,9 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         failurePhase = try c.decodeIfPresent(RuntimeFailurePhase.self, forKey: .failurePhase)
         requestPurpose = try c.decodeIfPresent(RequestPurpose.self, forKey: .requestPurpose)
         requestID = try c.decodeIfPresent(String.self, forKey: .requestID)
+        requestMethod = try c.decodeIfPresent(String.self, forKey: .requestMethod)
+        requestPath = try c.decodeIfPresent(String.self, forKey: .requestPath)
+        routeIntent = try c.decodeIfPresent(String.self, forKey: .routeIntent)
         sessionID = try c.decodeIfPresent(String.self, forKey: .sessionID)
         ttfbMS = try c.decodeIfPresent(Int.self, forKey: .ttfbMS)
         timeoutMS = try c.decodeIfPresent(Int.self, forKey: .timeoutMS)
@@ -540,6 +597,9 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         try c.encodeIfPresent(failurePhase, forKey: .failurePhase)
         try c.encodeIfPresent(requestPurpose, forKey: .requestPurpose)
         try c.encodeIfPresent(requestID, forKey: .requestID)
+        try c.encodeIfPresent(requestMethod, forKey: .requestMethod)
+        try c.encodeIfPresent(requestPath, forKey: .requestPath)
+        try c.encodeIfPresent(routeIntent, forKey: .routeIntent)
         try c.encodeIfPresent(sessionID, forKey: .sessionID)
         try c.encodeIfPresent(ttfbMS, forKey: .ttfbMS)
         try c.encodeIfPresent(timeoutMS, forKey: .timeoutMS)
@@ -601,6 +661,9 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         failurePhase: RuntimeFailurePhase? = nil,
         requestPurpose: RequestPurpose? = nil,
         requestID: String? = nil,
+        requestMethod: String? = nil,
+        requestPath: String? = nil,
+        routeIntent: String? = nil,
         sessionID: String? = nil,
         ttfbMS: Int? = nil,
         timeoutMS: Int? = nil,
@@ -641,6 +704,9 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         self.failurePhase = failurePhase
         self.requestPurpose = requestPurpose
         self.requestID = requestID
+        self.requestMethod = requestMethod
+        self.requestPath = requestPath
+        self.routeIntent = routeIntent
         self.sessionID = sessionID
         self.ttfbMS = ttfbMS
         self.timeoutMS = timeoutMS

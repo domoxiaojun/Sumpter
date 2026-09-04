@@ -483,3 +483,26 @@ multipart 模型读取、Files/Models 能力选路、本地 Models 目录、资�
 - [ ] 6. 被拒事件记录有界的 method/path/intent，并同步 runtime 投影与 wire。
 - [ ] 7. 增加 endpoint+model 冷却与 Retry-After 调度；补 WebSocket 脱敏指标字段。
 - [ ] 8. 运行格式化、workspace 测试和 clippy；只报告源码验证，不宣称安装态生效。
+
+## 本轮：修复 Codex Desktop 语音 invalid_architecture（2026-09-04）
+
+运行页事件是 HTTP `passthrough realtime` → CPA `ccc.domob.org`，模型 `gpt-live-1-codex`，
+HTTP 400，229 字节 `architecture="avas" is only supported for quicksilver Realtime WebRTC sessions.`
+上一轮把 `intent=quicksilver&architecture=avas` 加在了 POST `/v1/realtime` 根上，路径没有改到
+`/v1/realtime/calls`。OpenAI/CPA 兼容面只允许 avas 出现在 WebRTC `/calls`。
+
+- [x] ✅ 1. POST `/v1/realtime`（及 `/realtime`、`/openai/v1/realtime` 别名）出站改写到对应 `/calls?intent=quicksilver&architecture=avas`。
+- [x] ✅ 2. POST `/v1/live` 与 `/v1/realtime/calls` 保持原路径并补齐 avas；GET 不追加这些 marker。
+- [x] ✅ 3. 标准 Realtime WebSocket 出站剥掉 `intent`/`architecture`，避免 GET 握手泄漏 avas。
+- [x] ✅ 4. focused tests、fmt/check/clippy、USAGE/README/architecture；提交源码。不替换 `/Applications/Sumpter.app`。
+
+## 本轮：意图路由问题闭环（2026-09-04）
+
+- [ ] 1. 在原始 body 解析阶段先确定 Codex Originator，再做 Live 标准化与路由。
+- [ ] 2. 保证 Raw 请求 body 字节不变，并允许 JSON body-only model 参与未知路径选路。
+- [ ] 3. 收紧 Realtime calls sideband 分类，补齐 Live 出站标识与测试矩阵。
+- [ ] 4. 完善 Videos/Live 绑定 ID 提取、header 优先注册、重启/TTL 验证。
+- [ ] 5. 让每一轮重试重新应用 endpoint+model cooldown，并更新双端回归测试。
+- [ ] 6. 补齐拒绝/上游事件上下文与 WebSocket 双向关闭指标及 Swift wire。
+- [ ] 7. 从 mapping/catalog 生成完整本地 `/v1/models` 能力目录并补测试。
+- [ ] 8. 运行格式、workspace 测试、clippy 和 Swift 测试，记录源码验证边界。

@@ -19,7 +19,7 @@ fn config_with_base(base_url: &str, protocol: &str) -> AppConfig {
           "listener": {"host":"127.0.0.1", "port":0, "authToken":"listener-secret"},
           "retry": {"maxDeferredRounds":0, "sessionStickyRetries":0, "pinnedIPConcurrency":1},
           "endpoints": [{"id":"openai", "name":"OpenAI", "baseURL":"__BASE_URL__", "apiKey":"provider-key", "protocol":"__PROTOCOL__", "enabled":true,
-             "mappings":[{"clientPattern":"gpt-4o", "upstreamModel":"gpt-4o-mini"}, {"clientPattern":"gpt-live-1-codex", "upstreamModel":"gpt-live-1-codex"}, {"clientPattern":"gpt-realtime", "upstreamModel":"gpt-realtime"}, {"clientPattern":"grok-imagine-video", "upstreamModel":"grok-imagine-video"}, {"clientPattern":"gpt-image-2", "upstreamModel":"gpt-image-2"}] }]
+             "mappings":[{"clientPattern":"gpt-4o", "upstreamModel":"gpt-4o-mini", "capabilities":["live"]}, {"clientPattern":"gpt-live-1-codex", "upstreamModel":"gpt-live-1-codex"}, {"clientPattern":"gpt-realtime", "upstreamModel":"gpt-realtime"}, {"clientPattern":"grok-imagine-video", "upstreamModel":"grok-imagine-video"}, {"clientPattern":"gpt-image-2", "upstreamModel":"gpt-image-2"}, {"clientPattern":"file-*", "upstreamModel":"file-*", "capabilities":["files"]}] }]
         }"#
     .replace("__BASE_URL__", base_url)
     .replace("__PROTOCOL__", protocol);
@@ -716,7 +716,7 @@ async fn realtime_bootstrap_does_not_follow_a_leaked_chat_model() {
     );
     assert_eq!(
         calls[1].path_and_query,
-        "/v1/realtime?model=gpt-live-1-codex&intent=quicksilver&architecture=avas"
+        "/v1/realtime/calls?model=gpt-live-1-codex&intent=quicksilver&architecture=avas"
     );
     let live_body: serde_json::Value =
         serde_json::from_slice(&calls[0].body).expect("Codex Live JSON envelope");

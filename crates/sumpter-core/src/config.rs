@@ -492,15 +492,104 @@ impl Endpoint {
     /// 后续添加的 `foo-special` 精确映射；同一匹配级别仍保持配置顺序。
     pub fn mapping_for(&self, client_model: &str) -> Option<&ModelMapping> {
         let cleaned = model_name::clean(client_model);
-        self.mappings
-            .iter()
-            .find(|m| model_name::clean(&m.client_pattern) == cleaned)
-            .or_else(|| {
-                self.mappings
-                    .iter()
-                    .find(|m| model_name::pattern_matches(&m.client_pattern, &cleaned))
-            })
+        best_mapping(&self.mappings, &cleaned, |_| true)
     }
+
+    /// Find the best mapping that can serve a particular request capability.
+    /// Capability filtering happens before precedence selection: an exact text
+    /// mapping must not hide a wildcard video/Live mapping for the same model.
+    /// Within the eligible set, exact client patterns still win over wildcard
+    /// patterns and configuration order remains the final tie breaker.
+    pub fn mapping_for_capability(
+        &self,
+        client_model: &str,
+        capability: ModelCapability,
+    ) -> Option<&ModelMapping> {
+        let cleaned = model_name::clean(client_model);
+        let serves = |mapping: &ModelMapping| {
+            crate::capability::mapping_serves_capability(
+                &mapping.capabilities,
+                &mapping.client_pattern,
+                &cleaned,
+                capability,
+            )
+        };
+        let direct = best_mapping(&self.mappings, &cleaned, serves);
+        if direct.is_some() {
+            return direct;
+        }
+
+        // CPA's Codex OAuth handler normalizes the public Realtime family to
+        // `gpt-live-1-codex` for provider selection.  Preserve the caller's
+        // logical model in the route plan, but allow an installation that
+        // declares only the private mapping to serve `gpt-realtime` and
+        // `realtime-preview*` requests.  This alias is intentionally scoped
+        // to the Live capability; text/image routes never see it.
+        if capability == ModelCapability::Live
+            && crate::capability::is_realtime_model_name(&cleaned)
+        {
+            let live_model = "gpt-live-1-codex";
+            return self.mappings.iter().find(|mapping| {
+                model_name::clean(&mapping.client_pattern) == live_model
+                    && crate::capability::mapping_serves_capability(
+                        &mapping.capabilities,
+                        &mapping.client_pattern,
+                        live_model,
+                        capability,
+                    )
+            });
+        }
+        None
+    }
+}
+
+/// Return the most specific mapping that matches `client_model`.
+///
+/// Mapping order is a deterministic tie breaker, not the specificity rule:
+/// an earlier `gpt-*` entry must not hide a later `gpt-image-*` entry.  The
+/// iterator is scanned in configuration order and only a *strictly* better
+/// rank replaces the current winner, so equal-length wildcards remain stable.
+fn best_mapping<'a, F>(
+    mappings: &'a [ModelMapping],
+    client_model: &str,
+    serves: F,
+) -> Option<&'a ModelMapping>
+where
+    F: Fn(&ModelMapping) -> bool,
+{
+    let mut best: Option<(&ModelMapping, (u8, usize))> = None;
+    for mapping in mappings {
+        if !serves(mapping) {
+            continue;
+        }
+        let Some(rank) = mapping_match_rank(&mapping.client_pattern, client_model) else {
+            continue;
+        };
+        if best.as_ref().is_none_or(|(_, current)| rank > *current) {
+            best = Some((mapping, rank));
+        }
+    }
+    best.map(|(mapping, _)| mapping)
+}
+
+/// Exact matches outrank wildcards; among wildcards, the longest prefix wins.
+/// `model_name::pattern_matches` currently supports only a trailing `*`, so
+/// this rank deliberately mirrors that contract instead of treating an
+/// embedded star as a glob.
+fn mapping_match_rank(pattern: &str, client_model: &str) -> Option<(u8, usize)> {
+    let cleaned_pattern = model_name::clean(pattern);
+    let cleaned_model = model_name::clean(client_model);
+    if cleaned_pattern == cleaned_model && !cleaned_pattern.is_empty() {
+        return Some((2, cleaned_pattern.len()));
+    }
+    let prefix = cleaned_pattern.strip_suffix('*')?;
+    // A bare `*` is the legacy catch-all mapping. It has the lowest
+    // wildcard rank, but must still participate so older configurations keep
+    // routing and catalog behaviour; more specific prefixes outrank it.
+    if !cleaned_model.starts_with(prefix) {
+        return None;
+    }
+    Some((1, prefix.len()))
 }
 
 /// 「获取模型」的缓存目录与状态,纯展示。
