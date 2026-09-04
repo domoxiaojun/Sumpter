@@ -1,4 +1,17 @@
+# 修复运行页历史事件表只剩表头（2026-09-04）
+
+截图：进行中两行正常，下面「请求 / 模型 / 路由 / 结果 / 说明」表头还在，行是空白。
+SwiftUI `Table` 底层是 NSTableView，实时 SSE / 进行中 overlay 更新后经常只挂表头、行被裁掉。
+改成与进行中请求相同的 SwiftUI 行，不再用原生 Table。
+
+- [x] 历史事件列表改用自定义四列行 + 表头，去掉 `Table(visibleEvents)`
+- [x] 窄窗仍走 compact 列表；保留分页高度和选中高亮
+- [x] Swift 测试；更新 todos/plan；提交。不宣称已安装 App 已更新
+
+---
+
 # 修复 Codex Desktop 语音 400 invalid_architecture（2026-09-04）
+
 
 运行页：`passthrough realtime` → CPA `ccc.domob.org`，`gpt-live-1-codex`，HTTP 400，
 229 字节 `architecture="avas" is only supported for quicksilver Realtime WebRTC sessions.`
