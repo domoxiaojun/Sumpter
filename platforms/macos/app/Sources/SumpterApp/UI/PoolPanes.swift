@@ -294,7 +294,6 @@ struct ProvidersPane: View {
                 value: retry.maxRetryDurationSeconds == 0 ? "不限" : "\(retry.maxRetryDurationSeconds)s"
             )
             ProviderPolicySummaryItem(title: "粘性入口重试", value: "\(retry.sessionStickyRetries) 次")
-            ProviderPolicySummaryItem(title: "固定 IP 并发", value: "\(retry.pinnedIPConcurrency)")
         }
     }
 
@@ -436,8 +435,6 @@ struct ProvidersPane: View {
                     EndpointDetailField(title: "入口协议", value: row.protocolDisplayName)
                     EndpointDetailField(title: "API 地址", value: row.baseURL, copyable: true)
                     EndpointDetailField(title: "API Key", value: row.keyStatusText)
-                    EndpointDetailField(title: "出口模式", value: row.pinModeText)
-                    EndpointDetailField(title: "Pinned IPs", value: row.pinnedIPs.isEmpty ? "-" : row.pinnedIPsText, copyable: !row.pinnedIPs.isEmpty)
                     EndpointDetailField(title: "粘性分组", value: row.stickyGroupText)
                     EndpointDetailField(title: "连接复用", value: row.keepAliveText)
                     EndpointDetailField(title: "已知模型", value: row.modelCatalogText)

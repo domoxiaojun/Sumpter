@@ -33,7 +33,6 @@
 - `maxDeferredRounds`：所有可重试故障的最大轮数（历史字段名保留兼容），`0` = 不限轮数
 - `maxRetryDurationSeconds`：所有可重试故障的跨轮总上限秒数，`0` = 不限总时长
 - `sessionStickyRetries`：同一次请求中，当前粘性调度组遇到非 500 可重试故障后的额外重试次数；全部遇到可重试故障后才访问其它调度组，其它组成功后立即改绑会话。`0` = 首次失败后立即切换；默认 `2`
-- `pinnedIPConcurrency`：pinned IP 并发竞速数
 
 可跨轮的 HTTP 状态为 `401/402/403/429/502/503/504/520-527/529/530`；HTTP 500 仅按
 `max500Retries` 在当前入口内重试，是否切换入口由 `failoverOn500` 控制，不进入跨轮无限重试。另含首响应前的
@@ -67,8 +66,6 @@ SourceFormat 只由路径决定：`/v1/messages` 是 `anthropic`，`/v1/chat/com
 | `protocol` | 四态：`auto`（默认）/ `anthropic` / `openai` / `openai-responses` |
 | `enabled` | `false` 不参与调度 |
 | `priority` | 非负整数，数值越小越优先；缺省 / `0` 不落盘，同级保持配置数组顺序 |
-| `pinnedIPs` | 填了就优先按这些 IP 直连（TLS SNI 仍是域名） |
-| `pinnedIPExclusive` | 只走这些 IP、不回落 DNS；关闭 = IP 与 DNS 一起竞速 |
 | `stickyGroup` | 留空时使用入口 ID 作为独立粘性组；填写相同组名的入口共享会话归属，组内线路按配置顺序尝试 |
 | `keepAlive` | 入口级出站连接复用；省略或 `false` 不落盘（关闭）。界面新建入口默认打开 |
 | `catalog` | 「获取模型」拉回的目录与状态，纯展示，不参与路由；空目录不落盘 |

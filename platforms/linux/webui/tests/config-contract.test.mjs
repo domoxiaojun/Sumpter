@@ -8,7 +8,6 @@ const {
   api,
   fromWireConfig,
   toWireConfig,
-  normalizePinnedIPs,
 } = await import('../src/services/api.js');
 const {
   ENDPOINT_PROTOCOL_MODES,
@@ -799,12 +798,13 @@ test('runtime event UI exposes endpoint identity and request-chain grouping', ()
   assert.deepEqual(getRequestChain([upstream, client], 'client-1').map((event) => event.id), ['upstream-1', 'client-1']);
 });
 
-test('v6 UI config adapts endpoint mappings, secret status and pinned IPs', () => {
-  const ui = fromWireConfig({ generation: 'g1', config: { schemaVersion: 6, listener: { authToken: '', host: '127.0.0.1', port: 57878 }, retry: {}, featureRules: [], endpoints: [{ id: 'ep', name: '入口', baseURL: 'https://example.invalid', apiKey: '', protocol: 'openai', enabled: true, pinnedIPs: ['203.0.113.1'], mappings: [{ clientPattern: 'gpt-*', upstreamModel: 'gpt-5', thinking: 'disabled', context: 'strip' }] }] }, secretStatus: { endpoints: { ep: { apiKey: { configured: true, last4: '1234' } } } } });
+test('v6 UI config removes legacy fixed IP fields while adapting mappings', () => {
+  const ui = fromWireConfig({ generation: 'g1', config: { schemaVersion: 6, listener: { authToken: '', host: '127.0.0.1', port: 57878 }, retry: { pinnedIPConcurrency: 3 }, featureRules: [], endpoints: [{ id: 'ep', name: '入口', baseURL: 'https://example.invalid', apiKey: '', protocol: 'openai', enabled: true, pinnedIPs: ['203.0.113.1'], pinnedIPExclusive: true, mappings: [{ clientPattern: 'gpt-*', upstreamModel: 'gpt-5', thinking: 'disabled', context: 'strip' }] }] }, secretStatus: { endpoints: { ep: { apiKey: { configured: true, last4: '1234' } } } } });
   assert.equal('pools' in ui.config, false);
   assert.equal(ui.config.endpoints[0].modelMappings[0].from, 'gpt-*');
-  assert.deepEqual(ui.config.endpoints[0].pinnedIPs, ['203.0.113.1']);
-  assert.equal(ui.config.endpoints[0].pinnedIP, '203.0.113.1');
+  assert.equal('pinnedIPs' in ui.config.endpoints[0], false);
+  assert.equal('pinnedIPExclusive' in ui.config.endpoints[0], false);
+  assert.equal('pinnedIPConcurrency' in ui.config.retry, false);
   assert.equal(ui.secretStatus.endpoints.ep.configured, true);
 });
 
@@ -822,9 +822,11 @@ test('v6 retry settings preserve HTTP 500 failover and retry delay fields', () =
 });
 
 test('save adapter emits only Rust v6 endpoint and routing fields', () => {
-  const wire = toWireConfig({ schemaVersion: 6, listener: { authToken: 'redacted', host: '127.0.0.1', port: 57878 }, retry: {}, featureRules: [{ id: 'custom', name: 'custom', enabled: true, match: { requestKind: 'session_title', modelEquals: 'x' }, target: { endpointID: 'ep', model: 'x', effort: 'high' } }], endpoints: [{ id: 'ep', name: '入口', baseURL: 'https://example.invalid', apiKey: 'redacted', protocol: 'openai', enabled: true, pinnedIP: '203.0.113.1', timeoutSeconds: 30, headers: { x: 'y' }, modelMappings: [{ from: 'gpt-*', to: 'gpt-5', thinking: 'disable', context: 'strip' }] }] });
+  const wire = toWireConfig({ schemaVersion: 6, listener: { authToken: 'redacted', host: '127.0.0.1', port: 57878 }, retry: {}, featureRules: [{ id: 'custom', name: 'custom', enabled: true, match: { requestKind: 'session_title', modelEquals: 'x' }, target: { endpointID: 'ep', model: 'x', effort: 'high' } }], endpoints: [{ id: 'ep', name: '入口', baseURL: 'https://example.invalid', apiKey: 'redacted', protocol: 'openai', enabled: true, pinnedIP: '203.0.113.1', pinnedIPExclusive: true, timeoutSeconds: 30, headers: { x: 'y' }, modelMappings: [{ from: 'gpt-*', to: 'gpt-5', thinking: 'disable', context: 'strip' }] }] });
   const endpoint = wire.endpoints[0];
-  assert.deepEqual(endpoint.pinnedIPs, ['203.0.113.1']);
+  assert.equal('pinnedIPs' in endpoint, false);
+  assert.equal('pinnedIP' in endpoint, false);
+  assert.equal('pinnedIPExclusive' in endpoint, false);
   assert.deepEqual(endpoint.mappings[0], { clientPattern: 'gpt-*', upstreamModel: 'gpt-5', thinking: 'disabled', context: 'strip' });
   assert.equal(endpoint.apiKey, '');
   assert.equal('modelMappings' in endpoint, false);
@@ -897,9 +899,8 @@ test('v6 flat endpoints preserve provider order, mappings, and endpoint fields',
       priority: 0, mappings: [],
     }, {
       id: 'ep-fallback', name: '备用', baseURL: 'https://provider.invalid', protocol: 'openai', enabled: true,
-      priority: 10, keepAlive: true, searchDialect: 'openai', pinnedIPExclusive: true,
+      priority: 10, keepAlive: true, searchDialect: 'openai',
       stickyGroup: 'shared-fallback',
-      pinnedIPs: ['203.0.113.10', '2001:db8::10'],
       catalog: {
         models: ['model-a', 'model-a', ' model-b '], source: 'https://provider.invalid/v1/models',
         status: '已获取', error: '', updatedAt: '1720000000',
@@ -915,9 +916,9 @@ test('v6 flat endpoints preserve provider order, mappings, and endpoint fields',
   assert.deepEqual(ui.config.endpoints.map((endpoint) => endpoint.id), ['ep-primary', 'ep-fallback']);
   assert.equal(ui.config.endpoints[1].priority, 10);
   const endpoint = ui.config.endpoints[1];
-  assert.deepEqual(endpoint.pinnedIPs, ['203.0.113.10', '2001:db8::10']);
-  assert.equal(endpoint.pinnedIP, '203.0.113.10, 2001:db8::10');
-  assert.equal(endpoint.pinnedIPExclusive, true);
+  assert.equal('pinnedIPs' in endpoint, false);
+  assert.equal('pinnedIP' in endpoint, false);
+  assert.equal('pinnedIPExclusive' in endpoint, false);
   assert.equal(endpoint.stickyGroup, 'shared-fallback');
   assert.equal(endpoint.keepAlive, true);
   assert.deepEqual(endpoint.catalog.models, ['model-a', 'model-b']);
@@ -927,12 +928,13 @@ test('v6 flat endpoints preserve provider order, mappings, and endpoint fields',
 
   const roundTrip = toWireConfig(ui.config);
   const saved = roundTrip.endpoints[1];
-  assert.deepEqual(saved.pinnedIPs, ['203.0.113.10', '2001:db8::10']);
+  assert.equal('pinnedIPs' in saved, false);
+  assert.equal('pinnedIP' in saved, false);
   assert.deepEqual(saved.catalog.models, ['model-a', 'model-b']);
   assert.equal(saved.catalog.status, '已获取');
   assert.equal(saved.keepAlive, true);
   assert.equal(saved.searchDialect, undefined);
-  assert.equal(saved.pinnedIPExclusive, true);
+  assert.equal('pinnedIPExclusive' in saved, false);
   assert.equal(saved.stickyGroup, 'shared-fallback');
   assert.deepEqual(saved.mappings[0], {
     clientPattern: 'claude-*', upstreamModel: 'provider-model', thinking: 'passthrough',
@@ -941,17 +943,19 @@ test('v6 flat endpoints preserve provider order, mappings, and endpoint fields',
   assert.equal('pools' in roundTrip, false);
 });
 
-test('plural pinned IPs accept legacy aliases, commas, whitespace, and explicit clearing', () => {
-  assert.deepEqual(normalizePinnedIPs(' 203.0.113.1, 203.0.113.2\n2001:db8::1 '), [
-    '203.0.113.1', '203.0.113.2', '2001:db8::1',
-  ]);
+test('legacy fixed IP aliases are ignored and never written back', () => {
   const legacy = fromWireConfig({ config: {
     schemaVersion: 6,
-    endpoints: [{ id: 'legacy', pinnedIP: '203.0.113.3, 203.0.113.4' }],
+    retry: { pinnedIPConcurrency: 3 },
+    endpoints: [{ id: 'legacy', pinnedIP: '203.0.113.3', pinnedIPs: ['203.0.113.4'], pinnedIPExclusive: true }],
   } });
-  assert.deepEqual(legacy.config.endpoints[0].pinnedIPs, ['203.0.113.3', '203.0.113.4']);
-  const cleared = toWireConfig({ schemaVersion: 6, endpoints: [{ id: 'clear', pinnedIPs: [], pinnedIP: '203.0.113.99' }] });
-  assert.deepEqual(cleared.endpoints[0].pinnedIPs, []);
+  assert.equal('pinnedIP' in legacy.config.endpoints[0], false);
+  assert.equal('pinnedIPs' in legacy.config.endpoints[0], false);
+  assert.equal('pinnedIPExclusive' in legacy.config.endpoints[0], false);
+  const cleared = toWireConfig({ schemaVersion: 6, retry: { pinnedIPConcurrency: 1 }, endpoints: [{ id: 'clear', pinnedIP: '203.0.113.99', pinnedIPs: ['203.0.113.1'] }] });
+  assert.equal('pinnedIP' in cleared.endpoints[0], false);
+  assert.equal('pinnedIPs' in cleared.endpoints[0], false);
+  assert.equal('pinnedIPConcurrency' in cleared.retry, false);
 });
 
 test('editing UI mapping aliases does not drop thinking, context, or failover timeout', () => {

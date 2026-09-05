@@ -88,7 +88,6 @@ public enum InputValidation {
         public var maxDeferredRounds: Int
         public var maxRetryDurationSeconds: Double
         public var sessionStickyRetries: Int
-        public var pinnedIPConcurrency: Int
 
         public init(
             responseTimeoutSeconds: Double?,
@@ -99,8 +98,7 @@ public enum InputValidation {
             passThroughRetryDelay: Bool = true,
             maxDeferredRounds: Int,
             maxRetryDurationSeconds: Double,
-            sessionStickyRetries: Int,
-            pinnedIPConcurrency: Int
+            sessionStickyRetries: Int
         ) {
             self.responseTimeoutSeconds = responseTimeoutSeconds
             self.streamIdleTimeoutSeconds = streamIdleTimeoutSeconds
@@ -111,7 +109,6 @@ public enum InputValidation {
             self.maxDeferredRounds = maxDeferredRounds
             self.maxRetryDurationSeconds = maxRetryDurationSeconds
             self.sessionStickyRetries = sessionStickyRetries
-            self.pinnedIPConcurrency = pinnedIPConcurrency
         }
     }
 
@@ -125,8 +122,7 @@ public enum InputValidation {
         passThroughRetryDelay: Bool = true,
         maxDeferredRoundsText: String,
         maxRetryDurationSecondsText: String,
-        sessionStickyRetriesText: String,
-        pinnedIPConcurrencyText: String
+        sessionStickyRetriesText: String
     ) throws -> RetryPolicyInput {
         let responseTimeout = try optionalPositiveDouble(responseTimeoutText, field: "首响应截止")
         let streamIdleTimeout = try optionalPositiveDouble(streamIdleTimeoutText, field: "流式空闲截止")
@@ -148,10 +144,6 @@ public enum InputValidation {
               stickyRetries >= 0 else {
             throw InputValidationError("粘性入口额外重试次数必须为 0 或正整数")
         }
-        guard let ipConcurrency = Int(pinnedIPConcurrencyText.trimmingCharacters(in: .whitespacesAndNewlines)),
-              ipConcurrency > 0 else {
-            throw InputValidationError("固定 IP 并发数必须大于 0")
-        }
         return RetryPolicyInput(
             responseTimeoutSeconds: responseTimeout,
             streamIdleTimeoutSeconds: streamIdleTimeout,
@@ -161,8 +153,7 @@ public enum InputValidation {
             passThroughRetryDelay: passThroughRetryDelay,
             maxDeferredRounds: deferredRounds,
             maxRetryDurationSeconds: retrySeconds,
-            sessionStickyRetries: stickyRetries,
-            pinnedIPConcurrency: ipConcurrency
+            sessionStickyRetries: stickyRetries
         )
     }
 

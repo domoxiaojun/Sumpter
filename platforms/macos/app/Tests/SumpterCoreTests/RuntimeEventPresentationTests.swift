@@ -212,7 +212,7 @@ final class RuntimeEventPresentationTests: XCTestCase {
         )
         XCTAssertEqual(
             RuntimeEventPresentation.friendlyMessage(kind: "upstream", statusCode: 200, failover: false, message: "pinned 1.2.3.4"),
-            "IP 直连 1.2.3.4"
+            ""
         )
         XCTAssertEqual(
             RuntimeEventPresentation.friendlyMessage(kind: "client", statusCode: 400, failover: false, message: #"noEnabledEndpoint("fallback")"#),
@@ -282,7 +282,6 @@ final class RuntimeEventPresentationTests: XCTestCase {
         XCTAssertEqual(friendly("pool not found: x", kind: "client", status: 400), "目标池不存在")
         XCTAssertEqual(friendly("no enabled endpoint in pool primary", kind: "client", status: 400), "目标池无可用入口")
         XCTAssertEqual(friendly("feature rule not found: r1", kind: "client", status: 400), "分流规则不存在")
-        XCTAssertEqual(friendly("pinned 1.2.3.4"), "IP 直连 1.2.3.4")
         XCTAssertEqual(friendly("passthrough responses", outcome: .succeeded), "请求成功")
         XCTAssertEqual(
             friendly("bridge openai-responses; 命中路由规则", outcome: .succeeded, streamTrace: StreamTrace(chunkCount: 1)),
@@ -309,9 +308,9 @@ final class RuntimeEventPresentationTests: XCTestCase {
                 kind: "client",
                 statusCode: 200,
                 failover: false,
-                message: "pinned 1.2.3.4; bridge openai; deferred_rounds 2"
+                message: "bridge openai; deferred_rounds 2"
             ),
-            "IP 直连 1.2.3.4 · openai 桥接 · 上游重跑 2 轮"
+            "openai 桥接 · 上游重跑 2 轮"
         )
         // 信息 token + 错误 token 组合:失败解释已在,不叠加状态码合成段。
         XCTAssertEqual(
@@ -319,9 +318,9 @@ final class RuntimeEventPresentationTests: XCTestCase {
                 kind: "upstream",
                 statusCode: 502,
                 failover: false,
-                message: "pinned 1.2.3.4; connection failed: boom"
+                message: "connection failed: boom"
             ),
-            "IP 直连 1.2.3.4 · 连接失败"
+            "连接失败"
         )
     }
 
@@ -331,7 +330,7 @@ final class RuntimeEventPresentationTests: XCTestCase {
             "Responses 原生适配"
         )
         XCTAssertEqual(
-            RuntimeEventPresentation.forwardingModeDisplay("pinned 1.2.3.4; bridge openai-responses"),
+            RuntimeEventPresentation.forwardingModeDisplay("bridge openai-responses"),
             "Responses ↔ Anthropic 桥接"
         )
         XCTAssertEqual(
@@ -782,16 +781,6 @@ final class RuntimeEventPresentationTests: XCTestCase {
             RuntimeEventPresentation.friendlyMessage(kind: "client", statusCode: 418, failover: false, message: nil),
             "上游返回 418"
         )
-        // 只有信息 token 的失败行:合成段在前,信息段在后。
-        XCTAssertEqual(
-            RuntimeEventPresentation.friendlyMessage(
-                kind: "upstream",
-                statusCode: 429,
-                failover: false,
-                message: "pinned 1.2.3.4"
-            ),
-            "上游返回 429(限流) · IP 直连 1.2.3.4"
-        )
         // 成功行不合成;failover 空消息标记保留。
         XCTAssertEqual(
             RuntimeEventPresentation.friendlyMessage(kind: "client", statusCode: 200, failover: false, message: nil),
@@ -968,7 +957,6 @@ final class RuntimeEventPresentationTests: XCTestCase {
         XCTAssertEqual(severity(), .none)
         XCTAssertEqual(severity(ttfbMS: 2_100), .none)
         // 中性补充信息。
-        XCTAssertEqual(severity(message: "pinned 1.2.3.4"), .info)
         XCTAssertEqual(severity(message: "bridge openai"), .info)
         XCTAssertEqual(severity(message: "deferred_rounds 2"), .info)
         // 成功但有代价。
@@ -977,7 +965,7 @@ final class RuntimeEventPresentationTests: XCTestCase {
         XCTAssertEqual(severity(message: "deferred_rounds 7"), .warning)
         XCTAssertEqual(severity(ttfbMS: 85_400), .warning)
         XCTAssertEqual(severity(message: "unmatched_no_tools"), .warning)
-        XCTAssertEqual(severity(message: "pinned 1.2.3.4; deferred_rounds 6"), .warning)
+        XCTAssertEqual(severity(message: "deferred_rounds 6"), .warning)
         // 失败行。
         XCTAssertEqual(severity(status: 502, message: "upstream_retryable_status"), .warning)
         // 499 是用户主动取消,不是异常。

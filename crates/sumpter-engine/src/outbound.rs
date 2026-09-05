@@ -1,17 +1,14 @@
-//! 出站传输层:pinned IP + SNI 分离的 HTTPS 客户端。对齐 Swift `PinnedHTTPSClient`
-//! 的行为面(specs/spec-engine.md §2),实现换成 reqwest + rustls:
+//! 出站传输层：按 Base URL 连接的 reqwest + rustls HTTP(S) 客户端。
 //!
-//! - **TCP 连 IP、SNI/证书校验名/Host 头用域名**:`resolve(host, ip)` 只覆盖 DNS,
-//!   URL 域名不变,SNI/校验/Host 自动都是域名。
-//! - **恒 TLS**:http baseURL 也强制按 https 连(Swift 同款)。
-//! - **连接不复用**(`pool_max_idle_per_host(0)`)、**http1 only**(Swift 是手写 h1 栈,
+//! - 地址正常解析，Host、TLS SNI 和证书校验名均由 Base URL 决定。
+//! - HTTP / HTTPS 由 Base URL 的 scheme 决定。
+//! - 按入口 keepAlive 配置复用连接、**http1 only**(Swift 是手写 h1 栈,
 //!   锁 h1 保行为一致)、**不跟随重定向**(3xx 原样透传)、**不走系统代理**、**不自动解压**。
 //! - 超时归属:响应头截止由调用方传入(此处 timeout 包 connect+写+读头);
 //!   流式块间空闲超时在引擎层逐 chunk 包。
 //! - 取消:future drop 即撕连接(tokio 语义),对应 Swift 的 cancel → connectionFailed。
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -51,8 +48,6 @@ pub struct OutboundRequest {
     /// 已构造完毕的出站 header(黑名单/强制项由引擎处理)。
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
-    /// TCP 直连的固定 IP;None = 正常 DNS。
-    pub pinned_ip: Option<String>,
     /// 【实验】连接复用(Endpoint.keepAlive):false = 每请求新建连接。
     pub keep_alive: bool,
 }
@@ -75,7 +70,7 @@ pub trait UpstreamTransport: Send + Sync {
     ) -> Result<UpstreamResponse, TransportError>;
 }
 
-/// 目标解析:恒 https;端口 = baseURL 端口 ?? 443。
+/// 目标地址与端口来自 Base URL；缺省端口由 HTTP(S) scheme 决定。
 pub struct ResolvedTarget {
     pub host: String,
     pub port: u16,
@@ -129,7 +124,7 @@ pub fn join_paths(base_path: &str, inbound_path: &str) -> String {
     format!("{base}{inbound}")
 }
 
-type ClientKey = (String, u16, Option<String>, bool);
+type ClientKey = (String, u16, bool);
 
 pub struct ReqwestTransport {
     clients: Mutex<HashMap<ClientKey, reqwest::Client>>,
@@ -146,15 +141,9 @@ impl ReqwestTransport {
         &self,
         host: &str,
         port: u16,
-        pinned_ip: Option<&str>,
         keep_alive: bool,
     ) -> Result<reqwest::Client, TransportError> {
-        let key: ClientKey = (
-            host.to_string(),
-            port,
-            pinned_ip.map(str::to_string),
-            keep_alive,
-        );
+        let key: ClientKey = (host.to_string(), port, keep_alive);
         if let Some(client) = self.clients.lock().unwrap().get(&key) {
             return Ok(client.clone());
         }
@@ -179,13 +168,6 @@ impl ReqwestTransport {
         } else {
             builder.pool_max_idle_per_host(0)
         };
-        if let Some(ip) = pinned_ip {
-            let addr: SocketAddr = format!("{ip}:{port}")
-                .parse()
-                .or_else(|_| format!("[{ip}]:{port}").parse())
-                .map_err(|_| TransportError::ConnectionFailed(format!("invalid pinned IP {ip}")))?;
-            builder = builder.resolve(host, addr);
-        }
         let client = builder
             .build()
             .map_err(|e| TransportError::ConnectionFailed(format!("client build: {e}")))?;
@@ -251,12 +233,7 @@ impl UpstreamTransport for ReqwestTransport {
         response_timeout: Option<Duration>,
     ) -> Result<UpstreamResponse, TransportError> {
         let target = resolve_target(&request.base_url, &request.path_and_query)?;
-        let client = self.client_for(
-            &target.host,
-            target.port,
-            request.pinned_ip.as_deref(),
-            request.keep_alive,
-        )?;
+        let client = self.client_for(&target.host, target.port, request.keep_alive)?;
 
         let method = reqwest::Method::from_bytes(request.method.as_bytes()).map_err(|_| {
             TransportError::InvalidResponse(format!("bad method {}", request.method))
@@ -345,6 +322,11 @@ mod tests {
         let t = resolve_target("http://localhost:11434", "/v1/messages").unwrap();
         assert_eq!(t.port, 11434);
         assert_eq!(t.url.as_str(), "http://localhost:11434/v1/messages");
+
+        let t = resolve_target("https://[2001:db8::1]", "/v1/messages").unwrap();
+        assert_eq!(t.host, "[2001:db8::1]");
+        assert_eq!(t.port, 443);
+        assert_eq!(t.url.as_str(), "https://[2001:db8::1]/v1/messages");
 
         let t = resolve_target("https://example.com:8443/base", "/base/v1/messages").unwrap();
         assert_eq!(t.port, 8443);

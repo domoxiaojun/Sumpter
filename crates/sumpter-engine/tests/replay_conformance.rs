@@ -13,7 +13,7 @@ fn config() -> AppConfig {
         r#"{
           "schemaVersion": 6,
           "listener": {"host":"127.0.0.1", "port":57878, "authToken":""},
-          "retry": {"maxDeferredRounds":1, "sessionStickyRetries":0, "pinnedIPConcurrency":1},
+          "retry": {"maxDeferredRounds":1, "sessionStickyRetries":0},
           "endpoints": [
             {"id":"primary", "name":"Primary", "baseURL":"https://primary.invalid", "apiKey":"test-primary", "protocol":"anthropic", "enabled":true,
              "mappings":[{"clientPattern":"claude-test", "upstreamModel":"claude-upstream"}]},
@@ -51,7 +51,7 @@ fn live_config_with_sticky_retries(session_sticky_retries: i64) -> AppConfig {
         r#"{
           "schemaVersion": 6,
           "listener": {"host":"127.0.0.1", "port":57878, "authToken":""},
-          "retry": {"maxDeferredRounds":0, "sessionStickyRetries":0, "pinnedIPConcurrency":1},
+          "retry": {"maxDeferredRounds":0, "sessionStickyRetries":0},
           "endpoints": [
             {"id":"cpa", "name":"CPA", "baseURL":"https://cpa.invalid", "apiKey":"test-cpa", "protocol":"openai", "enabled":true,
              "mappings":[{"clientPattern":"gpt-live-1-codex", "upstreamModel":"gpt-live-1-codex", "capabilities":["live"]}]}

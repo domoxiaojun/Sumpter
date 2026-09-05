@@ -71,6 +71,39 @@ apps/<platform>/sumpterd
 4. adapter 可以依赖 shared crate，shared crate 不得反向依赖 adapter。
 5. app 只负责参数解析、配置目录、监听启动、信号 / EOF 生命周期和平台组合，不复制请求处理逻辑。
 
+## 共享引擎内部
+
+`engine/mod.rs` 只定义可克隆的 `Engine` 句柄、模块声明和既有公开类型的重导出。
+实现仍属于同一个 crate，各职责使用明确的模块导入，内部类型最多在 `engine`
+范围可见。`Engine`、`EngineServices` 和 adapter 调用的公开方法保持原有合同。
+
+| 职责 | 实现模块 | 状态与交接 |
+| --- | --- | --- |
+| 构造和生命周期 | `state`、`lifecycle` | 组合共享状态、恢复持久化数据、替换配置并编排后台 flush |
+| HTTP 入站和协议提示 | `inbound`、`context`、`protocol`、`payload`、`catalog` | 先检查访问权限，再消费惰性 body；保留原始报文和既有 Live/模型转换规则 |
+| HTTP 调度和转发 | `dispatch`、`http_relay`、`http_response` | 保留入口排序、粘性、冷却和重试；响应被接纳后将完成保护对象交给 relay |
+| 完成和事件 | `completion`、`events`、`failure` | `CompletionGuard` 管理 HTTP 完成与 Drop 取消；统一失败描述和 client/upstream 计数 |
+| WebSocket | `websocket`、`websocket_relay` | 保留先完成上游握手再升级的入口；帧转发与关闭指标使用独立上下文 |
+| 会话、抓包和统计 | `sessions`、`capture`、`runtime_api` | 各自管理绑定、诊断和查询/存储 API；SQLite 实现继续属于 `sumpter-runtime` |
+
+`forward` 保留上游传输的兼容重导出。模块拆分不增加配置字段、crate 或平台专属引擎。
+
+Runtime 内部也按数据生命周期分层：`runtime_store.rs` 只保留共享类型、
+`RuntimeStore` 状态定义和模块声明；`runtime_store/store_api.rs` 实现公开存储方法，
+`runtime_store/schema.rs` 负责 schema、投影与
+rollup，`worker.rs` 负责写入 worker，`maintenance.rs` 负责保留策略/清理，
+`analytics.rs` 负责投影聚合，`export.rs` 负责会话导出，测试位于同目录
+`tests.rs`。只读查询以 `runtime_query.rs` 的公共模型和过滤器为边界，具体实现
+分布在 `runtime_query/events.rs`、`trends.rs`、`analytics.rs`、`facets.rs`、
+`errors.rs`、`dimensions.rs`、`export.rs` 与 `storage.rs`；这些模块共享过滤器、
+快照和 SQL 辅助函数，但不改变 crate 的公开查询函数合同。
+
+并发和持久化约束：runtime 写操作保持 `runtime_write → state` 锁顺序；
+抓包 flush/clear 保持 `capture_flush → capture → capture_index` 顺序；
+会话在释放内存锁后落盘。加载损坏的绑定或诊断文件时继续禁止隐式覆盖，过期资源绑定
+在启动时裁剪并写回。HTTP 的完成保护对象沿 `dispatch → http_relay` 唯一移交，
+WebSocket 继续使用自身的完成记账流程。
+
 ## 平台边界
 
 `crates/sumpter-engine/src/boundary.rs` 是唯一边界入口：
@@ -84,6 +117,19 @@ apps/<platform>/sumpterd
 共享引擎默认使用 `NoopPlatform`，因此 core / runtime / engine 可以在没有操作系统控制面时独立测试。实际二进制由对应 adapter 注入具体 `Platform`。
 
 对应页面优先保持同一信息层级、字段命名、状态语义和主要交互；只有原生控件、窗口形态或平台生命周期确有差异时才保留平台化表现。运行统计存储统一使用 `maxAgeDays` 与 `storageLimitBytes` 的 OR 轮换语义，进行中的请求组整体保护；低频技术字段进入详情，策略编辑使用 Linux 弹窗 / macOS sheet。
+
+Linux `admin.rs` 保留 listener / 配置事务状态、路由组装和 SSE 生命周期，
+路由处理按职责放在 `admin_auth_routes.rs`、`admin_config.rs`、`admin_runtime.rs`、
+`admin_diagnostics.rs` 与 `admin_autostart.rs`。既有 `admin_auth.rs` 继续管理
+登录会话与凭据；配置和模型探测属于平台 Admin，公开 `admin::validate_config`
+入口保持不变。
+
+macOS `main.swift` 保留应用入口、AppModel 状态/初始化和原生通知支持类型。
+AppModel 方法分布在 `AppModel+Lifecycle.swift`、`AppModel+RuntimeStatus.swift`、
+`AppModel+Analytics.swift`、`AppModel+Diagnostics.swift`、`AppModel+Config.swift`、
+`AppModel+Providers.swift` 与 `AppModel+Notifications.swift`。这些 extension
+继续共享同一个 `@MainActor` AppModel 和 `@Published` 状态；跨文件使用的内部成员
+为模块内可见，异步响应顺序保护、sidecar 生命周期和通知行为保持原有语义。
 
 ## 变更归属
 

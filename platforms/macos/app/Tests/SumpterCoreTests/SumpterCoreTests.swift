@@ -730,6 +730,44 @@ final class SumpterCoreTests: XCTestCase {
         XCTAssertEqual(Endpoint(id: "new", name: "new", baseURL: try XCTUnwrap(URL(string: "https://new.example"))).protocolMode, .auto)
     }
 
+    func testConfigStoreIgnoresLegacyFixedIPsAndRemovesThemOnSave() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sumpter-fixed-ip-removal-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("config.json")
+        let original = Data(#"""
+        {"schemaVersion":6,"listener":{"host":"127.0.0.1","port":57878},
+         "retry":{"pinnedIPConcurrency":3,"sessionStickyRetries":2,"max500Retries":1},
+         "endpoints":[{"id":"legacy","baseURL":"https://example.invalid","protocol":"auto",
+          "pinnedIPs":["203.0.113.10","203.0.113.11"],"pinnedIP":"203.0.113.12","pinnedIPExclusive":true,
+          "priority":10,"stickyGroup":"account-a","keepAlive":true}],"featureRules":[]}
+        """#.utf8)
+        try original.write(to: url)
+        let store = ConfigStore(url: url)
+        let loaded = try store.loadWithMigration()
+        XCTAssertNil(loaded.migrationNotice)
+        XCTAssertEqual(try Data(contentsOf: url), original)
+        XCTAssertEqual(loaded.config.retry.sessionStickyRetries, 2)
+        XCTAssertEqual(loaded.config.retry.max500Retries, 1)
+        XCTAssertEqual(loaded.config.endpoints.first?.baseURL.absoluteString, "https://example.invalid")
+        XCTAssertEqual(loaded.config.endpoints.first?.stickyGroup, "account-a")
+        XCTAssertEqual(loaded.config.endpoints.first?.priority, 10)
+        XCTAssertEqual(loaded.config.endpoints.first?.keepAlive, true)
+
+        try store.save(loaded.config)
+        let saved = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        XCTAssertEqual(saved["schemaVersion"] as? Int, 6)
+        let retry = try XCTUnwrap(saved["retry"] as? [String: Any])
+        XCTAssertNil(retry["pinnedIPConcurrency"])
+        let endpoints = try XCTUnwrap(saved["endpoints"] as? [[String: Any]])
+        let endpoint = try XCTUnwrap(endpoints.first)
+        for key in ["pinnedIPs", "pinnedIP", "pinnedIPExclusive"] {
+            XCTAssertNil(endpoint[key])
+        }
+        XCTAssertEqual(try store.load(), loaded.config)
+    }
+
     func testConfigStoreMigratesLegacyPassthroughToAutoAndBacksUp() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("sumpter-config-migration-\(UUID().uuidString)", isDirectory: true)
@@ -1069,8 +1107,7 @@ final class SumpterCoreTests: XCTestCase {
                 streamIdleTimeoutSeconds: nil,
                 maxDeferredRounds: 2,
                 maxRetryDurationSeconds: 900,
-                sessionStickyRetries: 1,
-                pinnedIPConcurrency: 4
+                sessionStickyRetries: 1
             ),
             pools: [
                 Pool(
@@ -1084,8 +1121,6 @@ final class SumpterCoreTests: XCTestCase {
                             baseURL: try XCTUnwrap(URL(string: "https://anyrouter.top")),
                             enabled: true,
                             apiKey: "sk-1",
-                            pinnedIPs: ["1.1.1.1", "2.2.2.2"],
-                            pinnedIPExclusive: true,
                             stickyGroup: "anyrouter",
                             catalog: ModelCatalog(models: ["claude-opus-5"], source: "api", status: "已获取", updatedAt: "2026-08-01 10:00:00"),
                             mappings: [ModelMapping(clientPattern: "claude-opus-*", thinking: .adaptive, context: .oneMillion)]
@@ -1131,8 +1166,6 @@ final class SumpterCoreTests: XCTestCase {
         XCTAssertEqual(decoded.pools.count, 1)
         let primaryEndpoint = try XCTUnwrap(decoded.primaryPool?.endpoints.first)
         XCTAssertEqual(primaryEndpoint.apiKey, "sk-1")
-        XCTAssertEqual(primaryEndpoint.pinnedIPs, ["1.1.1.1", "2.2.2.2"])
-        XCTAssertTrue(primaryEndpoint.pinnedIPExclusive)
         XCTAssertEqual(primaryEndpoint.stickyGroup, "anyrouter")
         XCTAssertEqual(primaryEndpoint.catalog.models, ["claude-opus-5"])
         XCTAssertEqual(decoded.primaryPool?.endpoints.first?.mappings.map(\.id), ["claude-opus-*"])
@@ -1180,7 +1213,6 @@ final class SumpterCoreTests: XCTestCase {
         XCTAssertEqual(endpoint.name, "e1", "缺 name 时回退成 id")
         XCTAssertEqual(endpoint.protocolMode, .auto)
         XCTAssertTrue(endpoint.enabled)
-        XCTAssertTrue(endpoint.pinnedIPs.isEmpty)
         XCTAssertNil(endpoint.stickyGroup)
         XCTAssertTrue(endpoint.mappings.isEmpty)
 
@@ -1376,11 +1408,10 @@ final class SumpterCoreTests: XCTestCase {
           "listener": {"host": "127.0.0.1", "port": 57878, "allowedCIDRs": [], "authToken": ""},
           "retry": {"responseTimeoutSeconds": null, "streamIdleTimeoutSeconds": null,
                     "max500Retries": 0, "retryDelaySeconds": null,
-                    "maxDeferredRounds": 0, "maxRetryDurationSeconds": 1800, "sessionStickyRetries": 2, "pinnedIPConcurrency": 3},
+                    "maxDeferredRounds": 0, "maxRetryDurationSeconds": 1800, "sessionStickyRetries": 2},
           "endpoints": [{
             "id": "e1", "name": "e1", "baseURL": "https://a.example.com",
             "protocol": "anthropic", "enabled": true, "apiKey": "k",
-            "pinnedIPs": [], "pinnedIPExclusive": false,
             "mappings": [
               {"clientPattern": "gpt-5.4", "upstreamModel": "gpt-5.4",
                "thinking": "disabled", "context": "standard"},

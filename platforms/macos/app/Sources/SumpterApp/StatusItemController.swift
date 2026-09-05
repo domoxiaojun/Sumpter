@@ -334,7 +334,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     }
 }
 
-/// 菜单栏图标:线描驴头 + 右下角状态点。由 StatusItemController 绘制到状态项按钮。
+/// 菜单栏图标:新驴 logo 的单色小尺寸版本 + 右下角状态点。
+/// 菜单栏使用模板友好的单色轮廓，保留高耳朵、头巾、口鼻三个识别点。
 enum MenuBarIconImage {
     static func image(dotColor: NSColor) -> NSImage {
         let size = NSSize(width: 22, height: 18)
@@ -352,31 +353,38 @@ enum MenuBarIconImage {
             stroke.setStroke()
 
             let ears = NSBezierPath()
-            ears.lineWidth = 1.45
+            ears.lineWidth = 1.55
             ears.lineCapStyle = .round
             ears.lineJoinStyle = .round
-            ears.move(to: point(7.1, 11.5))
-            ears.line(to: point(5.7, 16.0))
-            ears.line(to: point(9.0, 12.8))
-            ears.move(to: point(13.0, 12.8))
-            ears.line(to: point(16.3, 16.0))
-            ears.line(to: point(14.9, 11.5))
+            ears.move(to: point(7.0, 11.8))
+            ears.curve(to: point(4.5, 15.9), controlPoint1: point(5.9, 13.4), controlPoint2: point(4.9, 15.0))
+            ears.curve(to: point(8.4, 12.9), controlPoint1: point(5.9, 16.1), controlPoint2: point(7.4, 14.0))
+            ears.move(to: point(14.0, 12.9))
+            ears.curve(to: point(17.5, 15.9), controlPoint1: point(15.3, 14.0), controlPoint2: point(16.9, 16.1))
+            ears.curve(to: point(15.0, 11.8), controlPoint1: point(17.1, 15.0), controlPoint2: point(16.1, 13.4))
             ears.stroke()
 
-            let head = NSBezierPath(roundedRect: box(6.2, 3.4, 9.6, 10.7), xRadius: 4.9 * scaleX, yRadius: 5.2 * scaleY)
-            head.lineWidth = 1.55
+            let head = NSBezierPath(roundedRect: box(6.0, 3.1, 10.0, 11.0), xRadius: 4.8 * scaleX, yRadius: 5.0 * scaleY)
+            head.lineWidth = 1.65
             head.stroke()
+
+            let headband = NSBezierPath()
+            headband.lineWidth = 1.45
+            headband.lineCapStyle = .round
+            headband.move(to: point(6.8, 6.0))
+            headband.curve(to: point(15.2, 6.0), controlPoint1: point(8.9, 5.4), controlPoint2: point(13.1, 5.4))
+            headband.stroke()
 
             let muzzle = NSBezierPath()
             muzzle.lineWidth = 1.25
             muzzle.lineCapStyle = .round
-            muzzle.move(to: point(9.0, 6.1))
-            muzzle.curve(to: point(13.0, 6.1), controlPoint1: point(9.8, 5.1), controlPoint2: point(12.2, 5.1))
+            muzzle.move(to: point(8.8, 8.1))
+            muzzle.curve(to: point(13.2, 8.1), controlPoint1: point(9.8, 7.0), controlPoint2: point(12.2, 7.0))
             muzzle.stroke()
 
             stroke.setFill()
-            NSBezierPath(ovalIn: box(8.6, 9.0, 1.15, 1.15)).fill()
-            NSBezierPath(ovalIn: box(12.25, 9.0, 1.15, 1.15)).fill()
+            NSBezierPath(ovalIn: box(8.7, 9.3, 1.15, 1.15)).fill()
+            NSBezierPath(ovalIn: box(12.15, 9.3, 1.15, 1.15)).fill()
 
             let dotRect = box(15.1, 2.0, 4.9, 4.9)
             NSColor.windowBackgroundColor.setFill()

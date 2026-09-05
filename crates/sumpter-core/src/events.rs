@@ -45,8 +45,6 @@ pub const STATUS_CLIENT_DISCONNECTED: i64 = 499;
 pub mod message_tokens {
     /// 多 token 连接符。
     pub const JOIN: &str = "; ";
-    /// `pinned <ip>`:该次尝试走 IP 直连。
-    pub const PINNED_PREFIX: &str = "pinned ";
     /// `bridge <openai|openai-responses>`:该请求经协议桥接。
     pub const BRIDGE_PREFIX: &str = "bridge ";
 
@@ -79,10 +77,6 @@ pub mod message_tokens {
     pub const STREAM_INTERRUPTED_PREFIX: &str = "stream interrupted: ";
     /// `client_disconnected*`:客户端取消(与 499 状态码成对)。
     pub const CLIENT_DISCONNECTED_PREFIX: &str = "client_disconnected";
-
-    pub fn pinned(ip: &str) -> String {
-        format!("{PINNED_PREFIX}{ip}")
-    }
 
     /// 组合 token:None/空串跳过;全空返回 None(事件不落 message 键)。
     pub fn join(parts: &[Option<String>]) -> Option<String> {
@@ -2318,7 +2312,13 @@ pub struct DiagnosticAttemptCapture {
     pub target_format: Option<ProviderProtocol>,
     #[serde(rename = "routeMode", default, skip_serializing_if = "is_none")]
     pub route_mode: Option<RouteMode>,
-    #[serde(rename = "pinnedIP", alias = "pinnedIp")]
+    /// Historical captures may carry a fixed IP; new attempts omit this field.
+    #[serde(
+        rename = "pinnedIP",
+        alias = "pinnedIp",
+        default,
+        skip_serializing_if = "is_none"
+    )]
     pub pinned_ip: Option<String>,
     #[serde(rename = "startedAtMS")]
     pub started_at_ms: i64,

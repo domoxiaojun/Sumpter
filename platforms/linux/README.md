@@ -5,7 +5,7 @@
 1. **源码 monorepo**：本文件位于 `platforms/linux/README.md`。Rust 真源是仓库根 workspace 的 `sumpter-core` / `sumpter-runtime` / `sumpter-engine` 与 `sumpterd-linux`。
 2. **独立发布包**：发布阶段把 `platforms/linux/` 提升为包根。包内二进制名为 `sumpterd`，配置目录 `~/.config/sumpter` 或 `/var/lib/sumpter`，systemd 单元 `sumpter.service`，环境变量 `SUMPTER_*`。
 
-Linux 版以 standalone daemon 提供多协议代理、扁平 Provider 入口、分流规则、pinned IP、failover、统计，以及与桌面 UI 信息架构对齐的本机 Web 管理界面。
+Linux 版以 standalone daemon 提供多协议代理、扁平 Provider 入口、分流规则、failover、统计，以及与桌面 UI 信息架构对齐的本机 Web 管理界面。
 
 Linux 专属边界：
 
@@ -599,7 +599,6 @@ schema v6 的全局 `retry`：
   WebUI 事件里的「本次已故障转移」表示该请求换过入口，成功组会立即成为后续请求的粘性归属。
 - `maxDeferredRounds:0`：所有可重试故障不设轮数上限（字段名为历史兼容保留）。
 - `maxRetryDurationSeconds:0`：所有可重试故障不设跨轮总时长上限；示例默认 0（无限）。
-- `pinnedIPConcurrency`：pinned IP 并发竞速数，必须大于 0。
 - 备用映射的 `failoverTimeoutSeconds` 可省略；存在时必须大于 0，并与全局首响应超时取较小值。
 
 可跨轮的 HTTP 状态为 `401/402/403/429/502/503/504/520-527/529/530`；HTTP 500 仅按 `max500Retries`

@@ -294,7 +294,7 @@ Linux 的 Web Admin 地址 **不是** 这个字段，默认永远是 `127.0.0.1:
 | `mappings` | **必须**声明本入口承接的客户端模型；空数组 = 不接任何模型 |
 | `stickyGroup` | 空 = 用 id 当独立组；同名组共享会话 |
 
-可选：`pinnedIPs` / `pinnedIPExclusive`、`keepAlive`（省略 = 关闭；界面里新建入口默认打开）、`catalog`（「获取模型」缓存，纯展示，不参与路由）。
+可选：`keepAlive`（省略 = 关闭；界面里新建入口默认打开）、`catalog`（「获取模型」缓存，纯展示，不参与路由）。
 
 ### 5.4 mappings[]
 
@@ -341,8 +341,7 @@ Linux 的 Web Admin 地址 **不是** 这个字段，默认永远是 `127.0.0.1:
     "streamIdleTimeoutSeconds": null,
     "sessionStickyRetries": 2,
     "maxDeferredRounds": 0,
-    "maxRetryDurationSeconds": 0,
-    "pinnedIPConcurrency": 3
+    "maxRetryDurationSeconds": 0
   },
   "endpoints": [
     {
@@ -353,8 +352,6 @@ Linux 的 Web Admin 地址 **不是** 这个字段，默认永远是 `127.0.0.1:
       "enabled": true,
       "apiKey": "sk-YOUR-MAIN-KEY",
       "priority": 0,
-      "pinnedIPs": [],
-      "pinnedIPExclusive": false,
       "stickyGroup": "main-1",
       "mappings": [
         {
@@ -373,8 +370,6 @@ Linux 的 Web Admin 地址 **不是** 这个字段，默认永远是 `127.0.0.1:
       "enabled": true,
       "apiKey": "sk-YOUR-SECOND-KEY",
       "priority": 10,
-      "pinnedIPs": [],
-      "pinnedIPExclusive": false,
       "mappings": [
         {
           "clientPattern": "claude-haiku-4-5-20251001",

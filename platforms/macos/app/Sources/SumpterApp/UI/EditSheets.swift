@@ -13,7 +13,6 @@ struct RetryPolicySheet: View {
     @State private var deferredRounds: String
     @State private var retryMaxSeconds: String
     @State private var sessionStickyRetries: String
-    @State private var ipConcurrency: String
     @State private var submission = SubmissionState.idle
 
     init(model: AppModel, onClose: @escaping () -> Void) {
@@ -29,7 +28,6 @@ struct RetryPolicySheet: View {
         _deferredRounds = State(initialValue: "\(retry.maxDeferredRounds)")
         _retryMaxSeconds = State(initialValue: "\(retry.maxRetryDurationSeconds)")
         _sessionStickyRetries = State(initialValue: "\(retry.sessionStickyRetries)")
-        _ipConcurrency = State(initialValue: "\(retry.pinnedIPConcurrency)")
     }
 
     var body: some View {
@@ -123,10 +121,6 @@ struct RetryPolicySheet: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                FormLine(title: "固定 IP 并发") {
-                    TextField("3", text: $ipConcurrency)
-                        .frame(width: 120)
-                }
                 SheetErrorText(submission.errorText)
             }
         }
@@ -145,8 +139,7 @@ struct RetryPolicySheet: View {
                     passThroughRetryDelay: passThroughRetryDelay,
                     maxDeferredRoundsText: deferredRounds,
                     maxRetryDurationSecondsText: retryMaxSeconds,
-                    sessionStickyRetriesText: sessionStickyRetries,
-                    pinnedIPConcurrencyText: ipConcurrency
+                    sessionStickyRetriesText: sessionStickyRetries
                 )
                 submission.succeed()
                 onClose()

@@ -60,8 +60,7 @@ final class UILogicTests: XCTestCase {
             retryDelaySecondsText: "4.5",
             maxDeferredRoundsText: "2",
             maxRetryDurationSecondsText: "5",
-            sessionStickyRetriesText: "2",
-            pinnedIPConcurrencyText: "4"
+            sessionStickyRetriesText: "2"
         )
         XCTAssertEqual(parsed.responseTimeoutSeconds, 9)
         XCTAssertEqual(parsed.streamIdleTimeoutSeconds, 30)
@@ -71,15 +70,13 @@ final class UILogicTests: XCTestCase {
         XCTAssertEqual(parsed.maxDeferredRounds, 2)
         XCTAssertEqual(parsed.maxRetryDurationSeconds, 5)
         XCTAssertEqual(parsed.sessionStickyRetries, 2)
-        XCTAssertEqual(parsed.pinnedIPConcurrency, 4)
 
         let clientControlled = try InputValidation.retryPolicy(
             responseTimeoutText: " ",
             streamIdleTimeoutText: "",
             maxDeferredRoundsText: "0",
             maxRetryDurationSecondsText: "0",
-            sessionStickyRetriesText: "0",
-            pinnedIPConcurrencyText: "3"
+            sessionStickyRetriesText: "0"
         )
         XCTAssertNil(clientControlled.responseTimeoutSeconds)
         XCTAssertNil(clientControlled.streamIdleTimeoutSeconds)
@@ -87,22 +84,20 @@ final class UILogicTests: XCTestCase {
     }
 
     func testInputValidationRetryPolicyRejectsBadValues() {
-        let cases: [(String, String, String, String, String, String, String)] = [
-            ("0", "45", "0", "2", "5", "3", "首响应截止必须留空或大于 0"),
-            ("8", "0", "0", "2", "5", "3", "流式空闲截止必须留空或大于 0"),
-            ("8", "45", "-1", "2", "5", "3", "故障重试最大轮数必须为 0 或正整数"),
-            ("8", "45", "0", "2", "-1", "3", "跨轮最长时长必须为 0 或正数"),
-            ("8", "45", "0", "-1", "5", "3", "粘性入口额外重试次数必须为 0 或正整数"),
-            ("8", "45", "0", "2", "5", "0", "固定 IP 并发数必须大于 0")
+        let cases: [(String, String, String, String, String, String)] = [
+            ("0", "45", "0", "2", "5", "首响应截止必须留空或大于 0"),
+            ("8", "0", "0", "2", "5", "流式空闲截止必须留空或大于 0"),
+            ("8", "45", "-1", "2", "5", "故障重试最大轮数必须为 0 或正整数"),
+            ("8", "45", "0", "2", "-1", "跨轮最长时长必须为 0 或正数"),
+            ("8", "45", "0", "-1", "5", "粘性入口额外重试次数必须为 0 或正整数")
         ]
-        for (timeout, streamIdle, rounds, sticky, retrySeconds, ip, expected) in cases {
+        for (timeout, streamIdle, rounds, sticky, retrySeconds, expected) in cases {
             XCTAssertThrowsError(try InputValidation.retryPolicy(
                 responseTimeoutText: timeout,
                 streamIdleTimeoutText: streamIdle,
                 maxDeferredRoundsText: rounds,
                 maxRetryDurationSecondsText: retrySeconds,
-                sessionStickyRetriesText: sticky,
-                pinnedIPConcurrencyText: ip
+                sessionStickyRetriesText: sticky
             )) { error in
                 XCTAssertEqual((error as? InputValidationError)?.message, expected)
             }
@@ -116,8 +111,6 @@ final class UILogicTests: XCTestCase {
         key: String = "k-\(UUID().uuidString.prefix(4))",
         enabled: Bool = true,
         host: String? = nil,
-        pinnedIPs: [String] = [],
-        pinnedIPExclusive: Bool = false,
         stickyGroup: String? = nil,
         catalog: ModelCatalog = ModelCatalog(),
         mappings: [ModelMapping] = []
@@ -128,8 +121,6 @@ final class UILogicTests: XCTestCase {
             baseURL: URL(string: "https://\(host ?? id).example.com")!,
             enabled: enabled,
             apiKey: key,
-            pinnedIPs: pinnedIPs,
-            pinnedIPExclusive: pinnedIPExclusive,
             stickyGroup: stickyGroup,
             catalog: catalog,
             mappings: mappings

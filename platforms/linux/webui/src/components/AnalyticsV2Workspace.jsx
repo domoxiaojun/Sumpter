@@ -226,12 +226,14 @@ function TokenCoreGrid({ tokens, compact = false }) {
         <div key={card.id} className={`runtime-v2-token-card ${card.tone || ''}`} data-token-role={card.id} style={{ '--card-accent': card.accent || 'var(--primary)' }}>
           <div className="runtime-v2-token-card-heading">
             <span>{card.label}</span>
-            <span className="runtime-v2-token-card-heading-meta">
-              {card.id === 'cache-read' && <em>命中率 {percent(cacheReadRate)}</em>}
-            </span>
           </div>
           <strong className="mono-cell">{optionalNumberWithComma(card.value)}</strong>
-          <small>{card.detail}</small>
+          <div className="runtime-v2-token-card-footer">
+            <small>{card.detail}</small>
+            {card.id === 'cache-read' && (
+              <span className="runtime-v2-token-card-hit-rate">命中率 {percent(cacheReadRate)}</span>
+            )}
+          </div>
         </div>
       ))}
     </div>

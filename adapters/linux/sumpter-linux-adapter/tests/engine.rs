@@ -40,7 +40,7 @@ enum Outcome {
     Timeout,
     /// 长流:状态 200,body 由测试端经 channel 灌入。
     Gated { status: u16 },
-    /// 悬挂在响应头阶段(模拟赛跑中被胜者掐断的慢候选)。
+    /// 悬挂在响应头阶段，用于验证响应超时与请求取消。
     Hang,
 }
 
@@ -52,10 +52,10 @@ struct Recorded {
     body: Vec<u8>,
 }
 
-type Script = HashMap<(String, Option<String>), VecDeque<Outcome>>;
+type Script = HashMap<String, VecDeque<Outcome>>;
 
 struct FakeTransport {
-    /// (host, pinned_ip) → 结局队列;查找顺序:精确 (host, Some(ip)) → 通配 (host, None)。
+    /// host → 结局队列。
     script: Mutex<Script>,
     requests: Mutex<Vec<Recorded>>,
     gate_txs: Mutex<Vec<tokio::sync::mpsc::UnboundedSender<Result<Bytes, TransportError>>>>,
@@ -81,16 +81,7 @@ impl FakeTransport {
         self.script
             .lock()
             .unwrap()
-            .entry((host.to_string(), None))
-            .or_default()
-            .push_back(outcome);
-    }
-
-    fn push_ip(&self, host: &str, ip: &str, outcome: Outcome) {
-        self.script
-            .lock()
-            .unwrap()
-            .entry((host.to_string(), Some(ip.to_string())))
+            .entry(host.to_string())
             .or_default()
             .push_back(outcome);
     }
@@ -133,15 +124,9 @@ impl UpstreamTransport for FakeTransport {
         });
         let outcome = {
             let mut script = self.script.lock().unwrap();
-            let exact = script
-                .get_mut(&(host.clone(), request.pinned_ip.clone()))
-                .and_then(|q| q.pop_front());
-            exact
-                .or_else(|| {
-                    script
-                        .get_mut(&(host.clone(), None))
-                        .and_then(|q| q.pop_front())
-                })
+            script
+                .get_mut(&host)
+                .and_then(|q| q.pop_front())
                 .unwrap_or(Outcome::Error("no scripted outcome".into()))
         };
         match outcome {
@@ -198,8 +183,6 @@ fn endpoint(id: &str, host: &str, key: &str) -> Endpoint {
         keep_alive: false,
         mappings: vec![],
         name: id.into(),
-        pinned_ip_exclusive: false,
-        pinned_ips: vec![],
         priority: 0,
         protocol: EndpointProtocolMode::Anthropic,
         sticky_group: None,
@@ -220,6 +203,7 @@ fn two_endpoint_config() -> AppConfig {
             context: ContextMode::OneMillion,
             failover_timeout_seconds: None,
             thinking: ThinkingMode::Adaptive,
+            effort: None,
             upstream_model: String::new(),
             capabilities: Vec::new(),
         }];
@@ -400,7 +384,6 @@ fn codex_responses_body() -> Bytes {
 /// 事件消息词表前缀清单(specs/spec-engine.md §5.1)。
 /// 与 Swift 侧 `RuntimeEventPresentationTests` 的清单互钉:两边不同步会各自红。
 const MESSAGE_TOKEN_PREFIXES: &[&str] = &[
-    "pinned ",
     "bridge ",
     "passthrough ",
     "inbound_convert_failed: ",
@@ -445,6 +428,22 @@ fn assert_messages_in_vocabulary(runtime: &sumpter_core::events::RuntimeSnapshot
 // ---------------------------------------------------------------------------
 // 测试
 // ---------------------------------------------------------------------------
+
+fn anthropic_tool_sse() -> Vec<String> {
+    [
+        r#"{"type":"message_start","message":{"id":"msg_1","model":"claude-up","usage":{"input_tokens":5}}}"#,
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"running"}}"#,
+        r#"{"type":"content_block_stop","index":0}"#,
+        r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"shell","input":{}}}"#,
+        r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"cmd\":[\"ls\"]}"}}"#,
+        r#"{"type":"content_block_stop","index":1}"#,
+        r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":9}}"#,
+        r#"{"type":"message_stop"}"#,
+    ]
+    .map(|data| format!("data: {data}\n\n"))
+    .to_vec()
+}
 
 #[tokio::test]
 async fn empty_api_key_forwards_without_auth_headers() {
@@ -508,7 +507,7 @@ async fn plaintext_http_endpoint_forwards_over_http() {
 #[tokio::test]
 async fn no_hardcoded_request_timeout_when_config_says_none() {
     // 回应「是不是硬编码 60s 超时」:两个超时都为 None 时,引擎不施加任何截止;
-    // 60s 常量只属于 pinned IP 健康排序,不掐断进行中的请求。
+    // provider/model 冷却有独立上限,不掐断进行中的请求。
     let fake = FakeTransport::new();
     let mut config = two_endpoint_config();
     config.retry.response_timeout_seconds = None;
@@ -1928,6 +1927,7 @@ async fn openai_endpoint_bridged_to_anthropic_sse() {
         context: ContextMode::Standard,
         failover_timeout_seconds: None,
         thinking: ThinkingMode::Disabled,
+        effort: None,
         upstream_model: "gpt-up".into(),
         capabilities: Vec::new(),
     }];
@@ -2472,106 +2472,6 @@ async fn rejected_requests_preserve_codex_metadata() {
 }
 
 #[tokio::test]
-async fn pinned_success_records_ip_tokens() {
-    // 成功路径:upstream 与 client 事件都带 `pinned <ip>`(Swift 只记 upstream 侧;
-    // client 侧是 Rust 增强,事件表默认筛选就能看到直连信息)。
-    let fake = FakeTransport::new();
-    let mut config = two_endpoint_config();
-    config.endpoints[0].pinned_ips = vec!["9.9.9.9".into()];
-    config.endpoints[0].pinned_ip_exclusive = true;
-    config.endpoints[1].enabled = false;
-    let engine = engine_with(config.normalized(), fake.clone());
-    fake.push_ip("a.example.com", "9.9.9.9", sse_ok(&["data: {}\n\n"]));
-
-    let (status, _) = call(&engine, loopback(), "/v1/messages", vec![], body()).await;
-    assert_eq!(status, 200);
-
-    let runtime = runtime_of(&engine).await;
-    let upstream = runtime
-        .recent_events
-        .iter()
-        .find(|e| e.kind == "upstream")
-        .unwrap();
-    assert_eq!(upstream.message.as_deref(), Some("pinned 9.9.9.9"));
-    assert_eq!(upstream.status_code, 200);
-    assert!(
-        upstream.ttfb_ms.is_some(),
-        "200 已收到响应头，必须记录 TTFB"
-    );
-    let client = runtime
-        .recent_events
-        .iter()
-        .find(|e| e.kind == "client")
-        .unwrap();
-    assert_eq!(client.message.as_deref(), Some("pinned 9.9.9.9"));
-    assert_messages_in_vocabulary(&runtime);
-}
-
-#[tokio::test]
-async fn pinned_retryable_and_transport_error_record_ip_tokens() {
-    // 429(retryable):事件 message 补 pinned token(状态码本身在 status 列)。
-    let fake = FakeTransport::new();
-    let mut config = two_endpoint_config();
-    config.endpoints[0].pinned_ips = vec!["9.9.9.9".into()];
-    config.endpoints[0].pinned_ip_exclusive = true;
-    config.endpoints[1].enabled = false;
-    config.retry.max_deferred_rounds = 1;
-    let engine = engine_with(config.normalized(), fake.clone());
-    fake.push_ip(
-        "a.example.com",
-        "9.9.9.9",
-        Outcome::Status {
-            status: 429,
-            headers: vec![],
-            chunks: vec![],
-        },
-    );
-    let (status, _) = call(&engine, loopback(), "/v1/messages", vec![], body()).await;
-    assert_eq!(status, 429);
-    let runtime = runtime_of(&engine).await;
-    let upstream = runtime
-        .recent_events
-        .iter()
-        .find(|e| e.kind == "upstream")
-        .unwrap();
-    assert_eq!(upstream.message.as_deref(), Some("pinned 9.9.9.9"));
-    assert!(
-        upstream.ttfb_ms.is_some(),
-        "429 已收到响应头，必须记录 TTFB"
-    );
-    assert_eq!(upstream.upstream_status_code, Some(429));
-    let client = runtime
-        .recent_events
-        .iter()
-        .find(|e| e.kind == "client")
-        .unwrap();
-    assert_eq!(client.message.as_deref(), Some("upstream_retryable_status"));
-    assert_messages_in_vocabulary(&runtime);
-
-    // 传输失败:`pinned <ip>; connection failed: …` 组合(保留是哪个 IP 死了)。
-    let fake = FakeTransport::new();
-    let mut config = two_endpoint_config();
-    config.endpoints[0].pinned_ips = vec!["9.9.9.9".into()];
-    config.endpoints[0].pinned_ip_exclusive = true;
-    let engine = engine_with(config.normalized(), fake.clone());
-    fake.push_ip("a.example.com", "9.9.9.9", Outcome::Error("boom".into()));
-    fake.push("b.example.com", sse_ok(&["data: {}\n\n"]));
-    let (status, _) = call(&engine, loopback(), "/v1/messages", vec![], body()).await;
-    assert_eq!(status, 200);
-    let runtime = runtime_of(&engine).await;
-    let failed = runtime
-        .recent_events
-        .iter()
-        .find(|e| e.kind == "upstream" && e.endpoint_id.as_deref() == Some("a"))
-        .unwrap();
-    assert_eq!(
-        failed.message.as_deref(),
-        Some("pinned 9.9.9.9; connection failed: boom")
-    );
-    assert_messages_in_vocabulary(&runtime);
-}
-
-#[tokio::test]
 async fn bridge_and_deferred_round_tokens() {
     // 桥接成功:client/upstream 消息都带 `bridge openai`。
     let fake = FakeTransport::new();
@@ -2582,6 +2482,7 @@ async fn bridge_and_deferred_round_tokens() {
         context: ContextMode::Standard,
         failover_timeout_seconds: None,
         thinking: ThinkingMode::Disabled,
+        effort: None,
         upstream_model: "gpt-up".into(),
         capabilities: Vec::new(),
     });
@@ -3318,6 +3219,7 @@ async fn same_session_keeps_independent_assignments_per_effective_model() {
         context: ContextMode::Standard,
         failover_timeout_seconds: None,
         thinking: ThinkingMode::Disabled,
+        effort: None,
         upstream_model: String::new(),
         capabilities: Vec::new(),
     }];
@@ -3327,6 +3229,7 @@ async fn same_session_keeps_independent_assignments_per_effective_model() {
         context: ContextMode::Standard,
         failover_timeout_seconds: None,
         thinking: ThinkingMode::Disabled,
+        effort: None,
         upstream_model: String::new(),
         capabilities: Vec::new(),
     }];
@@ -3939,85 +3842,6 @@ async fn sticky_group_retries_within_request_then_rebinds_immediately() {
 }
 
 #[tokio::test]
-async fn race_picks_live_ip_and_losers_leave_no_trace() {
-    let fake = FakeTransport::new();
-    let mut config = two_endpoint_config();
-    config.endpoints[0].pinned_ips = vec!["1.1.1.1".into(), "2.2.2.2".into(), "3.3.3.3".into()];
-    config.endpoints[0].pinned_ip_exclusive = true;
-    config.endpoints[1].enabled = false;
-    let engine = engine_with(config.normalized(), fake.clone());
-
-    // 两个 IP 悬挂、一个 IP 活:赛跑应挑中活 IP,输家零记账。
-    fake.push_ip("a.example.com", "1.1.1.1", Outcome::Hang);
-    fake.push_ip("a.example.com", "2.2.2.2", Outcome::Hang);
-    fake.push_ip(
-        "a.example.com",
-        "3.3.3.3",
-        sse_ok(&["data: {\"win\":1}\n\n"]),
-    );
-
-    let (status, resp) = call(&engine, loopback(), "/v1/messages", vec![], body()).await;
-    assert_eq!(status, 200);
-    assert!(String::from_utf8_lossy(&resp).contains("win"));
-
-    let runtime = runtime_of(&engine).await;
-    // 只有胜者一条 upstream 记账;被掐断的悬挂候选不进事件不计失败。
-    assert_eq!(runtime.upstream_attempts, 1);
-    assert_eq!(runtime.upstream_failures, 0);
-    let upstream: Vec<_> = runtime
-        .recent_events
-        .iter()
-        .filter(|e| e.kind == "upstream")
-        .collect();
-    assert_eq!(upstream.len(), 1);
-    assert_eq!(upstream[0].status_code, 200);
-}
-
-#[tokio::test]
-async fn race_all_dead_fails_fast_and_fails_over() {
-    let fake = FakeTransport::new();
-    let mut config = two_endpoint_config();
-    config.endpoints[0].pinned_ips = vec!["1.1.1.1".into(), "2.2.2.2".into(), "3.3.3.3".into()];
-    config.endpoints[0].pinned_ip_exclusive = true;
-    let engine = engine_with(config.normalized(), fake.clone());
-
-    for ip in ["1.1.1.1", "2.2.2.2", "3.3.3.3"] {
-        fake.push_ip("a.example.com", ip, Outcome::Error("dead ip".into()));
-    }
-    fake.push("b.example.com", sse_ok(&["data: {\"ok\":1}\n\n"]));
-
-    let (status, _) = call(&engine, loopback(), "/v1/messages", vec![], body()).await;
-    assert_eq!(status, 200);
-
-    let runtime = runtime_of(&engine).await;
-    // 全死 IP 自然失败各记一条,随后跨入口 failover 成功。
-    assert_eq!(runtime.upstream_attempts, 4);
-    assert_eq!(runtime.upstream_failures, 3);
-    assert_eq!(runtime.upstream_successes, 1);
-    assert_eq!(runtime.failovers, 1);
-}
-
-// ---------------------------------------------------------------------------
-// 入站 OpenAI 兼容层(Codex 接入)+ UA 透传
-// ---------------------------------------------------------------------------
-
-fn anthropic_tool_sse() -> Vec<String> {
-    [
-        r#"{"type":"message_start","message":{"id":"msg_1","model":"claude-up","usage":{"input_tokens":5}}}"#,
-        r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
-        r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"running"}}"#,
-        r#"{"type":"content_block_stop","index":0}"#,
-        r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"shell","input":{}}}"#,
-        r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"cmd\":[\"ls\"]}"}}"#,
-        r#"{"type":"content_block_stop","index":1}"#,
-        r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":9}}"#,
-        r#"{"type":"message_stop"}"#,
-    ]
-    .map(|data| format!("data: {data}\n\n"))
-    .to_vec()
-}
-
-#[tokio::test]
 async fn responses_inbound_bridges_tools_and_passes_client_ua() {
     let fake = FakeTransport::new();
     let chunks = anthropic_tool_sse();
@@ -4572,6 +4396,7 @@ async fn auto_endpoint_sends_raw_responses_body_natively() {
         context: ContextMode::Standard,
         failover_timeout_seconds: None,
         thinking: ThinkingMode::Adaptive,
+        effort: None,
         upstream_model: String::new(),
         capabilities: Vec::new(),
     }];
@@ -5063,6 +4888,7 @@ fn native_passthrough_config(pattern: &str) -> AppConfig {
         context: ContextMode::Standard,
         failover_timeout_seconds: None,
         thinking: ThinkingMode::Passthrough,
+        effort: None,
         upstream_model: String::new(),
         capabilities: Vec::new(),
     });
@@ -5567,6 +5393,7 @@ async fn events_separate_logical_model_from_upstream_alias() {
             context: ContextMode::Standard,
             failover_timeout_seconds: None,
             thinking: ThinkingMode::Passthrough,
+            effort: None,
             upstream_model: "provider-luna".into(),
             capabilities: Vec::new(),
         }];
@@ -5652,6 +5479,7 @@ async fn native_adapter_applies_endpoint_model_alias() {
         context: ContextMode::Standard,
         failover_timeout_seconds: None,
         thinking: ThinkingMode::Passthrough,
+        effort: None,
         upstream_model: "provider-terra".into(),
         capabilities: Vec::new(),
     }];
@@ -5714,6 +5542,7 @@ async fn native_adapter_applies_rule_then_endpoint_model_mapping() {
         context: ContextMode::Standard,
         failover_timeout_seconds: None,
         thinking: ThinkingMode::Passthrough,
+        effort: None,
         upstream_model: "provider-luna".into(),
         capabilities: Vec::new(),
     }];

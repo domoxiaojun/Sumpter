@@ -9,9 +9,7 @@ struct EndpointDisplayRow: Identifiable, Hashable {
     let protocolName: String
     let enabled: Bool
     let apiKey: String
-    let pinnedIPs: [String]
     let priority: Int
-    let pinnedIPExclusive: Bool
     let stickyGroup: String?
     let keepAlive: Bool
     let mappingCount: Int
@@ -24,9 +22,7 @@ struct EndpointDisplayRow: Identifiable, Hashable {
         protocolName = endpoint.protocolMode.rawValue
         enabled = endpoint.enabled
         apiKey = endpoint.apiKey
-        pinnedIPs = endpoint.pinnedIPs
         priority = endpoint.priority
-        pinnedIPExclusive = endpoint.pinnedIPExclusive
         stickyGroup = endpoint.stickyGroup
         keepAlive = endpoint.keepAlive
         mappingCount = endpoint.mappings.count
@@ -36,10 +32,7 @@ struct EndpointDisplayRow: Identifiable, Hashable {
     var statusText: String { enabled ? "启用" : "停用" }
     var keyStatusText: String { apiKey.isEmpty ? "未配置" : "已配置" }
     var keyTailText: String { apiKey.isEmpty ? "未配置" : "..." + String(apiKey.suffix(4)) }
-    var pinnedIPsText: String { pinnedIPs.joined(separator: ", ") }
     var priorityText: String { String(priority) }
-    /// pin 且真填了 IP 才算源站直连,与出口实际行为一致。
-    var pinModeText: String { pinnedIPExclusive && !pinnedIPs.isEmpty ? "源站直连" : "域名解析" }
     var stickyGroupText: String { stickyGroup ?? "入口 ID（独立组）" }
     var keepAliveText: String { keepAlive ? "启用" : "关闭" }
     var protocolDisplayName: String {

@@ -7,12 +7,111 @@ use sumpter_macos_adapter::server;
 use tokio::io::AsyncWriteExt;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
+#[tokio::test]
+async fn legacy_fixed_ips_do_not_duplicate_live_posts_and_new_captures_omit_ip() {
+    use axum::http::{HeaderMap, Method, StatusCode, Uri};
+    use bytes::Bytes;
+    use std::time::Duration;
+    use sumpter_engine::outbound::ReqwestTransport;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let authority = format!("localhost:{port}");
+    let base_url = format!("http://{authority}");
+    let (sent, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let app = axum::Router::new().fallback(
+        move |method: Method, uri: Uri, headers: HeaderMap, body: Bytes| {
+            let sent = sent.clone();
+            async move {
+                sent.send((method, uri, headers, body)).unwrap();
+                // Leave headers pending so any competing POST reaches the server.
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                (
+                    StatusCode::CREATED,
+                    [
+                        ("content-type", "application/sdp"),
+                        ("location", "/v1/live/call-once"),
+                    ],
+                    "v=0\r\na=answer\r\n",
+                )
+            }
+        },
+    );
+    let upstream = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let mut legacy = serde_json::to_value(config()).unwrap();
+    legacy["endpoints"][0]["baseURL"] = serde_json::json!(base_url);
+    legacy["endpoints"][0]["pinnedIPs"] = serde_json::json!(["127.0.0.1", "127.0.0.2"]);
+    legacy["endpoints"][0]["pinnedIPExclusive"] = serde_json::json!(false);
+    legacy["retry"]["pinnedIPConcurrency"] = serde_json::json!(3);
+    legacy["retry"]["sessionStickyRetries"] = serde_json::json!(2);
+    let config = AppConfig::from_json(&legacy.to_string())
+        .unwrap()
+        .normalized();
+    let engine = Engine::new(
+        config,
+        None,
+        Arc::new(ReqwestTransport::new()),
+        String::new(),
+    );
+    engine.set_diagnostic_capture(true, Some(1024 * 1024));
+    let (address, handle) = server::serve(engine.clone(), "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap();
+    let response = client
+        .post(format!("http://{address}/v1/live"))
+        .bearer_auth("listener-secret")
+        .header("Content-Type", "application/sdp")
+        .body("v=0\r\na=offer\r\n")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(response.text().await.unwrap(), "v=0\r\na=answer\r\n");
+
+    let (method, uri, headers, body) = received.try_recv().unwrap();
+    assert_eq!(method, Method::POST);
+    assert_eq!(uri.path(), "/v1/live");
+    assert_eq!(headers["host"], authority);
+    assert_eq!(body.as_ref(), b"v=0\r\na=offer\r\n");
+    assert!(matches!(
+        received.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+    let runtime = engine.runtime_snapshot();
+    assert_eq!(runtime.upstream_attempts, 1);
+    assert_eq!(runtime.upstream_successes, 1);
+    assert_eq!(runtime.upstream_failures, 0);
+    assert_eq!(runtime.failovers, 0);
+    assert_eq!(
+        runtime
+            .recent_events
+            .iter()
+            .filter(|event| event.kind == "upstream")
+            .count(),
+        1
+    );
+    let capture = engine.diagnostic_capture_snapshot();
+    assert_eq!(capture.records.len(), 1);
+    assert_eq!(capture.records[0].attempts.len(), 1);
+    let attempt = serde_json::to_value(&capture.records[0].attempts[0]).unwrap();
+    assert!(attempt.get("pinnedIP").is_none());
+    assert!(attempt.get("pinnedIp").is_none());
+
+    handle.abort();
+    upstream.abort();
+}
+
 fn config() -> AppConfig {
     AppConfig::from_json(
         r#"{
           "schemaVersion": 6,
           "listener": {"host":"127.0.0.1", "port":0, "authToken":"listener-secret"},
-          "retry": {"maxDeferredRounds":0, "sessionStickyRetries":0, "pinnedIPConcurrency":1},
+          "retry": {"maxDeferredRounds":0, "sessionStickyRetries":0},
           "endpoints": [{"id":"openai", "name":"OpenAI", "baseURL":"https://provider.invalid", "apiKey":"provider-key", "protocol":"openai-responses", "enabled":true,
              "mappings":[{"clientPattern":"gpt-4o", "upstreamModel":"gpt-4o-mini", "capabilities":["live"]}, {"clientPattern":"gpt-live-1-codex", "upstreamModel":"gpt-live-1-codex"}, {"clientPattern":"gpt-realtime", "upstreamModel":"gpt-realtime"}, {"clientPattern":"grok-imagine-video", "upstreamModel":"grok-imagine-video"}, {"clientPattern":"gpt-image-2", "upstreamModel":"gpt-image-2"}, {"clientPattern":"file-*", "upstreamModel":"file-*", "capabilities":["files"]}] }]
         }"#,

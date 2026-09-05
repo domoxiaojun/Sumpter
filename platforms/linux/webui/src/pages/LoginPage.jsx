@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext.jsx';
 import { Icon } from '../utils/icons.jsx';
-import donkeyHead from '../assets/donkey-head.svg';
+import donkeyHead from '../assets/donkey-logo.png';
 
 export function LoginPage() {
   const { login } = useApp();

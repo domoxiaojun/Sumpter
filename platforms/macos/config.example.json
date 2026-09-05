@@ -15,8 +15,7 @@
     "streamIdleTimeoutSeconds": null,
     "sessionStickyRetries": 2,
     "maxDeferredRounds": 0,
-    "maxRetryDurationSeconds": 0,
-    "pinnedIPConcurrency": 3
+    "maxRetryDurationSeconds": 0
   },
   "featureRules": [
     {
@@ -63,8 +62,6 @@
       "protocol": "auto",
       "enabled": false,
       "apiKey": "sk-test-main-replace-me",
-      "pinnedIPs": [],
-      "pinnedIPExclusive": false,
       "stickyGroup": "example-main",
       "mappings": [
         {
@@ -82,8 +79,6 @@
       "protocol": "auto",
       "enabled": false,
       "apiKey": "sk-test-fallback-replace-me",
-      "pinnedIPs": [],
-      "pinnedIPExclusive": false,
       "priority": 10,
       "mappings": [
         {
@@ -98,20 +93,24 @@
           "thinking": "disabled",
           "context": "oneMillion"
         },
-          {
-            "clientPattern": "gpt-live-1-codex",
-            "upstreamModel": "gpt-live-1-codex",
-            "capabilities": ["live"],
-            "thinking": "passthrough",
-            "context": "standard"
-          },
-          {
-            "clientPattern": "gpt-realtime",
-            "upstreamModel": "gpt-realtime",
-            "capabilities": ["live"],
-            "thinking": "passthrough",
-            "context": "standard"
-          }
+        {
+          "clientPattern": "gpt-live-1-codex",
+          "upstreamModel": "gpt-live-1-codex",
+          "capabilities": [
+            "live"
+          ],
+          "thinking": "passthrough",
+          "context": "standard"
+        },
+        {
+          "clientPattern": "gpt-realtime",
+          "upstreamModel": "gpt-realtime",
+          "capabilities": [
+            "live"
+          ],
+          "thinking": "passthrough",
+          "context": "standard"
+        }
       ]
     }
   ]

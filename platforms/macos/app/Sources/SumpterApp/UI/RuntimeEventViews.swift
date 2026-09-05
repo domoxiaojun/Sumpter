@@ -1333,7 +1333,7 @@ private struct RuntimeEventDetail: View {
                 if !friendly.isEmpty {
                     InfoRow(title: "摘要", value: friendly)
                 } else if rawEngineMessage.isEmpty {
-                    InfoRow(title: "摘要", value: "无(仅错误、IP 直连、桥接或上游重跑时记录)", muted: true)
+                    InfoRow(title: "摘要", value: "无(仅错误、桥接或上游重跑时记录)", muted: true)
                 }
             }
 

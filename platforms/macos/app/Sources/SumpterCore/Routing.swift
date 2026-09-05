@@ -47,8 +47,6 @@ public struct PlannedEndpoint: Equatable, Sendable, Identifiable {
     public var sourceFormat: ProviderProtocol
     public var providerProtocol: ProviderProtocol
     public var upstreamModel: String
-    public var pinnedIPs: [String]
-    public var pinnedIPExclusive: Bool
     /// 同组入口共享会话粘性;nil = 使用入口 id 作为独立组并参与统一 Provider 分流。
     public var stickyGroup: String?
     public var thinking: ThinkingMode
@@ -69,8 +67,6 @@ public struct PlannedEndpoint: Equatable, Sendable, Identifiable {
         sourceFormat: ProviderProtocol = .anthropic,
         providerProtocol: ProviderProtocol,
         upstreamModel: String,
-        pinnedIPs: [String] = [],
-        pinnedIPExclusive: Bool = false,
         stickyGroup: String? = nil,
         thinking: ThinkingMode,
         context: ContextMode,
@@ -85,8 +81,6 @@ public struct PlannedEndpoint: Equatable, Sendable, Identifiable {
         self.sourceFormat = sourceFormat
         self.providerProtocol = providerProtocol
         self.upstreamModel = upstreamModel
-        self.pinnedIPs = pinnedIPs
-        self.pinnedIPExclusive = pinnedIPExclusive
         self.stickyGroup = stickyGroup
         self.thinking = thinking
         self.context = context
@@ -107,8 +101,6 @@ public struct PlannedEndpoint: Equatable, Sendable, Identifiable {
         sourceFormat: ProviderProtocol = .anthropic,
         providerProtocol: ProviderProtocol,
         upstreamModel: String,
-        pinnedIPs: [String] = [],
-        pinnedIPExclusive: Bool = false,
         stickyGroup: String? = nil,
         thinking: ThinkingMode,
         context: ContextMode,
@@ -124,8 +116,6 @@ public struct PlannedEndpoint: Equatable, Sendable, Identifiable {
             sourceFormat: sourceFormat,
             providerProtocol: providerProtocol,
             upstreamModel: upstreamModel,
-            pinnedIPs: pinnedIPs,
-            pinnedIPExclusive: pinnedIPExclusive,
             stickyGroup: stickyGroup,
             thinking: thinking,
             context: context,
@@ -652,8 +642,6 @@ public struct RoutePlanner {
                     sourceFormat: sourceFormat,
                     providerProtocol: providerProtocol,
                     upstreamModel: upstream,
-                    pinnedIPs: endpoint.pinnedIPs,
-                    pinnedIPExclusive: endpoint.pinnedIPExclusive,
                     stickyGroup: endpoint.stickyGroup,
                     thinking: mapping?.thinking ?? .adaptive,
                     context: mapping?.context ?? .oneMillion,

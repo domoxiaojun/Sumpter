@@ -361,7 +361,7 @@ public enum RuntimeEventPresentation {
             for segment in message.components(separatedBy: "; ") {
                 let mapped = mapSegment(segment, kind: kind)
                 // 新事件由 failureKind 给出唯一失败摘要；message 里的旧错误 token 仅为
-                // 向后兼容，避免“连接失败 · 连接失败”重复。IP/桥接/轮数等信息仍保留。
+                // 向后兼容，避免“连接失败 · 连接失败”重复。桥接/轮数等信息仍保留。
                 if !mapped.text.isEmpty, structuredFailure == nil || !mapped.explainsFailure {
                     parts.append(mapped.text)
                 }
@@ -374,8 +374,7 @@ public enum RuntimeEventPresentation {
             parts.insert(structuredFailure, at: 0)
             explainsFailure = true
         }
-        // 失败行没有任何错误解释时按状态码合成一段——「消息列全空」的治本兜底:
-        // 引擎对可重试状态只记 pinned 等信息 token,状态本身在这里翻译。
+        // 失败行没有任何错误解释时按状态码合成一段——「消息列全空」的治本兜底。
         if effectiveStatusCode >= 400, !explainsFailure {
             parts.insert("上游返回 \(effectiveStatusCode)\(statusCodeHint(effectiveStatusCode))", at: 0)
         } else if outcome == .failed, !explainsFailure {
@@ -451,8 +450,9 @@ public enum RuntimeEventPresentation {
         }
 
         // —— 现行词表(rust/specs/spec-engine.md §5.1)——
+        // 历史事件可能带有已移除的固定 IP token；不在新的运行详情中展示。
         if segment.hasPrefix("pinned ") {
-            return info("IP 直连 " + String(segment.dropFirst("pinned ".count)))
+            return info("")
         }
         if segment.hasPrefix("passthrough ") {
             // This is a routing token, not an outcome. The final result label
@@ -552,7 +552,7 @@ public enum RuntimeEventPresentation {
     public enum MessageSeverity: Sendable {
         /// 无消息:一次打通,消息列显示 `-`。
         case none
-        /// 中性补充信息(IP 直连、桥接、上游重跑 1-2 轮…)。
+        /// 中性补充信息(桥接、上游重跑 1-2 轮…)。
         case info
         /// 成功但有代价,或明确的失败。
         case warning

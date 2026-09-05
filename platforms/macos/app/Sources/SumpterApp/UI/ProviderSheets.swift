@@ -13,9 +13,7 @@ struct ProviderAccountEditorSheet: View {
     @State private var protocolName: String
     @State private var enabled: Bool
     @State private var apiKey: String
-    @State private var pinnedIPs: String
     @State private var priorityText: String
-    @State private var pin: Bool
     @State private var stickyGroup: String
     @State private var keepAlive: Bool
     @State private var submission = SubmissionState.idle
@@ -37,9 +35,7 @@ struct ProviderAccountEditorSheet: View {
         _protocolName = State(initialValue: row?.protocolName ?? EndpointProtocolMode.auto.rawValue)
         _enabled = State(initialValue: row?.enabled ?? true)
         _apiKey = State(initialValue: row?.apiKey ?? "")
-        _pinnedIPs = State(initialValue: row?.pinnedIPsText ?? "")
         _priorityText = State(initialValue: row?.priorityText ?? "0")
-        _pin = State(initialValue: row?.pinnedIPExclusive ?? false)
         _stickyGroup = State(initialValue: row?.stickyGroup ?? "")
         // 新入口默认开启；编辑已有入口时保留磁盘中的显式值。
         _keepAlive = State(initialValue: row?.keepAlive ?? true)
@@ -112,26 +108,6 @@ struct ProviderAccountEditorSheet: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                Divider()
-                FormLine(title: "Pinned IPs") {
-                    VStack(alignment: .leading, spacing: 2) {
-                        TextField("可空，逗号分隔", text: $pinnedIPs)
-                        Text("填了就会优先按这些 IP 直连（TLS SNI 仍是域名）；是否回落 DNS 由下面的开关决定。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                FormLine(title: "源站直连") {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Toggle("启用 IP pin", isOn: $pin)
-                            .labelsHidden()
-                        Text(pin && pinnedIPs.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            ? "没填 IP，仍会走域名解析。"
-                            : "开启 = 只走上面的 IP，不回落 DNS；关闭 = IP 与 DNS 一起竞速。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
                 FormLine(title: "粘性分组") {
                     VStack(alignment: .leading, spacing: 2) {
                         TextField("留空则使用入口 ID 作为独立粘性组", text: $stickyGroup)
@@ -193,9 +169,7 @@ struct ProviderAccountEditorSheet: View {
                         protocolName: protocolName,
                         enabled: enabled,
                         apiKey: apiKey,
-                        pinnedIPsText: pinnedIPs,
                         priority: priority,
-                        pin: pin,
                         stickyGroup: stickyGroup,
                         keepAlive: keepAlive
                     )
@@ -207,9 +181,7 @@ struct ProviderAccountEditorSheet: View {
                         protocolName: protocolName,
                         enabled: enabled,
                         apiKey: apiKey,
-                        pinnedIPsText: pinnedIPs,
                         priority: priority,
-                        pin: pin,
                         stickyGroup: stickyGroup,
                         keepAlive: keepAlive
                     )
