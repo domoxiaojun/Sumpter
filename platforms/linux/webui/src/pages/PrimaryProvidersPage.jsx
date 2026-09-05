@@ -6,17 +6,13 @@ import { QuickToggle } from '../components/QuickToggle.jsx';
 import { StatusBadge } from '../components/StatusBadge.jsx';
 import { Icon } from '../utils/icons.jsx';
 import { api } from '../services/api.js';
-import { clone, parseList, formatTimestamp } from '../utils/helpers.js';
+import { clone, formatTimestamp } from '../utils/helpers.js';
 import { ENDPOINT_PROTOCOL_MODES, endpointProtocolLabel, normalizeEndpointProtocol } from '../utils/protocols.js';
 
 function endpointMappings(endpoint) {
   return endpoint?.modelMappings || endpoint?.mappings || [];
 }
 
-function endpointPinnedIPs(endpoint) {
-  if (Array.isArray(endpoint?.pinnedIPs)) return endpoint.pinnedIPs.filter(Boolean).map(String);
-  return parseList(endpoint?.pinnedIP);
-}
 
 // Keep catalog IDs aligned with the Rust model-name parser before matching or
 // persisting a mapping. Catalogs may expose reasoning/context suffixes; those
@@ -598,7 +594,6 @@ export function PrimaryProvidersPage() {
     let stickyRetries = retry.sessionStickyRetries ?? 2;
     let maxRounds = retry.maxDeferredRounds ?? retry.crossRoundRetries ?? 3;
     let maxDuration = retry.maxRetryDurationSeconds ?? 0;
-    let pinnedIPConcurrency = retry.pinnedIPConcurrency ?? 3;
     let max500Retries = retry.max500Retries ?? 0;
     let failoverOn500 = retry.failoverOn500 ?? true;
     let retryDelaySeconds = retry.retryDelaySeconds ?? '';
@@ -722,19 +717,6 @@ export function PrimaryProvidersPage() {
               />
               <span className="form-hint">超时后停止重试并返回最后错误。</span>
             </div>
-
-            <div className="form-group">
-              <label className="form-label">固定 IP 并发</label>
-              <input
-                type="number"
-                min="1"
-                step="1"
-                className="form-input"
-                defaultValue={pinnedIPConcurrency}
-                onChange={(e) => { pinnedIPConcurrency = Number(e.target.value); }}
-              />
-              <span className="form-hint">固定 IP 入口同时参与连接竞速的地址数。</span>
-            </div>
           </div>
         </div>
       ),
@@ -749,7 +731,6 @@ export function PrimaryProvidersPage() {
             const stickyRetriesNumber = Number(stickyRetries);
             const maxRoundsNumber = Number(maxRounds);
             const maxDurationNumber = Number(maxDuration);
-            const pinnedIPConcurrencyNumber = Number(pinnedIPConcurrency);
             const max500RetriesNumber = Number(max500Retries);
             const retryDelaySecondsNumber = retryDelaySeconds == null || retryDelaySeconds === '' ? null : Number(retryDelaySeconds);
             if ((responseTimeoutNumber != null && (!Number.isFinite(responseTimeoutNumber) || responseTimeoutNumber <= 0))
@@ -761,9 +742,8 @@ export function PrimaryProvidersPage() {
               || (retryDelaySecondsNumber != null && (!Number.isFinite(retryDelaySecondsNumber) || retryDelaySecondsNumber <= 0))
               || !Number.isInteger(stickyRetriesNumber) || stickyRetriesNumber < 0
               || !Number.isInteger(maxRoundsNumber) || maxRoundsNumber < 0
-              || !Number.isFinite(maxDurationNumber) || maxDurationNumber < 0
-              || !Number.isInteger(pinnedIPConcurrencyNumber) || pinnedIPConcurrencyNumber < 1) {
-              addToast('入口内 500 重试、故障轮数和粘性重试必须是非负整数；retry_delay 秒数和超时必须大于 0；IP 并发至少为 1', 'warning');
+              || !Number.isFinite(maxDurationNumber) || maxDurationNumber < 0) {
+              addToast('入口内 500 重试、故障轮数和粘性重试必须是非负整数；retry_delay 秒数和超时必须大于 0', 'warning');
               return true;
             }
             const nextConfig = clone(config);
@@ -777,7 +757,6 @@ export function PrimaryProvidersPage() {
               sessionStickyRetries: stickyRetriesNumber,
               maxDeferredRounds: maxRoundsNumber,
               maxRetryDurationSeconds: maxDurationNumber,
-              pinnedIPConcurrency: pinnedIPConcurrencyNumber,
             };
             await saveConfig(nextConfig);
             return false;
@@ -816,8 +795,6 @@ export function PrimaryProvidersPage() {
     // 新入口默认开启；编辑已有入口时严格保留其显式配置（缺省旧配置仍为关闭）。
     let keepAlive = isNew ? true : endpoint?.keepAlive === true;
     let stickyGroup = endpoint?.stickyGroup || '';
-    let pinnedIPs = endpointPinnedIPs(endpoint);
-    let pinnedIPExclusive = endpoint?.pinnedIPExclusive === true;
     let modelMappings = clone(endpointMappings(endpoint));
     let apiKeyTouched = false;
 
@@ -923,27 +900,9 @@ export function PrimaryProvidersPage() {
           </div>
 
           <div className="form-group">
-            <label className="form-label">Pinned IPs（可多值）</label>
-            <textarea
-              className="form-input"
-              rows="2"
-              defaultValue={pinnedIPs.join('\n')}
-              placeholder="可选，每行或逗号分隔一个 IPv4/IPv6 地址"
-              onChange={(e) => { pinnedIPs = parseList(e.target.value); }}
-            />
-            <span className="form-hint">TLS SNI 仍使用 API 地址的域名；多个地址按运行时策略尝试。</span>
-          </div>
-
-          <div className="grid-2col">
-            <div className="form-group">
-              <label className="form-label">Pinned IP 出口模式</label>
-              <LocalToggle initial={pinnedIPExclusive} onChange={(value) => { pinnedIPExclusive = value; }} label={(value) => (value ? '仅固定 IP' : '固定 IP 优先，允许回落 DNS')} ariaLabel="切换固定 IP 出口模式" />
-            </div>
-            <div className="form-group">
-              <label className="form-label">粘性分组</label>
-              <input type="text" className="form-input" defaultValue={stickyGroup} placeholder="留空 = 入口独立分组" onChange={(e) => { stickyGroup = e.target.value; }} />
-              <span className="form-hint">同一分组共享会话粘性；当前分组故障后再故障转移到其他分组。</span>
-            </div>
+            <label className="form-label">粘性分组</label>
+            <input type="text" className="form-input" defaultValue={stickyGroup} placeholder="留空 = 入口独立分组" onChange={(e) => { stickyGroup = e.target.value; }} />
+            <span className="form-hint">同一分组共享会话粘性；当前分组故障后再故障转移到其他分组。</span>
           </div>
 
           <div className="grid-2col">
@@ -1014,8 +973,6 @@ export function PrimaryProvidersPage() {
                 baseURL: baseURL.trim(),
                 protocol: normalizeEndpointProtocol(protocol, 'auto'),
                 priority: Number(priority),
-                pinnedIPs,
-                pinnedIPExclusive,
                 stickyGroup: stickyGroup.trim() || null,
                 keepAlive,
                 enabled,
@@ -1032,8 +989,6 @@ export function PrimaryProvidersPage() {
                 target.enabled = enabled;
                 target.keepAlive = keepAlive;
                 target.stickyGroup = stickyGroup.trim() || null;
-                target.pinnedIPs = pinnedIPs;
-                target.pinnedIPExclusive = pinnedIPExclusive;
                 target.modelMappings = modelMappings;
                 if (apiKeyTouched) secretUpdates[endpoint.id] = apiKey.trim();
               }
@@ -1052,6 +1007,7 @@ export function PrimaryProvidersPage() {
     let fromModel = mappingClient(mapping);
     let toModel = mappingUpstream(mapping);
     let thinking = mapping?.thinking || 'disable';
+    let effort = mapping?.effort || 'auto';
     let context = mapping?.context || 'passThrough';
     let failoverTimeout = mapping?.failoverTimeoutSeconds ?? '';
 
@@ -1090,6 +1046,17 @@ export function PrimaryProvidersPage() {
                 <option value="passThrough">透传 (PassThrough)</option>
                 <option value="disable">禁用 (Disable)</option>
               </select>
+              {thinking === 'adaptive' && (
+                <>
+                  <label className="form-label" style={{ marginTop: 8 }}>思考级别覆盖</label>
+                  <select className="form-select" defaultValue={effort} onChange={(e) => { effort = e.target.value; }}>
+                    <option value="auto">自动（跟随客户端）</option>
+                    <option value="low">Low</option><option value="medium">Medium</option>
+                    <option value="high">High</option><option value="xhigh">Xhigh</option>
+                    <option value="max">Max</option><option value="ultra">Ultra</option>
+                  </select>
+                </>
+              )}
             </div>
             <div className="form-group">
               <label className="form-label">上下文 (Context)</label>
@@ -1146,6 +1113,7 @@ export function PrimaryProvidersPage() {
               from: fromModel.trim(),
               to: toModel.trim(),
               thinking,
+              ...(thinking === 'adaptive' && effort !== 'auto' ? { effort } : {}),
               context,
               ...(failoverTimeoutNumber == null ? {} : { failoverTimeoutSeconds: failoverTimeoutNumber }),
             };
@@ -1385,7 +1353,6 @@ export function PrimaryProvidersPage() {
             <div>retry_delay 透传：<strong className="mono-cell">{(retry.passThroughRetryDelay ?? true) ? (retry.retryDelaySeconds ? `${retry.retryDelaySeconds}s` : '未配置') : '关闭'}</strong></div>
             <div>粘性入口重试：<strong className="mono-cell">{retry.sessionStickyRetries ?? 2} 次</strong></div>
             <div>故障重试最大轮数：<strong className="mono-cell">{retry.maxDeferredRounds ?? retry.crossRoundRetries ?? 3} 轮</strong></div>
-            <div>固定 IP 并发：<strong className="mono-cell">{retry.pinnedIPConcurrency ?? 3}</strong></div>
             <div>跨轮最长时长：<strong className="mono-cell">{retry.maxRetryDurationSeconds ? `${retry.maxRetryDurationSeconds}s` : '不限时长'}</strong></div>
           </div>
         </div>
@@ -1585,9 +1552,7 @@ export function PrimaryProvidersPage() {
             <div><span style={{ color: 'var(--text-muted)' }}>API 地址：</span><span className="mono-cell">{selectedEndpoint.baseURL}</span></div>
             <div><span style={{ color: 'var(--text-muted)' }}>API Key：</span><span className={secretStatus?.endpoints?.[selectedEndpoint.id]?.configured ? 'provider-secret-configured' : 'provider-secret-missing'}>{secretStatus?.endpoints?.[selectedEndpoint.id]?.configured ? `已配置 · 尾号 ${secretStatus.endpoints[selectedEndpoint.id].last4 || '****'}` : '未配置'}</span></div>
             <div><span style={{ color: 'var(--text-muted)' }}>入口协议：</span><span className="mono-cell">{endpointProtocolLabel(selectedEndpoint.protocol)}</span></div>
-            <div><span style={{ color: 'var(--text-muted)' }}>Pinned IPs：</span><span className="mono-cell">{endpointPinnedIPs(selectedEndpoint).join(', ') || '自动 DNS'}</span></div>
             <div><span style={{ color: 'var(--text-muted)' }}>粘性分组：</span><span className="mono-cell">{selectedEndpoint.stickyGroup || '独立分组'}</span></div>
-            <div><span style={{ color: 'var(--text-muted)' }}>出口模式：</span><span className="mono-cell">{selectedEndpoint.pinnedIPExclusive ? '仅固定 IP' : '允许 DNS 回落'}</span></div>
             <div><span style={{ color: 'var(--text-muted)' }}>连接复用：</span><span className="mono-cell">{selectedEndpoint.keepAlive ? '开启' : '关闭'}</span></div>
           </div>
 

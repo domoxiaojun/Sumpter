@@ -4,7 +4,6 @@
 use serde::{Deserialize, Serialize};
 
 /// CPA / CLIProxyAPI 兼容的 reasoning effort 档位(模型名后缀 `model(high)`)。
-/// `ultra` 故意不在列表中。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ReasoningEffort {
@@ -16,6 +15,7 @@ pub enum ReasoningEffort {
     High,
     Xhigh,
     Max,
+    Ultra,
 }
 
 impl ReasoningEffort {
@@ -29,6 +29,7 @@ impl ReasoningEffort {
             "high" => Some(Self::High),
             "xhigh" => Some(Self::Xhigh),
             "max" => Some(Self::Max),
+            "ultra" => Some(Self::Ultra),
             _ => None,
         }
     }
@@ -43,6 +44,7 @@ impl ReasoningEffort {
             Self::High => "high",
             Self::Xhigh => "xhigh",
             Self::Max => "max",
+            Self::Ultra => "ultra",
         }
     }
 }
@@ -132,7 +134,7 @@ mod tests {
     fn keeps_unknown_parens_and_brackets() {
         assert_eq!(clean("model(custom)"), "model(custom)");
         assert_eq!(reasoning_effort("model(custom)"), None);
-        assert_eq!(clean("model(ultra)"), "model(ultra)");
+        assert_eq!(clean("model(ultra)"), "model");
         // `[..]` 只剥最尾部一段。
         assert_eq!(clean("a[x]b"), "a[x]b");
         assert_eq!(clean("model[beta][1m]"), "model[beta]");

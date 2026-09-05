@@ -98,11 +98,6 @@ fn append_endpoint_warnings(endpoint: &Endpoint, risks: &mut Vec<String>) {
         // 空 key 是合法用法(本地 LLM / 内网无鉴权上游),但多数情况是漏填,故仍提示。
         risks.push(format!("{id} 未配置 API Key(将以无鉴权方式转发)。"));
     }
-    if endpoint.pinned_ip_exclusive && endpoint.pinned_ips.is_empty() {
-        risks.push(format!(
-            "{id} 开了源站直连但没填 Pinned IP，仍会走域名解析。"
-        ));
-    }
     let mut seen = std::collections::HashSet::new();
     for mapping in &endpoint.mappings {
         let client = model_name::clean(&mapping.client_pattern);
@@ -254,8 +249,6 @@ mod tests {
             keep_alive: false,
             mappings: vec![],
             name: id.into(),
-            pinned_ip_exclusive: false,
-            pinned_ips: vec![],
             priority: 0,
             protocol: EndpointProtocolMode::Anthropic,
             sticky_group: None,
@@ -270,6 +263,7 @@ mod tests {
                     context: ContextMode::OneMillion,
                     failover_timeout_seconds: None,
                     thinking: ThinkingMode::Adaptive,
+                    effort: None,
                     upstream_model: String::new(),
                     capabilities: Vec::new(),
                 }],
@@ -399,6 +393,7 @@ mod tests {
             context: ContextMode::Standard,
             failover_timeout_seconds: None,
             thinking: ThinkingMode::Disabled,
+            effort: None,
             upstream_model: "x".into(),
             capabilities: Vec::new(),
         });
