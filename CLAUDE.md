@@ -88,7 +88,7 @@ apps/<platform>/sumpterd → adapters/<platform> → sumpter-engine → sumpter-
 3. CIDR + `listener.authToken` 鉴权先于读 body（`MAX_BODY_BYTES` = 64 MiB），拒绝的请求不会被迫分配 payload。
 4. `RoutePlanner`（`core/routing.rs`）按 `mappings.clientPattern` + `featureRules` 选入口，产出 `PlannedEndpoint`（含 `source_format` / `protocol` / `RouteMode::Native|Translated`）。匹配不到任何启用入口 → 400。
 5. 同一会话尽量粘在同一 `stickyGroup`；组内先按 `sessionStickyRetries` 重试，再换组，换组成功即改绑（CAS 规则在 `core/scheduler.rs`）。
-6. 出站走 `outbound.rs`：pinned IP + SNI 分离（TCP 连 IP，SNI/证书校验/Host 用域名）、恒 TLS、不复用连接、http1 only、不跟随重定向、不走系统代理。
+6. 出站走 `outbound.rs`：按 Base URL 解析并连接，Host / TLS SNI / 证书校验名由 URL 决定；http1 only、不跟随重定向、不走系统代理。
 7. 需要转协议时走 `core/bridge.rs`（出站 Anthropic→OpenAI/Responses）与 `core/bridge_in.rs`（入站 OpenAI/Responses→Anthropic Messages）。
 8. 事件记账 → runtime SQLite。客户端断连 → 响应体流 drop → 上游请求与重试循环立刻撕停，`CompletionGuard` 补记 499（不计成功也不计失败）。
 
@@ -107,7 +107,7 @@ apps/<platform>/sumpterd → adapters/<platform> → sumpter-engine → sumpter-
 - **`USAGE.md` 与 `platforms/linux/USAGE.md` 是生成物**：改 `docs/usage-onboarding.md` + `docs/usage-path-matrix.json`，再 `uv run scripts/sync-usage-docs.py --write`。
 - **`platforms/linux/web/` 是构建产物**：改 UI 要动 `platforms/linux/webui/` 再 `npm run build`。
 - **两端 UI 对齐**：同名页面的信息层级、字段命名、状态语义保持一致；只在原生控件/布局需要时留差异。改统计或运行页时先对照另一端。
-- **根 workspace 通过 ≠ 发布链通过**：`platforms/linux/scripts/{assemble-shared-tree,cross-build,release-preflight}.sh` 和 `platforms/linux/.github/workflows/` 仍带独立发布树假设（发布时把 `platforms/linux/` 提升为包根）；根目录没有 `.github/`，这些 workflow 不会自动跑。
+- **根 workspace 通过 ≠ 发布链通过**：`platforms/linux/scripts/{assemble-shared-tree,cross-build,release-preflight}.sh` 和 `platforms/linux/.github/workflows/` 仍带独立发布树假设（发布时把 `platforms/linux/` 提升为包根）；根目录和 `platforms/linux/.github/` 都有 CI、容器与发布 workflow；后者仍带独立发布树假设，不会因根 workspace 通过而自动证明发布链。
 - **历史材料不是现行契约**：`docs/upstream/`（含旧 `kekulv-*` 路径）、`docs/code-review-2026-08-31.md`、`platforms/linux/CHANGELOG.md`。`plan.md` 和 `todos.md` 是按轮次追加的工作日志。
 - 运行时名字已硬切到 `sumpter`：配置目录、systemd 单元、发布包二进制 `sumpterd`、环境变量 `SUMPTER_*`、header `X-Sumpter-*`、导出格式 `sumpter-session-export-v1`。不要重新引入 `kekulv`，也不要改 `docs/upstream/` 和 CHANGELOG 里的历史条目。旧安装需卸载后重装。
 - 真实 `apiKey`、`authToken`、Admin 密码、Cookie、请求体和 raw 捕获不进 git / Issue / 聊天记录。`config.example.json` 只放 `enabled: false` 的合成入口和 `.invalid` 主机。不要在仓库里的 example 上原地填 key。

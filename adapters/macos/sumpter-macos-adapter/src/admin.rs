@@ -3,7 +3,7 @@
 //! 端点镜像 schema v5,设计参考 PLAN.md §5。
 
 use std::convert::Infallible;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::Router;
@@ -285,14 +285,7 @@ async fn fetch_provider_models_inner(
     {
         return Err("baseURL 仅支持不带凭据、query 或 fragment 的 HTTP(S) 地址".into());
     }
-    let host = base
-        .host_str()
-        .ok_or_else(|| "baseURL 缺少 host".to_string())?;
-    let port = base
-        .port()
-        .unwrap_or(if base.scheme() == "http" { 80 } else { 443 });
-    let pinned = probe_pinned_ips(endpoint)?;
-    let fallback_client = reqwest::Client::builder()
+    let client = reqwest::Client::builder()
         .use_rustls_tls()
         .http1_only()
         .redirect(reqwest::redirect::Policy::none())
@@ -307,77 +300,53 @@ async fn fetch_provider_models_inner(
     let paths = model_catalog_paths(&base);
     let deadline = std::time::Instant::now() + Duration::from_secs(12);
     'probes: for auth in provider_model_auth_sets(key) {
-        for pinned_ip in &pinned {
-            for path in &paths {
-                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-                if remaining.is_zero() {
-                    errors.push("整体超时，已停止尝试".into());
-                    break 'probes;
-                }
-                let mut url = base.clone();
-                url.set_path(path);
-                url.set_query(None);
-                url.set_fragment(None);
-                let client = if let Some(ip) = pinned_ip {
-                    let addr: SocketAddr = format!("{ip}:{port}")
-                        .parse()
-                        .or_else(|_| format!("[{ip}]:{port}").parse())
-                        .map_err(|_| format!("pinned IP 无效: {ip}"))?;
-                    reqwest::Client::builder()
-                        .use_rustls_tls()
-                        .http1_only()
-                        .redirect(reqwest::redirect::Policy::none())
-                        .tcp_nodelay(true)
-                        .no_proxy()
-                        .pool_max_idle_per_host(0)
-                        .connect_timeout(Duration::from_secs(2))
-                        .timeout(Duration::from_secs(3))
-                        .resolve(host, addr)
-                        .build()
-                        .map_err(|error| error.to_string())?
-                } else {
-                    fallback_client.clone()
-                };
-                let mut request = client.get(url.clone());
-                for (header, value) in crate::request_build::provider_probe_headers("") {
-                    request = request.header(header, value);
-                }
-                for (header, value) in &auth {
-                    request = request.header(*header, value.as_str());
-                }
-                request = request.timeout(remaining.min(Duration::from_secs(3)));
-                match request.send().await {
-                    Ok(response) if response.status() == StatusCode::OK => {
-                        if response
-                            .content_length()
-                            .is_some_and(|length| length > MAX_MODEL_CATALOG_BYTES as u64)
-                        {
-                            errors.push(format!(
-                                "{}: 响应过大(>{} KiB)",
-                                url.path(),
-                                MAX_MODEL_CATALOG_BYTES / 1024
-                            ));
-                            continue;
-                        }
-                        match read_model_catalog_body(response).await {
-                            Err(message) => errors.push(format!("{}: {message}", url.path())),
-                            Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
-                                Ok(value) => {
-                                    let models = extract_models(&value);
-                                    if !models.is_empty() {
-                                        return Ok((models, url.to_string()));
-                                    }
-                                    errors.push(format!("{}: 响应中没有模型", url.path()));
+        for path in &paths {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                errors.push("整体超时，已停止尝试".into());
+                break 'probes;
+            }
+            let mut url = base.clone();
+            url.set_path(path);
+            url.set_query(None);
+            url.set_fragment(None);
+            let mut request = client.get(url.clone());
+            for (header, value) in crate::request_build::provider_probe_headers("") {
+                request = request.header(header, value);
+            }
+            for (header, value) in &auth {
+                request = request.header(*header, value.as_str());
+            }
+            request = request.timeout(remaining.min(Duration::from_secs(3)));
+            match request.send().await {
+                Ok(response) if response.status() == StatusCode::OK => {
+                    if response
+                        .content_length()
+                        .is_some_and(|length| length > MAX_MODEL_CATALOG_BYTES as u64)
+                    {
+                        errors.push(format!(
+                            "{}: 响应过大(>{} KiB)",
+                            url.path(),
+                            MAX_MODEL_CATALOG_BYTES / 1024
+                        ));
+                        continue;
+                    }
+                    match read_model_catalog_body(response).await {
+                        Err(message) => errors.push(format!("{}: {message}", url.path())),
+                        Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
+                            Ok(value) => {
+                                let models = extract_models(&value);
+                                if !models.is_empty() {
+                                    return Ok((models, url.to_string()));
                                 }
-                                Err(error) => errors.push(format!("{}: JSON {error}", url.path())),
-                            },
-                        }
+                                errors.push(format!("{}: 响应中没有模型", url.path()));
+                            }
+                            Err(error) => errors.push(format!("{}: JSON {error}", url.path())),
+                        },
                     }
-                    Ok(response) => {
-                        errors.push(format!("{}: HTTP {}", url.path(), response.status()))
-                    }
-                    Err(error) => errors.push(format!("{}: {error}", url.path())),
                 }
+                Ok(response) => errors.push(format!("{}: HTTP {}", url.path(), response.status())),
+                Err(error) => errors.push(format!("{}: {error}", url.path())),
             }
         }
     }
@@ -396,33 +365,6 @@ async fn read_model_catalog_body(response: reqwest::Response) -> Result<Bytes, S
         body.extend_from_slice(&chunk);
     }
     Ok(Bytes::from(body))
-}
-
-fn probe_pinned_ips(
-    endpoint: &sumpter_core::config::Endpoint,
-) -> Result<Vec<Option<String>>, String> {
-    let mut values = Vec::new();
-    for raw in &endpoint.pinned_ips {
-        let ip = raw.trim();
-        if ip.is_empty() {
-            continue;
-        }
-        ip.parse::<IpAddr>()
-            .map_err(|_| format!("pinned IP 无效: {ip}"))?;
-        if !values
-            .iter()
-            .any(|item: &Option<String>| item.as_deref() == Some(ip))
-        {
-            values.push(Some(ip.to_string()));
-        }
-    }
-    if endpoint.pinned_ip_exclusive && values.is_empty() {
-        return Err("该入口启用了 pinned IP 独占，但没有可用 pinned IP".into());
-    }
-    if !endpoint.pinned_ip_exclusive || values.is_empty() {
-        values.push(None);
-    }
-    Ok(values)
 }
 
 fn model_catalog_paths(base: &reqwest::Url) -> Vec<String> {

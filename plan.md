@@ -1,5 +1,119 @@
 # 执行记录（2026-08-31 起）
 
+## 本轮：完整移除固定 IP / 源站直连（2026-09-05）
+
+上游统一按 Base URL 连接，Host / TLS SNI 由 URL 决定。移除固定 IP 配置、
+竞速与健康排序、双端模型探测分支和 UI；保留入口优先级、会话粘性、
+endpoint/model 冷却、500 策略和 Live 有限 401 重试。继续使用 schema v6，
+旧配置字段读取时忽略、保存时移除；历史诊断 pinnedIP 只保留可选读取能力。
+本轮不处理其它引擎审查项，不安装或发布应用。
+
+- [x] ✅ 1. 确认工作区边界、完整变更范围和旧配置读取规则，保留并行的图标/品牌改动。
+- [x] ✅ 2. 删除 Rust 配置、路由、传输和模型探测中的固定 IP 功能，保留历史诊断读取。
+- [x] ✅ 3. 清理 Linux WebUI 和 macOS Swift 配置、表单、展示与专用调度器。
+- [x] ✅ 4. 更新回归测试、示例配置和当前使用文档。
+- [x] ✅ 5. 通过 Rust fmt / workspace tests / clippy、WebUI 测试与构建、Swift 测试与构建、文档同步及链接检查。
+- [x] ✅ 6. 核对差异、静态资源与残留引用，记录最终验证结果。
+
+验证记录：`cargo fmt --all -- --check`、`cargo test --workspace --locked`（579 项）、
+`cargo clippy --workspace --all-targets --locked -- -D warnings`、WebUI `npm test`
+（121 项）与 `npm run build`、Swift `swift test --package-path platforms/macos/app`
+（177 项 XCTest + 34 项 Swift Testing）与 `swift build -c release --package-path platforms/macos/app`
+均通过；`uv run scripts/sync-usage-docs.py --check` 通过。当前文档执行
+`lychee --offline --no-progress`（排除 `docs/upstream/` 历史迁移资料）通过，65 个链接有效。
+静态资源引用为 `platforms/linux/web/assets/index-Cm2ibEqv.js`、
+`index-CPOSIoXM.css` 和 `donkey-logo-DumeRnor.png`；`git diff --check` 通过。
+源码残留仅保留旧配置清理、迁移/历史诊断读取兼容、历史文档和
+与固定 IP 无关的 `pinnedEndpoint` 路由语义。
+
+## 本轮：共享引擎模块化重构（2026-09-05）
+
+目标是降低 `crates/sumpter-engine/src/engine/mod.rs` 的单体复杂度，保持
+`Engine`、`PlatformBoundary`、Linux/macOS adapter 合同和现有协议行为不变。
+先在同一 crate 内按职责拆分，暂不新增 crate，也不改变 schema、SQLite 或 UI。
+
+- [x] ✅ 1. 冻结公开 API、建立私有模块边界并迁移共享状态/构造。
+- [x] ✅ 2. 迁移诊断抓包、runtime API 和生命周期/持久化编排。
+- [x] ✅ 3. 迁移入站协议解析、Live/Realtime/Video 会话和 WebSocket。
+- [x] ✅ 4. 迁移调度、重试、HTTP relay 与事件完成记账。
+- [x] ✅ 5. 整合 `mod.rs` facade，拆分测试并完成 Rust 验证。
+
+验证记录：共享引擎 `mod.rs` 从约 12,088 行收敛为约 115 行 facade；实现按
+`state/capture/runtime_api/lifecycle/inbound/context/protocol/payload/catalog/
+sessions/dispatch/http_relay/http_response/completion/failure/events/websocket`
+等模块组织，原有 adapter 公共方法保持不变。通过 `cargo fmt --all -- --check`、
+`cargo test --workspace --locked`（全 workspace 测试通过）、
+`cargo clippy --workspace --all-targets --locked -- -D warnings` 与
+`git diff --check`。新增 CompletionGuard 幂等/早期取消回归，既有 engine、
+Linux/macOS、replay 和 WebSocket 测试均通过。本轮不安装、不发布应用。
+
+实施约束：保留 body 鉴权顺序、Live/Realtime 必要模型归一化、每入口单请求、
+CompletionGuard Drop 取消语义、runtime/capture/session 锁顺序；混合工作区其他
+改动不纳入本轮。
+
+## 本轮：Runtime 存储与查询模块化（2026-09-05）
+
+目标是继续降低生产代码单体复杂度，优先处理 `sumpter-runtime` 中职责混杂的
+SQLite 存储与分析查询文件。保持公开函数签名、schema/projection 版本、worker
+线程模型、SQL 结果和现有数据语义不变；不修改 UI、配置 schema 或数据库格式。
+
+- [x] ✅ 1. 拆分 `runtime_store.rs` 的 schema/projection、worker、retention 和 session export 边界。
+- [x] ✅ 2. 拆分 `runtime_query.rs` 的事件、趋势、analytics、facets、导出和存储查询边界。
+- [x] ✅ 3. 保持私有接口闭合，补齐模块测试入口并核对公开 API 无变化。
+- [x] ✅ 4. 运行 Rust fmt、workspace check/test/clippy 与 diff 检查，记录结果。
+- [x] ✅ 5. 检查混合工作区边界；不提交、不推送、不安装或发布应用。
+
+验证记录：`cargo fmt --all -- --check`、`cargo check --workspace --locked`、
+`cargo test --workspace --locked`（580 项）和
+`cargo clippy --workspace --all-targets --locked -- -D warnings` 均通过；
+`git diff --check` 通过。`runtime_store` 专项 54 项测试也通过。公开函数声明
+集合与拆分前一致；除新增模块路径字面量外，原有存储 SQL 字符串未丢失，
+会话导出构造改为等价的 `AnalyticsAggregate::with_request_metadata`。
+当前仅源码、文档和已有混合工作区变更，未提交、未推送、未安装或发布应用。
+
+## 本轮：平台 Admin 与 macOS AppModel 模块化（2026-09-05）
+
+处理平台侧生产单体：Linux Admin 路由与 macOS `main.swift` 的
+AppModel 扩展。保持 Admin API、鉴权、探测结果和 SwiftUI 状态/主线程语义不变；
+不把平台逻辑移回共享引擎，不处理测试夹具和纯 UI 组件拆分。
+
+- [x] ✅ 1. 按 API 域拆分 Linux Admin（鉴权、配置、runtime、诊断、模型探测、自启动）。
+- [x] ✅ 2. 按职责拆分 macOS AppModel（runtime、配置/provider、通知、生命周期）。
+- [x] ✅ 3. 运行对应 Rust/Swift 格式、测试和构建验证，检查公开合同与混合工作区边界。
+
+验证记录：Linux `admin.rs` 从约 4,434 行降至 1,939 行，新增五个职责模块，
+保留 `admin::validate_config` 公开入口；生产模块使用显式导入，测试专用依赖
+放在 `#[cfg(test)]` 下。通过 `cargo check -p sumpter-linux-adapter --locked`、
+`cargo test -p sumpter-linux-adapter --locked`（24 项单元、110 项 engine、
+16 项 WebSocket）及
+`cargo clippy -p sumpter-linux-adapter --all-targets --locked -- -D warnings`。
+最终导入整理后再次通过 fmt check 和 adapter clippy，未重复行为测试。
+
+macOS `main.swift` 从约 4,439 行降至 942 行，新增七个 `AppModel+*.swift`
+文件，保留 `@MainActor`、`@Published`、异步响应顺序保护及 sidecar/通知行为。
+通过 `swift test --package-path platforms/macos/app`（177 项 XCTest + 34 项
+Swift Testing）和 `swift build -c release --package-path platforms/macos/app`。
+当前环境无 `swift-format`，未执行该工具。
+
+`cargo fmt --all -- --check`、`git diff --check` 和
+`lychee --offline --no-progress docs/architecture.md plan.md` 均通过。
+公开 API、SQLite schema/projection 与数据语义未因拆分而改变。
+本轮选定的四个生产单体已完成拆分；`events.rs`、`bridge.rs`、macOS Admin
+和纯 UI 大文件继续暂缓。保留既有混合工作区改动，未提交、未推送、未安装或发布应用。
+
+### 完成后复核（2026-09-05）
+
+- [x] ✅ 1. 核对实际模块、测试入口和 Git 状态；`mod.rs` 当前为 102 行，新增文件均在工作区，未发现临时 `*_impl.rs` 或生产代码 `use super::*`。
+- [x] ✅ 2. 复核公开接口、调度/relay 完成交接和固定 IP 残留，确认拆分范围；公开声明名称与原版本一致，生产引擎无 IP 竞速/解析路径，历史诊断字段仍仅作兼容读取。
+- [x] ✅ 3. 重新运行 Rust fmt、workspace tests、clippy、check 与差异检查，记录当前工作区的结果。
+
+复核结果：`cargo fmt --all -- --check`、`cargo check --workspace --locked`、
+`cargo test --workspace --locked`（580 项）和
+`cargo clippy --workspace --all-targets --locked -- -D warnings` 均通过；
+`git diff --check` 通过。当前 Linux 静态资源入口为
+`index-HAtf4Eit.js`、`index-DxKYcdlS.css` 和 `donkey-logo-DIo3iBVX.png`，
+与 `platforms/linux/web/index.html` 一致。工作区保留用户此前的混合改动，未提交、未推送、未安装或发布应用。
+
 ## 本轮：Sumpter Codex Live 401 同请求恢复（2026-09-04）
 
 官方 CPA 的 Live OAuth 账号选择发生在上游；Sumpter 首次收到 `401 token_revoked`
@@ -604,3 +718,12 @@ HTTP 400，229 字节 `architecture="avas" is only supported for quicksilver Rea
 - [ ] 6. 补齐拒绝/上游事件上下文与 WebSocket 双向关闭指标及 Swift wire。
 - [ ] 7. 从 mapping/catalog 生成完整本地 `/v1/models` 能力目录并补测试。
 - [ ] 8. 运行格式、workspace 测试、clippy 和 Swift 测试，记录源码验证边界。
+
+## 本轮：复核 2026-09-06 深度检查报告（2026-09-06）
+
+仅复核报告与当前工作树，不修改产品代码、不暂存或提交。
+
+- [x] ✅ 1. 读取报告，核对 HEAD、工作树与现行仓库约定。
+- [x] ✅ 2. 复现 Rust 阻断，检查 HEAD 的独立完整性。
+- [x] ✅ 3. 复核提交风险、配置兼容、API 文档和低优先级条目。
+- [x] ✅ 4. 完成最小必要验证，输出修正后的结论及证据边界。

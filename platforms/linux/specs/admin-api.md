@@ -1,6 +1,8 @@
 # Sumpter Linux Rust Admin API
 
-本文是 Linux WebUI 与 daemon 之间的唯一管理契约。源码树可执行文件是 `sumpterd-linux`，
+本文是 Linux WebUI 与 daemon 之间的唯一管理契约。
+运行时管理端点还包括：`GET/PUT /runtime/pricing`、`GET /runtime/export`、`GET /runtime/export/estimate`、`GET /runtime/request-chain`、`GET /runtime/facets`。历史诊断记录可能携带 `pinnedIP` 字段；新请求不再生成该字段。
+源码树可执行文件是 `sumpterd-linux`，
 发布包内二进制仍名为 `sumpterd`。配置格式为 `config.json` schema v6；自动迁移 schema v3/v4/v5，
 旧 Swift `keys.json` API 不再适用。
 
@@ -374,7 +376,7 @@ listener 直接暴露到公网。
 
 服务端至少校验：listener host（IP、`localhost` 或空值/全接口）/port/CIDR、endpoint ID 唯一、URL scheme/host、
 Base URL 不得包含 userinfo、query 或 fragment、入口 `protocol` 必须是四态之一、模型映射、feature target、
-可选超时和 `retryDelaySeconds` 为正数、重试轮数/次数/时长非负、pinned 并发大于 0；遗留的 Provider WebSearch 能力字段必须拒绝，
+可选超时和 `retryDelaySeconds` 为正数、重试轮数/次数/时长非负；遗留的 Provider WebSearch 能力字段必须拒绝，
 WebSearch 表达由严格 RequestPurpose 与最终 TargetFormat 自动选择。
 
 ### `POST /admin/api/reload`
@@ -413,7 +415,7 @@ SIGHUP 必须复用同一条 reload/rebind 路径。失败保持原运行配置�
 502 `models_fetch_failed`。
 
 探测的出站行为面与 `outbound.rs` 的转发路径一致：锁 HTTP/1.1、不跟随重定向、**不走代理**、
-不复用连接池，并按入口的 `pinnedIPs`/`pinnedIPExclusive` 规则连接。目录候选会复用
+按入口 Base URL 连接，不复用连接池。目录候选会复用
 `baseURL` 的自定义路径并避免重复 `/v1`；响应体限制为 2 MiB、最多保留 5000 个模型。
 否则设了代理的机器上探测与真实转发会走两条不同链路，「能取到模型」不代表「转发能通」。
 因此当 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 存在时，`models_fetch_failed`
@@ -466,7 +468,7 @@ SIGHUP 必须复用同一条 reload/rebind 路径。失败保持原运行配置�
 - `DELETE /admin/api/diagnostic-capture`：返回 `{"cleared":true}`。
 
 索引与详情共用一套大写 ID 键名（`requestID` / `featureRuleID`，尝试里是
-`endpointID` / `outboundURL` / `pinnedIP`）：索引是手写 JSON，详情是直接序列化
+`endpointID` / `outboundURL`）：索引是手写 JSON，详情是直接序列化
 `DiagnosticRequestCapture`，所以详情侧靠字段级 `rename` 保持一致——落到 serde 的 camelCase
 默认规则上会变成 `requestId`/`endpointId`，WebUI 与 macOS 侧都读不出来（`alias` 只为读回旧
 `diagnostic_capture.json`）。详情另有 `clientDeclared`（客户端 `X-Sumpter-*` 声明的项目归因，

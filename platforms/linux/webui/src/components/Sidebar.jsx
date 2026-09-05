@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useApp } from '../context/AppContext.jsx';
 import { Icon } from '../utils/icons.jsx';
-import donkeyHead from '../assets/donkey-head.svg';
+import donkeyHead from '../assets/donkey-logo.png';
 
 export function Sidebar() {
   const { currentRoute, navigate, status } = useApp();

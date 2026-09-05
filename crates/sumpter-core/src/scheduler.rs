@@ -1,14 +1,6 @@
-//! pinned IP 的健康感知排序与会话归属 CAS 规则(纯逻辑,时间一律用 Unix 秒 f64)。
-//! 入口级优先级由引擎按配置排序；这里保留的健康记录只属于 pinned IP。
+//! 会话归属 CAS 与粘性淘汰规则（纯逻辑，时间一律用 Unix 秒 f64）。
 
-/// 健康记录:`cooling_until` 晚于 now 表示冷却中(近期连不上);`last_success` 最近成功时间。
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct Health {
-    pub cooling_until: Option<f64>,
-    pub last_success: Option<f64>,
-}
-
-/// 并发请求下更新固定入口的 CAS 规则：
+/// 并发请求下更新已归属入口的 CAS 规则：
 /// - 首次成功可建立归属；同入口成功无需改写；
 /// - 只有当前归属仍等于本请求开始时的入口，才允许把故障转移后的成功入口写回；
 /// - 配置已删除的旧分组可被新成功入口替换；
@@ -25,46 +17,6 @@ pub fn should_replace_sticky_assignment(
         Some(current) if current == initial => true,
         Some(current) => !eligible_groups.iter().any(|group| group == current),
     }
-}
-
-/// pinned IP 候选按健康度重排;`None`(DNS 兜底)恒视为可用、不冷却。
-///
-/// 返回顺序:近期成功(按成功时间倒序)→ 未试过(按 rotation 滚动分散)→ 冷却中(同样滚动,兜底)。
-pub fn ordered_pinned_ips(
-    candidates: &[Option<String>],
-    health: &std::collections::HashMap<String, Health>,
-    now: f64,
-    rotation: i64,
-) -> Vec<Option<String>> {
-    if candidates.len() <= 1 {
-        return candidates.to_vec();
-    }
-
-    let mut succeeded: Vec<(Option<String>, f64)> = Vec::new();
-    let mut untried: Vec<Option<String>> = Vec::new();
-    let mut cooling: Vec<Option<String>> = Vec::new();
-
-    for candidate in candidates {
-        let Some(ip) = candidate else {
-            untried.push(None);
-            continue;
-        };
-        let entry = health.get(ip);
-        if entry.and_then(|h| h.cooling_until).is_some_and(|u| u > now) {
-            cooling.push(candidate.clone());
-        } else if let Some(last) = entry.and_then(|h| h.last_success) {
-            succeeded.push((candidate.clone(), last));
-        } else {
-            untried.push(candidate.clone());
-        }
-    }
-
-    // 最新成功的先试;排序需稳定(同刻成功保持原序)。
-    succeeded.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    let mut output: Vec<Option<String>> = succeeded.into_iter().map(|(ip, _)| ip).collect();
-    output.extend(rotate(untried, rotation));
-    output.extend(rotate(cooling, rotation));
-    output
 }
 
 /// 会话粘性归属的淘汰决策(纯函数,返回待删除的键)。
@@ -106,32 +58,12 @@ pub fn session_sticky_evictions(
     expired
 }
 
-fn rotate(items: Vec<Option<String>>, rotation: i64) -> Vec<Option<String>> {
-    if items.len() <= 1 {
-        return items;
-    }
-    let n = items.len() as i64;
-    let offset = (((rotation % n) + n) % n) as usize;
-    let mut rotated = Vec::with_capacity(items.len());
-    rotated.extend_from_slice(&items[offset..]);
-    rotated.extend_from_slice(&items[..offset]);
-    rotated
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     fn ids(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
-    }
-
-    fn cooling(until: f64) -> Health {
-        Health {
-            cooling_until: Some(until),
-            last_success: None,
-        }
     }
 
     #[test]
@@ -162,74 +94,6 @@ mod tests {
             "a",
             &eligible
         ));
-    }
-
-    #[test]
-    fn pinned_ips_prefer_recent_success() {
-        let mut health = HashMap::new();
-        health.insert(
-            "1.1.1.1".to_string(),
-            Health {
-                cooling_until: None,
-                last_success: Some(10.0),
-            },
-        );
-        health.insert(
-            "2.2.2.2".to_string(),
-            Health {
-                cooling_until: None,
-                last_success: Some(20.0),
-            },
-        );
-        let candidates = vec![
-            Some("1.1.1.1".to_string()),
-            Some("2.2.2.2".to_string()),
-            Some("3.3.3.3".to_string()),
-        ];
-        let ordered = ordered_pinned_ips(&candidates, &health, 30.0, 0);
-        assert_eq!(
-            ordered,
-            vec![
-                Some("2.2.2.2".to_string()), // 最新成功在前
-                Some("1.1.1.1".to_string()),
-                Some("3.3.3.3".to_string()), // 未试过
-            ]
-        );
-    }
-
-    #[test]
-    fn pinned_cooling_sinks_and_dns_fallback_counts_as_untried() {
-        let mut health = HashMap::new();
-        health.insert("1.1.1.1".to_string(), cooling(100.0));
-        let candidates = vec![Some("1.1.1.1".to_string()), None];
-        let ordered = ordered_pinned_ips(&candidates, &health, 50.0, 0);
-        assert_eq!(ordered, vec![None, Some("1.1.1.1".to_string())]);
-    }
-
-    #[test]
-    fn rotation_spreads_untried() {
-        let health = HashMap::new();
-        let candidates: Vec<Option<String>> = ["a", "b", "c"]
-            .iter()
-            .map(|s| Some(s.to_string()))
-            .collect();
-        assert_eq!(
-            ordered_pinned_ips(&candidates, &health, 0.0, 1),
-            vec![Some("b".into()), Some("c".into()), Some("a".into())]
-        );
-        // 成功档不参与 rotation(Swift 同款:仅 untried/cooling 滚动)。
-        let mut with_success = HashMap::new();
-        with_success.insert(
-            "a".to_string(),
-            Health {
-                cooling_until: None,
-                last_success: Some(1.0),
-            },
-        );
-        assert_eq!(
-            ordered_pinned_ips(&candidates, &with_success, 5.0, 1),
-            vec![Some("a".into()), Some("c".into()), Some("b".into())]
-        );
     }
 
     fn entry(key: &str, at: f64, persistent: bool) -> (String, f64, bool) {

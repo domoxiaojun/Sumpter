@@ -172,7 +172,7 @@ public struct AdminClient: Sendable {
         try await send(request("/admin/reload", method: "POST"), as: AdminWire.ReloadAck.self)
     }
 
-    /// 由 sumpterd 统一探测 Provider 模型目录，确保 pinned IP、超时和出站
+    /// 由 sumpterd 统一探测 Provider 模型目录，确保超时和出站
     /// 代理策略与真实转发一致；UI 进程不再直接连接上游。
     public func providerModels(endpointID: String) async throws -> AdminWire.ProviderModels {
         let body: [String: Any] = ["endpointID": endpointID]

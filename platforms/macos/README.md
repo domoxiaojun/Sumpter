@@ -43,6 +43,6 @@ sidecar 支持 Claude `/v1/messages`，OpenAI Chat / Responses 的 Native Adapte
 
 - `sumpter-core` — 配置模型（schema v6）、路由、粘性调度、访问控制、协议桥接纯函数。无网络、无平台依赖。
 - `sumpter-runtime` — 共享 SQLite 事件存储与查询。
-- `sumpter-engine` — 入站服务、pinned-IP 出站、failover、SSE relay、统计事件。平台能力只通过 `PlatformBoundary` 注入。
+- `sumpter-engine` — 入站服务、按 Base URL 出站、failover、SSE relay、统计事件。平台能力只通过 `PlatformBoundary` 注入。
 - `sumpter-macos-adapter` — control token、通知、reload、Admin facade、HTTP 组装。
 - `sumpterd-macos` — 可执行入口：组装、握手 JSON、stdin EOF 随父进程退出。

@@ -47,8 +47,6 @@ fn full_fixture_decodes_optional_fields_without_pool_layer() {
     assert_eq!(config.schema_version, SCHEMA_VERSION);
     assert_eq!(config.endpoints.len(), 4);
     let first = &config.endpoints[0];
-    assert!(first.pinned_ip_exclusive);
-    assert_eq!(first.pinned_ips, vec!["1.2.3.4", "5.6.7.8"]);
     assert!(first.keep_alive);
     let qwen = config.endpoint("qwen").expect("qwen endpoint");
     assert!(!qwen.keep_alive);
@@ -86,6 +84,20 @@ fn example_config_value_roundtrip() {
 #[test]
 fn full_fixture_value_roundtrip() {
     assert_value_roundtrip(FULL);
+}
+
+#[test]
+fn legacy_fixed_ip_fields_are_ignored_and_omitted_on_save() {
+    let mut value: serde_json::Value = serde_json::from_str(EXAMPLE).unwrap();
+    value["retry"]["pinnedIPConcurrency"] = serde_json::json!(3);
+    value["endpoints"][0]["pinnedIPs"] = serde_json::json!(["203.0.113.10"]);
+    value["endpoints"][0]["pinnedIPExclusive"] = serde_json::json!(true);
+
+    let config = AppConfig::from_json(&value.to_string()).expect("旧固定 IP 配置仍可读取");
+    let saved: serde_json::Value = serde_json::from_str(&config.to_json_pretty().unwrap()).unwrap();
+    assert!(saved["retry"].get("pinnedIPConcurrency").is_none());
+    assert!(saved["endpoints"][0].get("pinnedIPs").is_none());
+    assert!(saved["endpoints"][0].get("pinnedIPExclusive").is_none());
 }
 
 #[test]

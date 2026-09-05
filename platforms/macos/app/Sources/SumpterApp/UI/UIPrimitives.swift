@@ -1046,11 +1046,9 @@ struct MetricTile: View {
     /// Compact operational summaries use the same visual language with a
     /// smaller footprint, keeping the primary cumulative cards prominent.
     var compact: Bool = false
-    /// Optional secondary label kept on the title baseline.  This is useful
-    /// for a directly related qualifier (for example, cache-read hit rate)
-    /// without turning it into a second KPI card or increasing dashboard
-    /// density.
-    var titleAccessory: String? = nil
+    /// Optional secondary label displayed at the trailing edge of the detail
+    /// row. This keeps the primary value aligned with its peer metric cards.
+    var footerAccessory: String? = nil
     var systemImage: String
     /// An optional minimum height lets a group of related KPI cards share one
     /// baseline even when one card has a wrapped detail or an accessory line.
@@ -1090,27 +1088,15 @@ struct MetricTile: View {
                     .truncationMode(.tail)
                 Spacer(minLength: 4)
             }
-            // Keep qualifiers (for example, cache hit rate) on their own
-            // line.  Putting them beside the title made SwiftUI compress the
-            // accessory first and render an ellipsis in narrow metric tiles.
-            if let titleAccessory, !titleAccessory.isEmpty {
-                Text(titleAccessory)
-                    .font(.caption2.monospacedDigit().weight(.semibold))
-                    .foregroundStyle(accentColor)
-                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.leading, 26)
-            }
             Text(value)
                 .font((compact ? Font.headline : Font.title3).monospacedDigit().weight(.semibold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
-            if let detail, !detail.isEmpty {
-                Text(detail)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 2)
-                    .fixedSize(horizontal: false, vertical: true)
+            if (detail?.isEmpty == false) || (footerAccessory?.isEmpty == false) {
+                ViewThatFits(in: .horizontal) {
+                    metricTileFooter(horizontal: true)
+                    metricTileFooter(horizontal: false)
+                }
             }
         }
         .padding(compact ? 12 : SumpterTheme.Layout.metricPadding)
@@ -1140,6 +1126,44 @@ struct MetricTile: View {
             RoundedRectangle(cornerRadius: SumpterTheme.Layout.metricRadius, style: .continuous)
                 .stroke(palette.borderSubtle, lineWidth: 0.8)
         )
+    }
+
+    @ViewBuilder
+    private func metricTileFooter(horizontal: Bool) -> some View {
+        if horizontal {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                metricTileDetail
+                Spacer(minLength: 4)
+                metricTileFooterAccessory
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 2) {
+                metricTileDetail
+                metricTileFooterAccessory
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var metricTileDetail: some View {
+        if let detail, !detail.isEmpty {
+            Text(detail)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
+    private var metricTileFooterAccessory: some View {
+        if let footerAccessory, !footerAccessory.isEmpty {
+            Text(footerAccessory)
+                .font(.caption2.monospacedDigit().weight(.semibold))
+                .foregroundStyle(accentColor)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 

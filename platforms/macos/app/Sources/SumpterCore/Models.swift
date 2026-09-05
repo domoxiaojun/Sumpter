@@ -204,8 +204,6 @@ public struct RetryPolicy: Codable, Equatable, Sendable {
     public var maxRetryDurationSeconds: Double
     /// 同一次请求中当前粘性调度组在非 500 可重试故障后的额外尝试次数;0 = 首次失败后立即切换。
     public var sessionStickyRetries: Int
-    /// pinned IP 并发竞速数。
-    public var pinnedIPConcurrency: Int
     /// 下面两组状态码不可配,不进配置文件。
     public var retryableStatusCodes: Set<Int>
     public var deferredStatusCodes: Set<Int>
@@ -220,7 +218,6 @@ public struct RetryPolicy: Codable, Equatable, Sendable {
         case maxDeferredRounds
         case maxRetryDurationSeconds
         case sessionStickyRetries
-        case pinnedIPConcurrency
     }
 
     public init(
@@ -233,7 +230,6 @@ public struct RetryPolicy: Codable, Equatable, Sendable {
         maxDeferredRounds: Int = 0,
         maxRetryDurationSeconds: Double = 0,
         sessionStickyRetries: Int = 2,
-        pinnedIPConcurrency: Int = 3,
         retryableStatusCodes: Set<Int> = [401, 402, 403, 429, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 529, 530],
         deferredStatusCodes: Set<Int> = [401, 402, 403, 429, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 529, 530]
     ) {
@@ -246,7 +242,6 @@ public struct RetryPolicy: Codable, Equatable, Sendable {
         self.maxDeferredRounds = max(0, maxDeferredRounds)
         self.maxRetryDurationSeconds = max(0, maxRetryDurationSeconds)
         self.sessionStickyRetries = max(0, sessionStickyRetries)
-        self.pinnedIPConcurrency = max(1, pinnedIPConcurrency)
         self.retryableStatusCodes = retryableStatusCodes
         self.deferredStatusCodes = deferredStatusCodes
     }
@@ -262,8 +257,7 @@ public struct RetryPolicy: Codable, Equatable, Sendable {
             passThroughRetryDelay: try keyed.decodeIfPresent(Bool.self, forKey: .passThroughRetryDelay) ?? true,
             maxDeferredRounds: try keyed.decodeIfPresent(Int.self, forKey: .maxDeferredRounds) ?? 0,
             maxRetryDurationSeconds: try keyed.decodeIfPresent(Double.self, forKey: .maxRetryDurationSeconds) ?? 0,
-            sessionStickyRetries: try keyed.decodeIfPresent(Int.self, forKey: .sessionStickyRetries) ?? 2,
-            pinnedIPConcurrency: try keyed.decodeIfPresent(Int.self, forKey: .pinnedIPConcurrency) ?? 3
+            sessionStickyRetries: try keyed.decodeIfPresent(Int.self, forKey: .sessionStickyRetries) ?? 2
         )
     }
 
@@ -279,7 +273,6 @@ public struct RetryPolicy: Codable, Equatable, Sendable {
         try keyed.encode(maxDeferredRounds, forKey: .maxDeferredRounds)
         try keyed.encode(maxRetryDurationSeconds, forKey: .maxRetryDurationSeconds)
         try keyed.encode(sessionStickyRetries, forKey: .sessionStickyRetries)
-        try keyed.encode(pinnedIPConcurrency, forKey: .pinnedIPConcurrency)
     }
 }
 
@@ -419,7 +412,7 @@ public struct ModelMapping: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
-/// 一个真实的上游入口:自带地址、Key、协议、出口 IP 与模型映射。
+/// 一个真实的上游入口:自带地址、Key、协议与模型映射。
 public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
     public var id: String
     public var name: String
@@ -428,12 +421,8 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
     public var enabled: Bool
     /// 明文 API Key(配置文件权限 0600);空 = 未配置。
     public var apiKey: String
-    /// 固定出口 IP;非空则优先按这些 IP 直连(TLS SNI 仍是域名)。
-    public var pinnedIPs: [String]
     /// Provider 调度优先级：数值越小越优先；同级保持配置顺序。
     public var priority: Int
-    /// 只走 pinnedIPs,不回落 DNS。
-    public var pinnedIPExclusive: Bool
     /// 粘性分组:同组入口共享会话粘性。nil = 使用入口 id 作为独立组。
     public var stickyGroup: String?
     public var catalog: ModelCatalog
@@ -449,9 +438,7 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         case protocolMode = "protocol"
         case enabled
         case apiKey
-        case pinnedIPs
         case priority
-        case pinnedIPExclusive
         case stickyGroup
         case catalog
         case mappings
@@ -465,9 +452,7 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         protocolMode: EndpointProtocolMode = .auto,
         enabled: Bool = true,
         apiKey: String = "",
-        pinnedIPs: [String] = [],
         priority: Int = 0,
-        pinnedIPExclusive: Bool = false,
         stickyGroup: String? = nil,
         catalog: ModelCatalog = ModelCatalog(),
         mappings: [ModelMapping] = [],
@@ -479,9 +464,7 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         self.protocolMode = protocolMode
         self.enabled = enabled
         self.apiKey = apiKey
-        self.pinnedIPs = pinnedIPs
         self.priority = max(0, priority)
-        self.pinnedIPExclusive = pinnedIPExclusive
         self.stickyGroup = Endpoint.normalizedGroup(stickyGroup)
         self.catalog = catalog
         self.mappings = mappings
@@ -496,9 +479,7 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         protocolMode = try keyed.decodeIfPresent(EndpointProtocolMode.self, forKey: .protocolMode) ?? .auto
         enabled = try keyed.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         apiKey = try keyed.decodeIfPresent(String.self, forKey: .apiKey) ?? ""
-        pinnedIPs = try keyed.decodeIfPresent([String].self, forKey: .pinnedIPs) ?? []
         priority = max(0, try keyed.decodeIfPresent(Int.self, forKey: .priority) ?? 0)
-        pinnedIPExclusive = try keyed.decodeIfPresent(Bool.self, forKey: .pinnedIPExclusive) ?? false
         stickyGroup = Endpoint.normalizedGroup(try keyed.decodeIfPresent(String.self, forKey: .stickyGroup))
         catalog = try keyed.decodeIfPresent(ModelCatalog.self, forKey: .catalog) ?? ModelCatalog()
         mappings = try keyed.decodeIfPresent([ModelMapping].self, forKey: .mappings) ?? []
@@ -513,11 +494,9 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         try keyed.encode(protocolMode, forKey: .protocolMode)
         try keyed.encode(enabled, forKey: .enabled)
         try keyed.encode(apiKey, forKey: .apiKey)
-        try keyed.encode(pinnedIPs, forKey: .pinnedIPs)
         if priority > 0 {
             try keyed.encode(priority, forKey: .priority)
         }
-        try keyed.encode(pinnedIPExclusive, forKey: .pinnedIPExclusive)
         try keyed.encodeIfPresent(stickyGroup, forKey: .stickyGroup)
         if !catalog.isEmpty {
             try keyed.encode(catalog, forKey: .catalog)
@@ -556,11 +535,6 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
             }
             return ModelName.clean(mapping.clientPattern.rawValue) == cleaned
         }
-    }
-
-    /// 真正会被使用的出口 IP:开了独占才禁用 DNS 回落,这里只判有没有 IP。
-    public var usesPinnedIPs: Bool {
-        !pinnedIPs.isEmpty
     }
 
     private static func normalizedGroup(_ raw: String?) -> String? {

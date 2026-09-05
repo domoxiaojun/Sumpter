@@ -1312,7 +1312,7 @@ struct UsagePane: View {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
                 MetricTile(title: "输入 Token", value: tokenText(usage?.inputTokens, presence: usage?.usageFieldPresence.inputTokens), detail: "输入用量", systemImage: "arrow.down.doc", minimumHeight: overviewMetricMinimumHeight)
                 MetricTile(title: "输出 Token", value: tokenText(usage?.outputTokens, presence: usage?.usageFieldPresence.outputTokens), detail: "输出用量", systemImage: "arrow.up.doc", minimumHeight: overviewMetricMinimumHeight)
-                MetricTile(title: "缓存读取", value: tokenText(usage?.cacheReadInputTokens, presence: usage?.usageFieldPresence.cacheReadInputTokens), detail: "缓存读取用量", titleAccessory: "命中率 " + rateText(usage?.cacheReadTokenRate), systemImage: "externaldrive.badge.checkmark", minimumHeight: overviewMetricMinimumHeight)
+                MetricTile(title: "缓存读取", value: tokenText(usage?.cacheReadInputTokens, presence: usage?.usageFieldPresence.cacheReadInputTokens), detail: "缓存读取用量", footerAccessory: "命中率 " + rateText(usage?.cacheReadTokenRate), systemImage: "externaldrive.badge.checkmark", minimumHeight: overviewMetricMinimumHeight)
                 MetricTile(title: "缓存写入", value: tokenText(usage?.cacheCreationInputTokens, presence: usage?.usageFieldPresence.cacheCreationInputTokens), detail: "缓存写入 Token", systemImage: "externaldrive.badge.plus", minimumHeight: overviewMetricMinimumHeight)
             }
         }
@@ -1525,7 +1525,7 @@ struct UsagePane: View {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
                     MetricTile(title: "输入 Token", value: tokenText(usage?.inputTokens, presence: usage?.usageFieldPresence.inputTokens), detail: "输入用量", systemImage: "arrow.down.doc")
                     MetricTile(title: "输出 Token", value: tokenText(usage?.outputTokens, presence: usage?.usageFieldPresence.outputTokens), detail: "输出用量", systemImage: "arrow.up.doc")
-                    MetricTile(title: "缓存读取", value: tokenText(usage?.cacheReadInputTokens, presence: usage?.usageFieldPresence.cacheReadInputTokens), detail: "缓存读取用量", titleAccessory: "命中率 " + rateText(usage?.cacheReadTokenRate), systemImage: "externaldrive.badge.checkmark")
+                    MetricTile(title: "缓存读取", value: tokenText(usage?.cacheReadInputTokens, presence: usage?.usageFieldPresence.cacheReadInputTokens), detail: "缓存读取用量", footerAccessory: "命中率 " + rateText(usage?.cacheReadTokenRate), systemImage: "externaldrive.badge.checkmark")
                     MetricTile(title: "缓存写入", value: tokenText(usage?.cacheCreationInputTokens, presence: usage?.usageFieldPresence.cacheCreationInputTokens), systemImage: "externaldrive.badge.plus")
                 }
             }

@@ -16,8 +16,6 @@ export const mockConfig = {
           priority: 0,
           timeoutSeconds: 60,
           streamIdleTimeoutSeconds: 30,
-          pinnedIPs: [],
-          pinnedIPExclusive: false,
           stickyGroup: 'anthropic-direct',
           keepAlive: true,
           catalog: {
@@ -47,8 +45,6 @@ export const mockConfig = {
           priority: 1,
           timeoutSeconds: 45,
           streamIdleTimeoutSeconds: 20,
-          pinnedIPs: ['104.18.2.161', '104.18.3.161'],
-          pinnedIPExclusive: true,
           stickyGroup: 'openrouter-fast',
           keepAlive: true,
           catalog: {
@@ -78,8 +74,6 @@ export const mockConfig = {
           priority: 10,
           timeoutSeconds: 30,
           streamIdleTimeoutSeconds: 15,
-          pinnedIPs: ['20.185.12.8'],
-          pinnedIPExclusive: false,
           stickyGroup: 'azure-eastus',
           keepAlive: true,
           catalog: {
@@ -109,8 +103,6 @@ export const mockConfig = {
           priority: 11,
           timeoutSeconds: 25,
           streamIdleTimeoutSeconds: 10,
-          pinnedIPs: [],
-          pinnedIPExclusive: false,
           stickyGroup: 'deepseek-emergency',
           keepAlive: false,
           catalog: {
@@ -177,7 +169,6 @@ export const mockConfig = {
     maxDeferredRounds: 3,
     crossRoundRetries: 3,
     maxRetryDurationSeconds: 120,
-    pinnedIPConcurrency: 3,
   },
 };
 
@@ -785,7 +776,7 @@ export const mockDiagnostics = {
       clientKind: 'claude_code', requestPurpose: 'chat', clientModel: 'claude-opus-5', effectiveModel: 'claude-opus-5', featureRuleID: null,
       clientDeclared: { project: 'automode-proxy', workspace: '.../.claude/automode-proxy', gitRemote: 'https://github.com/domoxiaojun/sumpter.git' },
       sourceFormat: 'anthropic', targetFormat: 'anthropic', routeMode: 'native',
-      attempts: [{ id: 'ATTEMPT-MOCK-001', endpointID: 'ep-mock', endpointName: 'Mock upstream', protocol: 'anthropic', pinnedIP: null, startedAtMS: 1,
+      attempts: [{ id: 'ATTEMPT-MOCK-001', endpointID: 'ep-mock', endpointName: 'Mock upstream', protocol: 'anthropic', startedAtMS: 1,
         outboundMethod: 'POST', outboundURL: 'https://upstream.example/v1/messages', outboundHeaders: [{ name: 'content-type', value: 'application/json' }],
         outboundBody: '{"model":"claude-opus-5"}', outboundBodyBytes: 24, outboundBodyTruncated: false, responseStatus: 200,
         responseHeaders: [{ name: 'content-type', value: 'text/event-stream' }], upstreamChunks: [{ atMS: 400, bytes: 24, data: 'data: {"type":"message_stop"}\\n\\n', truncated: false }], error: null, completedAtMS: 840 }],

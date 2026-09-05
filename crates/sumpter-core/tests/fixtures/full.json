@@ -42,7 +42,6 @@
     "failoverOn500": true,
     "maxDeferredRounds": 4,
     "maxRetryDurationSeconds": 0,
-    "pinnedIPConcurrency": 1,
     "responseTimeoutSeconds": 200,
     "retryDelaySeconds": null,
     "passThroughRetryDelay": true,
@@ -72,11 +71,6 @@
         }
       ],
       "name": "acc1",
-      "pinnedIPExclusive": true,
-      "pinnedIPs": [
-        "1.2.3.4",
-        "5.6.7.8"
-      ],
       "protocol": "auto",
       "stickyGroup": "acc1"
     },
@@ -111,8 +105,6 @@
         }
       ],
       "name": "Qwen",
-      "pinnedIPExclusive": false,
-      "pinnedIPs": [],
       "protocol": "anthropic",
       "priority": 10
     },
@@ -131,8 +123,6 @@
         }
       ],
       "name": "OAI 桥",
-      "pinnedIPExclusive": false,
-      "pinnedIPs": [],
       "protocol": "openai",
       "priority": 11
     },
@@ -150,8 +140,6 @@
         }
       ],
       "name": "Responses",
-      "pinnedIPExclusive": false,
-      "pinnedIPs": [],
       "protocol": "openai-responses",
       "priority": 12
     }

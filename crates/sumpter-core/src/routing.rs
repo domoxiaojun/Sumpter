@@ -1329,7 +1329,8 @@ impl RoutePlanner {
                         .as_ref()
                         .map(|m| m.context)
                         .unwrap_or(ContextMode::Standard),
-                    effort_override: effort_override.or_else(|| mapping.as_ref().and_then(|m| m.effort)),
+                    effort_override: effort_override
+                        .or_else(|| mapping.as_ref().and_then(|m| m.effort)),
                     failover_timeout_seconds: failover_timeout,
                     keep_alive: endpoint.keep_alive,
                 })
