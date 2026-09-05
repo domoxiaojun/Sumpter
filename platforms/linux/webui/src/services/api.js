@@ -99,28 +99,6 @@ const thinkingToWire = { disable: 'disabled', passThrough: 'passthrough', adapti
 const contextToUI = { standard: 'passThrough', oneMillion: 'oneMillion', strip: 'strip' };
 const contextToWire = { passThrough: 'standard', oneMillion: 'oneMillion', strip: 'strip' };
 
-/**
- * Convert the UI's deliberately forgiving IP input into the Rust schema's
- * canonical array.  A provider field historically accepted `pinnedIP` as a
- * single string; accepting both commas and whitespace here lets old saved
- * documents and the new multi-value editor share one code path.
- */
-export function normalizePinnedIPs(value) {
-  const values = Array.isArray(value) ? value : [value];
-  const result = [];
-  const seen = new Set();
-  for (const item of values) {
-    if (item == null) continue;
-    for (const token of String(item).split(/[\s,]+/)) {
-      const ip = token.trim();
-      if (ip && !seen.has(ip)) {
-        seen.add(ip);
-        result.push(ip);
-      }
-    }
-  }
-  return result;
-}
 
 function normalizeOptionalNumber(value) {
   if (value == null || (typeof value === 'string' && value.trim() === '')) return undefined;
@@ -255,22 +233,16 @@ export function fromWireConfig(document) {
       throw new TypeError('schema v6 不允许 featureRules[].target.poolID');
     }
   }
+  if (config.retry) delete config.retry.pinnedIPConcurrency;
   for (const endpoint of config.endpoints || []) {
+      delete endpoint.pinnedIPs;
+      delete endpoint.pinnedIP;
+      delete endpoint.pinnedIPExclusive;
       const wireMappings = Array.isArray(endpoint.modelMappings)
         ? endpoint.modelMappings
         : (endpoint.mappings || []);
       endpoint.modelMappings = wireMappings.map(normalizeMappingForUI);
 
-      // `pinnedIPs` is canonical.  The singular field remains as a derived
-      // compatibility alias for existing readers, while new editors write the
-      // canonical array and `toWireConfig` treats that explicit array as the
-      // source of truth.
-      endpoint.pinnedIPs = normalizePinnedIPs(
-        Object.prototype.hasOwnProperty.call(endpoint, 'pinnedIPs')
-          ? endpoint.pinnedIPs
-          : endpoint.pinnedIP,
-      );
-      endpoint.pinnedIP = endpoint.pinnedIPs.join(', ');
       endpoint.catalog = normalizeCatalog(endpoint.catalog);
       delete endpoint.searchDialect;
       endpoint.baseURL = endpoint.baseURL || '';
@@ -287,7 +259,11 @@ export function toWireConfig(document) {
     throw new TypeError('schema v6 不允许 pools；请先由服务端完成迁移');
   }
   delete config.warnings;
+  if (config.retry) delete config.retry.pinnedIPConcurrency;
   for (const endpoint of config.endpoints || []) {
+      delete endpoint.pinnedIPs;
+      delete endpoint.pinnedIP;
+      delete endpoint.pinnedIPExclusive;
       const rawProtocol = String(endpoint.protocol || '').trim();
       if (rawProtocol && !isEndpointProtocol(rawProtocol)) {
         throw new TypeError(`入口 ${endpoint.id || '(unknown)'} 的 protocol 非法: ${rawProtocol}`);
@@ -301,6 +277,7 @@ export function toWireConfig(document) {
         upstreamModel: String(mapping.to ?? mapping.upstreamModel ?? '').trim(),
         thinking: thinkingToWire[mapping.thinking] || 'disabled',
         context: contextToWire[mapping.context] || 'standard',
+        ...(mapping.effort && mapping.effort !== 'auto' ? { effort: mapping.effort } : {}),
         ...(Array.isArray(mapping.capabilities) && mapping.capabilities.length > 0
           ? {
               capabilities: [...new Set(
@@ -319,15 +296,6 @@ export function toWireConfig(document) {
       delete endpoint.streamIdleTimeoutSeconds;
       delete endpoint.headers;
       delete endpoint.searchDialect;
-      // Treat an explicitly supplied array as authoritative (including an
-      // empty array, which is how the editor clears all pinned addresses).
-      // Legacy objects without that property still get their singular alias
-      // parsed, including comma/whitespace-separated values.
-      const pinned = Object.prototype.hasOwnProperty.call(endpoint, 'pinnedIPs')
-        ? normalizePinnedIPs(endpoint.pinnedIPs)
-        : normalizePinnedIPs(endpoint.pinnedIP);
-      endpoint.pinnedIPs = pinned;
-      delete endpoint.pinnedIP;
       if (endpoint.catalog != null) {
         const catalog = normalizeCatalog(endpoint.catalog);
         if (catalog.models.length || catalog.source || catalog.status || catalog.error || catalog.updatedAt) {

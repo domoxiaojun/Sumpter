@@ -821,8 +821,6 @@ pub struct PlannedEndpoint {
     /// 路由规则选中的逻辑模型名；用于按模型家族做协议兼容，不能从上游别名反推。
     pub routed_model: String,
     pub upstream_model: String,
-    pub pinned_ips: Vec<String>,
-    pub pinned_ip_exclusive: bool,
     /// Provider 优先级：数值越小越优先；同组保持配置顺序。
     pub priority: i64,
     /// 同组入口共享会话粘性；None = 使用自身 id 作为独立组。
@@ -1319,8 +1317,6 @@ impl RoutePlanner {
                     },
                     routed_model: effective_model.to_string(),
                     upstream_model,
-                    pinned_ips: endpoint.pinned_ips.clone(),
-                    pinned_ip_exclusive: endpoint.pinned_ip_exclusive,
                     priority: endpoint.priority,
                     sticky_group: endpoint.sticky_group.clone(),
                     thinking: mapping
@@ -1333,7 +1329,7 @@ impl RoutePlanner {
                         .as_ref()
                         .map(|m| m.context)
                         .unwrap_or(ContextMode::Standard),
-                    effort_override,
+                    effort_override: effort_override.or_else(|| mapping.as_ref().and_then(|m| m.effort)),
                     failover_timeout_seconds: failover_timeout,
                     keep_alive: endpoint.keep_alive,
                 })

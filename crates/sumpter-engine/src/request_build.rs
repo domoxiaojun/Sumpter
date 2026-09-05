@@ -12,6 +12,8 @@ use crate::outbound::{OutboundRequest, join_paths};
 /// Claude Code 指纹 UA:入站 UA 透传优先,仅在客户端未带 UA 时作回落
 /// (无 UA 探针打 DashScope 会 405,回落保住指纹放行面)。
 pub const CLAUDE_CODE_USER_AGENT: &str = "claude-cli/2.1.220 (external, cli)";
+/// Codex-compatible identity required by several Responses upstream gateways.
+pub const CODEX_USER_AGENT: &str = "codex_cli_rs/0.5.0";
 pub const ANTHROPIC_VERSION: &str = "2023-06-01";
 /// Codex Desktop's private Live/Quicksilver bootstrap model.  It is distinct
 /// from the ordinary text model selected by the same client session.
@@ -221,7 +223,6 @@ pub fn build_outbound(
     inbound_method: &str,
     inbound_path_and_query: &str,
     api_key: &str,
-    pinned_ip: Option<String>,
     purpose: RequestPurpose,
     // Data-plane passthrough: keep the client's original bytes and path. The
     // active Raw mode only changes an existing model field when its mapping
@@ -261,7 +262,12 @@ pub fn build_outbound(
     // passthrough rebuilds its header list below without this synthetic value,
     // so arbitrary vendor requests stay wire-faithful.
     if !headers.iter().any(|(n, _)| n == "user-agent") {
-        set_header(&mut headers, "user-agent", CLAUDE_CODE_USER_AGENT);
+        let fallback_ua = if protocol == ProviderProtocol::OpenAIResponses {
+            CODEX_USER_AGENT
+        } else {
+            CLAUDE_CODE_USER_AGENT
+        };
+        set_header(&mut headers, "user-agent", fallback_ua);
     }
 
     if raw_passthrough {
@@ -386,7 +392,6 @@ pub fn build_outbound(
                     passthrough.content_type,
                     passthrough.kind,
                 ),
-                pinned_ip,
                 keep_alive: endpoint.keep_alive,
             },
             effort,
@@ -453,7 +458,6 @@ pub fn build_outbound(
             path_and_query: path,
             headers,
             body,
-            pinned_ip,
             keep_alive: endpoint.keep_alive,
         },
         effort,
@@ -895,8 +899,6 @@ mod tests {
             },
             routed_model: "m".into(),
             upstream_model: "up-model".into(),
-            pinned_ips: vec![],
-            pinned_ip_exclusive: false,
             priority: 0,
             sticky_group: None,
             thinking,
@@ -985,7 +987,6 @@ mod tests {
             "POST",
             "/v1/live",
             "cpa-key",
-            None,
             RequestPurpose::Standard,
             Some(PassthroughRequest {
                 kind: PassthroughKind::Realtime,
@@ -1030,7 +1031,6 @@ mod tests {
             "POST",
             "/v1/messages",
             "sk-key",
-            None,
             RequestPurpose::Standard,
             None,
         );
@@ -1085,7 +1085,6 @@ mod tests {
             "POST",
             "/v1/messages",
             "sk-key",
-            None,
             RequestPurpose::Standard,
             None,
         );
@@ -1111,7 +1110,6 @@ mod tests {
             "POST",
             "/v1/messages",
             "k",
-            None,
             RequestPurpose::Standard,
             None,
         );
@@ -1132,7 +1130,6 @@ mod tests {
             "POST",
             "/v1/messages",
             "k",
-            None,
             RequestPurpose::Standard,
             None,
         );
@@ -1161,7 +1158,6 @@ mod tests {
             "POST",
             "/v1/messages",
             "k",
-            None,
             RequestPurpose::Standard,
             None,
         );
@@ -1206,7 +1202,6 @@ mod tests {
             "POST",
             "/v1/messages",
             "k",
-            None,
             RequestPurpose::Standard,
             None,
         );
@@ -1240,7 +1235,6 @@ mod tests {
             "POST",
             "/v1/messages",
             "k",
-            None,
             RequestPurpose::Standard,
             None,
         );
@@ -1272,7 +1266,6 @@ mod tests {
             "POST",
             "/v1/messages",
             "k",
-            None,
             RequestPurpose::Standard,
             None,
         );
@@ -1292,7 +1285,6 @@ mod tests {
             "POST",
             "/v1/messages",
             "k",
-            None,
             RequestPurpose::Standard,
             None,
         );
@@ -1311,7 +1303,6 @@ mod tests {
             "POST",
             "/v1/messages",
             "k",
-            None,
             RequestPurpose::Standard,
             None,
         );
@@ -1336,7 +1327,6 @@ mod tests {
             "POST",
             "/v1/messages",
             "k",
-            None,
             RequestPurpose::WebSearch,
             None,
         );
@@ -1352,7 +1342,6 @@ mod tests {
             "POST",
             "/v1/messages",
             "k",
-            None,
             RequestPurpose::WebSearch,
             None,
         );
@@ -1370,7 +1359,6 @@ mod tests {
             "POST",
             "/v1/messages",
             "k",
-            None,
             RequestPurpose::Standard,
             None,
         );
@@ -1404,7 +1392,6 @@ mod tests {
                     "POST",
                     "/v1/messages",
                     "k",
-                    None,
                     purpose,
                     None,
                 );
@@ -1449,7 +1436,6 @@ mod tests {
             "POST",
             "/v1/messages",
             "k",
-            None,
             RequestPurpose::WebFetch,
             None,
         );
@@ -1491,7 +1477,6 @@ mod tests {
             "POST",
             "/v1/messages",
             "k",
-            None,
             RequestPurpose::Standard,
             None,
         );
@@ -1518,7 +1503,6 @@ mod tests {
             "POST",
             "/v1/messages",
             "k",
-            None,
             RequestPurpose::Standard,
             None,
         );
@@ -1540,7 +1524,6 @@ mod tests {
             "POST",
             "/v1/messages",
             "k",
-            None,
             RequestPurpose::Standard,
             None,
         );
@@ -1567,7 +1550,6 @@ mod tests {
                 "POST",
                 "/v1/messages",
                 "k",
-                None,
                 RequestPurpose::Classifier,
                 None,
             );
@@ -1601,7 +1583,6 @@ mod tests {
             "POST",
             "/v1/messages",
             "k",
-            None,
             RequestPurpose::Standard,
             None,
         );
@@ -1620,7 +1601,6 @@ mod tests {
             "POST",
             "/v1/messages",
             "k",
-            None,
             RequestPurpose::Standard,
             None,
         );
@@ -1635,7 +1615,6 @@ mod tests {
             "POST",
             "/v1/messages",
             "k",
-            None,
             RequestPurpose::Standard,
             None,
         );
@@ -1659,7 +1638,6 @@ mod tests {
             "GET",
             "/v1/videos/video_123/content?variant=video",
             "k",
-            None,
             RequestPurpose::Standard,
             Some(PassthroughRequest {
                 kind: PassthroughKind::Videos,
@@ -1694,7 +1672,6 @@ mod tests {
             "POST",
             "/v1/realtime/calls?model=gpt-realtime",
             "k",
-            None,
             RequestPurpose::Standard,
             Some(PassthroughRequest {
                 kind: PassthroughKind::Realtime,
@@ -1722,7 +1699,6 @@ mod tests {
             "POST",
             "/v1/realtime/calls?model=gpt-realtime&voice=alloy",
             "k",
-            None,
             RequestPurpose::Standard,
             Some(PassthroughRequest {
                 kind: PassthroughKind::Realtime,
@@ -1742,7 +1718,6 @@ mod tests {
             "POST",
             "/v1/realtime?model=claude-fable-5",
             "k",
-            None,
             RequestPurpose::Standard,
             Some(PassthroughRequest {
                 kind: PassthroughKind::Realtime,
@@ -1811,7 +1786,6 @@ mod tests {
             "POST",
             "/vendor/request",
             "k",
-            None,
             RequestPurpose::Standard,
             Some(PassthroughRequest {
                 kind: PassthroughKind::Raw,
@@ -1844,7 +1818,6 @@ mod tests {
             "POST",
             "/vendor/request",
             "k",
-            None,
             RequestPurpose::Standard,
             Some(PassthroughRequest {
                 kind: PassthroughKind::Raw,
@@ -1876,7 +1849,6 @@ mod tests {
             "POST",
             "/v1/messages?beta=true",
             "k",
-            None,
             RequestPurpose::Standard,
             None,
         );

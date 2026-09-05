@@ -104,7 +104,6 @@ impl AppConfig {
         self.retry.max_retry_duration_seconds = self.retry.max_retry_duration_seconds.max(0.0);
         self.retry.session_sticky_retries = self.retry.session_sticky_retries.max(0);
         self.retry.max_500_retries = self.retry.max_500_retries.max(0);
-        self.retry.pinned_ip_concurrency = self.retry.pinned_ip_concurrency.max(1);
 
         for endpoint in &mut self.endpoints {
             if endpoint.name.is_empty() {
@@ -235,7 +234,6 @@ impl Default for ListenerConfig {
 /// - `stream_idle_timeout_seconds`:流式两次吐字最大间隔。None = 不限。
 /// - `max_deferred_rounds`:历史 JSON 键名；现为跨轮可重试故障的最大轮数,0 = 不限。
 /// - `max_retry_duration_seconds`:跨轮可重试故障的墙钟总闸,0 = 不限（HTTP 500 不跨轮）。
-/// - `pinned_ip_concurrency`:pinned IP 并发赛跑数,normalized 后 ≥1。
 /// - `session_sticky_retries`:同一次请求中,当前粘性调度组遇到非 500 可重试故障后额外重试的次数；
 ///   全部遇到可重试故障后才访问其它调度组,其它组成功立即改绑。0 = 首次失败后立即 failover。
 /// - `max_500_retries`:单个入口收到 HTTP 500 后的额外重试次数；0 = 不在该入口重试,
@@ -260,11 +258,6 @@ pub struct RetryPolicy {
         serialize_with = "trim_f64"
     )]
     pub max_retry_duration_seconds: f64,
-    #[serde(
-        rename = "pinnedIPConcurrency",
-        default = "RetryPolicy::default_pinned_ip_concurrency"
-    )]
-    pub pinned_ip_concurrency: i64,
     /// None 序列化为显式 null(与 Swift 对齐,不省略键)。
     #[serde(
         rename = "responseTimeoutSeconds",
@@ -295,9 +288,6 @@ pub struct RetryPolicy {
 impl RetryPolicy {
     fn default_max_retry_duration() -> f64 {
         0.0
-    }
-    fn default_pinned_ip_concurrency() -> i64 {
-        3
     }
     fn default_session_sticky_retries() -> i64 {
         2
@@ -339,7 +329,6 @@ impl Default for RetryPolicy {
             failover_on_500: Self::default_failover_on_500(),
             max_deferred_rounds: 0,
             max_retry_duration_seconds: Self::default_max_retry_duration(),
-            pinned_ip_concurrency: Self::default_pinned_ip_concurrency(),
             response_timeout_seconds: None,
             retry_delay_seconds: None,
             pass_through_retry_delay: Self::default_pass_through_retry_delay(),
@@ -466,11 +455,6 @@ pub struct Endpoint {
     pub mappings: Vec<ModelMapping>,
     #[serde(default)]
     pub name: String,
-    #[serde(rename = "pinnedIPExclusive", default)]
-    pub pinned_ip_exclusive: bool,
-    /// 非空则优先按这些 IP 直连(TLS SNI 仍是域名)。
-    #[serde(rename = "pinnedIPs", default)]
-    pub pinned_ips: Vec<String>,
     /// Provider 调度优先级：数值越小越优先；同级保持配置顺序。
     #[serde(default, skip_serializing_if = "is_zero_i64")]
     pub priority: i64,
@@ -633,6 +617,9 @@ pub struct ModelMapping {
     pub failover_timeout_seconds: Option<f64>,
     #[serde(default)]
     pub thinking: ThinkingMode,
+    /// adaptive 模式下覆盖客户端 effort；None 表示自动跟随客户端。
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub effort: Option<model_name::ReasoningEffort>,
     /// 空串 = 与客户端模型同名。
     #[serde(rename = "upstreamModel", default)]
     pub upstream_model: String,
