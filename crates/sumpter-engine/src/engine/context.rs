@@ -37,36 +37,103 @@ tokio::task_local! {
     pub(super) static INBOUND_REQUEST_CONTEXT: RefCell<InboundRequestContext>;
 }
 
-/// Merge two bounded Codex metadata projections without allowing a later
-/// WebSocket frame to overwrite authoritative handshake/header values.  The
+/// Merge a preferred bounded Codex projection with a fallback. Callers put
+/// first-frame body metadata before handshake compatibility headers. The
 /// helper intentionally copies only identity/diagnostic fields that are safe
 /// to retain; prompt and transport payload fields are never introduced here.
 pub(super) fn merge_codex_metadata(
     base: Option<CodexMetadata>,
     overlay: Option<CodexMetadata>,
 ) -> Option<CodexMetadata> {
-    let Some(overlay) = overlay else {
+    let Some(mut overlay) = overlay else {
         return base;
     };
     let Some(mut base) = base else {
         return Some(overlay);
     };
-    if base.originator.is_none() {
-        base.originator = overlay.originator.clone();
+    let inherits_parent = base.parent_thread_id.is_none();
+    if base.parent_thread_id_inferred
+        && overlay.parent_thread_id.is_some()
+        && !overlay.parent_thread_id_inferred
+    {
+        // An authoritative header parent beats a parent inferred from a fork.
+        base.parent_thread_id = overlay.parent_thread_id.clone();
+        base.parent_thread_id_inferred = false;
     }
-    if base.session_id.is_none() {
-        base.session_id = overlay.session_id.clone();
+    macro_rules! fill {
+        ($field:ident) => {
+            if let Some(value) = overlay.$field.take() {
+                match &base.$field {
+                    Some(preferred) if preferred != &value => {
+                        base.has_conflicts = true;
+                        let conflict =
+                            concat!(stringify!($field), ":websocketFallback").to_string();
+                        if !base.conflicts.contains(&conflict) {
+                            base.conflicts.push(conflict);
+                        }
+                    }
+                    Some(_) => {}
+                    None => base.$field = Some(value),
+                }
+            }
+        };
     }
-    if base.thread_id.is_none() {
-        base.thread_id = overlay.thread_id.clone();
+    fill!(session_id);
+    fill!(thread_id);
+    fill!(turn_id);
+    fill!(installation_id);
+    fill!(source_installation_id);
+    fill!(agent_name);
+    fill!(window_id);
+    fill!(window_number);
+    fill!(context_window_id);
+    fill!(request_kind);
+    fill!(forked_from_thread_id);
+    fill!(forked_from_ordinal_exclusive);
+    fill!(parent_thread_id);
+    fill!(parent_turn_id);
+    fill!(root_turn_id);
+    fill!(subagent_header);
+    fill!(subagent_kind);
+    fill!(thread_source);
+    fill!(turn_trigger);
+    fill!(sandbox);
+    fill!(sandbox_mode);
+    fill!(auto_review_enabled);
+    fill!(node_repl_auto_review_required);
+    fill!(node_repl_disabled);
+    fill!(turn_started_at_unix_ms);
+    fill!(history_ingest_requested);
+    fill!(compaction);
+    fill!(originator);
+    fill!(beta_features);
+    fill!(memgen_request);
+    fill!(responses_lite);
+    fill!(ws_stream_request_start_ms);
+    if base.workspaces.is_empty() {
+        base.workspaces = overlay.workspaces.clone();
     }
-    if base.turn_id.is_none() {
-        base.turn_id = overlay.turn_id.clone();
+    if base.source_workspace_paths.is_empty() {
+        base.source_workspace_paths = overlay.source_workspace_paths.clone();
+    }
+    if base.tool_namespaces_info.is_empty() {
+        base.tool_namespaces_info = overlay.tool_namespaces_info.clone();
+    }
+    if base.extras.is_empty() {
+        base.extras = overlay.extras.clone();
+    }
+    if inherits_parent {
+        base.parent_thread_id_inferred = overlay.parent_thread_id_inferred;
     }
     base.malformed |= overlay.malformed;
     base.truncated |= overlay.truncated;
     base.has_conflicts |= overlay.has_conflicts;
     base.is_subagent |= overlay.is_subagent;
+    for conflict in &overlay.conflicts {
+        if !base.conflicts.contains(conflict) {
+            base.conflicts.push(conflict.clone());
+        }
+    }
     for source in &overlay.sources {
         if !base.sources.contains(source) {
             base.sources.push(source.clone());
@@ -115,6 +182,9 @@ pub(super) struct ClientMeta {
     pub(super) unmatched_no_tools: bool,
     /// 有界客户端会话标识，用于跨客户端的会话统计筛选。
     pub(super) session_id: Option<String>,
+    /// 本请求的粘性归属键（affinity 哈希）。随事件落库，供运维面按项目
+    /// 清除粘性归属；早期拒绝与 WebSocket 合成键保持 None。
+    pub(super) sticky_key: Option<String>,
     pub(super) codex_metadata: Option<CodexMetadata>,
     /// 客户端用 `X-Sumpter-*` 声明的项目归因；可信度低于 codex_metadata。
     pub(super) client_declared: Option<ClientDeclaredMetadata>,
@@ -150,7 +220,9 @@ pub(super) fn upstream_request_id(headers: &[(String, String)]) -> Option<String
 
 pub(super) fn inbound_auth_ok(headers: &[(String, String)], token: &str) -> bool {
     for (name, value) in headers {
-        if name.eq_ignore_ascii_case("x-api-key") && value == token {
+        if (name.eq_ignore_ascii_case("x-api-key") || name.eq_ignore_ascii_case("x-goog-api-key"))
+            && value == token
+        {
             return true;
         }
         if name.eq_ignore_ascii_case("authorization") {
@@ -175,6 +247,11 @@ pub(super) fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> O
 }
 
 pub(super) fn detect_client_kind(headers: &[(String, String)], openai_inbound: bool) -> ClientKind {
+    if header_value(headers, "x-sumpter-client")
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("pi"))
+    {
+        return ClientKind::Pi;
+    }
     // `Originator` is not consistently emitted as a standalone header by
     // Codex Desktop.  The same value commonly lives in the bounded canonical
     // `x-codex-turn-metadata` header, so use the parser as a transport-level
@@ -264,6 +341,9 @@ pub(super) fn retain_codex_metadata_for_client(
     client_kind: ClientKind,
     metadata: Option<CodexMetadata>,
 ) -> Option<CodexMetadata> {
+    if client_kind == ClientKind::Pi {
+        return None;
+    }
     let metadata = metadata?;
     if client_kind == ClientKind::GrokBuild && !metadata.has_request_identity() {
         None
@@ -274,11 +354,14 @@ pub(super) fn retain_codex_metadata_for_client(
 
 pub(super) fn observed_session_id(headers: &[(String, String)]) -> Option<String> {
     [
+        "x-sumpter-session-id",
         "x-claude-code-session-id",
         "x-grok-session-id",
         "x-grok-conv-id",
         "session_id",
         "session-id",
+        "x-session-id",
+        "x-session-affinity",
     ]
     .iter()
     .find_map(|name| {

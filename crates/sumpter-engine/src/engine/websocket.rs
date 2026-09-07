@@ -205,6 +205,9 @@ pub(super) fn websocket_upstream_headers(headers: &[(String, String)]) -> Vec<(S
                 && !matches!(
                     name.to_ascii_lowercase().as_str(),
                     "x-sumpter-project"
+                        | "x-sumpter-client"
+                        | "x-sumpter-session-id"
+                        | "x-sumpter-attribution-encoding"
                         | "x-sumpter-workspace"
                         | "x-sumpter-git-remote"
                         | "x-sumpter-user"
@@ -341,6 +344,7 @@ impl Engine {
             );
             upstream.codex_metadata = context.codex_metadata.clone();
             upstream.client_declared = context.client_declared.clone();
+            upstream.session_id = context.session_id.clone();
             upstream.grok_metadata = context.grok_metadata.clone();
             upstream.request_method = Some("GET".into());
             upstream.request_path = Some(context.request_path.clone());
@@ -399,6 +403,7 @@ impl Engine {
         );
         upstream.codex_metadata = context.codex_metadata.clone();
         upstream.client_declared = context.client_declared.clone();
+        upstream.session_id = context.session_id.clone();
         upstream.grok_metadata = context.grok_metadata.clone();
         upstream.request_method = Some("GET".into());
         upstream.request_path = Some(context.request_path.clone());

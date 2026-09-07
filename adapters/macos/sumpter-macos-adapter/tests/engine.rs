@@ -1,5 +1,11 @@
 //! 引擎行为测试:FakeTransport 脚本化上游,对照 specs/spec-engine.md §8 的核心条目。
 
+#[path = "../../../../tests/contracts/gemini.rs"]
+mod gemini;
+
+#[path = "../../../../tests/contracts/pi.rs"]
+mod pi;
+
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -222,7 +228,9 @@ fn two_endpoint_config() -> AppConfig {
         listener: ListenerConfig::default(),
         endpoints: vec![a, b],
         retry,
+        session_sticky_ttl_hours: sumpter_core::config::DEFAULT_SESSION_STICKY_TTL_HOURS,
         schema_version: 6,
+        model_groups: None,
     }
     .normalized()
 }
@@ -2346,6 +2354,46 @@ async fn grok_sampling_headers_reach_event_details() {
 }
 
 #[tokio::test]
+async fn rejected_guardian_preserves_header_identity_and_internal_scope() {
+    let engine = engine_with(two_endpoint_config(), FakeTransport::new());
+    let (status, _) = call(
+        &engine,
+        loopback(),
+        "/v1/responses",
+        vec![
+            ("originator".into(), "Codex Desktop".into()),
+            ("x-openai-subagent".into(), "guardian".into()),
+            ("session-id".into(), "guardian-session".into()),
+        ],
+        Bytes::from_static(b"not json"),
+    )
+    .await;
+    assert_eq!(status, 400);
+    let snapshot = runtime_of(&engine).await;
+    let event = snapshot
+        .recent_events
+        .iter()
+        .find(|e| e.kind == "client")
+        .unwrap();
+    assert_eq!(event.message.as_deref(), Some("body is not JSON"));
+    assert_eq!(
+        event.client_kind,
+        Some(sumpter_core::events::ClientKind::Codex)
+    );
+    let metadata = event.codex_metadata.as_ref().unwrap();
+    assert_eq!(metadata.session_id.as_deref(), Some("guardian-session"));
+    assert_eq!(
+        sumpter_core::events::codex_thread_class(Some(metadata)).as_str(),
+        "guardian_review"
+    );
+    assert_eq!(
+        sumpter_core::events::codex_attribution_scope(Some(metadata), None).as_str(),
+        "internal_feature"
+    );
+    assert!(metadata.workspaces.is_empty());
+}
+
+#[tokio::test]
 async fn rejected_requests_preserve_codex_metadata() {
     let fake = FakeTransport::new();
     let mut config = two_endpoint_config();
@@ -3624,6 +3672,7 @@ async fn grok_server_retrieval_cross_protocol_engine_matrix() {
                 assert!(String::from_utf8_lossy(&response).contains("web_search_tool_result"));
             }
             ProviderProtocol::Anthropic => unreachable!(),
+            ProviderProtocol::Gemini => unreachable!(),
         }
     }
 
@@ -3674,6 +3723,7 @@ async fn grok_server_retrieval_cross_protocol_engine_matrix() {
                 let sent: Value = serde_json::from_slice(&fake.requests()[0].body).unwrap();
                 assert_eq!(sent["tools"], json!([{"type": "web_search"}]));
             }
+            ProviderProtocol::Gemini => unreachable!(),
         }
         if protocol != ProviderProtocol::OpenAIResponses {
             let json: Value = serde_json::from_slice(&response).unwrap();
@@ -3888,6 +3938,82 @@ async fn sticky_group_retries_within_request_then_rebinds_immediately() {
     );
     assert_eq!(fake.requests().len(), before + 1);
     assert_eq!(fake.requests().last().unwrap().host, "b.example.com");
+}
+
+#[tokio::test]
+async fn clear_project_sticky_removes_bindings_and_persists_to_disk() {
+    let dir = temp_config_dir("sticky-clear");
+    let fake = FakeTransport::new();
+    let mut config = two_endpoint_config();
+    config.endpoints[0].sticky_group = Some("ga".into());
+    config.endpoints[1].sticky_group = Some("gb".into());
+    let engine = engine_with_dir(config.normalized(), dir.clone(), fake.clone());
+    let header = session_header(&stable_session("sticky-clear"));
+
+    // 第一次请求建立粘性归属;两边都备好 200,起点组任意。
+    fake.push("a.example.com", sse_ok(&["data: {}\n\n"]));
+    fake.push("b.example.com", sse_ok(&["data: {}\n\n"]));
+    assert_eq!(
+        call(&engine, loopback(), "/v1/messages", header, body())
+            .await
+            .0,
+        200
+    );
+    engine.flush_session_affinity_if_dirty();
+    let persisted = dir.load_session_affinity().unwrap();
+    assert_eq!(persisted.len(), 1, "粘性归属应已落盘");
+    let sticky_key = persisted.keys().next().unwrap().clone();
+
+    // 用目录阻止原子替换：清盘失败必须返回错误；重复调用不能因内存已空而伪报成功。
+    let affinity_path = dir.session_affinity_path();
+    std::fs::remove_file(&affinity_path).unwrap();
+    std::fs::create_dir(&affinity_path).unwrap();
+    assert!(engine.clear_project_sticky("unidentified_project").is_err());
+    assert!(engine.clear_project_sticky("unidentified_project").is_err());
+    std::fs::remove_dir(&affinity_path).unwrap();
+    let recovered = engine.clear_project_sticky("unidentified_project").unwrap();
+    assert_eq!(recovered["cleared"], 0);
+    assert!(dir.load_session_affinity().unwrap().is_empty());
+
+    // 同一会话再次请求，重新建立一条归属，继续验证正常清除链路。
+    fake.push("a.example.com", sse_ok(&["data: {}\n\n"]));
+    assert_eq!(
+        call(
+            &engine,
+            loopback(),
+            "/v1/messages",
+            session_header(&stable_session("sticky-clear")),
+            body()
+        )
+        .await
+        .0,
+        200
+    );
+
+    // 事件带 stickyKey 入库;Claude Code 会话无 workspace 声明,
+    // 项目归属是 unidentified_project。
+    let result = engine.clear_project_sticky("unidentified_project").unwrap();
+    assert_eq!(result["matched"], 1, "应聚合到 1 个粘性键");
+    assert_eq!(result["cleared"], 1, "应清除 1 条内存归属");
+
+    // 清除后落盘文件同步变空;重复清除 matched 不变(事件仍在)但 cleared=0。
+    assert!(dir.load_session_affinity().unwrap().is_empty());
+    let again = engine.clear_project_sticky("unidentified_project").unwrap();
+    assert_eq!(again["cleared"], 0);
+    assert_eq!(again["matched"], 1);
+
+    // 已知键直接清除也应返回 0(幂等)。
+    assert_eq!(engine.clear_session_sticky(&[sticky_key]).unwrap(), 0);
+
+    // 无 runtime store 的引擎给出明确错误。
+    let storeless = engine_with(two_endpoint_config(), fake.clone());
+    assert!(
+        storeless
+            .clear_project_sticky("unidentified_project")
+            .is_err()
+    );
+
+    let _ = std::fs::remove_dir_all(dir.root);
 }
 
 #[tokio::test]
@@ -6433,4 +6559,179 @@ async fn responses_shaped_body_on_chat_route_is_rejected() {
     .unwrap();
     assert_eq!(response["error"], "invalid_request");
     assert!(fake.requests().is_empty());
+}
+
+// Model groups extend candidate selection without replacing any retry policy.
+#[tokio::test]
+async fn endpoint_reorder_reload_routes_new_session_for_default_group_and_flat() {
+    for grouped in [false, true] {
+        let dir = temp_config_dir(if grouped {
+            "reorder-grouped"
+        } else {
+            "reorder-flat"
+        });
+        let fake = FakeTransport::new();
+        let mut config = two_endpoint_config();
+        for endpoint in &mut config.endpoints {
+            endpoint.priority = 0;
+            endpoint.sticky_group = Some(endpoint.id.clone());
+        }
+        if grouped {
+            config.migrate_model_groups();
+        }
+        config = config.normalized();
+        let engine = engine_with_dir(config.clone(), dir.clone(), fake.clone());
+        fake.push("a.example.com", sse_ok(&["data: {}\n\n"]));
+        assert_eq!(
+            call(
+                &engine,
+                loopback(),
+                "/v1/messages",
+                session_header(&stable_session("before-reorder")),
+                body()
+            )
+            .await
+            .0,
+            200
+        );
+        assert_eq!(fake.requests().last().unwrap().host, "a.example.com");
+
+        config.endpoints.swap(0, 1);
+        // 模拟保存旧 bindings + 新 endpoints，真实 reload 负责归一化。
+        let _ = dir.save_config(&config).unwrap();
+        engine.reload_config().unwrap();
+        fake.push("b.example.com", sse_ok(&["data: {}\n\n"]));
+        assert_eq!(
+            call(
+                &engine,
+                loopback(),
+                "/v1/messages",
+                session_header(&stable_session("after-reorder")),
+                body()
+            )
+            .await
+            .0,
+            200
+        );
+        assert_eq!(fake.requests().last().unwrap().host, "b.example.com");
+        // 原会话仍保留粘性，排序调整只决定新会话的初始归属。
+        fake.push("a.example.com", sse_ok(&["data: {}\n\n"]));
+        assert_eq!(
+            call(
+                &engine,
+                loopback(),
+                "/v1/messages",
+                session_header(&stable_session("before-reorder")),
+                body()
+            )
+            .await
+            .0,
+            200
+        );
+        assert_eq!(fake.requests().len(), 3);
+        assert_eq!(fake.requests().last().unwrap().host, "a.example.com");
+        drop(engine);
+        let _ = std::fs::remove_dir_all(dir.root);
+    }
+}
+
+fn with_model_groups(mut config: AppConfig) -> AppConfig {
+    let models: Vec<String> = config.endpoints[0]
+        .mappings
+        .iter()
+        .map(|m| m.client_pattern.clone())
+        .collect();
+    config.model_groups = Some(config.endpoints.iter().enumerate().map(|(i, e)| {
+        serde_json::from_value(json!({"id": format!("group-{i}"), "name": format!("Group {i}"),
+            "priority": i, "models": models, "bindings":[{"endpointID":e.id,"priority":0,"models":null}]})).unwrap()
+    }).collect());
+    config
+}
+
+#[tokio::test]
+async fn model_groups_keep_500_entry_retries_then_switch_groups() {
+    let fake = FakeTransport::new();
+    let mut config = with_model_groups(two_endpoint_config());
+    config.retry.max_500_retries = 1;
+    for _ in 0..2 {
+        fake.push(
+            "a.example.com",
+            Outcome::Status {
+                status: 500,
+                headers: vec![],
+                chunks: vec![],
+            },
+        );
+    }
+    fake.push("b.example.com", sse_ok(&["data: {\"ok\":true}\n\n"]));
+    let engine = engine_with(config, fake.clone());
+    let (status, _) = call(&engine, loopback(), "/v1/messages", vec![], body()).await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        fake.requests()
+            .iter()
+            .map(|r| r.host.as_str())
+            .collect::<Vec<_>>(),
+        ["a.example.com", "a.example.com", "b.example.com"]
+    );
+    assert!(
+        engine
+            .runtime_snapshot()
+            .recent_events
+            .iter()
+            .any(|e| e.model_group_id.as_deref() == Some("group-1"))
+    );
+}
+
+#[tokio::test]
+async fn model_groups_preserve_disabled_500_failover() {
+    let fake = FakeTransport::new();
+    let mut config = with_model_groups(two_endpoint_config());
+    config.retry.failover_on_500 = false;
+    fake.push(
+        "a.example.com",
+        Outcome::Status {
+            status: 500,
+            headers: vec![],
+            chunks: vec![],
+        },
+    );
+    let engine = engine_with(config, fake.clone());
+    let (status, _) = call(&engine, loopback(), "/v1/messages", vec![], body()).await;
+    assert_eq!(status, 500);
+    assert_eq!(fake.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn model_groups_preserve_deferred_rounds_and_same_model() {
+    let fake = FakeTransport::new();
+    let mut config = with_model_groups(two_endpoint_config());
+    config.retry.max_deferred_rounds = 2;
+    for host in ["a.example.com", "b.example.com"] {
+        fake.push(
+            host,
+            Outcome::Status {
+                status: 429,
+                headers: vec![],
+                chunks: vec![],
+            },
+        );
+    }
+    fake.push("a.example.com", sse_ok(&["data: {\"ok\":true}\n\n"]));
+    let engine = engine_with(config, fake.clone());
+    let (status, _) = call(&engine, loopback(), "/v1/messages", vec![], body()).await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        fake.requests()
+            .iter()
+            .map(|r| r.host.as_str())
+            .collect::<Vec<_>>(),
+        ["a.example.com", "b.example.com", "a.example.com"]
+    );
+    let models: Vec<_> = fake
+        .requests()
+        .iter()
+        .map(|r| serde_json::from_slice::<Value>(&r.body).unwrap()["model"].clone())
+        .collect();
+    assert!(models.windows(2).all(|p| p[0] == p[1]));
 }

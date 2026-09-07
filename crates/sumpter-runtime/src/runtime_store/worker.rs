@@ -384,7 +384,8 @@ pub(super) fn update_event_projection(
             processed_total_tokens=?34,token_accounting_semantics=?35,
             token_accounting_quality=?36,tool_calls_json=?37
             ,codex_thread_class=?38,attribution_scope=?39,request_method=?40,
-            request_path=?41,route_intent=?42
+            request_path=?41,route_intent=?42,model_group_id=?43,model_group_name=?44,
+            sticky_key=?45
          WHERE seq=?1",
         params![
             seq,
@@ -429,6 +430,9 @@ pub(super) fn update_event_projection(
             projection.request_method,
             projection.request_path,
             projection.route_intent,
+            projection.model_group_id,
+            projection.model_group_name,
+            projection.sticky_key,
         ],
     )?;
     Ok(())
@@ -706,12 +710,13 @@ pub(super) fn write_batch(
                 output_tokens,cache_read_input_tokens,cache_creation_input_tokens,reasoning_tokens,
                 uncached_input_tokens,processed_input_tokens,processed_total_tokens,
                 token_accounting_semantics,token_accounting_quality,tool_calls_json
-                ,codex_thread_class,attribution_scope,request_method,request_path,route_intent
+                ,codex_thread_class,attribution_scope,request_method,request_path,route_intent,model_group_id,model_group_name,
+                sticky_key
              ) VALUES(
                 ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?16,
                 ?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,
                 ?32,?33,?34,?35,?36,?37,?38,?39,?40,?41,?42,?43,?44,?45,?46,
-                ?47,?48,?49,?50,?51,?52,?53,?54,?55,?56,?57
+                ?47,?48,?49,?50,?51,?52,?53,?54,?55,?56,?57,?58,?59,?60
              )
              ON CONFLICT(event_id) DO UPDATE SET
                 change_seq=excluded.change_seq,payload_json=excluded.payload_json,
@@ -750,7 +755,9 @@ pub(super) fn write_batch(
                 attribution_scope=excluded.attribution_scope,
                 request_method=excluded.request_method,
                 request_path=excluded.request_path,
-                route_intent=excluded.route_intent",
+                route_intent=excluded.route_intent,
+                model_group_id=excluded.model_group_id,model_group_name=excluded.model_group_name,
+                sticky_key=excluded.sticky_key",
             params![
                 message.seq,
                 message.change_seq,
@@ -809,6 +816,9 @@ pub(super) fn write_batch(
                 projection.request_method,
                 projection.request_path,
                 projection.route_intent,
+            projection.model_group_id,
+            projection.model_group_name,
+            projection.sticky_key,
             ],
         )?;
         mark_event_hourly_rollup_dirty(&transaction, &message.event)?;

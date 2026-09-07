@@ -1074,6 +1074,38 @@ pub(crate) async fn export_runtime_session(
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct ProjectStickyBody {
+    #[serde(rename = "projectID", alias = "project_id")]
+    project_id: String,
+}
+
+pub(crate) async fn clear_project_sticky(
+    State(state): State<AdminState>,
+    payload: JsonPayload<ProjectStickyBody>,
+) -> Response {
+    let body = match require_json(payload) {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
+    let project_id = body.project_id.trim().to_owned();
+    if project_id.is_empty() {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "project_id_required",
+            "必须提供 projectID",
+        );
+    }
+    match state.inner.engine.clear_project_sticky(&project_id) {
+        Ok(value) => json_ok(&value),
+        Err(message) => api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "sticky_clear_failed",
+            &message,
+        ),
+    }
+}
+
 pub(crate) async fn reset_runtime(State(state): State<AdminState>) -> Response {
     match state.inner.engine.reset_runtime() {
         Ok(_) => json_ok(

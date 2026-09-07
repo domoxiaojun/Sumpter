@@ -54,6 +54,8 @@ public struct PlannedEndpoint: Equatable, Sendable, Identifiable {
     public var effortOverride: ReasoningEffort?
     public var failoverTimeoutSeconds: Double?
     public var priority: Int
+    public var modelGroupID: String? = nil
+    public var modelGroupRank: Int = 0
 
     public var routeMode: RouteMode {
         sourceFormat == providerProtocol ? .native : .translated
@@ -579,10 +581,11 @@ public struct RoutePlanner {
             )
         }
 
-        let matching = config.endpoints.filter { $0.preferredMapping(for: baseModel) != nil }
+        let scoped = config.routingEndpoints(for: baseModel)
+        let matching = scoped.filter { $0.preferredMapping(for: baseModel) != nil }
         guard !matching.isEmpty else { throw RoutePlanningError.noProviderForModel(baseModel) }
         let endpoints = plannedEndpoints(
-            endpoints: config.endpoints,
+            endpoints: scoped,
             effectiveModel: baseModel,
             sourceFormat: sourceFormat
         )
@@ -634,7 +637,7 @@ public struct RoutePlanner {
                     return nil
                 }
                 let upstream = mapping?.upstreamModel(for: effectiveModel) ?? effectiveModel
-                return PlannedEndpoint(
+                var planned = PlannedEndpoint(
                     endpointID: endpoint.id,
                     endpointName: endpoint.name,
                     baseURL: endpoint.baseURL,
@@ -645,10 +648,13 @@ public struct RoutePlanner {
                     stickyGroup: endpoint.stickyGroup,
                     thinking: mapping?.thinking ?? .adaptive,
                     context: mapping?.context ?? .oneMillion,
-                    effortOverride: effortOverride,
+                    effortOverride: effortOverride ?? mapping?.effort,
                     failoverTimeoutSeconds: failoverTimeout,
                     priority: endpoint.priority
                 )
+                planned.modelGroupID = endpoint.modelGroupID
+                planned.modelGroupRank = endpoint.modelGroupRank
+                return planned
             }
         let native = candidates.filter { $0.routeMode == .native }
         return orderEndpoints(native.isEmpty ? candidates : native)
@@ -657,15 +663,16 @@ public struct RoutePlanner {
     /// 无既有会话归属时的确定性入口顺序：按调度组最低 priority，
     /// 同级按该组首次出现位置，组内保持配置顺序。
     private func orderEndpoints(_ endpoints: [PlannedEndpoint]) -> [PlannedEndpoint] {
-        var groups: [(id: String, priority: Int, firstIndex: Int)] = []
+        var groups: [(id: String, rank: Int, priority: Int, firstIndex: Int)] = []
         for (index, endpoint) in endpoints.enumerated() {
             if let groupIndex = groups.firstIndex(where: { $0.id == endpoint.schedulingGroup }) {
                 groups[groupIndex].priority = min(groups[groupIndex].priority, endpoint.priority)
             } else {
-                groups.append((endpoint.schedulingGroup, endpoint.priority, index))
+                groups.append((endpoint.schedulingGroup, endpoint.modelGroupRank, endpoint.priority, index))
             }
         }
         groups.sort {
+            if $0.rank != $1.rank { return $0.rank < $1.rank }
             if $0.priority != $1.priority { return $0.priority < $1.priority }
             return $0.firstIndex < $1.firstIndex
         }

@@ -48,7 +48,8 @@
     "sessionStickyRetries": 0,
     "streamIdleTimeoutSeconds": null
   },
-  "schemaVersion": 6,
+  "sessionStickyTtlHours": 72,
+  "schemaVersion": 7,
   "endpoints": [
     {
       "apiKey": "sk-main-1",

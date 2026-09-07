@@ -8,9 +8,125 @@
 
 <!-- BEGIN SUMPTER_CANONICAL_ONBOARDING -->
 
+## pi 客户端
+
+pi 使用现有代理协议入口。编辑 `~/.pi/agent/models.json`，将以下 provider 合并到已有
+`providers`，不要覆盖其他配置。`id` 填模型组已启用的客户端模型名：
+
+```json
+{
+  "providers": {
+    "sumpter": {
+      "baseUrl": "http://127.0.0.1:57878/v1",
+      "api": "openai-responses",
+      "apiKey": "$SUMPTER_API_KEY",
+      "headers": { "X-Sumpter-Client": "pi" },
+      "models": [{ "id": "your-enabled-model" }]
+    }
+  }
+}
+```
+
+`SUMPTER_API_KEY` 设置为 Sumpter **入站 Token**；入站未启用认证时可用非空占位值 `sumpter`，
+以满足 pi 的模型可用性检查。使用 `pi --provider sumpter --model your-enabled-model` 启动；
+编辑后打开 `/model` 可重新加载配置。模型的上下文长度、输出上限和 reasoning 能力按实际模型填写。
+
+| pi 的 `api` | Sumpter `baseUrl` 示例 |
+|---|---|
+| `openai-responses` / `openai-completions` | `http://127.0.0.1:57878/v1` |
+| `anthropic-messages` | `http://127.0.0.1:57878` |
+| `google-generative-ai` | `http://127.0.0.1:57878/v1beta` |
+
+同一代理地址下可以配置多个 provider，分别选择协议；上游入口须能承接对应协议。
+Codex 专用请求沿用现有入口和认证配置，本扩展不替代 pi 登录或修改 OAuth。
+
+### pi 项目与会话归因扩展
+
+在**运行 pi 的主机**安装 `pi-project-attribution.ts`。扩展要求当前 pi 支持
+`before_provider_headers`，只为带 `X-Sumpter-Client: pi` 的 provider 追加归因；不要在直连
+其他服务的 provider 上设置该标识。无需改 pi 源码或 shell 启动文件。
+
+资源位置：Linux 包的 `scripts/pi-project-attribution.ts`；macOS App 的
+`Contents/Resources/pi-project-attribution.ts`；源码的 `scripts/pi-project-attribution.ts`。
+
+先临时加载验证（将路径替换为实际资源位置）：
+
+```sh
+pi -e /path/to/pi-project-attribution.ts --provider sumpter --model your-enabled-model
+```
+
+永久安装：
+
+```sh
+mkdir -p "$HOME/.pi/agent/extensions"
+cp /path/to/pi-project-attribution.ts "$HOME/.pi/agent/extensions/pi-project-attribution.ts"
+```
+
+如目标文件已经存在，先备份再更新。重启 pi 或执行 `/reload`。
+Linux listener 也提供受现有访问控制与入站认证保护的下载入口：
+
+```sh
+curl --fail --show-error \
+  -H "Authorization: Bearer $SUMPTER_API_KEY" \
+  http://127.0.0.1:57878/__sumpter/pi-project-attribution.ts \
+  -o /tmp/pi-project-attribution.ts
+```
+
+将地址替换为实际 Sumpter 地址，再按上面的安装步骤复制下载文件。
+移除扩展时只删除自己安装的文件，然后 `/reload`：
+
+```sh
+rm "$HOME/.pi/agent/extensions/pi-project-attribution.ts"
+```
+
+扩展按当前会话获取 ID、项目目录及本地用户名；Git 项目使用仓库根目录，普通目录使用当前目录。
+恢复、分叉或切换会话后自动更新。Git remote 去掉用户名、密码、query 和 fragment 后才发送。
+中文路径通过带 `uri-v1` 标记的编码传输，Sumpter 解码后沿用现有归因清洗与本地存储规则。
+所有 `X-Sumpter-*` 归因头在出站前剥离，原生请求体、认证与协议会话头不由扩展改写。
+
+验证时发一条请求，在“运行”检查客户端为 **pi**、项目及会话 ID 正确，再按 pi 筛选统计并查看会话导出。
+统计中的提示基于当前视图：**已观察到归因 / 存在未归因请求 / 暂无可判定数据**；无流量不等于未安装。
+未安装扩展时仍可根据 pi 原生身份头识别客户端；未上送的项目或会话保留“未识别”，不根据消息内容猜测。
+
+## Linux/macOS 客户端归因脚本统一安装
+
+Claude Code、Grok Build、Gemini CLI 共用 `client-attribution.mjs`。它们使用同一套项目名、工作区、用户、脱敏 Git remote 和 URI 编码规则；客户端的原生启动参数与会话恢复参数保持不变。Pi 仍使用 Pi 原生扩展机制。
+
+macOS：在「设置 → 安全」的项目归因面板选择客户端与终端 Shell，自动显示本机配置状态；点击「安装配置」或「还原配置」，操作后自动复查。需要 Node.js 18+。
+
+Linux：在运行客户端的主机执行，不要用 `sudo`。安装包内可直接运行 `bash scripts/setup-client-attribution.sh` 进入交互菜单，也可远程下载：
+
+```bash
+export SUMPTER_BASE_URL='http://127.0.0.1:57878'
+export SUMPTER_AUTH_TOKEN='替换为 Sumpter 入站 Token'
+curl --fail --show-error -H "Authorization: Bearer $SUMPTER_AUTH_TOKEN" \
+  "${SUMPTER_BASE_URL%/}/__sumpter/setup-client-attribution.sh" \
+  -o setup-client-attribution.sh
+
+# 选择 claude、grok、gemini 或 all；自动安装支持 bash/zsh
+bash setup-client-attribution.sh status all
+bash setup-client-attribution.sh install all
+bash setup-client-attribution.sh restore all
+```
+
+Linux 脚本自动获取配套安装器，安装和还原后显示当前状态；支持 `--shell bash|zsh` 与 `--rc 文件`。
+
+安装器会备份 shell rc，并只替换 Sumpter 管理的对应归因标记块；重复安装幂等，`uninstall` 删除所选块，`restore` 只恢复所选客户端安装前的旧块并保留其他改动。安装、卸载、还原后新开终端。也可以不安装，直接临时运行：
+
+```bash
+node client-attribution.mjs run claude -- --help
+node client-attribution.mjs run grok -- --help
+```
+
+Gemini 运行前还需设置 `SUMPTER_GEMINI_BASE_URL` 和 `SUMPTER_AUTH_TOKEN`；统一入口会设置 Gemini 的 Base URL、认证方式和归因 header。显式 `--resume`、`--session-id`、`--session-file` 或 `--list-sessions` 时不生成新会话 ID，避免改变客户端恢复语义。
+
+三者都只把归因 header 发送到 Sumpter；代理解析后从发往上游的请求剥离。工作区路径只在 Sumpter 本地统计中保存脱敏形态，Git remote 会删除凭据、query 和 fragment。
+
+Pi 扩展仍从 `scripts/pi-project-attribution.ts` 或 listener 的 `/__sumpter/pi-project-attribution.ts` 获取，安装到 `~/.pi/agent/extensions/` 后执行 `/reload`；必须在 Pi 的 Sumpter provider 上设置 `X-Sumpter-Client: pi`。
+
 ## 开箱路径（固定顺序）
 
-第一次使用只做 3 件事：找到配置 → 填一个上游服务（Provider）→ 启动 Sumpter 并接入客户端。
+第一次使用只做 3 件事：找到配置 → 配置入口与模型组→ 启动 Sumpter 并接入客户端。
 备用入口、重试和功能规则等高级配置，等基本使用后再设置。
 
 ### 1. 找到配置文件
@@ -26,13 +142,23 @@
 ### 2. 只填一个上游服务入口
 
 在 `endpoints[]`（上游服务列表）中先只启用一个入口，填 `baseURL`（上游服务地址）、`apiKey`、
-`enabled: true` 和 `mappings`。例如：
+`enabled: true`。需要改上游模型名或设置模型参数时填写 `mappings`。例如：
 
 ```json
 { "clientPattern": "gpt-5.4", "upstreamModel": "gpt-5.4" }
 ```
 
-`clientPattern` 必须和客户端实际使用的模型名一致；不确定时先用精确名称。
+然后在“模型组”启用默认组（或新建组），添加客户端使用的模型名，从入口库添加刚才的入口，选择“全部组内模型”或勾选指定模型后保存。示例文件的入口和默认组均停用，须分别启用。
+
+手工配置对应 `modelGroups[].models` 与 `bindings`；`endpointID` 必须引用已有入口 ID：
+
+```json
+{"id":"main","name":"主用","enabled":true,"priority":0,"models":["gpt-5.4"],"bindings":[{"endpointID":"your-endpoint-id","enabled":true,"priority":0,"models":null}]}
+```
+
+组内模型名必须和客户端实际使用的模型名一致；不确定时先用精确名称。模型名相同的多个入口可绑定到同一组，也可按用途放到不同组；客户端地址不变。
+
+配置多个入口后，同一会话默认粘在上次成功的入口组，时长由顶层 `sessionStickyTtlHours` 控制（单位小时，默认 72；`0` 表示永不过期）。想立即改走新顺序，在统计页对应项目行点「清除粘性归属」，或在入口库把粘性时长改为更短的值——默认组的入口顺序与优先级始终跟随入口库的列表顺序和 Priority。
 
 ### 3. 接入客户端
 
@@ -45,7 +171,7 @@ export ANTHROPIC_BASE_URL=http://127.0.0.1:57878
 Codex：**Base URL 必须带 `/v1`**。
 
 ```toml
-model = "gpt-5.4"                 # 改成你 mapping 里的模型名
+model = "gpt-5.4"                 # 改成你模型组里的模型名
 model_provider = "sumpter"
 
 [model_providers.sumpter]
@@ -67,13 +193,19 @@ experimental_bearer_token = "填 listener.authToken（未启用鉴权时删除�
 
 <!-- END SUMPTER_CANONICAL_ONBOARDING -->
 
-两端当前使用 **schema v6** 的 `config.json`。启动或热重载时自动迁移旧的 schema v3 / v4 / v5；更早的
+两端当前使用 **schema v7** 的 `config.json`。启动或热重载时自动迁移旧的 schema v3 / v4 / v5 / v6；更早的
 格式和旧 `keys.json` 不会被读取，可留作人工转换的草稿。迁移会先创建带时间戳的
-`config.before-schema-v6-*.json` 原始备份，成功后才原子替换配置。
+`config.before-schema-v7-*.json` 原始备份，成功后才原子替换配置。
 
 本文是 Linux 发布包的使用指南。源码 monorepo 中它位于 `platforms/linux/USAGE.md`；发布阶段会把
 `platforms/linux/` 提升为包根，届时本文与同目录 `README.md` 位于发布包根目录。开箱模板的真源是
 仓库根 `docs/usage-onboarding.md`，由 `scripts/sync-usage-docs.py` 同步到仓库根 `USAGE.md` 和本文件。
+
+## 模型组调度
+
+需要多个 OpenAI、Claude、Gemini、Grok 等入口共用一个客户端地址时，在“模型组”中声明模型范围，再把入口库中的连接绑定到一个或多个组。客户端继续使用原模型名；基础候选依次按组优先级、组顺序、入口优先级和入口顺序排列。实际调度保留会话粘性与冷却规则；允许故障切换时继续尝试后续组中的同一模型，不自动更换模型。
+
+入口库负责地址、密钥和原始映射，模型组只负责模型范围与入口绑定。原有 HTTP 500 重试、跨轮重试、冷却、退避、`Retry-After`、会话粘性、超时、raw 透传和 Live/Realtime/Video 资源绑定继续由全局调度器处理。绑定的 `models` 省略或为 `null` 表示全部组内模型，`[]` 表示不承接；`overrides` 可为某个精确模型设置 `upstreamModel` 与 `priority`。
 
 ## 文档怎么读
 
@@ -139,7 +271,7 @@ Docker、systemd、Admin HTTPS 反代、卸载见 [`README.md`](README.md)。
 1. 把上一节推荐的模板复制到配置路径。
 2. `chmod 600` 该文件。
 3. 至少改一个 `endpoints[]` 的 `baseURL`、`apiKey`、`enabled: true`，并在 `mappings` 里写下客户端实际会发的模型名。
-4. `schemaVersion` 保持 `6`；新入口的 `protocol` 默认使用 `auto`。
+4. `schemaVersion` 保持 `7`；新入口的 `protocol` 默认使用 `auto`。
 5. 启动 App 或 Linux 服务。
 
 没有 `config.json`、只有旧 `keys.json` 时，进程会拒启，且不会改你的旧文件。
@@ -191,12 +323,19 @@ export OPENAI_BASE_URL=http://127.0.0.1:57878/v1
 | `anthropic` | 入口标签为 Anthropic |
 | `openai` | 入口标签为 OpenAI Chat |
 | `openai-responses` | 入口标签为 OpenAI Responses |
+| `gemini` | Gemini Developer API / Google AI Studio 原生 REST |
 
 这些值不会作为出站协议发送给上游，也不会让 Sumpter 对 HTTP 请求做协议转换或拒绝。
 
 ---
 
 ## 4. 协议与路径
+
+Gemini CLI 使用 Gemini Developer API 原生 REST：`POST /v1beta/models/{model}:generateContent`
+与 `:streamGenerateContent?alt=sse`。将入口协议设为 `gemini`（或 `auto`）即可按模型映射
+透传；默认以 `x-goog-api-key` 认证，`apiKey` 以 `Bearer ` 开头时改用 Bearer。Vertex、
+OAuth 和 Service Account 不属于本适配范围。客户端归因识别 `GeminiCLI` User-Agent；项目
+归因需由 wrapper 显式发送 `X-Sumpter-Project` / `X-Sumpter-Workspace`，本地路径不会写入上游。
 
 数据面通常不识别、重建或转换协议，也不维护路径别名白名单。除 `/__*` 本地控制接口外，任意
 HTTP 方法和任意路径都会进入同一条转发链：入站鉴权 → Provider 选择 → failover/retry →
@@ -211,12 +350,12 @@ Quicksilver JSON；CPA 一类 Provider 自己负责对应协议。无 `call_id` 
 仍归类为公开 Realtime WebSocket，带 call id 的后续请求则钉回创建会话的入口。
 另一个例外是 `GET /v1/models`（以及 `/models`、`/openai/v1/models` 和带模型 id 的子路径）：
 按当前启用入口的 `mappings` 生成本地目录，不转发到上游。普通 OpenAI 客户端拿到
-`{object:"list",data:[...]}`；Codex Desktop/CLI 带 `client_version` 时拿到 `{models:[...]}`。
+`{object:"list",data:[...]}`；Codex Desktop/CLI 带 `client_version` 时拿到 `{models:[...]}`：官方 slug 用嵌入的 Codex catalog 原件，其余模型 clone `gpt-5.5` 模板只改身份字段。
 这样 Codex 的目录探测不会打到排序最前的任意 OpenAI 入口。
 Live/Realtime 只接受可用 Provider 上的精确 mapping，不使用 `*` 通配或 Anthropic 文本入口；
 缺少精确 Live mapping 时返回 `no_live_provider`，避免语音请求误发到普通模型。
 
-Provider 选择仍以已配置的 `mappings` 为准。JSON 只用于读取路由所需的模型元数据：请求已有
+普通模型候选由模型组及其入口绑定生成；未配置模型组时沿用入口 `mappings`。JSON 只用于读取路由所需的模型元数据：请求已有
 顶层 `model` 或 `session.model` 且对应 mapping 配置了不同的 `upstreamModel` 时，才替换这一
 个模型值；不会主动新增 `model`，不会删除或重排其它字段。无论路径是否带 `/v1`、`/openai/v1`
 或其它前缀，原始路径都会按客户端写法交给 Provider，不做别名归一化。
@@ -288,7 +427,7 @@ Linux 的 Web Admin 地址 **不是** 这个字段，默认永远是 `127.0.0.1:
 | `id` | 唯一。改 id 会让用量统计断成两截 |
 | `baseURL` | 上游根，不要抄错路径 |
 | `apiKey` | 明文，仅本机文件 |
-| `protocol` | 必填四态：`auto`（默认）/ `anthropic` / `openai` / `openai-responses` |
+| `protocol` | 必填五态：`auto`（默认）/ `anthropic` / `openai` / `openai-responses` / `gemini` |
 | `enabled` | `false` 的入口不参与 |
 | `priority` | 非负整数，越小越优先；同级按数组顺序；`0` 可不写 |
 | `mappings` | **必须**声明本入口承接的客户端模型；空数组 = 不接任何模型 |
@@ -326,7 +465,7 @@ Linux 的 Web Admin 地址 **不是** 这个字段，默认永远是 `127.0.0.1:
 
 ```json
 {
-  "schemaVersion": 6,
+  "schemaVersion": 7,
   "listener": {
     "host": "127.0.0.1",
     "port": 57878,
@@ -388,12 +527,12 @@ Linux 的 Web Admin 地址 **不是** 这个字段，默认永远是 `127.0.0.1:
 
 ### 旧配置怎么迁
 
-- schema v3 / v4 / v5 会在启动时迁到 v6，备份名为 `config.before-schema-v6-*.json`。
+- schema v3 / v4 / v5 / v6 会在启动时迁到 v7，备份名为 `config.before-schema-v7-*.json`。
 - 旧 `pools` 会按原顺序展平为顶层 `endpoints`；非主池入口会拿到更高的连续 `priority`。
 - 旧池级 `globalModels` 只复制给当时 `mappings` 为空的入口，然后删除。
 - 旧 `featureRules[].target.poolID` 删除；规则目标改走入口序列 / 可选 `endpointID`。
 - 旧 `listener.inboundDialectPassthrough=true` 会把当时的入口改成 `protocol: "auto"`；为 `false` 或缺失时保留三种固定协议；缺少 `protocol` 的旧入口按历史默认迁为 `anthropic`。
-- 迁移失败不会覆盖旧文件。已经是 v6 的配置不会再迁一遍。
+- 迁移失败不会覆盖旧文件。已经是 v7 的配置不会再迁一遍。
 
 ---
 
@@ -541,7 +680,7 @@ curl 风格 `名字: 值`，**一行一个**，三个都可选。但手工设有
 
 | 现象 | 先查 |
 |---|---|
-| 进程起不来 | 配置路径对不对；是不是只有 `keys.json`；JSON 是否合法；权限是否 0600；`schemaVersion` 是否为 6（旧文件应能自动迁移） |
+| 进程起不来 | 配置路径对不对；是不是只有 `keys.json`；JSON 是否合法；权限是否 0600；`schemaVersion` 是否为 7（旧文件应能自动迁移） |
 | Claude Code 连不上 | `ANTHROPIC_BASE_URL` 是否指向当前 `host:port` |
 | 401 | `authToken` 开了但客户端没带，或带错 |
 | 400 `route_planning` | 没有任何入口的 `mappings` 声明该模型，或声明它的入口全部停用；空 `mappings` 等于不接模型 |
@@ -559,6 +698,6 @@ curl 风格 `名字: 值`，**一行一个**，三个都可选。但手工设有
 1. 问清：macOS 还是 Linux；要接 Claude Code、Codex 还是两者。
 2. 定位配置文件路径；没有就从 example 复制，不要用仓库里的 example 当生产文件原地填 key。
 3. 向用户要：每个 Provider 入口的 baseURL + key，以及客户端实际会发的模型名。
-4. 写入 `config.json`，确认 `schemaVersion: 6`、顶层是 `endpoints`（没有 `pools`），且至少一条入口为 `enabled: true` 并带覆盖客户端模型的 `mappings`。
+4. 写入 `config.json`，确认 `schemaVersion: 7`、顶层是 `endpoints`（没有 `pools`），且至少一条入口为 `enabled: true` 并带覆盖客户端模型的 `mappings`。
 5. 告诉用户怎么设 `ANTHROPIC_BASE_URL`（以及可选 `ANTHROPIC_AUTH_TOKEN`）。接 Codex 时给一份 `~/.codex/config.toml` 的 `model_providers` 片段。
 6. **不要**把 key 写进回复；**不要** `git add` 配置；**不要**改源码。

@@ -40,7 +40,7 @@ extension AppModel {
             guard config.endpoint(id: id) == nil else {
                 throw AppModelError.invalidInput("入口 ID 已存在: \(id)")
             }
-            config.endpoints.append(Endpoint(
+            config.addEndpointToLibrary(Endpoint(
                 id: id,
                 name: cleanName,
                 baseURL: baseURL,
@@ -51,6 +51,7 @@ extension AppModel {
                 stickyGroup: group.isEmpty ? nil : group,
                 keepAlive: keepAlive
             ))
+
         }
     }
 
@@ -468,6 +469,17 @@ extension AppModel {
         }
     }
 
+    /// 设置会话粘性归属的存活时长(小时)。<= 0 表示永不过期(仍受条目上限约束);
+    /// 引擎在 replace_config 时读取该值,无需重启。
+    func setSessionStickyTTL(hours: Double) async throws {
+        guard hours.isFinite, hours >= 0 else {
+            throw AppModelError.invalidInput("会话粘性时长必须是 ≥ 0 的小时数")
+        }
+        try await mutateConfig { config in
+            config.sessionStickyTtlHours = hours
+        }
+    }
+
     // MARK: - Claude Code 配置备份
 
     func backupClaudeSettings() {
@@ -547,6 +559,9 @@ extension AppModel {
         var draft = previous
         try body(&draft)
         draft.pruneDanglingEndpointReferences()
+        // 默认组绑定跟随入口库顺序/优先级(对齐 Rust normalized()),任何入口
+        // 增删、排序或改优先级后默认组都保持同步,入口库即唯一事实来源。
+        draft.syncDefaultGroupBindings()
         try draft.validateModelGroups()
         draft.normalizeBuiltInFeatureRules()
         config = draft
@@ -593,7 +608,7 @@ extension AppModel {
         UserDefaults.standard.set(true, forKey: defaultsKey)
         configMigrationNotice = notice
         let expanded = notice.autoEndpointIDs.count
-        let suffix = expanded > 0 ? "，其中 \(expanded) 个入口已转为自动（三协议）" : ""
+        let suffix = expanded > 0 ? "，其中 \(expanded) 个入口已转为自动（四协议）" : ""
         flash("配置已迁移到 v\(notice.toSchema)\(suffix)；旧文件已备份")
     }
 

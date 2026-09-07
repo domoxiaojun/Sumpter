@@ -14,6 +14,36 @@ final class RuntimeV2WireContractTests: XCTestCase {
         XCTAssertNil(object["poolID"], "新 runtime JSON 不得重新输出已废弃字段")
     }
 
+    func testStickyKeyRoundTripsAndOmitsWhenAbsent() throws {
+        // Rust 事件 wire 的 stickyKey 是会话粘性归属键(affinity 哈希)。
+        // 带:解码并回写;不带(早期拒绝/旧事件):保持 nil 且编码省略。
+        let data = Data(#"{"id":"sticky-1","timestamp":1.5,"kind":"client","statusCode":200,"durationMS":12,"failover":false,"stickyKey":"affinity-9f2c"}"#.utf8)
+        let event = try JSONDecoder().decode(RuntimeEvent.self, from: data)
+        XCTAssertEqual(event.stickyKey, "affinity-9f2c")
+        let encoded = try JSONEncoder().encode(event)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertEqual(object["stickyKey"] as? String, "affinity-9f2c")
+
+        let legacy = Data(#"{"id":"sticky-0","timestamp":1.5,"kind":"client","statusCode":200,"durationMS":12,"failover":false}"#.utf8)
+        let oldEvent = try JSONDecoder().decode(RuntimeEvent.self, from: legacy)
+        XCTAssertNil(oldEvent.stickyKey)
+        let oldEncoded = try JSONEncoder().encode(oldEvent)
+        let oldObject = try XCTUnwrap(JSONSerialization.jsonObject(with: oldEncoded) as? [String: Any])
+        XCTAssertNil(oldObject["stickyKey"], "nil 时不得输出键")
+    }
+
+    func testSessionStickyTTLHoursDecodesWithDefaultAndClamp() throws {
+        // 缺省 = 72h(与 Rust default 对齐);负值/NaN 落盘口径是 0 = 永不过期。
+        let absent = try JSONDecoder().decode(AppConfig.self, from: Data(#"{"schemaVersion":7}"#.utf8))
+        XCTAssertEqual(absent.sessionStickyTtlHours, 72)
+
+        let withValue = try JSONDecoder().decode(AppConfig.self, from: Data(#"{"schemaVersion":7,"sessionStickyTtlHours":0}"#.utf8))
+        XCTAssertEqual(withValue.sessionStickyTtlHours, 0)
+        let encoded = try JSONEncoder().encode(withValue)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertEqual(object["sessionStickyTtlHours"] as? Double, 0, "0 也要显式写出,对齐 Rust 契约")
+    }
+
     func testPricingMutationDecodesPutAcknowledgement() throws {
         let data = Data(#"{"revision":7,"currency":"USD","priceCount":3}"#.utf8)
         let value = try JSONDecoder().decode(AdminWire.RuntimePricingMutation.self, from: data)

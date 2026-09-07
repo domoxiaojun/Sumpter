@@ -18,6 +18,7 @@ pub enum SseDialect {
     OpenAiChat,
     OpenAiImages,
     OpenAiResponses,
+    Gemini,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +38,7 @@ pub struct SseTerminalTracker {
     json_pending: Vec<u8>,
     json_observed: bool,
     observation_truncated: bool,
+    gemini_terminal: Option<SseTerminal>,
 }
 
 impl SseTerminalTracker {
@@ -51,6 +53,7 @@ impl SseTerminalTracker {
             json_pending: Vec::new(),
             json_observed: false,
             observation_truncated: false,
+            gemini_terminal: None,
         }
     }
 
@@ -65,6 +68,18 @@ impl SseTerminalTracker {
 
     pub fn stop_reason(&self) -> Option<&str> {
         self.stop_reason.as_deref()
+    }
+
+    /// Gemini may send usage-only frames after finishReason. Observe until
+    /// transport EOF so those frames reach the client and the accounting.
+    pub fn finish(&mut self) -> Option<SseTerminal> {
+        if self.dialect != SseDialect::Gemini {
+            return None;
+        }
+        if !self.pending.is_empty() {
+            let _ = self.push(b"\n\n");
+        }
+        self.gemini_terminal.take()
     }
 
     /// Whether the bounded non-stream observer had to drop body bytes. This is
@@ -119,6 +134,10 @@ impl SseTerminalTracker {
             &mut self.stop_reason,
         );
         let terminal = classify_json(self.dialect, &value);
+        if self.dialect == SseDialect::Gemini {
+            self.gemini_terminal = terminal;
+            return None;
+        }
         if terminal.is_some() {
             self.terminal_seen = true;
             self.pending.clear();
@@ -160,6 +179,15 @@ impl SseTerminalTracker {
             if let Some(terminal) = classify(self.dialect, &payload)
                 .or_else(|| classify_event_name(self.dialect, frame_event_name(&frame)))
             {
+                if self.dialect == SseDialect::Gemini {
+                    if !matches!(
+                        self.gemini_terminal,
+                        Some(SseTerminal::Failed { .. } | SseTerminal::Incomplete { .. })
+                    ) {
+                        self.gemini_terminal = Some(terminal);
+                    }
+                    continue;
+                }
                 self.terminal_seen = true;
                 self.pending.clear();
                 return Some(terminal);
@@ -200,6 +228,7 @@ fn observe_response_summary_value(
         SseDialect::OpenAiResponses => value
             .get("usage")
             .or_else(|| value.pointer("/response/usage")),
+        SseDialect::Gemini => value.get("usageMetadata"),
         SseDialect::OpenAiChat => value.get("usage"),
         SseDialect::OpenAiImages => None,
     };
@@ -233,6 +262,23 @@ fn observe_response_summary_value(
                 "/prompt_tokens_details/cache_read_tokens",
             ],
         );
+        if dialect == SseDialect::Gemini {
+            merge_max(&mut usage.input_tokens, value, &["promptTokenCount"]);
+            let output = value.get("candidatesTokenCount").and_then(Value::as_u64);
+            let thoughts = value.get("thoughtsTokenCount").and_then(Value::as_u64);
+            if output.is_some() || thoughts.is_some() {
+                merge_token_count(
+                    &mut usage.output_tokens,
+                    output.unwrap_or(0).saturating_add(thoughts.unwrap_or(0)),
+                );
+            }
+            merge_max(&mut usage.reasoning_tokens, value, &["thoughtsTokenCount"]);
+            merge_max(
+                &mut usage.cache_read_input_tokens,
+                value,
+                &["cachedContentTokenCount"],
+            );
+        }
         merge_max(
             &mut usage.cache_creation_input_tokens,
             value,
@@ -287,6 +333,9 @@ fn observe_response_summary_value(
         SseDialect::OpenAiResponses => value
             .pointer("/response/incomplete_details/reason")
             .or_else(|| value.pointer("/incomplete_details/reason"))
+            .and_then(Value::as_str),
+        SseDialect::Gemini => value
+            .pointer("/candidates/0/finishReason")
             .and_then(Value::as_str),
         SseDialect::OpenAiImages => None,
     };
@@ -352,6 +401,7 @@ fn classify_json(dialect: SseDialect, value: &Value) -> Option<SseTerminal> {
                 _ => None,
             }
         }
+        SseDialect::Gemini => classify_gemini(value),
         SseDialect::OpenAiImages => None,
     }
 }
@@ -405,6 +455,24 @@ fn observe_tool_call_value(dialect: SseDialect, value: &Value, calls: &mut Vec<S
         SseDialect::OpenAiChat => chat_tool_names(value),
         SseDialect::OpenAiImages => Vec::new(),
         SseDialect::Anthropic => anthropic_tool_names(value),
+        SseDialect::Gemini => value
+            .get("candidates")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .flat_map(|candidate| {
+                candidate
+                    .pointer("/content/parts")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+            })
+            .filter_map(|part| {
+                part.pointer("/functionCall/name")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect(),
     };
     for name in candidates {
         let name = name.trim();
@@ -657,7 +725,52 @@ fn classify(dialect: SseDialect, payload: &str) -> Option<SseTerminal> {
             }),
             _ => None,
         },
+        SseDialect::Gemini => classify_gemini(&value),
     }
+}
+
+fn classify_gemini(value: &Value) -> Option<SseTerminal> {
+    if value.get("error").is_some() {
+        return Some(SseTerminal::Failed {
+            detail: "gemini response error".into(),
+        });
+    }
+    if value
+        .pointer("/promptFeedback/blockReason")
+        .and_then(Value::as_str)
+        .is_some_and(|reason| !matches!(reason, "" | "BLOCK_REASON_UNSPECIFIED"))
+    {
+        return Some(SseTerminal::Incomplete {
+            detail: "gemini prompt blocked".into(),
+        });
+    }
+    // CountTokens and EmbedContent are complete unary response contracts.
+    if value.get("totalTokens").is_some_and(Value::is_u64)
+        || value
+            .pointer("/embedding/values")
+            .is_some_and(Value::is_array)
+    {
+        return Some(SseTerminal::Completed);
+    }
+    let candidates = value.get("candidates")?.as_array()?;
+    if candidates.is_empty() {
+        return None;
+    }
+    for candidate in candidates {
+        let reason = candidate.get("finishReason")?.as_str()?;
+        if matches!(reason, "" | "FINISH_REASON_UNSPECIFIED") {
+            return None;
+        }
+        if reason != "STOP" {
+            return Some(SseTerminal::Incomplete {
+                detail: format!(
+                    "gemini response incomplete ({})",
+                    safe_token(reason).unwrap_or_else(|| "unknown".into())
+                ),
+            });
+        }
+    }
+    Some(SseTerminal::Completed)
 }
 
 fn classify_responses_completed(value: &Value) -> SseTerminal {

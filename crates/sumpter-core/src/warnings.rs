@@ -272,7 +272,9 @@ mod tests {
             feature_rules: vec![],
             listener: ListenerConfig::default(),
             retry: RetryPolicy::default(),
+            session_sticky_ttl_hours: crate::config::DEFAULT_SESSION_STICKY_TTL_HOURS,
             schema_version: SCHEMA_VERSION,
+            model_groups: None,
         }
     }
 

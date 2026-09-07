@@ -54,6 +54,77 @@ fn websocket_non_http_connect_error_has_no_upstream_status() {
 }
 
 #[test]
+fn websocket_codex_frame_preserves_workspace_and_canonical_identity() {
+    use sumpter_core::events::CodexMetadata;
+    let body = serde_json::json!({"originator":"Codex Desktop", "response": {
+        "client_metadata": {"x-codex-turn-metadata": serde_json::json!({
+            "session_id":"body-session", "thread_id":"body-thread",
+            "context_window_id":"context", "window_number":0,
+            "turn_trigger":"user_input", "history_ingest_requested":false,
+            "forked_from_thread_id":"parent", "subagent_kind":"thread_spawn",
+            "forked_from_ordinal_exclusive":2,
+            "workspaces":{"/work/project":{}},
+            "tool_namespaces_info":{"functions":{"name":"functions","functions":{}}}
+        }).to_string()}
+    }});
+    let frame = WebSocketMessage::Text(body.to_string().into());
+    let metadata = websocket_message_codex_metadata(&frame).unwrap();
+    let context = WebSocketEventContext {
+        request_id: "request".into(),
+        request_path: "/v1/responses".into(),
+        route_intent: "responses_websocket".into(),
+        client_kind: ClientKind::OpenaiCompat,
+        model: "model".into(),
+        client_declared: None,
+        grok_metadata: None,
+        session_id: Some("header-session".into()),
+        started: Instant::now(),
+        codex_metadata: CodexMetadata::from_request(
+            &[
+                ("session-id".into(), "header-session".into()),
+                ("thread-id".into(), "header-thread".into()),
+            ],
+            None,
+        ),
+    };
+    let merged = websocket_context_with_first_frame(&context, Some(&metadata));
+    assert_eq!(merged.client_kind, ClientKind::Codex);
+    assert_eq!(merged.session_id.as_deref(), Some("body-session"));
+    let result = merged.codex_metadata.unwrap();
+    assert_eq!(result.thread_id.as_deref(), Some("body-thread"));
+    assert_eq!(result.workspaces, metadata.workspaces);
+    assert!(!result.workspaces.is_empty());
+    assert_eq!(result.tool_namespaces_info, metadata.tool_namespaces_info);
+    assert_eq!(result.parent_thread_id.as_deref(), Some("parent"));
+    assert!(result.parent_thread_id_inferred);
+    assert_eq!(result.context_window_id.as_deref(), Some("context"));
+    assert_eq!(result.window_number, Some(0));
+    assert_eq!(result.history_ingest_requested, Some(false));
+    assert_eq!(result.forked_from_ordinal_exclusive, Some(2));
+    assert!(result.has_conflicts);
+    assert!(
+        !result
+            .conflicts
+            .iter()
+            .any(|v| v.contains("header-session"))
+    );
+    let header_parent = CodexMetadata::from_request(
+        &[(
+            "x-codex-parent-thread-id".into(),
+            "authoritative-parent".into(),
+        )],
+        None,
+    );
+    let result =
+        crate::engine::context::merge_codex_metadata(Some(metadata), header_parent).unwrap();
+    assert_eq!(
+        result.parent_thread_id.as_deref(),
+        Some("authoritative-parent")
+    );
+    assert!(!result.parent_thread_id_inferred);
+}
+
+#[test]
 fn websocket_first_frame_originator_upgrades_generic_attribution() {
     let frame = WebSocketMessage::Text(
         r#"{"type":"response.create","model":"gpt-4o","originator":"Codex Desktop"}"#.into(),

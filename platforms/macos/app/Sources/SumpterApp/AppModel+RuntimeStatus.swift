@@ -89,11 +89,20 @@ extension AppModel {
             if let store = self.store {
                 let snapshot = self.config
                 // 磁盘写挪出 MainActor,避免保存时界面卡顿。
-                try await Task.detached(priority: .utility) {
-                    try store.save(snapshot)
-                }.value
+                do {
+                    try await Task.detached(priority: .utility) {
+                        try store.save(snapshot)
+                    }.value
+                } catch {
+                    throw ConfigSaveError(code: "config_write_failed", reason: error.localizedDescription)
+                }
             }
-            try await self.pushConfigToSidecar()
+            do {
+                try await self.pushConfigToSidecar()
+            } catch {
+                let adminError = error as? AdminClient.AdminError
+                throw ConfigSaveError(code: adminError?.serverCode ?? "reload_failed", reason: error.localizedDescription)
+            }
             await self.refreshStatus()
         }
         configPersistenceTail = Task { _ = try? await operation.value }

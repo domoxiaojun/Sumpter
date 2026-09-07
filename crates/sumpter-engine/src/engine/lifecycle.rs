@@ -82,7 +82,11 @@ impl Engine {
     pub fn replace_config(&self, config: AppConfig) -> (String, Vec<String>) {
         let warnings = sumpter_core::warnings::evaluate(&config);
         let generation = config_generation(&config);
+        // TTL 等调度参数跟随配置替换即时生效；粘性归属本身不动，
+        // 只影响后续的周期淘汰。
+        let session_sticky_ttl_secs = config.session_sticky_ttl_secs();
         *self.inner.config.write().unwrap() = Arc::new(config);
+        self.inner.state.lock().unwrap().session_sticky_ttl_secs = session_sticky_ttl_secs;
         *self.inner.generation.write().unwrap() = generation.clone();
         let _ = self.inner.notices.send(EngineNotice::ConfigReloaded {
             generation: generation.clone(),
@@ -90,7 +94,7 @@ impl Engine {
         (generation, warnings)
     }
 
-    /// Reload a validated schema-v6 configuration from the configured
+    /// Reload a validated schema-v7 configuration from the configured
     /// directory.  The old in-memory configuration remains active when
     /// loading, validation, or migration verification fails.
     pub fn reload_config(&self) -> Result<ConfigReplacement, String> {

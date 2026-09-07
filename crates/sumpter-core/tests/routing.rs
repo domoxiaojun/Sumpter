@@ -69,7 +69,9 @@ fn base_config() -> AppConfig {
         feature_rules: vec![],
         listener: ListenerConfig::default(),
         retry: RetryPolicy::default(),
+        session_sticky_ttl_hours: DEFAULT_SESSION_STICKY_TTL_HOURS,
         schema_version: SCHEMA_VERSION,
+        model_groups: None,
     }
     .normalized()
 }
@@ -254,7 +256,9 @@ fn resource_plan_does_not_require_text_model_mapping_or_anthropic_endpoint() {
         feature_rules: vec![],
         listener: ListenerConfig::default(),
         retry: RetryPolicy::default(),
+        session_sticky_ttl_hours: DEFAULT_SESSION_STICKY_TTL_HOURS,
         schema_version: SCHEMA_VERSION,
+        model_groups: None,
     }
     .normalized();
 
@@ -278,7 +282,9 @@ fn files_resource_plan_requires_explicit_files_capability() {
         feature_rules: vec![],
         listener: ListenerConfig::default(),
         retry: RetryPolicy::default(),
+        session_sticky_ttl_hours: DEFAULT_SESSION_STICKY_TTL_HOURS,
         schema_version: SCHEMA_VERSION,
+        model_groups: None,
     }
     .normalized();
 
@@ -311,7 +317,9 @@ fn files_resource_plan_honors_explicit_files_capability() {
         feature_rules: vec![],
         listener: ListenerConfig::default(),
         retry: RetryPolicy::default(),
+        session_sticky_ttl_hours: DEFAULT_SESSION_STICKY_TTL_HOURS,
         schema_version: SCHEMA_VERSION,
+        model_groups: None,
     }
     .normalized();
 
@@ -338,7 +346,9 @@ fn files_resource_plan_does_not_treat_live_or_chat_mapping_as_files() {
         feature_rules: vec![],
         listener: ListenerConfig::default(),
         retry: RetryPolicy::default(),
+        session_sticky_ttl_hours: DEFAULT_SESSION_STICKY_TTL_HOURS,
         schema_version: SCHEMA_VERSION,
+        model_groups: None,
     }
     .normalized();
 
@@ -412,7 +422,9 @@ fn no_providers_at_all_reports_no_provider_for_model() {
         feature_rules: vec![],
         listener: ListenerConfig::default(),
         retry: RetryPolicy::default(),
+        session_sticky_ttl_hours: DEFAULT_SESSION_STICKY_TTL_HOURS,
         schema_version: SCHEMA_VERSION,
+        model_groups: None,
     }
     .normalized();
     let err = RoutePlanner::plan(&plain_request("m"), &config).unwrap_err();
@@ -1321,7 +1333,9 @@ fn video_intent_does_not_use_the_first_text_provider() {
         feature_rules: vec![],
         listener: ListenerConfig::default(),
         retry: RetryPolicy::default(),
+        session_sticky_ttl_hours: DEFAULT_SESSION_STICKY_TTL_HOURS,
         schema_version: SCHEMA_VERSION,
+        model_groups: None,
     }
     .normalized();
 
@@ -1369,7 +1383,9 @@ fn text_wildcard_cannot_steal_video_capability_traffic() {
         feature_rules: vec![],
         listener: ListenerConfig::default(),
         retry: RetryPolicy::default(),
+        session_sticky_ttl_hours: DEFAULT_SESSION_STICKY_TTL_HOURS,
         schema_version: SCHEMA_VERSION,
+        model_groups: None,
     }
     .normalized();
 
@@ -1404,7 +1420,9 @@ fn explicit_mapping_capabilities_override_name_inference_for_routing() {
         feature_rules: vec![],
         listener: ListenerConfig::default(),
         retry: RetryPolicy::default(),
+        session_sticky_ttl_hours: DEFAULT_SESSION_STICKY_TTL_HOURS,
         schema_version: SCHEMA_VERSION,
+        model_groups: None,
     }
     .normalized();
 
@@ -1438,7 +1456,9 @@ fn realtime_public_model_aliases_use_private_codex_live_mapping() {
         feature_rules: vec![],
         listener: ListenerConfig::default(),
         retry: RetryPolicy::default(),
+        session_sticky_ttl_hours: DEFAULT_SESSION_STICKY_TTL_HOURS,
         schema_version: SCHEMA_VERSION,
+        model_groups: None,
     }
     .normalized();
 

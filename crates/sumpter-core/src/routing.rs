@@ -810,6 +810,9 @@ pub enum RouteMode {
 pub struct PlannedEndpoint {
     pub endpoint_id: String,
     pub endpoint_name: String,
+    pub model_group_id: Option<String>,
+    pub model_group_name: Option<String>,
+    pub model_group_rank: usize,
     pub base_url: String,
     /// 配置中声明的四态入口模式。
     pub configured_protocol: EndpointProtocolMode,
@@ -875,19 +878,23 @@ impl RoutePlanner {
     /// 无既有会话归属时的确定性入口顺序：按分组最低 priority 排序，
     /// 同级按首次出现位置；组内保持配置顺序。
     pub fn order_endpoints(endpoints: &[PlannedEndpoint]) -> Vec<PlannedEndpoint> {
-        let mut groups: Vec<(String, i64, usize)> = Vec::new();
+        let mut groups: Vec<(String, usize, i64, usize)> = Vec::new();
         for (index, endpoint) in endpoints.iter().enumerate() {
             let group = endpoint.scheduling_group().to_string();
             if let Some(existing) = groups.iter_mut().find(|item| item.0 == group) {
-                existing.1 = existing.1.min(endpoint.priority);
+                existing.2 = existing.2.min(endpoint.priority);
             } else {
-                groups.push((group, endpoint.priority, index));
+                groups.push((group, endpoint.model_group_rank, endpoint.priority, index));
             }
         }
-        groups.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.2.cmp(&b.2)));
+        groups.sort_by(|a, b| {
+            a.1.cmp(&b.1)
+                .then_with(|| a.2.cmp(&b.2))
+                .then_with(|| a.3.cmp(&b.3))
+        });
         groups
             .iter()
-            .flat_map(|(group, _, _)| {
+            .flat_map(|(group, _, _, _)| {
                 endpoints
                     .iter()
                     .filter(move |endpoint| endpoint.scheduling_group() == group)
@@ -924,7 +931,8 @@ impl RoutePlanner {
         config: &AppConfig,
         capability: crate::capability::ModelCapability,
     ) -> Option<String> {
-        for endpoint in &config.endpoints {
+        for scoped in config.routing_endpoints() {
+            let endpoint = &scoped.endpoint;
             if !endpoint.enabled {
                 continue;
             }
@@ -996,7 +1004,7 @@ impl RoutePlanner {
         source_format: ProviderProtocol,
     ) -> Result<RoutePlan, RoutePlanError> {
         let endpoints = Self::planned_endpoints(
-            &config.endpoints,
+            config,
             RESOURCE_ROUTING_MODEL,
             source_format,
             None,
@@ -1034,7 +1042,7 @@ impl RoutePlanner {
         capability: crate::capability::ModelCapability,
     ) -> Result<RoutePlan, RoutePlanError> {
         let mut endpoints = Self::planned_endpoints(
-            &config.endpoints,
+            config,
             RESOURCE_ROUTING_MODEL,
             source_format,
             None,
@@ -1112,7 +1120,8 @@ impl RoutePlanner {
         // surface instead of the text-model union in that case; a broad text
         // wildcard still cannot satisfy image/video/live requests.
         let model_is_mapped = match capability {
-            Some(wanted) => config.endpoints.iter().any(|endpoint| {
+            Some(wanted) => config.routing_endpoints().iter().any(|scoped| {
+                let endpoint = &scoped.endpoint;
                 endpoint.enabled
                     && endpoint
                         .mapping_for_capability(&base_model, wanted)
@@ -1129,7 +1138,7 @@ impl RoutePlanner {
             });
         }
         let endpoints = Self::planned_endpoints(
-            &config.endpoints,
+            config,
             &base_model,
             source_format,
             None,
@@ -1198,7 +1207,7 @@ impl RoutePlanner {
                 .is_some_and(|endpoint| endpoint.enabled)
         });
         let mut endpoints = Self::planned_endpoints(
-            &config.endpoints,
+            config,
             &effective_model,
             source_format,
             protocol_override,
@@ -1211,7 +1220,7 @@ impl RoutePlanner {
         // 规则钉住的入口被停用/删除时降级为候选序列 failover,而不是让整条规则失效。
         if endpoints.is_empty() && target.endpoint_id.is_some() && !pinned_endpoint_available {
             endpoints = Self::planned_endpoints(
-                &config.endpoints,
+                config,
                 &effective_model,
                 source_format,
                 protocol_override,
@@ -1244,7 +1253,7 @@ impl RoutePlanner {
     /// `pinned_endpoint_id` 非空(规则钉住入口)时只保留该入口并**跳过模型映射筛选**。
     #[allow(clippy::too_many_arguments)]
     fn planned_endpoints(
-        endpoints: &[Endpoint],
+        config: &AppConfig,
         effective_model: &str,
         source_format: ProviderProtocol,
         protocol_override: Option<ProviderProtocol>,
@@ -1254,11 +1263,23 @@ impl RoutePlanner {
         allow_unmapped: bool,
         capability: Option<crate::capability::ModelCapability>,
     ) -> Vec<PlannedEndpoint> {
-        let candidates: Vec<PlannedEndpoint> = endpoints
+        let scoped = if pinned_endpoint_id.is_some() {
+            // Explicit feature rules/resource affinity retain their original semantics.
+            config
+                .endpoints
+                .iter()
+                .cloned()
+                .map(crate::model_groups::RoutingEndpoint::legacy)
+                .collect()
+        } else {
+            config.routing_endpoints()
+        };
+        let candidates: Vec<PlannedEndpoint> = scoped
             .iter()
-            .filter(|e| e.enabled)
-            .filter(|e| pinned_endpoint_id.is_none_or(|id| e.id == id))
-            .filter_map(|endpoint| {
+            .filter(|e| e.endpoint.enabled)
+            .filter(|e| pinned_endpoint_id.is_none_or(|id| e.endpoint.id == id))
+            .filter_map(|scoped| {
+                let endpoint = &scoped.endpoint;
                 // 每个入口都通过显式 mappings 声明承接范围。
                 let mapping = match capability {
                     Some(wanted) => endpoint.mapping_for_capability(effective_model, wanted),
@@ -1306,6 +1327,9 @@ impl RoutePlanner {
                 Some(PlannedEndpoint {
                     endpoint_id: endpoint.id.clone(),
                     endpoint_name: endpoint.name.clone(),
+                    model_group_id: scoped.group_id.clone(),
+                    model_group_name: scoped.group_name.clone(),
+                    model_group_rank: scoped.group_rank,
                     base_url: endpoint.base_url.clone(),
                     configured_protocol,
                     source_format,
@@ -1317,8 +1341,21 @@ impl RoutePlanner {
                     },
                     routed_model: effective_model.to_string(),
                     upstream_model,
-                    priority: endpoint.priority,
-                    sticky_group: endpoint.sticky_group.clone(),
+                    priority: scoped
+                        .model_priorities
+                        .get(effective_model)
+                        .copied()
+                        .unwrap_or(endpoint.priority),
+                    sticky_group: match &scoped.group_id {
+                        // Preserve legacy affinity keys for the migrated default group.
+                        Some(id) if id != "default" => Some(format!(
+                            "model-group:{}:{}:{}",
+                            id.len(),
+                            id,
+                            endpoint.scheduling_group()
+                        )),
+                        _ => endpoint.sticky_group.clone(),
+                    },
                     thinking: mapping
                         .as_ref()
                         .map(|m| m.thinking)
@@ -1347,7 +1384,24 @@ impl RoutePlanner {
         } else {
             native
         };
-        Self::order_endpoints(&selected)
+        let ordered = Self::order_endpoints(&selected);
+        let mut unique: Vec<PlannedEndpoint> = Vec::new();
+        for candidate in ordered {
+            let duplicate = candidate.model_group_id.is_some()
+                && unique.iter().any(|prior| {
+                    let mut comparable = candidate.clone();
+                    comparable.model_group_id = prior.model_group_id.clone();
+                    comparable.model_group_name = prior.model_group_name.clone();
+                    comparable.model_group_rank = prior.model_group_rank;
+                    comparable.priority = prior.priority;
+                    comparable.sticky_group = prior.sticky_group.clone();
+                    &comparable == prior
+                });
+            if !duplicate {
+                unique.push(candidate);
+            }
+        }
+        unique
     }
 }
 

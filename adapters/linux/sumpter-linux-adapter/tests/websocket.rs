@@ -1,3 +1,6 @@
+#[path = "../../../../tests/contracts/pi_websocket.rs"]
+mod pi_websocket;
+
 use std::sync::Arc;
 
 use futures_util::{SinkExt, StreamExt};
@@ -46,9 +49,10 @@ async fn legacy_fixed_ips_do_not_duplicate_live_posts_and_new_captures_omit_ip()
     legacy["endpoints"][0]["pinnedIPExclusive"] = serde_json::json!(false);
     legacy["retry"]["pinnedIPConcurrency"] = serde_json::json!(3);
     legacy["retry"]["sessionStickyRetries"] = serde_json::json!(2);
-    let config = AppConfig::from_json(&legacy.to_string())
+    let mut config = AppConfig::from_json(&legacy.to_string())
         .unwrap()
         .normalized();
+    config.migrate_model_groups();
     let engine = Engine::new(config, None, Arc::new(ReqwestTransport::new()));
     engine.set_diagnostic_capture(true, Some(1024 * 1024));
     let (address, handle) = server::serve(engine.clone(), "127.0.0.1:0".parse().unwrap())
@@ -164,11 +168,9 @@ async fn responses_websocket_relays_frames_without_http_or_sse_reconstruction() 
         let _ = socket.close(None).await;
     });
 
-    let engine = Engine::new(
-        config_with_base(&format!("http://{upstream_address}"), "openai-responses"),
-        None,
-        Arc::new(ReplayTransport::new([])),
-    );
+    let mut grouped = config_with_base(&format!("http://{upstream_address}"), "openai-responses");
+    grouped.migrate_model_groups();
+    let engine = Engine::new(grouped, None, Arc::new(ReplayTransport::new([])));
     let (address, handle) = server::serve(engine, "127.0.0.1:0".parse().unwrap())
         .await
         .expect("bind server");
@@ -358,11 +360,9 @@ async fn realtime_client_secret_authorizes_follow_up_websocket() {
     let transport = Arc::new(ReplayTransport::new([Ok(ReplayReply::ok(
         secret_body.into_bytes(),
     ))]));
-    let engine = Engine::new(
-        config_with_base(&format!("http://{upstream_address}"), "openai"),
-        None,
-        transport,
-    );
+    let mut grouped = config_with_base(&format!("http://{upstream_address}"), "openai");
+    grouped.migrate_model_groups();
+    let engine = Engine::new(grouped, None, transport);
     let (address, handle) = server::serve(engine, "127.0.0.1:0".parse().unwrap())
         .await
         .expect("bind server");
@@ -961,5 +961,13 @@ async fn videos_create_does_not_follow_the_first_text_provider() {
     );
     assert_eq!(calls[0].path_and_query, "/v1/videos");
     assert_eq!(calls[1].path_and_query, "/v1/videos/video_abc/content");
+    handle.shutdown().await;
+}
+
+fn pi_test_engine(config: AppConfig) -> Engine {
+    Engine::new(config, None, Arc::new(ReplayTransport::new([])))
+}
+
+async fn pi_test_shutdown(handle: server::ServerHandle) {
     handle.shutdown().await;
 }

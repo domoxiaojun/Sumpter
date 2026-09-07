@@ -1,5 +1,61 @@
 use super::*;
 
+#[test]
+fn pi_persistence_filters_and_session_export_preserve_attribution() {
+    let dir = test_dir("pi-attribution");
+    let path = dir.join("runtime.sqlite3");
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    let mut value = event(
+        "pi-client",
+        KIND_CLIENT,
+        200,
+        RuntimeEventPhase::Completed,
+        Some(RuntimeEventOutcome::Succeeded),
+        event_now(),
+    );
+    value.client_kind = Some(ClientKind::Pi);
+    value.session_id = Some("pi-session".into());
+    value.request_id = Some("pi-request".into());
+    value.client_declared = ClientDeclaredMetadata::from_headers(&[
+        ("x-sumpter-project".into(), "pi-project".into()),
+        ("x-sumpter-workspace".into(), "/work/pi-project".into()),
+        ("x-sumpter-user".into(), "local-user".into()),
+    ]);
+    store.enqueue(value, RuntimeCounters::default()).unwrap();
+    store.flush().unwrap();
+    drop(store);
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    let analytics = store
+        .analytics_filtered(
+            "24h",
+            &AnalyticsFilter {
+                client_kind: Some("pi".into()),
+                session_id: Some("pi-session".into()),
+                project: Some("pi-project".into()),
+                ..AnalyticsFilter::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(analytics["clientRequests"], 1);
+    assert_eq!(analytics["projects"][0]["clientKinds"], json!(["pi"]));
+    assert_eq!(analytics["projects"][0]["projectSource"], "workspace_local");
+    assert_eq!(analytics["sessions"][0]["name"], "pi-session");
+    let export = store.export_session("pi-session").unwrap();
+    assert_eq!(export["clientKinds"], json!(["pi"]));
+    let exported = &export["events"][0]["event"];
+    assert_eq!(exported["clientKind"], "pi");
+    assert!(exported["codexMetadata"].is_null());
+    let connection = Connection::open(&path).unwrap();
+    let projection: (String, String, Option<String>, Option<String>) = connection.query_row(
+        "SELECT client_kind,session_key,codex_thread_class,attribution_scope FROM runtime_events WHERE event_id='pi-client'",
+        [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+    ).unwrap();
+    assert_eq!(projection, ("pi".into(), "pi-session".into(), None, None));
+    drop(connection);
+    drop(store);
+    remove_test_dir(&dir);
+}
+
 fn test_dir(label: &str) -> PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -419,6 +475,9 @@ fn sqlite_roundtrip_preserves_source_session_attribution() {
         "sessionID": "codex-session-source",
         "threadID": "thread-source",
         "turnID": "turn-source",
+        "windowNumber": 0, "contextWindowID": "context-source",
+        "forkedFromOrdinalExclusive": 42, "turnTrigger": "user_input",
+        "historyIngestRequested": false,
         "sourceWorkspacePaths": ["/Users/kkl/Documents/automode-proxy"],
     }))
     .ok();
@@ -447,6 +506,11 @@ fn sqlite_roundtrip_preserves_source_session_attribution() {
     assert_eq!(codex.session_id.as_deref(), Some("codex-session-source"));
     assert_eq!(codex.thread_id.as_deref(), Some("thread-source"));
     assert_eq!(codex.turn_id.as_deref(), Some("turn-source"));
+    assert_eq!(codex.window_number, Some(0));
+    assert_eq!(codex.context_window_id.as_deref(), Some("context-source"));
+    assert_eq!(codex.forked_from_ordinal_exclusive, Some(42));
+    assert_eq!(codex.turn_trigger.as_deref(), Some("user_input"));
+    assert_eq!(codex.history_ingest_requested, Some(false));
     assert_eq!(
         codex.source_workspace_paths,
         vec!["/Users/kkl/Documents/automode-proxy"]
@@ -470,6 +534,131 @@ fn sqlite_roundtrip_preserves_source_session_attribution() {
     assert!(payload.contains("/Users/kkl/.claude/automode-proxy"));
     drop(connection);
     drop(reopened);
+    remove_test_dir(&dir);
+}
+
+#[test]
+fn model_group_attribution_survives_update_reopen_and_list_projection() {
+    let dir = test_dir("model-group-roundtrip");
+    let path = dir.join("runtime.sqlite3");
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    let mut value = event(
+        "group-event",
+        KIND_CLIENT,
+        0,
+        RuntimeEventPhase::InFlight,
+        None,
+        event_now(),
+    );
+    value.model_group_id = Some("main".into());
+    value.model_group_name = Some("主用".into());
+    store
+        .enqueue(value.clone(), RuntimeCounters::default())
+        .unwrap();
+    store.flush().unwrap();
+    value.model_group_id = Some("backup".into());
+    value.model_group_name = Some("备用".into());
+    value.phase = Some(RuntimeEventPhase::Completed);
+    value.outcome = Some(RuntimeEventOutcome::Succeeded);
+    value.status_code = 200;
+    store.enqueue(value, RuntimeCounters::default()).unwrap();
+    store.flush().unwrap();
+    drop(store);
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    let detail = store.event("group-event").unwrap().unwrap();
+    let page = store
+        .events(None, None, 10, None, None, None, None, None)
+        .unwrap();
+    assert_eq!(detail.event.model_group_id.as_deref(), Some("backup"));
+    assert_eq!(page[0].model_group_name.as_deref(), Some("备用"));
+    let row: (String, String) = Connection::open(&path).unwrap().query_row(
+        "SELECT model_group_id,model_group_name FROM runtime_events WHERE event_id='group-event'",
+        [], |row| Ok((row.get(0)?, row.get(1)?)),
+    ).unwrap();
+    assert_eq!(row, ("backup".into(), "备用".into()));
+    drop(store);
+    remove_test_dir(&dir);
+}
+
+#[test]
+fn sticky_keys_for_project_aggregates_affinity_hashes_per_project() {
+    let dir = test_dir("sticky-keys");
+    let path = dir.join("runtime.sqlite3");
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    let push = |id: &str, workspace: &str, sticky: Option<&str>| {
+        let mut value = event(
+            id,
+            KIND_CLIENT,
+            200,
+            RuntimeEventPhase::Completed,
+            Some(RuntimeEventOutcome::Succeeded),
+            event_now(),
+        );
+        value.codex_metadata = Some(
+            serde_json::from_value(json!({
+                "workspaces": { workspace: {} }
+            }))
+            .unwrap(),
+        );
+        value.sticky_key = sticky.map(str::to_owned);
+        store.enqueue(value, RuntimeCounters::default()).unwrap();
+    };
+    push("alpha-1", ".../demo/alpha", Some("affinity-alpha"));
+    push("alpha-2", ".../demo/alpha", Some("affinity-alpha"));
+    push("beta-1", ".../demo/beta", Some("affinity-beta"));
+    push("alpha-rejected", ".../demo/alpha", None);
+    store.flush().unwrap();
+    let project_of = |event_id: &str| -> String {
+        Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT project_id FROM runtime_events WHERE event_id=?1",
+                params![event_id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+    let alpha = project_of("alpha-1");
+    let beta = project_of("beta-1");
+    assert_ne!(alpha, beta);
+    // 同键去重、None 不入结果、按项目隔离。
+    assert_eq!(
+        store.sticky_keys_for_project(&alpha).unwrap(),
+        vec!["affinity-alpha".to_owned()]
+    );
+    assert_eq!(
+        store.sticky_keys_for_project(&beta).unwrap(),
+        vec!["affinity-beta".to_owned()]
+    );
+    // 事件 payload 里的 stickyKey 保持亲和哈希原文。
+    let detail = store.event("alpha-1").unwrap().unwrap();
+    assert_eq!(detail.event.sticky_key.as_deref(), Some("affinity-alpha"));
+    assert!(
+        store
+            .event("alpha-rejected")
+            .unwrap()
+            .unwrap()
+            .event
+            .sticky_key
+            .is_none()
+    );
+    // 空项目号在 store 边界直接拒绝。
+    assert!(store.sticky_keys_for_project("  ").is_err());
+    // 同一 affinity 出现在两个项目时整次拒绝，不能把共享键交给全局归属表删除。
+    push("beta-shared", ".../demo/beta", Some("affinity-alpha"));
+    assert!(
+        store
+            .sticky_keys_for_project(&alpha)
+            .unwrap_err()
+            .contains("共享")
+    );
+    assert!(
+        store
+            .sticky_keys_for_project(&beta)
+            .unwrap_err()
+            .contains("共享")
+    );
+    drop(store);
     remove_test_dir(&dir);
 }
 
@@ -2331,6 +2520,48 @@ fn list_item_wire_carries_codex_thread_scope() {
     let wire = serde_json::to_value(RuntimeEventListItem::from_change(1, 2, value)).unwrap();
     assert_eq!(wire["codexThreadClass"], "ambient");
     assert_eq!(wire["attributionScope"], "internal_feature");
+}
+
+#[test]
+fn codex_guardian_projection_is_rebuilt_for_existing_events() {
+    let dir = test_dir("guardian-projection");
+    let path = dir.join("runtime.sqlite3");
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    let mut value = event(
+        "guardian",
+        KIND_CLIENT,
+        400,
+        RuntimeEventPhase::Completed,
+        Some(RuntimeEventOutcome::Failed),
+        event_now(),
+    );
+    value.client_kind = Some(ClientKind::Codex);
+    value.codex_metadata =
+        CodexMetadata::from_request(&[("x-openai-subagent".into(), "guardian".into())], None);
+    store.enqueue(value, RuntimeCounters::default()).unwrap();
+    store.flush().unwrap();
+    drop(store);
+    let connection = Connection::open(&path).unwrap();
+    connection.execute("UPDATE runtime_events SET projection_version=7,codex_thread_class='unknown',attribution_scope='unknown'", []).unwrap();
+    drop(connection);
+    let mut connection = Connection::open(&path).unwrap();
+    setup_connection(&mut connection).unwrap();
+    // flush only drains queued writes; startup backfill runs asynchronously.
+    // Drive the same maintenance batches deterministically for this fixture.
+    while run_projection_maintenance(&mut connection).unwrap() {}
+    let result: (String, String, i64) = connection.query_row(
+        "SELECT codex_thread_class,attribution_scope,projection_version FROM runtime_events WHERE event_id='guardian'", [],
+        |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap();
+    assert_eq!(
+        result,
+        (
+            "guardian_review".into(),
+            "internal_feature".into(),
+            PROJECTION_VERSION
+        )
+    );
+    drop(connection);
+    remove_test_dir(&dir);
 }
 
 #[test]

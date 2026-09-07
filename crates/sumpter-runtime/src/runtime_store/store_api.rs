@@ -633,6 +633,41 @@ impl RuntimeStore {
         export_session_json(&read_connection(&self.inner.path)?, session_id)
     }
 
+    /// 列出某项目下出现过的会话粘性归属键(affinity 哈希)。
+    /// Admin 读面的只读聚合:先 flush 保证事件已落库,再用短连接查询,
+    /// 不碰代理热路径状态。返回的键交给引擎 `clear_session_sticky`
+    /// 清除内存与 session_affinity.json。若现存事件显示键被其他项目共享，
+    /// 整次拒绝清除，避免部分成功或删除其他项目仍在使用的归属。
+    pub fn sticky_keys_for_project(&self, project_id: &str) -> Result<Vec<String>, String> {
+        let project_id = project_id.trim();
+        if project_id.is_empty() {
+            return Err("projectID 不能为空".into());
+        }
+        self.flush()?;
+        let connection = read_connection(&self.inner.path)?;
+        let mut statement = connection
+            .prepare(
+                "SELECT DISTINCT e.sticky_key, EXISTS (
+                     SELECT 1 FROM runtime_events other
+                     WHERE other.sticky_key=e.sticky_key
+                       AND other.project_id IS NOT ?1
+                   ) FROM runtime_events e
+                 WHERE e.project_id=?1 AND e.sticky_key IS NOT NULL AND e.sticky_key!=''",
+            )
+            .map_err(|error| error.to_string())?;
+        let keys = statement
+            .query_map(params![project_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?))
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        if keys.iter().any(|(_, shared)| *shared) {
+            return Err("该项目存在与其他项目共享的粘性归属，未执行清除".into());
+        }
+        Ok(keys.into_iter().map(|(key, _)| key).collect())
+    }
+
     pub fn summary(&self) -> RuntimeSummary {
         let (
             reset_generation,

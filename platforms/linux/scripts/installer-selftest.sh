@@ -56,6 +56,7 @@ cp "$ROOT/deploy/sumpter.service" "$TEST_PACKAGE/sumpter.service"
 cp "$ROOT/deploy/sumpter-system.service" "$TEST_PACKAGE/sumpter-system.service"
 cp -R "$ROOT/web/." "$TEST_PACKAGE/web/"
 cp "$ROOT/scripts/"*.sh "$TEST_PACKAGE/scripts/"
+cp "$ROOT/scripts/"*.mjs "$ROOT/scripts/"*.ts "$TEST_PACKAGE/scripts/"
 chmod 0755 "$TEST_PACKAGE/scripts/"*.sh
 printf '%s\n' 'synthetic-admin-password' >"$ADMIN_PASSWORD_FILE"
 chmod 0600 "$ADMIN_PASSWORD_FILE"

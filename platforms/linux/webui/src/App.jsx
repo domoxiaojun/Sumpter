@@ -8,6 +8,7 @@ import { ToastContainer } from './components/Toast.jsx';
 
 import { RunPage } from './pages/RunPage.jsx';
 import { PrimaryProvidersPage } from './pages/PrimaryProvidersPage.jsx';
+import { ModelGroupsPage } from './pages/ModelGroupsPage.jsx';
 import { RoutingPage } from './pages/RoutingPage.jsx';
 import { SecurityPage } from './pages/SecurityPage.jsx';
 import { StatsPage } from './pages/StatsPage.jsx';
@@ -44,6 +45,8 @@ export function AppContent() {
       case 'providers':
       case 'providers-primary':
         return <PrimaryProvidersPage />;
+      case 'model-groups':
+        return <ModelGroupsPage />;
       case 'routing':
         return <RoutingPage />;
       case 'security':

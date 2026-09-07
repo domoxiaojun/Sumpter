@@ -838,7 +838,13 @@ export function eventProjectContext(event) {
 }
 
 function codexSubagentKind(metadata) {
-  return cleanText(codexMetadataField(metadata, 'subagentKind', 'subagent_kind'));
+  return cleanText(codexMetadataField(metadata, 'subagentKind', 'subagent_kind'))
+    || cleanText(codexMetadataField(metadata, 'subagentHeader', 'subagent_header'));
+}
+
+function codexIsGuardian(metadata) {
+  return codexSubagentKind(metadata) === 'guardian'
+    || codexMetadataField(metadata, 'threadSource', 'thread_source') === 'guardian_review';
 }
 
 function codexHasSubagentEvidence(metadata) {
@@ -899,21 +905,23 @@ export function codexAgentRoleLabel(metadataOrEvent) {
   const metadata = codexMetadataValue(metadataOrEvent);
   if (!metadata || typeof metadata !== 'object') return '未记录代理身份';
   const kind = codexSubagentKind(metadata);
+  if (codexIsGuardian(metadata)) return 'Guardian 安全审查';
   if (codexHasSubagentEvidence(metadata)) return `子代理${kind ? ` · ${kind}` : ''}`;
   if (codexMetadataField(metadata, 'agentName', 'agent_name')
     || codexMetadataField(metadata, 'threadID', 'thread_id')
     || codexMetadataField(metadata, 'turnID', 'turn_id')) {
-    return '主代理';
+    return '未发现子代理证据';
   }
   return '代理身份未确定';
 }
 
 function codexAgentRoleSummary(metadata) {
+  if (codexIsGuardian(metadata)) return 'Guardian 安全审查';
   if (codexHasSubagentEvidence(metadata)) {
     const kind = codexSubagentKind(metadata);
     return `子代理${kind ? ` ${kind}` : ''}`;
   }
-  return '主代理';
+  return '未发现子代理证据';
 }
 
 export function codexMetadataSummary(metadataOrEvent) {
@@ -1053,6 +1061,8 @@ export function clientKindLabel(kind) {
     claude_code: 'Claude Code',
     codex: 'Codex',
     grok_build: 'Grok Build',
+    pi: 'pi',
+    gemini_cli: 'Gemini CLI',
     openai_compat: 'OpenAI 兼容客户端',
     unknown: '未知客户端',
   };

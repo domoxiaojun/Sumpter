@@ -38,7 +38,7 @@ def with_block(document: str, block: str) -> str:
         end += len(END)
         return document[:start] + block + "\n\n" + document[end:].lstrip("\n")
 
-    anchor = "\n两端当前使用 **schema v6**"
+    anchor = "\n两端当前使用 **schema v7**"
     position = document.find(anchor)
     if position < 0:
         raise ValueError("找不到 USAGE 文档插入点")

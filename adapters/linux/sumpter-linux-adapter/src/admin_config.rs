@@ -223,6 +223,7 @@ pub(crate) fn validate_config_identity(config: &AppConfig) -> Result<(), String>
 
 pub fn validate_config(config: &AppConfig) -> Result<(), String> {
     validate_config_identity(config)?;
+    config.validate_model_groups()?;
     let _ = listener_address(config)?;
     for cidr in &config.listener.allowed_cidrs {
         if !valid_cidr(cidr) {

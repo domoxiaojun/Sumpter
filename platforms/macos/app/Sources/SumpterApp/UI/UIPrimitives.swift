@@ -65,6 +65,7 @@ struct FullRowDisclosure<Label: View, Content: View>: View {
 enum SettingsSection: String, CaseIterable, Identifiable {
     case run
     case providers
+    case modelGroups
     case routing
     case security
     case notifications
@@ -78,7 +79,8 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .run: "运行"
-        case .providers: "Provider"
+        case .providers: "入口库"
+        case .modelGroups: "模型组"
         case .routing: "Claude Code 路由"
         case .security: "安全"
         case .notifications: "通知"
@@ -92,7 +94,8 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .run: "启动状态、监听地址、统计和最近事件。"
-        case .providers: "上游入口、优先级、粘性分组与入口显式模型映射。"
+        case .providers: "共享上游入口、凭据、模型目录及模型参数。"
+        case .modelGroups: "统一地址下的模型范围、组优先级和入口故障切换。"
         case .routing: "Claude Code 内部子请求分流与 effort 覆盖。"
         case .security: "监听、入站认证、入站方言和登录项。"
         case .notifications: "Claude Code、Codex CLI 与 Grok Build hook 统一系统通知。"
@@ -107,6 +110,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .run: "gauge.with.dots.needle.bottom.50percent"
         case .providers: "server.rack"
+        case .modelGroups: "square.stack.3d.up"
         case .routing: "arrow.triangle.branch"
         case .security: "lock.shield"
         case .notifications: "bell"

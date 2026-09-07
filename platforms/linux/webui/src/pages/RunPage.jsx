@@ -230,7 +230,8 @@ const CODEX_METADATA_LABELS = {
   subagentKind: '子代理类型', threadSource: '线程来源', sandbox: '沙箱',
   sandboxMode: '沙箱模式', autoReviewEnabled: '自动审查',
   nodeReplAutoReviewRequired: 'Node REPL 需要审查', nodeReplDisabled: 'Node REPL 已禁用',
-  turnStartedAtUnixMS: '回合开始时间（Unix ms）', originator: '来源客户端',
+  turnStartedAtUnixMS: '回合开始时间（Unix ms）', windowNumber: '窗口序号', contextWindowID: '上下文窗口 ID',
+  forkedFromOrdinalExclusive: '派生起始序号', turnTrigger: '回合触发来源', historyIngestRequested: '请求导入历史', originator: '来源客户端',
   betaFeatures: 'Beta 特性', memgenRequest: 'Memgen 请求',
   responsesLite: 'Responses Lite',
   wsStreamRequestStartMS: 'WebSocket 请求开始（ms）', malformed: '格式异常', truncated: '已截断',
@@ -647,7 +648,7 @@ export function RunPage() {
           <div className="grid-2col run-detail-grid">
             <div>
               <span>配置版本：</span>
-              <strong>v{config?.schemaVersion || 6}</strong>
+              <strong>v{config?.schemaVersion || 7}</strong>
             </div>
             <div>
               <span>认证状态：</span>
@@ -960,6 +961,7 @@ export function RunPage() {
                 <div><span style={{ color: 'var(--text-muted)' }}>路由/逻辑模型：</span><span className="mono-cell" style={{ color: 'var(--status-good)' }}>{eventField(selectedEvent, 'effectiveModel', 'effective_model') || '-'}</span></div>
                 <div><span style={{ color: 'var(--text-muted)' }}>实际上游模型：</span><span className="mono-cell">{eventUpstreamModel(selectedEvent)}</span></div>
                 <div><span style={{ color: 'var(--text-muted)' }}>入口名称：</span><span>{eventEndpointName(selectedEvent)}</span></div>
+                <div><span style={{ color: 'var(--text-muted)' }}>模型组：</span><span>{selectedEvent.modelGroupName || selectedEvent.modelGroupID || '—'}</span></div>
                 <div><span style={{ color: 'var(--text-muted)' }}>HTTP 状态：</span><strong className="mono-cell" style={{ color: selectedResult === 'failed' ? 'var(--status-critical)' : 'var(--text-primary)' }}>{eventHttpStatusLabel(selectedEvent)}</strong></div>
                 <div><span style={{ color: 'var(--text-muted)' }}>最终结果：</span><strong style={{ color: selectedResult === 'failed' ? 'var(--status-critical)' : selectedResult === 'succeeded' ? 'var(--status-good)' : 'var(--text-secondary)' }}>{eventOutcomeLabel(selectedEvent)}</strong></div>
                 <div><span style={{ color: 'var(--text-muted)' }}>故障转移：</span><strong style={{ color: eventFailover(selectedEvent) ? 'var(--status-warning)' : 'var(--text-secondary)' }}>{eventFailover(selectedEvent) ? '已发生' : '未发生'}</strong></div>

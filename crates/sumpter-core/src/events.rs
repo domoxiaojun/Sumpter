@@ -156,8 +156,12 @@ impl RuntimeFailureKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClientKind {
+    /// pi coding agent, independent of the upstream protocol or OAuth identity.
+    Pi,
     ClaudeCode,
     Codex,
+    /// Google Gemini CLI; identified from its documented GeminiCLI User-Agent.
+    GeminiCli,
     /// Grok Build CLI；其公开客户端产品名仍沿用 `grok-shell`。
     GrokBuild,
     /// 经 OpenAI 兼容层入站但 UA 不是已知客户端。
@@ -169,8 +173,10 @@ pub enum ClientKind {
 impl ClientKind {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Pi => "pi",
             Self::ClaudeCode => "claude_code",
             Self::Codex => "codex",
+            Self::GeminiCli => "gemini_cli",
             Self::GrokBuild => "grok_build",
             Self::OpenaiCompat => "openai_compat",
             Self::Unknown => "unknown",
@@ -196,14 +202,33 @@ impl ClientKind {
         originator: Option<&str>,
         openai_inbound: bool,
     ) -> Self {
+        if originator.is_some_and(|value| value.trim().eq_ignore_ascii_case("pi")) {
+            return Self::Pi;
+        }
         if let Some(ua) = user_agent {
             let ua = ua.trim();
+            let pi_ua = ua.to_ascii_lowercase();
+            if (pi_ua.starts_with("pi (") && pi_ua.ends_with(')'))
+                || pi_ua.strip_prefix("pi/").is_some_and(|version| {
+                    version.as_bytes().first().is_some_and(u8::is_ascii_digit)
+                })
+                || pi_ua == "pi-coding-agent"
+            {
+                return Self::Pi;
+            }
             if ua.starts_with("claude-cli/") {
                 return Self::ClaudeCode;
             }
             let lower = ua.to_ascii_lowercase();
             if lower.contains("codex") {
                 return Self::Codex;
+            }
+            if lower.starts_with("geminicli/")
+                || lower.starts_with("geminicli-")
+                || (lower.starts_with("cloudcodevscode/")
+                    && lower.contains("proxy_client=geminicli"))
+            {
+                return Self::GeminiCli;
             }
             // Grok Build 的 CLI UA 是 `grok-shell/<version>`；分页器会在它前面再带
             // `grok-pager/...`，所以按 CPA 一样匹配 UA 中的 grok-shell 产品标识。
@@ -439,12 +464,43 @@ impl ClientDeclaredMetadata {
         state: &mut CodexMetadataParseState,
     ) -> Option<String> {
         let value = first_header_value(headers, name, state)?;
+        // pi uses ASCII-safe URI encoding because fetch headers cannot carry
+        // arbitrary Unicode. Only decode explicitly marked attribution fields.
+        let value = if first_header_value(headers, "x-sumpter-attribution-encoding", state)
+            .as_deref()
+            == Some("uri-v1")
+        {
+            decode_attribution_header(&value)?
+        } else {
+            value
+        };
+        if value.chars().any(char::is_control) {
+            return None;
+        }
         let trimmed = value.trim();
         if trimmed.is_empty() || trimmed.chars().any(char::is_control) {
             return None;
         }
         Some(trimmed.to_string())
     }
+}
+
+fn decode_attribution_header(value: &str) -> Option<String> {
+    if value.len() > 3 * 4096 {
+        return None;
+    }
+    let mut decoded = Vec::with_capacity(value.len());
+    let mut bytes = value.bytes();
+    while let Some(byte) = bytes.next() {
+        if byte == b'%' {
+            let high = char::from(bytes.next()?).to_digit(16)?;
+            let low = char::from(bytes.next()?).to_digit(16)?;
+            decoded.push((high * 16 + low) as u8);
+        } else {
+            decoded.push(byte);
+        }
+    }
+    String::from_utf8(decoded).ok()
 }
 
 /// Grok Build 采样客户端在推理请求上带的身份 / 会话 header。
@@ -705,6 +761,10 @@ pub struct CodexMetadata {
     pub turn_id: Option<String>,
     #[serde(rename = "windowID", default, skip_serializing_if = "is_none")]
     pub window_id: Option<String>,
+    #[serde(rename = "windowNumber", default, skip_serializing_if = "is_none")]
+    pub window_number: Option<u64>,
+    #[serde(rename = "contextWindowID", default, skip_serializing_if = "is_none")]
+    pub context_window_id: Option<String>,
     #[serde(default, skip_serializing_if = "is_none")]
     pub request_kind: Option<String>,
     #[serde(
@@ -713,6 +773,12 @@ pub struct CodexMetadata {
         skip_serializing_if = "is_none"
     )]
     pub forked_from_thread_id: Option<String>,
+    #[serde(
+        rename = "forkedFromOrdinalExclusive",
+        default,
+        skip_serializing_if = "is_none"
+    )]
+    pub forked_from_ordinal_exclusive: Option<u64>,
     #[serde(rename = "parentThreadID", default, skip_serializing_if = "is_none")]
     pub parent_thread_id: Option<String>,
     #[serde(rename = "parentTurnID", default, skip_serializing_if = "is_none")]
@@ -728,6 +794,8 @@ pub struct CodexMetadata {
     #[serde(default, skip_serializing_if = "is_none")]
     pub thread_source: Option<String>,
     #[serde(default, skip_serializing_if = "is_none")]
+    pub turn_trigger: Option<String>,
+    #[serde(default, skip_serializing_if = "is_none")]
     pub sandbox: Option<String>,
     #[serde(default, skip_serializing_if = "is_none")]
     pub sandbox_mode: Option<String>,
@@ -737,6 +805,8 @@ pub struct CodexMetadata {
     pub node_repl_auto_review_required: Option<bool>,
     #[serde(default, skip_serializing_if = "is_none")]
     pub node_repl_disabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub history_ingest_requested: Option<bool>,
     #[serde(
         rename = "turnStartedAtUnixMS",
         default,
@@ -805,19 +875,24 @@ struct CodexMetadataCandidate {
     agent_name: Option<String>,
     turn_id: Option<String>,
     window_id: Option<String>,
+    window_number: Option<u64>,
+    context_window_id: Option<String>,
     request_kind: Option<String>,
     forked_from_thread_id: Option<String>,
+    forked_from_ordinal_exclusive: Option<u64>,
     parent_thread_id: Option<String>,
     parent_turn_id: Option<String>,
     root_turn_id: Option<String>,
     subagent_header: Option<String>,
     subagent_kind: Option<String>,
     thread_source: Option<String>,
+    turn_trigger: Option<String>,
     sandbox: Option<String>,
     sandbox_mode: Option<String>,
     auto_review_enabled: Option<bool>,
     node_repl_auto_review_required: Option<bool>,
     node_repl_disabled: Option<bool>,
+    history_ingest_requested: Option<bool>,
     turn_started_at_unix_ms: Option<i64>,
     workspaces: Option<BTreeMap<String, CodexWorkspaceMetadata>>,
     source_workspace_paths: Option<Vec<String>>,
@@ -962,19 +1037,24 @@ impl CodexMetadata {
             agent_name: merged.agent_name,
             turn_id: merged.turn_id,
             window_id: merged.window_id,
+            window_number: merged.window_number,
+            context_window_id: merged.context_window_id,
             request_kind: merged.request_kind,
             forked_from_thread_id: merged.forked_from_thread_id,
+            forked_from_ordinal_exclusive: merged.forked_from_ordinal_exclusive,
             parent_thread_id,
             parent_turn_id: merged.parent_turn_id,
             root_turn_id: merged.root_turn_id,
             subagent_header: merged.subagent_header,
             subagent_kind: merged.subagent_kind,
             thread_source: merged.thread_source,
+            turn_trigger: merged.turn_trigger,
             sandbox: merged.sandbox,
             sandbox_mode: merged.sandbox_mode,
             auto_review_enabled: merged.auto_review_enabled,
             node_repl_auto_review_required: merged.node_repl_auto_review_required,
             node_repl_disabled: merged.node_repl_disabled,
+            history_ingest_requested: merged.history_ingest_requested,
             turn_started_at_unix_ms: merged.turn_started_at_unix_ms,
             workspaces: merged.workspaces.unwrap_or_default(),
             source_workspace_paths: merged.source_workspace_paths.unwrap_or_default(),
@@ -1007,6 +1087,7 @@ impl CodexMetadata {
             || self.agent_name.is_some()
             || self.turn_id.is_some()
             || self.window_id.is_some()
+            || self.context_window_id.is_some()
             || self.request_kind.is_some()
             || self.forked_from_thread_id.is_some()
             || self.parent_thread_id.is_some()
@@ -1085,8 +1166,31 @@ impl CodexAttributionScope {
 /// Classify the raw Codex thread source without treating arbitrary feature
 /// names as project identities.
 pub fn codex_thread_class(metadata: Option<&CodexMetadata>) -> CodexThreadClass {
-    let Some(source) = metadata.and_then(|metadata| metadata.thread_source.as_deref()) else {
+    let Some(metadata) = metadata else {
         return CodexThreadClass::Unknown;
+    };
+    let source = metadata
+        .thread_source
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let Some(source) = source else {
+        // Compatibility headers also identify internal Codex sessions. Keep
+        // the original threadSource absent rather than fabricating canonical data.
+        let kind = metadata
+            .subagent_kind
+            .as_deref()
+            .or(metadata.subagent_header.as_deref());
+        return match kind {
+            Some("guardian") => CodexThreadClass::GuardianReview,
+            Some("memory_consolidation") => CodexThreadClass::MemoryConsolidation,
+            Some("review") => CodexThreadClass::AutomatedReview,
+            Some("thread_spawn" | "collab_spawn" | "compact") => CodexThreadClass::Subagent,
+            _ if metadata.request_kind.as_deref() == Some("memory") => {
+                CodexThreadClass::MemoryConsolidation
+            }
+            _ => CodexThreadClass::Unknown,
+        };
     };
     let source = source.trim();
     if source.is_empty() {
@@ -1199,6 +1303,13 @@ fn parse_metadata_object(
         ),
         turn_id: object_string(object, "turn_id", CODEX_METADATA_MAX_ID_BYTES, state),
         window_id: object_string(object, "window_id", CODEX_METADATA_MAX_ID_BYTES, state),
+        window_number: object_u64(object, "window_number", state),
+        context_window_id: object_string(
+            object,
+            "context_window_id",
+            CODEX_METADATA_MAX_ID_BYTES,
+            state,
+        ),
         request_kind: object_string(
             object,
             "request_kind",
@@ -1211,6 +1322,7 @@ fn parse_metadata_object(
             CODEX_METADATA_MAX_ID_BYTES,
             state,
         ),
+        forked_from_ordinal_exclusive: object_u64(object, "forked_from_ordinal_exclusive", state),
         parent_thread_id: object_string(
             object,
             "parent_thread_id",
@@ -1231,6 +1343,12 @@ fn parse_metadata_object(
             CODEX_METADATA_MAX_LABEL_BYTES,
             state,
         ),
+        turn_trigger: object_string(
+            object,
+            "turn_trigger",
+            CODEX_METADATA_MAX_LABEL_BYTES,
+            state,
+        ),
         sandbox: object_string(object, "sandbox", CODEX_METADATA_MAX_LABEL_BYTES, state),
         sandbox_mode: object_string(
             object,
@@ -1245,6 +1363,7 @@ fn parse_metadata_object(
             state,
         ),
         node_repl_disabled: object_bool(object, "node_repl_disabled", state),
+        history_ingest_requested: object_bool(object, "history_ingest_requested", state),
         turn_started_at_unix_ms: object_i64(object, "turn_started_at_unix_ms", state),
         workspaces: object
             .get("workspaces")
@@ -1501,19 +1620,24 @@ fn merge_candidate(
     merge!(agent_name, "agentName");
     merge!(turn_id, "turnID");
     merge!(window_id, "windowID");
+    merge!(window_number, "windowNumber");
+    merge!(context_window_id, "contextWindowID");
     merge!(request_kind, "requestKind");
     merge!(forked_from_thread_id, "forkedFromThreadID");
+    merge!(forked_from_ordinal_exclusive, "forkedFromOrdinalExclusive");
     merge!(parent_thread_id, "parentThreadID");
     merge!(parent_turn_id, "parentTurnID");
     merge!(root_turn_id, "rootTurnID");
     merge!(subagent_header, "subagentHeader");
     merge!(subagent_kind, "subagentKind");
     merge!(thread_source, "threadSource");
+    merge!(turn_trigger, "turnTrigger");
     merge!(sandbox, "sandbox");
     merge!(sandbox_mode, "sandboxMode");
     merge!(auto_review_enabled, "autoReviewEnabled");
     merge!(node_repl_auto_review_required, "nodeReplAutoReviewRequired");
     merge!(node_repl_disabled, "nodeReplDisabled");
+    merge!(history_ingest_requested, "historyIngestRequested");
     merge!(turn_started_at_unix_ms, "turnStartedAtUnixMS");
     merge!(workspaces, "workspaces");
     merge!(source_workspace_paths, "sourceWorkspacePaths");
@@ -1656,6 +1780,21 @@ fn object_i64(
     }
     state.malformed = true;
     None
+}
+
+fn object_u64(
+    object: &Map<String, Value>,
+    key: &str,
+    state: &mut CodexMetadataParseState,
+) -> Option<u64> {
+    let value = object.get(key)?;
+    if value.is_null() {
+        return None;
+    }
+    value.as_u64().or_else(|| {
+        state.malformed = true;
+        None
+    })
 }
 
 fn parse_workspaces(
@@ -2123,18 +2262,23 @@ fn is_known_canonical_key(key: &str) -> bool {
             | "agent_name"
             | "turn_id"
             | "window_id"
+            | "window_number"
+            | "context_window_id"
             | "request_kind"
             | "forked_from_thread_id"
+            | "forked_from_ordinal_exclusive"
             | "parent_thread_id"
             | "parent_turn_id"
             | "root_turn_id"
             | "subagent_kind"
             | "thread_source"
+            | "turn_trigger"
             | "sandbox"
             | "sandbox_mode"
             | "auto_review_enabled"
             | "node_repl_auto_review_required"
             | "node_repl_disabled"
+            | "history_ingest_requested"
             | "workspaces"
             | "tool_namespaces_info"
             | "turn_started_at_unix_ms"
@@ -2449,6 +2593,10 @@ pub struct RuntimeEvent {
     pub endpoint_id: Option<String>,
     #[serde(rename = "endpointName", default, skip_serializing_if = "is_none")]
     pub endpoint_name: Option<String>,
+    #[serde(rename = "modelGroupID", default, skip_serializing_if = "is_none")]
+    pub model_group_id: Option<String>,
+    #[serde(rename = "modelGroupName", default, skip_serializing_if = "is_none")]
+    pub model_group_name: Option<String>,
     #[serde(default)]
     pub failover: bool,
     #[serde(rename = "featureRuleID", default, skip_serializing_if = "is_none")]
@@ -2502,6 +2650,11 @@ pub struct RuntimeEvent {
     /// 499 = 客户端取消。
     #[serde(rename = "statusCode", default)]
     pub status_code: i64,
+    /// 会话粘性归属键(affinity 哈希,非会话 ID 原文)。用于运维面按项目清除
+    /// 粘性归属:统计端先按 project 聚合出键,再把键交给引擎清除。
+    /// None = 请求未建立粘性(早期拒绝、WebSocket 合成键)或旧事件。
+    #[serde(rename = "stickyKey", default, skip_serializing_if = "is_none")]
+    pub sticky_key: Option<String>,
     /// Apple reference date 秒数。
     #[serde(default)]
     pub timestamp: f64,
@@ -2766,6 +2919,8 @@ mod tests {
             effective_model: None,
             endpoint_id: None,
             endpoint_name: None,
+            model_group_id: None,
+            model_group_name: None,
             failover: false,
             feature_rule_id: None,
             failure_detail: None,
@@ -2784,6 +2939,7 @@ mod tests {
             request_path: None,
             route_intent: None,
             session_id: None,
+            sticky_key: None,
             status_code: 200,
             timestamp: ts,
             ttfb_ms: None,
@@ -3009,6 +3165,13 @@ mod tests {
             ClientKind::Codex
         );
         assert_eq!(
+            ClientKind::detect(
+                Some("GeminiCLI/0.1.0/gemini-2.5-pro (darwin; arm64; cli)"),
+                true
+            ),
+            ClientKind::GeminiCli
+        );
+        assert_eq!(
             ClientKind::detect(Some("Codex/151.0 Desktop"), false),
             ClientKind::Codex
         );
@@ -3089,6 +3252,7 @@ mod tests {
         for (kind, wire) in [
             (ClientKind::ClaudeCode, "claude_code"),
             (ClientKind::Codex, "codex"),
+            (ClientKind::GeminiCli, "gemini_cli"),
             (ClientKind::GrokBuild, "grok_build"),
             (ClientKind::OpenaiCompat, "openai_compat"),
             (ClientKind::Unknown, "unknown"),
@@ -3509,6 +3673,90 @@ mod tests {
         .unwrap();
         assert_eq!(bounded.agent_name.as_deref().unwrap().len(), 256);
         assert!(bounded.truncated);
+    }
+
+    #[test]
+    fn codex_context_fields_preserve_types_precedence_and_bounds() {
+        let canonical = serde_json::json!({
+            "window_number": 0,
+            "context_window_id": "context-body",
+            "forked_from_ordinal_exclusive": 42,
+            "turn_trigger": "user_input",
+            "history_ingest_requested": false
+        });
+        let headers = vec![(
+            "x-codex-turn-metadata".into(),
+            serde_json::json!({
+                "window_number": 3, "context_window_id": "context-header",
+                "forked_from_ordinal_exclusive": 9, "turn_trigger": "automation",
+                "history_ingest_requested": true
+            })
+            .to_string(),
+        )];
+        let body = serde_json::json!({"client_metadata": {
+            "x-codex-turn-metadata": canonical.to_string()
+        }});
+        let metadata = CodexMetadata::from_request(&headers, Some(&body)).unwrap();
+        let wire = serde_json::to_value(&metadata).unwrap();
+        assert_eq!(wire["windowNumber"], 0);
+        assert_eq!(wire["contextWindowID"], "context-body");
+        assert_eq!(wire["forkedFromOrdinalExclusive"], 42);
+        assert_eq!(wire["turnTrigger"], "user_input");
+        assert_eq!(wire["historyIngestRequested"], false);
+        assert_eq!(metadata.conflicts.len(), 5);
+        assert!(metadata.extras.is_empty());
+        assert!(!metadata.malformed);
+        assert_eq!(
+            serde_json::from_value::<CodexMetadata>(wire).unwrap(),
+            metadata
+        );
+
+        let invalid = serde_json::json!({"client_metadata": {
+            "x-codex-turn-metadata": serde_json::json!({
+                "window_number": -1, "forked_from_ordinal_exclusive": 1.5,
+                "history_ingest_requested": "false", "context_window_id": "x".repeat(200)
+            }).to_string()
+        }});
+        let metadata = CodexMetadata::from_request(&[], Some(&invalid)).unwrap();
+        assert!(metadata.malformed && metadata.truncated);
+        assert_eq!(metadata.window_number, None);
+        assert_eq!(metadata.forked_from_ordinal_exclusive, None);
+        assert_eq!(metadata.history_ingest_requested, None);
+        assert_eq!(
+            metadata.context_window_id.as_ref().unwrap().len(),
+            CODEX_METADATA_MAX_ID_BYTES
+        );
+    }
+
+    #[test]
+    fn codex_guardian_header_is_internal_without_fabricating_project_or_thread_source() {
+        let headers = vec![("x-openai-subagent".into(), "guardian".into())];
+        let mut metadata = CodexMetadata::from_request(&headers, None).unwrap();
+        assert!(metadata.is_subagent);
+        assert_eq!(metadata.thread_source, None);
+        assert_eq!(
+            codex_thread_class(Some(&metadata)),
+            CodexThreadClass::GuardianReview
+        );
+        assert_eq!(
+            codex_attribution_scope(Some(&metadata), None),
+            CodexAttributionScope::InternalFeature
+        );
+        metadata
+            .workspaces
+            .insert(".../project".into(), CodexWorkspaceMetadata::default());
+        assert_eq!(
+            codex_attribution_scope(Some(&metadata), None),
+            CodexAttributionScope::Project
+        );
+        metadata.thread_source = Some("user".into());
+        assert_eq!(codex_thread_class(Some(&metadata)), CodexThreadClass::User);
+        metadata.thread_source = None;
+        metadata.subagent_header = Some("unknown_feature".into());
+        assert_eq!(
+            codex_thread_class(Some(&metadata)),
+            CodexThreadClass::Unknown
+        );
     }
 
     #[test]

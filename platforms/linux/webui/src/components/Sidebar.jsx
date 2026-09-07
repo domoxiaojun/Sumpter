@@ -15,7 +15,8 @@ export function Sidebar() {
       title: '控制面板',
       items: [
         { id: 'run', title: '运行', icon: 'play' },
-        { id: 'providers', title: 'Provider', icon: 'server' },
+        { id: 'providers', title: '入口库', icon: 'server' },
+        { id: 'model-groups', title: '模型组', icon: 'route' },
         { id: 'routing', title: 'Claude Code 路由', icon: 'route' },
       ],
     },

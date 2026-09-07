@@ -25,7 +25,7 @@ use sumpter_core::events::{
 use sumpter_core::routing::{RESOURCE_ROUTING_MODEL, RequestPurpose, RouteMode};
 
 const SCHEMA_VERSION: i64 = 3;
-const PROJECTION_VERSION: i64 = 7;
+const PROJECTION_VERSION: i64 = 8;
 const PROJECTION_BACKFILL_BATCH: usize = 500;
 const BATCH_EVENTS: usize = 64;
 const BATCH_BYTES: usize = 256 * 1024;
@@ -114,6 +114,9 @@ struct EventProjection {
     payload_bytes: i64,
     session_key: String,
     session_source: &'static str,
+    /// 会话粘性归属键(affinity 哈希)。来自事件的 `stickyKey`;早期拒绝与
+    /// WebSocket 合成键的事件为 NULL。按项目清除粘性归属时按它聚合。
+    sticky_key: Option<String>,
     project_id: String,
     project_name: String,
     project_source: &'static str,
@@ -122,6 +125,8 @@ struct EventProjection {
     attribution_scope: Option<&'static str>,
     workspace_paths_json: String,
     endpoint_name: Option<String>,
+    model_group_id: Option<String>,
+    model_group_name: Option<String>,
     feature_rule_id: Option<String>,
     client_model: Option<String>,
     effective_model: Option<String>,
@@ -172,7 +177,7 @@ impl EventProjection {
             .map(|format| format.token())
         {
             Some("anthropic") => "independent",
-            Some("openai") | Some("openai-responses") => "subset",
+            Some("openai") | Some("openai-responses") | Some("gemini") => "subset",
             _ => "unknown",
         };
         let (processed_input_tokens, uncached_input_tokens) =
@@ -222,6 +227,12 @@ impl EventProjection {
             payload_bytes: payload_bytes.min(i64::MAX as usize) as i64,
             session_key,
             session_source,
+            sticky_key: event
+                .sticky_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| value.chars().take(128).collect()),
             project_id,
             project_name,
             project_source,
@@ -230,6 +241,8 @@ impl EventProjection {
             attribution_scope,
             workspace_paths_json,
             endpoint_name: event.endpoint_name.clone(),
+            model_group_id: event.model_group_id.clone(),
+            model_group_name: event.model_group_name.clone(),
             feature_rule_id: event.feature_rule_id.clone(),
             client_model: event.client_model.clone(),
             effective_model: event.effective_model.clone(),
@@ -373,6 +386,9 @@ pub struct RuntimeEventListItem {
     #[serde(rename = "endpointID")]
     pub endpoint_id: Option<String>,
     pub endpoint_name: Option<String>,
+    #[serde(rename = "modelGroupID")]
+    pub model_group_id: Option<String>,
+    pub model_group_name: Option<String>,
     #[serde(rename = "featureRuleID")]
     pub feature_rule_id: Option<String>,
     pub effective_model: Option<String>,
@@ -453,6 +469,8 @@ impl RuntimeEventListItem {
             request_purpose: event.request_purpose,
             endpoint_id: event.endpoint_id,
             endpoint_name: event.endpoint_name,
+            model_group_id: event.model_group_id,
+            model_group_name: event.model_group_name,
             feature_rule_id: event.feature_rule_id,
             effective_model: event.effective_model,
             upstream_model: event.upstream_model,

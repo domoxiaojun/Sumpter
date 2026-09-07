@@ -13,6 +13,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY adapters ./adapters
 COPY apps ./apps
+COPY platforms/linux/scripts ./platforms/linux/scripts
 
 RUN --mount=type=cache,id=sumpter-cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=sumpter-cargo-git,target=/usr/local/cargo/git \
@@ -33,8 +34,8 @@ RUN apk add --no-cache ca-certificates \
     && chmod 0700 /config
 
 COPY --from=builder /out/sumpterd /usr/local/bin/sumpterd
-COPY web/ /opt/sumpter/web/
-COPY config.example.json /opt/sumpter/config.example.json
+COPY platforms/linux/web/ /opt/sumpter/web/
+COPY platforms/linux/config.example.json /opt/sumpter/config.example.json
 
 # Admin defaults (daemon reads these; CLI flags still win if provided in command:).
 # `/config/admin-password` is mandatory because CMD sets `--config-dir /config`;
@@ -51,12 +52,12 @@ EXPOSE 57878 57879
 STOPSIGNAL SIGTERM
 
 # Healthcheck probes the unauthenticated, content-free listener liveness route.
-# Shell form so $${SUMPTER_ADMIN_PORT} expands at container runtime ($$ -> $).
+# Shell form expands SUMPTER_ADMIN_PORT at container runtime.
 # Alpine busybox provides wget.
 # hadolint ignore=DL3025
 HEALTHCHECK --interval=15s --timeout=4s --start-period=10s --retries=4 \
     CMD wget -q -T 3 -O /dev/null \
-      "http://127.0.0.1:$${SUMPTER_ADMIN_PORT:-57879}/healthz" \
+      "http://127.0.0.1:${SUMPTER_ADMIN_PORT:-57879}/healthz" \
       || exit 1
 
 ENTRYPOINT ["/usr/local/bin/sumpterd"]

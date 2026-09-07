@@ -36,6 +36,8 @@ use super::protocol::RealtimeRouteIntent;
 use super::protocol::body_indicates_codex_live;
 use super::protocol::classify_realtime_intent;
 use super::protocol::decoded_query_value;
+use super::protocol::gemini_model_from_path;
+use super::protocol::gemini_stream_path;
 use super::protocol::is_openai_resource_tree;
 use super::protocol::is_realtime_call_bootstrap_path;
 use super::protocol::is_realtime_client_secret_path;
@@ -301,7 +303,9 @@ impl Engine {
         // Claim the complete models route tree here. Otherwise POST
         // `/v1/models` and malformed nested paths fall through to the generic
         // resource/raw dispatcher and can leak a request to a Provider.
-        if is_openai_resource_tree(path, "models") {
+        if is_openai_resource_tree(path, "models")
+            && !super::protocol::is_gemini_generate_path(path)
+        {
             if config.listener.has_inbound_auth()
                 && !inbound_auth_ok(&headers, &config.listener.auth_token)
             {
@@ -353,7 +357,81 @@ impl Engine {
             return local_models_response(&config, path, query, &headers);
         }
 
+        // Decode only the JSON inference routes that must inspect the model.
+        // Authentication precedes decompression; opaque resource bodies stay raw.
+        let mut headers = headers;
+        let mut body = body;
+        if matches!(
+            path,
+            "/v1/messages"
+                | "/v1/responses"
+                | "/responses"
+                | "/backend-api/codex/responses"
+                | "/v1/responses/compact"
+                | "/responses/compact"
+                | "/backend-api/codex/responses/compact"
+                | "/v1/chat/completions"
+                | "/chat/completions"
+        ) && let Some(encoding) = header_value(&headers, "content-encoding").map(str::to_owned)
+            && !encoding.eq_ignore_ascii_case("identity")
+            && (!config.listener.has_inbound_auth()
+                || inbound_auth_ok(&headers, &config.listener.auth_token))
+        {
+            let decoded = match axum::body::to_bytes(body, MAX_BODY_BYTES).await {
+                Ok(bytes) => {
+                    tokio::task::spawn_blocking(move || decode_inference_body(&bytes, &encoding))
+                        .await
+                        .unwrap_or(Err("request_decompression_failed"))
+                }
+                Err(_) => Err("encoded_request_too_large"),
+            };
+            match decoded {
+                Ok(bytes) => {
+                    body = Body::from(bytes);
+                    headers.retain(|(name, _)| {
+                        !name.eq_ignore_ascii_case("content-encoding")
+                            && !name.eq_ignore_ascii_case("content-length")
+                    });
+                }
+                Err(message) => {
+                    self.record_rejected_client_with_metadata(
+                        400,
+                        message,
+                        None,
+                        None,
+                        detect_client_kind(&headers, path != "/v1/messages"),
+                        CodexMetadata::from_request(&headers, None),
+                        ClientDeclaredMetadata::from_headers(&headers),
+                        Some(if path == "/v1/messages" {
+                            ProviderProtocol::Anthropic
+                        } else if path.ends_with("/chat/completions") {
+                            ProviderProtocol::OpenAI
+                        } else {
+                            ProviderProtocol::OpenAIResponses
+                        }),
+                    );
+                    return error_response(StatusCode::BAD_REQUEST, &[("error", message)]);
+                }
+            }
+        }
+
         match path {
+            _ if super::protocol::is_gemini_generate_path(path) => {
+                self.handle_native_openai_passthrough(
+                    &config,
+                    PassthroughKind::GeminiGenerate,
+                    if path.ends_with(":countTokens") {
+                        RequestPurpose::TokenCount
+                    } else {
+                        RequestPurpose::Standard
+                    },
+                    method,
+                    path_and_query,
+                    headers,
+                    body,
+                )
+                .await
+            }
             "/v1/messages" => {
                 self.handle_messages(&config, method, path_and_query, headers, body)
                     .await
@@ -610,9 +688,17 @@ impl Engine {
         };
 
         let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
+            let encoding = header_value(&headers, "content-encoding").unwrap_or("identity");
+            let message = if !encoding.eq_ignore_ascii_case("identity") {
+                format!(
+                    "body is not JSON (Content-Encoding {encoding} is not decoded by this listener)"
+                )
+            } else {
+                message_tokens::BODY_NOT_JSON.to_string()
+            };
             self.record_rejected_client_with_metadata(
                 400,
-                message_tokens::BODY_NOT_JSON,
+                &message,
                 None,
                 None,
                 client_kind,
@@ -622,16 +708,14 @@ impl Engine {
             );
             return error_response(
                 StatusCode::BAD_REQUEST,
-                &[
-                    ("error", "invalid_request"),
-                    ("message", "body is not JSON"),
-                ],
+                &[("error", "invalid_request"), ("message", &message)],
             );
         };
         let codex_metadata = CodexMetadata::from_request(&headers, Some(&parsed));
-        if let Some(originator) = codex_metadata
-            .as_ref()
-            .and_then(|metadata| metadata.originator.as_deref())
+        if client_kind != ClientKind::Pi
+            && let Some(originator) = codex_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.originator.as_deref())
         {
             client_kind = ClientKind::detect_with_originator(
                 header_value(&headers, "user-agent"),
@@ -741,9 +825,17 @@ impl Engine {
             }
         };
         let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
+            let encoding = header_value(&headers, "content-encoding").unwrap_or("identity");
+            let message = if !encoding.eq_ignore_ascii_case("identity") {
+                format!(
+                    "body is not JSON (Content-Encoding {encoding} is not decoded by this listener)"
+                )
+            } else {
+                message_tokens::BODY_NOT_JSON.to_string()
+            };
             self.record_rejected_client_with_metadata(
                 400,
-                message_tokens::BODY_NOT_JSON,
+                &message,
                 None,
                 request_purpose,
                 client_kind,
@@ -753,16 +845,14 @@ impl Engine {
             );
             return error_response(
                 StatusCode::BAD_REQUEST,
-                &[
-                    ("error", "invalid_request"),
-                    ("message", "body is not JSON"),
-                ],
+                &[("error", "invalid_request"), ("message", &message)],
             );
         };
         let codex_metadata = CodexMetadata::from_request(&headers, Some(&parsed));
-        if let Some(originator) = codex_metadata
-            .as_ref()
-            .and_then(|metadata| metadata.originator.as_deref())
+        if client_kind != ClientKind::Pi
+            && let Some(originator) = codex_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.originator.as_deref())
         {
             client_kind = ClientKind::detect_with_originator(
                 header_value(&headers, "user-agent"),
@@ -894,6 +984,42 @@ impl Engine {
                 &[("error", "inbound_auth_required")],
             );
         }
+        if kind == PassthroughKind::GeminiGenerate {
+            let query = path_and_query
+                .split_once('?')
+                .map(|(_, query)| query)
+                .unwrap_or("");
+            let invalid = if !method.eq_ignore_ascii_case("POST") {
+                Some((405, "Gemini model operations require POST"))
+            } else if decoded_query_value(query, "key").is_some() {
+                Some((
+                    400,
+                    "use x-goog-api-key or Bearer for inbound authentication, not a query key",
+                ))
+            } else if gemini_stream_path(path_without_query(path_and_query))
+                && decoded_query_value(query, "alt").as_deref() != Some("sse")
+            {
+                Some((400, "streamGenerateContent requires alt=sse"))
+            } else {
+                None
+            };
+            if let Some((status, message)) = invalid {
+                self.record_rejected_client_with_metadata(
+                    status,
+                    message,
+                    None,
+                    Some(purpose),
+                    client_kind,
+                    None,
+                    ClientDeclaredMetadata::from_headers(&headers),
+                    Some(source_format),
+                );
+                return error_response(
+                    StatusCode::from_u16(status as u16).unwrap_or(StatusCode::BAD_REQUEST),
+                    &[("error", "invalid_gemini_request"), ("message", message)],
+                );
+            }
+        }
         let mut body = match axum::body::to_bytes(body, MAX_BODY_BYTES).await {
             Ok(body) => body,
             Err(error) => {
@@ -943,9 +1069,10 @@ impl Engine {
             metadata_json_body_hint(&body, content_type.as_deref());
         let codex_metadata =
             CodexMetadata::from_request(&headers, metadata_body_before_normalization.as_ref());
-        if let Some(originator) = codex_metadata
-            .as_ref()
-            .and_then(|metadata| metadata.originator.as_deref())
+        if client_kind != ClientKind::Pi
+            && let Some(originator) = codex_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.originator.as_deref())
         {
             client_kind = ClientKind::detect_with_originator(
                 header_value(&headers, "user-agent"),
@@ -1024,7 +1151,29 @@ impl Engine {
             body = normalized_body;
             content_type = Some(normalized_content_type);
         }
-        let fields = if resource_intent {
+        let fields = if kind == PassthroughKind::GeminiGenerate {
+            let Some(model) = gemini_model_from_path(path_without_query(path_and_query)) else {
+                let reason = "Gemini model is required in the request path";
+                self.record_rejected_client_with_metadata(
+                    400,
+                    reason,
+                    None,
+                    Some(purpose),
+                    client_kind,
+                    codex_metadata.clone(),
+                    ClientDeclaredMetadata::from_headers(&headers),
+                    Some(source_format),
+                );
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    &[("error", "invalid_request"), ("message", reason)],
+                );
+            };
+            NativePassthroughFields {
+                model,
+                stream: gemini_stream_path(path_without_query(path_and_query)),
+            }
+        } else if resource_intent {
             NativePassthroughFields {
                 model: sumpter_core::routing::RESOURCE_ROUTING_MODEL.into(),
                 stream: false,
@@ -1308,6 +1457,7 @@ impl Engine {
                     | PassthroughKind::Videos
                     | PassthroughKind::Realtime
                     | PassthroughKind::Models => SseDialect::OpenAiResponses,
+                    PassthroughKind::GeminiGenerate => SseDialect::Gemini,
                 },
                 realtime_client_secret: is_realtime_client_secret_path(path_and_query),
             }),
@@ -1316,5 +1466,52 @@ impl Engine {
             codex_metadata,
         )
         .await
+    }
+}
+
+// The output cap also protects against decompression bombs. Error strings never
+// include request bytes or arbitrary header values.
+fn decode_inference_body(raw: &[u8], encoding: &str) -> Result<Vec<u8>, &'static str> {
+    use std::io::Read;
+    let decoder: Box<dyn Read + '_> = match encoding.trim().to_ascii_lowercase().as_str() {
+        "zstd" => {
+            Box::new(zstd::stream::read::Decoder::new(raw).map_err(|_| "invalid_zstd_request")?)
+        }
+        "gzip" => Box::new(flate2::read::MultiGzDecoder::new(raw)),
+        _ => return Err("unsupported_request_content_encoding"),
+    };
+    let mut decoded = Vec::new();
+    decoder
+        .take(MAX_BODY_BYTES as u64 + 1)
+        .read_to_end(&mut decoded)
+        .map_err(|_| "invalid_compressed_request")?;
+    if decoded.len() > MAX_BODY_BYTES {
+        return Err("decoded_request_too_large");
+    }
+    Ok(decoded)
+}
+
+#[cfg(test)]
+mod compression_tests {
+    use super::*;
+    #[test]
+    fn codex_compressed_body_decodes_exact_json_and_rejects_invalid_encoding() {
+        let raw = br#"{ "model":"test", "client_metadata":{"x-openai-subagent":"guardian"} }"#;
+        let encoded = zstd::stream::encode_all(&raw[..], 1).unwrap();
+        assert_eq!(decode_inference_body(&encoded, "zstd").unwrap(), raw);
+        use std::io::Write;
+        let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gzip.write_all(raw).unwrap();
+        assert_eq!(
+            decode_inference_body(&gzip.finish().unwrap(), "gzip").unwrap(),
+            raw
+        );
+        assert!(decode_inference_body(b"invalid", "zstd").is_err());
+        assert!(decode_inference_body(raw, "br").is_err());
+        let huge = zstd::stream::encode_all(&vec![0; MAX_BODY_BYTES + 1][..], 1).unwrap();
+        assert_eq!(
+            decode_inference_body(&huge, "zstd"),
+            Err("decoded_request_too_large")
+        );
     }
 }

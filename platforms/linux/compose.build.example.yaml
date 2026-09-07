@@ -6,7 +6,7 @@ services:
   sumpter:
     image: ${SUMPTER_IMAGE:-sumpter:local}
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ../..
+      dockerfile: platforms/linux/Dockerfile
       args:
         RUST_IMAGE: ${RUST_IMAGE:-rust:1.88-alpine}

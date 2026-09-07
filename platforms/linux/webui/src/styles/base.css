@@ -169,7 +169,7 @@ body {
 
 .page-title {
   font-family: var(--font-sans);
-  font-size: 1.75rem;
+  font-size: 1.85rem;
   font-weight: 700;
   letter-spacing: -0.02em;
   color: var(--text-primary);
@@ -179,6 +179,8 @@ body {
 }
 
 .page-subtitle {
+  max-width: var(--readable-measure);
+  line-height: 1.65;
   font-size: 0.95rem;
   color: var(--text-secondary);
 }

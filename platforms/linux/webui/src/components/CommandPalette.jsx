@@ -13,7 +13,8 @@ export function CommandPalette() {
 
   const commands = useMemo(() => [
     { id: 'nav-run', title: '转到：运行监控', category: '页面跳转', icon: 'play', action: () => navigate('run') },
-    { id: 'nav-providers', title: '转到：Provider 管理', category: '页面跳转', icon: 'server', action: () => navigate('providers') },
+    { id: 'nav-model-groups', title: '转到：模型组', category: '页面跳转', icon: 'route', action: () => navigate('model-groups') },
+    { id: 'nav-providers', title: '转到：入口库', category: '页面跳转', icon: 'server', action: () => navigate('providers') },
     { id: 'nav-routing', title: '转到：Claude Code 路由', category: '页面跳转', icon: 'route', action: () => navigate('routing') },
     { id: 'nav-security', title: '转到：安全与监听配置', category: '页面跳转', icon: 'shield', action: () => navigate('security') },
     { id: 'nav-stats', title: '转到：使用统计与分析', category: '页面跳转', icon: 'chart', action: () => navigate('statistics') },

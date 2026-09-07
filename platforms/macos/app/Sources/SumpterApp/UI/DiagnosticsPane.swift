@@ -151,20 +151,15 @@ struct SecurityPane: View {
             listenerPanel
             authPanel
             launchPanel
-            attributionGuidePanel
-            ProjectAttributionInstallerPanel(
-                title: GrokAttributionHint.Guide.title,
-                subtitle: GrokAttributionHint.Guide.subtitle,
-                scriptResource: "grok-project-attribution",
-                clientName: "Grok Build",
-                observedState: GrokAttributionHint.state(projects: attributionRows),
-                whereToRun: GrokAttributionHint.Guide.whereToRun,
-                privacy: GrokAttributionHint.Guide.privacy,
-                steps: GrokAttributionHint.Guide.steps,
-                rollback: GrokAttributionHint.Guide.rollback,
-                installSuccessMessage: "配置已完成。请新开终端窗口，再启动 grok。",
-                missingScriptMessage: "App 资源中缺少 grok-project-attribution.sh，请重新安装完整 App。",
-                statusDetail: GrokAttributionHint.Guide.statusDetail
+            UnifiedAttributionPanel()
+            ClientAttributionResourcePanel(
+                title: "pi 项目归因",
+                subtitle: "在运行 pi 的主机安装扩展，为显式标记的 Sumpter provider 添加项目和会话归因。",
+                resourceName: "pi-project-attribution",
+                resourceExtension: "ts",
+                clientName: "pi",
+                command: { path in "mkdir -p \"$HOME/.pi/agent/extensions\" && cp '\(path)' \"$HOME/.pi/agent/extensions/pi-project-attribution.ts\"" },
+                detail: "安装后在 pi 中执行 /reload；provider 需要设置 X-Sumpter-Client: pi。"
             )
         }
         .onAppear { loadDraftIfNeeded() }

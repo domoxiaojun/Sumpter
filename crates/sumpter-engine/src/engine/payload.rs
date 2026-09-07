@@ -270,6 +270,7 @@ pub(super) fn native_json_fields(
             // default rather than inheriting an arbitrary text mapping.
             request_build::DEFAULT_REALTIME_MODEL
         }
+        PassthroughKind::GeminiGenerate => "",
         _ => "",
     };
     let model = object

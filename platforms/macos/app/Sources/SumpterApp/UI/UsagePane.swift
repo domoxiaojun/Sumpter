@@ -513,6 +513,8 @@ struct UsagePane: View {
     @State private var confirmDeleteSessionID: String?
     @State private var confirmUnidentifiedSessionID: String?
     @State private var unidentifiedConfirmationPhrase = ""
+    @State private var confirmStickyClearProject: (key: String, name: String)?
+    @State private var stickyClearingKey: String?
     @State private var locatingProjectName: String?
     @State private var confirmStoredExport = false
     @State private var exportPrivacy = "stored"
@@ -687,6 +689,31 @@ struct UsagePane: View {
             Button("取消", role: .cancel) {}
         } message: {
             Text("这不是完整诊断捕获，只包含 SQLite 已保存的源事件与会话归属字段；可能包含原始标识。导出前请确认用途和保存位置。")
+        }
+        .confirmationDialog(
+            "清除会话粘性归属？",
+            isPresented: Binding(
+                get: { confirmStickyClearProject != nil },
+                set: { if !$0 { confirmStickyClearProject = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("清除粘性归属", role: .destructive) {
+                if let project = confirmStickyClearProject {
+                    stickyClearingKey = project.key
+                    model.clearProjectSticky(projectID: project.key)
+                    // flash 反馈由 AppModel 给出;这里只短暂保留行内忙态。
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 800_000_000)
+                        stickyClearingKey = nil
+                    }
+                }
+                confirmStickyClearProject = nil
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            let name = confirmStickyClearProject?.name ?? ""
+            Text("清除项目「\(name)」的会话粘性归属后，该项目的新请求会按入口库顺序重新选择入口。统计与事件不会被删除。")
         }
         .confirmationDialog(
             "估算源运行字段？",
@@ -1043,6 +1070,7 @@ struct UsagePane: View {
                     runtimeOverviewDimensionControls(kind: kind, page: page)
                 }
             }
+            if kind == "project" { piAttributionStatus(page?.rows ?? []) }
             if let page {
                 if page.rows.isEmpty {
                     EmptyStateView(title: "暂无匹配的" + runtimeDimensionLabel(kind), systemImage: "chart.bar")
@@ -1058,6 +1086,17 @@ struct UsagePane: View {
             } else {
                 EmptyStateView(title: "暂无" + runtimeDimensionLabel(kind) + "使用数据", systemImage: "chart.bar")
             }
+        }
+    }
+
+    private func piAttributionStatus(_ rows: [AdminWire.RuntimeDimensionRow]) -> some View {
+        let state = PiAttributionHint.state(projects: rows.map {
+            .init(name: $0.name, projectSource: $0.source, clientKinds: $0.clientKinds ?? [], attempts: $0.requests)
+        })
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("pi 项目归因：" + state.message).font(.caption).foregroundStyle(.secondary)
+            Link("pi 接入说明", destination: URL(string: "https://github.com/domoxiaojun/sumpter/blob/main/USAGE.md#pi-客户端")!)
+                .font(.caption)
         }
     }
 
@@ -1218,10 +1257,22 @@ struct UsagePane: View {
             Text(dimensionSourceDisplayName(row.source, kind: kind)).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
         }
         if kind == "project" {
-            Button { model.setRuntimeLocalProject(row.key, projectName: row.name) } label: { content }
-                .buttonStyle(.link)
-                .help("仅筛选下方会话：\(row.key)")
-                .accessibilityLabel("仅查看项目 \(runtimeDimensionDisplayName(row.name, kind: kind)) 的会话和模型用量")
+            HStack(spacing: 6) {
+                Button { model.setRuntimeLocalProject(row.key, projectName: row.name) } label: { content }
+                    .buttonStyle(.link)
+                    .help("仅筛选下方会话：\(row.key)")
+                    .accessibilityLabel("仅查看项目 \(runtimeDimensionDisplayName(row.name, kind: kind)) 的会话和模型用量")
+                Button {
+                    confirmStickyClearProject = (key: row.key, name: runtimeDimensionDisplayName(row.name, kind: kind))
+                } label: {
+                    Image(systemName: stickyClearingKey == row.key ? "hourglass" : "arrow.triangle.2.circlepath")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .disabled(stickyClearingKey != nil)
+                .help("清除该项目的会话粘性归属：新请求按入口库顺序重新选择入口")
+                .accessibilityLabel("清除项目 \(runtimeDimensionDisplayName(row.name, kind: kind)) 的粘性归属")
+            }
         } else if kind == "session" {
             Button { model.setRuntimeLocalSession(row.key, sessionName: row.name) } label: { content }
                 .buttonStyle(.link)
@@ -1862,15 +1913,8 @@ struct UsagePane: View {
     }
 
     private func clientDisplayName(_ value: String) -> String {
-        switch value {
-        case "claude_code": "Claude Code"
-        case "codex": "Codex"
-        case "grok_build": "Grok Build"
-        case "openai_compat": "OpenAI 兼容客户端"
-        case "unknown": "未知客户端"
-        case "unrecorded_client": "旧事件（未记录）"
-        default: value
-        }
+        if value == "unrecorded_client" { return "旧事件（未记录）" }
+        return ClientKind(rawValue: value)?.displayName ?? value
     }
 
     private func runtimeOutcomeDisplayName(_ value: String) -> String {
@@ -2252,6 +2296,7 @@ struct UsagePane: View {
     private var v3DimensionTables: some View {
         if let projects = model.runtimeProjectsPage, let sessions = model.runtimeSessionsPage {
             VStack(alignment: .leading, spacing: 12) {
+                piAttributionStatus(projects.rows)
                 dimensionTable(title: "项目（服务端分页）", page: projects, search: $model.runtimeProjectSearch, searchPrompt: "搜索项目名或 ID", onSearch: { model.loadRuntimeProjects(page: 1) }, onPage: { model.loadRuntimeProjects(page: $0) }, pageSize: model.runtimeProjectPageSize, loading: model.runtimeDimensionsLoading, onPageSizeChange: model.setRuntimeProjectPageSize, select: { model.setRuntimeV2Project($0.key, projectName: $0.name) }, isProject: true)
                 dimensionTable(title: "会话（服务端分页）", page: sessions, search: $model.runtimeSessionSearch, searchPrompt: "搜索会话 ID", onSearch: { model.loadRuntimeSessions(page: 1) }, onPage: { model.loadRuntimeSessions(page: $0) }, pageSize: model.runtimeSessionPageSize, loading: model.runtimeDimensionsLoading, onPageSizeChange: model.setRuntimeSessionPageSize, select: { model.setRuntimeV2Session($0.key) }, isProject: false)
             }

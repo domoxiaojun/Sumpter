@@ -1,3 +1,5 @@
+import { configSaveMessage } from '../utils/configFeedback.js';
+import { pruneGroupReferences } from '../utils/modelGroups.js';
 import {
   mockConfig, mockSecretStatus, mockStatus, mockRuntime, mockRuntimeHistory,
   mockAnalytics, mockDiagnostics, mockAutostart,
@@ -215,14 +217,14 @@ function mockRuntimeEventItems(state) {
     .sort((left, right) => Number(right.seq || 0) - Number(left.seq || 0));
 }
 
-// 页面保留易懂的字段名，落盘前严格收敛到 Rust schema v6。
+// 页面保留易懂的字段名，落盘前严格收敛到 Rust schema v7。
 export function fromWireConfig(document) {
   if (!document) return document;
   const wire = clone(document);
   const config = wire.config || {};
   const schemaVersion = Number(config.schemaVersion);
-  if (schemaVersion !== 6) {
-    throw new TypeError(`仅支持 schema v6 配置，收到 v${config.schemaVersion ?? 'unknown'}`);
+  if (schemaVersion !== 7) {
+    throw new TypeError(`仅支持 schema v7 配置，收到 v${config.schemaVersion ?? 'unknown'}`);
   }
   if (Object.prototype.hasOwnProperty.call(config, 'pools')) {
     throw new TypeError('服务端必须先将 Provider 池迁移为扁平 endpoints；WebUI 不执行旧池迁移');
@@ -230,7 +232,7 @@ export function fromWireConfig(document) {
   if (config.listener) delete config.listener.inboundDialectPassthrough;
   for (const rule of config.featureRules || []) {
     if (rule.target && (rule.target.poolID != null || rule.target.poolId != null)) {
-      throw new TypeError('schema v6 不允许 featureRules[].target.poolID');
+      throw new TypeError('schema v7 不允许 featureRules[].target.poolID');
     }
   }
   if (config.retry) delete config.retry.pinnedIPConcurrency;
@@ -256,8 +258,9 @@ export function toWireConfig(document) {
   const wire = clone(document || {});
   const config = wire.config || wire;
   if (Object.prototype.hasOwnProperty.call(config, 'pools')) {
-    throw new TypeError('schema v6 不允许 pools；请先由服务端完成迁移');
+    throw new TypeError('schema v7 不允许 pools；请先由服务端完成迁移');
   }
+  pruneGroupReferences(config);
   delete config.warnings;
   if (config.retry) delete config.retry.pinnedIPConcurrency;
   for (const endpoint of config.endpoints || []) {
@@ -309,10 +312,10 @@ export function toWireConfig(document) {
   config.listener = config.listener || {};
   config.listener.authToken = '';
   delete config.listener.inboundDialectPassthrough;
-  config.schemaVersion = 6;
+  config.schemaVersion = 7;
   for (const rule of config.featureRules || []) {
     if (rule.target && (rule.target.poolID != null || rule.target.poolId != null)) {
-      throw new TypeError('schema v6 不允许 featureRules[].target.poolID');
+      throw new TypeError('schema v7 不允许 featureRules[].target.poolID');
     }
     if (rule.target?.protocol && !isSourceFormat(rule.target.protocol)) {
       throw new TypeError(`分流规则 ${rule.id || '(unknown)'} 的目标协议非法: ${rule.target.protocol}`);
@@ -1291,6 +1294,18 @@ class ApiService {
         events: [],
       };
     }
+    if (path === '/runtime/projects/sticky-clear' && method === 'POST') {
+      const body = JSON.parse(options.body || '{}');
+      const projectID = String(body.projectID ?? body.project_id ?? '').trim();
+      if (!projectID) {
+        const error = new Error('必须提供 projectID'); error.status = 400; error.code = 'project_id_required'; throw error;
+      }
+      // Mock 把每个项目记为一条粘性归属,首次清除返回 1,之后幂等返回 0。
+      if (!this.mockState.clearedProjectSticky) this.mockState.clearedProjectSticky = new Set();
+      const cleared = this.mockState.clearedProjectSticky.has(projectID) ? 0 : 1;
+      this.mockState.clearedProjectSticky.add(projectID);
+      return { cleared, matched: cleared };
+    }
     if (path.startsWith('/runtime/session') && method === 'DELETE') {
       const query = new URLSearchParams(path.split('?')[1] || '');
       const sessionID = String(query.get('sessionID') || '').trim();
@@ -1674,6 +1689,13 @@ class ApiService {
     const query = new URLSearchParams({ sessionID: String(sessionID || '') });
     return this.request(`/runtime/session/export?${query.toString()}`, options);
   }
+  clearProjectSticky(projectID, options = {}) {
+    return this.request('/runtime/projects/sticky-clear', {
+      ...options,
+      method: 'POST',
+      body: JSON.stringify({ projectID: String(projectID || '') }),
+    });
+  }
   getConfig(options = {}) { return this.request('/config', options).then(fromWireConfig); }
   saveConfig(expectedGeneration, config, secretUpdates = {}) {
     return this.request('/config', {
@@ -1688,7 +1710,10 @@ class ApiService {
             .map(([id, apiKey]) => [id, { apiKey }])),
         },
       }),
-    }).then(fromWireConfig);
+    }).then(fromWireConfig).catch((error) => {
+      error.message = configSaveMessage(error.code, error.message);
+      throw error;
+    });
   }
   fetchProviderModels(endpointID, options = {}) {
     const id = String(endpointID ?? '').trim();

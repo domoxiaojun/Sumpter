@@ -26,7 +26,7 @@ use super::Engine;
 use super::catalog::is_media_only_conversation_model;
 use super::completion::CompletionGuard;
 use super::context::{
-    ClientMeta, ClientOut, current_request_context, header_value, observed_session_id,
+    ClientMeta, ClientOut, current_request_context, observed_session_id,
     retain_codex_metadata_for_client, upstream_request_id,
 };
 use super::events::new_event_id;
@@ -343,6 +343,7 @@ impl Engine {
                     | PassthroughKind::Files
                     | PassthroughKind::Realtime
                     | PassthroughKind::Models
+                    | PassthroughKind::GeminiGenerate
                     | PassthroughKind::Raw
             )
         });
@@ -500,6 +501,28 @@ impl Engine {
         let realtime_intent = client_out.as_ref().is_some_and(|client| {
             client.passthrough.is_some() && client.passthrough_kind == PassthroughKind::Realtime
         });
+        if passthrough_kind == Some(PassthroughKind::GeminiGenerate)
+            && plan
+                .endpoints
+                .iter()
+                .any(|endpoint| !request_build::valid_gemini_model(&endpoint.upstream_model))
+        {
+            let message = "Gemini upstream model must be a model ID or models/<ID>";
+            self.record_rejected_client_with_metadata(
+                400,
+                message,
+                Some(request.model.clone()),
+                Some(purpose),
+                client_kind,
+                None,
+                ClientDeclaredMetadata::from_headers(&headers),
+                Some(source_format),
+            );
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                &[("error", "invalid_gemini_mapping"), ("message", message)],
+            );
+        }
         if realtime_intent {
             // A text-only Anthropic endpoint must never receive an OpenAI
             // Realtime/Quicksilver request merely because it has a broad or
@@ -778,11 +801,9 @@ impl Engine {
         // passthrough_intent:排在 plan 之后时,route_mode 已经被 plan_for_passthrough
         // 压成 Native,条件永不成立。
 
-        let claude_session_id = header_value(&headers, "x-claude-code-session-id")
-            // Codex 等 OpenAI 客户端通常使用 session_id,纳入同一稳定粘性键。
-            .or_else(|| header_value(&headers, "session_id"));
         let observed_session_id = observed_session_id(&headers);
-        let session_identity = sticky::resolve_session_identity(&request, claude_session_id);
+        let session_identity =
+            sticky::resolve_session_identity(&request, observed_session_id.as_deref());
         let sticky_key = sticky::StickyKey::new(
             session_identity,
             plan.effective_model.clone(),
@@ -865,6 +886,7 @@ impl Engine {
             purpose,
             unmatched_no_tools,
             session_id: observed_session_id.clone(),
+            sticky_key: Some(session_key.value.clone()),
             codex_metadata: retain_codex_metadata_for_client(client_kind, codex_metadata),
             client_declared: ClientDeclaredMetadata::from_headers(&headers),
             grok_metadata: GrokMetadata::from_headers(&headers),
@@ -888,6 +910,8 @@ impl Engine {
             effective_model: Some(plan.effective_model.clone()),
             endpoint_id: None,
             endpoint_name: None,
+            model_group_id: None,
+            model_group_name: None,
             failover: false,
             feature_rule_id: plan.feature_rule_id.clone(),
             failure_detail: None,
@@ -918,6 +942,7 @@ impl Engine {
                 .as_ref()
                 .map(|context| context.route_intent.clone()),
             session_id: observed_session_id,
+            sticky_key: Some(session_key.value.clone()),
             status_code: 0,
             timestamp: client_timestamp,
             // 尚未选定入口,首字节由 accepted 时的回填补上。
@@ -1005,13 +1030,13 @@ impl Engine {
             // immediately probe the very provider we just quarantined.
             return Vec::new();
         }
-        let mut groups: Vec<(String, i64, usize, f64)> = Vec::new();
+        let mut groups: Vec<(String, usize, i64, usize)> = Vec::new();
         for (index, endpoint) in eligible_endpoints.iter().enumerate() {
             let group = endpoint.scheduling_group().to_string();
             if let Some(existing) = groups.iter_mut().find(|item| item.0 == group) {
-                existing.1 = existing.1.min(endpoint.priority);
+                existing.2 = existing.2.min(endpoint.priority);
             } else {
-                groups.push((group, endpoint.priority, index, f64::INFINITY));
+                groups.push((group, endpoint.model_group_rank, endpoint.priority, index));
             }
         }
         groups.sort_by(|a, b| {
@@ -1021,6 +1046,7 @@ impl Engine {
                 .cmp(&a_preferred)
                 .then_with(|| a.1.cmp(&b.1))
                 .then_with(|| a.2.cmp(&b.2))
+                .then_with(|| a.3.cmp(&b.3))
         });
 
         let mut output: Vec<PlannedEndpoint> = Vec::with_capacity(candidates.len());

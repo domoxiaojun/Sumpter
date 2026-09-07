@@ -26,6 +26,18 @@ pub use sumpter_engine::{EngineNotice, MAX_BODY_BYTES};
 pub const ATTRIBUTION_SCRIPT_PATH: &str = "/__sumpter/cc-project-attribution.sh";
 /// Linux listener 上提供给远程 Grok Build 客户端的内置配置器路径。
 pub const GROK_ATTRIBUTION_SCRIPT_PATH: &str = "/__sumpter/grok-project-attribution.sh";
+pub const PI_ATTRIBUTION_SCRIPT_PATH: &str = "/__sumpter/pi-project-attribution.ts";
+pub const GEMINI_WRAPPER_SCRIPT_PATH: &str = "/__sumpter/gemini-sumpter-wrapper.mjs";
+pub const CLIENT_ATTRIBUTION_SCRIPT_PATH: &str = "/__sumpter/client-attribution.mjs";
+pub const CLIENT_ATTRIBUTION_SETUP_PATH: &str = "/__sumpter/setup-client-attribution.sh";
+const CLIENT_ATTRIBUTION_SETUP: &str =
+    include_str!("../../../../platforms/linux/scripts/setup-client-attribution.sh");
+const CLIENT_ATTRIBUTION_SCRIPT: &str =
+    include_str!("../../../../platforms/linux/scripts/client-attribution.mjs");
+const GEMINI_WRAPPER_SCRIPT: &str =
+    include_str!("../../../../platforms/linux/scripts/gemini-sumpter-wrapper.mjs");
+const PI_ATTRIBUTION_SCRIPT: &str =
+    include_str!("../../../../platforms/linux/scripts/pi-project-attribution.ts");
 const ATTRIBUTION_SCRIPT: &str =
     include_str!("../../../../platforms/linux/scripts/cc-project-attribution.sh");
 const GROK_ATTRIBUTION_SCRIPT: &str =
@@ -146,6 +158,14 @@ fn attribution_script_response(
         ("cc-project-attribution.sh", ATTRIBUTION_SCRIPT)
     } else if path == GROK_ATTRIBUTION_SCRIPT_PATH {
         ("grok-project-attribution.sh", GROK_ATTRIBUTION_SCRIPT)
+    } else if path == PI_ATTRIBUTION_SCRIPT_PATH {
+        ("pi-project-attribution.ts", PI_ATTRIBUTION_SCRIPT)
+    } else if path == GEMINI_WRAPPER_SCRIPT_PATH {
+        ("gemini-sumpter-wrapper.mjs", GEMINI_WRAPPER_SCRIPT)
+    } else if path == CLIENT_ATTRIBUTION_SCRIPT_PATH {
+        ("client-attribution.mjs", CLIENT_ATTRIBUTION_SCRIPT)
+    } else if path == CLIENT_ATTRIBUTION_SETUP_PATH {
+        ("setup-client-attribution.sh", CLIENT_ATTRIBUTION_SETUP)
     } else {
         return None;
     };
@@ -187,7 +207,17 @@ fn attribution_script_response(
     Some(
         Response::builder()
             .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "text/x-shellscript; charset=utf-8")
+            .header(
+                header::CONTENT_TYPE,
+                if path == PI_ATTRIBUTION_SCRIPT_PATH
+                    || path == GEMINI_WRAPPER_SCRIPT_PATH
+                    || path == CLIENT_ATTRIBUTION_SCRIPT_PATH
+                {
+                    "text/plain; charset=utf-8"
+                } else {
+                    "text/x-shellscript; charset=utf-8"
+                },
+            )
             .header(header::CACHE_CONTROL, "no-store")
             .header(
                 header::CONTENT_DISPOSITION,

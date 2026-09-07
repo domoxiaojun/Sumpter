@@ -109,6 +109,7 @@ pub(super) fn protocol_token(protocol: ProviderProtocol) -> &'static str {
         ProviderProtocol::Anthropic => "anthropic",
         ProviderProtocol::OpenAI => "openai",
         ProviderProtocol::OpenAIResponses => "openai-responses",
+        ProviderProtocol::Gemini => "gemini",
     }
 }
 impl Engine {
@@ -227,6 +228,7 @@ impl Engine {
                 event.codex_metadata = event.codex_metadata.or(client.codex_metadata);
                 event.client_declared = event.client_declared.or(client.client_declared);
                 event.grok_metadata = event.grok_metadata.or(client.grok_metadata);
+                event.sticky_key = event.sticky_key.or(client.sticky_key);
             }
         }
         let snapshot = {
@@ -338,6 +340,8 @@ impl Engine {
             effective_model: None,
             endpoint_id: None,
             endpoint_name: None,
+            model_group_id: None,
+            model_group_name: None,
             failover: false,
             feature_rule_id: None,
             failure_detail: Some(message.clone()),
@@ -356,6 +360,8 @@ impl Engine {
             request_path,
             route_intent,
             session_id,
+            // 请求在规划/鉴权阶段就被拒,尚未建立粘性归属。
+            sticky_key: None,
             status_code: status,
             timestamp: unix_to_apple_epoch(now_unix()),
             // 请求在规划/鉴权阶段就被拒,从未 accepted。
@@ -405,12 +411,15 @@ impl Engine {
     ) {
         let context = self.inbound_request_context("GET", path_and_query, headers);
         let header_metadata = CodexMetadata::from_request(headers, None);
-        let codex_metadata = merge_codex_metadata(header_metadata, frame_metadata);
+        let codex_metadata = merge_codex_metadata(frame_metadata, header_metadata);
+        let detected_client = detect_client_kind(headers, true);
         let client_kind = codex_metadata
             .as_ref()
             .and_then(|metadata| metadata.originator.as_deref())
-            .filter(|originator| is_codex_originator(originator))
-            .map_or_else(|| detect_client_kind(headers, true), |_| ClientKind::Codex);
+            .filter(|originator| {
+                detected_client != ClientKind::Pi && is_codex_originator(originator)
+            })
+            .map_or(detected_client, |_| ClientKind::Codex);
         let query_model = path_and_query
             .split_once('?')
             .and_then(|(_, query)| decoded_query_value(query, "model"))
@@ -458,6 +467,8 @@ impl Engine {
             effective_model: Some(endpoint.routed_model.clone()),
             endpoint_id: Some(endpoint.endpoint_id.clone()),
             endpoint_name: Some(endpoint.endpoint_name.clone()),
+            model_group_id: endpoint.model_group_id.clone(),
+            model_group_name: endpoint.model_group_name.clone(),
             failover,
             feature_rule_id: None,
             failure_detail: None,
@@ -480,6 +491,8 @@ impl Engine {
             request_path: None,
             route_intent: None,
             session_id: None,
+            // upstream 尝试的粘性键由 complete_upstream 从对应 client 事件恢复。
+            sticky_key: None,
             status_code: status,
             timestamp: unix_to_apple_epoch(now_unix()),
             // 收到响应头的尝试由调用方(relay / retryable 分支)覆盖;

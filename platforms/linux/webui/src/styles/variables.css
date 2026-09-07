@@ -1,4 +1,4 @@
-/* Cyber-Slate & Aurora Modern Design System Tokens */
+/* Sumpter semantic design tokens — aligned with the native macOS palette. */
 
 :root {
   color-scheme: dark light;
@@ -28,8 +28,8 @@
   /* Cross-platform surface rhythm.  macOS SectionPanel/MetricTile use the
      same semantic layers and radii so screenshots remain comparable without
      forcing SwiftUI to imitate browser controls. */
-  --panel-radius: 14px;
-  --panel-padding: 16px;
+  --panel-radius: 16px;
+  --panel-padding: 20px;
   --metric-radius: 14px;
   --metric-padding: 16px;
   --control-height: 40px;
@@ -38,7 +38,7 @@
   /* Fluid layout contract. Breakpoints still change information structure
      (for example a dense table becoming summary cards), while ordinary
      resizing uses these continuous values instead of page-specific pixels. */
-  --page-gutter: clamp(16px, 2.1vw, 24px);
+  --page-gutter: clamp(16px, 2.1vw, 28px);
   --page-bottom-space: clamp(24px, 4vw, 40px);
   --page-stack-gap: clamp(16px, 1.75vw, 24px);
   --panel-gap: 16px;
@@ -107,6 +107,8 @@ html[data-theme="dark"],
   --primary-hover: #0ea5e9;
   --primary-action-start: #0369a1;
   --primary-action-end: #1d4ed8;
+  --primary-action-hover: var(--primary-hover);
+  --selection-border: var(--primary);
   --primary-glow: rgba(56, 189, 248, 0.35);
   --accent-cyan: #06b6d4;
   --accent-indigo: #6366f1;
@@ -180,6 +182,8 @@ html[data-theme="light"] {
   --primary-hover: #0369a1;
   --primary-action-start: #0369a1;
   --primary-action-end: #1d4ed8;
+  --primary-action-hover: var(--primary-hover);
+  --selection-border: var(--primary);
   --primary-glow: rgba(2, 132, 199, 0.2);
   --accent-cyan: #0e7490;
   --accent-indigo: #4f46e5;

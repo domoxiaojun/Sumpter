@@ -46,7 +46,9 @@ public enum RuntimeFailurePhase: String, Codable, Sendable {
 public enum ClientKind: String, Codable, CaseIterable, Equatable, Sendable {
     case claudeCode = "claude_code"
     case codex
+    case geminiCli = "gemini_cli"
     case grokBuild = "grok_build"
+    case pi = "pi"
     /// 经 OpenAI 兼容层入站,但 UA 不是已知客户端。
     case openaiCompat = "openai_compat"
     /// Anthropic 入站且 UA 不是已知客户端(含缺 UA)。
@@ -58,8 +60,12 @@ public enum ClientKind: String, Codable, CaseIterable, Equatable, Sendable {
             return "Claude Code"
         case .codex:
             return "Codex"
+        case .geminiCli:
+            return "Gemini CLI"
         case .grokBuild:
             return "Grok Build"
+        case .pi:
+            return "pi"
         case .openaiCompat:
             return "OpenAI 兼容客户端"
         case .unknown:
@@ -342,19 +348,24 @@ public struct CodexMetadata: Codable, Equatable, Sendable {
     public var agentName: String?
     public var turnID: String?
     public var windowID: String?
+    public var windowNumber: UInt64?
+    public var contextWindowID: String?
     public var requestKind: String?
     public var forkedFromThreadID: String?
     public var parentThreadID: String?
     public var parentTurnID: String?
     public var rootTurnID: String?
+    public var forkedFromOrdinalExclusive: UInt64?
     public var subagentHeader: String?
     public var subagentKind: String?
     public var threadSource: String?
+    public var turnTrigger: String?
     public var sandbox: String?
     public var sandboxMode: String?
     public var autoReviewEnabled: Bool?
     public var nodeReplAutoReviewRequired: Bool?
     public var nodeReplDisabled: Bool?
+    public var historyIngestRequested: Bool?
     public var turnStartedAtUnixMS: Int64?
     public var workspaces: [String: CodexWorkspaceMetadata]
     /// Unprojected, bounded workspace paths kept in runtime event details.
@@ -377,10 +388,10 @@ public struct CodexMetadata: Codable, Equatable, Sendable {
     public var parentThreadIDInferred: Bool
 
     private enum CodingKeys: String, CodingKey {
-        case installationID, sourceInstallationID, sessionID, threadID, agentName, turnID, windowID, requestKind
-        case forkedFromThreadID, parentThreadID, parentTurnID, rootTurnID
-        case subagentHeader, subagentKind, threadSource, sandbox, sandboxMode
-        case autoReviewEnabled, nodeReplAutoReviewRequired, nodeReplDisabled
+        case installationID, sourceInstallationID, sessionID, threadID, agentName, turnID, windowID, windowNumber, contextWindowID, requestKind
+        case forkedFromThreadID, forkedFromOrdinalExclusive, parentThreadID, parentTurnID, rootTurnID
+        case subagentHeader, subagentKind, threadSource, turnTrigger, sandbox, sandboxMode
+        case autoReviewEnabled, nodeReplAutoReviewRequired, nodeReplDisabled, historyIngestRequested
         case turnStartedAtUnixMS, workspaces, sourceWorkspacePaths, toolNamespacesInfo, compaction, extras
         case originator, betaFeatures, memgenRequest, responsesLite, wsStreamRequestStartMS
         case sources, redactedFields, malformed, truncated, hasConflicts, conflicts
@@ -396,19 +407,24 @@ public struct CodexMetadata: Codable, Equatable, Sendable {
         agentName = try c.decodeIfPresent(String.self, forKey: .agentName)
         turnID = try c.decodeIfPresent(String.self, forKey: .turnID)
         windowID = try c.decodeIfPresent(String.self, forKey: .windowID)
+        windowNumber = try c.decodeIfPresent(UInt64.self, forKey: .windowNumber)
+        contextWindowID = try c.decodeIfPresent(String.self, forKey: .contextWindowID)
         requestKind = try c.decodeIfPresent(String.self, forKey: .requestKind)
         forkedFromThreadID = try c.decodeIfPresent(String.self, forKey: .forkedFromThreadID)
+        forkedFromOrdinalExclusive = try c.decodeIfPresent(UInt64.self, forKey: .forkedFromOrdinalExclusive)
         parentThreadID = try c.decodeIfPresent(String.self, forKey: .parentThreadID)
         parentTurnID = try c.decodeIfPresent(String.self, forKey: .parentTurnID)
         rootTurnID = try c.decodeIfPresent(String.self, forKey: .rootTurnID)
         subagentHeader = try c.decodeIfPresent(String.self, forKey: .subagentHeader)
         subagentKind = try c.decodeIfPresent(String.self, forKey: .subagentKind)
         threadSource = try c.decodeIfPresent(String.self, forKey: .threadSource)
+        turnTrigger = try c.decodeIfPresent(String.self, forKey: .turnTrigger)
         sandbox = try c.decodeIfPresent(String.self, forKey: .sandbox)
         sandboxMode = try c.decodeIfPresent(String.self, forKey: .sandboxMode)
         autoReviewEnabled = try c.decodeIfPresent(Bool.self, forKey: .autoReviewEnabled)
         nodeReplAutoReviewRequired = try c.decodeIfPresent(Bool.self, forKey: .nodeReplAutoReviewRequired)
         nodeReplDisabled = try c.decodeIfPresent(Bool.self, forKey: .nodeReplDisabled)
+        historyIngestRequested = try c.decodeIfPresent(Bool.self, forKey: .historyIngestRequested)
         turnStartedAtUnixMS = try c.decodeIfPresent(Int64.self, forKey: .turnStartedAtUnixMS)
         workspaces = try c.decodeIfPresent([String: CodexWorkspaceMetadata].self, forKey: .workspaces) ?? [:]
         sourceWorkspacePaths = try c.decodeIfPresent([String].self, forKey: .sourceWorkspacePaths) ?? []
@@ -439,19 +455,24 @@ public struct CodexMetadata: Codable, Equatable, Sendable {
         try c.encodeIfPresent(agentName, forKey: .agentName)
         try c.encodeIfPresent(turnID, forKey: .turnID)
         try c.encodeIfPresent(windowID, forKey: .windowID)
+        try c.encodeIfPresent(windowNumber, forKey: .windowNumber)
+        try c.encodeIfPresent(contextWindowID, forKey: .contextWindowID)
         try c.encodeIfPresent(requestKind, forKey: .requestKind)
         try c.encodeIfPresent(forkedFromThreadID, forKey: .forkedFromThreadID)
+        try c.encodeIfPresent(forkedFromOrdinalExclusive, forKey: .forkedFromOrdinalExclusive)
         try c.encodeIfPresent(parentThreadID, forKey: .parentThreadID)
         try c.encodeIfPresent(parentTurnID, forKey: .parentTurnID)
         try c.encodeIfPresent(rootTurnID, forKey: .rootTurnID)
         try c.encodeIfPresent(subagentHeader, forKey: .subagentHeader)
         try c.encodeIfPresent(subagentKind, forKey: .subagentKind)
         try c.encodeIfPresent(threadSource, forKey: .threadSource)
+        try c.encodeIfPresent(turnTrigger, forKey: .turnTrigger)
         try c.encodeIfPresent(sandbox, forKey: .sandbox)
         try c.encodeIfPresent(sandboxMode, forKey: .sandboxMode)
         try c.encodeIfPresent(autoReviewEnabled, forKey: .autoReviewEnabled)
         try c.encodeIfPresent(nodeReplAutoReviewRequired, forKey: .nodeReplAutoReviewRequired)
         try c.encodeIfPresent(nodeReplDisabled, forKey: .nodeReplDisabled)
+        try c.encodeIfPresent(historyIngestRequested, forKey: .historyIngestRequested)
         try c.encodeIfPresent(turnStartedAtUnixMS, forKey: .turnStartedAtUnixMS)
         if !workspaces.isEmpty { try c.encode(workspaces, forKey: .workspaces) }
         if !sourceWorkspacePaths.isEmpty { try c.encode(sourceWorkspacePaths, forKey: .sourceWorkspacePaths) }
@@ -479,8 +500,10 @@ public struct CodexMetadata: Codable, Equatable, Sendable {
         installationID == nil && sourceInstallationID == nil && sessionID == nil && threadID == nil && agentName == nil
             && turnID == nil
             && windowID == nil && requestKind == nil && forkedFromThreadID == nil
+            && windowNumber == nil && contextWindowID == nil && forkedFromOrdinalExclusive == nil
             && parentThreadID == nil && parentTurnID == nil && rootTurnID == nil
             && subagentHeader == nil && subagentKind == nil && threadSource == nil
+            && turnTrigger == nil && historyIngestRequested == nil
             && sandbox == nil && sandboxMode == nil && autoReviewEnabled == nil
             && nodeReplAutoReviewRequired == nil && nodeReplDisabled == nil
             && turnStartedAtUnixMS == nil && workspaces.isEmpty && sourceWorkspacePaths.isEmpty
@@ -495,6 +518,7 @@ public struct CodexMetadata: Codable, Equatable, Sendable {
     public var hasRequestIdentity: Bool {
         installationID != nil || sourceInstallationID != nil || sessionID != nil
             || threadID != nil || agentName != nil || turnID != nil || windowID != nil
+            || contextWindowID != nil
             || requestKind != nil || forkedFromThreadID != nil || parentThreadID != nil
             || parentTurnID != nil || rootTurnID != nil || subagentHeader != nil
             || subagentKind != nil || threadSource != nil || sandbox != nil
@@ -510,6 +534,8 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
     public var poolID: String?
     public var endpointID: String?
     public var endpointName: String?
+    public var modelGroupID: String? = nil
+    public var modelGroupName: String? = nil
     public var upstreamHost: String?
     public var clientModel: String?
     /// 入站客户端类型。nil = 升级前的 stats.json 事件,或请求在读到入站信息前就被拒。
@@ -549,6 +575,10 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
     /// 客户端提供的稳定会话标识（例如 Claude Code session header）。
     /// 只保存有界、无控制字符的标识，不保存会话正文。
     public var sessionID: String?
+    /// 会话粘性归属键(affinity 哈希,非会话 ID 原文)。nil = 请求未建立粘性
+    /// (早期拒绝、WebSocket 合成键)或旧事件。与 Rust 事件 wire 的 `stickyKey`
+    /// 对齐;按项目清除粘性归属时用同一口径。
+    public var stickyKey: String?
     /// 首字节耗时(ms):到上游响应头 accepted 为止。nil = 从未 accepted 或旧事件。
     ///
     /// **两类事件口径不同**:client 事件是客户端视角的总等待(含 failover 与上游重跑);
@@ -577,13 +607,13 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
     public var attributionScope: String?
 
     private enum CodingKeys: String, CodingKey {
-        case id, timestamp, kind, poolID, endpointID, endpointName, upstreamHost
+        case id, timestamp, kind, poolID, endpointID, endpointName, upstreamHost, modelGroupID, modelGroupName
         case clientModel, clientKind, sourceFormat, targetFormat, routeMode
         case upstreamModel, effectiveModel, statusCode, durationMS, failover
         case message, toolCalls, streamTrace, outcome, phase, featureRuleID
         case failureDetail, failureKind, failurePhase, requestPurpose, requestID
         case requestMethod, requestPath, routeIntent
-        case sessionID, ttfbMS, timeoutMS, upstreamStatusCode, upstreamRequestID
+        case sessionID, stickyKey, ttfbMS, timeoutMS, upstreamStatusCode, upstreamRequestID
         case codexMetadata, clientDeclared, grokMetadata, projectName, projectSource, localUser, codexThreadClass, attributionScope
     }
 
@@ -617,6 +647,8 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         poolID = try c.decodeIfPresent(String.self, forKey: .poolID)
         endpointID = try c.decodeIfPresent(String.self, forKey: .endpointID)
         endpointName = try c.decodeIfPresent(String.self, forKey: .endpointName)
+        modelGroupID = try c.decodeIfPresent(String.self, forKey: .modelGroupID)
+        modelGroupName = try c.decodeIfPresent(String.self, forKey: .modelGroupName)
         upstreamHost = try c.decodeIfPresent(String.self, forKey: .upstreamHost)
         clientModel = try c.decodeIfPresent(String.self, forKey: .clientModel)
         clientKind = try c.decodeIfPresent(ClientKind.self, forKey: .clientKind)
@@ -643,6 +675,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         requestPath = try c.decodeIfPresent(String.self, forKey: .requestPath)
         routeIntent = try c.decodeIfPresent(String.self, forKey: .routeIntent)
         sessionID = try c.decodeIfPresent(String.self, forKey: .sessionID)
+        stickyKey = try c.decodeIfPresent(String.self, forKey: .stickyKey)
         ttfbMS = try c.decodeIfPresent(Int.self, forKey: .ttfbMS)
         timeoutMS = try c.decodeIfPresent(Int.self, forKey: .timeoutMS)
         upstreamStatusCode = try c.decodeIfPresent(Int.self, forKey: .upstreamStatusCode)
@@ -666,6 +699,8 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         // stats files, but keep it out of new runtime/detail JSON.
         try c.encodeIfPresent(endpointID, forKey: .endpointID)
         try c.encodeIfPresent(endpointName, forKey: .endpointName)
+        try c.encodeIfPresent(modelGroupID, forKey: .modelGroupID)
+        try c.encodeIfPresent(modelGroupName, forKey: .modelGroupName)
         try c.encodeIfPresent(upstreamHost, forKey: .upstreamHost)
         try c.encodeIfPresent(clientModel, forKey: .clientModel)
         try c.encodeIfPresent(clientKind, forKey: .clientKind)
@@ -692,6 +727,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         try c.encodeIfPresent(requestPath, forKey: .requestPath)
         try c.encodeIfPresent(routeIntent, forKey: .routeIntent)
         try c.encodeIfPresent(sessionID, forKey: .sessionID)
+        try c.encodeIfPresent(stickyKey, forKey: .stickyKey)
         try c.encodeIfPresent(ttfbMS, forKey: .ttfbMS)
         try c.encodeIfPresent(timeoutMS, forKey: .timeoutMS)
         try c.encodeIfPresent(upstreamStatusCode, forKey: .upstreamStatusCode)

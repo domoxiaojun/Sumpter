@@ -75,6 +75,9 @@ struct ProvidersPane: View {
     @State private var retrySheetPresented = false
     @State private var mappingSheet: MappingSheetMode?
     @State private var deleteRequest: ProviderDeleteRequest?
+    @State private var stickyTTLDraft = ""
+    @State private var savingStickyTTL = false
+    @State private var stickyTTLError: String?
     /// 排序保存必须等 AppKit 结束当前拖拽会话后再发布列表数据；同时
     /// 取消尚未执行的旧操作，避免快速连续拖拽时多个配置快照互相覆盖。
     @State private var pendingReorderTask: Task<Void, Never>?
@@ -185,6 +188,17 @@ struct ProvidersPane: View {
                 Text(detail)
             }
         }
+        .alert(
+            "会话粘性时长",
+            isPresented: Binding(
+                get: { stickyTTLError != nil },
+                set: { if !$0 { stickyTTLError = nil } }
+            )
+        ) {
+            Button("好", role: .cancel) { stickyTTLError = nil }
+        } message: {
+            Text(stickyTTLError ?? "")
+        }
     }
 
     private func providerOverviewPanel(rows: [EndpointDisplayRow]) -> some View {
@@ -204,7 +218,7 @@ struct ProvidersPane: View {
             },
             content: {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("点击入口后可编辑映射；系统按优先级、粘性组和协议能力形成候选序列。")
+                    Text("模型组决定承接范围与组内入口优先级；这里的优先级用于旧配置和新增默认组。原始映射的模型参数继续继承。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -294,7 +308,18 @@ struct ProvidersPane: View {
                 value: retry.maxRetryDurationSeconds == 0 ? "不限" : "\(retry.maxRetryDurationSeconds)s"
             )
             ProviderPolicySummaryItem(title: "粘性入口重试", value: "\(retry.sessionStickyRetries) 次")
+            ProviderPolicySummaryItem(
+                title: "会话粘性时长",
+                value: stickyTTLLabel(model.config.sessionStickyTtlHours)
+            )
         }
+    }
+
+    /// 粘性时长展示口径:小时数;0 表示永不过期(仍受条目数上限约束)。
+    private func stickyTTLLabel(_ hours: Double) -> String {
+        let value = hours.isFinite ? max(0, hours) : 0
+        if value == 0 { return "永不过期" }
+        return value == value.rounded() ? "\(Int(value))h" : String(format: "%.1fh", value)
     }
 
     private func providerAccountsPanel(
@@ -304,24 +329,81 @@ struct ProvidersPane: View {
         selection: Binding<Set<String>>
     ) -> some View {
         return SectionPanel(title: title, hint: hint) {
-            ProviderAccountsTable(
-                rows: rows,
-                selection: selection,
-                showsQuickToggle: true,
-                togglingEndpointIDs: togglingEndpointIDs,
-                fetchingModelEndpointIDs: model.fetchingModelEndpointIDs,
-                onEdit: { editorMode = .provider(providerName: $0.name, row: $0) },
-                onSetEnabled: setEnabled,
-                onFetchModels: fetchModels,
-                onCopyBaseURL: copyBaseURL,
-                onDeleteIDs: { deleteRequest = providerDeleteRequest(rows: rows, ids: $0) },
-                onMove: { row, direction in
-                    moveSelection(ids: [row.id], direction: direction)
-                },
-                onReorder: { draggedID, targetID, placeAfter in
-                    reorderProvider(draggedID: draggedID, targetID: targetID, placeAfter: placeAfter, rows: rows)
-                }
-            )
+            VStack(alignment: .leading, spacing: 10) {
+                stickyTTLEditorRow
+                ProviderAccountsTable(
+                    rows: rows,
+                    selection: selection,
+                    showsQuickToggle: true,
+                    togglingEndpointIDs: togglingEndpointIDs,
+                    fetchingModelEndpointIDs: model.fetchingModelEndpointIDs,
+                    onEdit: { editorMode = .provider(providerName: $0.name, row: $0) },
+                    onSetEnabled: setEnabled,
+                    onFetchModels: fetchModels,
+                    onCopyBaseURL: copyBaseURL,
+                    onDeleteIDs: { deleteRequest = providerDeleteRequest(rows: rows, ids: $0) },
+                    onMove: { row, direction in
+                        moveSelection(ids: [row.id], direction: direction)
+                    },
+                    onReorder: { draggedID, targetID, placeAfter in
+                        reorderProvider(draggedID: draggedID, targetID: targetID, placeAfter: placeAfter, rows: rows)
+                    }
+                )
+            }
+        }
+    }
+
+    /// 会话粘性时长输入(单位 h,默认 72,0 = 永不过期)。失焦或回车提交,
+    /// 与入口库的顺序/优先级一样属于全局调度参数。
+    private var stickyTTLEditorRow: some View {
+        HStack(spacing: 8) {
+            Text("会话粘性时长")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            TextField("72", text: $stickyTTLDraft)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 76)
+                .disabled(savingStickyTTL)
+                .onSubmit(commitStickyTTL)
+            Text("h")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Text("同一会话粘在同一入口组的时长；超时后新请求按入口库顺序重新选择。0 表示永不过期。")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+            Spacer(minLength: 0)
+        }
+        .onAppear { syncStickyTTLDraft() }
+        .onChange(of: model.config.sessionStickyTtlHours) { _, _ in syncStickyTTLDraft() }
+    }
+
+    private func syncStickyTTLDraft() {
+        let value = model.config.sessionStickyTtlHours
+        stickyTTLDraft = value == value.rounded() ? String(Int(value)) : String(value)
+    }
+
+    private func commitStickyTTL() {
+        let trimmed = stickyTTLDraft.trimmingCharacters(in: .whitespaces)
+        let parsed = Double(trimmed.isEmpty ? "72" : trimmed)
+        guard let hours = parsed, hours.isFinite, hours >= 0 else {
+            stickyTTLError = "会话粘性时长必须是 ≥ 0 的小时数（0 表示永不过期）"
+            syncStickyTTLDraft()
+            return
+        }
+        let clamped = hours
+        if clamped == model.config.sessionStickyTtlHours {
+            syncStickyTTLDraft()
+            return
+        }
+        savingStickyTTL = true
+        Task { @MainActor in
+            defer { savingStickyTTL = false }
+            do {
+                try await model.setSessionStickyTTL(hours: clamped)
+            } catch {
+                stickyTTLError = "保存会话粘性时长失败：\(error.localizedDescription)"
+                syncStickyTTLDraft()
+            }
         }
     }
 

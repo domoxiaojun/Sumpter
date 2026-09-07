@@ -53,7 +53,7 @@ public struct ConfigStore: Sendable {
         try loadWithMigration().config
     }
 
-    /// 读取当前 schema v6；旧 v3/v4/v5 文件只在首次读取时迁移一次。
+    /// 读取当前 schema v7；旧 v3/v4/v5/v6 文件只在首次读取时迁移一次。
     /// 迁移前先验证原始结构，成功写回后再复读校验；任何一步失败都会恢复原字节。
     public func loadWithMigration() throws -> ConfigLoadResult {
         let original = try Data(contentsOf: url)
@@ -63,10 +63,10 @@ public struct ConfigStore: Sendable {
         }
 
         if schemaVersion == AppConfig.currentSchemaVersion {
-            let config = try decodeCurrentV6(data: original, root: root)
+            let config = try decodeCurrent(data: original, root: root)
             return ConfigLoadResult(config: config)
         }
-        guard [3, 4, 5].contains(schemaVersion) else {
+        guard [3, 4, 5, 6].contains(schemaVersion) else {
             throw ConfigStoreError.unsupportedSchema(schemaVersion)
         }
 
@@ -76,26 +76,27 @@ public struct ConfigStore: Sendable {
             withJSONObject: root,
             options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         )
-        let migrated = try decodeCurrentV6(data: candidate, root: root)
-        let normalized = try encodeCurrentV6(migrated)
+        var migrated = try decodeCurrent(data: candidate, root: root)
+        migrated.migrateModelGroups()
+        let normalized = try encodeCurrent(migrated)
         guard let normalizedRoot = try JSONSerialization.jsonObject(with: normalized) as? [String: Any] else {
             throw ConfigStoreError.invalidRoot
         }
-        _ = try decodeCurrentV6(data: normalized, root: normalizedRoot)
+        _ = try decodeCurrent(data: normalized, root: normalizedRoot)
 
-        let backup = try backupCurrent(suffix: "schema-v6")
+        let backup = try backupCurrent(suffix: "schema-v7")
         do {
             try writeAtomically(normalized)
             let verifiedData = try Data(contentsOf: url)
             guard let verifiedRoot = try JSONSerialization.jsonObject(with: verifiedData) as? [String: Any] else {
                 throw ConfigStoreError.invalidRoot
             }
-            let verified = try decodeCurrentV6(data: verifiedData, root: verifiedRoot)
+            let verified = try decodeCurrent(data: verifiedData, root: verifiedRoot)
             let backupName = backup?.lastPathComponent ?? ""
             return ConfigLoadResult(
                 config: verified,
                 migrationNotice: ConfigMigrationNotice(
-                    id: "schema-v\(schemaVersion)-to-v6-\(backupName)",
+                    id: "schema-v\(schemaVersion)-to-v7-\(backupName)",
                     fromSchema: schemaVersion,
                     toSchema: AppConfig.currentSchemaVersion,
                     backupFile: backupName,
@@ -118,12 +119,15 @@ public struct ConfigStore: Sendable {
         }
     }
 
-    private func decodeCurrentV6(data: Data, root: [String: Any]) throws -> AppConfig {
+    private func decodeCurrent(data: Data, root: [String: Any]) throws -> AppConfig {
         guard root["schemaVersion"] as? Int == AppConfig.currentSchemaVersion else {
             throw ConfigStoreError.unsupportedSchema(root["schemaVersion"] as? Int)
         }
         if root["pools"] != nil {
             throw ConfigStoreError.legacyField("pools")
+        }
+        if root.keys.contains("modelGroups"), root["modelGroups"] is NSNull {
+            throw ConfigStoreError.invalidField("modelGroups")
         }
         if let listener = root["listener"] as? [String: Any],
            listener["inboundDialectPassthrough"] != nil {
@@ -138,7 +142,12 @@ public struct ConfigStore: Sendable {
                 }
             }
         }
-        return try JSONDecoder().decode(AppConfig.self, from: data).normalizedBuiltInFeatureRules()
+        let rawConfig = try JSONDecoder().decode(AppConfig.self, from: data)
+        // Validate the decoded values before normalization so malformed model
+        // group entries cannot be silently repaired into an accepted config.
+        try rawConfig.validateModelGroups()
+        let config = rawConfig.normalizedBuiltInFeatureRules()
+        return config
     }
 
     private struct LegacyMigrationMetadata {
@@ -147,7 +156,7 @@ public struct ConfigStore: Sendable {
         var removedFields: [String] = []
     }
 
-    /// 将 v3/v4/v5 的池容器一次性展平为 v6 `endpoints`。此处是唯一允许读取
+    /// 将 v3/v4/v5 的池容器一次性展平为当前 `endpoints`。此处是唯一允许读取
     /// 旧池字段的地方；迁移完成后强类型模型和保存路径都只接受扁平形状。
     private func migrateLegacyRoot(
         _ root: inout [String: Any],
@@ -311,7 +320,7 @@ public struct ConfigStore: Sendable {
         }
     }
 
-    /// 当前 v6 入口协议仍需显式声明；Endpoint 解码器的默认值只用于新建对象。
+    /// 当前 v7 入口协议仍需显式声明；Endpoint 解码器的默认值只用于新建对象。
     private func validateEndpointProtocols(in root: [String: Any]) throws {
         guard let endpoints = root["endpoints"] as? [[String: Any]] else {
             if root["endpoints"] == nil { return }
@@ -323,14 +332,15 @@ public struct ConfigStore: Sendable {
     }
 
     public func save(_ config: AppConfig) throws {
-        try writeAtomically(try encodeCurrentV6(config))
+        try writeAtomically(try encodeCurrent(config))
     }
 
-    private func encodeCurrentV6(_ config: AppConfig) throws -> Data {
+    private func encodeCurrent(_ config: AppConfig) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         var stored = config
         stored.schemaVersion = AppConfig.currentSchemaVersion
+        try stored.validateModelGroups()
         return try encoder.encode(stored.normalizedBuiltInFeatureRules())
     }
 
@@ -419,11 +429,11 @@ public enum ConfigStoreError: Error, Equatable, Sendable, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .unsupportedSchema(let version):
-            "不支持的配置 schema：\(version.map(String.init) ?? "缺失")（支持 v3/v4/v5 自动迁移或 v6）"
+            "不支持的配置 schema：\(version.map(String.init) ?? "缺失")（支持 v3/v4/v5 自动迁移或 v7）"
         case .legacyField(let field):
-            "schema v6 不允许旧字段：\(field)"
+            "schema v7 不允许旧字段：\(field)"
         case .missingField(let field):
-            "schema v6 缺少必填字段：\(field)"
+            "schema v7 缺少必填字段：\(field)"
         case .invalidField(let field):
             "配置字段类型或值无效：\(field)"
         case .invalidRoot:

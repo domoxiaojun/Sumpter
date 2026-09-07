@@ -7,11 +7,27 @@ use sumpter_core::events::{ClientKind, CodexMetadata};
 use crate::engine::context::{INBOUND_REQUEST_CONTEXT, InboundRequestContext};
 use crate::engine::payload::metadata_json_body_hint;
 use crate::engine::protocol::{
-    RealtimeCallPathError, RealtimeRouteIntent, classify_realtime_intent, is_codex_live_path,
-    is_codex_live_sideband_target, is_live_bootstrap_request, live_call_id_from_headers,
-    live_call_id_from_json, live_call_id_from_target, realtime_voice_route_model,
-    unsupported_realtime_call_action, validate_realtime_call_target,
+    RealtimeCallPathError, RealtimeRouteIntent, classify_realtime_intent, gemini_model_from_path,
+    gemini_stream_path, is_codex_live_path, is_codex_live_sideband_target, is_gemini_generate_path,
+    is_live_bootstrap_request, live_call_id_from_headers, live_call_id_from_json,
+    live_call_id_from_target, realtime_voice_route_model, unsupported_realtime_call_action,
+    validate_realtime_call_target,
 };
+
+#[test]
+fn gemini_native_paths_extract_model_and_stream_shape() {
+    assert!(is_gemini_generate_path(
+        "/v1beta/models/gemini-2.5-pro:generateContent"
+    ));
+    assert_eq!(
+        gemini_model_from_path("/v1beta/models/gemini-2.5-pro:generateContent"),
+        Some("gemini-2.5-pro".into())
+    );
+    assert!(gemini_stream_path(
+        "/v1beta/models/gemini-2.5-pro:streamGenerateContent"
+    ));
+    assert!(!is_gemini_generate_path("/v1beta/models/gemini-2.5-pro"));
+}
 use crate::request_build;
 
 #[tokio::test]

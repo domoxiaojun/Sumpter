@@ -10,6 +10,8 @@ repository.workspace = true
 default = []
 
 [dependencies]
+zstd = "0.13"
+flate2 = "1"
 sumpter-core = { workspace = true }
 sumpter-runtime = { workspace = true }
 serde = { workspace = true }

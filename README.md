@@ -2,7 +2,7 @@
 
 本地优先的 AI 请求代理。把 Claude Code、Codex 和其它客户端接到多个上游 Provider，按模型 mapping、优先级和粘性分组调度，失败时 failover，并把请求链记在本机 SQLite。
 
-当前版本 **0.3.4**（schema v6）。Rust 数据面只有一份共享实现；Linux 与 macOS 通过各自 adapter 接入。
+当前版本 **0.3.4**（schema v7）。Rust 数据面只有一份共享实现；Linux 与 macOS 通过各自 adapter 接入。模型组把多个入口按模型范围绑定到同一统一地址，原有重试、冷却、会话粘性和 raw 透传保持不变。
 
 源码仓库：[domoxiaojun/sumpter](https://github.com/domoxiaojun/sumpter) · 许可证 MIT
 
@@ -14,6 +14,7 @@
 - 入口是扁平的 `endpoints[]`，每个入口必须用 `mappings[]` 声明承接的客户端模型
 - 同一次会话尽量粘在同一 `stickyGroup`，可重试故障后再换组
 - 数据面通常不重建协议：任意 HTTP 方法/路径都按原始请求透传给选定 Provider；`GET /v1/models` 按 mapping 生成本地目录，Codex Live POST bootstrap 是 quicksilver 封装特例；WebSocket Upgrade 统一双向 relay
+- Gemini CLI 的 Developer API 原生路径（`/v1beta/models/{model}:generateContent` 与 `:streamGenerateContent?alt=sse`）由共享 engine 路由，使用 `x-goog-api-key`（或显式 `Bearer ` 前缀）并保留 Gemini JSON/SSE 报文；Vertex、OAuth、Service Account 不在支持范围内。
 - 密钥、Admin 密码、请求体和诊断捕获只留在本机受限文件里
 
 OpenAI 兼容客户端的 Files/Videos 资源查询与下载、Responses WebSocket 和无 `call_id` 的
@@ -39,11 +40,11 @@ Linux 配置目录、systemd 单元、发布包二进制和协议 header 现已�
 
 ## 快速开始
 
-完整开箱、客户端接入和排错见 **[USAGE.md](USAGE.md)**。第一次只需：安装/启动 → 配置一个 Provider → 连接客户端 → 发一条请求。
+完整开箱、客户端接入和排错见 **[USAGE.md](USAGE.md)**。第一次只需：安装/启动 → 入口库添加连接并绑定模型组 → 连接客户端 → 发一条请求。
 
 ### macOS
 
-打开 DMG，双击「安装Sumpter.command」。细节与 Gatekeeper 处理见 [`platforms/macos/app/INSTALL.txt`](platforms/macos/app/INSTALL.txt)。
+打开 DMG，双击「安装 Sumpter.command」。细节与 Gatekeeper 处理见 [`platforms/macos/app/INSTALL.txt`](platforms/macos/app/INSTALL.txt)。
 
 ### Linux
 

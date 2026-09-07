@@ -1,5 +1,11 @@
 //! 引擎行为测试:FakeTransport 脚本化上游,对照 specs/spec-engine.md §8 的核心条目。
 
+#[path = "../../../../tests/contracts/gemini.rs"]
+mod gemini;
+
+#[path = "../../../../tests/contracts/pi.rs"]
+mod pi;
+
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -220,7 +226,9 @@ fn two_endpoint_config() -> AppConfig {
         listener: ListenerConfig::default(),
         endpoints: vec![a, b],
         retry,
+        session_sticky_ttl_hours: sumpter_core::config::DEFAULT_SESSION_STICKY_TTL_HOURS,
         schema_version: 6,
+        model_groups: None,
     }
     .normalized()
 }
@@ -2104,6 +2112,83 @@ async fn linux_listener_serves_builtin_grok_attribution_script() {
 }
 
 #[tokio::test]
+async fn pi_and_gemini_attribution_script_download_uses_listener_access_policy() {
+    let mut config = two_endpoint_config();
+    config.listener.auth_token = "listener-secret".into();
+    config.listener.allowed_cidrs = vec!["127.0.0.0/8".into()];
+    let engine = engine_with(config, FakeTransport::new());
+    for (path, expected) in [
+        (
+            sumpter_linux_adapter::engine::CLIENT_ATTRIBUTION_SETUP_PATH,
+            include_bytes!("../../../../platforms/linux/scripts/setup-client-attribution.sh")
+                .as_slice(),
+        ),
+        (
+            sumpter_linux_adapter::engine::PI_ATTRIBUTION_SCRIPT_PATH,
+            include_bytes!("../../../../scripts/pi-project-attribution.ts").as_slice(),
+        ),
+        (
+            sumpter_linux_adapter::engine::GEMINI_WRAPPER_SCRIPT_PATH,
+            include_bytes!("../../../../scripts/gemini-sumpter-wrapper.mjs").as_slice(),
+        ),
+        (
+            sumpter_linux_adapter::engine::CLIENT_ATTRIBUTION_SCRIPT_PATH,
+            include_bytes!("../../../../scripts/client-attribution.mjs").as_slice(),
+        ),
+    ] {
+        assert_eq!(
+            engine
+                .handle_request(
+                    Some("192.0.2.10".parse().unwrap()),
+                    "GET",
+                    path,
+                    vec![("authorization".into(), "Bearer listener-secret".into())],
+                    Body::empty(),
+                )
+                .await
+                .status(),
+            403
+        );
+        assert_eq!(
+            engine
+                .handle_request(loopback(), "GET", path, vec![], Body::empty())
+                .await
+                .status(),
+            401
+        );
+        assert_eq!(
+            engine
+                .handle_request(loopback(), "POST", path, vec![], Body::empty())
+                .await
+                .status(),
+            405
+        );
+        let response = engine
+            .handle_request(
+                loopback(),
+                "GET",
+                path,
+                vec![("authorization".into(), "Bearer listener-secret".into())],
+                Body::empty(),
+            )
+            .await;
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response.headers()["content-type"],
+            if path.ends_with(".sh") {
+                "text/x-shellscript; charset=utf-8"
+            } else {
+                "text/plain; charset=utf-8"
+            }
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(body.as_ref(), expected);
+    }
+}
+
+#[tokio::test]
 async fn linux_attribution_script_obeys_listener_access_policy() {
     let fake = FakeTransport::new();
     let mut config = two_endpoint_config();
@@ -2432,6 +2517,46 @@ async fn grok_sampling_headers_reach_event_details() {
         Some("sess-1")
     );
     assert_eq!(event.session_id.as_deref(), Some("sess-1"));
+}
+
+#[tokio::test]
+async fn rejected_guardian_preserves_header_identity_and_internal_scope() {
+    let engine = engine_with(two_endpoint_config(), FakeTransport::new());
+    let (status, _) = call(
+        &engine,
+        loopback(),
+        "/v1/responses",
+        vec![
+            ("originator".into(), "Codex Desktop".into()),
+            ("x-openai-subagent".into(), "guardian".into()),
+            ("session-id".into(), "guardian-session".into()),
+        ],
+        Bytes::from_static(b"not json"),
+    )
+    .await;
+    assert_eq!(status, 400);
+    let snapshot = runtime_of(&engine).await;
+    let event = snapshot
+        .recent_events
+        .iter()
+        .find(|e| e.kind == "client")
+        .unwrap();
+    assert_eq!(event.message.as_deref(), Some("body is not JSON"));
+    assert_eq!(
+        event.client_kind,
+        Some(sumpter_core::events::ClientKind::Codex)
+    );
+    let metadata = event.codex_metadata.as_ref().unwrap();
+    assert_eq!(metadata.session_id.as_deref(), Some("guardian-session"));
+    assert_eq!(
+        sumpter_core::events::codex_thread_class(Some(metadata)).as_str(),
+        "guardian_review"
+    );
+    assert_eq!(
+        sumpter_core::events::codex_attribution_scope(Some(metadata), None).as_str(),
+        "internal_feature"
+    );
+    assert!(metadata.workspaces.is_empty());
 }
 
 #[tokio::test]
@@ -2924,6 +3049,7 @@ async fn grok_server_retrieval_cross_protocol_engine_matrix() {
                 assert!(String::from_utf8_lossy(&response).contains("web_search_tool_result"));
             }
             ProviderProtocol::Anthropic => unreachable!(),
+            ProviderProtocol::Gemini => unreachable!(),
         }
     }
 
@@ -2974,6 +3100,7 @@ async fn grok_server_retrieval_cross_protocol_engine_matrix() {
                 let sent: Value = serde_json::from_slice(&fake.requests()[0].body).unwrap();
                 assert_eq!(sent["tools"], json!([{"type": "web_search"}]));
             }
+            ProviderProtocol::Gemini => unreachable!(),
         }
         if protocol != ProviderProtocol::OpenAIResponses {
             let json: Value = serde_json::from_slice(&response).unwrap();
@@ -5706,4 +5833,179 @@ async fn legacy_stats_is_ignored_and_preserved_across_requests_and_reset() {
         before
     );
     let _ = std::fs::remove_dir_all(dir.root);
+}
+
+// Model groups extend candidate selection without replacing any retry policy.
+#[tokio::test]
+async fn endpoint_reorder_reload_routes_new_session_for_default_group_and_flat() {
+    for grouped in [false, true] {
+        let dir = temp_config_dir(if grouped {
+            "reorder-grouped"
+        } else {
+            "reorder-flat"
+        });
+        let fake = FakeTransport::new();
+        let mut config = two_endpoint_config();
+        for endpoint in &mut config.endpoints {
+            endpoint.priority = 0;
+            endpoint.sticky_group = Some(endpoint.id.clone());
+        }
+        if grouped {
+            config.migrate_model_groups();
+        }
+        config = config.normalized();
+        let engine = engine_with_dir(config.clone(), dir.clone(), fake.clone());
+        fake.push("a.example.com", sse_ok(&["data: {}\n\n"]));
+        assert_eq!(
+            call(
+                &engine,
+                loopback(),
+                "/v1/messages",
+                session_header(&stable_session("before-reorder")),
+                body()
+            )
+            .await
+            .0,
+            200
+        );
+        assert_eq!(fake.requests().last().unwrap().host, "a.example.com");
+
+        config.endpoints.swap(0, 1);
+        // 模拟保存旧 bindings + 新 endpoints，真实 reload 负责归一化。
+        let _ = dir.save_config(&config).unwrap();
+        engine.reload_config().unwrap();
+        fake.push("b.example.com", sse_ok(&["data: {}\n\n"]));
+        assert_eq!(
+            call(
+                &engine,
+                loopback(),
+                "/v1/messages",
+                session_header(&stable_session("after-reorder")),
+                body()
+            )
+            .await
+            .0,
+            200
+        );
+        assert_eq!(fake.requests().last().unwrap().host, "b.example.com");
+        // 原会话仍保留粘性，排序调整只决定新会话的初始归属。
+        fake.push("a.example.com", sse_ok(&["data: {}\n\n"]));
+        assert_eq!(
+            call(
+                &engine,
+                loopback(),
+                "/v1/messages",
+                session_header(&stable_session("before-reorder")),
+                body()
+            )
+            .await
+            .0,
+            200
+        );
+        assert_eq!(fake.requests().len(), 3);
+        assert_eq!(fake.requests().last().unwrap().host, "a.example.com");
+        drop(engine);
+        let _ = std::fs::remove_dir_all(dir.root);
+    }
+}
+
+fn with_model_groups(mut config: AppConfig) -> AppConfig {
+    let models: Vec<String> = config.endpoints[0]
+        .mappings
+        .iter()
+        .map(|m| m.client_pattern.clone())
+        .collect();
+    config.model_groups = Some(config.endpoints.iter().enumerate().map(|(i, e)| {
+        serde_json::from_value(json!({"id": format!("group-{i}"), "name": format!("Group {i}"),
+            "priority": i, "models": models, "bindings":[{"endpointID":e.id,"priority":0,"models":null}]})).unwrap()
+    }).collect());
+    config
+}
+
+#[tokio::test]
+async fn model_groups_keep_500_entry_retries_then_switch_groups() {
+    let fake = FakeTransport::new();
+    let mut config = with_model_groups(two_endpoint_config());
+    config.retry.max_500_retries = 1;
+    for _ in 0..2 {
+        fake.push(
+            "a.example.com",
+            Outcome::Status {
+                status: 500,
+                headers: vec![],
+                chunks: vec![],
+            },
+        );
+    }
+    fake.push("b.example.com", sse_ok(&["data: {\"ok\":true}\n\n"]));
+    let engine = engine_with(config, fake.clone());
+    let (status, _) = call(&engine, loopback(), "/v1/messages", vec![], body()).await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        fake.requests()
+            .iter()
+            .map(|r| r.host.as_str())
+            .collect::<Vec<_>>(),
+        ["a.example.com", "a.example.com", "b.example.com"]
+    );
+    assert!(
+        engine
+            .runtime_snapshot()
+            .recent_events
+            .iter()
+            .any(|e| e.model_group_id.as_deref() == Some("group-1"))
+    );
+}
+
+#[tokio::test]
+async fn model_groups_preserve_disabled_500_failover() {
+    let fake = FakeTransport::new();
+    let mut config = with_model_groups(two_endpoint_config());
+    config.retry.failover_on_500 = false;
+    fake.push(
+        "a.example.com",
+        Outcome::Status {
+            status: 500,
+            headers: vec![],
+            chunks: vec![],
+        },
+    );
+    let engine = engine_with(config, fake.clone());
+    let (status, _) = call(&engine, loopback(), "/v1/messages", vec![], body()).await;
+    assert_eq!(status, 500);
+    assert_eq!(fake.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn model_groups_preserve_deferred_rounds_and_same_model() {
+    let fake = FakeTransport::new();
+    let mut config = with_model_groups(two_endpoint_config());
+    config.retry.max_deferred_rounds = 2;
+    for host in ["a.example.com", "b.example.com"] {
+        fake.push(
+            host,
+            Outcome::Status {
+                status: 429,
+                headers: vec![],
+                chunks: vec![],
+            },
+        );
+    }
+    fake.push("a.example.com", sse_ok(&["data: {\"ok\":true}\n\n"]));
+    let engine = engine_with(config, fake.clone());
+    let (status, _) = call(&engine, loopback(), "/v1/messages", vec![], body()).await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        fake.requests()
+            .iter()
+            .map(|r| r.host.as_str())
+            .collect::<Vec<_>>(),
+        ["a.example.com", "b.example.com", "a.example.com"]
+    );
+    let models: Vec<_> = fake
+        .requests()
+        .iter()
+        .map(|r| serde_json::from_slice::<Value>(&r.body).unwrap()["model"].clone())
+        .collect();
+    assert!(models.windows(2).all(|p| p[0] == p[1]));
 }

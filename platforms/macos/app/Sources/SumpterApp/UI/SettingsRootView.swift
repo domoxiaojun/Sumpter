@@ -93,6 +93,8 @@ struct SettingsRootView: View {
             OverviewPane(model: model)
         case .providers:
             ProvidersPane(model: model)
+        case .modelGroups:
+            ModelGroupsPane(model: model)
         case .routing:
             RoutingPane(model: model)
         case .security:

@@ -94,7 +94,7 @@ apps/<platform>/sumpterd → adapters/<platform> → sumpter-engine → sumpter-
 
 ### 不能随手改的契约
 
-- **`config.json` schema v6**：顶层是扁平 `endpoints[]`，每个入口必须有 `mappings[]`；没有 `pools`。serde 字段名是 camelCase 契约；部分 `Option` 字段序列化成显式 `null`（对齐 Swift），不是可省略键。启动/热重载时 v3/v4/v5 自动备份后原子迁移（`core/config_store.rs`），`normalized()` 还会把旧池级模型规则改写成入口显式映射。含密钥的写入一律临时文件 + 0600 + 原子 rename。
+- **`config.json` schema v7**：顶层是扁平 `endpoints[]`，每个入口必须有 `mappings[]`；可选 `modelGroups[]` 将模型范围与入口绑定分层，没有 `pools`。serde 字段名是 camelCase 契约；部分 `Option` 字段序列化成显式 `null`（对齐 Swift），不是可省略键。启动/热重载时 v3/v4/v5/v6 自动备份后原子迁移（`core/config_store.rs`），文件迁移会将旧池级模型规则改为入口映射，并创建默认模型组；`normalized()` 只负责当前字段归一化。含密钥的写入一律临时文件 + 0600 + 原子 rename。
 - **`core/events.rs` 磁盘形状**：`timestamp` 是 Apple reference date（2001-01-01Z）秒数浮点；`None` 省略键；`id` 大写 UUID；键字母序。改结构体字段顺序或 serde 属性会破坏已落盘数据与两端 UI。
 - **重试面**：`RetryPolicy::RETRYABLE_STATUS_CODES` 是常量、不可配置（401/402/403/429/5xx 网关族）。400 原样返回，不换入口。
 - **runtime 热路径**：代理只更新内存快照并推入有界队列；SQLite 连接归 worker 线程，Admin 读用短连接，不碰代理状态锁。

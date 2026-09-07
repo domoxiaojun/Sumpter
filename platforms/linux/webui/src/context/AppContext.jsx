@@ -121,7 +121,7 @@ export function AppProvider({ children }) {
   const [currentRoute, setCurrentRoute] = useState(() => {
     const hash = window.location.hash.replace(/^#/, '');
     const legacyProviderRoute = hash === 'providers-primary' || hash === 'providers-fallback';
-    const validRoutes = ['run', 'providers', 'routing', 'security', 'statistics', 'diagnostics', 'help', 'about'];
+    const validRoutes = ['run', 'providers', 'model-groups', 'routing', 'security', 'statistics', 'diagnostics', 'help', 'about'];
     return legacyProviderRoute ? 'providers' : (validRoutes.includes(hash) ? hash : 'run');
   });
 
@@ -276,7 +276,7 @@ export function AppProvider({ children }) {
       const hash = window.location.hash.replace(/^#/, '');
       if (hash === 'providers-primary' || hash === 'providers-fallback') {
         setCurrentRoute('providers');
-      } else if (['run', 'providers', 'routing', 'security', 'statistics', 'diagnostics', 'help', 'about'].includes(hash)) {
+      } else if (['run', 'providers', 'model-groups', 'routing', 'security', 'statistics', 'diagnostics', 'help', 'about'].includes(hash)) {
         setCurrentRoute(hash);
       }
     };
@@ -328,7 +328,7 @@ export function AppProvider({ children }) {
       ?? 0);
     addToast(
       expanded > 0
-        ? `配置已升级到 v${notice?.toSchema || 4}：${expanded} 个入口已转为“自动（三协议）”，请按上游能力复核`
+        ? `配置已升级到 v${notice?.toSchema || 4}：${expanded} 个入口已转为“自动（四协议）”，请按上游能力复核`
         : `配置已安全升级到 v${notice?.toSchema || 4}`,
       'info',
       10000,
