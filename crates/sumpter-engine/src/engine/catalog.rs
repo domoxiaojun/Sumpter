@@ -10,6 +10,9 @@ use super::context::header_value;
 use super::http_response::{error_response, json_response};
 use super::protocol::decoded_query_value;
 
+#[path = "codex_client_catalog.rs"]
+mod codex_client_catalog;
+
 pub(super) fn supports_extended_reasoning_levels(client_version: &str) -> bool {
     let trimmed = client_version.trim().trim_start_matches('v');
     if trimmed.is_empty() {
@@ -81,7 +84,12 @@ pub(super) fn collect_local_models(
 ) -> Vec<LocalModelEntry> {
     let mut models =
         std::collections::BTreeMap::<String, Vec<sumpter_core::capability::ModelCapability>>::new();
-    for endpoint in config.endpoints.iter().filter(|endpoint| endpoint.enabled) {
+    for scoped in config
+        .routing_endpoints()
+        .iter()
+        .filter(|e| e.endpoint.enabled)
+    {
+        let endpoint = &scoped.endpoint;
         let mut concrete_models = std::collections::BTreeSet::new();
         for mapping in &endpoint.mappings {
             let pattern = mapping.client_pattern.trim();
@@ -201,53 +209,6 @@ pub(super) fn is_codex_chat_model(
         })
 }
 
-pub(super) fn codex_reasoning_description(level: &str) -> &'static str {
-    match level {
-        "none" => "No reasoning",
-        "minimal" => "Fastest responses with minimal reasoning",
-        "low" => "Fast responses with lighter reasoning",
-        "medium" => "Balances speed and reasoning depth for everyday tasks",
-        "high" => "Greater reasoning depth for complex problems",
-        "xhigh" => "Extra high reasoning depth for complex problems",
-        "max" => "Maximum available reasoning depth for complex problems",
-        _ => "ultra",
-    }
-}
-
-pub(super) fn codex_reasoning_levels(client_version: &str) -> Vec<Value> {
-    let mut levels = vec!["none", "minimal", "low", "medium", "high", "xhigh"];
-    if supports_extended_reasoning_levels(client_version) {
-        levels.extend(["max", "ultra"]);
-    }
-    levels
-        .into_iter()
-        .map(|effort| {
-            json!({
-                "effort": effort,
-                "description": codex_reasoning_description(effort),
-            })
-        })
-        .collect()
-}
-
-pub(super) fn codex_model_entry(model: &LocalModelEntry, client_version: &str) -> Value {
-    let mut entry = json!({
-        "slug": model.id,
-        "display_name": model.id,
-        "description": model.id,
-        "prefer_websockets": false,
-        "service_tiers": [],
-    });
-    if is_codex_chat_model(&model.capabilities) {
-        entry["input_modalities"] = json!(["text"]);
-        entry["supported_reasoning_levels"] = json!(codex_reasoning_levels(client_version));
-        entry["default_reasoning_level"] = json!("medium");
-    } else {
-        entry["visibility"] = json!("hide");
-    }
-    entry
-}
-
 pub(super) fn grok_model_object(model: &LocalModelEntry) -> Value {
     json!({
         "id": model.id,
@@ -298,12 +259,10 @@ pub(super) fn local_models_json(
     if let Some(client_version) =
         query.and_then(|query| decoded_query_value(query, "client_version"))
     {
-        return Ok(json!({
-            "models": models
-                .iter()
-                .map(|model| codex_model_entry(model, &client_version))
-                .collect::<Vec<_>>(),
-        }));
+        return Ok(codex_client_catalog::codex_models_payload(
+            &models,
+            &client_version,
+        ));
     }
     let user_agent = header_value(headers, "user-agent").unwrap_or("");
     let grok_shell = user_agent.to_ascii_lowercase().contains("grok-shell");
