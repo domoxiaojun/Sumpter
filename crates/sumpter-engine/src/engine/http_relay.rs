@@ -308,6 +308,7 @@ impl Engine {
                     )))
                 }
                 ProviderProtocol::Anthropic => None,
+                ProviderProtocol::Gemini => None,
             }
         } else {
             None
@@ -368,6 +369,7 @@ impl Engine {
                     ProviderProtocol::Anthropic => SseDialect::Anthropic,
                     ProviderProtocol::OpenAI => SseDialect::OpenAiChat,
                     ProviderProtocol::OpenAIResponses => SseDialect::OpenAiResponses,
+                    ProviderProtocol::Gemini => SseDialect::Gemini,
                 }
             };
             SseTerminalTracker::new(dialect)
@@ -392,7 +394,9 @@ impl Engine {
                 client_out.as_ref().is_some_and(|client| {
                     matches!(
                         client.passthrough_kind,
-                        PassthroughKind::Chat | PassthroughKind::Responses
+                        PassthroughKind::Chat
+                            | PassthroughKind::Responses
+                            | PassthroughKind::GeminiGenerate
                     )
                 })
             } else if !passthrough && client_out.is_none() && !client_stream {
@@ -538,6 +542,10 @@ impl Engine {
                     Ok(None) => {
                         st.finished = true;
                         st.finalize_response_metadata();
+                        if let Some(tracker) = &mut st.upstream_summary_tracker {
+                            let _ = tracker.finish();
+                            st.guard.stream_trace.record_response_summary(tracker);
+                        }
                         let mut tail = st.bridge.as_mut().map(|b| b.finish()).unwrap_or_default();
                         if let Some(client) = &mut st.client_bridge {
                             let mut client_tail = client.feed(&tail);
@@ -550,6 +558,11 @@ impl Engine {
                             } else {
                                 tracker.observe_json(&tail)
                             }
+                        });
+                        let terminal = terminal.or_else(|| {
+                            st.terminal_tracker
+                                .as_mut()
+                                .and_then(SseTerminalTracker::finish)
                         });
                         if let Some(tracker) = &st.terminal_tracker {
                             st.guard.set_tool_calls(tracker.tool_calls());

@@ -67,14 +67,18 @@ const ANTHROPIC_BETA_EFFORT: &str = "effort-2025-11-24";
 ///
 /// `x-sumpter-*` 是客户端声明项目归因用的入站专用 header(见 `ClientDeclaredMetadata`):
 /// 代理读完就必须剥掉,否则项目名与本机工作区路径会跟着请求外泄给上游中转站。
-const HEADER_BLOCKLIST: [&str; 18] = [
+const HEADER_BLOCKLIST: [&str; 22] = [
     "host",
+    "x-sumpter-client",
+    "x-sumpter-attribution-encoding",
     "x-sumpter-project",
     "x-sumpter-workspace",
     "x-sumpter-git-remote",
     "x-sumpter-user",
+    "x-sumpter-session-id",
     "authorization",
     "x-api-key",
+    "x-goog-api-key",
     "content-length",
     "content-type",
     "connection",
@@ -117,6 +121,8 @@ pub enum PassthroughKind {
     /// OpenAI model discovery. The response is owned by the upstream Provider;
     /// Sumpter only routes and relays it.
     Models,
+    /// Gemini Developer API generateContent / streamGenerateContent.
+    GeminiGenerate,
 }
 
 /// CPA's Codex Live handler authenticates the downstream request with the
@@ -128,7 +134,16 @@ fn auth_headers_for_kind(
     api_key: &str,
     kind: Option<PassthroughKind>,
 ) -> Vec<(&'static str, String)> {
-    if kind == Some(PassthroughKind::Realtime) {
+    if kind == Some(PassthroughKind::GeminiGenerate) {
+        let key = api_key.trim();
+        if key.is_empty() {
+            Vec::new()
+        } else if let Some(token) = key.strip_prefix("Bearer ") {
+            vec![("authorization", format!("Bearer {}", token.trim()))]
+        } else {
+            vec![("x-goog-api-key", key.into())]
+        }
+    } else if kind == Some(PassthroughKind::Realtime) {
         let key = api_key.trim();
         if key.is_empty() {
             Vec::new()
@@ -156,6 +171,7 @@ impl PassthroughKind {
             Self::Videos => "/videos",
             Self::Realtime => "/realtime",
             Self::Models => "/models",
+            Self::GeminiGenerate => "/",
         }
     }
 
@@ -174,6 +190,7 @@ impl PassthroughKind {
             Self::Videos => "videos",
             Self::Realtime => "realtime",
             Self::Models => "models",
+            Self::GeminiGenerate => "gemini-generate",
         }
     }
 }
@@ -229,9 +246,12 @@ pub fn build_outbound(
     // names a different upstream model.
     passthrough: Option<PassthroughRequest<'_>>,
 ) -> OutboundBuild {
-    let raw_passthrough = passthrough
-        .as_ref()
-        .is_some_and(|request| request.kind == PassthroughKind::Raw);
+    let raw_passthrough = passthrough.as_ref().is_some_and(|request| {
+        matches!(
+            request.kind,
+            PassthroughKind::Raw | PassthroughKind::GeminiGenerate
+        )
+    });
     let effort = endpoint
         .effort_override
         .or_else(|| model_name::reasoning_effort(&request.model));
@@ -363,6 +383,12 @@ pub fn build_outbound(
                 &request.model,
                 &endpoint.upstream_model,
             )
+        } else if passthrough.kind == PassthroughKind::GeminiGenerate {
+            rewrite_gemini_model_path(
+                &gemini_resource_path(&base_path, inbound_path_and_query),
+                &request.model,
+                &endpoint.upstream_model,
+            )
         } else {
             openai_resource_path(&base_path, inbound_path_and_query)
         };
@@ -377,6 +403,7 @@ pub fn build_outbound(
                         | PassthroughKind::Videos
                         | PassthroughKind::Realtime
                         | PassthroughKind::Models
+                        | PassthroughKind::GeminiGenerate
                 ) {
                     path_and_query
                 } else {
@@ -447,6 +474,14 @@ pub fn build_outbound(
                     server_retrieval,
                 ))
                 .unwrap_or_default(),
+            )
+        }
+        ProviderProtocol::Gemini => {
+            // Gemini requests use the native passthrough branch above. Keep a
+            // defensive raw fallback for internal callers that omit it.
+            (
+                gemini_resource_path(&base_path, inbound_path_and_query),
+                serde_json::to_vec(&request.raw).unwrap_or_default(),
             )
         }
     };
@@ -540,6 +575,7 @@ fn rewrite_passthrough_model(
         PassthroughKind::Files | PassthroughKind::Videos | PassthroughKind::Models => {
             return raw.to_vec();
         }
+        PassthroughKind::GeminiGenerate => return raw.to_vec(),
         PassthroughKind::Realtime => {
             let mut changed = false;
             if object.get("model").is_some_and(Value::is_string) {
@@ -625,6 +661,72 @@ pub fn openai_resource_path(base_path: &str, inbound_path_and_query: &str) -> St
         Some(query) if !query.is_empty() => format!("{output}?{query}"),
         _ => output,
     }
+}
+
+/// Preserve Gemini's native `/v1beta/models/...:generateContent` target while
+/// avoiding a duplicate `/v1beta` when the configured base URL already ends
+/// with that version prefix.
+pub fn gemini_resource_path(base_path: &str, inbound_path_and_query: &str) -> String {
+    let (raw_path, query) = inbound_path_and_query
+        .split_once('?')
+        .map_or((inbound_path_and_query, None), |(path, query)| {
+            (path, Some(query))
+        });
+    let path = if raw_path.starts_with('/') {
+        raw_path.to_string()
+    } else {
+        format!("/{raw_path}")
+    };
+    let trimmed_base = base_path.trim_end_matches('/');
+    let output = if trimmed_base.ends_with("/v1beta")
+        && (path == "/v1beta" || path.starts_with("/v1beta/"))
+    {
+        format!("{trimmed_base}{}", &path[7..])
+    } else if trimmed_base.ends_with("/v1") && (path == "/v1" || path.starts_with("/v1/")) {
+        format!("{trimmed_base}{}", &path[3..])
+    } else {
+        format!("{trimmed_base}{path}")
+    };
+    match query {
+        Some(query) if !query.is_empty() => format!("{output}?{query}"),
+        _ => output,
+    }
+}
+
+/// Gemini Developer API model path segments are intentionally narrower than a
+/// general URL path. This prevents mappings from escaping the `models/` tree.
+pub fn valid_gemini_model(model: &str) -> bool {
+    let model = model.strip_prefix("models/").unwrap_or(model);
+    !model.is_empty()
+        && model.len() <= 256
+        && model
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        && !model.contains("..")
+}
+
+fn rewrite_gemini_model_path(
+    path_and_query: &str,
+    _client_model: &str,
+    upstream_model: &str,
+) -> String {
+    if !valid_gemini_model(upstream_model) {
+        return path_and_query.to_string();
+    }
+    let (path, query) = path_and_query
+        .split_once('?')
+        .map_or((path_and_query, None), |(path, query)| (path, Some(query)));
+    let Some((prefix, rest)) = path.rsplit_once("/models/") else {
+        return path_and_query.into();
+    };
+    let Some((_, operation)) = rest.split_once(':') else {
+        return path_and_query.into();
+    };
+    let replacement = upstream_model
+        .strip_prefix("models/")
+        .unwrap_or(upstream_model);
+    let output = format!("{prefix}/models/{replacement}:{operation}");
+    query.map_or(output.clone(), |query| format!("{output}?{query}"))
 }
 
 /// Rewrite an explicit Realtime `model` query parameter when a configured
@@ -884,11 +986,15 @@ mod tests {
         PlannedEndpoint {
             endpoint_id: "e".into(),
             endpoint_name: "e".into(),
+            model_group_id: None,
+            model_group_name: None,
+            model_group_rank: 0,
             base_url: "https://up.example.com".into(),
             configured_protocol: match protocol {
                 ProviderProtocol::Anthropic => EndpointProtocolMode::Anthropic,
                 ProviderProtocol::OpenAI => EndpointProtocolMode::OpenAI,
                 ProviderProtocol::OpenAIResponses => EndpointProtocolMode::OpenAIResponses,
+                ProviderProtocol::Gemini => EndpointProtocolMode::Gemini,
             },
             source_format: ProviderProtocol::Anthropic,
             protocol,
@@ -1409,6 +1515,9 @@ mod tests {
                         assert_eq!(build.request.path_and_query, "/v1/responses");
                         assert_eq!(body["tools"], json!([{"type": "web_search"}]));
                     }
+                    ProviderProtocol::Gemini => {
+                        assert_eq!(build.request.path_and_query, "/v1/messages");
+                    }
                 }
             }
         }
@@ -1565,6 +1674,9 @@ mod tests {
                 ProviderProtocol::OpenAIResponses => {
                     assert_eq!(body["reasoning"]["effort"], "high");
                 }
+                ProviderProtocol::Gemini => {
+                    assert_eq!(body["model"], "up-model");
+                }
             }
         }
     }
@@ -1622,6 +1734,58 @@ mod tests {
         let body: Value = serde_json::from_slice(&build.request.body).unwrap();
         assert!(body.get("input").is_some());
         assert!(body.get("messages").is_none());
+    }
+
+    #[test]
+    fn gemini_native_path_and_auth_preserve_body() {
+        let mut target = endpoint(
+            ProviderProtocol::Gemini,
+            ContextMode::Standard,
+            ThinkingMode::Disabled,
+        );
+        target.base_url = "https://generativelanguage.googleapis.com/v1beta".into();
+        target.routed_model = "gemini-2.5-pro".into();
+        target.upstream_model = "gemini-2.5-flash".into();
+        let body = br#"{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"tools":[{"functionDeclarations":[]}]}"#;
+        let request =
+            RoutingRequest::from_value(&json!({"model":"gemini-2.5-pro","messages":[]})).unwrap();
+        let built = build_outbound(
+            &target,
+            &request,
+            &[
+                ("user-agent".into(), "GeminiCLI/0.1".into()),
+                ("x-goog-api-key".into(), "client-secret".into()),
+            ],
+            "POST",
+            "/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse",
+            "provider-secret",
+            RequestPurpose::Standard,
+            Some(PassthroughRequest {
+                kind: PassthroughKind::GeminiGenerate,
+                body,
+                content_type: Some("application/json"),
+                stream: true,
+            }),
+        );
+        assert_eq!(
+            built.request.path_and_query,
+            "/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse"
+        );
+        assert_eq!(built.request.body, body);
+        assert!(
+            built
+                .request
+                .headers
+                .iter()
+                .any(|(name, value)| name == "x-goog-api-key" && value == "provider-secret")
+        );
+        assert!(
+            !built
+                .request
+                .headers
+                .iter()
+                .any(|(name, value)| name == "x-goog-api-key" && value == "client-secret")
+        );
     }
 
     #[test]

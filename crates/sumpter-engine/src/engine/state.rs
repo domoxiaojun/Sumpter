@@ -34,6 +34,9 @@ pub(super) struct EngineState {
     /// affinityID → 调度组；稳定会话不超时并持久化，内容指纹仅进程内兼容。
     pub(super) session_sticky: HashMap<String, SessionStickyEntry>,
     pub(super) last_session_prune_at: f64,
+    /// 会话粘性归属的 TTL 秒数（来自 `sessionStickyTtlHours`）；0 = 永不过期。
+    /// 跟随配置替换更新，`touch_session_success` 的周期清理读取它。
+    pub(super) session_sticky_ttl_secs: f64,
 }
 
 pub struct EngineInner {
@@ -107,6 +110,7 @@ impl Engine {
         services: EngineServices,
     ) -> Self {
         let generation = config_generation(&config);
+        let session_sticky_ttl_secs = config.session_sticky_ttl_secs();
         let (runtime_store, runtime, stats_writable, stats_error) = match dir.as_ref() {
             Some(dir) => match RuntimeStore::new(dir.root.join("runtime.sqlite3")) {
                 Ok((store, runtime)) => (Some(store), runtime, true, None),
@@ -131,7 +135,7 @@ impl Engine {
                             )
                         })
                         .collect();
-                    let pruned = prune_session_sticky(&mut loaded, now);
+                    let pruned = prune_session_sticky(&mut loaded, now, session_sticky_ttl_secs);
                     (loaded, true, pruned)
                 }
                 Some(Err(error)) => {
@@ -218,6 +222,7 @@ impl Engine {
                     provider_model_health: HashMap::new(),
                     session_sticky,
                     last_session_prune_at: now,
+                    session_sticky_ttl_secs,
                 }),
                 dir,
                 stats_writable: AtomicBool::new(stats_writable),

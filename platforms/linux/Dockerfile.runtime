@@ -32,7 +32,7 @@ STOPSIGNAL SIGTERM
 # hadolint ignore=DL3025
 HEALTHCHECK --interval=15s --timeout=4s --start-period=10s --retries=4 \
     CMD wget -q -T 3 -O /dev/null \
-      "http://127.0.0.1:$${SUMPTER_ADMIN_PORT:-57879}/healthz" \
+      "http://127.0.0.1:${SUMPTER_ADMIN_PORT:-57879}/healthz" \
       || exit 1
 
 ENTRYPOINT ["/usr/local/bin/sumpterd"]

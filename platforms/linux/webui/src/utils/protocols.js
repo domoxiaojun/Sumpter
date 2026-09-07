@@ -2,10 +2,11 @@ export const SOURCE_FORMATS = Object.freeze([
   Object.freeze({ value: 'anthropic', label: 'Anthropic Messages' }),
   Object.freeze({ value: 'openai', label: 'OpenAI Chat Completions' }),
   Object.freeze({ value: 'openai-responses', label: 'OpenAI Responses' }),
+  Object.freeze({ value: 'gemini', label: 'Gemini Developer API' }),
 ]);
 
 export const ENDPOINT_PROTOCOL_MODES = Object.freeze([
-  Object.freeze({ value: 'auto', label: '自动（三协议）' }),
+  Object.freeze({ value: 'auto', label: '自动（四协议）' }),
   ...SOURCE_FORMATS,
 ]);
 

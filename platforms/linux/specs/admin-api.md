@@ -3,7 +3,7 @@
 本文是 Linux WebUI 与 daemon 之间的唯一管理契约。
 运行时管理端点还包括：`GET/PUT /runtime/pricing`、`GET /runtime/export`、`GET /runtime/export/estimate`、`GET /runtime/request-chain`、`GET /runtime/facets`。历史诊断记录可能携带 `pinnedIP` 字段；新请求不再生成该字段。
 源码树可执行文件是 `sumpterd-linux`，
-发布包内二进制仍名为 `sumpterd`。配置格式为 `config.json` schema v6；自动迁移 schema v3/v4/v5，
+发布包内二进制仍名为 `sumpterd`。配置格式为 `config.json` schema v7；自动迁移 schema v3/v4/v5，
 旧 Swift `keys.json` API 不再适用。
 
 ## 当前运行统计契约（runtime API v1，2026-08-22）
@@ -317,10 +317,11 @@ listener 直接暴露到公网。
 {
   "generation": "config-hash",
   "config": {
-    "schemaVersion": 6,
+    "schemaVersion": 7,
     "listener": {},
     "retry": {},
     "endpoints": [],
+    "modelGroups": [],
     "featureRules": []
   },
   "secretStatus": {
@@ -334,13 +335,14 @@ listener 直接暴露到公网。
 }
 ```
 
-- `config` 使用 schema v6 原生 camelCase 形状。每个 endpoint 必须显式写单值 `protocol`：
+- `config` 使用 schema v7 原生 camelCase 形状。每个 endpoint 必须显式写单值 `protocol`：
   `auto`、`anthropic`、`openai` 或 `openai-responses`；遗留 `protocols` 数组和
   `listener.inboundDialectPassthrough` 均拒绝。
 - `auto` 只表示入口能力模式，实际 TargetFormat 由 RoutePlanner 解析为三种真实协议；
   `featureRules[].target.protocol` 仍只能是 `anthropic`、`openai` 或 `openai-responses`。
 - 响应中的 `listener.authToken` 与每个 `endpoint.apiKey` 必须为空或省略，绝不返回明文。
 - `secretStatus` 只表达是否已配置及可选尾四位。
+- `modelGroups` 为可选数组；省略兼容旧入口映射，空数组关闭自动模型路由，显式 `null` 拒绝。组内保存 `id/name/enabled/priority/models/bindings`；绑定引用 `endpointID`，可设置 `enabled/priority/models/overrides`。绑定 `models` 省略或为 `null` 表示全部组内模型，空数组表示不承接；覆盖仅允许组内已选精确模型。组 ID 唯一、入口引用存在、优先级非负、模型范围有效，否则拒绝写入。
 - `retry.max500Retries` 控制单个入口 HTTP 500 后的额外重试次数，0 表示不额外重试；
   `retry.failoverOn500` 控制 500 重试耗尽后是否切换入口，默认 `true`，关闭时直接返回当前入口的 500；
   `retry.retryDelaySeconds` 为可选正数；`retry.passThroughRetryDelay` 默认 `true`，控制最终可重试失败响应
@@ -366,7 +368,7 @@ listener 直接暴露到公网。
 ```
 
 - `expectedGeneration` 必填；与服务端当前 generation 不同返回 409 `generation_conflict`，不得覆盖。
-- `config.schemaVersion` 必须等于 6。校验失败返回 400 `invalid_config`，原文件和运行态保持不变。
+- `config.schemaVersion` 必须等于 7。校验失败返回 400 `invalid_config`，原文件和运行态保持不变。
 - `secretUpdates` 中字段缺失 = 保留；空字符串 = 明确清除；非空字符串 = 设置。
 - 不能在 `config` 的脱敏 secret 字段里提交 `***` 等占位串。
 - 成功写入必须使用同目录临时文件、0600 权限和原子 rename。
@@ -375,7 +377,7 @@ listener 直接暴露到公网。
   500 `listener_rebind_failed`，不得把半套配置发布到运行态；磁盘回滚结果写入错误消息。
 
 服务端至少校验：listener host（IP、`localhost` 或空值/全接口）/port/CIDR、endpoint ID 唯一、URL scheme/host、
-Base URL 不得包含 userinfo、query 或 fragment、入口 `protocol` 必须是四态之一、模型映射、feature target、
+Base URL 不得包含 userinfo、query 或 fragment、入口 `protocol` 必须是五态之一（含 `gemini`）、模型映射、feature target、
 可选超时和 `retryDelaySeconds` 为正数、重试轮数/次数/时长非负；遗留的 Provider WebSearch 能力字段必须拒绝，
 WebSearch 表达由严格 RequestPurpose 与最终 TargetFormat 自动选择。
 

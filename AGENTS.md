@@ -16,7 +16,7 @@ thin platform adapters:
 `platforms/macos/app/` are platform UI and packaging inputs outside the Rust
 workspace. They are intentionally not changed by engine architecture work.
 
-Unit tests live beside modules under `src/`; integration tests and fixtures live under each crate's `tests/`. `config.example.json` is the safe schema-v6 example. Treat `docs/upstream/` as migration reference, not the current API contract. Current architecture and doc index live in `docs/architecture.md` and `docs/README.md`. Never commit `target/` artifacts.
+Unit tests live beside modules under `src/`; integration tests and fixtures live under each crate's `tests/`. `config.example.json` is the safe schema-v7 example. Treat `docs/upstream/` as migration reference, not the current API contract. Current architecture and doc index live in `docs/architecture.md` and `docs/README.md`. Never commit `target/` artifacts.
 
 ## Build, Test, and Development Commands
 

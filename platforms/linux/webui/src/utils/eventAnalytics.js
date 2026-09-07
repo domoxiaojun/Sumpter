@@ -44,9 +44,10 @@ export function codexDimensionValues(metadata, dimension) {
   switch (dimension) {
     case 'requestKind': return [value('requestKind', 'request_kind') || '未记录请求类型'];
     case 'subagentKind': {
-      const kind = value('subagentKind', 'subagent_kind');
+      const kind = value('subagentKind', 'subagent_kind') || value('subagentHeader', 'subagent_header');
       const isSubagent = Boolean(value('isSubagent', 'is_subagent'));
-      return [kind || (isSubagent ? '子代理（类型未记录）' : '主代理')];
+      if (kind === 'guardian' || value('threadSource', 'thread_source') === 'guardian_review') return ['Guardian 安全审查'];
+      return [kind || (isSubagent ? '子代理（类型未记录）' : '未发现子代理证据')];
     }
     case 'threadSource': return [value('threadSource', 'thread_source') || '未记录线程来源'];
     case 'agentName': return [value('agentName', 'agent_name') || '未记录代理路径'];

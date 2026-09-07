@@ -23,7 +23,9 @@ use sumpter_core::routing::{RequestPurpose, RouteMode};
 use crate::runtime_store::{RuntimeChange, RuntimeEventListItem};
 
 const API_VERSION: u8 = 3;
-const PROJECTION_VERSION: i64 = 7;
+// 必须与 runtime_store.rs 的 PROJECTION_VERSION 同步:查询侧按它过滤投影行,
+// 写入侧 bump 后这里不同步会让所有 analytics 归零(见 2026-09-07 轮修复)。
+const PROJECTION_VERSION: i64 = 8;
 const PAGE_SIZES: [usize; 5] = [10, 25, 50, 100, 200];
 const REQUEST_CHAIN_LIMIT: usize = 512;
 const MAX_TREND_POINTS: usize = 240;
@@ -1234,6 +1236,8 @@ struct EventListProjection {
     request_purpose: Option<String>,
     endpoint_id: Option<String>,
     endpoint_name: Option<String>,
+    model_group_id: Option<String>,
+    model_group_name: Option<String>,
     feature_rule_id: Option<String>,
     client_model: Option<String>,
     effective_model: Option<String>,
@@ -1304,6 +1308,8 @@ fn event_list_item_from_projection(row: EventListProjection) -> RuntimeEventList
         request_purpose: decode_projection_enum::<RequestPurpose>(row.request_purpose),
         endpoint_id: row.endpoint_id,
         endpoint_name: row.endpoint_name,
+        model_group_id: row.model_group_id,
+        model_group_name: row.model_group_name,
         feature_rule_id: row.feature_rule_id,
         effective_model: row.effective_model,
         upstream_model: row.upstream_model,

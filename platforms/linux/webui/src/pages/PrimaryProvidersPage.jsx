@@ -6,6 +6,7 @@ import { QuickToggle } from '../components/QuickToggle.jsx';
 import { StatusBadge } from '../components/StatusBadge.jsx';
 import { Icon } from '../utils/icons.jsx';
 import { api } from '../services/api.js';
+import { addEndpointToLibrary } from '../utils/modelGroups.js';
 import { clone, formatTimestamp } from '../utils/helpers.js';
 import { ENDPOINT_PROTOCOL_MODES, endpointProtocolLabel, normalizeEndpointProtocol } from '../utils/protocols.js';
 
@@ -323,6 +324,44 @@ export function PrimaryProvidersPage() {
   const [selectedEndpointID, setSelectedEndpointID] = useState(null);
   const [fetchingModelEndpointIDs, setFetchingModelEndpointIDs] = useState(() => new Set());
   const [reorderingEndpointID, setReorderingEndpointID] = useState(null);
+  const [stickyTTLDraft, setStickyTTLDraft] = useState('');
+  const [savingStickyTTL, setSavingStickyTTL] = useState(false);
+  const stickyTTLEffective = Number.isFinite(Number(config?.sessionStickyTtlHours))
+    ? Number(config.sessionStickyTtlHours)
+    : 72;
+  useEffect(() => {
+    setStickyTTLDraft(stickyTTLEffective === 0 ? '0' : String(stickyTTLEffective));
+  }, [stickyTTLEffective]);
+
+  // 会话粘性时长(小时):默认 72,0 = 永不过期(仍受条目上限约束)。
+  const commitStickyTTL = async () => {
+    const raw = String(stickyTTLDraft ?? '').trim();
+    const value = raw === '' ? 72 : Number(raw);
+    if (!Number.isFinite(value) || value < 0) {
+      addToast('会话粘性时长必须是 ≥ 0 的小时数（0 表示永不过期）', 'warning');
+      setStickyTTLDraft(String(stickyTTLEffective));
+      return;
+    }
+    const next = value === Math.trunc(value) ? Math.trunc(value) : value;
+    if (next === stickyTTLEffective) {
+      setStickyTTLDraft(String(next));
+      return;
+    }
+    setSavingStickyTTL(true);
+    try {
+      await saveConfig((latestConfig) => {
+        latestConfig.sessionStickyTtlHours = next;
+        return latestConfig;
+      });
+      setStickyTTLDraft(String(next));
+      addToast(next > 0 ? `会话粘性时长已设为 ${next}h` : '会话粘性时长已设为永不过期', 'success');
+    } catch (error) {
+      addToast(`保存会话粘性时长失败：${error.message}`, 'error');
+      setStickyTTLDraft(String(stickyTTLEffective));
+    } finally {
+      setSavingStickyTTL(false);
+    }
+  };
   const [providerDragState, setProviderDragState] = useState({
     sourceID: null,
     targetID: null,
@@ -833,7 +872,7 @@ export function PrimaryProvidersPage() {
     let baseURL = endpoint?.baseURL || '';
     let protocol = normalizeEndpointProtocol(endpoint?.protocol, 'auto');
     let apiKey = '';
-    let priority = endpoint?.priority ?? endpoints.length;
+    let priority = endpoint?.priority ?? 0;
     let enabled = endpoint?.enabled !== false;
     // 新入口默认开启；编辑已有入口时严格保留其显式配置（缺省旧配置仍为关闭）。
     let keepAlive = isNew ? true : endpoint?.keepAlive === true;
@@ -858,6 +897,7 @@ export function PrimaryProvidersPage() {
       maxWidth: '680px',
       content: (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          {isNew && <p className="form-hint">新入口仅加入入口库；请到模型组手动添加入口并选择承接范围。</p>}
           <div className="grid-2col">
             <div className="form-group">
               <label className="form-label">入口 ID {isNew ? '' : '(只读)'}</label>
@@ -939,7 +979,7 @@ export function PrimaryProvidersPage() {
                 <option key={option.value} value={option.value}>{option.label}</option>
               ))}
             </select>
-            <span className="form-hint">自动（三协议）会按入站路径选择对应的原生协议；固定协议用于强制指定上游格式。</span>
+            <span className="form-hint">自动（四协议）会按入站路径选择对应的原生协议；固定协议用于强制指定上游格式。</span>
           </div>
 
           <div className="form-group">
@@ -1010,7 +1050,7 @@ export function PrimaryProvidersPage() {
                 addToast(`入口 ID 已存在: ${newId}`, 'warning');
                 return true;
               }
-              nextConfig.endpoints.push({
+              addEndpointToLibrary(nextConfig, {
                 id: newId,
                 name: name.trim(),
                 baseURL: baseURL.trim(),
@@ -1049,7 +1089,7 @@ export function PrimaryProvidersPage() {
   const openMappingEditor = (mapping = null, mappingIdx = -1) => {
     let fromModel = mappingClient(mapping);
     let toModel = mappingUpstream(mapping);
-    let thinking = mapping?.thinking || 'disable';
+    let thinking = mapping?.thinking || 'passThrough';
     let effort = mapping?.effort || 'auto';
     let context = mapping?.context || 'passThrough';
     let failoverTimeout = mapping?.failoverTimeoutSeconds ?? '';
@@ -1151,6 +1191,7 @@ export function PrimaryProvidersPage() {
               // Preserve any future fields from the existing mapping while replacing editable values.
               targetEp.modelMappings[mappingIdx] = { ...targetEp.modelMappings[mappingIdx], ...nextMapping };
               if (failoverTimeoutNumber == null) delete targetEp.modelMappings[mappingIdx].failoverTimeoutSeconds;
+              if (thinking !== 'adaptive' || effort === 'auto') delete targetEp.modelMappings[mappingIdx].effort;
             } else {
               targetEp.modelMappings.push(nextMapping);
             }
@@ -1382,6 +1423,7 @@ export function PrimaryProvidersPage() {
             <div>入口内 500 重试：<strong className="mono-cell">{retry.max500Retries ?? 0} 次</strong></div>
             <div>retry_delay 透传：<strong className="mono-cell">{(retry.passThroughRetryDelay ?? true) ? (retry.retryDelaySeconds ? `${retry.retryDelaySeconds}s` : '未配置') : '关闭'}</strong></div>
             <div>粘性入口重试：<strong className="mono-cell">{retry.sessionStickyRetries ?? 2} 次</strong></div>
+            <div>会话粘性时长：<strong className="mono-cell">{stickyTTLEffective > 0 ? `${stickyTTLEffective}h` : '永不过期'}</strong></div>
             <div>故障重试最大轮数：<strong className="mono-cell">{retry.maxDeferredRounds ?? retry.crossRoundRetries ?? 3} 轮</strong></div>
             <div>跨轮最长时长：<strong className="mono-cell">{retry.maxRetryDurationSeconds ? `${retry.maxRetryDurationSeconds}s` : '不限时长'}</strong></div>
           </div>
@@ -1394,6 +1436,24 @@ export function PrimaryProvidersPage() {
           <div className="panel-title-group">
             <div className="panel-title">上游通道入口列表 ({endpoints.length})</div>
             <span className="panel-hint">调度优先按 Priority 数值（小者优先），同级按列表顺序。点击行查看详细映射；拖动整行可调整入口顺序，目标行上/下半区会显示插入位置。</span>
+          </div>
+          <div className="panel-header-actions" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <label htmlFor="provider-sticky-ttl" style={{ fontSize: '0.8rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }} title="同一会话粘在同一入口组的时长；超时后新请求按入口库顺序重新选择。0 表示永不过期。">会话粘性时长</label>
+            <input
+              id="provider-sticky-ttl"
+              className="form-input"
+              type="number"
+              min="0"
+              step="1"
+              style={{ width: '90px' }}
+              value={stickyTTLDraft}
+              disabled={savingStickyTTL}
+              onChange={(event) => setStickyTTLDraft(event.target.value)}
+              onBlur={commitStickyTTL}
+              onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } }}
+              aria-label="会话粘性时长（小时）"
+            />
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>h</span>
           </div>
         </div>
         <div className="panel-body panel-body-flush">

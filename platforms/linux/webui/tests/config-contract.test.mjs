@@ -88,14 +88,14 @@ test('mock routing config mirrors all built-in Claude Code rules', () => {
   );
 });
 
-test('v6 endpoint protocol contract exposes four modes and defaults mock entries to Auto', () => {
-  assert.equal(mockConfig.schemaVersion, 6);
+test('v7 endpoint protocol contract exposes five modes and defaults mock entries to Auto', () => {
+  assert.equal(mockConfig.schemaVersion, 7);
   assert.equal('inboundDialectPassthrough' in mockConfig.listener, false);
-  assert.deepEqual(ENDPOINT_PROTOCOL_MODES.map((item) => item.value), ['auto', 'anthropic', 'openai', 'openai-responses']);
+  assert.deepEqual(ENDPOINT_PROTOCOL_MODES.map((item) => item.value), ['auto', 'anthropic', 'openai', 'openai-responses', 'gemini']);
   assert.equal(mockConfig.endpoints[1].protocol, 'auto');
   for (const value of ENDPOINT_PROTOCOL_MODES.map((item) => item.value)) assert.equal(isEndpointProtocol(value), true);
   assert.equal(isSourceFormat('auto'), false);
-  assert.equal(endpointProtocolLabel('auto'), '自动（三协议）');
+  assert.equal(endpointProtocolLabel('auto'), '自动（四协议）');
 });
 
 test('Provider 新入口默认启用连接复用，编辑旧入口保留原值', () => {
@@ -466,7 +466,7 @@ test('Codex metadata summary and full JSON tolerate legacy wire forms', () => {
   assert.equal(eventCodexMetadata({ codex_metadata: { thread_id: 'legacy' } }).thread_id, 'legacy');
   assert.match(codexMetadataJSON(event), /"workspaces"/);
   assert.doesNotThrow(() => codexMetadataSummary({ id: 'old' }));
-  assert.equal(codexMetadataSummary({ id: 'old', codex_metadata: { thread_id: 'legacy' } }), '主代理 · 线程 legacy');
+  assert.equal(codexMetadataSummary({ id: 'old', codex_metadata: { thread_id: 'legacy' } }), '未发现子代理证据 · 线程 legacy');
 });
 
 test('Grok metadata summary exposes sampling headers and empty Codex OTel is not identity', () => {
@@ -522,7 +522,7 @@ test('Codex workspace context prefers local project names and keeps remote as se
     },
   ]);
   assert.equal(codexWorkspaceSummary(metadata), 'automode-proxy · 有未提交改动 · 提交 12345678；local-only · 工作区干净');
-  assert.equal(codexAgentRoleLabel(metadata), '主代理');
+  assert.equal(codexAgentRoleLabel(metadata), '未发现子代理证据');
 });
 
 test('runtime event UI keeps HTTP 200 separate from a failed final outcome', () => {
@@ -777,7 +777,7 @@ test('runtime mock covers main and subagent Codex metadata with nested wire fiel
   const subagent = (await api.getRuntimeEvent(subagentItem.id)).event;
   assert.equal(main.codexMetadata.isSubagent, false);
   assert.equal(main.codexMetadata.agentName, '/root');
-  assert.equal(codexMetadataSummary(main), '主代理 · 代理路径 /root · 请求 turn · 线程 thread-main-0001 · 回合 turn-main-0041');
+  assert.equal(codexMetadataSummary(main), '未发现子代理证据 · 代理路径 /root · 请求 turn · 线程 thread-main-0001 · 回合 turn-main-0041');
   assert.equal(subagent.codexMetadata.isSubagent, true);
   assert.equal(subagent.codexMetadata.agentName, '/root/linux_final_tests');
   assert.equal(subagent.codexMetadata.originator, 'codex_cli_rs');
@@ -799,7 +799,7 @@ test('runtime event UI exposes endpoint identity and request-chain grouping', ()
 });
 
 test('v6 UI config removes legacy fixed IP fields while adapting mappings', () => {
-  const ui = fromWireConfig({ generation: 'g1', config: { schemaVersion: 6, listener: { authToken: '', host: '127.0.0.1', port: 57878 }, retry: { pinnedIPConcurrency: 3 }, featureRules: [], endpoints: [{ id: 'ep', name: '入口', baseURL: 'https://example.invalid', apiKey: '', protocol: 'openai', enabled: true, pinnedIPs: ['203.0.113.1'], pinnedIPExclusive: true, mappings: [{ clientPattern: 'gpt-*', upstreamModel: 'gpt-5', thinking: 'disabled', context: 'strip' }] }] }, secretStatus: { endpoints: { ep: { apiKey: { configured: true, last4: '1234' } } } } });
+  const ui = fromWireConfig({ generation: 'g1', config: { schemaVersion: 7, listener: { authToken: '', host: '127.0.0.1', port: 57878 }, retry: { pinnedIPConcurrency: 3 }, featureRules: [], endpoints: [{ id: 'ep', name: '入口', baseURL: 'https://example.invalid', apiKey: '', protocol: 'openai', enabled: true, pinnedIPs: ['203.0.113.1'], pinnedIPExclusive: true, mappings: [{ clientPattern: 'gpt-*', upstreamModel: 'gpt-5', thinking: 'disabled', context: 'strip' }] }] }, secretStatus: { endpoints: { ep: { apiKey: { configured: true, last4: '1234' } } } } });
   assert.equal('pools' in ui.config, false);
   assert.equal(ui.config.endpoints[0].modelMappings[0].from, 'gpt-*');
   assert.equal('pinnedIPs' in ui.config.endpoints[0], false);
@@ -810,7 +810,7 @@ test('v6 UI config removes legacy fixed IP fields while adapting mappings', () =
 
 test('v6 retry settings preserve HTTP 500 failover and retry delay fields', () => {
   const wire = toWireConfig({
-    schemaVersion: 6,
+    schemaVersion: 7,
     listener: {},
     retry: { max500Retries: 4, failoverOn500: false, retryDelaySeconds: 2.5 },
     featureRules: [],
@@ -822,7 +822,7 @@ test('v6 retry settings preserve HTTP 500 failover and retry delay fields', () =
 });
 
 test('save adapter emits only Rust v6 endpoint and routing fields', () => {
-  const wire = toWireConfig({ schemaVersion: 6, listener: { authToken: 'redacted', host: '127.0.0.1', port: 57878 }, retry: {}, featureRules: [{ id: 'custom', name: 'custom', enabled: true, match: { requestKind: 'session_title', modelEquals: 'x' }, target: { endpointID: 'ep', model: 'x', effort: 'high' } }], endpoints: [{ id: 'ep', name: '入口', baseURL: 'https://example.invalid', apiKey: 'redacted', protocol: 'openai', enabled: true, pinnedIP: '203.0.113.1', pinnedIPExclusive: true, timeoutSeconds: 30, headers: { x: 'y' }, modelMappings: [{ from: 'gpt-*', to: 'gpt-5', thinking: 'disable', context: 'strip' }] }] });
+  const wire = toWireConfig({ schemaVersion: 7, listener: { authToken: 'redacted', host: '127.0.0.1', port: 57878 }, retry: {}, featureRules: [{ id: 'custom', name: 'custom', enabled: true, match: { requestKind: 'session_title', modelEquals: 'x' }, target: { endpointID: 'ep', model: 'x', effort: 'high' } }], endpoints: [{ id: 'ep', name: '入口', baseURL: 'https://example.invalid', apiKey: 'redacted', protocol: 'openai', enabled: true, pinnedIP: '203.0.113.1', pinnedIPExclusive: true, timeoutSeconds: 30, headers: { x: 'y' }, modelMappings: [{ from: 'gpt-*', to: 'gpt-5', thinking: 'disable', context: 'strip' }] }] });
   const endpoint = wire.endpoints[0];
   assert.equal('pinnedIPs' in endpoint, false);
   assert.equal('pinnedIP' in endpoint, false);
@@ -834,7 +834,7 @@ test('save adapter emits only Rust v6 endpoint and routing fields', () => {
   assert.equal('headers' in endpoint, false);
   assert.equal('requestKind' in wire.featureRules[0].match, false);
   assert.equal(wire.featureRules[0].target.effort, 'high');
-  assert.equal(wire.schemaVersion, 6);
+  assert.equal(wire.schemaVersion, 7);
   assert.equal('inboundDialectPassthrough' in wire.listener, false);
   assert.equal(endpoint.protocol, 'openai');
   assert.equal('pools' in wire, false);
@@ -842,7 +842,7 @@ test('save adapter emits only Rust v6 endpoint and routing fields', () => {
 
 test('legacy pool-level model rules are handled by the server migration', () => {
   assert.throws(() => toWireConfig({ schemaVersion: 5, listener: {}, pools: [] }), /不允许 pools/);
-  const wire = toWireConfig({ schemaVersion: 6, listener: {}, endpoints: [
+  const wire = toWireConfig({ schemaVersion: 7, listener: {}, endpoints: [
     { id: 'empty', protocol: 'auto', mappings: [] },
     { id: 'explicit', protocol: 'auto', mappings: [{ from: 'gpt-*', to: 'gpt-5', thinking: 'disable', context: 'passThrough' }] },
   ] });
@@ -857,9 +857,9 @@ test('legacy schema is rejected by the UI adapter and server owns migration', ()
     schemaVersion: 3,
     listener: { inboundDialectPassthrough: true },
     pools: [{ endpoints: [{ id: 'a', protocol: 'anthropic' }] }],
-  } }), /仅支持 schema v6/);
+  } }), /仅支持 schema v7/);
   const ui = fromWireConfig({ config: {
-    schemaVersion: 6,
+    schemaVersion: 7,
     listener: {},
     endpoints: [{ id: 'a', protocol: 'auto' }, { id: 'b', protocol: 'auto' }],
   } });
@@ -888,9 +888,9 @@ test('provider-models API posts endpointID and normalizes the catalog response',
   assert.match(result.updatedAt, /^\d+$/);
 });
 
-test('v6 flat endpoints preserve provider order, mappings, and endpoint fields', () => {
+test('v7 flat endpoints preserve provider order, mappings, and endpoint fields', () => {
   const wireDocument = {
-    schemaVersion: 6,
+    schemaVersion: 7,
     listener: { authToken: '', host: '127.0.0.1', port: 57878 },
     retry: {},
     featureRules: [],
@@ -945,14 +945,14 @@ test('v6 flat endpoints preserve provider order, mappings, and endpoint fields',
 
 test('legacy fixed IP aliases are ignored and never written back', () => {
   const legacy = fromWireConfig({ config: {
-    schemaVersion: 6,
+    schemaVersion: 7,
     retry: { pinnedIPConcurrency: 3 },
     endpoints: [{ id: 'legacy', pinnedIP: '203.0.113.3', pinnedIPs: ['203.0.113.4'], pinnedIPExclusive: true }],
   } });
   assert.equal('pinnedIP' in legacy.config.endpoints[0], false);
   assert.equal('pinnedIPs' in legacy.config.endpoints[0], false);
   assert.equal('pinnedIPExclusive' in legacy.config.endpoints[0], false);
-  const cleared = toWireConfig({ schemaVersion: 6, retry: { pinnedIPConcurrency: 1 }, endpoints: [{ id: 'clear', pinnedIP: '203.0.113.99', pinnedIPs: ['203.0.113.1'] }] });
+  const cleared = toWireConfig({ schemaVersion: 7, retry: { pinnedIPConcurrency: 1 }, endpoints: [{ id: 'clear', pinnedIP: '203.0.113.99', pinnedIPs: ['203.0.113.1'] }] });
   assert.equal('pinnedIP' in cleared.endpoints[0], false);
   assert.equal('pinnedIPs' in cleared.endpoints[0], false);
   assert.equal('pinnedIPConcurrency' in cleared.retry, false);
@@ -960,7 +960,7 @@ test('legacy fixed IP aliases are ignored and never written back', () => {
 
 test('editing UI mapping aliases does not drop thinking, context, or failover timeout', () => {
   const ui = fromWireConfig({ config: {
-    schemaVersion: 6,
+    schemaVersion: 7,
     endpoints: [{ id: 'ep', mappings: [{
       clientPattern: 'client-model', upstreamModel: 'upstream-model', thinking: 'adaptive',
       context: 'strip', failoverTimeoutSeconds: 11,
@@ -1068,6 +1068,35 @@ test('diagnostic capture write response remains an index without plaintext body'
   assert.ok(Array.isArray(index.records));
   assert.equal(index.recordCount, index.records.length);
   assert.equal(Object.prototype.hasOwnProperty.call(index.records[0] || {}, 'inboundBody'), false);
+});
+
+test('runtime project sticky clear posts projectID and is idempotent', async () => {
+  // 线上形状:POST /runtime/projects/sticky-clear,body 是 camelCase 的 projectID。
+  let captured;
+  const original = api.request.bind(api);
+  api.request = async (path, options) => {
+    captured = { path, options };
+    return { cleared: 1, matched: 1 };
+  };
+  try {
+    await api.clearProjectSticky('sha256:abc123');
+  } finally {
+    api.request = original;
+  }
+  assert.equal(captured.path, '/runtime/projects/sticky-clear');
+  assert.equal(captured.options.method, 'POST');
+  assert.deepEqual(JSON.parse(captured.options.body), { projectID: 'sha256:abc123' });
+
+  // mock:首次清除返回计数,重复调用幂等返回 0;空 projectID 在 400 被拒。
+  const first = await api.clearProjectSticky('project-sticky-contract');
+  assert.equal(first.cleared, 1);
+  assert.equal(first.matched, 1);
+  const again = await api.clearProjectSticky('project-sticky-contract');
+  assert.equal(again.cleared, 0);
+  await assert.rejects(
+    () => api.clearProjectSticky('   '),
+    (error) => error.status === 400 && error.code === 'project_id_required',
+  );
 });
 
 test('runtime mock session export and delete update the visible aggregate', async () => {
@@ -1412,4 +1441,13 @@ test('安全页面归因引导:三态文案齐全、命令可复制、三个陷�
   );
   assert.match(CC_ATTRIBUTION_HINT.message, /实际运行/);
   assert.match(CC_ATTRIBUTION_HINT.hint, /SSH/);
+});
+
+
+test('Guardian compatibility header appears in role, summary and analytics', () => {
+  const metadata = { subagentHeader: 'guardian', sessionID: 'session', isSubagent: true };
+  assert.equal(codexAgentRoleLabel(metadata), 'Guardian 安全审查');
+  assert.match(codexMetadataSummary(metadata), /^Guardian 安全审查/);
+  assert.deepEqual(codexDimensionValues(metadata, 'subagentKind'), ['Guardian 安全审查']);
+  assert.deepEqual(codexDimensionValues({subagentHeader:'collab_spawn'}, 'subagentKind'), ['collab_spawn']);
 });

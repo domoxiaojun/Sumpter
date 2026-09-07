@@ -3,6 +3,8 @@
 > 适用范围：本仓库 Linux 与 macOS 两套代理实现。
 >
 > 本文按当前源码整理，区分四类数据：**客户端原始请求参数**、**代理生成的运行事件**、**Codex 回合元数据**、**诊断抓包数据**。这四类字段不能混为一谈。
+>
+> 归因字段于 2026-09-07 对照本地 Codex `121f91fd5d` 的 `codex-rs/core/src/responses_metadata.rs` 复核。本文其它协议转换段落为迁移参考；当前转发契约以 `docs/architecture.md` 为准。Sumpter 的解析入口是 `crates/sumpter-core/src/events.rs`。
 
 ## 1. 先明确四类字段
 
@@ -209,11 +211,15 @@ bodyCanonical
 | `agentName` | `agent_name` | 完整 AgentPath，例如 `/root/worker`；不是文件系统路径 | 否 |
 | `turnID` | `turn_id` | 当前回合 ID | 否 |
 | `windowID` | `window_id` | Codex 窗口标识 | 否 |
+| `windowNumber` | `window_number` | 上下文窗口序号，非负整数，0 是有效值 | 否 |
+| `contextWindowID` | `context_window_id` | 上下文窗口 ID，不作为会话或项目 ID | 否 |
 | `requestKind` | `request_kind` | Codex 请求类型，例如 `turn`、`memory` | 否 |
 | `forkedFromThreadID` | `forked_from_thread_id` | 当前线程从哪个线程 fork | 否 |
+| `forkedFromOrdinalExclusive` | `forked_from_ordinal_exclusive` | fork 历史排他边界序号，非负整数 | 否 |
 | `parentThreadID` | `parent_thread_id` | 父线程 ID | 否 |
 | `parentTurnID` | `parent_turn_id` | 父回合 ID | 否 |
 | `rootTurnID` | `root_turn_id` | 根回合 ID | 否 |
+| `turnTrigger` | `turn_trigger` | 回合触发来源，只作有界标签记录 | 否 |
 
 ### 7.2 子代理与线程来源
 
@@ -246,6 +252,7 @@ isSubagent =
 | `autoReviewEnabled` | `auto_review_enabled` | 是否启用自动审查 |
 | `nodeReplAutoReviewRequired` | `node_repl_auto_review_required` | Node REPL 是否必须经过自动审查 |
 | `nodeReplDisabled` | `node_repl_disabled` | 是否禁用 Node REPL |
+| `historyIngestRequested` | `history_ingest_requested` | 是否请求历史导入；false 与未记录分开保存 |
 | `turnStartedAtUnixMS` | `turn_started_at_unix_ms` | 回合开始时间，Unix 毫秒 |
 
 ### 7.4 工作区 `workspaces`
@@ -579,6 +586,17 @@ Header 结构仅包含：
 ---
 
 ## 12. 子代理判断边界
+
+### 12.0 Guardian、WebSocket 与项目归因
+
+- `x-openai-subagent=guardian` 是 Codex 内部 Guardian 安全审查身份。界面显示「Guardian 安全审查」，保留原始 Header 与 `isSubagent` 兼容字段。
+- `codexThreadClass` 优先使用 canonical `thread_source`；没有它时，仅用已知的 `subagent_kind` / `x-openai-subagent` 值回退。例如 `guardian` → `guardian_review`，`memory_consolidation` → `memory_consolidation`。不伪造 `threadSource`。
+- 有结构化工作区或明确项目声明时仍归属该项目；只有内部功能身份、没有项目证据时归为 `internal_feature`。不能从 session/thread ID 或模型名称猜项目。
+- WebSocket 首帧的顶层与 `response` 嵌套元数据都会合并。Body 投影优先于握手兼容 Header，保留工作区、父子关系、工具信息及新增字段；冲突只记字段名与来源。这里只观察首帧，不宣称完成了长连接内逐回合统计。
+- SQLite 投影版本 8 会重算仍保有 payload 的旧事件分类；此前未保存的 Body 字段无法凭空补回。
+- `body is not JSON` 表示代理入口解析失败，并不表示 Guardian 审查否决。此时仅能保留 Header 身份。JSON 推理入口现支持 zstd/gzip 请求解压：先认证，限制解压后大小，移除失效的 Content-Encoding/Content-Length，再解析归因字段。资源与 multipart 请求不进入此解压分支。未知编码、损坏压缩流和超限分别返回明确错误。该兼容处理不能证明截图实例的根因；用户已选择跳过远端核验，仍缺该实例的 Content-Type、Content-Encoding、请求体字节数等证据。
+
+新增的五个 canonical 字段支持详情、JSON 导出和持久化；不将上下文窗口或 fork 序号新增为项目统计分组，也不改写原始请求。`turnTrigger`、`contextWindowID` 曾可能进入字符串 extras，新版本将其提升为有类型的字段；三个整数/布尔字段此前会被忽略。
 
 ### 12.1 可以确认子代理的证据
 

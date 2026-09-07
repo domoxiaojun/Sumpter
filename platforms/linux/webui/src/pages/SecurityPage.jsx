@@ -1,3 +1,4 @@
+import { UnifiedAttributionPanel } from '../components/UnifiedAttributionPanel.jsx';
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext.jsx';
 import { StatusBadge } from '../components/StatusBadge.jsx';
@@ -333,8 +334,7 @@ export function SecurityPage() {
         </div>
       </div>
 
-      <CCAttributionGuidePanel />
-      <GrokAttributionGuidePanel />
+      <UnifiedAttributionPanel />
     </div>
   );
 }

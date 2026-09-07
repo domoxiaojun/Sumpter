@@ -28,3 +28,16 @@ test('help onboarding follows the six-state contract and uses existing snapshots
   );
 });
 
+test('model groups determine availability even without source mappings', () => {
+  const config = {
+    endpoints: [{ id: 'a', enabled: true, mappings: [] }],
+    modelGroups: [{ id: 'main', models: ['gpt-*'], bindings: [{ endpointID: 'a', models: ['gpt-x'] }] }],
+  };
+  const state = () => getOnboardingState({ config, status: { running: true } });
+  assert.equal(state(), ONBOARDING_STATES.CLIENT_NOT_CONNECTED);
+  config.modelGroups[0].enabled = false;
+  assert.equal(state(), ONBOARDING_STATES.NO_MAPPING);
+  config.endpoints[0].mappings = [{ clientPattern: '*' }];
+  config.modelGroups = [];
+  assert.equal(state(), ONBOARDING_STATES.NO_MAPPING);
+});

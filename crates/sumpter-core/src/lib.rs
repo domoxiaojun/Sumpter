@@ -25,3 +25,5 @@ pub use routing::{
     PlannedEndpoint, RequestPurpose, RouteMode, RoutePlan, RoutePlanError, RoutePlanner,
     RoutingRequest,
 };
+
+pub mod model_groups;

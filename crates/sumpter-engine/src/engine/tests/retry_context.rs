@@ -3,6 +3,40 @@
 use std::time::Duration;
 
 use crate::engine::context::observed_session_id;
+use crate::engine::context::{detect_client_kind, retain_codex_metadata_for_client};
+use sumpter_core::events::{ClientKind, CodexMetadata};
+
+#[test]
+fn pi_explicit_identity_and_session_headers_have_stable_precedence() {
+    let mut headers = vec![
+        ("User-Agent".into(), "claude-cli/1.0".into()),
+        ("X-Sumpter-Client".into(), "pi".into()),
+        ("session_id".into(), "native".into()),
+        ("X-Sumpter-Session-ID".into(), "explicit".into()),
+    ];
+    assert_eq!(detect_client_kind(&headers, false), ClientKind::Pi);
+    assert_eq!(observed_session_id(&headers).as_deref(), Some("explicit"));
+    assert!(
+        retain_codex_metadata_for_client(
+            ClientKind::Pi,
+            CodexMetadata::from_request(&headers, None)
+        )
+        .is_none()
+    );
+    headers.clear();
+    for name in [
+        "session_id",
+        "session-id",
+        "x-session-id",
+        "x-session-affinity",
+    ] {
+        assert_eq!(
+            observed_session_id(&[(name.into(), "session".into())]).as_deref(),
+            Some("session")
+        );
+    }
+    assert!(observed_session_id(&[("x-client-request-id".into(), "request".into())]).is_none());
+}
 use crate::engine::dispatch::{retry_after_seconds, retry_backoff_delay};
 
 fn assert_seconds(actual: Duration, expected: f64) {

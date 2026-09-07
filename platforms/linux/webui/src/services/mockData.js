@@ -1,7 +1,7 @@
 // Complete mock datasets mirroring Linux/Rust v6 runtime & macOS presentation parity
 
 export const mockConfig = {
-  schemaVersion: 6,
+  schemaVersion: 7,
   listener: {
     host: '127.0.0.1',
     port: 57878,

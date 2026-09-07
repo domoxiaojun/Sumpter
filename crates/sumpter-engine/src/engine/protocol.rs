@@ -33,6 +33,7 @@ pub(super) fn source_format_for_passthrough(kind: PassthroughKind) -> ProviderPr
         | PassthroughKind::Realtime
         | PassthroughKind::Models
         | PassthroughKind::Raw => ProviderProtocol::OpenAI,
+        PassthroughKind::GeminiGenerate => ProviderProtocol::Gemini,
     }
 }
 
@@ -53,6 +54,7 @@ pub(super) fn required_native_protocol(kind: PassthroughKind) -> Option<Provider
         | PassthroughKind::Models => None,
         PassthroughKind::ImagesGenerations | PassthroughKind::ImagesEdits => None,
         PassthroughKind::Chat | PassthroughKind::Responses => None,
+        PassthroughKind::GeminiGenerate => Some(ProviderProtocol::Gemini),
     }
 }
 
@@ -79,6 +81,7 @@ pub(super) fn translation_supported(
                 ProviderProtocol::OpenAI => bridge_in::check_chat_to_anthropic(&body),
                 ProviderProtocol::OpenAIResponses => bridge_in::check_responses_to_anthropic(&body),
                 ProviderProtocol::Anthropic => unreachable!(),
+                ProviderProtocol::Gemini => unreachable!(),
             }?;
             bridge::check_anthropic_translation(
                 request,
@@ -86,6 +89,9 @@ pub(super) fn translation_supported(
                 request_build::server_retrieval_enabled(endpoint, request, purpose),
             )
         }
+        ProviderProtocol::Gemini => Err(bridge::TranslationError::InvalidInput(
+            "Gemini requires native passthrough".into(),
+        )),
     }
 }
 
@@ -100,6 +106,15 @@ pub(super) fn route_intent_for_path(
     client_kind: ClientKind,
 ) -> &'static str {
     let path = path_without_query(path_and_query);
+    if is_gemini_generate_path(path) {
+        return if path.ends_with(":countTokens") {
+            "token_count"
+        } else if path.ends_with(":embedContent") {
+            "embedding"
+        } else {
+            "gemini_generate"
+        };
+    }
     if path == "/v1/messages/count_tokens" || path == "/messages/count_tokens" {
         return "token_count";
     }
@@ -315,7 +330,9 @@ pub(super) fn has_exact_realtime_mapping(
 /// Unknown non-control paths intentionally become Raw so vendor-specific
 /// resources do not require another engine release just to be reachable.
 pub(super) fn native_passthrough_kind(path: &str) -> PassthroughKind {
-    if is_openai_resource_tree(path, "models") {
+    if is_gemini_generate_path(path) {
+        PassthroughKind::GeminiGenerate
+    } else if is_openai_resource_tree(path, "models") {
         PassthroughKind::Models
     } else if is_openai_resource_tree(path, "files") {
         PassthroughKind::Files
@@ -326,6 +343,31 @@ pub(super) fn native_passthrough_kind(path: &str) -> PassthroughKind {
     } else {
         PassthroughKind::Raw
     }
+}
+
+/// Gemini Developer API native generation endpoints. Keep the accepted
+/// version prefixes narrow so unrelated vendor paths still use the generic
+/// raw relay and do not receive Gemini authentication headers.
+pub(super) fn is_gemini_generate_path(path: &str) -> bool {
+    gemini_model_from_path(path).is_some()
+}
+
+pub(super) fn gemini_model_from_path(path: &str) -> Option<String> {
+    let rest = path
+        .strip_prefix("/v1beta/models/")
+        .or_else(|| path.strip_prefix("/v1/models/"))?;
+    let (model, operation) = rest.split_once(':')?;
+    if !matches!(
+        operation,
+        "generateContent" | "streamGenerateContent" | "countTokens" | "embedContent"
+    ) {
+        return None;
+    }
+    crate::request_build::valid_gemini_model(model).then(|| model.to_string())
+}
+
+pub(super) fn gemini_stream_path(path: &str) -> bool {
+    is_gemini_generate_path(path) && path.ends_with(":streamGenerateContent")
 }
 
 pub(super) fn is_openai_resource_tree(path: &str, resource: &str) -> bool {

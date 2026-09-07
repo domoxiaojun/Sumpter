@@ -75,7 +75,7 @@ pub fn events_page_on(
                 source_format,target_format,route_mode,upstream_status_code,\
                 duration_ms,ttfb_ms,failover,project_name,project_source,local_user,\
                 codex_thread_class,attribution_scope \
-                ,request_method,request_path,route_intent \
+                ,request_method,request_path,route_intent,model_group_id,model_group_name \
          FROM runtime_events{where_sql} ORDER BY seq DESC LIMIT ? OFFSET ?"
     );
     let events = {
@@ -118,6 +118,8 @@ pub fn events_page_on(
                 request_method: row.get(33)?,
                 request_path: row.get(34)?,
                 route_intent: row.get(35)?,
+                model_group_id: row.get(36)?,
+                model_group_name: row.get(37)?,
             })
         })?;
         rows.map(|row| row.map(event_list_item_from_projection))

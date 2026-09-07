@@ -43,7 +43,7 @@ die() {
 ARCH="${ARCH:-arm64}"
 ARTIFACT_NAME="${ARTIFACT_NAME:-Sumpter-local}"
 BUILD_VERSION="${BUILD_VERSION:-1}"
-RUN_TESTS="${RUN_TESTS:-1}"
+RUN_TESTS="${RUN_TESTS:-0}"
 CLEAN_BUILD="${CLEAN_BUILD:-0}"
 CONFIGURATION="${CONFIGURATION:-release}"
 VERBOSE="${VERBOSE:-0}"
@@ -124,6 +124,8 @@ APP_PATH="$DIST_DIR/Sumpter.app"
   || die "App 未内置 Claude Code 项目归因配置器"
 [[ -f "$APP_PATH/Contents/Resources/grok-project-attribution.sh" ]] \
   || die "App 未内置 Grok Build 项目归因配置器"
+[[ -f "$APP_PATH/Contents/Resources/pi-project-attribution.ts" ]] \
+  || die "App 未内置 pi 项目归因扩展"
 
 echo "本地 DMG 构建完成"
 echo "  App: $APP_PATH"

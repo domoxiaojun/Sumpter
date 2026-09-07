@@ -1,4 +1,4 @@
-//! v6 配置 golden：Linux 与 macOS 共用扁平 Provider 候选序列。
+//! v7 配置 golden：Linux 与 macOS 共用扁平 Provider 候选序列。
 
 use sumpter_core::config::*;
 
@@ -10,7 +10,7 @@ fn assert_value_roundtrip(source: &str) {
     let reencoded = config.to_json_pretty().expect("encode");
     let original: serde_json::Value = serde_json::from_str(source).unwrap();
     let ours: serde_json::Value = serde_json::from_str(&reencoded).unwrap();
-    assert_eq!(original, ours, "v6 配置 round-trip 发生字段漂移");
+    assert_eq!(original, ours, "v7 配置 round-trip 发生字段漂移");
 }
 
 #[test]

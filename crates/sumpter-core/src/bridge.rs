@@ -260,6 +260,9 @@ pub fn check_anthropic_translation(
         ProviderProtocol::OpenAIResponses => {
             check_anthropic_to_openai_responses(request, websearch)
         }
+        ProviderProtocol::Gemini => Err(TranslationError::UnsupportedField(
+            "Anthropic to Gemini translation is not supported; use native Gemini requests".into(),
+        )),
     }
 }
 

@@ -1,7 +1,7 @@
 //! Linux 配置目录与持久化。
 //!
 //! `config.json` 与 `stats.json` 都属于 daemon。配置严格要求当前 schema；
-//! schema v3/v4/v5 会先保留原始备份再原子迁移到 v6。所有含密钥的写入均使用
+//! schema v3/v4/v5/v6 会先保留原始备份再原子迁移到 v7。所有含密钥的写入均使用
 //! 同目录临时文件、0600 权限和原子 rename。
 
 use std::collections::HashMap;
@@ -229,7 +229,7 @@ impl ConfigDir {
         Ok(())
     }
 
-    /// 加载当前 schema 配置；schema v3/v4/v5 会先备份原始文件并原子迁移到 v6。
+    /// 加载当前 schema 配置；schema v3/v4/v5/v6 会先备份原始文件并原子迁移到 v7。
     /// 不提前归一化，调用方必须先校验原始值，再执行 `normalized()`，避免负数
     /// 等非法输入在校验前被静默 clamp。
     pub fn load_config(&self) -> Result<AppConfig, ConfigLoadError> {
@@ -264,7 +264,7 @@ impl ConfigDir {
             version,
             Some(v) if v == u64::from(MIGRATABLE_SCHEMA_V3)
                 || v == u64::from(MIGRATABLE_SCHEMA_V4)
-                || v == u64::from(MIGRATABLE_SCHEMA_V5)
+                || v == u64::from(MIGRATABLE_SCHEMA_V5) || v == 6
         ) {
             return Err(ConfigLoadError::Schema {
                 path,
@@ -336,12 +336,12 @@ impl ConfigDir {
     ) -> Result<ConfigLoadResult, ConfigLoadError> {
         let path = self.config_path();
         let stamp = migration_stamp();
-        let backup_file = format!("config.before-schema-v6-{stamp}.json");
+        let backup_file = format!("config.before-schema-v{SCHEMA_VERSION}-{stamp}.json");
         let backup_path = self.root.join(&backup_file);
         let (endpoint_count, converted_to_auto_endpoint_ids) = match from_schema {
             MIGRATABLE_SCHEMA_V3 => migrate_v3_value(&mut value),
             MIGRATABLE_SCHEMA_V4 => migrate_v4_value(&mut value),
-            MIGRATABLE_SCHEMA_V5 => Ok((0, Vec::new())),
+            MIGRATABLE_SCHEMA_V5 | 6 => Ok((0, Vec::new())),
             _ => unreachable!("unsupported migration schema {from_schema}"),
         }
         .map_err(|message| ConfigLoadError::MigrationInvalid {
@@ -371,10 +371,18 @@ impl ConfigDir {
             path: path.clone(),
             message,
         })?;
-        let migrated_config = serde_json::from_value::<AppConfig>(value).map_err(|source| {
+        let mut migrated_config = serde_json::from_value::<AppConfig>(value).map_err(|source| {
             ConfigLoadError::Parse {
                 path: path.clone(),
                 source,
+            }
+        })?;
+
+        migrated_config.migrate_model_groups();
+        migrated_config.validate_model_groups().map_err(|message| {
+            ConfigLoadError::MigrationInvalid {
+                path: path.clone(),
+                message,
             }
         })?;
 
@@ -385,7 +393,7 @@ impl ConfigDir {
             }
         })?;
 
-        // 旧 schema 先解码为当前强类型配置，再重新序列化为 v6。这样只保留当前
+        // 旧 schema 先解码为当前强类型配置，再重新序列化为 v7。这样只保留当前
         // AppConfig 明确定义的字段，所有不再属于现行 wire 的未知旧字段自然丢弃。
         let mut migrated_data = serde_json::to_vec_pretty(&migrated_config).map_err(|source| {
             ConfigLoadError::Parse {
@@ -422,7 +430,7 @@ impl ConfigDir {
                 "pools[].endpoints[].searchDialect".into(),
             ],
             MIGRATABLE_SCHEMA_V4 => Vec::new(),
-            MIGRATABLE_SCHEMA_V5 => Vec::new(),
+            MIGRATABLE_SCHEMA_V5 | 6 => Vec::new(),
             _ => unreachable!("unsupported migration schema {from_schema}"),
         };
         removed_fields.extend(removed_pool_fields);
@@ -432,7 +440,7 @@ impl ConfigDir {
         removed_fields.sort();
         removed_fields.dedup();
         let notice = MigrationNotice {
-            id: format!("schema-v{from_schema}-to-v6-{stamp}"),
+            id: format!("schema-v{from_schema}-to-v{SCHEMA_VERSION}-{stamp}"),
             from_schema,
             to_schema: SCHEMA_VERSION,
             backup_file,
@@ -663,7 +671,7 @@ pub enum ConfigLoadError {
         path: PathBuf,
         source: serde_json::Error,
     },
-    #[error("配置 {path} 的 schema v6 wire 无效: {message}")]
+    #[error("配置 {path} 的 schema v7 wire 无效: {message}")]
     Wire { path: PathBuf, message: String },
     #[error("配置 {path} 的 schemaVersion 必须显式为 {expected}，当前为 {found:?}")]
     Schema {
@@ -686,9 +694,9 @@ pub enum ConfigLoadError {
     MigrationInvalid { path: PathBuf, message: String },
     #[error("创建 schema 迁移备份失败 {path}: {source}")]
     MigrationBackup { path: PathBuf, source: io::Error },
-    #[error("写入 schema v6 配置失败 {path}: {source}")]
+    #[error("写入 schema v7 配置失败 {path}: {source}")]
     MigrationWrite { path: PathBuf, source: io::Error },
-    #[error("schema v6 配置 {path} 写入后验证失败: {verify_error}; 回滚错误: {rollback_error:?}")]
+    #[error("schema v7 配置 {path} 写入后验证失败: {verify_error}; 回滚错误: {rollback_error:?}")]
     MigrationVerify {
         path: PathBuf,
         verify_error: String,
@@ -723,10 +731,10 @@ fn validate_current_wire(value: &Value) -> Result<(), String> {
         .and_then(Value::as_object)
         .is_some_and(|listener| listener.contains_key("inboundDialectPassthrough"))
     {
-        return Err("schema v6 不允许 listener.inboundDialectPassthrough".into());
+        return Err("schema v7 不允许 listener.inboundDialectPassthrough".into());
     }
     if root.contains_key("pools") {
-        return Err("schema v6 不允许 pools；请先完成 Provider 候选迁移".into());
+        return Err("schema v7 不允许 pools；请先完成 Provider 候选迁移".into());
     }
     let endpoints = match root.get("endpoints") {
         None => &[][..],
@@ -773,6 +781,14 @@ fn validate_current_wire(value: &Value) -> Result<(), String> {
             }
         }
     }
+    if root.contains_key("modelGroups") {
+        if root.get("modelGroups").is_some_and(Value::is_null) {
+            return Err("modelGroups 必须是数组；省略该字段才表示兼容旧扁平路由".into());
+        }
+        let config: AppConfig =
+            serde_json::from_value(value.clone()).map_err(|e| format!("配置格式无效: {e}"))?;
+        config.validate_model_groups()?;
+    }
     Ok(())
 }
 
@@ -783,6 +799,10 @@ fn migrate_provider_pools_value(value: &mut Value) -> Result<(usize, Vec<String>
         .as_object_mut()
         .ok_or_else(|| "配置根节点必须是对象".to_string())?;
     let Some(pools_value) = root.remove("pools") else {
+        let endpoint_count = root
+            .get("endpoints")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
         if !root.contains_key("endpoints") {
             root.insert("endpoints".into(), Value::Array(Vec::new()));
         }
@@ -790,7 +810,7 @@ fn migrate_provider_pools_value(value: &mut Value) -> Result<(usize, Vec<String>
             "schemaVersion".into(),
             Value::Number(serde_json::Number::from(SCHEMA_VERSION)),
         );
-        return Ok((0, Vec::new()));
+        return Ok((endpoint_count, Vec::new()));
     };
     let pools = pools_value
         .as_array()
@@ -1265,6 +1285,54 @@ mod tests {
     }
 
     #[test]
+    fn v6_file_migration_preserves_settings_and_does_not_repeat() {
+        let dir = temp_dir("schema-v6-model-groups");
+        dir.ensure_exists().unwrap();
+        let original = json!({
+            "schemaVersion": 6, "retry": {"max500Retries": 3, "failoverOn500": false},
+            "endpoints": [{"id":"a", "protocol":"auto", "baseURL":"https://example.invalid",
+                "priority":7, "stickyGroup":"existing", "mappings":[{"clientPattern":"gpt-*", "effort":"high"}]}]
+        });
+        let bytes = serde_json::to_vec_pretty(&original).unwrap();
+        std::fs::write(dir.config_path(), &bytes).unwrap();
+        let first = dir.load_config_with_notice().unwrap();
+        let notice = first.migration_notice.unwrap();
+        assert_eq!(notice.endpoint_count, 1);
+        assert_eq!(
+            std::fs::read(dir.root.join(notice.backup_file)).unwrap(),
+            bytes
+        );
+        assert_eq!(first.config.retry.max_500_retries, 3);
+        assert!(!first.config.retry.failover_on_500);
+        let groups = first.config.model_groups.as_ref().unwrap();
+        assert_eq!(groups[0].bindings[0].priority, 7);
+        assert_eq!(groups[0].models, ["gpt-*"]);
+        assert_eq!(
+            first.config.endpoints[0].sticky_group.as_deref(),
+            Some("existing")
+        );
+        assert!(
+            dir.load_config_with_notice()
+                .unwrap()
+                .migration_notice
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn flatten_without_pools_reports_existing_endpoint_count() {
+        let mut value = json!({
+            "schemaVersion": 6,
+            "listener": {},
+            "endpoints": [{"id": "a"}, {"id": "b"}]
+        });
+        let (count, removed) = migrate_provider_pools_value(&mut value).unwrap();
+        assert_eq!(count, 2);
+        assert!(removed.is_empty());
+        assert_eq!(value["schemaVersion"], json!(SCHEMA_VERSION));
+    }
+
+    #[test]
     fn current_wire_requires_explicit_four_state_protocol_and_rejects_legacy_switch() {
         let mut value = json!({
             "schemaVersion": SCHEMA_VERSION,
@@ -1325,9 +1393,6 @@ mod tests {
 
     #[test]
     fn v3_file_migration_keeps_owner_only_backup_and_is_idempotent() {
-        if SCHEMA_VERSION != 6 {
-            return;
-        }
         let dir = temp_dir("schema-v5-migration");
         dir.ensure_exists().unwrap();
         let original = json!({
@@ -1412,7 +1477,7 @@ mod tests {
                 entry
                     .file_name()
                     .to_string_lossy()
-                    .starts_with("config.before-schema-v6-")
+                    .starts_with("config.before-schema-v7-")
             })
             .count();
         assert_eq!(backups, 1);
@@ -1420,9 +1485,6 @@ mod tests {
 
     #[test]
     fn v4_file_migration_keeps_owner_only_backup_and_is_idempotent() {
-        if SCHEMA_VERSION != 6 {
-            return;
-        }
         let dir = temp_dir("schema-v4-migration");
         dir.ensure_exists().unwrap();
         let original = json!({
@@ -1508,7 +1570,7 @@ mod tests {
                 entry
                     .file_name()
                     .to_string_lossy()
-                    .starts_with("config.before-schema-v6-")
+                    .starts_with("config.before-schema-v7-")
             })
             .count();
         assert_eq!(backups, 1);
@@ -1596,7 +1658,7 @@ mod tests {
                 .all(|entry| !entry
                     .file_name()
                     .to_string_lossy()
-                    .starts_with("config.before-schema-v6-"))
+                    .starts_with("config.before-schema-v7-"))
         );
     }
 

@@ -5,14 +5,14 @@
 1. **源码 monorepo**：本文件位于 `platforms/linux/README.md`。Rust 真源是仓库根 workspace 的 `sumpter-core` / `sumpter-runtime` / `sumpter-engine` 与 `sumpterd-linux`。
 2. **独立发布包**：发布阶段把 `platforms/linux/` 提升为包根。包内二进制名为 `sumpterd`，配置目录 `~/.config/sumpter` 或 `/var/lib/sumpter`，systemd 单元 `sumpter.service`，环境变量 `SUMPTER_*`。
 
-Linux 版以 standalone daemon 提供多协议代理、扁平 Provider 入口、分流规则、failover、统计，以及与桌面 UI 信息架构对齐的本机 Web 管理界面。
+Linux 版以 standalone daemon 提供多协议代理、入口库、多个模型组、分流规则、failover、统计，以及与桌面 UI 信息架构对齐的本机 Web 管理界面。
 
 Linux 专属边界：
 
 - proxy listener：由 `config.json.listener.host/port` 决定，默认 `127.0.0.1:57878`。
 - Admin/Web listener：默认 `127.0.0.1:57879`；可用启动参数或环境变量覆盖（见下文）。
-- 配置：当前使用 schema v6 `config.json`；自动迁移 schema v3/v4/v5，其他旧格式和旧 `keys.json`
-  不读取。迁移会先创建 0600 的 `config.before-schema-v6-*.json` 原始备份，再原子写入并验证；已废弃入口字段会在迁移时删除。
+- 配置：当前使用 schema v7 `config.json`；自动迁移 schema v3/v4/v5/v6，其他旧格式和旧 `keys.json`
+  不读取。迁移会先创建 0600 的 `config.before-schema-v7-*.json` 原始备份，再原子写入并验证；已废弃入口字段会在迁移时删除。
 - Web Admin：默认从配置目录 `admin-password` 初始化内置登录，会话使用 HttpOnly Cookie + CSRF；不提供通知页、Claude Hook 或 `/__notify`。
 - 进程：默认前台运行，适合 systemd；SIGHUP 热重载，SIGTERM/SIGINT 优雅退出。
 - 发行版：面向通用 systemd Linux（含 Fedora/RHEL 与 Debian/Ubuntu）；静态 musl 二进制，不依赖发行版 glibc 包。
@@ -41,7 +41,10 @@ sumpter-linux-<arch>/
 │   ├── bootstrap-install.sh
 │   ├── bootstrap-uninstall.sh
 │   ├── uninstall.sh
-│   └── cc-project-attribution.sh        # Claude Code 项目统计配置器(可选)
+│   ├── cc-project-attribution.sh        # Claude Code 项目归因配置器(可选)
+│   ├── grok-project-attribution.sh      # Grok Build 项目归因配置器(可选)
+│   ├── gemini-sumpter-wrapper.mjs       # Gemini CLI 启动包装脚本(可选)
+│   └── pi-project-attribution.ts        # pi 项目与会话归因扩展(可选)
 ├── specs/admin-api.md
 ├── sumpter.service
 ├── sumpter-system.service
@@ -217,19 +220,19 @@ install -m 600 ./config.example.json "$config_base/sumpter/config.json"
 ```
 
 > 不要用桌面/Rust 版本的 `config.toml` 内容覆盖这里的 `config.json`，也不要把它直接改名为
-> `config.json`。Linux daemon 只解析 schema v6 JSON；名为 `config.toml` 的文件不会被读取，
+> `config.json`。Linux daemon 只解析 schema v7 JSON；名为 `config.toml` 的文件不会被读取，
 > TOML 内容一旦放进 `config.json` 会让 daemon 在 Admin 端口启动前退出，WebUI 随后只能显示
 > “无法连接管理接口 / Failed to fetch”。请以 `config.example.json` 为结构，通过 WebUI 或人工把
 > Provider、模型和路由值转换到 JSON。
 
 若配置目录已有 `admin-password`，但既没有 `config.json` 也没有旧 `keys.json`，daemon 会创建
-安全的 schema v6 bootstrap 空配置；显式安装示例的好处是能直接看到字段结构和停用的合成入口。
+安全的 schema v7 bootstrap 空配置；显式安装示例的好处是能直接看到字段结构和停用的合成入口。
 
 示例入口全部 `enabled:false`，域名使用 `.invalid`，secret 为合成的 `sk-test-...`；替换真实
 地址和 secret 后再启用。`config.json` 含明文 secret，权限必须保持 0600。
 
 > 旧 Linux Swift 版的 `keys.json` 不会自动迁移。配置目录只有 `keys.json` 时，新 daemon
-> 必须报错并非零退出，且不能改写原文件。请先备份旧文件，再人工转换为 schema v6 `config.json`；
+> 必须报错并非零退出，且不能改写原文件。请先备份旧文件，再人工转换为 schema v7 `config.json`；
 > 不要通过删除旧文件来掩盖未完成的转换。
 
 ## 启动与连接
@@ -424,7 +427,7 @@ loopback + HTTPS 反代更简单。
    sudo systemctl reload sumpter
    ```
 
-也可调用 `POST /admin/api/reload`。上述入口使用同一条 reload 路径：先读取并验证完整 v6 配置，
+也可调用 `POST /admin/api/reload`。上述入口使用同一条 reload 路径：先读取并验证完整 v7 配置，
 再替换 Engine；proxy host/port 变化时重绑 proxy listener，Admin 57879 保持在线。失败时保留
 上一份运行配置，并通过日志/diagnostics 报错。
 
@@ -586,7 +589,7 @@ docker compose down          # 保留 ./config
 
 ## 配置中的重试语义
 
-schema v6 的全局 `retry`：
+schema v7 的全局 `retry`：
 
 - `responseTimeoutSeconds:null`：代理不额外限制收到完整响应头的时间。
 - `streamIdleTimeoutSeconds:null`：流式响应可无限空闲。
@@ -609,7 +612,7 @@ schema v6 的全局 `retry`：
 
 Claude Code 的 `/v1/messages` 与 Codex/OpenAI 客户端的 Chat、Responses、Legacy
 Completions、Images、Alpha Search 和 Claude Count Tokens 共用上述路由、粘性、failover 与
-无限重试状态机。入口协议是每个 Provider 的四态能力声明（默认 `auto`），完整路径与模式如下：
+无限重试状态机。入口协议是每个 Provider 的五态能力声明（默认 `auto`），完整路径与模式如下：
 
 | 路径族 | 行为 |
 |---|---|
@@ -731,3 +734,15 @@ musl 兼容和真实上游请求必须另行验收。
 - **上游一直重试**：`maxDeferredRounds` 与 `maxRetryDurationSeconds` 都为 0 就是预期的无限模式；
   如需有限重试，至少把其中一项设为正数。客户端断开后应立即停止并记录 499。
 - **交叉构建环境缺失**：运行 `cross-build.sh --check` 查看清单；脚本不会替你安装依赖。
+
+### Gemini CLI
+
+发布包的 `scripts/gemini-sumpter-wrapper.mjs`（源码为 `platforms/linux/scripts/gemini-sumpter-wrapper.mjs`）
+将 Gemini CLI 配置为 Developer API Gateway，并清除 Vertex/GCA/ADC 环境变量。
+设置 `SUMPTER_GEMINI_BASE_URL`、`SUMPTER_AUTH_TOKEN`，可选 `SUMPTER_GEMINI_PROJECT` 与
+`SUMPTER_GEMINI_SESSION_ID` 后通过 `node` 运行 wrapper；请求使用原生 Gemini JSON/SSE，
+项目和会话归因只写入 Sumpter 事件，不发送给 Provider。
+
+Linux listener 同样提供 `/__sumpter/gemini-sumpter-wrapper.mjs` 下载，沿用入站认证及访问控制。
+Claude Code、Grok、Gemini 和 pi 的仓库下载、安装、使用与移除命令见
+[`USAGE.md` 的客户端脚本安装说明](USAGE.md#linux-客户端归因脚本远程安装)。

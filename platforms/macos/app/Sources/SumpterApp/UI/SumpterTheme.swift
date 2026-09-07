@@ -10,9 +10,9 @@ enum SumpterTheme {
     /// controls keep their macOS behavior while panels and metric cards align
     /// visually with the browser dashboard.
     enum Layout {
-        static let panelRadius: CGFloat = 14
-        static let panelPadding: CGFloat = 16
-        static let panelSpacing: CGFloat = 14
+        static let panelRadius: CGFloat = 16
+        static let panelPadding: CGFloat = 20
+        static let panelSpacing: CGFloat = 16
         static let metricRadius: CGFloat = 14
         static let metricPadding: CGFloat = 16
         static let metricMinimumHeight: CGFloat = 96

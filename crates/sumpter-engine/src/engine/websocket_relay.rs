@@ -337,25 +337,7 @@ pub(super) fn websocket_message_codex_metadata(
         .get("response")
         .filter(|response| response.is_object())
         .and_then(|response| CodexMetadata::from_request(&[], Some(response)));
-    match (direct, nested) {
-        (Some(mut direct), Some(nested)) => {
-            if direct.originator.is_none() {
-                direct.originator = nested.originator;
-            }
-            if direct.session_id.is_none() {
-                direct.session_id = nested.session_id;
-            }
-            if direct.thread_id.is_none() {
-                direct.thread_id = nested.thread_id;
-            }
-            if direct.turn_id.is_none() {
-                direct.turn_id = nested.turn_id;
-            }
-            Some(direct)
-        }
-        (Some(metadata), None) | (None, Some(metadata)) => Some(metadata),
-        (None, None) => None,
-    }
+    merge_codex_metadata(direct, nested)
 }
 
 pub(super) fn tungstenite_message_stats(
@@ -479,8 +461,8 @@ pub(super) fn websocket_event_context(
 /// into the handshake context. A Responses WebSocket may use a generic
 /// browser-like User-Agent and put `originator` only in `response.create`;
 /// that frame must still be attributable as Codex without persisting its
-/// prompt or raw JSON. Handshake identity remains authoritative when both
-/// sources disagree.
+/// prompt or raw JSON. Frame body metadata takes priority over handshake
+/// compatibility headers, matching the HTTP parser's precedence.
 pub(super) fn websocket_context_with_first_frame(
     context: &WebSocketEventContext,
     frame: Option<&CodexMetadata>,
@@ -489,13 +471,17 @@ pub(super) fn websocket_context_with_first_frame(
         return context.clone();
     };
     let mut merged = context.clone();
-    merged.codex_metadata = merge_codex_metadata(merged.codex_metadata.take(), Some(frame.clone()));
-    if merged.session_id.is_none() {
-        merged.session_id = merged
-            .codex_metadata
-            .as_ref()
-            .and_then(|metadata| metadata.session_id.clone());
+    // pi session identity comes from its handshake headers. Responses frame
+    // metadata must not relabel pi as Codex or override explicit attribution.
+    if merged.client_kind == ClientKind::Pi {
+        return merged;
     }
+    merged.codex_metadata = merge_codex_metadata(Some(frame.clone()), merged.codex_metadata.take());
+    merged.session_id = merged
+        .codex_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.session_id.clone())
+        .or(merged.session_id);
     if matches!(
         merged.client_kind,
         ClientKind::OpenaiCompat | ClientKind::Unknown
@@ -573,6 +559,8 @@ pub(super) fn websocket_client_event(
         effective_model: Some(context.model.clone()),
         endpoint_id: endpoint.map(|endpoint| endpoint.endpoint_id.clone()),
         endpoint_name: endpoint.map(|endpoint| endpoint.endpoint_name.clone()),
+        model_group_id: None,
+        model_group_name: None,
         failover,
         feature_rule_id: None,
         failure_detail: None,
@@ -595,6 +583,8 @@ pub(super) fn websocket_client_event(
         request_path: Some(context.request_path.clone()),
         route_intent: Some(context.route_intent.clone()),
         session_id: context.session_id.clone(),
+        // WebSocket 排序键是合成的 websocket:{model},不是会话粘性归属。
+        sticky_key: None,
         status_code: status,
         timestamp: unix_to_apple_epoch(now_unix()),
         ttfb_ms: None,

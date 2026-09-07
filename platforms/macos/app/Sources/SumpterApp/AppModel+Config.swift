@@ -199,6 +199,21 @@ extension AppModel {
         }
     }
 
+    /// 清除某项目的会话粘性归属。不删任何统计;只让该项目的粘性绑定失效,
+    /// 下一个请求按入口库顺序重新选择入口。
+    func clearProjectSticky(projectID: String) {
+        Task {
+            guard let admin else { return }
+            do {
+                let cleared = try await admin.clearProjectSticky(projectID: projectID)
+                flash(cleared > 0 ? "已清除 \(cleared) 条粘性归属" : "该项目当前没有粘性归属")
+            } catch {
+                lastError = "\(error)"
+                flash("清除粘性归属失败")
+            }
+        }
+    }
+
     func exportRuntimeSession(sessionID: String) {
         Task {
             guard let admin else { return }

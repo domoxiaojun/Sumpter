@@ -32,14 +32,22 @@ struct HelpPane: View {
     @ObservedObject var model: AppModel
     var onNavigate: (SettingsSection) -> Void = { _ in }
 
+    private var piExtensionPath: String? {
+        (Bundle.main.url(forResource: "pi-project-attribution", withExtension: "ts")
+            ?? Bundle.module.url(forResource: "pi-project-attribution", withExtension: "ts"))?.path
+    }
+
+    private var geminiWrapperPath: String? {
+        (Bundle.main.url(forResource: "gemini-sumpter-wrapper", withExtension: "mjs")
+            ?? Bundle.module.url(forResource: "gemini-sumpter-wrapper", withExtension: "mjs"))?.path
+    }
+
     private var onboardingState: HelpOnboardingState {
         let counters = model.runtimeSummary?.counters
         return resolveHelpOnboardingState(
             isRunning: model.sidecarState == .running && model.isProxyRunning,
             hasConfig: !model.configPath.isEmpty && !model.config.endpoints.isEmpty,
-            hasMapping: model.config.endpoints.contains { endpoint in
-                endpoint.enabled && !endpoint.mappings.isEmpty
-            },
+            hasMapping: model.config.hasRoutableModel,
             clientRequests: counters?.clientRequests ?? model.runtime.clientRequests,
             clientSuccesses: counters?.clientSuccesses ?? model.runtime.clientSuccesses,
             clientFailures: counters?.clientFailures ?? model.runtime.clientFailures
@@ -50,7 +58,7 @@ struct HelpPane: View {
         switch onboardingState {
         case .notStarted: "未启动"
         case .notConfigured: "未配置"
-        case .noMapping: "无 mapping"
+        case .noMapping: "无可用模型"
         case .clientNotConnected: "客户端未接入"
         case .firstFailure: "首次失败"
         case .firstSuccess: "首次成功"
@@ -60,8 +68,8 @@ struct HelpPane: View {
     private var onboardingDetail: String {
         switch onboardingState {
         case .notStarted: "代理还没有进入运行态。先启动 sidecar，再继续配置入口。"
-        case .notConfigured: "当前没有可用的 Provider 入口。先添加一个入口并保存。"
-        case .noMapping: "入口存在，但没有启用入口声明客户端模型 mapping。"
+        case .notConfigured: "入口库尚未配置连接。先添加一个入口并保存。"
+        case .noMapping: "入口已配置，但没有启用的模型与入口绑定。请在模型组中选择模型并绑定入口。"
         case .clientNotConnected: "还没有观察到客户端请求。把 Claude Code 或 Codex 的 Base URL 指向当前代理。"
         case .firstFailure: "已收到客户端请求，但还没有成功请求。先查看请求链中的失败阶段和上游响应。"
         case .firstSuccess: "已完成至少一次客户端成功请求。可以继续查看请求链和 failover 结果。"
@@ -71,8 +79,8 @@ struct HelpPane: View {
     private var onboardingAction: String {
         switch onboardingState {
         case .notStarted: "前往运行并启动"
-        case .notConfigured: "前往 Provider 添加入口"
-        case .noMapping: "前往 Provider 添加 mapping"
+        case .notConfigured: "前往入口库添加连接"
+        case .noMapping: "前往模型组配置模型"
         case .clientNotConnected: "查看客户端接入说明"
         case .firstFailure: "前往运行查看请求链"
         case .firstSuccess: "查看成功请求链"
@@ -102,7 +110,8 @@ struct HelpPane: View {
                         Button(onboardingAction) {
                             let destination: SettingsSection = switch onboardingState {
                             case .notStarted, .firstFailure, .firstSuccess: .run
-                            case .notConfigured, .noMapping: .providers
+                            case .notConfigured: .providers
+                            case .noMapping: .modelGroups
                             case .clientNotConnected: .help
                             }
                             onNavigate(destination)
@@ -113,11 +122,33 @@ struct HelpPane: View {
             }
             SectionPanel(title: "快速开始", hint: "Sumpter是本机协议代理；先启动代理，再把客户端 API Base 指向监听地址。") {
                 VStack(alignment: .leading, spacing: 10) {
-                    HelpStep(number: 1, title: "准备上游服务入口", bodyText: "在“Provider”页添加至少一个已启用入口，填写上游地址和密钥，并为客户端模型配置入口映射。")
+                    HelpStep(number: 1, title: "准备上游服务入口", bodyText: "在“入口库”添加地址和密钥，再到“模型组”选择模型并绑定入口；启用组和入口后保存。")
                     HelpStep(number: 2, title: "启动并确认监听", bodyText: "回到“运行”页确认 sidecar 正在运行。默认代理地址是 http://127.0.0.1:57878；实际地址以运行页显示为准。")
                     HelpStep(number: 3, title: "连接客户端", bodyText: "Claude Code 使用 ANTHROPIC_BASE_URL；Codex 或其它 OpenAI 客户端必须使用带 /v1 的 API Base（默认 http://127.0.0.1:57878/v1）。具体变量和协议矩阵见 USAGE.md。")
                 }
             }
+
+            SectionPanel(title: "pi 客户端与项目归因", hint: "在运行 pi 的主机配置，发送请求后在运行与统计页验证。") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("编辑 ~/.pi/agent/models.json，配置 Sumpter provider 的 API、Base URL、入站 Token 与已启用的客户端模型名。OpenAI 使用 /v1，Anthropic 使用根地址，Gemini 使用 /v1beta。")
+                        .font(.callout).foregroundStyle(.secondary)
+                    InfoRow(title: "provider 标识", value: #""headers": { "X-Sumpter-Client": "pi" }"#, copyable: true)
+                    InfoRow(title: "Token 环境变量", value: #""apiKey": "$SUMPTER_API_KEY""#, copyable: true)
+                    if let path = piExtensionPath {
+                        let quoted = "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+                        InfoRow(title: "临时加载", value: "pi -e " + quoted, copyable: true)
+                        InfoRow(title: "安装扩展", value: "mkdir -p \"$HOME/.pi/agent/extensions\" && cp " + quoted + " \"$HOME/.pi/agent/extensions/pi-project-attribution.ts\"", copyable: true)
+                    } else {
+                        Text("App 缺少 pi 扩展资源，请使用完整安装包或仓库 scripts/pi-project-attribution.ts。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text("已有扩展先备份再更新；安装后执行 /reload。扩展仅为显式标记的 Sumpter provider 添加当前项目和会话。删除 ~/.pi/agent/extensions/pi-project-attribution.ts 并重新加载即可移除。")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Link("完整 pi 配置与安装说明", destination: URL(string: "https://github.com/domoxiaojun/sumpter/blob/main/USAGE.md#pi-客户端")!)
+                }
+            }
+
+            UnifiedAttributionPanel()
 
             SectionPanel(title: "配置与接入", hint: "两端均使用当前 schema 的 config.json；旧版本迁移会先创建备份。") {
                 VStack(alignment: .leading, spacing: 10) {
@@ -136,7 +167,7 @@ struct HelpPane: View {
             SectionPanel(title: "常见问题", hint: "先看运行页和诊断页的状态，再判断是客户端、代理还是上游问题。") {
                 VStack(alignment: .leading, spacing: 10) {
                     HelpFAQ(question: "Claude Code 连不上？", answer: "确认 Base URL 指向当前监听地址；若启用了入站认证，客户端 Token 必须与配置完全一致。")
-                    HelpFAQ(question: "请求返回模型未找到？", answer: "检查 Provider 入口的 mappings 是否覆盖客户端发送的模型名；代理不会拿未声明的原名盲试上游。")
+                    HelpFAQ(question: "请求返回模型未找到？", answer: "检查启用模型组是否声明客户端模型名，组内是否绑定了启用入口；旧配置也可检查入口 mappings。")
                     HelpFAQ(question: "Realtime、Files 或 Videos 失败？", answer: "这些能力由代理直接 relay 给上游：先检查 Provider 的 baseURL、API key、模型 mapping，以及上游是否开放对应 HTTP/WebSocket 能力。代理不会在本地重建协议。")
                 }
             }

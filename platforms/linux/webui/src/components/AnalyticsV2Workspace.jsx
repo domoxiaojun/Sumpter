@@ -4,6 +4,7 @@ import { PaginationBar } from './PaginationBar.jsx';
 import { StatusBadge } from './StatusBadge.jsx';
 import { Icon } from '../utils/icons.jsx';
 import { api } from '../services/api.js';
+import { piAttributionState, PI_ATTRIBUTION_COPY } from '../utils/piAttribution.js';
 import {
   CC_ATTRIBUTION_HINT,
   formatDuration,
@@ -640,7 +641,7 @@ function ProjectOverviewTable({ page, loading, onPageChange, onPageSizeChange, o
   );
 }
 
-function DimensionTable({ page, loading, onPageChange, onPageSizeChange, onSearchSubmit, onSortChange, kind, clientKindFacets, addToast, onSessionExport, onSessionDelete, sessionActionID, mode = 'usage', activeRowKey, onRowClick }) {
+function DimensionTable({ page, loading, onPageChange, onPageSizeChange, onSearchSubmit, onSortChange, kind, clientKindFacets, addToast, onSessionExport, onSessionDelete, sessionActionID, onProjectStickyClear, stickyActionKey, mode = 'usage', activeRowKey, onRowClick }) {
   const [searchDraft, setSearchDraft] = useState(page?.search || '');
   useEffect(() => setSearchDraft(page?.search || ''), [page?.search, kind]);
   if (!page) return null;
@@ -679,6 +680,26 @@ function DimensionTable({ page, loading, onPageChange, onPageSizeChange, onSearc
     { title: '最近活动', key: 'last_seen', type: 'time', width: '180px', sortable: true, render: (row) => <span className="mono-cell">{dateLabel(row.lastSeen)}</span> },
   ];
   const columns = mode === 'cost' ? costColumns : usageColumns;
+  if (mode === 'usage' && kind === 'project' && onProjectStickyClear) {
+    columns.push({
+      title: '操作',
+      type: 'action',
+      width: '130px',
+      render: (row) => {
+        const busy = stickyActionKey === row.key;
+        return <div className="runtime-v2-sample-actions">
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            disabled={busy}
+            onClick={(event) => { event.stopPropagation(); onProjectStickyClear(row); }}
+            aria-label={`清除项目 ${row.name} 的粘性归属`}
+            title="清除后新请求按入口库顺序重新选择入口"
+          >{busy ? '清除中…' : '清除粘性'}</button>
+        </div>;
+      },
+    });
+  }
   if (mode === 'usage' && kind === 'session' && (onSessionExport || onSessionDelete)) {
     columns.push({
       title: '操作',
@@ -696,6 +717,10 @@ function DimensionTable({ page, loading, onPageChange, onPageSizeChange, onSearc
   return (
     <>
       {showAttributionHint && <CCAttributionHint addToast={addToast} />}
+      {kind === 'project' && <div className="help-warning" data-pi-attribution={piAttributionState(rows)}>
+        <span>pi 项目归因：{PI_ATTRIBUTION_COPY[piAttributionState(rows)]} </span>
+        <a href="https://github.com/domoxiaojun/sumpter/blob/main/USAGE.md#pi-客户端" target="_blank" rel="noreferrer">接入说明</a>
+      </div>}
       <form className="runtime-v2-search-label" onSubmit={(event) => { event.preventDefault(); onSearchSubmit(searchDraft.trim()); }}>
         <label htmlFor={`runtime-v2-${kind}-search`}>搜索{dimensionLabel(kind)}</label>
         <div className="runtime-v2-search-controls">
@@ -757,6 +782,8 @@ function DimensionBlock({
   onSessionExport,
   onSessionDelete,
   sessionActionID,
+  onProjectStickyClear,
+  stickyActionKey,
   activeRowKey,
   onRowClick,
   selectedProjectLabel,
@@ -795,6 +822,8 @@ function DimensionBlock({
           sessionActionID={sessionActionID}
           onSessionExport={onSessionExport}
           onSessionDelete={onSessionDelete}
+          onProjectStickyClear={onProjectStickyClear}
+          stickyActionKey={stickyActionKey}
           activeRowKey={activeRowKey}
           onRowClick={onRowClick}
           onPageChange={onPageChange}
@@ -963,6 +992,7 @@ function TrendPanel({ trend, legacyAnalytics, loading, error, onRetry }) {
             <Metric label="上游尝试" value={numberWithComma(totals.upstreamAttempts)} detail={`成功 ${numberWithComma(totals.upstreamSuccesses)} · 失败 ${numberWithComma(totals.upstreamFailures)}`} accent="var(--accent-indigo)" />
             <Metric label="慢请求" value={optionalNumberWithComma(thresholdExceeded(duration, thresholds.durationMS?.[0]))} detail={thresholds.durationMS?.[0] ? `完成耗时 > ${formatDuration(thresholds.durationMS[0])}` : '未提供阈值'} accent="var(--status-warning)" />
             <Metric label="严重慢请求" value={optionalNumberWithComma(thresholdExceeded(duration, thresholds.durationMS?.[1]))} detail={thresholds.durationMS?.[1] ? `完成耗时 > ${formatDuration(thresholds.durationMS[1])}` : '未提供阈值'} tone="runtime-v2-warning" accent="var(--status-danger)" />
+            <Metric label="输入 Token" value={optionalNumberWithComma(tokenValue(tokens, 'inputTokens'))} detail="输入用量" accent="var(--primary)" />
             <Metric label="缓存读取" value={optionalNumberWithComma(tokenValue(tokens, 'cacheReadInputTokens'))} detail={`命中率 ${percent(runtimeCacheRate(tokens, 'token'))}`} accent="var(--accent-cyan)" />
             <Metric label="估算成本" value={formatMoney(cost.estimatedCostMicros, cost.currency || 'USD')} detail="按已配置价格估算" accent="var(--status-good)" />
           </div>
@@ -1006,6 +1036,8 @@ function OverviewPanel({
   onSessionExport,
   onSessionDelete,
   sessionActionID,
+  onProjectStickyClear,
+  stickyActionKey,
   selectedProject,
   selectedSession,
   onProjectSelect,
@@ -1111,6 +1143,8 @@ function OverviewPanel({
               onSessionExport={onSessionExport}
               onSessionDelete={onSessionDelete}
               sessionActionID={sessionActionID}
+              onProjectStickyClear={onProjectStickyClear}
+              stickyActionKey={stickyActionKey}
               activeRowKey={kind === 'project' ? selectedProject?.key : kind === 'session' ? selectedSession?.key : undefined}
               onRowClick={kind === 'project' ? onProjectSelect : kind === 'session' ? onSessionSelect : undefined}
               selectedProjectLabel={(kind === 'session' || kind === 'model') && !selectedSession ? selectedProject?.name : undefined}
@@ -1618,6 +1652,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
   const [showExport, setShowExport] = useState(false);
   const [showStorageSettings, setShowStorageSettings] = useState(false);
   const [sessionActionID, setSessionActionID] = useState('');
+  const [stickyActionKey, setStickyActionKey] = useState('');
   const trendRequestRef = useRef({ id: 0, controller: null });
   const errorsRequestRef = useRef({ id: 0, controller: null });
   const diagnosticsRequestRef = useRef({ id: 0, controller: null });
@@ -2050,6 +2085,23 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
       addToast?.(`删除会话失败：${error.message}`, 'error');
     } finally {
       setSessionActionID('');
+    }
+  };
+
+  const clearProjectSticky = async (row) => {
+    const projectID = String(row?.key || '').trim();
+    const label = row?.name || projectID;
+    if (!projectID) return;
+    if (!window.confirm(`清除“${label}”的会话粘性归属？清除后该项目的新请求会按入口库顺序重新选择入口。`)) return;
+    setStickyActionKey(projectID);
+    try {
+      const result = await api.clearProjectSticky(projectID);
+      const cleared = Number(result?.cleared ?? 0);
+      addToast?.(cleared > 0 ? `已清除 ${cleared} 条粘性归属` : '该项目当前没有粘性归属', cleared > 0 ? 'success' : 'info');
+    } catch (error) {
+      addToast?.(`清除粘性归属失败：${error.message}`, 'error');
+    } finally {
+      setStickyActionKey('');
     }
   };
 

@@ -5,10 +5,15 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本。
 
-## [0.3.4] - 2026-08-30
+## [0.3.4] - 2026-09-08
 
 ### 新增
 
+- 配置升级到 schema v7，增加模型组、入口绑定与双端模型组编辑器。
+- 统一 Claude Code / Grok Build / Gemini CLI 项目归因安装器；内置 pi 项目与会话归因扩展。
+- macOS 归因面板自动检查安装状态，支持安装配置、还原配置和操作后复查；Linux 新增交互式一键配置脚本，支持远程下载与状态检查。
+- 支持 Gemini Developer API 原生请求与流式响应，补齐两端协议合同测试。
+- 会话粘性时长可配置，统计页支持按项目清除粘性归属。
 - Runtime Analytics 增加 Codex 线程功能分类与归因范围：`ambient_*`、自动化、审查、记忆整理和子代理等无项目上下文的请求单独归入后台功能；普通项目排行、facets、维度分页和项目导出不再膨胀 `unidentified_project`，总请求量仍完整保留。
 - 运行事件投影升级到 v4，列表、SSE、历史回填、Analytics 和导出统一返回 `codexThreadClass`、`attributionScope`，并保持 Linux/macOS wire 一致。
 - Provider 探测复用数据面的鉴权和指纹头，入口连接复用、模型目录去重、运行库原子重建及统计范围边界进一步收口。

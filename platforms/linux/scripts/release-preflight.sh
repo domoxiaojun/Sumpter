@@ -93,8 +93,8 @@ else
 fi
 
 need_file USAGE.md
-need_text USAGE.md "schema v6"
-need_text USAGE.md '"schemaVersion": 6'
+need_text USAGE.md "schema v7"
+need_text USAGE.md '"schemaVersion": 7'
 ok "USAGE.md present for published repo / tarball"
 
 # The shared engine is opt-in during the migration.  A legacy-only standalone
@@ -158,6 +158,10 @@ need_file scripts/install.sh
 need_file scripts/cc-project-attribution.sh
 [[ -x scripts/cc-project-attribution.sh ]] || fail "scripts/cc-project-attribution.sh must be executable"
 need_file scripts/grok-project-attribution.sh
+need_file scripts/pi-project-attribution.ts
+need_file scripts/client-attribution.mjs
+need_file scripts/setup-client-attribution.sh
+need_file scripts/gemini-sumpter-wrapper.mjs
 [[ -x scripts/grok-project-attribution.sh ]] || fail "scripts/grok-project-attribution.sh must be executable"
 need_text scripts/install.sh "--admin-host"
 need_text scripts/install.sh "--admin-password-file"

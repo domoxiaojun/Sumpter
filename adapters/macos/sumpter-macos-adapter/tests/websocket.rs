@@ -1,3 +1,6 @@
+#[path = "../../../../tests/contracts/pi_websocket.rs"]
+mod pi_websocket;
+
 use std::sync::Arc;
 
 use sumpter_core::config::AppConfig;
@@ -44,9 +47,10 @@ async fn legacy_fixed_ips_do_not_duplicate_live_posts_and_new_captures_omit_ip()
     legacy["endpoints"][0]["pinnedIPExclusive"] = serde_json::json!(false);
     legacy["retry"]["pinnedIPConcurrency"] = serde_json::json!(3);
     legacy["retry"]["sessionStickyRetries"] = serde_json::json!(2);
-    let config = AppConfig::from_json(&legacy.to_string())
+    let mut config = AppConfig::from_json(&legacy.to_string())
         .unwrap()
         .normalized();
+    config.migrate_model_groups();
     let engine = Engine::new(
         config,
         None,
@@ -165,6 +169,7 @@ async fn realtime_upstream_handshake_error_is_returned_before_101() {
     });
     let mut config = config();
     config.endpoints[0].base_url = format!("http://{upstream_address}");
+    config.migrate_model_groups();
     let engine = Engine::new(
         config,
         None,
@@ -284,4 +289,17 @@ async fn cpa_resource_paths_preserve_dynamic_suffix_and_http_method() {
     assert_eq!(calls[0].path_and_query, "/v1/files/file_123");
 
     server.abort();
+}
+
+fn pi_test_engine(config: AppConfig) -> Engine {
+    Engine::new(
+        config,
+        None,
+        Arc::new(ReplayTransport::new([])),
+        String::new(),
+    )
+}
+
+async fn pi_test_shutdown(handle: tokio::task::JoinHandle<()>) {
+    handle.abort();
 }

@@ -54,6 +54,9 @@ if [[ -f "$ROOT/../../../Cargo.toml" && -d "$ROOT/../../../crates" ]]; then
   DEFAULT_VERSION_SOURCE="$REPO_ROOT/Cargo.toml"
   DEFAULT_CC_ATTRIBUTION_SCRIPT="$REPO_ROOT/platforms/macos/scripts/cc-project-attribution.sh"
   DEFAULT_GROK_ATTRIBUTION_SCRIPT="$REPO_ROOT/platforms/macos/scripts/grok-project-attribution.sh"
+  DEFAULT_GEMINI_WRAPPER="$REPO_ROOT/platforms/macos/scripts/gemini-sumpter-wrapper.mjs"
+  DEFAULT_CLIENT_ATTRIBUTION="$REPO_ROOT/platforms/macos/scripts/client-attribution.mjs"
+  DEFAULT_PI_ATTRIBUTION="$REPO_ROOT/platforms/macos/scripts/pi-project-attribution.ts"
   SHARED_WORKSPACE=1
   SIDECAR_BIN="sumpterd-macos"
 else
@@ -64,6 +67,9 @@ else
   DEFAULT_VERSION_SOURCE="$RUST_DIR/Cargo.toml"
   DEFAULT_CC_ATTRIBUTION_SCRIPT="$REPO_ROOT/scripts/cc-project-attribution.sh"
   DEFAULT_GROK_ATTRIBUTION_SCRIPT="$REPO_ROOT/scripts/grok-project-attribution.sh"
+  DEFAULT_GEMINI_WRAPPER="$REPO_ROOT/scripts/gemini-sumpter-wrapper.mjs"
+  DEFAULT_CLIENT_ATTRIBUTION="$REPO_ROOT/scripts/client-attribution.mjs"
+  DEFAULT_PI_ATTRIBUTION="$REPO_ROOT/scripts/pi-project-attribution.ts"
   SHARED_WORKSPACE=0
   SIDECAR_BIN="sumpterd-macos"
 fi
@@ -555,6 +561,10 @@ verify_app() {
     || die "CC 归因配置器未打进 App"
   [[ -f "$app/Contents/Resources/grok-project-attribution.sh" ]] \
     || die "Grok 归因配置器未打进 App"
+  [[ -f "$app/Contents/Resources/pi-project-attribution.ts" ]] || die "pi attribution extension missing"
+  [[ -f "$app/Contents/Resources/client-attribution.mjs" ]] || die "统一归因脚本未打进 App"
+  [[ -f "$app/Contents/Resources/gemini-sumpter-wrapper.mjs" ]] \
+    || die "Gemini CLI wrapper 未打进 App"
   [[ -f "$sparkle_bin" ]] || die "Sparkle 主二进制缺失: $sparkle_bin"
   "$PLUTIL_BIN" -lint "$info" >/dev/null
   executable_name="$("$PLUTIL_BIN" -extract CFBundleExecutable raw -o - "$info")"
@@ -767,6 +777,11 @@ fi
 chmod 0755 "$STAGED_RESOURCES/cc-project-attribution.sh"
 "$DITTO_BIN" "$GROK_ATTRIBUTION_SCRIPT" "$STAGED_RESOURCES/grok-project-attribution.sh"
 chmod 0755 "$STAGED_RESOURCES/grok-project-attribution.sh"
+"$DITTO_BIN" "$DEFAULT_PI_ATTRIBUTION" "$STAGED_RESOURCES/pi-project-attribution.ts"
+"$DITTO_BIN" "$DEFAULT_CLIENT_ATTRIBUTION" "$STAGED_RESOURCES/client-attribution.mjs"
+chmod 0755 "$STAGED_RESOURCES/client-attribution.mjs"
+"$DITTO_BIN" "$DEFAULT_GEMINI_WRAPPER" "$STAGED_RESOURCES/gemini-sumpter-wrapper.mjs"
+chmod 0755 "$STAGED_RESOURCES/gemini-sumpter-wrapper.mjs"
 create_info_plist "$STAGED_CONTENTS/Info.plist"
 
 if [[ "$CODESIGN_IDENTITY" == "-" ]]; then

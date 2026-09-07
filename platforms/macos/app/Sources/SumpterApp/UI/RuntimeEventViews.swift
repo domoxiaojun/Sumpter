@@ -75,12 +75,16 @@ enum RuntimeEventDisplay {
     }
 
     static func codexAgentRole(_ metadata: CodexMetadata) -> String {
+        if metadata.threadSource == "guardian_review"
+            || metadata.subagentKind == "guardian" || metadata.subagentHeader == "guardian" {
+            return "Guardian 安全审查"
+        }
         if metadata.isSubagent || metadata.subagentKind != nil || metadata.subagentHeader != nil
             || metadata.threadSource == "subagent" || metadata.threadSource == "memory_consolidation" {
-            return "子代理" + (metadata.subagentKind.map { " · \($0)" } ?? "")
+            return "子代理" + ((metadata.subagentKind ?? metadata.subagentHeader).map { " · \($0)" } ?? "")
         }
         if metadata.agentName != nil || metadata.threadID != nil || metadata.turnID != nil {
-            return "主代理"
+            return "未发现子代理证据"
         }
         return "代理身份未确定"
     }
@@ -1356,6 +1360,7 @@ private struct RuntimeEventDetail: View {
                     InfoRow(title: "路由模型", value: RuntimeEventDisplay.displayedModelName(event.effectiveModel) ?? "-")
                     InfoRow(title: "上游模型", value: RuntimeEventDisplay.displayedModelName(event.upstreamModel) ?? "-")
                     InfoRow(title: "入口名称", value: event.endpointName ?? "-")
+                    InfoRow(title: "模型组", value: event.modelGroupName ?? event.modelGroupID ?? "-")
                     InfoRow(title: "入口 ID", value: event.endpointID ?? "-", copyable: true)
                     InfoRow(title: "上游 Host", value: event.upstreamHost ?? "-", copyable: true)
                     InfoRow(title: "SourceFormat", value: RuntimeEventPresentation.protocolDisplay(event.sourceFormat))
@@ -1678,6 +1683,7 @@ private struct RuntimeEventDetail: View {
             ("thread ID", metadata.threadID), ("agent path", metadata.agentName),
             ("turn ID", metadata.turnID),
             ("window ID", metadata.windowID), ("request kind", metadata.requestKind),
+            ("context window ID", metadata.contextWindowID), ("turn trigger", metadata.turnTrigger),
             ("forked-from thread ID", metadata.forkedFromThreadID),
             ("parent thread ID", metadata.parentThreadID), ("parent turn ID", metadata.parentTurnID),
             ("root turn ID", metadata.rootTurnID), ("x-openai-subagent", metadata.subagentHeader),
@@ -1694,10 +1700,13 @@ private struct RuntimeEventDetail: View {
             if let value = row.1, !value.isEmpty { InfoRow(title: row.0, value: value, copyable: true) }
         }
         if let value = metadata.turnStartedAtUnixMS { InfoRow(title: "turn started (Unix ms)", value: "\(value)") }
+        if let value = metadata.windowNumber { InfoRow(title: "window number", value: "\(value)") }
+        if let value = metadata.forkedFromOrdinalExclusive { InfoRow(title: "forked-from ordinal", value: "\(value)") }
         if let value = metadata.wsStreamRequestStartMS { InfoRow(title: "WS request start (ms)", value: "\(value)") }
         InfoRow(title: "auto review", value: metadata.autoReviewEnabled.map { $0 ? "true" : "false" } ?? "-")
         InfoRow(title: "Node REPL review required", value: metadata.nodeReplAutoReviewRequired.map { $0 ? "true" : "false" } ?? "-")
         InfoRow(title: "Node REPL disabled", value: metadata.nodeReplDisabled.map { $0 ? "true" : "false" } ?? "-")
+        InfoRow(title: "history ingest requested", value: metadata.historyIngestRequested.map { $0 ? "true" : "false" } ?? "-")
         InfoRow(title: "is subagent", value: metadata.isSubagent ? "true" : "false")
         InfoRow(title: "parent inferred", value: metadata.parentThreadIDInferred ? "true" : "false")
         InfoRow(title: "malformed", value: metadata.malformed ? "true" : "false")

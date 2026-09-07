@@ -451,6 +451,7 @@ struct FeatureRuleEditorSheet: View {
                         Text("Anthropic").tag(ProviderProtocol.anthropic.rawValue)
                         Text("OpenAI Responses").tag(ProviderProtocol.openaiResponses.rawValue)
                         Text("OpenAI Chat").tag(ProviderProtocol.openai.rawValue)
+                        Text("Gemini Developer API").tag(ProviderProtocol.gemini.rawValue)
                     }
                     .labelsHidden()
                     .frame(width: 160, alignment: .leading)

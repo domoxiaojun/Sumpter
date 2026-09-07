@@ -1,3 +1,4 @@
+import { UnifiedAttributionPanel } from '../components/UnifiedAttributionPanel.jsx';
 import React from 'react';
 import { useApp } from '../context/AppContext.jsx';
 import { Icon } from '../utils/icons.jsx';
@@ -37,15 +38,15 @@ const onboardingCopy = {
   },
   [ONBOARDING_STATES.NOT_CONFIGURED]: {
     label: '未配置',
-    detail: '当前没有可用的 Provider 入口。先添加一个入口并保存。',
-    action: '前往 Provider 添加入口',
+    detail: '入口库尚未配置连接。先添加一个入口并保存。',
+    action: '前往入口库添加连接',
     route: 'providers',
   },
   [ONBOARDING_STATES.NO_MAPPING]: {
-    label: '无 mapping',
-    detail: '入口存在，但没有启用入口声明客户端模型 mapping。',
-    action: '前往 Provider 添加 mapping',
-    route: 'providers',
+    label: '无可用模型',
+    detail: '入口已配置，但没有启用的模型与入口绑定。请在模型组中选择模型并绑定入口。',
+    action: '前往模型组配置模型',
+    route: 'model-groups',
   },
   [ONBOARDING_STATES.CLIENT_NOT_CONNECTED]: {
     label: '客户端未接入',
@@ -72,7 +73,7 @@ export function HelpPage() {
   const listener = status?.listener
     ? `${status.listener.host}:${status.listener.port}`
     : '127.0.0.1:57878';
-  const schemaVersion = config?.schemaVersion ?? 6;
+  const schemaVersion = config?.schemaVersion ?? 7;
   const onboardingState = getOnboardingState({ status, config, runtime });
   const onboarding = onboardingCopy[onboardingState];
 
@@ -97,11 +98,13 @@ export function HelpPage() {
         </div>
       </section>
 
+      <UnifiedAttributionPanel />
+
       <div className="help-grid">
         <section className="glass-panel help-panel">
           <div className="panel-title"><Icon name="sparkles" size={18} style={{ color: 'var(--primary)' }} /><span>快速开始</span></div>
           <div className="help-step-list">
-            <HelpStep number="1" title="准备上游服务入口">在“Provider”页添加至少一个已启用入口，填写上游地址和密钥，并配置客户端模型映射。</HelpStep>
+            <HelpStep number="1" title="准备上游服务入口">在“入口库”添加地址和密钥，再到“模型组”选择模型并绑定入口；启用组和入口后保存。</HelpStep>
             <HelpStep number="2" title="确认代理监听">在“运行”页确认 daemon 正在运行。当前监听地址为 <code>{listener}</code>。</HelpStep>
             <HelpStep number="3" title="连接客户端">Claude Code 使用 <code>ANTHROPIC_BASE_URL</code>；Codex 或其它 OpenAI 客户端使用带 <code>/v1</code> 的 API Base（默认 <code>http://127.0.0.1:57878/v1</code>）。完整协议矩阵见仓库的 USAGE.md。</HelpStep>
           </div>
@@ -122,10 +125,20 @@ export function HelpPage() {
         <div className="panel-title"><Icon name="search" size={18} style={{ color: 'var(--status-warning)' }} /><span>常见问题</span></div>
         <div className="help-faq-grid">
           <HelpQuestion question="Claude Code 连不上？">确认 Base URL 指向当前监听地址；若启用了入站认证，客户端 Token 必须与配置完全一致。</HelpQuestion>
-          <HelpQuestion question="请求返回模型未找到？">检查 Provider 入口的 mappings 是否覆盖客户端发送的模型名；代理不会拿未声明的原名盲试上游。</HelpQuestion>
+          <HelpQuestion question="请求返回模型未找到？">检查启用模型组是否声明客户端模型名，组内是否绑定了启用入口；旧配置也可检查入口 mappings。</HelpQuestion>
           <HelpQuestion question="Realtime、Files 或 Videos 失败？">这些能力由代理直接 relay 给上游：先检查 Provider 的 baseURL、API key、模型 mapping，以及上游是否开放对应 HTTP/WebSocket 能力。代理不会在本地重建协议。</HelpQuestion>
           <HelpQuestion question="仍然无法判断故障在哪？">先看“运行”和“诊断”页，再带上脱敏后的请求 ID、时间和错误阶段提交 Issue；不要上传 raw 捕获。</HelpQuestion>
         </div>
+      </section>
+
+      <section className="glass-panel help-panel">
+        <div className="panel-title"><Icon name="terminal" size={18} /><span>pi 客户端与项目归因</span></div>
+        <p>在 pi 所在主机编辑 <code>~/.pi/agent/models.json</code>，为 Sumpter provider 配置 API、Base URL、入站 Token 与已启用的客户端模型名，并添加 <code>{'"headers": { "X-Sumpter-Client": "pi" }'}</code>。</p>
+        <p>OpenAI Responses / Chat 使用 <code>/v1</code>；Anthropic 使用根地址；Gemini 使用 <code>/v1beta</code>。Token 可通过 <code>"apiKey": "$SUMPTER_API_KEY"</code> 引用环境变量。</p>
+        <p>从 Linux 包的 <code>scripts/pi-project-attribution.ts</code> 获取扩展，或从当前 listener 的 <code>/__sumpter/pi-project-attribution.ts</code> 下载（沿用入站认证）。</p>
+        <p>临时验证：<code>pi -e /path/to/pi-project-attribution.ts</code>。永久安装：复制到 <code>~/.pi/agent/extensions/pi-project-attribution.ts</code>，已有文件先备份，再执行 <code>/reload</code>。移除该文件并重新加载即可卸载。</p>
+        <p>扩展随当前项目和会话更新归因。发送请求后，在“运行”查看客户端 pi、项目和会话，再按 pi 筛选统计；暂无数据不能说明扩展未安装。</p>
+        <a className="btn btn-secondary" href={`${docsURL}#pi-客户端`} target="_blank" rel="noreferrer">完整 pi 配置与安装命令</a>
       </section>
 
       <section className="glass-panel help-panel help-links-panel">

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 6,
+  "schemaVersion": 7,
   "listener": {
     "host": "127.0.0.1",
     "port": 57878,
@@ -110,6 +110,41 @@
           ],
           "thinking": "passthrough",
           "context": "standard"
+        }
+      ]
+    }
+  ],
+  "modelGroups": [
+    {
+      "id": "default",
+      "name": "默认模型组",
+      "enabled": false,
+      "priority": 0,
+      "models": [
+        "claude-opus-*",
+        "claude-haiku-4-5-20251001",
+        "gpt-live-1-codex",
+        "gpt-realtime"
+      ],
+      "bindings": [
+        {
+          "endpointID": "example-main",
+          "enabled": true,
+          "priority": 0,
+          "models": [
+            "claude-opus-*"
+          ]
+        },
+        {
+          "endpointID": "example-fallback",
+          "enabled": true,
+          "priority": 10,
+          "models": [
+            "claude-opus-*",
+            "claude-haiku-4-5-20251001",
+            "gpt-live-1-codex",
+            "gpt-realtime"
+          ]
         }
       ]
     }

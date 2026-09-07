@@ -26,6 +26,9 @@ let package = Package(
             resources: [
                 .copy("Resources/cc-project-attribution.sh"),
                 .copy("Resources/grok-project-attribution.sh"),
+                .copy("Resources/pi-project-attribution.ts"),
+                .copy("Resources/gemini-sumpter-wrapper.mjs"),
+                .copy("Resources/client-attribution.mjs"),
             ]
         ),
         .testTarget(

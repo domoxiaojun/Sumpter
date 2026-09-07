@@ -288,6 +288,19 @@ impl Engine {
         store.export_session(session_id)
     }
 
+    /// 清除某项目的会话粘性归属:先从 runtime 事件聚合该项目出现过的
+    /// affinity 键,再交给 `clear_session_sticky` 清内存并落盘
+    /// session_affinity.json。返回清除的归属条数。
+    pub fn clear_project_sticky(&self, project_id: &str) -> Result<Value, String> {
+        let store = self.inner.runtime_store.as_ref().ok_or_else(|| {
+            self.last_error()
+                .unwrap_or_else(|| "runtime.sqlite3 不可用，无法清除会话粘性归属".into())
+        })?;
+        let keys = store.sticky_keys_for_project(project_id)?;
+        let removed = self.clear_session_sticky(&keys)?;
+        Ok(json!({"cleared": removed, "matched": keys.len()}))
+    }
+
     pub fn runtime_analytics(&self, range: &str) -> Result<Value, String> {
         self.runtime_analytics_filtered(range, &AnalyticsFilter::default())
     }

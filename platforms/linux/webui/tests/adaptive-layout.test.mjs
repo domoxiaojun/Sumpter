@@ -76,6 +76,6 @@ test('compact topbar stays one row and canonical page labels match navigation', 
   assert.match(componentStyles, /@media \(max-width: 1199px\)[\s\S]*?\.glass-topbar\s*\{[\s\S]*?height: 64px;[\s\S]*?flex-wrap: nowrap;/);
   assert.match(componentStyles, /@media \(max-width: 900px\)[\s\S]*?\.glass-topbar\s*\{[\s\S]*?padding-left: 64px;/);
   assert.match(runSource, /<span>运行<\/span>/);
-  assert.match(providerSource, /<span>Provider<\/span>/);
+  assert.match(providerSource, /<span>入口库<\/span>/);
   assert.match(statisticsSource, /<span>统计<\/span>/);
 });

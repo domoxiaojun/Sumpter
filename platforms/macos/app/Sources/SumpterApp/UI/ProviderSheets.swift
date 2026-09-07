@@ -50,6 +50,10 @@ struct ProviderAccountEditorSheet: View {
             onSubmit: submit
         ) {
             VStack(alignment: .leading, spacing: 12) {
+                if row == nil {
+                    Text("新入口仅加入入口库；请到模型组手动添加入口并选择承接范围。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 FormLine(title: "Provider") {
                     Text(providerName)
                         .foregroundStyle(.secondary)

@@ -119,10 +119,22 @@ final class RuntimeEventPresentationTests: XCTestCase {
         let data = Data(#"{"agentName":"/root","originator":"codex_cli_rs"}"#.utf8)
         let metadata = try JSONDecoder().decode(CodexMetadata.self, from: data)
         XCTAssertFalse(metadata.isEmpty)
-        XCTAssertEqual(RuntimeEventPresentation.codexSummary(metadata), "Codex · 主代理 · /root")
+        XCTAssertEqual(RuntimeEventPresentation.codexSummary(metadata), "Codex · 未发现子代理证据 · /root")
         let json = try XCTUnwrap(RuntimeEventPresentation.codexJSON(metadata))
         XCTAssertTrue(json.contains("codex_cli_rs"))
         XCTAssertFalse(json.contains("workspaces"), "空集合编码应与 Rust wire 一样省略")
+    }
+
+    func testCodexGuardianAndContextFieldsSurviveExport() throws {
+        let data = Data(#"{"subagentHeader":"guardian","windowNumber":0,"contextWindowID":"context","forkedFromOrdinalExclusive":42,"turnTrigger":"user_input","historyIngestRequested":false}"#.utf8)
+        let metadata = try JSONDecoder().decode(CodexMetadata.self, from: data)
+        XCTAssertEqual(metadata.windowNumber, 0)
+        XCTAssertEqual(metadata.contextWindowID, "context")
+        XCTAssertEqual(metadata.forkedFromOrdinalExclusive, 42)
+        XCTAssertEqual(metadata.turnTrigger, "user_input")
+        XCTAssertEqual(metadata.historyIngestRequested, false)
+        XCTAssertEqual(RuntimeEventPresentation.codexSummary(metadata), "Codex · Guardian 安全审查")
+        XCTAssertEqual(try JSONDecoder().decode(CodexMetadata.self, from: JSONEncoder().encode(metadata)), metadata)
     }
 
     func testCodexMetadataRemainsOptionalForLegacyEvents() throws {

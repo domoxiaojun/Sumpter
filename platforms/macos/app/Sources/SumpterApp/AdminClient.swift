@@ -222,6 +222,22 @@ public struct AdminClient: Sendable {
         try await sendData(request("/admin/runtime/session/export", query: ["sessionID": sessionID]))
     }
 
+    /// 清除某项目的会话粘性归属(affinity 键来自该项目的历史事件)。
+    /// 返回清除的归属条数;0 = 该项目当前没有粘性归属。
+    @discardableResult
+    public func clearProjectSticky(projectID: String) async throws -> Int {
+        struct StickyClearAck: Decodable {
+            let cleared: Int
+            let matched: Int
+        }
+        let body: [String: Any] = ["projectID": projectID]
+        let ack = try await send(
+            jsonRequest("/admin/runtime/projects/sticky-clear", method: "POST", body: body),
+            as: StickyClearAck.self
+        )
+        return ack.cleared
+    }
+
     public func diagnostics() async throws -> AdminWire.Diagnostics {
         try await send(request("/admin/diagnostics"), as: AdminWire.Diagnostics.self)
     }
@@ -675,6 +691,8 @@ public enum AdminWire {
         public let featureRuleID: String?
         public let endpointID: String?
         public let endpointName: String?
+        public let modelGroupID: String?
+        public let modelGroupName: String?
         public let upstreamHost: String?
         public let sourceFormat: ProviderProtocol?
         public let targetFormat: ProviderProtocol?
@@ -726,6 +744,8 @@ public enum AdminWire {
             featureRuleID = event.featureRuleID
             endpointID = event.endpointID
             endpointName = event.endpointName
+            modelGroupID = event.modelGroupID
+            modelGroupName = event.modelGroupName
             upstreamHost = event.upstreamHost
             sourceFormat = event.sourceFormat
             targetFormat = event.targetFormat
@@ -828,6 +848,8 @@ public enum AdminWire {
             if let featureRuleID { event.featureRuleID = featureRuleID }
             if let endpointID { event.endpointID = endpointID }
             if let endpointName { event.endpointName = endpointName }
+            if let modelGroupID { event.modelGroupID = modelGroupID }
+            if let modelGroupName { event.modelGroupName = modelGroupName }
             if let upstreamHost { event.upstreamHost = upstreamHost }
             if let sourceFormat { event.sourceFormat = sourceFormat }
             if let targetFormat { event.targetFormat = targetFormat }

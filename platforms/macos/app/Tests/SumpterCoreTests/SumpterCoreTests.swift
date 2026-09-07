@@ -122,9 +122,9 @@ final class SumpterCoreTests: XCTestCase {
         XCTAssertEqual(ModelName.parse("gpt-5.6-luna (medium)").effort, .medium)
         // 可与 [1m] 叠用(先去 bracket 再去 effort)
         XCTAssertEqual(ModelName.clean("claude-opus-4-8(high)[1m]"), "claude-opus-4-8")
-        // 未知括号 / ultra 不剥离
+        // 未知括号不剥离;ultra 已是合法档位(对齐 Rust ReasoningEffort)。
         XCTAssertEqual(ModelName.clean("weird-model(custom)"), "weird-model(custom)")
-        XCTAssertNil(ModelName.reasoningEffort(from: "gpt-5.6-luna(ultra)"))
+        XCTAssertEqual(ModelName.reasoningEffort(from: "gpt-5.6-luna(ultra)"), .ultra)
         XCTAssertNil(ModelName.reasoningEffort(from: "gpt-5.6-luna"))
         // 路由匹配:后缀不影响 pattern
         XCTAssertTrue(ModelPattern("gpt-5.6-luna").matches("gpt-5.6-luna(high)"))

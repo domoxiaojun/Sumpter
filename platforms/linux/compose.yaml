@@ -14,8 +14,8 @@
 # 升级：
 #   docker compose pull && docker compose up -d
 #
-# :latest 跟随 main 最近一次成功的 Container 构建，不一定等于最新 GitHub Release。
-# 私有 GHCR 需先 docker login。钉死版本：export SUMPTER_IMAGE=ghcr.io/domoxiaojun/sumpter:0.1.6
+# :latest 由统一 Release 工作流更新。
+# 私有 GHCR 需先 docker login。钉死版本：export SUMPTER_IMAGE=ghcr.io/domoxiaojun/sumpter:0.3.4
 #
 # 仅 Linux host network。镜像与 Compose 都不指定运行用户，默认由 root 写 ./config。
 # Admin 默认读取 ./config/admin-password 并提供 WebUI 内置登录；公网反代仍必须使用 HTTPS。

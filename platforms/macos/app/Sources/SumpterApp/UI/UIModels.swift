@@ -332,11 +332,7 @@ struct UsageAggregateRow: Identifiable, Hashable {
         for event in codexEvents {
             guard let metadata = event.codexMetadata else { continue }
             record("请求类型", metadata.requestKind ?? "未记录", event: event)
-            if metadata.isSubagent || metadata.subagentKind != nil {
-                record("代理类型", "子代理" + (metadata.subagentKind.map { "（\($0)）" } ?? ""), event: event)
-            } else {
-                record("代理类型", "主代理", event: event)
-            }
+            record("代理类型", RuntimeEventDisplay.codexAgentRole(metadata), event: event)
             record("线程来源", metadata.threadSource, event: event)
             record("代理路径", metadata.agentName, event: event)
             for workspace in metadata.workspaces.keys.sorted() {

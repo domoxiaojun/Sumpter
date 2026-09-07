@@ -1,8 +1,8 @@
-//! 配置模型(schema v6)。
+//! 配置模型(schema v7)。
 //!
 //! Linux daemon 从 XDG 配置目录读写 `config.json`；Admin PUT 是唯一远程写入口，
 //! reload/SIGHUP 只读磁盘。模型继续与 macOS Rust 版共用 v4 wire 形状，因此这里的原则:
-//! - serde 对未知字段宽容；配置存储层额外要求 `schemaVersion` 显式等于 6。
+//! - serde 对未知字段宽容；配置存储层额外要求 `schemaVersion` 显式等于 7。
 //! - 写对齐:键名/键序(字母序)/可选字段省略策略与既有 `pretty + sortedKeys` 输出一致,
 //!   数值整值不带小数点(见 `trim_f64`)。golden 测试见 `tests/golden.rs`。
 //! - Swift 在 `init(from:)` 里做的清洗(内建规则归一、upstreamModel clean、clamp、name 回退)
@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize, Serializer};
 use crate::capability::ModelCapability;
 use crate::model_name;
 
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 
 fn is_none<T>(v: &Option<T>) -> bool {
     v.is_none()
@@ -63,14 +63,36 @@ fn default_true() -> bool {
 pub struct AppConfig {
     #[serde(default)]
     pub endpoints: Vec<Endpoint>,
+    #[serde(
+        rename = "modelGroups",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub model_groups: Option<Vec<crate::model_groups::ModelGroup>>,
     #[serde(rename = "featureRules", default)]
     pub feature_rules: Vec<FeatureRule>,
     #[serde(default)]
     pub listener: ListenerConfig,
     #[serde(default)]
     pub retry: RetryPolicy,
+    /// 会话粘性归属的存活时长(小时)。默认 72;`<= 0` 表示永不过期(仍受
+    /// 条目数上限约束)。控制面语义见 `EngineState::session_sticky_ttl_secs`。
+    #[serde(
+        rename = "sessionStickyTtlHours",
+        default = "default_session_sticky_ttl_hours",
+        serialize_with = "trim_f64"
+    )]
+    pub session_sticky_ttl_hours: f64,
     #[serde(rename = "schemaVersion", default = "default_schema_version")]
     pub schema_version: u32,
+}
+
+/// 会话粘性时长的默认值(小时)。旧版本固定 30 天,过长的归属让入口调整
+/// 几乎无法在存量会话上生效,收敛到 3 天并允许用户按需调整。
+pub const DEFAULT_SESSION_STICKY_TTL_HOURS: f64 = 72.0;
+
+fn default_session_sticky_ttl_hours() -> f64 {
+    DEFAULT_SESSION_STICKY_TTL_HOURS
 }
 
 fn default_schema_version() -> u32 {
@@ -104,6 +126,12 @@ impl AppConfig {
         self.retry.max_retry_duration_seconds = self.retry.max_retry_duration_seconds.max(0.0);
         self.retry.session_sticky_retries = self.retry.session_sticky_retries.max(0);
         self.retry.max_500_retries = self.retry.max_500_retries.max(0);
+        // 非有限值只可能来自手工编辑的 JSON;负数与 NaN 一样收敛到「永不过期」,
+        // 与调度层 `ttl_seconds <= 0` 的语义一致。
+        if !self.session_sticky_ttl_hours.is_finite() {
+            self.session_sticky_ttl_hours = 0.0;
+        }
+        self.session_sticky_ttl_hours = self.session_sticky_ttl_hours.max(0.0);
 
         for endpoint in &mut self.endpoints {
             if endpoint.name.is_empty() {
@@ -128,6 +156,39 @@ impl AppConfig {
             }
         }
 
+        if let Some(groups) = &mut self.model_groups {
+            for group in groups {
+                let trimmed_name = group.name.trim();
+                if trimmed_name.is_empty() {
+                    group.name = group.id.clone();
+                } else {
+                    group.name = trimmed_name.to_string();
+                }
+                group.priority = group.priority.max(0);
+                for model in &mut group.models {
+                    *model = model_name::clean(model);
+                }
+                for binding in &mut group.bindings {
+                    binding.priority = binding.priority.max(0);
+                    if let Some(models) = &mut binding.models {
+                        for model in models {
+                            *model = model_name::clean(model);
+                        }
+                    }
+                    for override_ in &mut binding.overrides {
+                        override_.model = model_name::clean(&override_.model);
+                        override_.upstream_model = override_
+                            .upstream_model
+                            .take()
+                            .map(|model| model_name::clean(&model));
+                    }
+                }
+            }
+            // 入口库是默认组顺序/优先级的单一事实源:迁移产生的默认组必须
+            // 跟随 endpoints 数组的后续调整,否则入口库的排序编辑对路由无效。
+            self.sync_default_group_bindings();
+        }
+
         for rule in &mut self.feature_rules {
             if rule.name.is_empty() {
                 rule.name = rule.id.clone();
@@ -145,11 +206,22 @@ impl AppConfig {
             .find(|endpoint| endpoint.id == endpoint_id)
     }
 
+    /// 粘性 TTL 的调度层秒数;`0` 表示不按 TTL 淘汰(仅条目数上限)。
+    pub fn session_sticky_ttl_secs(&self) -> f64 {
+        if self.session_sticky_ttl_hours.is_finite() && self.session_sticky_ttl_hours > 0.0 {
+            self.session_sticky_ttl_hours * 3600.0
+        } else {
+            0.0
+        }
+    }
+
     /// 当前配置承接的客户端模型并集；仅由 Provider 显式映射派生。
     pub fn accepted_models(&self) -> Vec<String> {
         let mut seen = std::collections::HashSet::new();
         let mut output = Vec::new();
-        for raw in self.endpoints.iter().flat_map(|endpoint| {
+        let scoped = self.routing_endpoints();
+        for raw in scoped.iter().flat_map(|entry| {
+            let endpoint = &entry.endpoint;
             endpoint
                 .mappings
                 .iter()
@@ -165,18 +237,20 @@ impl AppConfig {
     }
 
     pub fn matches_model(&self, model: &str) -> bool {
-        self.endpoints
+        self.routing_endpoints()
             .iter()
-            .any(|endpoint| endpoint.mapping_for(model).is_some())
+            .any(|entry| entry.endpoint.mapping_for(model).is_some())
     }
 
     /// 全新安装的空壳：零 Provider，内建分流规则全部停用。
     pub fn bootstrap() -> Self {
         Self {
             endpoints: vec![],
+            model_groups: None,
             feature_rules: builtin_rules::canonical(),
             listener: ListenerConfig::default(),
             retry: RetryPolicy::default(),
+            session_sticky_ttl_hours: DEFAULT_SESSION_STICKY_TTL_HOURS,
             schema_version: SCHEMA_VERSION,
         }
     }
@@ -378,6 +452,9 @@ pub enum ProviderProtocol {
     /// OpenAI Responses API(/v1/responses);`openai` 保留为 chat/completions。
     #[serde(rename = "openai-responses")]
     OpenAIResponses,
+    /// Gemini Developer API / Google AI Studio REST protocol.
+    #[serde(rename = "gemini")]
+    Gemini,
 }
 
 impl ProviderProtocol {
@@ -386,6 +463,7 @@ impl ProviderProtocol {
             Self::Anthropic => "anthropic",
             Self::OpenAI => "openai",
             Self::OpenAIResponses => "openai-responses",
+            Self::Gemini => "gemini",
         }
     }
 }
@@ -403,6 +481,8 @@ pub enum EndpointProtocolMode {
     OpenAI,
     #[serde(rename = "openai-responses")]
     OpenAIResponses,
+    #[serde(rename = "gemini")]
+    Gemini,
 }
 
 impl EndpointProtocolMode {
@@ -412,6 +492,7 @@ impl EndpointProtocolMode {
             Self::Anthropic => Some(ProviderProtocol::Anthropic),
             Self::OpenAI => Some(ProviderProtocol::OpenAI),
             Self::OpenAIResponses => Some(ProviderProtocol::OpenAIResponses),
+            Self::Gemini => Some(ProviderProtocol::Gemini),
         }
     }
 

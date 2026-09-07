@@ -249,13 +249,17 @@ public enum RuntimeEventPresentation {
     /// Compact list label, retaining authoritative evidence for subagent rows.
     public static func codexSummary(_ metadata: CodexMetadata?) -> String? {
         guard let metadata, metadata.hasRequestIdentity else { return nil }
+        if metadata.threadSource == "guardian_review"
+            || metadata.subagentKind == "guardian" || metadata.subagentHeader == "guardian" {
+            return ["Codex · Guardian 安全审查", metadata.agentName].compactMap { $0 }.joined(separator: " · ")
+        }
         if metadata.isSubagent || metadata.subagentKind != nil || metadata.subagentHeader != nil {
             let kind = metadata.subagentKind ?? metadata.subagentHeader ?? "subagent"
             return ["Codex · 子代理(\(kind))", metadata.agentName]
                 .compactMap { $0 }
                 .joined(separator: " · ")
         }
-        return ["Codex · 主代理", metadata.agentName]
+        return ["Codex · 未发现子代理证据", metadata.agentName]
             .compactMap { $0 }
             .joined(separator: " · ")
     }
@@ -609,6 +613,8 @@ public enum RuntimeEventPresentation {
             return "OpenAI Chat Completions"
         case .openaiResponses:
             return "OpenAI Responses"
+        case .gemini:
+            return "Gemini Developer API"
         case nil:
             return "未记录（旧事件或路由未完成）"
         }

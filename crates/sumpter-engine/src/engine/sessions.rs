@@ -14,7 +14,6 @@ use super::Engine;
 use super::protocol::{json_timestamp, live_call_id_from_target, video_id_from_path};
 use super::state::now_unix;
 pub(super) const SESSION_STICKY_MAX_ENTRIES: usize = 2000;
-pub(super) const SESSION_STICKY_TTL_SECS: f64 = 30.0 * 24.0 * 3600.0;
 pub(super) const SESSION_STICKY_PRUNE_INTERVAL_SECS: f64 = 60.0;
 #[derive(Clone)]
 pub(super) struct SessionStickyEntry {
@@ -24,21 +23,20 @@ pub(super) struct SessionStickyEntry {
 }
 
 /// 按 TTL + 上限清理会话归属，返回是否删除了需要同步回磁盘的持久条目。
+/// `ttl_secs <= 0` 表示不按 TTL 淘汰(仍受条目数上限约束),见 scheduler。
 pub(super) fn prune_session_sticky(
     sticky: &mut HashMap<String, SessionStickyEntry>,
     now: f64,
+    ttl_secs: f64,
 ) -> bool {
     let entries: Vec<(String, f64, bool)> = sticky
         .iter()
         .map(|(key, entry)| (key.clone(), entry.at, entry.persistent))
         .collect();
     let mut removed_persistent = false;
-    for key in scheduler::session_sticky_evictions(
-        &entries,
-        now,
-        SESSION_STICKY_TTL_SECS,
-        SESSION_STICKY_MAX_ENTRIES,
-    ) {
+    for key in
+        scheduler::session_sticky_evictions(&entries, now, ttl_secs, SESSION_STICKY_MAX_ENTRIES)
+    {
         removed_persistent |= sticky.remove(&key).is_some_and(|entry| entry.persistent);
     }
     removed_persistent
@@ -620,7 +618,8 @@ impl Engine {
         let needs_prune = now - state.last_session_prune_at >= SESSION_STICKY_PRUNE_INTERVAL_SECS
             || state.session_sticky.len() > SESSION_STICKY_MAX_ENTRIES;
         if needs_prune {
-            let removed_persistent = prune_session_sticky(&mut state.session_sticky, now);
+            let ttl_secs = state.session_sticky_ttl_secs;
+            let removed_persistent = prune_session_sticky(&mut state.session_sticky, now, ttl_secs);
             state.last_session_prune_at = now;
             if removed_persistent {
                 self.inner
@@ -680,5 +679,38 @@ impl Engine {
         if let Err(error) = self.flush_session_affinity() {
             tracing::warn!("session_affinity.json 首次归属落盘失败: {error}");
         }
+    }
+
+    /// 按粘性键清除会话归属（运维出口：项目维度的「清除会话粘性」）。
+    /// 键来自 runtime 事件里的 affinity 哈希，不触碰其它会话；返回实际删除数。
+    /// 返回成功前同步落盘；失败保留 dirty 位并向调用方报告，不伪报持久成功。
+    pub fn clear_session_sticky(&self, keys: &[String]) -> Result<usize, String> {
+        if keys.is_empty() {
+            return Ok(0);
+        }
+        let mut removed_persistent = false;
+        let removed = {
+            let mut state = self.inner.state.lock().unwrap();
+            let before = state.session_sticky.len();
+            for key in keys {
+                removed_persistent |= state
+                    .session_sticky
+                    .remove(key)
+                    .is_some_and(|entry| entry.persistent);
+            }
+            before - state.session_sticky.len()
+        };
+        // 重复清除也必须重试之前失败的落盘，不能因内存已空就返回成功。
+        if (removed_persistent || self.inner.session_affinity_dirty.load(Ordering::Acquire))
+            && let Err(error) = self.flush_session_affinity()
+        {
+            self.inner
+                .session_affinity_dirty
+                .store(true, Ordering::Release);
+            return Err(format!(
+                "内存归属已清除，但 session_affinity.json 同步失败：{error}"
+            ));
+        }
+        Ok(removed)
     }
 }

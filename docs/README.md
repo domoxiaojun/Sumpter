@@ -10,7 +10,7 @@
 |---|---|
 | 产品定位、仓库结构、开发命令 | 根 [`README.md`](../README.md) |
 | 安装、接 Claude/Codex、排错 | 根 [`USAGE.md`](../USAGE.md) |
-| 配置字段 | [`../platforms/macos/CONFIG.md`](../platforms/macos/CONFIG.md)（两端同一份 schema v6） |
+| 配置字段 | [`../platforms/macos/CONFIG.md`](../platforms/macos/CONFIG.md)（两端同一份 schema v7） |
 | 当前 Rust 分层与变更归属 | [`architecture.md`](architecture.md) |
 | 仓库协作规则 | [`../AGENTS.md`](../AGENTS.md) |
 

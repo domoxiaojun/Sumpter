@@ -68,6 +68,12 @@ jobs:
         working-directory: platforms/linux/webui
         run: npm test
 
+      - name: Test pi attribution extension and packaged copies
+        run: node --test scripts/pi-project-attribution.test.mjs
+
+      - name: Test unified client attribution and packaged copies
+        run: node --test scripts/client-attribution.test.mjs
+
       - name: Verify generated WebUI is synchronized
         run: |
           set -euo pipefail

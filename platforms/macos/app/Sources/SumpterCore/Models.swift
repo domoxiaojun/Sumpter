@@ -6,6 +6,7 @@ public enum ProviderProtocol: String, Codable, Sendable, CaseIterable {
     /// OpenAI Responses API(/v1/responses)——2025 起的官方主力端点,codex 系列仅此可用。
     /// `openai` 保留为 chat/completions(vLLM/Ollama 等兼容生态的事实标准)。
     case openaiResponses = "openai-responses"
+    case gemini
 }
 
 /// 入口在配置文件中声明的协议能力模式。`auto` 不是可发送给上游的真实协议，
@@ -15,6 +16,7 @@ public enum EndpointProtocolMode: String, Codable, Sendable, CaseIterable {
     case anthropic
     case openai
     case openaiResponses = "openai-responses"
+    case gemini
 
     public var fixedProtocol: ProviderProtocol? {
         switch self {
@@ -26,6 +28,8 @@ public enum EndpointProtocolMode: String, Codable, Sendable, CaseIterable {
             .openai
         case .openaiResponses:
             .openaiResponses
+        case .gemini:
+            .gemini
         }
     }
 
@@ -41,13 +45,15 @@ public enum EndpointProtocolMode: String, Codable, Sendable, CaseIterable {
     public var displayName: String {
         switch self {
         case .auto:
-            "自动（三协议）"
+            "自动（四协议）"
         case .anthropic:
             "Anthropic"
         case .openai:
             "OpenAI Chat"
         case .openaiResponses:
             "OpenAI Responses"
+        case .gemini:
+            "Gemini Developer API"
         }
     }
 }
@@ -830,11 +836,16 @@ public enum BuiltInFeatureRules {
 
 public struct AppConfig: Codable, Equatable, Sendable {
     public static let currentSchemaVersion = 7
+    /// 会话粘性归属的默认存活时长(小时)。72h;`<= 0` 表示永不过期。
+    public static let defaultSessionStickyTTLHours: Double = 72
 
     public var schemaVersion: Int
     public var listener: ListenerConfig
     /// 转发与重试参数,全局共享。
     public var retry: RetryPolicy
+    /// 会话粘性归属的存活时长(小时)。`<= 0` 表示永不过期(仍受条目数上限约束)。
+    /// 与 Rust `AppConfig::session_sticky_ttl_hours` 是同一契约。
+    public var sessionStickyTtlHours: Double
     /// 正式配置模型：Provider 候选按用户配置顺序扁平保存。
     public var endpoints: [Endpoint]
     public var featureRules: [FeatureRule]
@@ -844,6 +855,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         case schemaVersion
         case listener
         case retry
+        case sessionStickyTtlHours
         case endpoints
         case featureRules
         case modelGroups
@@ -853,6 +865,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         schemaVersion: Int = AppConfig.currentSchemaVersion,
         listener: ListenerConfig = ListenerConfig(),
         retry: RetryPolicy = RetryPolicy(),
+        sessionStickyTtlHours: Double = AppConfig.defaultSessionStickyTTLHours,
         endpoints: [Endpoint] = [],
         featureRules: [FeatureRule] = [],
         modelGroups: [ModelGroup]? = nil
@@ -860,6 +873,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.schemaVersion = schemaVersion
         self.listener = listener
         self.retry = retry
+        self.sessionStickyTtlHours = sessionStickyTtlHours
         self.endpoints = endpoints
         self.featureRules = featureRules
         self.modelGroups = modelGroups
@@ -885,6 +899,8 @@ public struct AppConfig: Codable, Equatable, Sendable {
         schemaVersion = try keyed.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? AppConfig.currentSchemaVersion
         listener = try keyed.decodeIfPresent(ListenerConfig.self, forKey: .listener) ?? ListenerConfig()
         retry = try keyed.decodeIfPresent(RetryPolicy.self, forKey: .retry) ?? RetryPolicy()
+        let ttl = try keyed.decodeIfPresent(Double.self, forKey: .sessionStickyTtlHours) ?? AppConfig.defaultSessionStickyTTLHours
+        sessionStickyTtlHours = ttl.isFinite ? max(0, ttl) : 0
         endpoints = try keyed.decodeIfPresent([Endpoint].self, forKey: .endpoints) ?? []
         modelGroups = try keyed.decodeIfPresent([ModelGroup].self, forKey: .modelGroups)
         featureRules = BuiltInFeatureRules.normalized(
@@ -899,6 +915,8 @@ public struct AppConfig: Codable, Equatable, Sendable {
         try keyed.encode(AppConfig.currentSchemaVersion, forKey: .schemaVersion)
         try keyed.encode(listener, forKey: .listener)
         try keyed.encode(retry, forKey: .retry)
+        // 契约对齐 Rust:显式序列化(含 0),让两端配置视图一致。
+        try keyed.encode(sessionStickyTtlHours.isFinite ? max(0, sessionStickyTtlHours) : 0, forKey: .sessionStickyTtlHours)
         try keyed.encode(endpoints, forKey: .endpoints)
         try keyed.encode(featureRules, forKey: .featureRules)
         try keyed.encodeIfPresent(modelGroups, forKey: .modelGroups)
