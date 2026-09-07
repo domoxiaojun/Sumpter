@@ -737,7 +737,7 @@ final class SumpterCoreTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("config.json")
         let original = Data(#"""
-        {"schemaVersion":6,"listener":{"host":"127.0.0.1","port":57878},
+        {"schemaVersion":7,"listener":{"host":"127.0.0.1","port":57878},
          "retry":{"pinnedIPConcurrency":3,"sessionStickyRetries":2,"max500Retries":1},
          "endpoints":[{"id":"legacy","baseURL":"https://example.invalid","protocol":"auto",
           "pinnedIPs":["203.0.113.10","203.0.113.11"],"pinnedIP":"203.0.113.12","pinnedIPExclusive":true,
@@ -757,7 +757,7 @@ final class SumpterCoreTests: XCTestCase {
 
         try store.save(loaded.config)
         let saved = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
-        XCTAssertEqual(saved["schemaVersion"] as? Int, 6)
+        XCTAssertEqual(saved["schemaVersion"] as? Int, 7)
         let retry = try XCTUnwrap(saved["retry"] as? [String: Any])
         XCTAssertNil(retry["pinnedIPConcurrency"])
         let endpoints = try XCTUnwrap(saved["endpoints"] as? [[String: Any]])
@@ -778,13 +778,13 @@ final class SumpterCoreTests: XCTestCase {
         try Data(json.utf8).write(to: url)
 
         let result = try ConfigStore(url: url).loadWithMigration()
-        XCTAssertEqual(result.config.schemaVersion, 6)
+        XCTAssertEqual(result.config.schemaVersion, 7)
         XCTAssertEqual(result.config.pools[0].endpoints.map(\.protocolMode), [.auto, .auto])
         XCTAssertEqual(result.migrationNotice?.autoEndpointIDs, ["a", "b"])
         XCTAssertEqual(result.migrationNotice?.expandedLegacyPassthroughEndpoints, 2)
         XCTAssertNotNil(result.migrationNotice?.backupFile)
         let backups = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-            .filter { $0.lastPathComponent.contains("before-schema-v6") }
+            .filter { $0.lastPathComponent.contains("before-schema-v7") }
         XCTAssertEqual(backups.count, 1)
         let permissions = try XCTUnwrap(
             try FileManager.default.attributesOfItem(atPath: backups[0].path)[.posixPermissions]
@@ -792,7 +792,7 @@ final class SumpterCoreTests: XCTestCase {
         ).intValue
         XCTAssertEqual(permissions & 0o777, 0o600)
         let stored = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
-        XCTAssertEqual(stored?["schemaVersion"] as? Int, 6)
+        XCTAssertEqual(stored?["schemaVersion"] as? Int, 7)
         XCTAssertNil((stored?["listener"] as? [String: Any])?["inboundDialectPassthrough"])
 
         let secondLoad = try ConfigStore(url: url).loadWithMigration()
@@ -800,7 +800,7 @@ final class SumpterCoreTests: XCTestCase {
         let backupsAfterSecondLoad = try FileManager.default.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: nil
-        ).filter { $0.lastPathComponent.contains("before-schema-v6") }
+        ).filter { $0.lastPathComponent.contains("before-schema-v7") }
         XCTAssertEqual(backupsAfterSecondLoad.count, 1)
     }
 
@@ -832,7 +832,7 @@ final class SumpterCoreTests: XCTestCase {
         ]
         try JSONSerialization.data(withJSONObject: v4).write(to: url)
         let migrated = try ConfigStore(url: url).loadWithMigration()
-        XCTAssertEqual(migrated.config.schemaVersion, 6)
+        XCTAssertEqual(migrated.config.schemaVersion, 7)
         XCTAssertEqual(migrated.config.pools[0].endpoints[0].protocolMode, .auto)
         XCTAssertEqual(migrated.migrationNotice?.removedFields, [])
         let stored = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
@@ -890,7 +890,7 @@ final class SumpterCoreTests: XCTestCase {
         }
         XCTAssertFalse(
             try FileManager.default.contentsOfDirectory(atPath: directory.path)
-                .contains { $0.contains("before-schema-v6") }
+                .contains { $0.contains("before-schema-v7") }
         )
     }
 
@@ -911,7 +911,7 @@ final class SumpterCoreTests: XCTestCase {
         }
         XCTAssertFalse(
             try FileManager.default.contentsOfDirectory(atPath: directory.path)
-                .contains { $0.contains("before-schema-v6") }
+                .contains { $0.contains("before-schema-v7") }
         )
 
         let invalidProtocol = #"{"schemaVersion":4,"listener":{},"pools":[{"id":"primary","role":"primary","endpoints":[{"id":"a","baseURL":"https://a.example","protocol":"automatic"}]}],"featureRules":[]}"#
@@ -924,7 +924,7 @@ final class SumpterCoreTests: XCTestCase {
         }
         XCTAssertFalse(
             try FileManager.default.contentsOfDirectory(atPath: directory.path)
-                .contains { $0.contains("before-schema-v6") }
+                .contains { $0.contains("before-schema-v7") }
         )
     }
 
@@ -946,19 +946,19 @@ final class SumpterCoreTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), original)
         XCTAssertFalse(
             try FileManager.default.contentsOfDirectory(atPath: directory.path)
-                .contains { $0.contains("before-schema-v6") }
+                .contains { $0.contains("before-schema-v7") }
         )
     }
 
     func testMigrationNoticeDecodesRustSSEWire() throws {
-        let json = #"{"id":"migration-1","fromSchema":3,"toSchema":6,"backupFile":"config.before-schema-v6-1.json","endpointCount":2,"expandedLegacyPassthroughEndpoints":2,"convertedToAutoEndpointIds":["a","b"],"removedFields":["listener.inboundDialectPassthrough","pools[].endpoints[].searchDialect"]}"#
+        let json = #"{"id":"migration-1","fromSchema":3,"toSchema":7,"backupFile":"config.before-schema-v7-1.json","endpointCount":2,"expandedLegacyPassthroughEndpoints":2,"convertedToAutoEndpointIds":["a","b"],"removedFields":["listener.inboundDialectPassthrough","pools[].endpoints[].searchDialect"]}"#
 
         let notice = try JSONDecoder().decode(ConfigMigrationNotice.self, from: Data(json.utf8))
 
         XCTAssertEqual(notice.id, "migration-1")
         XCTAssertEqual(notice.autoEndpointIDs, ["a", "b"])
         XCTAssertEqual(notice.expandedLegacyPassthroughEndpoints, 2)
-        XCTAssertEqual(notice.toSchema, 6)
+        XCTAssertEqual(notice.toSchema, 7)
         XCTAssertEqual(notice.removedFields, ["listener.inboundDialectPassthrough", "pools[].endpoints[].searchDialect"])
     }
 
@@ -1189,7 +1189,7 @@ final class SumpterCoreTests: XCTestCase {
         for noise in ["\"id\":\"" + fallbackMapping.id, "secretRef", "pythonKind", "main_accounts", "backup_accounts", "modelPatterns"] {
             XCTAssertFalse(text.contains(noise), "配置里不该出现 \(noise)")
         }
-        XCTAssertTrue(text.contains("\"schemaVersion\":6"))
+        XCTAssertTrue(text.contains("\"schemaVersion\":7"))
     }
 
     func testConfigDecodesWithMissingOptionalKeys() throws {

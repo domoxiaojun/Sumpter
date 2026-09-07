@@ -89,6 +89,49 @@ function LocalToggle({ initial, label, title, ariaLabel, onChange }) {
 // surface.  The modal itself stores draft values in a closure for the save
 // action, but the input disabled state must still react immediately when the
 // user flips the switch.
+// 映射编辑器里的 Thinking/effort 联动控件。modal 的 content 是打开时创建的静态
+// JSX，闭包变量改写不会触发重渲染；切到「自适应」时必须靠组件内 state 才能让
+// effort 覆盖选择器动态出现。
+function MappingThinkingControls({ thinking: initialThinking, effort: initialEffort, onThinking, onEffort }) {
+  const [thinking, setThinking] = useState(initialThinking || 'disable');
+  const [effort, setEffort] = useState(initialEffort || 'auto');
+  return (
+    <div className="form-group">
+      <label className="form-label">思考模式 (Thinking)</label>
+      <select
+        className="form-select"
+        value={thinking}
+        onChange={(e) => {
+          setThinking(e.target.value);
+          if (onThinking) onThinking(e.target.value);
+        }}
+      >
+        <option value="adaptive">自适应 (Adaptive)</option>
+        <option value="passThrough">透传 (PassThrough)</option>
+        <option value="disable">禁用 (Disable)</option>
+      </select>
+      {thinking === 'adaptive' && (
+        <>
+          <label className="form-label" style={{ marginTop: 8 }}>思考级别覆盖</label>
+          <select
+            className="form-select"
+            value={effort}
+            onChange={(e) => {
+              setEffort(e.target.value);
+              if (onEffort) onEffort(e.target.value);
+            }}
+          >
+            <option value="auto">自动（跟随客户端）</option>
+            <option value="low">Low</option><option value="medium">Medium</option>
+            <option value="high">High</option><option value="xhigh">Xhigh</option>
+            <option value="max">Max</option><option value="ultra">Ultra</option>
+          </select>
+        </>
+      )}
+    </div>
+  );
+}
+
 function RetryDelayControls({ initialSeconds, initialEnabled, onChange }) {
   const [seconds, setSeconds] = useState(initialSeconds ?? '');
   const [enabled, setEnabled] = useState(Boolean(initialEnabled));
@@ -1039,25 +1082,12 @@ export function PrimaryProvidersPage() {
           </div>
 
           <div className="grid-2col">
-            <div className="form-group">
-              <label className="form-label">思考模式 (Thinking)</label>
-              <select className="form-select" defaultValue={thinking} onChange={(e) => { thinking = e.target.value; }}>
-                <option value="adaptive">自适应 (Adaptive)</option>
-                <option value="passThrough">透传 (PassThrough)</option>
-                <option value="disable">禁用 (Disable)</option>
-              </select>
-              {thinking === 'adaptive' && (
-                <>
-                  <label className="form-label" style={{ marginTop: 8 }}>思考级别覆盖</label>
-                  <select className="form-select" defaultValue={effort} onChange={(e) => { effort = e.target.value; }}>
-                    <option value="auto">自动（跟随客户端）</option>
-                    <option value="low">Low</option><option value="medium">Medium</option>
-                    <option value="high">High</option><option value="xhigh">Xhigh</option>
-                    <option value="max">Max</option><option value="ultra">Ultra</option>
-                  </select>
-                </>
-              )}
-            </div>
+            <MappingThinkingControls
+              thinking={thinking}
+              effort={effort}
+              onThinking={(value) => { thinking = value; }}
+              onEffort={(value) => { effort = value; }}
+            />
             <div className="form-group">
               <label className="form-label">上下文 (Context)</label>
               <select className="form-select" defaultValue={context} onChange={(e) => { context = e.target.value; }}>
@@ -1289,9 +1319,9 @@ export function PrimaryProvidersPage() {
         <div className="page-title-group">
           <h1 className="page-title">
             <Icon name="server" size={24} style={{ color: 'var(--primary)' }} />
-            <span>Provider</span>
+            <span>入口库</span>
           </h1>
-          <p className="page-subtitle">上游入口、优先级、粘性分组与入口显式模型映射。</p>
+          <p className="page-subtitle">统一维护上游地址、密钥和原始映射，供多个模型组复用。</p>
         </div>
         <div className="page-actions">
           <button
@@ -1327,7 +1357,7 @@ export function PrimaryProvidersPage() {
             每个入口都必须在“模型映射”中声明客户端模型、上游模型、Thinking 和上下文策略。
             精确模型名优先于 <code>prefix-*</code> 通配映射；点击入口后即可编辑。
           </p>
-          <span className="form-hint">每个 Provider 入口独立声明模型映射；系统按优先级、粘性组和协议能力形成候选序列。</span>
+          <span className="form-hint">模型组决定承接范围与组内入口优先级；这里的优先级用于旧配置和新增默认组。原始映射的模型参数继续继承。</span>
           <div className="grid-3col provider-overview-metrics" aria-label="Provider 入口概览">
             <div><span>入口总数</span><strong className="mono-cell">{endpoints.length}</strong></div>
             <div><span>已启用</span><strong className="mono-cell">{enabledEndpointCount}</strong></div>

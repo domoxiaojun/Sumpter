@@ -67,7 +67,7 @@ public enum ThinkingMode: String, Codable, Sendable, CaseIterable {
 }
 
 /// CPA / CLIProxyAPI 兼容的 reasoning effort 档位(模型名后缀 `model(high)`)。
-/// 与 CPA `ParseLevelSuffix` / 特殊值一致;`ultra` 故意不在列表中。
+/// 与 CPA `ParseLevelSuffix` / 特殊值一致;对齐 Rust `ReasoningEffort`(含 `ultra`)。
 public enum ReasoningEffort: String, Codable, Sendable, CaseIterable {
     case none
     case auto
@@ -77,6 +77,7 @@ public enum ReasoningEffort: String, Codable, Sendable, CaseIterable {
     case high
     case xhigh
     case max
+    case ultra
 
     public var displayName: String {
         switch self {
@@ -88,6 +89,7 @@ public enum ReasoningEffort: String, Codable, Sendable, CaseIterable {
         case .high: return "高"
         case .xhigh: return "很高"
         case .max: return "最高"
+        case .ultra: return "极致"
         }
     }
 }
@@ -351,6 +353,7 @@ public struct ModelMapping: Codable, Equatable, Sendable, Identifiable {
     public var clientPattern: ModelPattern
     public var upstreamModel: String
     public var thinking: ThinkingMode
+    public var effort: ReasoningEffort?
     public var context: ContextMode
     /// 该映射的首个响应超时;nil = 不额外设截止。
     public var failoverTimeoutSeconds: Double?
@@ -363,6 +366,7 @@ public struct ModelMapping: Codable, Equatable, Sendable, Identifiable {
         case clientPattern
         case upstreamModel
         case thinking
+        case effort
         case context
         case failoverTimeoutSeconds
         case capabilities
@@ -374,7 +378,8 @@ public struct ModelMapping: Codable, Equatable, Sendable, Identifiable {
         thinking: ThinkingMode = .disabled,
         context: ContextMode = .standard,
         failoverTimeoutSeconds: Double? = nil,
-        capabilities: [String] = []
+        capabilities: [String] = [],
+        effort: ReasoningEffort? = nil
     ) {
         self.clientPattern = clientPattern
         self.upstreamModel = upstreamModel
@@ -382,6 +387,7 @@ public struct ModelMapping: Codable, Equatable, Sendable, Identifiable {
         self.context = context
         self.failoverTimeoutSeconds = failoverTimeoutSeconds
         self.capabilities = capabilities
+        self.effort = effort
     }
 
     public init(from decoder: Decoder) throws {
@@ -391,6 +397,7 @@ public struct ModelMapping: Codable, Equatable, Sendable, Identifiable {
         thinking = try keyed.decodeIfPresent(ThinkingMode.self, forKey: .thinking) ?? .disabled
         context = try keyed.decodeIfPresent(ContextMode.self, forKey: .context) ?? .standard
         failoverTimeoutSeconds = try keyed.decodeIfPresent(Double.self, forKey: .failoverTimeoutSeconds)
+        effort = try keyed.decodeIfPresent(ReasoningEffort.self, forKey: .effort)
         capabilities = try keyed.decodeIfPresent([String].self, forKey: .capabilities) ?? []
     }
 
@@ -400,6 +407,7 @@ public struct ModelMapping: Codable, Equatable, Sendable, Identifiable {
         try keyed.encode(upstreamModel, forKey: .upstreamModel)
         try keyed.encode(thinking, forKey: .thinking)
         try keyed.encode(context, forKey: .context)
+        try keyed.encodeIfPresent(effort, forKey: .effort)
         try keyed.encodeIfPresent(failoverTimeoutSeconds, forKey: .failoverTimeoutSeconds)
         if !capabilities.isEmpty {
             try keyed.encode(capabilities, forKey: .capabilities)
@@ -414,6 +422,8 @@ public struct ModelMapping: Codable, Equatable, Sendable, Identifiable {
 
 /// 一个真实的上游入口:自带地址、Key、协议与模型映射。
 public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
+    public var modelGroupID: String? = nil
+    public var modelGroupRank: Int = 0
     public var id: String
     public var name: String
     public var baseURL: URL
@@ -518,10 +528,16 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         }
     }
 
-    /// 精确模型映射优先于通配映射；这样旧池级规则迁移出的 `foo-*` 不会
-    /// 遮蔽用户后来添加的 `foo-special` 精确映射。
+    /// 与共享引擎一致：精确映射优先，其次最长前缀；同级保持配置顺序。
     public func preferredMapping(for clientModel: String) -> ModelMapping? {
-        mapping(for: clientModel, exactOnly: true) ?? mapping(for: clientModel)
+        var best: ModelMapping?
+        var bestRank = (0, 0)
+        for mapping in mappings where mapping.clientPattern.matches(clientModel) {
+            let pattern = ModelName.clean(mapping.clientPattern.rawValue)
+            let rank = (pattern.hasSuffix("*") ? 1 : 2, pattern.utf8.count)
+            if rank > bestRank { best = mapping; bestRank = rank }
+        }
+        return best
     }
 
     public func hasMapping(clientPattern: String, excluding mappingID: String? = nil) -> Bool {
@@ -705,7 +721,7 @@ public struct RouteTarget: Codable, Equatable, Sendable {
 
     /// Legacy UI/source shim only. It is not a stored property and is never
     /// present in Codable output, so the pool concept cannot leak back to the
-    /// v6 configuration contract.
+    /// v7 configuration contract.
     @available(*, deprecated, message: "Provider 池已移除；请使用 endpointID")
     public var poolID: String {
         get { "providers" }
@@ -813,7 +829,7 @@ public enum BuiltInFeatureRules {
 }
 
 public struct AppConfig: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = 6
+    public static let currentSchemaVersion = 7
 
     public var schemaVersion: Int
     public var listener: ListenerConfig
@@ -822,6 +838,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
     /// 正式配置模型：Provider 候选按用户配置顺序扁平保存。
     public var endpoints: [Endpoint]
     public var featureRules: [FeatureRule]
+    public var modelGroups: [ModelGroup]?
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion
@@ -829,6 +846,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         case retry
         case endpoints
         case featureRules
+        case modelGroups
     }
 
     public init(
@@ -836,18 +854,20 @@ public struct AppConfig: Codable, Equatable, Sendable {
         listener: ListenerConfig = ListenerConfig(),
         retry: RetryPolicy = RetryPolicy(),
         endpoints: [Endpoint] = [],
-        featureRules: [FeatureRule] = []
+        featureRules: [FeatureRule] = [],
+        modelGroups: [ModelGroup]? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.listener = listener
         self.retry = retry
         self.endpoints = endpoints
         self.featureRules = featureRules
+        self.modelGroups = modelGroups
     }
 
     /// Legacy initializer retained for source compatibility with older App
     /// extensions and tests. It flattens pools in their existing order and is
-    /// never reflected in the encoded v6 document.
+    /// never reflected in the encoded v7 document.
     @available(*, deprecated, message: "Provider 池已移除；请使用 endpoints")
     public init(
         schemaVersion: Int = AppConfig.currentSchemaVersion,
@@ -866,6 +886,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         listener = try keyed.decodeIfPresent(ListenerConfig.self, forKey: .listener) ?? ListenerConfig()
         retry = try keyed.decodeIfPresent(RetryPolicy.self, forKey: .retry) ?? RetryPolicy()
         endpoints = try keyed.decodeIfPresent([Endpoint].self, forKey: .endpoints) ?? []
+        modelGroups = try keyed.decodeIfPresent([ModelGroup].self, forKey: .modelGroups)
         featureRules = BuiltInFeatureRules.normalized(
             try keyed.decodeIfPresent([FeatureRule].self, forKey: .featureRules) ?? []
         )
@@ -880,6 +901,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         try keyed.encode(retry, forKey: .retry)
         try keyed.encode(endpoints, forKey: .endpoints)
         try keyed.encode(featureRules, forKey: .featureRules)
+        try keyed.encodeIfPresent(modelGroups, forKey: .modelGroups)
     }
 
     /// 全新安装的空壳：没有 Provider 候选，内建分流规则全部停用。
@@ -890,6 +912,27 @@ public struct AppConfig: Codable, Equatable, Sendable {
 
     public func normalizedBuiltInFeatureRules() -> AppConfig {
         var copy = self
+        if var groups = copy.modelGroups {
+            for index in groups.indices {
+                let trimmedName = groups[index].name.trimmingCharacters(in: .whitespacesAndNewlines)
+                groups[index].name = trimmedName.isEmpty ? groups[index].id : trimmedName
+                groups[index].priority = max(0, groups[index].priority)
+                groups[index].models = groups[index].models.map(ModelName.clean)
+                for bindingIndex in groups[index].bindings.indices {
+                    groups[index].bindings[bindingIndex].priority = max(0, groups[index].bindings[bindingIndex].priority)
+                    if let selected = groups[index].bindings[bindingIndex].models {
+                        groups[index].bindings[bindingIndex].models = selected.map(ModelName.clean)
+                    }
+                    groups[index].bindings[bindingIndex].overrides = groups[index].bindings[bindingIndex].overrides.map {
+                        var item = $0
+                        item.model = ModelName.clean(item.model)
+                        item.upstreamModel = item.upstreamModel.map(ModelName.clean)
+                        return item
+                    }
+                }
+            }
+            copy.modelGroups = groups
+        }
         copy.featureRules = BuiltInFeatureRules.normalized(copy.featureRules)
         return copy
     }

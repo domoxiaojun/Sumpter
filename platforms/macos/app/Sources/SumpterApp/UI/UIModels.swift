@@ -57,6 +57,7 @@ struct MappingDisplayRow: Identifiable, Hashable {
     let clientPattern: String
     let upstreamModel: String
     let thinking: ThinkingMode
+    let effort: ReasoningEffort?
     let context: ContextMode
     let failoverTimeoutSeconds: Double?
 
@@ -67,6 +68,7 @@ struct MappingDisplayRow: Identifiable, Hashable {
         clientPattern = mapping.clientPattern.rawValue
         upstreamModel = mapping.upstreamModel
         thinking = mapping.thinking
+        effort = mapping.effort
         context = mapping.context
         failoverTimeoutSeconds = mapping.failoverTimeoutSeconds
     }

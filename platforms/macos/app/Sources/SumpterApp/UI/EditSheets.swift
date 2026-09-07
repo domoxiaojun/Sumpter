@@ -236,6 +236,7 @@ struct MappingEditorSheet: View {
     @State private var clientPattern: String
     @State private var upstreamModel: String
     @State private var thinking: ThinkingMode
+    @State private var effortChoice: String
     @State private var context: ContextMode
     @State private var failoverTimeout: String
     @State private var submission = SubmissionState.idle
@@ -248,6 +249,7 @@ struct MappingEditorSheet: View {
         _clientPattern = State(initialValue: mapping?.clientPattern ?? "")
         _upstreamModel = State(initialValue: mapping?.upstreamModel ?? "")
         _thinking = State(initialValue: mapping?.thinking ?? .passthrough)
+        _effortChoice = State(initialValue: mapping?.effort?.rawValue ?? "")
         _context = State(initialValue: mapping?.context ?? .standard)
         _failoverTimeout = State(initialValue: mapping?.failoverTimeoutSeconds.map { String($0) } ?? "")
     }
@@ -268,12 +270,26 @@ struct MappingEditorSheet: View {
                     TextField("留空则同名", text: $upstreamModel)
                 }
                 FormLine(title: "Thinking") {
-                    Picker("Thinking", selection: $thinking) {
-                        ForEach(ThinkingMode.allCases, id: \.rawValue) { mode in
-                            Text(mode.rawValue).tag(mode)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Picker("Thinking", selection: $thinking) {
+                            ForEach(ThinkingMode.allCases, id: \.rawValue) { mode in
+                                Text(mode.rawValue).tag(mode)
+                            }
+                        }
+                        .labelsHidden()
+                        if thinking == .adaptive {
+                            Picker("思考级别覆盖", selection: $effortChoice) {
+                                Text("自动（跟随客户端）").tag("")
+                                ForEach(ReasoningEffort.allCases, id: \.rawValue) { effort in
+                                    Text("\(effort.displayName)（\(effort.rawValue)）").tag(effort.rawValue)
+                                }
+                            }
+                            .labelsHidden()
+                            Text("仅在自适应模式下生效；留空跟随客户端 effort。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
-                    .labelsHidden()
                 }
                 FormLine(title: "上下文") {
                     Picker("上下文", selection: $context) {
@@ -307,6 +323,7 @@ struct MappingEditorSheet: View {
         Task {
             do {
                 let timeout = try InputValidation.optionalPositiveDouble(failoverTimeout, field: "首个超时")
+                let effort = ReasoningEffort(rawValue: effortChoice)
                 if let mapping {
                     try await model.updateProviderMapping(
                         endpointID: endpointID,
@@ -315,7 +332,8 @@ struct MappingEditorSheet: View {
                         upstreamModel: upstreamModel,
                         thinking: thinking,
                         context: context,
-                        failoverTimeoutSeconds: timeout
+                        failoverTimeoutSeconds: timeout,
+                        effort: effort
                     )
                 } else {
                     try await model.addProviderMapping(
@@ -324,7 +342,8 @@ struct MappingEditorSheet: View {
                         upstreamModel: upstreamModel,
                         thinking: thinking,
                         context: context,
-                        failoverTimeoutSeconds: timeout
+                        failoverTimeoutSeconds: timeout,
+                        effort: effort
                     )
                 }
                 submission.succeed()
