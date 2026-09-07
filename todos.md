@@ -280,3 +280,22 @@ let passthrough_intent = client_out.as_ref().is_some_and(|client| {
 - [x] `cargo fmt --all -- --check`
 - [x] `cargo test --workspace --locked`：0 失败
 - [x] `uv run scripts/sync-usage-docs.py --check`
+
+---
+
+## 2026-09-07 轮次：入口库模型映射的 effort 覆盖选项补全（两端）
+
+背景：`59877fc` 已让 Rust wire/引擎支持 `ModelMapping.effort`（adaptive 模式下覆盖客户端 effort，None=自动跟随）。Linux WebUI 编辑器写了选项但 thinking 联动是闭包静态值，切到 adaptive 时选择器不出现；macOS 端未接 UI 且更新映射会丢 effort，Swift `ReasoningEffort` 缺 `ultra`（wire 不对齐）。
+
+- [x] Linux WebUI：把映射编辑器 thinking→effort 联动改为带 useState 的内嵌组件
+      `MappingThinkingControls`，切到自适应时动态出现「思考级别覆盖」：
+      自动（跟随客户端）默认 + low/medium/high/xhigh/max/ultra
+- [x] macOS：`Models.swift` `ReasoningEffort` 补 `ultra` case（对齐 Rust wire），
+      同步更新 `ModelNameParsesCPAStyleEffortSuffix` 测试：`ultra` 后缀现在会剥离并解析
+- [x] macOS：`MappingEditorSheet` 在 thinking=adaptive 时显示 effort picker（空=自动跟随）
+- [x] macOS：`addProviderMapping` / `updateProviderMapping` 传 effort，
+      update 不再静默丢已有 effort；`MappingDisplayRow` 带上 effort
+- [x] 构建+测试全绿：WebUI `npm test` 132/132 + `npm run build`；Swift `swift build`
+      + `swift test`（修 ultra 断言后全过）；Rust `cargo test -p sumpter-core
+      --test routing` 46/46
+- [x] git 提交（Conventional Commits）：420684b

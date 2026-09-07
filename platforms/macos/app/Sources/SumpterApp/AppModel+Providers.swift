@@ -103,6 +103,8 @@ extension AppModel {
 
         var draft = config
         draft.endpoints[location.endpoint].enabled = enabled
+        draft.pruneDanglingEndpointReferences()
+        try draft.validateModelGroups()
         config = draft
 
         do {
@@ -177,7 +179,8 @@ extension AppModel {
         upstreamModel: String,
         thinking: ThinkingMode,
         context: ContextMode,
-        failoverTimeoutSeconds: Double? = nil
+        failoverTimeoutSeconds: Double? = nil,
+        effort: ReasoningEffort? = nil
     ) async throws {
         try await mutateConfig { config in
             let location = try Self.locate(endpointID: endpointID, in: config)
@@ -194,7 +197,8 @@ extension AppModel {
                 upstreamModel: upstream,
                 thinking: thinking,
                 context: context,
-                failoverTimeoutSeconds: failoverTimeoutSeconds
+                failoverTimeoutSeconds: failoverTimeoutSeconds,
+                effort: effort
             ))
         }
     }
@@ -241,6 +245,7 @@ extension AppModel {
         return result
     }
 
+    /// `effort` 传 nil = 自动跟随客户端；编辑器把「自适应 + 留空」清洗为 nil 落盘。
     func updateProviderMapping(
         endpointID: String,
         mappingID: String,
@@ -248,7 +253,8 @@ extension AppModel {
         upstreamModel: String,
         thinking: ThinkingMode,
         context: ContextMode,
-        failoverTimeoutSeconds: Double?
+        failoverTimeoutSeconds: Double?,
+        effort: ReasoningEffort? = nil
     ) async throws {
         try await mutateConfig { config in
             let location = try Self.locate(endpointID: endpointID, in: config)
@@ -275,7 +281,8 @@ extension AppModel {
                 thinking: thinking,
                 context: context,
                 failoverTimeoutSeconds: failoverTimeoutSeconds,
-                capabilities: existingCapabilities
+                capabilities: existingCapabilities,
+                effort: effort
             )
         }
     }
@@ -536,11 +543,29 @@ extension AppModel {
 
     /// 所有配置修改的唯一入口:在草稿上改,归一化内建规则,落盘并刷新引擎。
     func mutateConfig(_ body: (inout AppConfig) throws -> Void) async throws {
-        var draft = config
+        let previous = config
+        var draft = previous
         try body(&draft)
+        draft.pruneDanglingEndpointReferences()
+        try draft.validateModelGroups()
         draft.normalizeBuiltInFeatureRules()
         config = draft
-        try await persistConfigAndRefresh()
+        do {
+            try await persistConfigAndRefresh()
+        } catch {
+            let saveError = error
+            // Do not overwrite a newer edit that arrived while persistence
+            // was suspended. Otherwise restore both the visible and disk draft.
+            if config == draft {
+                config = previous
+                do {
+                    try await persistConfigAndRefresh()
+                } catch {
+                    throw AppModelError.invalidInput("保存失败（\(saveError.localizedDescription)），回滚也失败：\(error.localizedDescription)")
+                }
+            }
+            throw saveError
+        }
     }
 
     struct EndpointLocation {
