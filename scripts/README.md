@@ -36,6 +36,6 @@ node --test scripts/tests/*.test.mjs
 
 `clients/client-attribution.mjs` 是 Claude、Grok、Gemini、pi 的共用安装器；前三者还使用其中的启动包装逻辑。不要单独编辑 `clients/gemini-sumpter-wrapper.mjs`。`clients/pi-project-attribution.ts` 是 pi 扩展，修改后运行同一个客户端同步命令更新三个平台资源副本，检查入口和测试会检查一致性。
 
-平台 Shell 安装器、`cc-project-attribution.sh` 和 `grok-project-attribution.sh` 保留在平台目录；它们不由上述客户端同步工具生成，修改时应核对 Linux/macOS 脚本与 Swift App 内置资源。
+用户远程安装用 `platforms/linux/scripts/setup-client-attribution.sh`（默认从 GitHub raw 拉配套文件）。旧的 `cc-project-attribution.sh` / `grok-project-attribution.sh` 仍在平台目录，仅兼容已有安装；它们不由上述 Node 同步工具生成。
 
 `platforms/linux/scripts/`、`platforms/macos/scripts/` 和 macOS App 内置资源属于安装包布局，保留原来的文件名和位置。用户文档中的远程安装命令指向 GitHub 仓库 raw 与 Release；listener 的 `/__sumpter/` 仍可作为已运行代理的备用下载。

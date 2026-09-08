@@ -5,7 +5,7 @@
 1. **源码 monorepo**：本文件位于 `platforms/linux/README.md`。Rust 真源是仓库根 workspace 的 `sumpter-core` / `sumpter-runtime` / `sumpter-engine` 与 `sumpterd-linux`。
 2. **独立发布包**：发布阶段把 `platforms/linux/` 提升为包根。包内二进制名为 `sumpterd`，配置目录 `~/.config/sumpter` 或 `/var/lib/sumpter`，systemd 单元 `sumpter.service`，环境变量 `SUMPTER_*`。
 
-Linux 版以 standalone daemon 提供多协议代理、入口库、多个模型组、分流规则、failover、统计，以及与桌面 UI 信息架构对齐的本机 Web 管理界面。
+Linux 版以 standalone daemon 提供多协议代理、入口库、多个模型组、分流规则、failover、统计，以及与桌面 UI 信息架构对齐的本机 Web 管理界面。版本与 schema 与仓库根一致（现为 0.3.7 / schema v7）。用户安装看下文「自动安装、升级与卸载」，不要用 `docs/upstream/`。
 
 Linux 专属边界：
 
@@ -41,10 +41,12 @@ sumpter-linux-<arch>/
 │   ├── bootstrap-install.sh
 │   ├── bootstrap-uninstall.sh
 │   ├── uninstall.sh
-│   ├── cc-project-attribution.sh        # Claude Code 项目归因配置器(可选)
-│   ├── grok-project-attribution.sh      # Grok Build 项目归因配置器(可选)
-│   ├── gemini-sumpter-wrapper.mjs       # Gemini CLI 启动包装脚本(可选)
-│   └── pi-project-attribution.ts        # pi 项目与会话归因扩展(可选)
+│   ├── setup-client-attribution.sh      # 统一归因安装器（推荐）
+│   ├── client-attribution.mjs
+│   ├── pi-project-attribution.ts
+│   ├── gemini-sumpter-wrapper.mjs
+│   ├── cc-project-attribution.sh        # 旧 Claude 配置器，仅兼容已有安装
+│   └── grok-project-attribution.sh      # 旧 Grok 配置器，仅兼容已有安装
 ├── specs/admin-api.md
 ├── sumpter.service
 ├── sumpter-system.service
@@ -67,12 +69,13 @@ DMG 用仓库根 `scripts/build-macos-dmg.sh`。
 - `ci.yml`：main push、pull request 或手动触发；Rust fmt/check/test/clippy、WebUI 构建与测试、macOS App 构建与测试、文档与资源同步检查。
 - `release.yml`：使用同一个已有的 `vX.Y.Z` tag 同时构建 Linux 包、校验多架构容器并发布 GHCR 镜像和 macOS 包；所有构建成功后才运行唯一的 publish job。
 
-Release 固定提供：
+Release 固定提供 Linux 包，并推送 GHCR：
 
 ```text
 sumpter-linux-x86_64.tar.gz
 sumpter-linux-aarch64.tar.gz
 SHA256SUMS
+ghcr.io/domoxiaojun/sumpter:<version>   # 同时打 latest / 大版本标签
 ```
 
 所有第三方 Actions 固定到完整 commit SHA；Release 发布 job 才有 `contents:write` 和

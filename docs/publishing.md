@@ -32,7 +32,7 @@ shellcheck scripts/check.sh scripts/build-macos-dmg.sh
 actionlint
 ```
 
-检查现行文档链接与已修改平台安装脚本自测。Linux 和 macOS CI 都必须成功；macOS 本地通过不能证明 Linux 安装成功。容器只由 Linux CI 验证。
+检查现行文档链接与已修改平台安装脚本自测。Linux 和 macOS CI 都必须成功；macOS 本地通过不能证明 Linux 安装成功。多架构容器由 Release 工作流校验并推送 GHCR，不在普通 CI 里发布。
 
 生成源码候选时执行 `node scripts/maintenance/export-source.mjs /absolute/path/to/source-candidate`。在候选目录重新运行文档检查并核对旁置 SHA-256 清单。候选生成后继续修改源仓库会使其过时，应创建新候选，不覆盖旧目录。
 

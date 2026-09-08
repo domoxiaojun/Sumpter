@@ -1,6 +1,8 @@
 # Sumpter macOS
 
-macOS 产品是 SwiftUI 菜单栏 App + Rust sidecar。App 源码在 `app/`；sidecar 由根 workspace 的 `sumpterd-macos` 提供，经 `adapters/macos` 注入平台边界，通过 `127.0.0.1` Admin API 与 App 通信。
+macOS 产品是 SwiftUI 菜单栏 App + Rust sidecar，配置为 schema v7，版本与仓库根 [Cargo.toml](../../Cargo.toml) 一致。App 源码在 `app/`；sidecar 由根 workspace 的 `sumpterd-macos` 提供，经 `adapters/macos` 注入平台边界，通过 `127.0.0.1` Admin API 与 App 通信。
+
+正式包从 [GitHub Releases](https://github.com/domoxiaojun/sumpter/releases/latest) 下载 `sumpter-macos-*.dmg`。当前自动发布为 Apple Silicon、ad-hoc 签名、无公证。用户安装见 [`app/INSTALL.txt`](app/INSTALL.txt)，开箱见 [使用指南](../../USAGE.md)。
 
 源码与测试位置见 [项目结构](../../docs/project-structure.md)，开发环境见 [开发指南](../../docs/development.md)，共享依赖与平台边界见 [架构说明](../../docs/architecture.md)。
 
@@ -39,4 +41,4 @@ sidecar 使用共享引擎处理 HTTP、流式响应和 WebSocket。完整路径
 
 ## Gemini CLI
 
-App 资源内置 `gemini-sumpter-wrapper.mjs`。设置 `SUMPTER_GEMINI_BASE_URL` 与 `SUMPTER_AUTH_TOKEN` 后，用 `node` 调用该 wrapper；新会话自动带稳定的 `--session-id` 和 `X-Sumpter-Session-Id`，项目名通过 `SUMPTER_GEMINI_PROJECT` 显式声明。Gemini 使用 Developer API 原生路径，Vertex、OAuth、Service Account 和 Code Assist 不在范围内。
+推荐在 App「安全」页用统一安装器接入 Gemini。资源内也内置 `gemini-sumpter-wrapper.mjs`：设置 `SUMPTER_GEMINI_BASE_URL` 与 `SUMPTER_AUTH_TOKEN` 后用 `node` 调用；新会话自动带稳定的 `--session-id` 和 `X-Sumpter-Session-Id`，项目名通过 `SUMPTER_GEMINI_PROJECT` 显式声明。Gemini 使用 Developer API 原生路径，Vertex、OAuth、Service Account 和 Code Assist 不在范围内。

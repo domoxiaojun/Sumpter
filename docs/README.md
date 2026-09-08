@@ -1,13 +1,13 @@
 # 文档索引
 
-按任务选择入口。当前行为以源码、平台契约测试和现行文档共同核对，历史快照仅供追溯。
+按任务选择入口。当前产品版本以根 `Cargo.toml` 为准（0.3.7），磁盘格式为 schema v7，安装入口为 [GitHub Releases](https://github.com/domoxiaojun/sumpter/releases/latest) 与仓库 raw 脚本。行为以源码、平台契约测试和现行文档共同核对；`docs/upstream/` 与 `docs/archive/` 只作历史。
 
 ## 使用与运维
 
 | 用途 | 文档 |
 | --- | --- |
-| 产品、平台支持、快速入口 | [README](../README.md) |
-| 安装、客户端接入、排错 | [使用指南](../USAGE.md) |
+| 产品、版本、GitHub 安装 | [README](../README.md) |
+| 开箱、客户端接入、归因、排错 | [使用指南](../USAGE.md) |
 | 两端共用 schema v7 字段 | [配置说明](configuration.md) |
 | Linux 安装、服务管理与部署包 | [Linux 指南](../platforms/linux/README.md) |
 | macOS App、sidecar 与通知 | [macOS 指南](../platforms/macos/README.md) |

@@ -1,9 +1,9 @@
 # Sumpter使用指南
 
-给第一次安装并接入 Claude Code 或 Codex 的用户。
+给第一次安装并接入客户端的用户。当前版本 **0.3.7**，配置 **schema v7**。
 
-**范围**：安装入口、`config.json`、接 Claude Code / Codex、常见错误。  
-**不包含**：改源码、编译、发版、Git 远程。
+**范围**：从 GitHub 安装、填写 `config.json`、接入 Claude Code / Codex / Grok Build / Gemini CLI / pi、项目归因、常见错误。  
+**不包含**：改源码、编译、发版。
 
 
 <!-- BEGIN SUMPTER_CANONICAL_ONBOARDING -->
@@ -199,9 +199,9 @@ experimental_bearer_token = "填 listener.authToken（未启用鉴权时删除�
 
 | 你想做什么 | 读哪份 |
 |---|---|
-| 产品定位与仓库地图 | [`README.md`](README.md) |
+| 产品定位、当前版本、安装入口 | [`README.md`](README.md) |
 | 开箱、接客户端、排错 | 本文 |
-| 每个配置字段的含义 | [`docs/configuration.md`](docs/configuration.md)（两端同一份 schema） |
+| 每个配置字段的含义 | [`docs/configuration.md`](docs/configuration.md)（两端同一份 schema v7） |
 | Linux 安装、systemd、Docker、Admin 反代 | [`platforms/linux/README.md`](platforms/linux/README.md) |
 | macOS 首次打开被拦截 | [`platforms/macos/app/INSTALL.txt`](platforms/macos/app/INSTALL.txt) |
 | 改代码 / 架构 | [`docs/architecture.md`](docs/architecture.md)、[`AGENTS.md`](AGENTS.md) |
@@ -634,7 +634,7 @@ curl 风格 `名字: 值`，**一行一个**，三个都可选。但手工设有
 | 进程起不来 | 配置路径对不对；是不是只有 `keys.json`；JSON 是否合法；权限是否 0600；`schemaVersion` 是否为 7（旧文件应能自动迁移） |
 | Claude Code 连不上 | `ANTHROPIC_BASE_URL` 是否指向当前 `host:port` |
 | 401 | `authToken` 开了但客户端没带，或带错 |
-| 400 `route_planning` | 没有任何入口的 `mappings` 声明该模型，或声明它的入口全部停用；空 `mappings` 等于不接模型 |
+| 400 `route_planning` | 启用的模型组未声明该客户端模型，或组内没有启用入口；旧配置则看入口 `mappings`。空 mappings / 空模型组都不接模型 |
 | Codex 连不上 | `base_url` 是否指向当前 `host:port`（常见带 `/v1`）；模型名是否写在 `mappings`；`authToken` 开了但没配成 API key |
 | 用量统计突然断了 | 改过 `endpoints[].id` |
 | Linux 管理页 Failed to fetch | 没登录，或 Admin 不在 `57879`，或 daemon 没起来 |
@@ -646,12 +646,13 @@ curl 风格 `名字: 值`，**一行一个**，三个都可选。但手工设有
 
 ## 10. Agent 操作清单（帮用户配置时）
 
-1. 问清：macOS 还是 Linux；要接 Claude Code、Codex 还是两者。
-2. 定位配置文件路径；没有就从 example 复制，不要用仓库里的 example 当生产文件原地填 key。
-3. 向用户要：每个 Provider 入口的 baseURL + key，以及客户端实际会发的模型名。
-4. 写入 `config.json`，确认 `schemaVersion: 7`、顶层是 `endpoints`（没有 `pools`），且至少一条入口为 `enabled: true` 并带覆盖客户端模型的 `mappings`。
-5. 告诉用户怎么设 `ANTHROPIC_BASE_URL`（以及可选 `ANTHROPIC_AUTH_TOKEN`）。接 Codex 时给一份 `~/.codex/config.toml` 的 `model_providers` 片段。
-6. **不要**把 key 写进回复；**不要** `git add` 配置；**不要**改源码。
+1. 问清平台（macOS / Linux）和客户端（Claude Code、Codex、Grok Build、Gemini CLI、pi）。
+2. 安装走 GitHub：macOS 下 Releases 的 DMG；Linux 用 `install.sh --repo domoxiaojun/sumpter`，需要时加 `--admin-host`。
+3. 定位配置文件路径；没有就从 example 复制，不要在仓库 example 里填真实 key。
+4. 写入 `config.json`，确认 `schemaVersion: 7`、顶层是 `endpoints` 与可选 `modelGroups`（没有 `pools`），至少一条入口 `enabled: true`，客户端模型被模型组或 `mappings` 接住。
+5. 告诉用户对应客户端的 Base URL：Claude Code 用根地址；Codex 必须带 `/v1`；pi 要设 `X-Sumpter-Client: pi`。
+6. 需要项目统计时，macOS 用 App 安全页；Linux 从仓库 raw 下载 `setup-client-attribution.sh`。
+7. **不要**把 key 写进回复；**不要** `git add` 配置；**不要**改源码。
 
 #### Gemini CLI 客户端 wrapper
 
