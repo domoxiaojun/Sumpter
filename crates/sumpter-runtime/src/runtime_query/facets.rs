@@ -45,6 +45,18 @@ pub(super) fn analytics_facets_for_filter(
     // filter. This prevents a selected value from making the next picker
     // appear empty; the selected value is retained with count 0 when the
     // remaining filters are incompatible.
+    let mut client_variant_facet_filter = filters.clone();
+    client_variant_facet_filter.client_variant = None;
+    let mut agent_role_facet_filter = filters.clone();
+    agent_role_facet_filter.agent_role = None;
+    let mut agent_name_facet_filter = filters.clone();
+    agent_name_facet_filter.agent_name = None;
+    let mut parent_thread_id_facet_filter = filters.clone();
+    parent_thread_id_facet_filter.parent_thread_id = None;
+    let mut parent_turn_id_facet_filter = filters.clone();
+    parent_turn_id_facet_filter.parent_turn_id = None;
+    let mut root_turn_id_facet_filter = filters.clone();
+    root_turn_id_facet_filter.root_turn_id = None;
     let mut client_facet_filter = filters.clone();
     client_facet_filter.client_kind = None;
     let mut endpoint_facet_filter = filters.clone();
@@ -91,7 +103,8 @@ pub(super) fn analytics_facets_for_filter(
     let sql = format!(
         "SELECT outcome,client_kind,request_purpose,request_id,endpoint_id,
                 effective_model,project_id,project_name,session_key,
-                failure_kind,failure_phase,attribution_scope,timestamp
+                failure_kind,failure_phase,client_variant,agent_role,agent_name,parent_thread_id,parent_turn_id,root_turn_id,
+                attribution_scope,timestamp
            FROM runtime_events{}",
         base.where_sql()
     );
@@ -109,11 +122,23 @@ pub(super) fn analytics_facets_for_filter(
             session_id: row.get(8)?,
             failure_kind: row.get(9)?,
             failure_phase: row.get(10)?,
-            attribution_scope: row.get(11)?,
-            timestamp: row.get(12)?,
+            client_variant: row.get(11)?,
+            agent_role: row.get(12)?,
+            agent_name: row.get(13)?,
+            parent_thread_id: row.get(14)?,
+            parent_turn_id: row.get(15)?,
+            root_turn_id: row.get(16)?,
+            attribution_scope: row.get(17)?,
+            timestamp: row.get(18)?,
         })
     })?;
     let mut client_counts = HashMap::<String, i64>::new();
+    let mut client_variant_counts = HashMap::<String, i64>::new();
+    let mut agent_role_counts = HashMap::<String, i64>::new();
+    let mut agent_name_counts = HashMap::<String, i64>::new();
+    let mut parent_thread_counts = HashMap::<String, i64>::new();
+    let mut parent_turn_counts = HashMap::<String, i64>::new();
+    let mut root_turn_counts = HashMap::<String, i64>::new();
     let mut endpoint_counts = HashMap::<String, i64>::new();
     let mut project_counts = HashMap::<String, i64>::new();
     let mut session_counts = HashMap::<String, i64>::new();
@@ -123,6 +148,52 @@ pub(super) fn analytics_facets_for_filter(
     let mut failure_phase_counts = HashMap::<String, i64>::new();
     for row in rows {
         let row = row?;
+        if facet_row_matches(&row, &root_turn_id_facet_filter, FacetDimension::RootTurn) {
+            increment_facet(
+                &mut root_turn_counts,
+                row.root_turn_id.as_deref(),
+                "unknown",
+            );
+        }
+        if facet_row_matches(
+            &row,
+            &parent_turn_id_facet_filter,
+            FacetDimension::ParentTurn,
+        ) {
+            increment_facet(
+                &mut parent_turn_counts,
+                row.parent_turn_id.as_deref(),
+                "unknown",
+            );
+        }
+        if facet_row_matches(
+            &row,
+            &parent_thread_id_facet_filter,
+            FacetDimension::ParentThread,
+        ) {
+            increment_facet(
+                &mut parent_thread_counts,
+                row.parent_thread_id.as_deref(),
+                "unknown",
+            );
+        }
+        if facet_row_matches(&row, &agent_name_facet_filter, FacetDimension::AgentName) {
+            increment_facet(&mut agent_name_counts, row.agent_name.as_deref(), "unknown");
+        }
+        if facet_row_matches(&row, &agent_role_facet_filter, FacetDimension::AgentRole) {
+            increment_facet(&mut agent_role_counts, row.agent_role.as_deref(), "unknown");
+        }
+        if facet_row_matches(
+            &row,
+            &client_variant_facet_filter,
+            FacetDimension::ClientVariant,
+        ) {
+            increment_facet(
+                &mut client_variant_counts,
+                row.client_variant.as_deref(),
+                "unknown",
+            );
+        }
         if facet_row_matches(&row, &client_facet_filter, FacetDimension::Client) {
             increment_facet(
                 &mut client_counts,
@@ -189,6 +260,12 @@ pub(super) fn analytics_facets_for_filter(
         }
     }
     let mut client_kinds = facet_rows_from_counts(client_counts);
+    let mut client_variants = facet_rows_from_counts(client_variant_counts);
+    let mut agent_roles = facet_rows_from_counts(agent_role_counts);
+    let mut agent_names = facet_rows_from_counts(agent_name_counts);
+    let mut parent_threads = facet_rows_from_counts(parent_thread_counts);
+    let mut parent_turns = facet_rows_from_counts(parent_turn_counts);
+    let mut root_turns = facet_rows_from_counts(root_turn_counts);
     let mut endpoints = facet_rows_from_counts(endpoint_counts);
     let mut projects = facet_rows_from_counts(project_counts);
     let mut sessions = facet_rows_from_counts(session_counts);
@@ -197,6 +274,12 @@ pub(super) fn analytics_facets_for_filter(
     let mut failure_kinds = facet_rows_from_counts(failure_kind_counts);
     let mut failure_phases = facet_rows_from_counts(failure_phase_counts);
     ensure_facet_selection(&mut client_kinds, filters.client_kind.as_deref());
+    ensure_facet_selection(&mut client_variants, filters.client_variant.as_deref());
+    ensure_facet_selection(&mut agent_roles, filters.agent_role.as_deref());
+    ensure_facet_selection(&mut agent_names, filters.agent_name.as_deref());
+    ensure_facet_selection(&mut parent_threads, filters.parent_thread_id.as_deref());
+    ensure_facet_selection(&mut parent_turns, filters.parent_turn_id.as_deref());
+    ensure_facet_selection(&mut root_turns, filters.root_turn_id.as_deref());
     ensure_facet_selection(&mut endpoints, filters.endpoint_id.as_deref());
     ensure_facet_selection(
         &mut projects,
@@ -212,6 +295,12 @@ pub(super) fn analytics_facets_for_filter(
     ensure_facet_selection(&mut failure_phases, filters.failure_phase.as_deref());
     Ok(AnalyticsFacets {
         client_kinds,
+        client_variants,
+        agent_roles,
+        agent_names,
+        parent_threads,
+        parent_turns,
+        root_turns,
         endpoints,
         projects,
         sessions,
@@ -235,12 +324,24 @@ struct FacetProjectionRow {
     session_id: Option<String>,
     failure_kind: Option<String>,
     failure_phase: Option<String>,
+    client_variant: Option<String>,
+    agent_role: Option<String>,
+    agent_name: Option<String>,
+    parent_thread_id: Option<String>,
+    parent_turn_id: Option<String>,
+    root_turn_id: Option<String>,
     attribution_scope: Option<String>,
     timestamp: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
 enum FacetDimension {
+    ClientVariant,
+    AgentRole,
+    AgentName,
+    ParentThread,
+    ParentTurn,
+    RootTurn,
     Client,
     Endpoint,
     Project,
@@ -270,6 +371,38 @@ fn facet_row_matches(
         || !matches(&row.failure_phase, filter.failure_phase.as_ref())
         || filter.from.is_some_and(|from| row.timestamp < from)
         || filter.to.is_some_and(|to| row.timestamp > to)
+    {
+        return false;
+    }
+    if !filter
+        .client_variant
+        .as_deref()
+        .is_none_or(|expected| row.client_variant.as_deref().unwrap_or("unknown") == expected)
+        || !filter
+            .agent_role
+            .as_deref()
+            .is_none_or(|expected| row.agent_role.as_deref().unwrap_or("unknown") == expected)
+            && !matches!(ignored, FacetDimension::AgentRole)
+        || !filter
+            .agent_name
+            .as_deref()
+            .is_none_or(|expected| row.agent_name.as_deref().unwrap_or("unknown") == expected)
+            && !matches!(ignored, FacetDimension::AgentName)
+        || !filter
+            .parent_thread_id
+            .as_deref()
+            .is_none_or(|expected| row.parent_thread_id.as_deref().unwrap_or("unknown") == expected)
+            && !matches!(ignored, FacetDimension::ParentThread)
+        || !filter
+            .parent_turn_id
+            .as_deref()
+            .is_none_or(|expected| row.parent_turn_id.as_deref().unwrap_or("unknown") == expected)
+            && !matches!(ignored, FacetDimension::ParentTurn)
+        || !filter
+            .root_turn_id
+            .as_deref()
+            .is_none_or(|expected| row.root_turn_id.as_deref().unwrap_or("unknown") == expected)
+            && !matches!(ignored, FacetDimension::RootTurn)
     {
         return false;
     }

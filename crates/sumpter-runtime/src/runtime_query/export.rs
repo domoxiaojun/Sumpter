@@ -110,7 +110,7 @@ where
                 "seq,changeSeq,eventID,requestID,timestamp,kind,payloadJSON\n"
             }
             ExportScope::Events => {
-                "seq,changeSeq,eventID,requestID,timestamp,kind,outcome,statusCode,clientKind,requestPurpose,endpointID,endpointName,model,projectID,projectName,sessionID,failureKind,failurePhase,upstreamStatusCode,durationMS,ttfbMS,failover,inputTokens,outputTokens,cacheReadInputTokens,cacheCreationInputTokens,reasoningTokens,processedInputTokens,processedTotalTokens\n"
+                "seq,changeSeq,eventID,requestID,timestamp,kind,outcome,statusCode,clientKind,requestPurpose,endpointID,endpointName,model,projectID,projectName,sessionID,failureKind,failurePhase,upstreamStatusCode,durationMS,ttfbMS,failover,inputTokens,outputTokens,cacheReadInputTokens,cacheCreationInputTokens,reasoningTokens,processedInputTokens,processedTotalTokens,clientVariant,agentRole,agentName,parentThreadID,parentTurnID,rootTurnID\n"
             }
             ExportScope::Projects | ExportScope::Sessions => {
                 "key,name,source,requests,successes,failures,cancelled,failovers,inputTokens,outputTokens,cacheReadInputTokens,cacheCreationInputTokens,processedTotalTokens,firstSeen,lastSeen,relatedCount,workspacePaths\n"
@@ -210,7 +210,7 @@ where
                 project_id,project_name,session_key,failure_kind,failure_phase,\
                 upstream_status_code,duration_ms,ttfb_ms,failover,input_tokens,output_tokens,\
                 cache_read_input_tokens,cache_creation_input_tokens,reasoning_tokens,\
-                processed_input_tokens,processed_total_tokens{payload_column} \
+                processed_input_tokens,processed_total_tokens,client_variant,agent_role,agent_name,parent_thread_id,parent_turn_id,root_turn_id{payload_column} \
          FROM runtime_events{} ORDER BY seq ASC",
         builder.where_sql()
     );
@@ -247,7 +247,13 @@ where
             reasoning_tokens: row.get(26)?,
             processed_input_tokens: row.get(27)?,
             processed_total_tokens: row.get(28)?,
-            payload_json: stored.then(|| row.get(29)).transpose()?,
+            client_variant: row.get(29)?,
+            agent_role: row.get(30)?,
+            agent_name: row.get(31)?,
+            parent_thread_id: row.get(32)?,
+            parent_turn_id: row.get(33)?,
+            root_turn_id: row.get(34)?,
+            payload_json: stored.then(|| row.get(35)).transpose()?,
         };
         let bytes = export_event_bytes(&event, query)?;
         export_send(sink, bytes, bytes_written)?;
@@ -306,6 +312,13 @@ fn export_event_bytes(event: &ExportEventRow, query: &ExportQuery) -> QueryResul
                 "reasoningTokens": event.reasoning_tokens,
                 "processedInputTokens": event.processed_input_tokens,
                 "processedTotalTokens": event.processed_total_tokens,
+                "clientVariant": event.client_variant,
+                "agentRole": event.agent_role,
+                "agentName": redact_optional("agent", event.agent_name.as_deref(), query.privacy),
+                "parentThreadID": redact_optional("thread", event.parent_thread_id.as_deref(), query.privacy),
+                "parentTurnID": redact_optional("turn", event.parent_turn_id.as_deref(), query.privacy),
+                "rootTurnID": redact_optional("turn", event.root_turn_id.as_deref(), query.privacy),
+
             })
         };
         let mut bytes = serde_json::to_vec(&value)
@@ -355,6 +368,16 @@ fn export_event_bytes(event: &ExportEventRow, query: &ExportQuery) -> QueryResul
             option_csv(event.reasoning_tokens),
             option_csv(event.processed_input_tokens),
             option_csv(event.processed_total_tokens),
+            event.client_variant.clone().unwrap_or_default(),
+            event.agent_role.clone().unwrap_or_default(),
+            redact_optional("agent", event.agent_name.as_deref(), query.privacy)
+                .unwrap_or_default(),
+            redact_optional("thread", event.parent_thread_id.as_deref(), query.privacy)
+                .unwrap_or_default(),
+            redact_optional("turn", event.parent_turn_id.as_deref(), query.privacy)
+                .unwrap_or_default(),
+            redact_optional("turn", event.root_turn_id.as_deref(), query.privacy)
+                .unwrap_or_default(),
         ]
     };
     Ok(csv_line(fields).into_bytes())

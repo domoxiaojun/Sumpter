@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use sumpter_core::config::AppConfig;
@@ -60,7 +60,8 @@ pub struct EngineInner {
     pub(super) capture_index: Mutex<DiagnosticCaptureIndexCache>,
     pub(super) notices: tokio::sync::broadcast::Sender<EngineNotice>,
     pub(super) started_at: Instant,
-    pub(super) runtime_store: Option<RuntimeStore>,
+    pub(super) runtime_store: OnceLock<RuntimeStore>,
+    pub(super) runtime_database_issue: Mutex<Option<crate::runtime_store::RuntimeDatabaseIssue>>,
     pub(super) runtime_write: Mutex<()>,
     pub(super) realtime_client_secrets: Mutex<HashMap<String, RealtimeClientSecretEntry>>,
     pub(super) live_sessions: Mutex<HashMap<String, LiveSessionEntry>>,
@@ -118,6 +119,11 @@ impl Engine {
             },
             None => (None, RuntimeSnapshot::default(), true, None),
         };
+        let runtime_database_issue = dir.as_ref().and_then(|dir| {
+            RuntimeStore::database_issue(&dir.root.join("runtime.sqlite3"))
+                .ok()
+                .flatten()
+        });
         let now = now_unix();
         let (session_sticky, session_affinity_writable, session_affinity_pruned) =
             match dir.as_ref().map(ConfigDir::load_session_affinity) {
@@ -239,7 +245,8 @@ impl Engine {
                 started_at: Instant::now(),
                 capture_index: Mutex::new(capture_index_cache_from_capture(&capture)),
                 capture: Mutex::new(capture),
-                runtime_store,
+                runtime_store: runtime_store.map(OnceLock::from).unwrap_or_default(),
+                runtime_database_issue: Mutex::new(runtime_database_issue),
                 runtime_write: Mutex::new(()),
                 realtime_client_secrets: Mutex::new(HashMap::new()),
                 live_sessions: Mutex::new(live_sessions),

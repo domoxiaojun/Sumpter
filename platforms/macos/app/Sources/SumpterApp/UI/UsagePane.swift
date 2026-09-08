@@ -43,6 +43,19 @@ private struct RecreateDatabaseButton: View {
     }
 }
 
+
+private struct AttributionFacetPicker: View {
+    let title: String
+    @Binding var selection: String
+    let rows: [AdminWire.RuntimeAnalytics.FacetRow]
+    var body: some View {
+        Picker(title, selection: $selection) {
+            Text("不限\(title)").tag("")
+            ForEach(rows) { item in Text("\(item.value) · \(item.count)").tag(item.value) }
+        }
+    }
+}
+
 private struct RuntimeCleanupSheet: View {
     @ObservedObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -598,6 +611,13 @@ struct UsagePane: View {
 
     var body: some View {
         SettingsPage(title: "统计", subtitle: "请求统计") {
+            if let issue = model.runtimeSummary?.startupIssue {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("运行统计数据库需要重建", systemImage: "exclamationmark.triangle.fill").font(.headline)
+                    Text(issue.message).font(.callout).foregroundStyle(.secondary)
+                    RecreateDatabaseButton(model: model)
+                }.padding(14).background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+            }
             analyticsControlsPanel
             selectedBoardContent
         }
@@ -876,6 +896,12 @@ struct UsagePane: View {
                 Text("\(clientDisplayName(item.value)) · \(item.count)").tag(item.value)
             }
         }
+        AttributionFacetPicker(title: "客户端变体", selection: Binding(get: { model.runtimeAnalyticsClientVariant }, set: { model.setRuntimeAnalyticsFilters(clientVariant: $0) }), rows: facets?.clientVariants ?? [])
+        AttributionFacetPicker(title: "代理角色", selection: Binding(get: { model.runtimeAnalyticsAgentRole }, set: { model.setRuntimeAnalyticsFilters(agentRole: $0) }), rows: facets?.agentRoles ?? [])
+        AttributionFacetPicker(title: "代理名称", selection: Binding(get: { model.runtimeAnalyticsAgentName }, set: { model.setRuntimeAnalyticsFilters(agentName: $0) }), rows: facets?.agentNames ?? [])
+        AttributionFacetPicker(title: "父线程", selection: Binding(get: { model.runtimeAnalyticsParentThreadID }, set: { model.setRuntimeAnalyticsFilters(parentThreadID: $0) }), rows: facets?.parentThreads ?? [])
+        AttributionFacetPicker(title: "父回合", selection: Binding(get: { model.runtimeAnalyticsParentTurnID }, set: { model.setRuntimeAnalyticsFilters(parentTurnID: $0) }), rows: facets?.parentTurns ?? [])
+        AttributionFacetPicker(title: "根回合", selection: Binding(get: { model.runtimeAnalyticsRootTurnID }, set: { model.setRuntimeAnalyticsFilters(rootTurnID: $0) }), rows: facets?.rootTurns ?? [])
         Picker("模型", selection: Binding(
             get: { model.runtimeAnalyticsModel },
             set: { model.setRuntimeAnalyticsFilters(model: $0) }
@@ -922,7 +948,7 @@ struct UsagePane: View {
             }
         }
         Button("清除筛选") {
-            model.setRuntimeAnalyticsFilters(clientKind: "", endpointID: "", project: "", sessionID: "", model: "", requestPurpose: "", outcome: "", failureKind: "", failurePhase: "")
+            model.setRuntimeAnalyticsFilters(clientKind: "", clientVariant: "", agentRole: "", agentName: "", parentThreadID: "", parentTurnID: "", rootTurnID: "", endpointID: "", project: "", sessionID: "", model: "", requestPurpose: "", outcome: "", failureKind: "", failurePhase: "")
         }
         .disabled(!hasActiveRuntimeFilters)
     }
@@ -2882,6 +2908,7 @@ struct UsagePane: View {
     private var hasActiveRuntimeFilters: Bool {
         let globalFilters = [
             model.runtimeAnalyticsClientKind,
+            model.runtimeAnalyticsClientVariant, model.runtimeAnalyticsAgentRole, model.runtimeAnalyticsAgentName, model.runtimeAnalyticsParentThreadID, model.runtimeAnalyticsParentTurnID, model.runtimeAnalyticsRootTurnID,
             model.runtimeAnalyticsEndpointID,
             model.runtimeAnalyticsProject,
             model.runtimeAnalyticsSessionID,

@@ -25,7 +25,7 @@ npm ci --prefix platforms/linux/webui
 ./scripts/check.sh macos
 ```
 
-`./scripts/check.sh all` 执行 docs、rust、web，并在 macOS 上追加 App 检查；Linux 会明确报告跳过 App。本机不运行 Docker；多架构镜像由 Release 工作流校验并推送 GHCR。`web` 会重建受版本控制的静态资源，随后检查与工作区是否一致；更新 UI 的首次构建应先单独执行下面的同步命令，再审阅产物。
+`./scripts/check.sh all` 执行 docs、rust、web，并在 macOS 上追加 App 检查；Linux 会明确报告跳过 App。本机不运行 Docker；多架构镜像由 Release 工作流校验并推送 GHCR。`web` 会重建静态资源，再用 `git diff` 检查产物与 Git 索引是否一致，并拒绝新增未跟踪资源。开发中源码与产物都未暂存时，这一检查会因预期差异退出，即使测试和构建已通过；应分别报告测试、构建和产物提交状态，不为通过检查而自动暂存或提交。
 
 ## 按变更选择验证
 

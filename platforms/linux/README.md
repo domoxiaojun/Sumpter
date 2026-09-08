@@ -5,7 +5,7 @@
 1. **源码 monorepo**：本文件位于 `platforms/linux/README.md`。Rust 真源是仓库根 workspace 的 `sumpter-core` / `sumpter-runtime` / `sumpter-engine` 与 `sumpterd-linux`。
 2. **独立发布包**：发布阶段把 `platforms/linux/` 提升为包根。包内二进制名为 `sumpterd`，配置目录 `~/.config/sumpter` 或 `/var/lib/sumpter`，systemd 单元 `sumpter.service`，环境变量 `SUMPTER_*`。
 
-Linux 版以 standalone daemon 提供多协议代理、入口库、多个模型组、分流规则、failover、统计，以及与桌面 UI 信息架构对齐的本机 Web 管理界面。版本与 schema 与仓库根一致（现为 0.3.9 / schema v7）。用户安装看下文「自动安装、升级与卸载」。
+Linux 版以 standalone daemon 提供多协议代理、入口库、多个模型组、分流规则、failover、统计，以及与桌面 UI 信息架构对齐的本机 Web 管理界面。版本与 schema 与仓库根一致（现为 0.4.0 / schema v7）。用户安装看下文「自动安装、升级与卸载」。
 
 Linux 专属边界：
 
@@ -145,14 +145,14 @@ unit 或数据目录不在范围内。
 curl --proto '=https' --tlsv1.2 -fLo /tmp/sumpter-migrate-kekulv.sh \
   https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/migrate-kekulv.sh
 sudo bash /tmp/sumpter-migrate-kekulv.sh --check
-# 省略 --version 即下载 latest；钉死版本再加 --version v0.3.9
+# 省略 --version 即下载 latest；钉死版本再加 --version v0.4.0
 sudo bash /tmp/sumpter-migrate-kekulv.sh --admin-host 0.0.0.0
 ```
 
 | 参数 | 作用 |
 | --- | --- |
 | （默认） | 下载 `https://github.com/domoxiaojun/sumpter/releases/latest/download/` 下当前架构包 |
-| `--version vX.Y.Z` | 改为该 tag 的 Release 资产，例如 `.../download/v0.3.9/` |
+| `--version vX.Y.Z` | 改为该 tag 的 Release 资产，例如 `.../download/v0.4.0/` |
 | `--admin-host` / `--admin-port` | 写入新服务的 Admin 监听，与下载无关；省略则沿用旧 drop-in |
 | `--check` | 只检查布局和参数，**不下载、不停服、不改文件** |
 
@@ -164,7 +164,7 @@ sudo bash /tmp/sumpter-migrate-kekulv.sh --admin-host 0.0.0.0
 已有 `/opt/sumpter` 或 `sumpter.service`、自定义 ExecStart/drop-in、外部密码路径或链接数据
 会在停服前拒绝。公网 Admin 仍走原来的 HTTPS 反代。`/healthz` 通过不等于代理请求已验证。
 
-迁移改的是服务器上的 daemon，**不会**改笔记本上的 Claude / Grok / Gemini / pi。客户端继续把
+迁移改的是服务器上的 daemon，**不会**改笔记本上的 Claude / Grok / Gemini / Codex / pi。客户端继续把
 Base URL 指到这台机器；项目统计要在**启动客户端的电脑**上处理，见下一节，不要在这台
 Linux 上对 shell 做归因安装。
 
@@ -659,7 +659,7 @@ Completions、Images、Alpha Search 和 Claude Count Tokens 共用上述路由�
 `/backend-api/codex/...` 直连别名。原生 JSON 请求除路由后的 `model` 外保留全部参数，Grok
 图片的 `aspect_ratio` / `resolution` 等字段同样不会丢失；multipart 图片编辑不重建 body 或
 `Content-Type`。WebUI 在 Provider 编辑器中选择入口协议；Security 页不再提供全局透传开关。
-`auto` 只表示入口支持三种协议，不会发给上游；SourceFormat 只由路径决定，UA 和请求体形状
+`auto` 只表示入口支持四种协议，不会发给上游；SourceFormat 只由路径决定，UA 和请求体形状
 不参与协议选择。Provider 不再声明独立 WebSearch 能力；严格 WebSearch RequestPurpose 按最终
 TargetFormat 自动保留 Anthropic 原生 `web_search`、为 OpenAI Chat 使用 `web_search_options`，
 或为 Responses 使用内建 `web_search`。Grok 检索仍要求 Responses，固定 OpenAI Chat 入口不会
@@ -667,32 +667,18 @@ TargetFormat 自动保留 Anthropic 原生 `web_search`、为 OpenAI Chat 使用
 
 Responses WebSocket、Realtime / Live、Files、Videos 与 `/v1/models` 已接入共享 engine。`GET /v1/models` 按本地 mapping 生成目录（Codex `client_version` 返回 `{models:[...]}`），不转发到上游。其余资源 HTTP 与 WebSocket 由 engine 做统一鉴权、按 mapping 选择 Provider、必要的上游模型名替换、failover 和连接 relay；原始 path/query、请求与响应、二进制内容，以及两类 WebSocket 的 path/query 与文本/二进制/关闭帧都交给上游，不在本地重建协议或改写路径别名。Provider 的实际权限和媒体/Realtime 能力仍需目标上游实测。更完整的使用说明见同目录 [`USAGE.md`](USAGE.md#4-协议与路径)（源码树里对应仓库根 `USAGE.md`）。
 
-想按项目统计时，在**启动 Claude / Grok / Gemini / pi 的那台电脑**操作，不要装到只跑 daemon
-的 Linux。需要 Node.js 18+，不要 `sudo`。
-
-先临时跑一趟（不改 shell rc，关掉终端即失效）：
+想按项目统计时，在**启动 Claude / Grok / Gemini / Codex / pi 的那台电脑**操作。
+需要 Node.js 18+，请以客户端的普通用户执行：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fLo client-attribution.mjs \
-  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/client-attribution.mjs
-# Base URL 换成这台 daemon 的可达地址；本机代理可用 127.0.0.1
-export ANTHROPIC_BASE_URL='http://sumpter.example:57878'
-node client-attribution.mjs run claude --
-node client-attribution.mjs run grok --
-# Gemini 还需 SUMPTER_GEMINI_BASE_URL 与 SUMPTER_AUTH_TOKEN
-```
-
-要每次启动都带归因，再在同一台客户端电脑安装：
-
-```bash
-curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh \
-  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/setup-client-attribution.sh
+curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/setup-client-attribution.sh
 bash setup-client-attribution.sh install all
 ```
 
-`install` 会改该用户的 bash/zsh rc 或 pi 扩展；`status` / `restore` 只作用于这台客户端主机。
-无法访问 GitHub 且代理已运行时，可设 `SUMPTER_BASE_URL` 从 `/__sumpter/` 取脚本。细节见
-[`USAGE.md` §8](USAGE.md#8-让-claude-code--grok-build-按项目统计可选)。
+setup 自动获取所选客户端需要的安装器和扩展。重复 install 可更新；status 检查本机配置，
+restore 恢复所选客户端安装前状态。Shell 客户端新开终端，pi 执行 /reload。
+无法访问 GitHub 时，可设置 SUMPTER_BASE_URL 从已运行的代理下载资源。
+客户端连接和 Codex Desktop 的适用边界见[归因安装](USAGE.md#linuxmacos-客户端归因脚本统一安装)。
 
 ## 原生构建与打包
 
@@ -753,7 +739,7 @@ musl 兼容和真实上游请求必须另行验收。
 
 ## 常见问题
 
-- **提示存在旧 keys.json**：这是预期的硬阻断，不会自动迁移。备份后人工转换为 v3。
+- **提示存在旧 keys.json**：这是预期的硬阻断，不会自动迁移。备份后人工转换为当前 schema v7。
 - **Admin 连接失败**：默认 `127.0.0.1:57879`；若改过 `--admin-port` / `SUMPTER_ADMIN_PORT`
   请用新端口。检查 daemon 日志和端口占用；proxy 57878 正常不代表 Admin 已启动。
 - **Admin API 返回 401**：会话不存在或已过期，刷新 `/admin/` 后重新登录。旧单行凭据初始

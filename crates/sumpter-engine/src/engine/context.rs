@@ -149,7 +149,10 @@ pub(super) fn merge_codex_metadata(
 
 pub(super) fn is_codex_originator(value: &str) -> bool {
     let value = value.trim().to_ascii_lowercase();
-    value.contains("codex desktop") || value.contains("codex_cli_rs") || value.contains("codex-tui")
+    value.contains("codex desktop")
+        || value.contains("codex_work_desktop")
+        || value.contains("codex_cli_rs")
+        || value.contains("codex-tui")
 }
 
 /// 入站 OpenAI 兼容层的客户端出口形态。

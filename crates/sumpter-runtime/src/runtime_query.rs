@@ -23,9 +23,7 @@ use sumpter_core::routing::{RequestPurpose, RouteMode};
 use crate::runtime_store::{RuntimeChange, RuntimeEventListItem};
 
 const API_VERSION: u8 = 3;
-// 必须与 runtime_store.rs 的 PROJECTION_VERSION 同步:查询侧按它过滤投影行,
-// 写入侧 bump 后这里不同步会让所有 analytics 归零(见 2026-09-07 轮修复)。
-const PROJECTION_VERSION: i64 = 8;
+use crate::runtime_store::PROJECTION_VERSION;
 const PAGE_SIZES: [usize; 5] = [10, 25, 50, 100, 200];
 const REQUEST_CHAIN_LIMIT: usize = 512;
 const MAX_TREND_POINTS: usize = 240;
@@ -120,6 +118,21 @@ pub struct RuntimeFilter {
     pub kind: Option<String>,
     pub outcome: Option<String>,
     pub client_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_variant: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "parentThreadID")]
+    pub parent_thread_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "parentTurnID")]
+    pub parent_turn_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "rootTurnID")]
+    pub root_turn_id: Option<String>,
     pub request_purpose: Option<String>,
     #[serde(rename = "requestID")]
     pub request_id: Option<String>,
@@ -150,6 +163,21 @@ pub struct RuntimeFilter {
 #[serde(rename_all = "camelCase")]
 pub struct AnalyticsAppliedFilters {
     pub client_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_variant: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "parentThreadID")]
+    pub parent_thread_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "parentTurnID")]
+    pub parent_turn_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "rootTurnID")]
+    pub root_turn_id: Option<String>,
     #[serde(rename = "endpointID")]
     pub endpoint_id: Option<String>,
     #[serde(rename = "projectID")]
@@ -160,6 +188,15 @@ pub struct AnalyticsAppliedFilters {
 }
 
 impl RuntimeFilter {
+    fn has_agent_filter(&self) -> bool {
+        self.client_variant.is_some()
+            || self.agent_role.is_some()
+            || self.agent_name.is_some()
+            || self.parent_thread_id.is_some()
+            || self.parent_turn_id.is_some()
+            || self.root_turn_id.is_some()
+    }
+
     pub fn normalized(&self) -> QueryResult<Self> {
         fn string(value: &Option<String>, label: &str) -> QueryResult<Option<String>> {
             let value = value
@@ -190,6 +227,12 @@ impl RuntimeFilter {
             kind: string(&self.kind, "kind")?,
             outcome: string(&self.outcome, "outcome")?,
             client_kind: string(&self.client_kind, "clientKind")?,
+            client_variant: string(&self.client_variant, "clientVariant")?,
+            agent_role: string(&self.agent_role, "agentRole")?,
+            agent_name: string(&self.agent_name, "agentName")?,
+            parent_thread_id: string(&self.parent_thread_id, "parentThreadID")?,
+            parent_turn_id: string(&self.parent_turn_id, "parentTurnID")?,
+            root_turn_id: string(&self.root_turn_id, "rootTurnID")?,
             request_purpose: string(&self.request_purpose, "requestPurpose")?,
             request_id: string(&self.request_id, "requestID")?,
             endpoint_id: string(&self.endpoint_id, "endpointID")?,
@@ -496,6 +539,12 @@ pub struct ToolCallRow {
 #[serde(rename_all = "camelCase")]
 pub struct AnalyticsFacets {
     pub client_kinds: Vec<AnalyticsFacetRow>,
+    pub client_variants: Vec<AnalyticsFacetRow>,
+    pub agent_roles: Vec<AnalyticsFacetRow>,
+    pub agent_names: Vec<AnalyticsFacetRow>,
+    pub parent_threads: Vec<AnalyticsFacetRow>,
+    pub parent_turns: Vec<AnalyticsFacetRow>,
+    pub root_turns: Vec<AnalyticsFacetRow>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub endpoints: Vec<AnalyticsFacetRow>,
     pub projects: Vec<AnalyticsFacetRow>,
@@ -549,6 +598,13 @@ pub struct AnalyticsSummary {
     pub endpoints: Vec<AnalyticsDimensionRow>,
     pub models: Vec<AnalyticsDimensionRow>,
     pub client_kinds: Vec<AnalyticsDimensionRow>,
+    pub client_variants: Vec<AnalyticsDimensionRow>,
+    pub agent_roles: Vec<AnalyticsDimensionRow>,
+    pub agent_names: Vec<AnalyticsDimensionRow>,
+    pub parent_threads: Vec<AnalyticsDimensionRow>,
+    pub parent_turns: Vec<AnalyticsDimensionRow>,
+    pub root_turns: Vec<AnalyticsDimensionRow>,
+
     pub request_purposes: Vec<AnalyticsDimensionRow>,
     pub feature_rules: Vec<AnalyticsDimensionRow>,
     pub protocol_routes: Vec<AnalyticsDimensionRow>,
@@ -639,6 +695,12 @@ pub enum DimensionKind {
     Endpoint,
     Model,
     ClientKind,
+    ClientVariant,
+    AgentRole,
+    AgentName,
+    ParentThread,
+    ParentTurn,
+    RootTurn,
     Purpose,
     FailureKind,
     FailurePhase,
@@ -1191,6 +1253,13 @@ struct ExportEventRow {
     outcome: Option<String>,
     status_code: i64,
     client_kind: Option<String>,
+    client_variant: Option<String>,
+    agent_role: Option<String>,
+    agent_name: Option<String>,
+    parent_thread_id: Option<String>,
+    parent_turn_id: Option<String>,
+    root_turn_id: Option<String>,
+
     request_purpose: Option<String>,
     endpoint_id: Option<String>,
     endpoint_name: Option<String>,
@@ -1226,6 +1295,12 @@ struct EventListProjection {
     id: String,
     timestamp: f64,
     kind: String,
+    client_variant: Option<String>,
+    agent_role: Option<String>,
+    agent_name: Option<String>,
+    parent_thread_id: Option<String>,
+    parent_turn_id: Option<String>,
+    root_turn_id: Option<String>,
     phase: Option<String>,
     outcome: Option<String>,
     status_code: i64,
@@ -1283,6 +1358,12 @@ fn event_list_item_from_projection(row: EventListProjection) -> RuntimeEventList
         id: row.id,
         timestamp: row.timestamp,
         kind: row.kind,
+        client_variant: row.client_variant,
+        agent_role: row.agent_role,
+        agent_name: row.agent_name,
+        parent_thread_id: row.parent_thread_id,
+        parent_turn_id: row.parent_turn_id,
+        root_turn_id: row.root_turn_id,
         codex_metadata: None,
         client_declared: None,
         grok_metadata: None,
@@ -1517,6 +1598,30 @@ fn append_runtime_filter(builder: &mut SqlFilter, filter: &RuntimeFilter) {
     builder.eq_text("kind", filter.kind.as_deref());
     builder.eq_text("outcome", filter.outcome.as_deref());
     builder.eq_text("client_kind", filter.client_kind.as_deref());
+    builder.eq_text(
+        "COALESCE(client_variant,'unknown')",
+        filter.client_variant.as_deref(),
+    );
+    builder.eq_text(
+        "COALESCE(agent_role,'unknown')",
+        filter.agent_role.as_deref(),
+    );
+    builder.eq_text(
+        "COALESCE(agent_name,'unknown')",
+        filter.agent_name.as_deref(),
+    );
+    builder.eq_text(
+        "COALESCE(parent_thread_id,'unknown')",
+        filter.parent_thread_id.as_deref(),
+    );
+    builder.eq_text(
+        "COALESCE(parent_turn_id,'unknown')",
+        filter.parent_turn_id.as_deref(),
+    );
+    builder.eq_text(
+        "COALESCE(root_turn_id,'unknown')",
+        filter.root_turn_id.as_deref(),
+    );
     builder.eq_text("request_purpose", filter.request_purpose.as_deref());
     builder.eq_text("request_id", filter.request_id.as_deref());
     builder.eq_text("endpoint_id", filter.endpoint_id.as_deref());
@@ -1573,12 +1678,15 @@ fn analytics_upstream_builder(filter: &RuntimeFilter, snapshot_seq: i64) -> SqlF
     } else {
         builder.raw("kind = 'upstream'");
     }
-    let has_client_selection = filter.client_kind.is_some()
+    let has_client_selection = filter.has_agent_filter()
+        || filter.client_kind.is_some()
         || filter.project_id.is_some()
         || filter.project_name.is_some()
         || filter.session_id.is_some();
     if has_client_selection {
-        let client = analytics_client_builder(filter, snapshot_seq);
+        let mut client_filter = filter.clone();
+        client_filter.kind = None;
+        let client = analytics_client_builder(&client_filter, snapshot_seq);
         builder.raw(format!(
             "request_id IN (SELECT request_id FROM runtime_events{} )",
             client.where_sql()

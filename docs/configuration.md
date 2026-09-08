@@ -56,7 +56,7 @@ SourceFormat 只由路径决定：`/v1/messages` 是 `anthropic`，`/v1/chat/com
 - `openai-responses`：固定 OpenAI Responses。
 - `gemini`：固定 Gemini Developer API 原生 REST。
 
-`auto` 只代表入口能力模式，实际 TargetFormat 永远是后三种之一。SourceFormat 与 TargetFormat
+`auto` 只代表入口能力模式，实际 TargetFormat 永远是后四种之一。SourceFormat 与 TargetFormat
 相同时 Native Adapter 自动保留原始请求/响应字段；不同才进入已注册 Translator。只要有原生候选，
 桥接候选就不会混入同一次重试，原生阶段失败也不再切换到桥接阶段。
 

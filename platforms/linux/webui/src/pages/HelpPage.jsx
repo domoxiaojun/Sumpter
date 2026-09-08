@@ -99,7 +99,7 @@ export function HelpPage() {
 
       <section className="glass-panel help-panel help-attribution-entry">
         <div className="panel-title"><Icon name="shield" size={18} style={{ color: 'var(--status-good)' }} /><span>客户端项目归因</span></div>
-        <p>归因安装、状态检查和还原统一在“安全”页完成。请在启动 Claude Code、Grok、Gemini 或 pi 的那台主机执行，浏览器和 daemon 主机不会代替客户端修改配置。</p>
+        <p>归因安装、状态检查和还原统一在“安全”页完成。请在启动 Claude Code、Grok、Gemini、Codex 或 pi 的那台主机执行，浏览器和 daemon 主机不会代替客户端修改配置。</p>
         <div className="help-links">
           <button type="button" className="btn btn-primary" onClick={() => navigate('security')}><Icon name="shield" size={16} />打开安全页配置</button>
           <a className="btn btn-secondary" href={`${docsURL}#linuxmacos-客户端归因脚本统一安装`} target="_blank" rel="noreferrer"><Icon name="book" size={16} />查看完整安装说明</a>

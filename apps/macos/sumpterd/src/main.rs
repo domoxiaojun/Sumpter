@@ -6,6 +6,7 @@
 //! - SIGTERM/SIGINT → flush 统计 → 退出;
 //! - pid 写入配置目录 `sumpterd.pid`,退出时清理。
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -138,12 +139,17 @@ async fn run(
     }
     engine.spawn_stats_flusher();
 
-    let proxy_addr = server::bind_address(&host, port);
-    let (proxy_local, _proxy_task) = match server::serve(engine.clone(), proxy_addr).await {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("proxy 监听失败 {proxy_addr}: {e}");
-            return ExitCode::FAILURE;
+    let proxy_local = if let Some(issue) = engine.runtime_database_issue() {
+        tracing::error!("{message}", message = issue.message);
+        SocketAddr::from(([127, 0, 0, 1], 0))
+    } else {
+        let proxy_addr = server::bind_address(&host, port);
+        match server::serve(engine.clone(), proxy_addr).await {
+            Ok((local, _task)) => local,
+            Err(e) => {
+                eprintln!("proxy 监听失败 {proxy_addr}: {e}");
+                return ExitCode::FAILURE;
+            }
         }
     };
 

@@ -5,6 +5,11 @@ use super::{
 };
 
 pub(super) fn setup_connection(connection: &mut Connection) -> rusqlite::Result<()> {
+    if let Some(issue) =
+        database_issue_on(connection).map_err(rusqlite::Error::InvalidParameterName)?
+    {
+        return Err(rusqlite::Error::InvalidParameterName(issue.message));
+    }
     connection.execute_batch(
         "PRAGMA journal_mode = WAL;
          PRAGMA synchronous = FULL;
@@ -146,6 +151,7 @@ pub(super) fn setup_connection(connection: &mut Connection) -> rusqlite::Result<
         )?;
     }
     set_meta(connection, "schema_version", SCHEMA_VERSION)?;
+    set_meta(connection, "projection_version", PROJECTION_VERSION)?;
     if !unprojected_exists {
         set_meta(connection, "projection_backfill_complete", 1)?;
         if retained_event_count == 0 {
@@ -208,6 +214,12 @@ pub(super) fn ensure_v2_schema(connection: &mut Connection) -> rusqlite::Result<
         ("request_method", "TEXT"),
         ("request_path", "TEXT"),
         ("route_intent", "TEXT"),
+        ("client_variant", "TEXT"),
+        ("agent_role", "TEXT"),
+        ("agent_name", "TEXT"),
+        ("parent_thread_id", "TEXT"),
+        ("parent_turn_id", "TEXT"),
+        ("root_turn_id", "TEXT"),
     ];
     let transaction = connection.transaction()?;
     for (name, definition) in columns {
@@ -1164,4 +1176,81 @@ pub(super) fn run_projection_maintenance(connection: &mut Connection) -> rusqlit
         set_meta(connection, "hourly_rollup_complete", 1)?;
     }
     Ok(false)
+}
+
+pub(super) fn database_issue_on(
+    connection: &Connection,
+) -> Result<Option<super::RuntimeDatabaseIssue>, String> {
+    let inspect = || -> rusqlite::Result<Option<super::RuntimeDatabaseIssue>> {
+        let tables = connection
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'runtime_%'")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<HashSet<_>, _>>()?;
+        if tables.is_empty() {
+            return Ok(None);
+        }
+        let version = if tables.contains("runtime_meta") {
+            meta_i64(connection, "schema_version")?.unwrap_or(0)
+        } else {
+            0
+        };
+        let projection = if tables.contains("runtime_meta") {
+            meta_i64(connection, "projection_version")?
+        } else {
+            None
+        };
+        let newer =
+            version > SCHEMA_VERSION || projection.is_some_and(|value| value > PROJECTION_VERSION);
+        let mut incompatible = version != SCHEMA_VERSION
+            || projection != Some(PROJECTION_VERSION)
+            || !tables.contains("runtime_events");
+        if !incompatible && tables.contains("runtime_events") {
+            let columns = connection
+                .prepare("PRAGMA table_info(runtime_events)")?
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<HashSet<_>, _>>()?;
+            incompatible = [
+                "projection_version",
+                "client_variant",
+                "agent_role",
+                "agent_name",
+                "parent_thread_id",
+                "parent_turn_id",
+                "root_turn_id",
+            ]
+            .iter()
+            .any(|column| !columns.contains(*column));
+        }
+        if !incompatible {
+            incompatible = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM runtime_events WHERE projection_version != ?1 LIMIT 1)",
+                [PROJECTION_VERSION], |row| row.get::<_, bool>(0),
+            )?;
+        }
+        if !incompatible && !newer {
+            return Ok(None);
+        }
+        Ok(Some(super::RuntimeDatabaseIssue {
+            code: if newer {
+                "runtime_schema_newer"
+            } else {
+                "runtime_recreate_required"
+            },
+            schema_version: version,
+            supported_schema_version: SCHEMA_VERSION,
+            projection_version: projection,
+            supported_projection_version: PROJECTION_VERSION,
+            requires_recreate: !newer,
+            message: if newer {
+                format!(
+                    "runtime schema {version} / projection {projection:?} is newer than supported {SCHEMA_VERSION}/{PROJECTION_VERSION}; 请升级 Sumpter"
+                )
+            } else {
+                format!(
+                    "检测到旧版 runtime 数据库（schema {version}），代理已停止。请在统计页确认清空并重建；旧事件不迁移。"
+                )
+            },
+        }))
+    };
+    inspect().map_err(|error| error.to_string())
 }

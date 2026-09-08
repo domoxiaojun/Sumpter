@@ -152,6 +152,12 @@ impl Engine {
         headers: Vec<(String, String)>,
         body: Body,
     ) -> Response {
+        if let Some(issue) = self.runtime_database_issue() {
+            return super::http_response::json_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                &serde_json::json!({"error": issue.code, "message": issue.message}),
+            );
+        }
         let context = self.inbound_request_context(method, path_and_query, &headers);
         INBOUND_REQUEST_CONTEXT
             .scope(

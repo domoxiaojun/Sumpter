@@ -41,7 +41,7 @@ test('pi launcher loads the request hook and preserves arguments, environment an
   assert.deepEqual(child.stdout.trimEnd().split('\n'), launch.args);
 });
 
-test('three clients share Unicode project/root/user/sanitized remote and preserve unrelated settings', (t) => {
+test('clients share Unicode project/root/user/sanitized remote and preserve unrelated settings', (t) => {
   const f = fixture(t);
   const base = collectHeaders('claude', f.nested, f.env);
   assert.equal(decodeURIComponent(base['X-Sumpter-Workspace']), f.repo);
@@ -106,7 +106,7 @@ test('bash/zsh install is idempotent, migrates legacy blocks and restores locall
     assert.equal(installed.includes('synthetic/old'),false);
     assert.equal(installed.includes('synthetic-token'),false);
     manage('install','all',opts,f.env); assert.equal(readFileSync(rc,'utf8'),installed);
-    assert.deepEqual(manage('status','all',opts,f.env).map(x=>x.status),['installed','installed','installed','installed']);
+  assert.deepEqual(manage('status','all',opts,f.env).map(x=>x.status),['installed','installed','installed','installed','installed']);
     execFileSync(`/bin/${shell}`,['-n',rc]);
     writeFileSync(rc,installed+'# later user change\n');
     manage('restore','claude',opts,f.env);
@@ -162,7 +162,7 @@ test('status distinguishes outdated and missing scripts; restore all skips clien
   rmSync(installed);
   assert.equal(manage('status', 'claude', opts, f.env)[0].status, 'broken');
   const result = manage('restore', 'all', opts, f.env);
-  assert.deepEqual(result.map(x => x.status), ['restored', 'unchanged', 'unchanged', 'unchanged']);
+  assert.deepEqual(result.map(x => x.status), ['restored', 'unchanged', 'unchanged', 'unchanged', 'unchanged']);
   assert.equal(manage('status', 'claude', opts, f.env)[0].canRestore, false);
 });
 

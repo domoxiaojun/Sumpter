@@ -7,7 +7,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, realpathSync, statSync, lstatSync, openSync, closeSync, unlinkSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const clients = ['claude', 'grok', 'gemini'];
+const clients = ['claude', 'grok', 'gemini', 'codex'];
 const ownedHeaders = new Set(['x-sumpter-client', 'x-sumpter-project', 'x-sumpter-workspace',
   'x-sumpter-git-remote', 'x-sumpter-user', 'x-sumpter-session-id', 'x-sumpter-attribution-encoding']);
 const safe = (value, max = 4096) => typeof value === 'string' && value.trim()
@@ -77,6 +77,50 @@ function claudeConflicts(cwd, env) {
     if (settings.env?.ANTHROPIC_CUSTOM_HEADERS) throw new Error(`${file} 设置了 ANTHROPIC_CUSTOM_HEADERS，会覆盖动态归因；请先移除该设置。`);
   }
 }
+// Read only the selectors used to attach headers; Codex still loads the full
+// configuration and owns provider/auth/model resolution. Never print config text.
+function codexLaunchContext(args, env, cwd) {
+  const selectors = new Map();
+  let section = '';
+  const text = read(join(env.CODEX_HOME || join(env.HOME || homedir(), '.codex'), 'config.toml'));
+  for (const line of text.split('\n')) {
+    if (/^\s*\[/u.test(line)) {
+      section = /^\s*\[profiles\.(?:([\w-]+)|"([\w-]+)"|'([\w-]+)')\]\s*(?:#.*)?$/u.exec(line)?.slice(1).find(Boolean) ?? '#other';
+      continue;
+    }
+    const field = /^\s*(model_provider|profile)\s*=\s*(.*)$/u.exec(line);
+    if (field && section !== '#other') {
+      const value = /^(?:"([\w-]+)"|'([\w-]+)')\s*(?:#.*)?$/u.exec(field[2])?.slice(1).find(Boolean);
+      if (!value) throw new Error('Codex 归因暂不支持该 profile/model_provider 写法；未修改配置。');
+      selectors.set(`${section}:${field[1]}`, value);
+    }
+  }
+  let profile = selectors.get(':profile');
+  let providerOverride;
+  let directory = cwd;
+  for (let i = 0; i < args.length && args[i] !== '--'; i++) {
+    const arg = args[i];
+    if (['-C', '--cd'].includes(arg)) directory = resolve(cwd, args[++i] || '.');
+    else if (arg.startsWith('--cd=')) directory = resolve(cwd, arg.slice(5));
+    else if (arg.startsWith('-C') && arg.length > 2) directory = resolve(cwd, arg.slice(2));
+    else if (['-p', '--profile'].includes(arg)) profile = args[++i];
+    else if (arg.startsWith('--profile=')) profile = arg.slice(10);
+    else if (arg.startsWith('-p') && arg.length > 2) profile = arg.slice(2);
+    else {
+      const raw = ['-c', '--config'].includes(arg) ? args[++i]
+        : arg.startsWith('--config=') ? arg.slice(9)
+          : arg.startsWith('-c') && arg.length > 2 ? arg.slice(2) : '';
+      const pair = /^(model_provider|profile)\s*=\s*(?:"([\w-]+)"|'([\w-]+)'|([\w-]+))\s*$/u.exec(raw || '');
+      if (pair?.[1] === 'model_provider') providerOverride = pair.slice(2).find(Boolean);
+      if (pair?.[1] === 'profile') profile = pair.slice(2).find(Boolean);
+    }
+  }
+  const provider = providerOverride || (profile && selectors.get(`${profile}:model_provider`)) || selectors.get(':model_provider');
+  if (!provider || ['openai', 'ollama', 'lmstudio', 'amazon-bedrock', 'amazon-bedrock-runtime'].includes(provider)) {
+    throw new Error('Codex 归因需要已有的 Sumpter 自定义连接配置；内置连接不支持此 header 注入方式。');
+  }
+  return { provider, directory };
+}
 export function prepareLaunch(client, args, env = process.env, cwd = process.cwd()) {
   if (client === 'pi') {
     const extension = fileURLToPath(new URL('./pi-project-attribution.ts', import.meta.url));
@@ -85,8 +129,13 @@ export function prepareLaunch(client, args, env = process.env, cwd = process.cwd
     // are observed at dispatch time rather than frozen in launcher environment.
     return { command: env.SUMPTER_PI_BIN || 'pi', args: ['-e', extension, ...args], env: { ...env } };
   }
-  if (!clients.includes(client)) throw new Error('客户端必须是 claude、grok 或 gemini');
-  const headers = collectHeaders(client, cwd, env);
+  if (!clients.includes(client)) throw new Error('客户端必须是 claude、grok、gemini 或 codex');
+  // Informational invocations should work even before the client is connected.
+  if (client === 'codex' && args.some((arg) => ['--version', '-V', '--help', '-h'].includes(arg))) {
+    return { command: env.SUMPTER_CODEX_BIN || 'codex', args: [...args], env: { ...env } };
+  }
+  const codex = client === 'codex' ? codexLaunchContext(args, env, cwd) : undefined;
+  const headers = collectHeaders(client, codex?.directory || cwd, env);
   const next = { ...env };
   const forwarded = [...args];
   if (client === 'claude') {
@@ -100,6 +149,17 @@ export function prepareLaunch(client, args, env = process.env, cwd = process.cwd
     if (config.models.extra_headers !== undefined && !object(config.models.extra_headers)) throw new Error('GROK_CONFIG models.extra_headers 必须是对象');
     config.models.extra_headers = { ...keepHeaders(config.models.extra_headers || {}), ...headers };
     next.GROK_CONFIG = JSON.stringify(config);
+  } else if (client === 'codex') {
+    // Same local collection as Claude; only the client's header transport differs.
+    // -c splits keys on dots literally: quoting a header name would send no header.
+    headers['X-Sumpter-Client'] = 'codex';
+    for (const key of Object.keys(next)) if (key.startsWith('SUMPTER_CODEX_X_SUMPTER_')) delete next[key];
+    for (const [name, value] of Object.entries(headers)) {
+      const variable = `SUMPTER_CODEX_${name.replaceAll(/[^A-Za-z0-9]/gu, '_').toUpperCase()}`;
+      next[variable] = value;
+      forwarded.unshift(`model_providers.${codex.provider}.env_http_headers.${name}=${JSON.stringify(variable)}`);
+      forwarded.unshift('-c');
+    }
   } else {
     const base = safe(env.SUMPTER_GEMINI_BASE_URL);
     const token = safe(env.SUMPTER_AUTH_TOKEN);
@@ -211,7 +271,7 @@ export function manage(action, client, options = {}, env = process.env, source =
 }
 
 function manageShell(action, client, options, env, source) {
-  if (!['install', 'status', 'uninstall', 'restore', 'snippet'].includes(action) || ![...clients, 'all'].includes(client)) throw new Error('用法：client-attribution.mjs install|status|uninstall|restore|snippet claude|grok|gemini|all [--shell bash|zsh] [--rc 文件] [--dry-run]');
+  if (!['install', 'status', 'uninstall', 'restore', 'snippet'].includes(action) || ![...clients, 'all'].includes(client)) throw new Error('用法：client-attribution.mjs install|status|uninstall|restore|snippet claude|grok|gemini|codex|all [--shell bash|zsh] [--rc 文件] [--dry-run]');
   const shell = options.shell || basename(env.SHELL || '');
   if (!['bash', 'zsh'].includes(shell)) throw new Error('自动安装支持 bash/zsh；其他 shell 请使用 run 子命令');
   const home = env.HOME || homedir();
@@ -288,7 +348,7 @@ function manageShell(action, client, options, env, source) {
 }
 async function main(argv) {
   if (['--help', '-h'].includes(argv[0]) || argv.length === 0) {
-    console.log('用法：node client-attribution.mjs install|status|uninstall|restore claude|grok|gemini|pi|all [--shell bash|zsh] [--rc 文件] [--dry-run]\n临时运行：node client-attribution.mjs run claude|grok|gemini|pi -- [原始参数]\n需要 Node.js 18+。pi 的 Sumpter provider 需设置 X-Sumpter-Client: pi；安装后执行 /reload，其他客户端新开终端；只在连接 Sumpter 的客户端上启用。');
+    console.log('用法：node client-attribution.mjs install|status|uninstall|restore claude|grok|gemini|codex|pi|all [--shell bash|zsh] [--rc 文件] [--dry-run]\n临时运行：node client-attribution.mjs run claude|grok|gemini|codex|pi -- [原始参数]\n需要 Node.js 18+。pi 的 Sumpter provider 需设置 X-Sumpter-Client: pi；安装后执行 /reload，其他客户端新开终端；只在连接 Sumpter 的客户端上启用。');
     return;
   }
   let [action, client, ...rest] = argv;

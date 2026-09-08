@@ -949,6 +949,12 @@ impl RuntimeStore {
         let filter = filter.normalized();
         let query_filter = crate::runtime_query::RuntimeFilter {
             client_kind: filter.client_kind,
+            client_variant: filter.client_variant,
+            agent_role: filter.agent_role,
+            agent_name: filter.agent_name,
+            parent_thread_id: filter.parent_thread_id,
+            parent_turn_id: filter.parent_turn_id,
+            root_turn_id: filter.root_turn_id,
             endpoint_id: filter.endpoint_id,
             project_id: filter.project_id,
             project_name: filter.project,

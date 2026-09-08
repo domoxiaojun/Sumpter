@@ -1,38 +1,16 @@
 use super::{
     APPLE_EPOCH_OFFSET_SECS, CachedStorageMetrics, Connection, EventProjection, HashMap,
-    KIND_CLIENT, KIND_UPSTREAM, OpenFlags, OptionalExtension, PROJECTION_VERSION, Path,
-    RuntimeChange, RuntimeCounters, RuntimeEvent, RuntimeEventOutcome, RuntimeEventPhase,
-    RuntimeFailureKind, RuntimeFailurePhase, SCHEMA_VERSION, STATUS_CLIENT_DISCONNECTED,
-    StoreState, VecDeque, WriteMessage, counters_from_connection, hourly_bucket_start,
-    mark_event_hourly_rollup_dirty, mark_hourly_rollup_bucket, mark_request_hourly_rollups_dirty,
-    now, option_token, params,
+    KIND_CLIENT, KIND_UPSTREAM, OptionalExtension, PROJECTION_VERSION, Path, RuntimeChange,
+    RuntimeCounters, RuntimeEvent, RuntimeEventOutcome, RuntimeEventPhase, RuntimeFailureKind,
+    RuntimeFailurePhase, STATUS_CLIENT_DISCONNECTED, StoreState, VecDeque, WriteMessage,
+    counters_from_connection, hourly_bucket_start, mark_event_hourly_rollup_dirty,
+    mark_hourly_rollup_bucket, mark_request_hourly_rollups_dirty, now, option_token, params,
 };
 
+/// Read-only preflight; rejected files must never enter schema setup or backfill.
 pub(super) fn check_existing_schema(path: &Path) -> Result<(), String> {
-    if !path.exists() {
-        return Ok(());
-    }
-    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|error| error.to_string())?;
-    let has_meta = connection
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_meta'",
-            [],
-            |_| Ok(()),
-        )
-        .optional()
-        .map_err(|error| error.to_string())?
-        .is_some();
-    if !has_meta {
-        return Ok(());
-    }
-    let version = meta_i64(&connection, "schema_version")
-        .map_err(|error| error.to_string())?
-        .unwrap_or(0);
-    if version > SCHEMA_VERSION {
-        return Err(format!(
-            "runtime schema {version} is newer than supported {SCHEMA_VERSION}"
-        ));
+    if let Some(issue) = super::RuntimeStore::database_issue(path)? {
+        return Err(issue.message);
     }
     Ok(())
 }
@@ -385,7 +363,8 @@ pub(super) fn update_event_projection(
             token_accounting_quality=?36,tool_calls_json=?37
             ,codex_thread_class=?38,attribution_scope=?39,request_method=?40,
             request_path=?41,route_intent=?42,model_group_id=?43,model_group_name=?44,
-            sticky_key=?45
+            sticky_key=?45,client_variant=?46,agent_role=?47,agent_name=?48,
+            parent_thread_id=?49,parent_turn_id=?50,root_turn_id=?51
          WHERE seq=?1",
         params![
             seq,
@@ -433,6 +412,12 @@ pub(super) fn update_event_projection(
             projection.model_group_id,
             projection.model_group_name,
             projection.sticky_key,
+            projection.client_variant,
+            projection.agent_role,
+            projection.agent_name,
+            projection.parent_thread_id,
+            projection.parent_turn_id,
+            projection.root_turn_id,
         ],
     )?;
     Ok(())
@@ -665,6 +650,41 @@ pub(super) fn rotate_retention_now(
     Ok(rotation)
 }
 
+fn apply_session_project_fallback(
+    connection: &Connection,
+    projection: &mut EventProjection,
+) -> rusqlite::Result<()> {
+    if projection.project_source != "missing_workspace_metadata"
+        || projection.session_key == "unidentified_session"
+    {
+        return Ok(());
+    }
+    let mut statement = connection.prepare(
+        "SELECT DISTINCT project_id,project_name,workspace_paths_json FROM runtime_events
+         WHERE session_key=?1 AND project_source NOT IN ('missing_workspace_metadata','internal_feature')
+         LIMIT 2",
+    )?;
+    let rows = statement
+        .query_map(params![projection.session_key], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    if rows.len() == 1 {
+        let (id, name, paths) = rows.into_iter().next().expect("one row");
+        projection.project_id = id;
+        projection.project_name = name;
+        projection.project_source = "session_fallback";
+        projection.workspace_paths_json = paths;
+    } else if rows.len() > 1 {
+        projection.project_source = "multiple_workspaces";
+    }
+    Ok(())
+}
+
 pub(super) fn write_batch(
     connection: &mut Connection,
     batch: &[WriteMessage],
@@ -696,7 +716,8 @@ pub(super) fn write_batch(
         }
         let payload = serde_json::to_string(&message.event)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
-        let projection = EventProjection::from_event(&message.event, payload.len());
+        let mut projection = EventProjection::from_event(&message.event, payload.len());
+        apply_session_project_fallback(&transaction, &mut projection)?;
         let created_at = now();
         transaction.execute(
             "INSERT INTO runtime_events(
@@ -711,12 +732,12 @@ pub(super) fn write_batch(
                 uncached_input_tokens,processed_input_tokens,processed_total_tokens,
                 token_accounting_semantics,token_accounting_quality,tool_calls_json
                 ,codex_thread_class,attribution_scope,request_method,request_path,route_intent,model_group_id,model_group_name,
-                sticky_key
+                sticky_key,client_variant,agent_role,agent_name,parent_thread_id,parent_turn_id,root_turn_id
              ) VALUES(
                 ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?16,
                 ?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,
                 ?32,?33,?34,?35,?36,?37,?38,?39,?40,?41,?42,?43,?44,?45,?46,
-                ?47,?48,?49,?50,?51,?52,?53,?54,?55,?56,?57,?58,?59,?60
+                ?47,?48,?49,?50,?51,?52,?53,?54,?55,?56,?57,?58,?59,?60,?61,?62,?63,?64,?65,?66
              )
              ON CONFLICT(event_id) DO UPDATE SET
                 change_seq=excluded.change_seq,payload_json=excluded.payload_json,
@@ -757,7 +778,10 @@ pub(super) fn write_batch(
                 request_path=excluded.request_path,
                 route_intent=excluded.route_intent,
                 model_group_id=excluded.model_group_id,model_group_name=excluded.model_group_name,
-                sticky_key=excluded.sticky_key",
+                sticky_key=excluded.sticky_key,client_variant=excluded.client_variant,
+                agent_role=excluded.agent_role,agent_name=excluded.agent_name,
+                parent_thread_id=excluded.parent_thread_id,parent_turn_id=excluded.parent_turn_id,
+                root_turn_id=excluded.root_turn_id",
             params![
                 message.seq,
                 message.change_seq,
@@ -818,7 +842,13 @@ pub(super) fn write_batch(
                 projection.route_intent,
             projection.model_group_id,
             projection.model_group_name,
-            projection.sticky_key,
+                projection.sticky_key,
+                projection.client_variant,
+                projection.agent_role,
+                projection.agent_name,
+                projection.parent_thread_id,
+                projection.parent_turn_id,
+                projection.root_turn_id,
             ],
         )?;
         mark_event_hourly_rollup_dirty(&transaction, &message.event)?;

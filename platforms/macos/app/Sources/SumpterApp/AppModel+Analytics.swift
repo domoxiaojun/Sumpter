@@ -46,8 +46,14 @@ extension AppModel {
         refreshRuntimeV2(resetSnapshot: true)
     }
 
-    func setRuntimeAnalyticsFilters(clientKind: String? = nil, endpointID: String? = nil, project: String? = nil, sessionID: String? = nil, model: String? = nil, requestPurpose: String? = nil, outcome: String? = nil, failureKind: String? = nil, failurePhase: String? = nil) {
+    func setRuntimeAnalyticsFilters(clientKind: String? = nil, clientVariant: String? = nil, agentRole: String? = nil, agentName: String? = nil, parentThreadID: String? = nil, parentTurnID: String? = nil, rootTurnID: String? = nil, endpointID: String? = nil, project: String? = nil, sessionID: String? = nil, model: String? = nil, requestPurpose: String? = nil, outcome: String? = nil, failureKind: String? = nil, failurePhase: String? = nil) {
         if let clientKind { runtimeAnalyticsClientKind = clientKind }
+        if let clientVariant { runtimeAnalyticsClientVariant = clientVariant }
+        if let agentRole { runtimeAnalyticsAgentRole = agentRole }
+        if let agentName { runtimeAnalyticsAgentName = agentName }
+        if let parentThreadID { runtimeAnalyticsParentThreadID = parentThreadID }
+        if let parentTurnID { runtimeAnalyticsParentTurnID = parentTurnID }
+        if let rootTurnID { runtimeAnalyticsRootTurnID = rootTurnID }
         if let endpointID { runtimeAnalyticsEndpointID = endpointID }
         if let project {
             runtimeAnalyticsProject = project
@@ -367,6 +373,12 @@ extension AppModel {
         let base = AdminWire.RuntimeFilter(
             outcome: runtimeAnalyticsOutcome.isEmpty ? nil : runtimeAnalyticsOutcome,
             clientKind: runtimeAnalyticsClientKind.isEmpty ? nil : runtimeAnalyticsClientKind,
+            clientVariant: runtimeAnalyticsClientVariant.isEmpty ? nil : runtimeAnalyticsClientVariant,
+            agentRole: runtimeAnalyticsAgentRole.isEmpty ? nil : runtimeAnalyticsAgentRole,
+            agentName: runtimeAnalyticsAgentName.isEmpty ? nil : runtimeAnalyticsAgentName,
+            parentThreadID: runtimeAnalyticsParentThreadID.isEmpty ? nil : runtimeAnalyticsParentThreadID,
+            parentTurnID: runtimeAnalyticsParentTurnID.isEmpty ? nil : runtimeAnalyticsParentTurnID,
+            rootTurnID: runtimeAnalyticsRootTurnID.isEmpty ? nil : runtimeAnalyticsRootTurnID,
             requestPurpose: runtimeAnalyticsRequestPurpose.isEmpty ? nil : runtimeAnalyticsRequestPurpose,
             endpointID: runtimeAnalyticsEndpointID.isEmpty ? nil : runtimeAnalyticsEndpointID,
             model: runtimeAnalyticsModel.isEmpty ? nil : runtimeAnalyticsModel,
@@ -723,13 +735,19 @@ extension AppModel {
     }
 
     static let runtimeDimensionKinds = [
-        "endpoint", "model", "clientKind", "purpose", "failureKind",
+        "endpoint", "model", "clientKind", "clientVariant", "agentRole", "agentName", "parentThread", "parentTurn", "rootTurn", "purpose", "failureKind",
         "failurePhase", "protocol", "streamTerminal", "project", "session",
     ]
 
     static func runtimeDimensionWireKind(_ kind: String) -> String {
         switch kind {
         case "clientKind": "client_kind"
+        case "clientVariant": "client_variant"
+        case "agentRole": "agent_role"
+        case "agentName": "agent_name"
+        case "parentThread": "parent_thread_id"
+        case "parentTurn": "parent_turn_id"
+        case "rootTurn": "root_turn_id"
         case "failureKind": "failure_kind"
         case "failurePhase": "failure_phase"
         case "streamTerminal": "stream_terminal"

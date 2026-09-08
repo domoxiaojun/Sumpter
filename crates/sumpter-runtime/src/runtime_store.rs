@@ -24,8 +24,8 @@ use sumpter_core::events::{
 };
 use sumpter_core::routing::{RESOURCE_ROUTING_MODEL, RequestPurpose, RouteMode};
 
-const SCHEMA_VERSION: i64 = 3;
-const PROJECTION_VERSION: i64 = 8;
+pub(crate) const SCHEMA_VERSION: i64 = 4;
+pub(crate) const PROJECTION_VERSION: i64 = 9;
 const PROJECTION_BACKFILL_BATCH: usize = 500;
 const BATCH_EVENTS: usize = 64;
 const BATCH_BYTES: usize = 256 * 1024;
@@ -70,6 +70,12 @@ fn option_token<T: serde::Serialize>(value: Option<T>) -> Option<String> {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AnalyticsFilter {
     pub client_kind: Option<String>,
+    pub client_variant: Option<String>,
+    pub agent_role: Option<String>,
+    pub agent_name: Option<String>,
+    pub parent_thread_id: Option<String>,
+    pub parent_turn_id: Option<String>,
+    pub root_turn_id: Option<String>,
     /// Stable endpoint identity, kept separate from the display name.
     pub endpoint_id: Option<String>,
     /// Stable project identity, kept separate from the display name.
@@ -96,6 +102,12 @@ impl AnalyticsFilter {
         }
         Self {
             client_kind: value(&self.client_kind),
+            client_variant: value(&self.client_variant),
+            agent_role: value(&self.agent_role),
+            agent_name: value(&self.agent_name),
+            parent_thread_id: value(&self.parent_thread_id),
+            parent_turn_id: value(&self.parent_turn_id),
+            root_turn_id: value(&self.root_turn_id),
             endpoint_id: value(&self.endpoint_id),
             project_id: value(&self.project_id),
             project: value(&self.project),
@@ -156,6 +168,12 @@ struct EventProjection {
     request_method: Option<String>,
     request_path: Option<String>,
     route_intent: Option<String>,
+    client_variant: Option<String>,
+    agent_role: Option<String>,
+    agent_name: Option<String>,
+    parent_thread_id: Option<String>,
+    parent_turn_id: Option<String>,
+    root_turn_id: Option<String>,
 }
 
 impl EventProjection {
@@ -285,6 +303,38 @@ impl EventProjection {
             request_method: event.request_method.clone(),
             request_path: event.request_path.clone(),
             route_intent: event.route_intent.clone(),
+            client_variant: event
+                .client_variant
+                .clone()
+                .or_else(|| Some(event.derived_client_variant().into())),
+            agent_role: event
+                .agent_role
+                .clone()
+                .or_else(|| Some(event.derived_agent_role().into())),
+            agent_name: event.agent_name.clone().or_else(|| {
+                event
+                    .codex_metadata
+                    .as_ref()
+                    .and_then(|m| m.agent_name.clone())
+            }),
+            parent_thread_id: event.parent_thread_id.clone().or_else(|| {
+                event
+                    .codex_metadata
+                    .as_ref()
+                    .and_then(|m| m.parent_thread_id.clone())
+            }),
+            parent_turn_id: event.parent_turn_id.clone().or_else(|| {
+                event
+                    .codex_metadata
+                    .as_ref()
+                    .and_then(|m| m.parent_turn_id.clone())
+            }),
+            root_turn_id: event.root_turn_id.clone().or_else(|| {
+                event
+                    .codex_metadata
+                    .as_ref()
+                    .and_then(|m| m.root_turn_id.clone())
+            }),
         }
     }
 }
@@ -335,6 +385,18 @@ pub struct RuntimeEventListItem {
     pub id: String,
     pub timestamp: f64,
     pub kind: String,
+    #[serde(rename = "clientVariant", skip_serializing_if = "Option::is_none")]
+    pub client_variant: Option<String>,
+    #[serde(rename = "agentRole", skip_serializing_if = "Option::is_none")]
+    pub agent_role: Option<String>,
+    #[serde(rename = "agentName", skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
+    #[serde(rename = "parentThreadId", skip_serializing_if = "Option::is_none")]
+    pub parent_thread_id: Option<String>,
+    #[serde(rename = "parentTurnId", skip_serializing_if = "Option::is_none")]
+    pub parent_turn_id: Option<String>,
+    #[serde(rename = "rootTurnId", skip_serializing_if = "Option::is_none")]
+    pub root_turn_id: Option<String>,
     #[serde(rename = "codexMetadata")]
     pub codex_metadata: Option<CodexMetadata>,
     /// 客户端 `X-Sumpter-*` 声明的项目归因。投影必须带上:macOS App 只从这个列表
@@ -426,6 +488,8 @@ impl RuntimeEventListItem {
     /// is intentionally public at the crate boundary rather than duplicated
     /// in each platform facade.
     pub fn from_change(seq: i64, change_seq: i64, event: RuntimeEvent) -> Self {
+        let derived_client_variant = event.derived_client_variant().to_owned();
+        let derived_agent_role = event.derived_agent_role().to_owned();
         // 必须在 event 被逐字段移动之前算:两个投影值都要借用整个 event。
         let projected_name = project_base(&project_identity(&event));
         let projected_source = project_source(&event).to_string();
@@ -445,6 +509,35 @@ impl RuntimeEventListItem {
             id: event.id,
             timestamp: event.timestamp,
             kind: event.kind,
+            client_variant: event
+                .client_variant
+                .clone()
+                .or(Some(derived_client_variant)),
+            agent_role: event.agent_role.clone().or(Some(derived_agent_role)),
+            agent_name: event.agent_name.clone().or_else(|| {
+                event
+                    .codex_metadata
+                    .as_ref()
+                    .and_then(|m| m.agent_name.clone())
+            }),
+            parent_thread_id: event.parent_thread_id.clone().or_else(|| {
+                event
+                    .codex_metadata
+                    .as_ref()
+                    .and_then(|m| m.parent_thread_id.clone())
+            }),
+            parent_turn_id: event.parent_turn_id.clone().or_else(|| {
+                event
+                    .codex_metadata
+                    .as_ref()
+                    .and_then(|m| m.parent_turn_id.clone())
+            }),
+            root_turn_id: event.root_turn_id.clone().or_else(|| {
+                event
+                    .codex_metadata
+                    .as_ref()
+                    .and_then(|m| m.root_turn_id.clone())
+            }),
             project_name: Some(projected_name),
             project_source: Some(projected_source),
             local_user,
@@ -769,3 +862,41 @@ use worker::*;
 
 #[cfg(test)]
 mod tests;
+
+/// A database startup problem that both management clients can act on.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeDatabaseIssue {
+    pub code: &'static str,
+    pub schema_version: i64,
+    pub supported_schema_version: i64,
+    pub projection_version: Option<i64>,
+    pub supported_projection_version: i64,
+    pub requires_recreate: bool,
+    pub message: String,
+}
+
+impl RuntimeStore {
+    pub fn database_issue(path: &Path) -> Result<Option<RuntimeDatabaseIssue>, String> {
+        if !path.exists() {
+            return Ok(None);
+        }
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|error| error.to_string())?;
+        schema::database_issue_on(&connection)
+    }
+
+    /// Called only by the explicit management recreate operation, while no
+    /// runtime worker exists. Recheck versions so a newer database is never erased.
+    pub fn recreate_legacy(path: &Path) -> Result<(Self, RuntimeSnapshot), String> {
+        let issue =
+            Self::database_issue(path)?.ok_or("runtime database does not require recreation")?;
+        if !issue.requires_recreate {
+            return Err(issue.message);
+        }
+        let mut connection = Connection::open(path).map_err(|error| error.to_string())?;
+        maintenance::rebuild_schema(&mut connection).map_err(|error| error.to_string())?;
+        drop(connection);
+        Self::new(path)
+    }
+}

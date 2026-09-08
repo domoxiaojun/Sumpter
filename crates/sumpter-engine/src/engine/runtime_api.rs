@@ -33,7 +33,7 @@ impl Engine {
                 state.runtime.recent_events.len(),
             )
         };
-        if let Some(store) = &self.inner.runtime_store {
+        if let Some(store) = self.inner.runtime_store.get() {
             let mut summary = store.summary();
             // Memory is the real-time source of truth; storage fields describe
             // durability and may lag while a batch is pending.
@@ -45,7 +45,7 @@ impl Engine {
             "apiVersion": 1,
             "storage": {
                 "backend": "sqlite",
-                "state": "degraded",
+                "state": self.runtime_database_issue().map_or("degraded", |issue| issue.code),
                 "pendingEvents": 0,
                 "eventCount": recent_event_count,
                 "dbBytes": 0,
@@ -54,6 +54,7 @@ impl Engine {
                 "lastError": self.last_error(),
             },
             "resetGeneration": 0,
+            "startupIssue": self.runtime_database_issue(),
             "counters": counters,
             "latestEvent": latest_event,
         })
@@ -72,7 +73,7 @@ impl Engine {
         from: Option<f64>,
         to: Option<f64>,
     ) -> Result<Value, String> {
-        if let Some(store) = &self.inner.runtime_store {
+        if let Some(store) = self.inner.runtime_store.get() {
             let cursor_valid = store.change_cursor_valid(after_change_seq)?;
             let mut events = store.events(
                 before_seq,
@@ -120,7 +121,7 @@ impl Engine {
     fn runtime_query_path(&self) -> Result<&std::path::Path, RuntimeQueryError> {
         self.inner
             .runtime_store
-            .as_ref()
+            .get()
             .map(RuntimeStore::database_path)
             .ok_or_else(|| RuntimeQueryError::NotFound("runtime.sqlite3 不可用".into()))
     }
@@ -139,7 +140,7 @@ impl Engine {
         let store = self
             .inner
             .runtime_store
-            .as_ref()
+            .get()
             .ok_or_else(|| RuntimeQueryError::NotFound("runtime.sqlite3 不可用".into()))?;
         let recent = store.recent_changes_for_request(request_id);
         Self::runtime_query_value(runtime_query::request_chain_with_recent(
@@ -202,7 +203,7 @@ impl Engine {
 
     pub fn runtime_set_retention(&self, update: RuntimeRetentionUpdate) -> Result<Value, String> {
         let _runtime_write = self.inner.runtime_write.lock().unwrap();
-        let store = self.inner.runtime_store.as_ref().ok_or_else(|| {
+        let store = self.inner.runtime_store.get().ok_or_else(|| {
             self.last_error()
                 .unwrap_or_else(|| "runtime.sqlite3 不可用，无法更新保留策略".into())
         })?;
@@ -212,7 +213,7 @@ impl Engine {
 
     pub fn runtime_cleanup_preview(&self, older_than: f64) -> Result<Value, String> {
         let _runtime_write = self.inner.runtime_write.lock().unwrap();
-        let store = self.inner.runtime_store.as_ref().ok_or_else(|| {
+        let store = self.inner.runtime_store.get().ok_or_else(|| {
             self.last_error()
                 .unwrap_or_else(|| "runtime.sqlite3 不可用，无法预览清理范围".into())
         })?;
@@ -222,7 +223,7 @@ impl Engine {
 
     pub fn runtime_cleanup(&self, older_than: f64) -> Result<Value, String> {
         let _runtime_write = self.inner.runtime_write.lock().unwrap();
-        let store = self.inner.runtime_store.as_ref().ok_or_else(|| {
+        let store = self.inner.runtime_store.get().ok_or_else(|| {
             self.last_error()
                 .unwrap_or_else(|| "runtime.sqlite3 不可用，无法清理统计".into())
         })?;
@@ -235,7 +236,7 @@ impl Engine {
 
     pub fn runtime_replace_pricing(&self, update: RuntimePricingUpdate) -> Result<Value, String> {
         let _runtime_write = self.inner.runtime_write.lock().unwrap();
-        let store = self.inner.runtime_store.as_ref().ok_or_else(|| {
+        let store = self.inner.runtime_store.get().ok_or_else(|| {
             self.last_error()
                 .unwrap_or_else(|| "runtime.sqlite3 不可用，无法更新价格表".into())
         })?;
@@ -244,7 +245,7 @@ impl Engine {
     }
 
     pub fn runtime_event(&self, id: &str) -> Result<Option<Value>, String> {
-        if let Some(store) = &self.inner.runtime_store {
+        if let Some(store) = self.inner.runtime_store.get() {
             return store.event(id).map(|change| {
                 change.map(|value| serde_json::to_value(value).unwrap_or(Value::Null))
             });
@@ -267,7 +268,7 @@ impl Engine {
         confirm_unidentified: bool,
     ) -> Result<Value, String> {
         let _runtime_write = self.inner.runtime_write.lock().unwrap();
-        let store = self.inner.runtime_store.as_ref().ok_or_else(|| {
+        let store = self.inner.runtime_store.get().ok_or_else(|| {
             self.last_error()
                 .unwrap_or_else(|| "runtime.sqlite3 不可用，无法删除会话".into())
         })?;
@@ -281,7 +282,7 @@ impl Engine {
     }
 
     pub fn export_runtime_session(&self, session_id: &str) -> Result<Value, String> {
-        let store = self.inner.runtime_store.as_ref().ok_or_else(|| {
+        let store = self.inner.runtime_store.get().ok_or_else(|| {
             self.last_error()
                 .unwrap_or_else(|| "runtime.sqlite3 不可用，无法导出会话".into())
         })?;
@@ -292,7 +293,7 @@ impl Engine {
     /// affinity 键,再交给 `clear_session_sticky` 清内存并落盘
     /// session_affinity.json。返回清除的归属条数。
     pub fn clear_project_sticky(&self, project_id: &str) -> Result<Value, String> {
-        let store = self.inner.runtime_store.as_ref().ok_or_else(|| {
+        let store = self.inner.runtime_store.get().ok_or_else(|| {
             self.last_error()
                 .unwrap_or_else(|| "runtime.sqlite3 不可用，无法清除会话粘性归属".into())
         })?;
@@ -311,7 +312,7 @@ impl Engine {
         filter: &AnalyticsFilter,
     ) -> Result<Value, String> {
         let filter = filter.normalized();
-        if let Some(store) = &self.inner.runtime_store {
+        if let Some(store) = self.inner.runtime_store.get() {
             let query_filter = RuntimeFilter {
                 client_kind: filter.client_kind.clone(),
                 endpoint_id: filter.endpoint_id.clone(),
@@ -388,8 +389,17 @@ impl Engine {
         self.inner.state.lock().unwrap().last_error = message;
     }
 
+    pub fn runtime_database_issue(&self) -> Option<crate::runtime_store::RuntimeDatabaseIssue> {
+        self.inner.runtime_database_issue.lock().unwrap().clone()
+    }
+
+    pub fn ensure_runtime_ready(&self) -> Result<(), String> {
+        self.runtime_database_issue()
+            .map_or(Ok(()), |issue| Err(issue.message))
+    }
+
     pub fn stats_writable(&self) -> bool {
-        self.inner.runtime_store.as_ref().map_or_else(
+        self.inner.runtime_store.get().map_or_else(
             || self.inner.stats_writable.load(Ordering::Acquire),
             |store| store.summary().storage.state == "ready",
         )
@@ -398,7 +408,7 @@ impl Engine {
     pub fn runtime_storage_backpressured(&self) -> bool {
         self.inner
             .runtime_store
-            .as_ref()
+            .get()
             .is_some_and(RuntimeStore::is_backpressured)
     }
 
@@ -408,7 +418,7 @@ impl Engine {
 
     pub fn reset_runtime(&self) -> Result<i64, String> {
         let _runtime_write = self.inner.runtime_write.lock().unwrap();
-        let store = self.inner.runtime_store.as_ref().ok_or_else(|| {
+        let store = self.inner.runtime_store.get().ok_or_else(|| {
             self.last_error()
                 .unwrap_or_else(|| "runtime.sqlite3 不可用，无法清空统计".into())
         })?;
@@ -435,7 +445,26 @@ impl Engine {
 
     pub fn recreate_runtime(&self) -> Result<i64, String> {
         let _runtime_write = self.inner.runtime_write.lock().unwrap();
-        let store = self.inner.runtime_store.as_ref().ok_or_else(|| {
+        if self.inner.runtime_store.get().is_none() {
+            let dir = self.inner.dir.as_ref().ok_or("runtime.sqlite3 不可用")?;
+            let (store, snapshot) =
+                RuntimeStore::recreate_legacy(&dir.root.join("runtime.sqlite3"))?;
+            let generation = store.summary().reset_generation;
+            self.inner
+                .runtime_store
+                .set(store)
+                .map_err(|_| "runtime store already initialized")?;
+            *self.inner.runtime_database_issue.lock().unwrap() = None;
+            self.inner.stats_writable.store(true, Ordering::Release);
+            let mut state = self.inner.state.lock().unwrap();
+            state.runtime = snapshot;
+            state.last_error = None;
+            state.stats_durability_warning = None;
+            drop(state);
+            let _ = self.inner.notices.send(EngineNotice::StatsReset);
+            return Ok(generation);
+        }
+        let store = self.inner.runtime_store.get().ok_or_else(|| {
             self.last_error()
                 .unwrap_or_else(|| "runtime.sqlite3 不可用，无法重置数据库".into())
         })?;
@@ -461,7 +490,7 @@ impl Engine {
     }
 
     pub fn flush_stats_if_dirty(&self) {
-        if let Some(store) = &self.inner.runtime_store
+        if let Some(store) = self.inner.runtime_store.get()
             && let Err(error) = store.flush()
         {
             self.set_last_error(Some(error.clone()));
@@ -472,7 +501,7 @@ impl Engine {
     pub fn flush_stats(&self) -> Result<(), String> {
         self.inner
             .runtime_store
-            .as_ref()
+            .get()
             .map_or(Ok(()), RuntimeStore::flush)
     }
 }

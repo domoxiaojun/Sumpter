@@ -225,6 +225,12 @@ impl Platform {
 
         let event = RuntimeEvent {
             client_kind: Some(client_kind),
+            client_variant: None,
+            agent_role: None,
+            agent_name: None,
+            parent_thread_id: None,
+            parent_turn_id: None,
+            root_turn_id: None,
             codex_metadata: None,
             client_declared: None,
             grok_metadata: None,

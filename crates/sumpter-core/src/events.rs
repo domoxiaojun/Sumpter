@@ -243,6 +243,7 @@ impl ClientKind {
             // values such as `Codex Desktop/1.2` continue to work, while not
             // treating an arbitrary OpenAI originator as Codex.
             if lower.contains("codex desktop")
+                || lower.contains("codex_work_desktop")
                 || lower.contains("codex_cli_rs")
                 || lower.contains("codex-tui")
             {
@@ -1199,7 +1200,7 @@ pub fn codex_thread_class(metadata: Option<&CodexMetadata>) -> CodexThreadClass 
     match source {
         "user" => CodexThreadClass::User,
         "system" => CodexThreadClass::System,
-        "title" => CodexThreadClass::Title,
+        "title" | "thread_title" => CodexThreadClass::Title,
         "automation" => CodexThreadClass::Automation,
         "automated_review" => CodexThreadClass::AutomatedReview,
         "guardian_review" => CodexThreadClass::GuardianReview,
@@ -2560,6 +2561,20 @@ pub struct RuntimeEvent {
     /// 或没有入站客户端的 notify；显式 Unknown 才表示无法识别的 Anthropic 客户端。
     #[serde(rename = "clientKind", default, skip_serializing_if = "is_none")]
     pub client_kind: Option<ClientKind>,
+    /// Stable client variant derived from the inbound UA/originator.
+    #[serde(rename = "clientVariant", default, skip_serializing_if = "is_none")]
+    pub client_variant: Option<String>,
+    /// Agent role derived from Codex/agent metadata.
+    #[serde(rename = "agentRole", default, skip_serializing_if = "is_none")]
+    pub agent_role: Option<String>,
+    #[serde(rename = "agentName", default, skip_serializing_if = "is_none")]
+    pub agent_name: Option<String>,
+    #[serde(rename = "parentThreadId", default, skip_serializing_if = "is_none")]
+    pub parent_thread_id: Option<String>,
+    #[serde(rename = "parentTurnId", default, skip_serializing_if = "is_none")]
+    pub parent_turn_id: Option<String>,
+    #[serde(rename = "rootTurnId", default, skip_serializing_if = "is_none")]
+    pub root_turn_id: Option<String>,
     /// Codex 入站线程/回合/子代理元数据；旧 stats.json 没有时保持 None。
     #[serde(rename = "codexMetadata", default, skip_serializing_if = "is_none")]
     pub codex_metadata: Option<CodexMetadata>,
@@ -2691,6 +2706,81 @@ pub struct RuntimeEvent {
 }
 
 impl RuntimeEvent {
+    /// Return a stable client variant for attribution and analytics.
+    pub fn derived_client_variant(&self) -> &'static str {
+        if let Some(value) = self.client_variant.as_deref() {
+            return match value {
+                "cli" => "cli",
+                "tui" => "tui",
+                "desktop" => "desktop",
+                "work_desktop" => "work_desktop",
+                "sdk" => "sdk",
+                "web" => "web",
+                _ => "unknown",
+            };
+        }
+        match self.client_kind {
+            Some(ClientKind::Codex) => {
+                let originator = self
+                    .codex_metadata
+                    .as_ref()
+                    .and_then(|m| m.originator.as_deref())
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                if originator.contains("codex_work_desktop") {
+                    "work_desktop"
+                } else if originator.contains("codex desktop") {
+                    "desktop"
+                } else if originator.contains("codex-tui") {
+                    "tui"
+                } else {
+                    "cli"
+                }
+            }
+            Some(ClientKind::ClaudeCode) => "cli",
+            Some(ClientKind::GeminiCli | ClientKind::GrokBuild | ClientKind::Pi) => "cli",
+            Some(ClientKind::OpenaiCompat | ClientKind::Unknown) | None => "unknown",
+        }
+    }
+
+    /// Return a normalized root/subagent/internal role.
+    pub fn derived_agent_role(&self) -> &'static str {
+        if let Some(value) = self.agent_role.as_deref() {
+            return match value {
+                "root" => "root",
+                "subagent" => "subagent",
+                "guardian" => "guardian",
+                "review" => "review",
+                "memory" => "memory",
+                "title" => "title",
+                "automation" => "automation",
+                "system" => "system",
+                "ambient" => "ambient",
+                _ => "unknown",
+            };
+        }
+        let Some(metadata) = self.codex_metadata.as_ref() else {
+            return "root";
+        };
+        if let Some(kind) = metadata.subagent_kind.as_deref() {
+            return match kind {
+                "guardian" => "guardian",
+                "review" | "automated_review" => "review",
+                "memory_consolidation" => "memory",
+                "thread_spawn" | "collab_spawn" | "compact" | "subagent" => "subagent",
+                _ => "unknown",
+            };
+        }
+        match metadata.thread_source.as_deref() {
+            Some("system") => "system",
+            Some("thread_title" | "title") => "title",
+            Some("automation") => "automation",
+            Some(value) if value.starts_with("ambient") => "ambient",
+            _ if metadata.is_subagent => "subagent",
+            _ => "root",
+        }
+    }
+
     pub fn is_in_flight(&self) -> bool {
         self.phase == Some(RuntimeEventPhase::InFlight)
     }
@@ -2908,6 +2998,12 @@ mod tests {
     fn event(id: &str, kind: &str, ts: f64) -> RuntimeEvent {
         RuntimeEvent {
             client_kind: None,
+            client_variant: None,
+            agent_role: None,
+            agent_name: None,
+            parent_thread_id: None,
+            parent_turn_id: None,
+            root_turn_id: None,
             codex_metadata: None,
             client_declared: None,
             grok_metadata: None,
@@ -3208,6 +3304,10 @@ mod tests {
         );
         assert_eq!(
             ClientKind::detect_with_originator(None, Some("Codex Desktop/1.2"), true),
+            ClientKind::Codex
+        );
+        assert_eq!(
+            ClientKind::detect_with_originator(None, Some("codex_work_desktop"), true),
             ClientKind::Codex
         );
         assert_eq!(
@@ -3799,6 +3899,26 @@ mod tests {
             codex_attribution_scope(Some(&feature), None),
             CodexAttributionScope::Unknown
         );
+        let title = CodexMetadata {
+            thread_source: Some("thread_title".into()),
+            ..Default::default()
+        };
+        assert_eq!(codex_thread_class(Some(&title)), CodexThreadClass::Title);
+    }
+
+    #[test]
+    fn runtime_event_derives_client_variant_and_agent_role() {
+        let event = RuntimeEvent {
+            client_kind: Some(ClientKind::Codex),
+            codex_metadata: Some(CodexMetadata {
+                originator: Some("codex-tui".into()),
+                subagent_kind: Some("thread_spawn".into()),
+                ..Default::default()
+            }),
+            ..event("derived", KIND_CLIENT, 0.0)
+        };
+        assert_eq!(event.derived_client_variant(), "tui");
+        assert_eq!(event.derived_agent_role(), "subagent");
     }
 
     #[test]

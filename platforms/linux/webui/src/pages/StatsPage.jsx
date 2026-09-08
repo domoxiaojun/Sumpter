@@ -235,11 +235,17 @@ export function StatsPage() {
     return () => { active = false; };
   }, [loadRuntimeEvent, selectedEventID]);
 
-  const filters = analyticsFilters || { clientKind: '', endpointID: '', project: '', projectID: '', sessionID: '', model: '', requestPurpose: '', outcome: '', failureKind: '', failurePhase: '' };
-  const activeFilterCount = [filters.clientKind, filters.endpointID, filters.projectID, filters.project, filters.sessionID, filters.model, filters.requestPurpose, filters.outcome, filters.failureKind, filters.failurePhase, selectedProject?.key, selectedSession?.key]
+  const filters = analyticsFilters || { clientKind: '', clientVariant: '', agentRole: '', agentName: '', parentThreadID: '', parentTurnID: '', rootTurnID: '', endpointID: '', project: '', projectID: '', sessionID: '', model: '', requestPurpose: '', outcome: '', failureKind: '', failurePhase: '' };
+  const activeFilterCount = [filters.clientKind, filters.clientVariant, filters.agentRole, filters.agentName, filters.parentThreadID, filters.parentTurnID, filters.rootTurnID, filters.endpointID, filters.projectID, filters.project, filters.sessionID, filters.model, filters.requestPurpose, filters.outcome, filters.failureKind, filters.failurePhase, selectedProject?.key, selectedSession?.key]
     .filter((value) => String(value || '').trim()).length;
   const facets = useMemo(() => ({
     clientKinds: facetOptions(runtimeFacets, 'clientKinds', filters.clientKind),
+    clientVariants: facetOptions(runtimeFacets, 'clientVariants', filters.clientVariant),
+    agentRoles: facetOptions(runtimeFacets, 'agentRoles', filters.agentRole),
+    agentNames: facetOptions(runtimeFacets, 'agentNames', filters.agentName),
+    parentThreads: facetOptions(runtimeFacets, 'parentThreads', filters.parentThreadID),
+    parentTurns: facetOptions(runtimeFacets, 'parentTurns', filters.parentTurnID),
+    rootTurns: facetOptions(runtimeFacets, 'rootTurns', filters.rootTurnID),
     endpoints: endpointOptions(runtime, config, runtimeFacets, filters.endpointID),
     projects: facetOptions(runtimeFacets, 'projects', filters.project),
     sessions: facetOptions(runtimeFacets, 'sessions', filters.sessionID),
@@ -247,7 +253,7 @@ export function StatsPage() {
     requestPurposes: facetOptions(runtimeFacets, 'requestPurposes', filters.requestPurpose),
     failureKinds: facetOptions(runtimeFacets, 'failureKinds', filters.failureKind),
     failurePhases: facetOptions(runtimeFacets, 'failurePhases', filters.failurePhase),
-  }), [config, runtime, runtimeFacets, filters.clientKind, filters.endpointID, filters.project, filters.sessionID, filters.model, filters.requestPurpose, filters.failureKind, filters.failurePhase]);
+  }), [config, runtime, runtimeFacets, filters.clientKind, filters.clientVariant, filters.agentRole, filters.agentName, filters.parentThreadID, filters.parentTurnID, filters.rootTurnID, filters.endpointID, filters.project, filters.sessionID, filters.model, filters.requestPurpose, filters.failureKind, filters.failurePhase]);
 
   const updateFilter = (key, value) => {
     const next = {
@@ -272,7 +278,7 @@ export function StatsPage() {
 
   const clearAllFilters = () => {
     clearLocalDrilldowns();
-    loadRuntimeAnalytics(analyticsRange, { clientKind: '', endpointID: '', project: '', projectID: '', sessionID: '', model: '', requestPurpose: '', outcome: '', failureKind: '', failurePhase: '' }).catch(() => null);
+    loadRuntimeAnalytics(analyticsRange, { clientKind: '', clientVariant: '', agentRole: '', agentName: '', parentThreadID: '', parentTurnID: '', rootTurnID: '', endpointID: '', project: '', projectID: '', sessionID: '', model: '', requestPurpose: '', outcome: '', failureKind: '', failurePhase: '' }).catch(() => null);
   };
 
   const recreateDatabase = async () => {
@@ -305,6 +311,7 @@ export function StatsPage() {
         </div>
       </div>
 
+      {runtime?.startupIssue && <div className="glass-panel runtime-startup-issue" role="alert"><strong>运行统计数据库需要重建</strong><p>{runtime.startupIssue.message || '检测到旧版 runtime 数据库，代理暂未启动。'}</p><button type="button" className="btn btn-danger" onClick={recreateDatabase}>清空并重建数据库</button></div>}
       <section className="glass-panel analytics-v3-filter-panel" aria-labelledby="analytics-v3-filter-heading">
         <div className="analytics-v3-filter-status">
           <div>
@@ -358,6 +365,14 @@ export function StatsPage() {
               {facets.clientKinds.map((item) => <option key={item.value} value={item.value}>{clientKindLabel(item.value)} · {formatNumber(item.count)}</option>)}
             </select>
           </label>
+          {[
+            ['clientVariant', '客户端变体', 'clientVariants'], ['agentRole', '代理角色', 'agentRoles'], ['agentName', '代理名称', 'agentNames'],
+            ['parentThreadID', '父线程', 'parentThreads'], ['parentTurnID', '父回合', 'parentTurns'], ['rootTurnID', '根回合', 'rootTurns'],
+          ].map(([key, label, facetKey]) => (
+            <label key={key}><span>{label}</span><select className="form-select" value={filters[key] || ''} onChange={(event) => updateFilter(key, event.target.value)}>
+              <option value="">不限{label}</option>{(facets[facetKey] || []).map((item) => <option key={item.value} value={item.value}>{item.value} · {formatNumber(item.count)}</option>)}
+            </select></label>
+          ))}
           <label>
             <span>模型</span>
             <select className="form-select" value={filters.model || ''} onChange={(event) => updateFilter('model', event.target.value)}>

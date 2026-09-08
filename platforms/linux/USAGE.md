@@ -1,6 +1,6 @@
 # Sumpter使用指南
 
-给第一次安装并接入客户端的用户。当前版本 **0.3.9**，配置 **schema v7**。
+给第一次安装并接入客户端的用户。当前版本 **0.4.0**，配置 **schema v7**。
 
 **范围**：从 GitHub 安装、填写 `config.json`、接入 Claude Code / Codex / Grok Build / Gemini CLI / pi、项目归因、常见错误。  
 **不包含**：改源码、编译、发版。
@@ -91,7 +91,7 @@ bash setup-client-attribution.sh restore pi
 
 ## Linux/macOS 客户端归因脚本统一安装
 
-Claude Code、Grok Build、Gemini CLI、pi 共用 `client-attribution.mjs` 安装器。前三者管理 shell 归因块，pi 管理原生扩展文件；客户端的原生启动参数与会话恢复参数保持不变。
+Claude Code、Grok Build、Gemini CLI、Codex CLI/TUI、pi 共用 `client-attribution.mjs` 安装器。前四者管理 shell 归因块，pi 管理原生扩展文件；客户端的原生启动参数与会话恢复参数保持不变。
 
 必须在**启动客户端的主机**执行，不要装到只跑 Sumpter daemon 的 Linux 上。本机 macOS App 可在「设置 → 安全」或「帮助」选择客户端后点「安装配置」。其它机器从仓库下载，不要用 `sudo`：
 
@@ -99,31 +99,33 @@ Claude Code、Grok Build、Gemini CLI、pi 共用 `client-attribution.mjs` 安�
 curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh \
   https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/setup-client-attribution.sh
 
-# 选择 claude、grok、gemini、pi 或 all（全部四个客户端）
+# 选择 claude、grok、gemini、codex、pi 或 all（全部五个客户端）
 bash setup-client-attribution.sh status all
 bash setup-client-attribution.sh install all
 bash setup-client-attribution.sh restore all
 ```
 
-脚本优先使用同目录资源；缺失时从 GitHub 仓库 raw 拉取 `client-attribution.mjs` 与 pi 扩展，全部成功后才安装。无法访问 GitHub 且代理已运行时，可改设 `SUMPTER_BASE_URL`（及入站 Token）从 `/__sumpter/` 下载。安装和还原后显示当前状态；`--shell bash|zsh` 与 `--rc 文件` 只影响前三个客户端。
+只需下载上述 setup 脚本，无需手动准备 mjs。脚本优先使用同目录资源；缺失时从 GitHub raw 自动获取所选客户端需要的安装器和扩展，下载失败时不执行安装。无法访问 GitHub 且代理已运行时，可改设 `SUMPTER_BASE_URL`（及入站 Token）从 `/__sumpter/` 下载。安装和还原后显示当前状态；`--shell bash|zsh` 与 `--rc 文件` 影响 shell 客户端（Claude/Grok/Gemini/Codex），pi 使用扩展文件。
 
-安装器会备份 shell rc，并只替换 Sumpter 管理的对应归因标记块；重复安装幂等，`uninstall` 删除所选块，`restore` 只恢复所选客户端安装前的旧块并保留其他改动。安装、卸载、还原后新开终端。
+安装器会备份 shell rc，并只替换 Sumpter 管理的对应归因标记块；重复安装幂等，`uninstall` 删除所选块，`restore` 只恢复所选客户端安装前的旧块并保留其他改动。Shell 客户端安装、卸载、还原后新开终端，pi 操作后执行 `/reload`。
 
-也可以不改 rc，在客户端电脑临时跑（需 Node.js 18+）。从仓库拉启动器后，把代理地址换成 daemon 的可达地址：
+Claude 的 `settings.json` 中若写死 `env.ANTHROPIC_CUSTOM_HEADERS`，会覆盖启动时的动态值；
+安装器会提示先移除该冲突。Grok 的 `GROK_CONFIG_PATH` 同样会触发冲突提示。
+不要把项目路径写死在全局配置里；切换项目后应从对应目录重新启动客户端。
 
-```bash
-curl --proto '=https' --tlsv1.2 -fLo client-attribution.mjs \
-  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/client-attribution.mjs
-export ANTHROPIC_BASE_URL='http://127.0.0.1:57878'   # 远程 daemon 改成实际 host:port
-node client-attribution.mjs run claude --
-node client-attribution.mjs run grok --
-```
+Codex CLI/TUI 使用与 Claude 相同的本地采集逻辑，支持 `-C / --cd` 和已有 profile。
+安装器自动读取当前连接配置，仅在本次启动参数中挂载归因 header；不修改 Codex 配置文件、
+模型或凭据，也不从 provider 名称判定项目。需先有指向 Sumpter 的自定义连接配置；
+Codex 内置连接不支持这一注入方式。通过新终端的 `codex` 命令启动才会加载包装器，
+Codex Desktop 和已运行的会话不会加载它；原生 workspace metadata 仍优先于脚本声明。
 
-`--` 后面是原来的客户端参数。关掉这次进程即不再注入 header。pi 没有临时 `run`，仍用上面的 `install pi`。
+如只需临时启动，可使用发布包内的 `node /path/to/client-attribution.mjs run claude --`，
+把 `claude` 换为对应客户端，`--` 后传原始参数；不修改 rc。pi 的临时启动需同目录带扩展，
+具体见上面的 pi 说明。普通安装无需先做临时启动。
 
 Gemini 运行前还需设置 `SUMPTER_GEMINI_BASE_URL` 和 `SUMPTER_AUTH_TOKEN`；统一入口会设置 Gemini 的 Base URL、认证方式和归因 header。显式 `--resume`、`--session-id`、`--session-file` 或 `--list-sessions` 时不生成新会话 ID，避免改变客户端恢复语义。
 
-三者都只把归因 header 发送到 Sumpter；代理解析后从发往上游的请求剥离。工作区路径只在 Sumpter 本地统计中保存脱敏形态，Git remote 会删除凭据、query 和 fragment。
+仅在已经连接 Sumpter 的客户端上启用；包装器随该客户端请求附加归因头，Sumpter 在上游转发前剥离。统计投影使用脱敏路径，Codex 源元数据和诊断捕获可能包含原始路径。Git remote 会删除凭据、query 和 fragment。
 
 pi 扩展由统一安装器从同目录资源、GitHub 仓库 raw 或 listener 的 `/__sumpter/pi-project-attribution.ts` 获取；必须在 pi 的 Sumpter provider 上设置 `X-Sumpter-Client: pi`，安装器不会自动修改该标识或凭据。
 
@@ -559,70 +561,26 @@ Linux 的 Web Admin 地址 **不是** 这个字段，默认永远是 `127.0.0.1:
 
 ## 8. 让 Claude Code / Grok Build 按项目统计（可选）
 
-统计页有「项目 Token 排行」。Codex 会自己上行工作区信息，天生分好项目；**Claude Code、Grok
-Build、Gemini CLI 默认不会**——工作目录不进发给代理的请求，所以未配置时都堆在「未识别项目」里。
-pi 需要安装扩展并设置 `X-Sumpter-Client: pi`。会话维度不受影响：CC 无条件发
-`X-Claude-Code-Session-Id`，**会话统计零配置就有**。
+本节同样适用于 Codex CLI/TUI、Gemini CLI 和 pi。统计依赖客户端明确上送的项目证据：
+Codex 部分请求自带 workspace metadata，但并非每条请求都有。缺少证据时保留“未识别项目”，
+不会从提示词、消息正文或 provider 名称推测本地目录。
 
-要分项目，让客户端按启动目录带上 `X-Sumpter-Project` / `X-Sumpter-Workspace` /
-`X-Sumpter-Git-Remote` / `X-Sumpter-User`（代理读完即从出站剥离）。有工作区路径时来源是
-**本地项目**，带用户名时运行页显示例如 `sumpter 本地(kkl)`。
+安装、检查和还原统一见前面的[客户端归因安装](#linuxmacos-客户端归因脚本统一安装)。
+只需在运行客户端的主机下载 setup 脚本，所需 mjs 和 pi 扩展由它自动获取；本机 macOS App
+可直接在“安全”或“帮助”页使用内置资源。Linux 发布包也带有同一 setup 脚本。
 
-> **在哪台机器配？** 在**跑客户端的那台机器**上，不是跑 daemon 的那台。
+Claude、Grok、Gemini、Codex 的包装器按每次启动目录读取 Git 根目录（非 Git 目录使用当前目录）、
+项目名、用户和 remote；Codex 支持 -C / --cd。安装后新开终端，通过对应客户端命令启动。
+pi 扩展在请求时读取当前工作区和会话，安装后执行 /reload。
 
-### 统一安装器
+Codex Desktop 图形进程和已经运行的会话不会加载 shell 包装器；桌面的 system 等内部请求
+可能没有项目上下文。请在新请求的运行详情中核对项目、来源和会话，安装状态不代表已经观察到归因。
 
-在**启动客户端的主机**操作，不要装到只跑 daemon 的 Linux。可先临时跑：
-
-```bash
-curl --proto '=https' --tlsv1.2 -fLo client-attribution.mjs \
-  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/client-attribution.mjs
-export ANTHROPIC_BASE_URL='http://127.0.0.1:57878'
-node client-attribution.mjs run claude --
-```
-
-要每次启动都带归因，再安装（本机发布包也可用 `bash scripts/setup-client-attribution.sh`）：
-
-```bash
-curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh \
-  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/setup-client-attribution.sh
-bash setup-client-attribution.sh install all
-```
-
-检查或还原：`status` / `restore`。缺失的配套文件默认从同一 GitHub raw 目录下载。无法访问
-GitHub 且本机代理已运行时，可设 `SUMPTER_BASE_URL` 从 `/__sumpter/` 取脚本。需要 Node.js 18+，
-不要用 `sudo`。安装后新开终端；pi 执行 `/reload`。
-
-客户端就在这台 Mac 时可用 App「安全」页。旧的 `cc-project-attribution.sh` /
-`grok-project-attribution.sh` 仅用于已有安装维护。
-
-### 手工配置（不想用配置器时）
-
-```bash
-export ANTHROPIC_CUSTOM_HEADERS="X-Sumpter-Project: $(basename "$PWD")
-X-Sumpter-Workspace: $PWD
-X-Sumpter-Git-Remote: $(git remote get-url origin 2>/dev/null)
-X-Sumpter-User: $USER"
-```
-
-curl 风格 `名字: 值`，**一行一个**，三个都可选。但手工设有几个坑配置器已经替你处理，自己写要注意：
-
-- **值必须纯 ASCII。** CC 见到含非 ASCII 的 `ANTHROPIC_CUSTOM_HEADERS` 会**直接报错退出**
-  （`Invalid value for distinct header ... non-ASCII character`），整个会话起不来——不是归因失败，
-  是 `claude` 用不了。中文目录名不能直接塞，得先判断跳过。
-- **别写进 `settings.json` 的 `env`。** 那里的值**覆盖**进程环境变量，一旦写死 shell 里再怎么设都
-  不生效；且 `env` **不做插值**（`$PWD`、`${CLAUDE_PROJECT_DIR}` 都按字面发出），只能是一个固定
-  字符串，等于所有项目共用一个名字。
-- **进程级、启动时读一次**，之后 `cd` 到别的目录不更新——归因的是「启动 CC 时所在的项目」。想每个
-  项目自动跟着走，用配置器，或 per-project 的 `.envrc`（direnv）。
-
-### 几个要知道的
-
-- 工作区在界面上只显示**尾两段**（`.../claude/automode-proxy`），完整绝对路径不落盘，故意的。
-- 带了工作区路径时来源是「本地项目」，有 `X-Sumpter-User` 时显示 `本地(用户名)`。只有项目名时仍是「客户端声明」。
-- **这三个 header 被剥，不代表路径没外泄。** CC 每条请求的 body 里本来就带工作目录绝对路径、
-  `CLAUDE.md` 全文与 `git status` 摘要，代理对 `system` / `messages` 一字不改地转发。配不配这三个
-  header 对外泄面**毫无影响**，只决定代理能不能按项目统计。真在意就只能换可信上游。
+归因字段使用 X-Sumpter-Project、X-Sumpter-Workspace、X-Sumpter-Git-Remote 和
+X-Sumpter-User。带工作区时显示“本地项目”，只有项目名时显示“客户端声明”；这些专用头
+在上游转发前剥离。Git remote 会移除凭据、query 和 fragment，中文路径用 uri-v1 编码。
+统计使用脱敏后的工作区路径；Codex 的 sourceWorkspacePaths 及启用的诊断捕获可能保留原始路径，
+不能把界面脱敏理解为所有存储都不含绝对路径。客户端正文中的工作目录也不由归因脚本清除。
 
 ---
 
@@ -650,5 +608,5 @@ curl 风格 `名字: 值`，**一行一个**，三个都可选。但手工设有
 3. 定位配置文件路径；没有就从 example 复制，不要在仓库 example 里填真实 key。
 4. 写入 `config.json`，确认 `schemaVersion: 7`、顶层是 `endpoints` 与可选 `modelGroups`（没有 `pools`），至少一条入口 `enabled: true`，客户端模型被模型组或 `mappings` 接住。
 5. 告诉用户对应客户端的 Base URL：Claude Code 用根地址；Codex 必须带 `/v1`；pi 要设 `X-Sumpter-Client: pi`。
-6. 需要项目统计时，在**启动客户端的主机**处理，不要装到只跑 daemon 的 Linux。可先 `node client-attribution.mjs run …` 临时跑；要持久再 `setup-client-attribution.sh install`。
+6. 需要项目统计时，在**启动客户端的主机**处理，不要装到只跑 daemon 的 Linux。下载 setup 脚本后执行 `bash setup-client-attribution.sh install all`。
 7. **不要**把 key 写进回复；**不要** `git add` 配置；**不要**改源码。

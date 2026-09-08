@@ -31,7 +31,7 @@ cargo build --locked -p sumpterd-macos
 
 sidecar 使用共享引擎处理 HTTP、流式响应和 WebSocket。完整路径、协议转换、模型目录及 Realtime/Live 特例统一见 [使用指南](../../USAGE.md#4-协议与路径)，入口协议字段见 [配置说明](../../docs/configuration.md#入站协议与入口五态)。Provider 的实际权限和媒体/Realtime 能力仍需目标上游实测。
 
-想让「统计」页按项目区分 Claude Code / Grok / Gemini / pi 请求，在 App 的**安全**页选择客户端并安装配置。打包后的统一安装器在 `Sumpter.app/Contents/Resources/`。原理见 [客户端项目归因](../../USAGE.md#8-让-claude-code--grok-build-按项目统计可选)。
+想让「统计」页按项目区分 Claude Code / Grok / Gemini / Codex CLI/TUI / pi 请求，在 App 的**安全**页选择客户端并安装配置。打包后的统一安装器在 `Sumpter.app/Contents/Resources/`。原理见 [客户端项目归因](../../USAGE.md#8-让-claude-code--grok-build-按项目统计可选)。
 
 ## 统一通知
 
@@ -41,4 +41,4 @@ sidecar 使用共享引擎处理 HTTP、流式响应和 WebSocket。完整路径
 
 ## Gemini CLI
 
-推荐在 App「安全」页用统一安装器接入 Gemini。资源内也内置 `gemini-sumpter-wrapper.mjs`：设置 `SUMPTER_GEMINI_BASE_URL` 与 `SUMPTER_AUTH_TOKEN` 后用 `node` 调用；新会话自动带稳定的 `--session-id` 和 `X-Sumpter-Session-Id`，项目名通过 `SUMPTER_GEMINI_PROJECT` 显式声明。Gemini 使用 Developer API 原生路径，Vertex、OAuth、Service Account 和 Code Assist 不在范围内。
+推荐在 App「安全」页用统一安装器接入 Gemini。资源内也内置 `gemini-sumpter-wrapper.mjs`：设置 `SUMPTER_GEMINI_BASE_URL` 与 `SUMPTER_AUTH_TOKEN` 后用 `node` 调用；新会话自动带稳定的 `--session-id` 和 `X-Sumpter-Session-Id`，项目名默认取 Git 根目录名（非 Git 目录取当前目录名），可通过 `SUMPTER_GEMINI_PROJECT` 覆盖。Gemini 使用 Developer API 原生路径，Vertex、OAuth、Service Account 和 Code Assist 不在范围内。

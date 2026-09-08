@@ -81,7 +81,7 @@ bash setup-client-attribution.sh restore pi
 
 ## Linux/macOS 客户端归因脚本统一安装
 
-Claude Code、Grok Build、Gemini CLI、pi 共用 `client-attribution.mjs` 安装器。前三者管理 shell 归因块，pi 管理原生扩展文件；客户端的原生启动参数与会话恢复参数保持不变。
+Claude Code、Grok Build、Gemini CLI、Codex CLI/TUI、pi 共用 `client-attribution.mjs` 安装器。前四者管理 shell 归因块，pi 管理原生扩展文件；客户端的原生启动参数与会话恢复参数保持不变。
 
 必须在**启动客户端的主机**执行，不要装到只跑 Sumpter daemon 的 Linux 上。本机 macOS App 可在「设置 → 安全」或「帮助」选择客户端后点「安装配置」。其它机器从仓库下载，不要用 `sudo`：
 
@@ -89,31 +89,33 @@ Claude Code、Grok Build、Gemini CLI、pi 共用 `client-attribution.mjs` 安�
 curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh \
   https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/setup-client-attribution.sh
 
-# 选择 claude、grok、gemini、pi 或 all（全部四个客户端）
+# 选择 claude、grok、gemini、codex、pi 或 all（全部五个客户端）
 bash setup-client-attribution.sh status all
 bash setup-client-attribution.sh install all
 bash setup-client-attribution.sh restore all
 ```
 
-脚本优先使用同目录资源；缺失时从 GitHub 仓库 raw 拉取 `client-attribution.mjs` 与 pi 扩展，全部成功后才安装。无法访问 GitHub 且代理已运行时，可改设 `SUMPTER_BASE_URL`（及入站 Token）从 `/__sumpter/` 下载。安装和还原后显示当前状态；`--shell bash|zsh` 与 `--rc 文件` 只影响前三个客户端。
+只需下载上述 setup 脚本，无需手动准备 mjs。脚本优先使用同目录资源；缺失时从 GitHub raw 自动获取所选客户端需要的安装器和扩展，下载失败时不执行安装。无法访问 GitHub 且代理已运行时，可改设 `SUMPTER_BASE_URL`（及入站 Token）从 `/__sumpter/` 下载。安装和还原后显示当前状态；`--shell bash|zsh` 与 `--rc 文件` 影响 shell 客户端（Claude/Grok/Gemini/Codex），pi 使用扩展文件。
 
-安装器会备份 shell rc，并只替换 Sumpter 管理的对应归因标记块；重复安装幂等，`uninstall` 删除所选块，`restore` 只恢复所选客户端安装前的旧块并保留其他改动。安装、卸载、还原后新开终端。
+安装器会备份 shell rc，并只替换 Sumpter 管理的对应归因标记块；重复安装幂等，`uninstall` 删除所选块，`restore` 只恢复所选客户端安装前的旧块并保留其他改动。Shell 客户端安装、卸载、还原后新开终端，pi 操作后执行 `/reload`。
 
-也可以不改 rc，在客户端电脑临时跑（需 Node.js 18+）。从仓库拉启动器后，把代理地址换成 daemon 的可达地址：
+Claude 的 `settings.json` 中若写死 `env.ANTHROPIC_CUSTOM_HEADERS`，会覆盖启动时的动态值；
+安装器会提示先移除该冲突。Grok 的 `GROK_CONFIG_PATH` 同样会触发冲突提示。
+不要把项目路径写死在全局配置里；切换项目后应从对应目录重新启动客户端。
 
-```bash
-curl --proto '=https' --tlsv1.2 -fLo client-attribution.mjs \
-  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/client-attribution.mjs
-export ANTHROPIC_BASE_URL='http://127.0.0.1:57878'   # 远程 daemon 改成实际 host:port
-node client-attribution.mjs run claude --
-node client-attribution.mjs run grok --
-```
+Codex CLI/TUI 使用与 Claude 相同的本地采集逻辑，支持 `-C / --cd` 和已有 profile。
+安装器自动读取当前连接配置，仅在本次启动参数中挂载归因 header；不修改 Codex 配置文件、
+模型或凭据，也不从 provider 名称判定项目。需先有指向 Sumpter 的自定义连接配置；
+Codex 内置连接不支持这一注入方式。通过新终端的 `codex` 命令启动才会加载包装器，
+Codex Desktop 和已运行的会话不会加载它；原生 workspace metadata 仍优先于脚本声明。
 
-`--` 后面是原来的客户端参数。关掉这次进程即不再注入 header。pi 没有临时 `run`，仍用上面的 `install pi`。
+如只需临时启动，可使用发布包内的 `node /path/to/client-attribution.mjs run claude --`，
+把 `claude` 换为对应客户端，`--` 后传原始参数；不修改 rc。pi 的临时启动需同目录带扩展，
+具体见上面的 pi 说明。普通安装无需先做临时启动。
 
 Gemini 运行前还需设置 `SUMPTER_GEMINI_BASE_URL` 和 `SUMPTER_AUTH_TOKEN`；统一入口会设置 Gemini 的 Base URL、认证方式和归因 header。显式 `--resume`、`--session-id`、`--session-file` 或 `--list-sessions` 时不生成新会话 ID，避免改变客户端恢复语义。
 
-三者都只把归因 header 发送到 Sumpter；代理解析后从发往上游的请求剥离。工作区路径只在 Sumpter 本地统计中保存脱敏形态，Git remote 会删除凭据、query 和 fragment。
+仅在已经连接 Sumpter 的客户端上启用；包装器随该客户端请求附加归因头，Sumpter 在上游转发前剥离。统计投影使用脱敏路径，Codex 源元数据和诊断捕获可能包含原始路径。Git remote 会删除凭据、query 和 fragment。
 
 pi 扩展由统一安装器从同目录资源、GitHub 仓库 raw 或 listener 的 `/__sumpter/pi-project-attribution.ts` 获取；必须在 pi 的 Sumpter provider 上设置 `X-Sumpter-Client: pi`，安装器不会自动修改该标识或凭据。
 

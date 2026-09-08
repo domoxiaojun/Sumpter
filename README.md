@@ -2,13 +2,13 @@
 
 本机 AI 请求代理。客户端只连一个地址，由 Sumpter 做入口选择、模型映射、会话粘性、重试和运行记录。
 
-Linux 与 macOS 共用一份 Rust 引擎和 **schema v7** `config.json`。当前版本以根 [Cargo.toml](Cargo.toml) 为准（现为 **0.3.9**），许可证 [MIT](LICENSE)。源码仓库：[domoxiaojun/sumpter](https://github.com/domoxiaojun/sumpter)。
+Linux 与 macOS 共用一份 Rust 引擎和 **schema v7** `config.json`。当前版本以根 [Cargo.toml](Cargo.toml) 为准（现为 **0.4.0**），许可证 [MIT](LICENSE)。源码仓库：[domoxiaojun/sumpter](https://github.com/domoxiaojun/sumpter)。
 
 | | 默认 |
 | --- | --- |
 | 代理 | `http://127.0.0.1:57878`（Codex / OpenAI 兼容客户端使用 `.../v1`） |
 | Linux 管理页 | `http://127.0.0.1:57879/admin/` |
-| 配置 | schema v7；旧 v3–v6 启动时备份后迁移 |
+| 配置 | schema v7；旧 v3–v6 按兼容规则迁移 |
 
 ## 安装
 
@@ -43,7 +43,7 @@ bash /tmp/sumpter-install.sh --repo domoxiaojun/sumpter
 | Grok Build / Gemini CLI / OpenAI 兼容 | 按协议选根地址或 `/v1` |
 | pi | `~/.pi/agent/models.json` 增加 provider，并设 `X-Sumpter-Client: pi` |
 
-项目统计的归因装在**启动 Claude / Grok / Gemini / pi 的那台电脑**，不要装到只跑 daemon 的 Linux 上。客户端就在这台 Mac、且用本机 App 时，打开「设置 → 安全」安装。其它机器（包括连远程 Linux 代理的笔记本）在客户端主机执行：
+项目统计的归因装在**启动 Claude / Grok / Gemini / Codex / pi 的那台电脑**，不要装到只跑 daemon 的 Linux 上。客户端就在这台 Mac、且用本机 App 时，打开「设置 → 安全」安装。其它机器（包括连远程 Linux 代理的笔记本）在客户端主机执行：
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh \

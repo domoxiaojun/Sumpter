@@ -20,6 +20,7 @@ fn test_connection() -> Connection {
                    seq INTEGER PRIMARY KEY,change_seq INTEGER NOT NULL UNIQUE,
                    event_id TEXT NOT NULL UNIQUE,request_id TEXT,timestamp REAL NOT NULL,
                    kind TEXT NOT NULL,phase TEXT,outcome TEXT,status_code INTEGER NOT NULL,
+                   client_variant TEXT,agent_role TEXT,agent_name TEXT,parent_thread_id TEXT,parent_turn_id TEXT,root_turn_id TEXT,
                    client_kind TEXT,request_purpose TEXT,endpoint_id TEXT,failure_kind TEXT,
                    is_in_flight INTEGER NOT NULL,payload_json TEXT NOT NULL,
                    projection_version INTEGER NOT NULL DEFAULT 0,
@@ -129,7 +130,7 @@ fn insert_endpoint_test_event(
                    seq,change_seq,event_id,request_id,timestamp,kind,phase,outcome,status_code,
                    client_kind,request_purpose,endpoint_id,is_in_flight,payload_json,
                    projection_version,endpoint_name
-                 ) VALUES (?1,?1,?2,?3,1.0,?4,'completed',?5,?6,?7,?8,?9,0,'{}',8,?10)",
+                 ) VALUES (?1,?1,?2,?3,1.0,?4,'completed',?5,?6,?7,?8,?9,0,'{}',?11,?10)",
             params![
                 seq,
                 format!("endpoint-test-{seq}"),
@@ -141,6 +142,7 @@ fn insert_endpoint_test_event(
                 request_purpose,
                 endpoint_id,
                 endpoint_name,
+                PROJECTION_VERSION,
             ],
         )
         .expect("insert endpoint test event");
@@ -172,7 +174,7 @@ fn insert_100k(connection: &Connection) {
                    'endpoint-a',CASE WHEN seq%10=0 THEN 'upstream_http_status' END,0,
                    CASE WHEN seq>99975 THEN '{\"id\":\"page-event\",\"kind\":\"client\"}'
                         ELSE '{not-json' END,
-                   8,80,printf('session-%03d',seq%500),'header',printf('project-%03d',seq%100),
+                   9,80,printf('session-%03d',seq%500),'header',printf('project-%03d',seq%100),
                    printf('Project %03d',seq%100),'workspace_local','[\".../projects/test\"]',
                    'Endpoint A','gpt-test',CASE WHEN seq%10=0 THEN 'response' END,
                    'openai-responses','openai-responses','native',
@@ -736,4 +738,30 @@ fn cache_request_rate_requires_explicit_cache_field() {
     assert_eq!(metrics.cache_read_request_rate, None);
     assert_eq!(metrics.cache_read_token_rate, None);
     assert_eq!(metrics.cache_read_token_unknown_requests, 1);
+}
+
+#[test]
+fn attribution_filters_match_variant_and_parent_chain_fields() {
+    let mut connection = test_connection();
+    connection.execute(
+        "INSERT INTO runtime_events(seq,change_seq,event_id,timestamp,kind,phase,outcome,status_code,is_in_flight,payload_json,projection_version,client_variant,agent_role,agent_name,parent_thread_id,parent_turn_id,root_turn_id)
+         VALUES(1,1,'attrib',1.0,'client','completed','succeeded',200,0,'{}',8,'tui','subagent','worker','thread-1','turn-2','turn-0')", [],
+    ).unwrap();
+    let filter = RuntimeFilter {
+        client_variant: Some("tui".into()),
+        agent_role: Some("subagent".into()),
+        parent_thread_id: Some("thread-1".into()),
+        ..RuntimeFilter::default()
+    };
+    let page = events_page_on(
+        &mut connection,
+        &EventPageRequest {
+            page: 1,
+            page_size: 10,
+            filter,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(page.total_count, 1);
 }

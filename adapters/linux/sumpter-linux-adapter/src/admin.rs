@@ -249,6 +249,7 @@ impl ProxySupervisor {
     }
 
     pub async fn start(&self) -> Result<ProxyStatus, String> {
+        self.engine.ensure_runtime_ready()?;
         let mut runtime = self.runtime.lock().await;
         Self::discard_finished(&mut runtime);
         if runtime.task.is_some() {
@@ -1481,7 +1482,7 @@ mod tests {
             .unwrap();
         assert_eq!(storage.status(), StatusCode::OK);
         let storage: Value = serde_json::from_slice(&storage.bytes().await.unwrap()).unwrap();
-        assert_eq!(storage["schemaVersion"], 3);
+        assert_eq!(storage["schemaVersion"], 4);
         assert_eq!(storage["retainedEvents"], 0);
 
         let retention_update = client

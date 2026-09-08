@@ -19,16 +19,16 @@ final class UnifiedAttributionInstallerTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: home) }
         let env = ["HOME": home.path, "XDG_DATA_HOME": home.appendingPathComponent("data").path, "PATH": "/usr/bin:/bin"]
         let initial = try await UnifiedAttributionInstaller.run(.status, client: "all", shell: "zsh", environment: env)
-        XCTAssertEqual(try UnifiedAttributionInstaller.parseStatus(initial).map(\.status), ["absent", "absent", "absent", "absent"])
-        _ = try await UnifiedAttributionInstaller.run(.install, client: "claude", shell: "zsh", environment: env)
-        let installed = try await UnifiedAttributionInstaller.run(.status, client: "claude", shell: "zsh", environment: env)
+        XCTAssertEqual(try UnifiedAttributionInstaller.parseStatus(initial).map(\.status), ["absent", "absent", "absent", "absent", "absent"])
+        _ = try await UnifiedAttributionInstaller.run(.install, client: "codex", shell: "zsh", environment: env)
+        let installed = try await UnifiedAttributionInstaller.run(.status, client: "codex", shell: "zsh", environment: env)
         XCTAssertEqual(try UnifiedAttributionInstaller.parseStatus(installed).first?.status, "installed")
         let rc = home.appendingPathComponent(".zshrc")
         let text = try String(contentsOf: rc, encoding: .utf8)
         try (text + "# user edit\n").write(to: rc, atomically: true, encoding: .utf8)
         _ = try await UnifiedAttributionInstaller.run(.restore, client: "all", shell: "zsh", environment: env)
         XCTAssertEqual(try String(contentsOf: rc, encoding: .utf8), "# user edit\n")
-        let restored = try await UnifiedAttributionInstaller.run(.status, client: "claude", shell: "zsh", environment: env)
+        let restored = try await UnifiedAttributionInstaller.run(.status, client: "codex", shell: "zsh", environment: env)
         XCTAssertEqual(try UnifiedAttributionInstaller.parseStatus(restored).first?.canRestore, false)
     }
 

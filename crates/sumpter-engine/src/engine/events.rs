@@ -130,7 +130,7 @@ impl Engine {
     }
 
     fn enqueue_runtime_change(&self, event: RuntimeEvent, snapshot: &RuntimeSnapshot) {
-        let Some(store) = &self.inner.runtime_store else {
+        let Some(store) = self.inner.runtime_store.get() else {
             // SQLite 初始化/版本检查失败时，内存窗口和实时 SSE 仍然可用。
             // 零游标要求客户端重新读取 summary 与最新事件页，不能把它
             // 当成可持久化的 changeSeq 延续。
@@ -327,6 +327,12 @@ impl Engine {
         let message = bounded_failure_detail(message);
         let event = RuntimeEvent {
             client_kind: Some(client_kind),
+            client_variant: None,
+            agent_role: None,
+            agent_name: None,
+            parent_thread_id: None,
+            parent_turn_id: None,
+            root_turn_id: None,
             codex_metadata: retain_codex_metadata_for_client(client_kind, codex_metadata),
             client_declared,
             grok_metadata,
@@ -456,6 +462,12 @@ impl Engine {
     ) -> RuntimeEvent {
         RuntimeEvent {
             client_kind: Some(client_kind),
+            client_variant: None,
+            agent_role: None,
+            agent_name: None,
+            parent_thread_id: None,
+            parent_turn_id: None,
+            root_turn_id: None,
             codex_metadata: None,
             client_declared: None,
             grok_metadata: None,

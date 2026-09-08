@@ -156,9 +156,13 @@ fn admin_access_error(
 async fn status(State(engine): State<Engine>) -> Response {
     let config = engine.config();
     let runtime = engine.runtime_snapshot();
-    let health = health::evaluate(&runtime.recent_events, true);
+    let health = health::evaluate(
+        &runtime.recent_events,
+        engine.runtime_database_issue().is_none(),
+    );
     json_ok(&json!({
-        "running": true,
+        "running": engine.runtime_database_issue().is_none(),
+        "runtimeDatabaseIssue": engine.runtime_database_issue(),
         "runtimeApiVersion": 1,
         "generation": engine.generation(),
         "uptimeSeconds": engine.uptime_seconds(),
@@ -495,6 +499,26 @@ struct RuntimeEventsQuery {
     outcome: Option<String>,
     #[serde(rename = "clientKind", alias = "client_kind")]
     client_kind: Option<String>,
+    #[serde(rename = "clientVariant", alias = "client_variant")]
+    client_variant: Option<String>,
+    #[serde(rename = "agentRole", alias = "agent_role")]
+    agent_role: Option<String>,
+    #[serde(rename = "agentName", alias = "agent_name")]
+    agent_name: Option<String>,
+    #[serde(
+        rename = "parentThreadID",
+        alias = "parent_thread_id",
+        alias = "parentThreadId"
+    )]
+    parent_thread_id: Option<String>,
+    #[serde(
+        rename = "parentTurnID",
+        alias = "parent_turn_id",
+        alias = "parentTurnId"
+    )]
+    parent_turn_id: Option<String>,
+    #[serde(rename = "rootTurnID", alias = "root_turn_id", alias = "rootTurnId")]
+    root_turn_id: Option<String>,
     #[serde(rename = "requestPurpose", alias = "request_purpose")]
     request_purpose: Option<String>,
     #[serde(rename = "endpointID", alias = "endpoint_id")]
@@ -573,6 +597,12 @@ fn runtime_filter_from_events_query(query: &RuntimeEventsQuery) -> RuntimeFilter
         kind: query.kind.clone(),
         outcome: query.outcome.clone(),
         client_kind: query.client_kind.clone(),
+        client_variant: query.client_variant.clone(),
+        agent_role: query.agent_role.clone(),
+        agent_name: query.agent_name.clone(),
+        parent_thread_id: query.parent_thread_id.clone(),
+        parent_turn_id: query.parent_turn_id.clone(),
+        root_turn_id: query.root_turn_id.clone(),
         request_purpose: query.request_purpose.clone(),
         request_id: query.request_id.clone(),
         endpoint_id: query.endpoint_id.clone(),
@@ -637,6 +667,26 @@ struct RuntimeFilterQuery {
     kind: Option<String>,
     outcome: Option<String>,
     client_kind: Option<String>,
+    #[serde(rename = "clientVariant", alias = "client_variant")]
+    client_variant: Option<String>,
+    #[serde(rename = "agentRole", alias = "agent_role")]
+    agent_role: Option<String>,
+    #[serde(rename = "agentName", alias = "agent_name")]
+    agent_name: Option<String>,
+    #[serde(
+        rename = "parentThreadID",
+        alias = "parent_thread_id",
+        alias = "parentThreadId"
+    )]
+    parent_thread_id: Option<String>,
+    #[serde(
+        rename = "parentTurnID",
+        alias = "parent_turn_id",
+        alias = "parentTurnId"
+    )]
+    parent_turn_id: Option<String>,
+    #[serde(rename = "rootTurnID", alias = "root_turn_id", alias = "rootTurnId")]
+    root_turn_id: Option<String>,
     request_purpose: Option<String>,
     #[serde(rename = "requestID", alias = "requestId")]
     request_id: Option<String>,
@@ -663,6 +713,12 @@ impl From<RuntimeFilterQuery> for RuntimeFilter {
             kind: query.kind,
             outcome: query.outcome,
             client_kind: query.client_kind,
+            client_variant: query.client_variant,
+            agent_role: query.agent_role,
+            agent_name: query.agent_name,
+            parent_thread_id: query.parent_thread_id,
+            parent_turn_id: query.parent_turn_id,
+            root_turn_id: query.root_turn_id,
             request_purpose: query.request_purpose,
             request_id: query.request_id,
             endpoint_id: query.endpoint_id,
@@ -845,6 +901,12 @@ fn parse_dimension_kind(value: Option<&str>) -> Option<DimensionKind> {
         "endpoint" => Some(DimensionKind::Endpoint),
         "model" => Some(DimensionKind::Model),
         "clientKind" | "client_kind" => Some(DimensionKind::ClientKind),
+        "clientVariant" | "client_variant" => Some(DimensionKind::ClientVariant),
+        "agentRole" | "agent_role" => Some(DimensionKind::AgentRole),
+        "agentName" | "agent_name" => Some(DimensionKind::AgentName),
+        "parentThread" | "parent_thread_id" => Some(DimensionKind::ParentThread),
+        "parentTurn" | "parent_turn_id" => Some(DimensionKind::ParentTurn),
+        "rootTurn" | "root_turn_id" => Some(DimensionKind::RootTurn),
         "purpose" | "requestPurpose" | "request_purpose" => Some(DimensionKind::Purpose),
         "failureKind" | "failure_kind" => Some(DimensionKind::FailureKind),
         "failurePhase" | "failure_phase" => Some(DimensionKind::FailurePhase),
@@ -1315,6 +1377,26 @@ struct RuntimeAnalyticsQuery {
     range: Option<String>,
     #[serde(rename = "clientKind", alias = "client_kind")]
     client_kind: Option<String>,
+    #[serde(rename = "clientVariant", alias = "client_variant")]
+    client_variant: Option<String>,
+    #[serde(rename = "agentRole", alias = "agent_role")]
+    agent_role: Option<String>,
+    #[serde(rename = "agentName", alias = "agent_name")]
+    agent_name: Option<String>,
+    #[serde(
+        rename = "parentThreadID",
+        alias = "parent_thread_id",
+        alias = "parentThreadId"
+    )]
+    parent_thread_id: Option<String>,
+    #[serde(
+        rename = "parentTurnID",
+        alias = "parent_turn_id",
+        alias = "parentTurnId"
+    )]
+    parent_turn_id: Option<String>,
+    #[serde(rename = "rootTurnID", alias = "root_turn_id", alias = "rootTurnId")]
+    root_turn_id: Option<String>,
     #[serde(rename = "endpointID", alias = "endpoint_id")]
     endpoint_id: Option<String>,
     #[serde(rename = "projectID", alias = "project_id")]
@@ -1348,6 +1430,12 @@ async fn runtime_analytics(
     }
     let filter = AnalyticsFilter {
         client_kind: analytics_filter_value(query.client_kind),
+        client_variant: analytics_filter_value(query.client_variant),
+        agent_role: analytics_filter_value(query.agent_role),
+        agent_name: analytics_filter_value(query.agent_name),
+        parent_thread_id: analytics_filter_value(query.parent_thread_id),
+        parent_turn_id: analytics_filter_value(query.parent_turn_id),
+        root_turn_id: analytics_filter_value(query.root_turn_id),
         endpoint_id: analytics_filter_value(query.endpoint_id),
         project_id: analytics_filter_value(query.project_id),
         project: analytics_filter_value(query.project),

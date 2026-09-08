@@ -29,7 +29,7 @@ HTTP 请求经平台服务组装进入共享引擎，依次完成访问检查、
 
 原始请求的透传、必要模型映射、本地模型目录和已配置协议转换均由共享实现负责。客户端路径与能力范围见 [使用指南](../USAGE.md#4-协议与路径)。
 
-Codex Live 的 SDP/multipart bootstrap（`POST /v1/live`、`POST /v1/realtime`、`POST /v1/realtime/calls`）是共享引擎内的 quicksilver 封装特例；出站把 POST `/v1/realtime` 改写到 `/v1/realtime/calls?intent=quicksilver&architecture=avas`（avas 只允许出现在 WebRTC `/calls`）。无 `call_id` 的 `GET /v1/realtime` 仍是公开 Realtime WebSocket 原生透传，并剥掉这些 query。
+Codex Live bootstrap（`POST /v1/live`、`POST /v1/realtime`、`POST /v1/realtime/calls`）按 Live 意图选择 `gpt-live-1-codex` 映射；协议封装由上游负责。Sumpter 不把 `/v1/realtime` 改为 `/v1/realtime/calls`，也不主动追加 `intent=quicksilver&architecture=avas`。现有模型映射和短期凭证的会话配置仍可影响请求中的模型与会话字段。无 `call_id` 的 `GET /v1/realtime` 是公开 Realtime WebSocket，HTTP 专用的 quicksilver query 在该路径剥离。
 
 ## 共享引擎内部
 
@@ -57,6 +57,10 @@ rollup，`worker.rs` 负责写入 worker，`maintenance.rs` 负责保留策略/�
 分布在 `runtime_query/events.rs`、`trends.rs`、`analytics.rs`、`facets.rs`、
 `errors.rs`、`dimensions.rs`、`export.rs` 与 `storage.rs`；这些模块共享过滤器、
 快照和 SQL 辅助函数，但不改变 crate 的公开查询函数合同。
+
+配置文件与 runtime 数据库各自维护版本。`config.json` 当前是 schema v7；runtime 的
+`SCHEMA_VERSION` / `PROJECTION_VERSION` 当前分别为 4 / 9，由 `runtime_store.rs` 定义。
+现行 `schema.rs` 只允许全新数据库进入初始化；检测到旧 schema、缺少归因列或旧 projection 时返回结构化 `runtime_recreate_required`，代理保持停止，确认后通过 `runtime/recreate` 清空重建且不回填历史。高于支持版本仍返回 `runtime_schema_newer` 并拒绝启动。
 
 并发和持久化约束：runtime 写操作保持 `runtime_write → state` 锁顺序；
 抓包 flush/clear 保持 `capture_flush → capture → capture_index` 顺序；

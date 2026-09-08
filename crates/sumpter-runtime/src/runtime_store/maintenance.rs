@@ -566,8 +566,21 @@ pub(super) fn recreate_database(
     inner: &Arc<Inner>,
     connection: &mut Connection,
 ) -> Result<i64, rusqlite::Error> {
-    let previous_generation = meta_i64(connection, "reset_generation")?.unwrap_or(0);
-    let previous_history_generation = meta_i64(connection, "history_generation")?.unwrap_or(0);
+    let generation = rebuild_schema(connection)?;
+    refresh_cached_storage(inner, connection, true)?;
+    inner.state.lock().unwrap().last_commit_at = Some(now());
+    Ok(generation)
+}
+
+pub(super) fn rebuild_schema(connection: &mut Connection) -> rusqlite::Result<i64> {
+    let previous_generation = meta_i64(connection, "reset_generation")
+        .ok()
+        .flatten()
+        .unwrap_or(0);
+    let previous_history_generation = meta_i64(connection, "history_generation")
+        .ok()
+        .flatten()
+        .unwrap_or(0);
     connection.execute_batch(
         "DROP TABLE IF EXISTS runtime_events;
          DROP TABLE IF EXISTS runtime_hourly_rollup_dirty;
@@ -591,7 +604,5 @@ pub(super) fn recreate_database(
     // Reclaim pages from the removed tables so this is a real fresh database,
     // not merely a schema reset with old payload pages left on the freelist.
     connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
-    refresh_cached_storage(inner, connection, true)?;
-    inner.state.lock().unwrap().last_commit_at = Some(now());
     Ok(generation)
 }

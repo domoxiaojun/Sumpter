@@ -6,6 +6,31 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-09
+
+### 新增
+
+- Runtime 事件统一记录客户端变体、代理角色、代理名称及主子线程/回合关系，覆盖 Codex CLI/TUI/Desktop、Claude Code、Grok Build、Gemini CLI、pi 和 OpenAI 兼容入口。
+- 项目归因优先使用完整 workspace，再使用客户端声明；同一 session 的唯一项目可前向补全，多项目和缺少证据分别标记为 `multiple_workspaces` 与 `project_context_missing`。
+- Analytics、事件筛选、facets、维度、趋势、导出和 Linux/macOS 管理界面支持六个归因维度，并保留 `unknown` 的缺失字段语义。
+- Linux 与 macOS 的 Codex 归因安装、状态检查、更新和还原入口统一接入现有客户端归因安装器。
+
+### 变更
+
+- Runtime SQLite schema 升级到 v4、projection 升级到 v9；旧版本数据库启动时结构化阻断，确认后清空并重建，不迁移或回填历史事件。
+- 新增旧库/高版本库启动状态，Linux/macOS Admin、HTTP 和 WebSocket 授权及 macOS sidecar 均遵循同一阻断策略。
+- 主代理、子代理、guardian、review、memory、title、automation、system 和 ambient 请求纳入统一归因统计，同时保持内部 header 在出站前剥离。
+- 统一安装脚本由脚本本身获取配套资源，Linux 远程安装与 macOS 内置资源保持一致；同步更新使用说明、架构和项目结构文档。
+
+### 修复
+
+- 修复归因字段在 runtime 列表、SSE、统计、导出与双端 UI 之间缺失或口径不一致的问题。
+- 修复旧 WebUI hash 资源残留，重建并同步 Linux 管理台静态资源。
+
+### 验证
+
+- Rust workspace、WebUI、macOS 构建与测试，以及 docs、脚本同步、Shell/Node 语法和差异检查全部通过。
+
 ## [0.3.9] - 2026-09-08
 
 ### 修复

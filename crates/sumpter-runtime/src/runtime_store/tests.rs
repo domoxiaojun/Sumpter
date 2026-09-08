@@ -217,14 +217,17 @@ fn schema_bootstrap_is_private_and_integral() {
     assert_eq!(snapshot, RuntimeSnapshot::default());
     store.flush().unwrap();
     let summary = store.summary();
-    assert_eq!(summary.storage.schema_version, 3);
+    assert_eq!(summary.storage.schema_version, SCHEMA_VERSION);
     assert!(summary.storage.backfill_complete);
     assert!(summary.storage.indexes_ready);
     assert!(summary.storage.rollup_complete);
     assert_eq!(summary.storage.rollup_dirty_buckets, 0);
 
     let connection = Connection::open(&path).unwrap();
-    assert_eq!(meta_i64(&connection, "schema_version").unwrap(), Some(3));
+    assert_eq!(
+        meta_i64(&connection, "schema_version").unwrap(),
+        Some(SCHEMA_VERSION)
+    );
     assert_eq!(
         connection
             .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
@@ -264,10 +267,10 @@ fn schema_bootstrap_is_private_and_integral() {
 }
 
 #[test]
-fn schema_v2_migrates_in_batches_and_quarantines_bad_payloads() {
+fn legacy_schema_is_unchanged_until_explicit_recreation() {
     let dir = test_dir("schema-v2-migration");
     let path = dir.join("runtime.sqlite3");
-    let mut connection = Connection::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
     connection
         .execute_batch(
             "CREATE TABLE runtime_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
@@ -314,53 +317,18 @@ fn schema_v2_migrates_in_batches_and_quarantines_bad_payloads() {
         )
         .unwrap();
 
-    setup_connection(&mut connection).unwrap();
-    assert_eq!(meta_i64(&connection, "schema_version").unwrap(), Some(3));
-    assert_eq!(
-        connection
-            .query_row(
-                "SELECT projection_version FROM runtime_events WHERE seq=1",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .unwrap(),
-        0
-    );
-    while run_projection_maintenance(&mut connection).unwrap() {}
-    assert_eq!(
-        connection
-            .query_row(
-                "SELECT projection_version FROM runtime_events WHERE seq=1",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .unwrap(),
-        PROJECTION_VERSION
-    );
-    assert_eq!(
-        connection
-            .query_row(
-                "SELECT projection_version FROM runtime_events WHERE seq=2",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .unwrap(),
-        -1
-    );
-    assert_eq!(
-        meta_i64(&connection, "projection_backfill_failed").unwrap(),
-        Some(1)
-    );
-    assert_eq!(
-        meta_i64(&connection, "projection_indexes_ready").unwrap(),
-        Some(1)
-    );
-    assert_eq!(
-        meta_i64(&connection, "hourly_rollup_complete").unwrap(),
-        Some(1)
-    );
-    assert!(!run_projection_maintenance(&mut connection).unwrap());
     drop(connection);
+    let before = std::fs::read(&path).unwrap();
+    let issue = RuntimeStore::database_issue(&path).unwrap().unwrap();
+    assert_eq!(issue.code, "runtime_recreate_required");
+    assert!(issue.requires_recreate);
+    assert!(RuntimeStore::new(&path).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    let (store, snapshot) = RuntimeStore::recreate_legacy(&path).unwrap();
+    assert!(snapshot.recent_events.is_empty());
+    assert_eq!(store.summary().storage.event_count, 0);
+    assert!(RuntimeStore::database_issue(&path).unwrap().is_none());
+    drop(store);
     remove_test_dir(&dir);
 }
 
@@ -1200,34 +1168,23 @@ fn startup_detects_legacy_retention_without_migration() {
         )
         .unwrap();
     drop(connection);
-    let (store, _) = RuntimeStore::new(&path).unwrap();
-
-    let mut connection = Connection::open(&path).unwrap();
-    connection.busy_timeout(Duration::from_secs(5)).unwrap();
-    setup_connection(&mut connection).unwrap();
+    let error = match RuntimeStore::new(&path) {
+        Ok(_) => panic!("legacy database must require recreation"),
+        Err(error) => error,
+    };
+    assert!(error.contains("旧版 runtime 数据库"));
+    let connection = Connection::open(&path).unwrap();
 
     let retention = connection
         .query_row(
-            "SELECT revision
-                 FROM runtime_retention WHERE id=1",
+            "SELECT revision FROM runtime_retention WHERE id=1",
             [],
             |row| row.get::<_, i64>(0),
         )
         .unwrap();
-    assert_eq!(
-        retention, 7,
-        "旧 revision 可保留，但旧自动清理值不得转成新容量提醒"
-    );
-    let legacy = crate::runtime_query::storage_details(&path).unwrap();
-    assert!(legacy.legacy_retention_detected);
-    assert_eq!(legacy.retention.storage_limit_bytes, None);
-
+    assert_eq!(retention, 7);
     drop(connection);
-    store.reset().unwrap();
-    let after_reset = crate::runtime_query::storage_details(&path).unwrap();
-    assert!(after_reset.legacy_retention_detected);
-
-    store.recreate().unwrap();
+    let (store, _) = RuntimeStore::recreate_legacy(&path).unwrap();
     let after_recreate = crate::runtime_query::storage_details(&path).unwrap();
     assert!(!after_recreate.legacy_retention_detected);
     let connection = Connection::open(&path).unwrap();
@@ -2243,7 +2200,7 @@ fn newer_schema_is_rejected_before_writes() {
     connection
         .execute_batch(
             "CREATE TABLE runtime_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-                 INSERT INTO runtime_meta(key,value) VALUES('schema_version','4');",
+                 INSERT INTO runtime_meta(key,value) VALUES('schema_version','5');",
         )
         .unwrap();
     drop(connection);
@@ -2523,7 +2480,7 @@ fn list_item_wire_carries_codex_thread_scope() {
 }
 
 #[test]
-fn codex_guardian_projection_is_rebuilt_for_existing_events() {
+fn old_event_projection_requires_recreation_without_backfill() {
     let dir = test_dir("guardian-projection");
     let path = dir.join("runtime.sqlite3");
     let (store, _) = RuntimeStore::new(&path).unwrap();
@@ -2544,23 +2501,12 @@ fn codex_guardian_projection_is_rebuilt_for_existing_events() {
     let connection = Connection::open(&path).unwrap();
     connection.execute("UPDATE runtime_events SET projection_version=7,codex_thread_class='unknown',attribution_scope='unknown'", []).unwrap();
     drop(connection);
-    let mut connection = Connection::open(&path).unwrap();
-    setup_connection(&mut connection).unwrap();
-    // flush only drains queued writes; startup backfill runs asynchronously.
-    // Drive the same maintenance batches deterministically for this fixture.
-    while run_projection_maintenance(&mut connection).unwrap() {}
-    let result: (String, String, i64) = connection.query_row(
-        "SELECT codex_thread_class,attribution_scope,projection_version FROM runtime_events WHERE event_id='guardian'", [],
-        |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap();
-    assert_eq!(
-        result,
-        (
-            "guardian_review".into(),
-            "internal_feature".into(),
-            PROJECTION_VERSION
-        )
-    );
-    drop(connection);
+    let before = std::fs::read(&path).unwrap();
+    assert!(RuntimeStore::new(&path).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    let (store, _) = RuntimeStore::recreate_legacy(&path).unwrap();
+    assert_eq!(store.summary().storage.event_count, 0);
+    drop(store);
     remove_test_dir(&dir);
 }
 

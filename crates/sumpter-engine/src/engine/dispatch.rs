@@ -902,6 +902,12 @@ impl Engine {
         );
         self.record_event(RuntimeEvent {
             client_kind: Some(client_kind),
+            client_variant: None,
+            agent_role: None,
+            agent_name: None,
+            parent_thread_id: None,
+            parent_turn_id: None,
+            root_turn_id: None,
             client_model: Some(plan.client_model.clone()),
             source_format: Some(source_format),
             target_format: preferred_endpoint.map(|endpoint| endpoint.protocol),

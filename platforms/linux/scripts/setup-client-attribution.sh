@@ -5,7 +5,7 @@ umask 077
 
 usage() {
   cat <<'HELP'
-用法：bash setup-client-attribution.sh [status|install|restore] [claude|grok|gemini|pi|all] [--shell bash|zsh] [--rc 文件]
+用法：bash setup-client-attribution.sh [status|install|restore] [claude|grok|gemini|codex|pi|all] [--shell bash|zsh] [--rc 文件]
 不带参数进入交互菜单；操作后自动检查当前状态。
 优先使用同目录 client-attribution.mjs 与 pi-project-attribution.ts。
 缺失时默认从 GitHub 仓库 raw 下载：
@@ -25,9 +25,9 @@ action=${1:-}
 client=${2:-all}
 if [[ -z $action ]]; then
   [[ -t 0 ]] || { usage >&2; exit 2; }
-  printf '客户端：1) Claude Code  2) Grok Build  3) Gemini CLI  4) pi  5) 全部\n'
-  read -r -p '请选择 [1-5，默认 5]：' choice
-  case ${choice:-5} in 1) client=claude;; 2) client=grok;; 3) client=gemini;; 4) client=pi;; 5) client=all;; *) exit 2;; esac
+  printf '客户端：1) Claude Code  2) Grok Build  3) Gemini CLI  4) Codex  5) pi  6) 全部\n'
+  read -r -p '请选择 [1-6，默认 6]：' choice
+  case ${choice:-6} in 1) client=claude;; 2) client=grok;; 3) client=gemini;; 4) client=codex;; 5) client=pi;; 6) client=all;; *) exit 2;; esac
   printf '操作：1) 检查状态  2) 安装配置  3) 还原配置\n'
   read -r -p '请选择 [1-3，默认 1]：' choice
   case ${choice:-1} in 1) action=status;; 2) action=install;; 3) action=restore;; *) exit 2;; esac
@@ -36,7 +36,7 @@ else
   if [[ $# -gt 0 ]]; then shift; fi
 fi
 case $action in status|install|restore) ;; *) usage >&2; exit 2;; esac
-case $client in claude|grok|gemini|pi|all) ;; *) usage >&2; exit 2;; esac
+case $client in claude|grok|gemini|codex|pi|all) ;; *) usage >&2; exit 2;; esac
 options=("$@")
 # Validate before attempting a download or changing configuration.
 while [[ $# -gt 0 ]]; do

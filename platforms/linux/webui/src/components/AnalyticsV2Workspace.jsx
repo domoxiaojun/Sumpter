@@ -69,6 +69,8 @@ const DIMENSION_OPTIONS = [
   ['endpoint', '入口'],
   ['model', '模型'],
   ['clientKind', '客户端'],
+  ['clientVariant', '客户端变体'], ['agentRole', '代理角色'], ['agentName', '代理名称'],
+  ['parentThread', '父线程'], ['parentTurn', '父回合'], ['rootTurn', '根回合'],
   ['purpose', '用途'],
   ['failureKind', '失败类型'],
   ['failurePhase', '失败阶段'],
@@ -99,6 +101,7 @@ function dimensionValueLabel(value, kind) {
       return labels[String(value || '')] || String(value || '线程类型未记录');
     }
     case 'clientKind': return clientKindLabel(value);
+    case 'clientVariant': case 'agentRole': case 'agentName': case 'parentThread': case 'parentTurn': case 'rootTurn': return value || 'unknown';
     case 'purpose': return purposeLabel(value);
     case 'failureKind': return failureKindLabel(value);
     case 'failurePhase': return failurePhaseLabel(value);

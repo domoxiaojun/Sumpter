@@ -653,10 +653,19 @@ public enum AdminWire {
         public let lastError: String?
     }
 
+    public struct RuntimeDatabaseIssue: Decodable, Equatable, Sendable {
+        public let code: String
+        public let schemaVersion: Int
+        public let supportedSchemaVersion: Int
+        public let requiresRecreate: Bool
+        public let message: String
+    }
+
     public struct RuntimeSummary: Decodable, Equatable, Sendable {
         public let apiVersion: Int
         public let storage: RuntimeStorage
         public let resetGeneration: Int
+        public let startupIssue: RuntimeDatabaseIssue?
         public let counters: RuntimeCounters
         public let latestEvent: RuntimeEvent?
     }
@@ -892,6 +901,12 @@ public enum AdminWire {
         public var kind: String?
         public var outcome: String?
         public var clientKind: String?
+        public var clientVariant: String?
+        public var agentRole: String?
+        public var agentName: String?
+        public var parentThreadID: String?
+        public var parentTurnID: String?
+        public var rootTurnID: String?
         public var requestPurpose: String?
         public var requestID: String?
         public var endpointID: String?
@@ -912,6 +927,7 @@ public enum AdminWire {
             kind: String? = nil,
             outcome: String? = nil,
             clientKind: String? = nil,
+            clientVariant: String? = nil, agentRole: String? = nil, agentName: String? = nil, parentThreadID: String? = nil, parentTurnID: String? = nil, rootTurnID: String? = nil,
             requestPurpose: String? = nil,
             requestID: String? = nil,
             endpointID: String? = nil,
@@ -927,6 +943,12 @@ public enum AdminWire {
             self.kind = kind
             self.outcome = outcome
             self.clientKind = clientKind
+            self.clientVariant = clientVariant
+            self.agentRole = agentRole
+            self.agentName = agentName
+            self.parentThreadID = parentThreadID
+            self.parentTurnID = parentTurnID
+            self.rootTurnID = rootTurnID
             self.requestPurpose = requestPurpose
             self.requestID = requestID
             self.endpointID = endpointID
@@ -943,6 +965,8 @@ public enum AdminWire {
         fileprivate func add(to query: inout [String: String]) {
             let strings: [(String, String?)] = [
                 ("kind", kind), ("outcome", outcome), ("clientKind", clientKind),
+                ("clientVariant", clientVariant), ("agentRole", agentRole), ("agentName", agentName),
+                ("parentThreadID", parentThreadID), ("parentTurnID", parentTurnID), ("rootTurnID", rootTurnID),
                 ("requestPurpose", requestPurpose), ("requestID", requestID),
                 ("endpointID", endpointID), ("model", model), ("projectID", projectID),
                 ("project", project),
@@ -1381,6 +1405,12 @@ public enum AdminWire {
 
         public struct AppliedFilters: Decodable, Equatable, Sendable {
             public let clientKind: String?
+            public let clientVariant: String?
+            public let agentRole: String?
+            public let agentName: String?
+            public let parentThreadID: String?
+            public let parentTurnID: String?
+            public let rootTurnID: String?
             public let endpointID: String?
             public let projectID: String?
             public let project: String?
@@ -1495,6 +1525,12 @@ public enum AdminWire {
         public let endpoints: [DimensionRow]?
         public let models: [DimensionRow]?
         public let clientKinds: [DimensionRow]?
+        public let clientVariants: [DimensionRow]?
+        public let agentRoles: [DimensionRow]?
+        public let agentNames: [DimensionRow]?
+        public let parentThreads: [DimensionRow]?
+        public let parentTurns: [DimensionRow]?
+        public let rootTurns: [DimensionRow]?
         public let requestPurposes: [DimensionRow]?
         public let featureRules: [DimensionRow]?
         public let protocolRoutes: [DimensionRow]?
@@ -1506,6 +1542,12 @@ public enum AdminWire {
         public let sessions: [DimensionRow]?
         public struct Facets: Decodable, Equatable, Sendable {
             public let clientKinds: [FacetRow]?
+            public let clientVariants: [FacetRow]?
+            public let agentRoles: [FacetRow]?
+            public let agentNames: [FacetRow]?
+            public let parentThreads: [FacetRow]?
+            public let parentTurns: [FacetRow]?
+            public let rootTurns: [FacetRow]?
             public let endpoints: [FacetRow]?
             public let projects: [FacetRow]?
             public let sessions: [FacetRow]?

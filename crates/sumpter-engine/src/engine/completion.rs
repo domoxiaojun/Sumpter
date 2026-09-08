@@ -276,6 +276,12 @@ impl CompletionGuard {
             .or(self.attempted_endpoint.as_ref());
         RuntimeEvent {
             client_kind: Some(self.meta.client_kind),
+            client_variant: None,
+            agent_role: None,
+            agent_name: None,
+            parent_thread_id: None,
+            parent_turn_id: None,
+            root_turn_id: None,
             client_model: Some(self.meta.client_model.clone()),
             source_format: Some(self.meta.source_format),
             target_format: endpoint

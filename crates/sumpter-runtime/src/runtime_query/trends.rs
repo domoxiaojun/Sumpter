@@ -182,9 +182,16 @@ fn try_hourly_rollup(
     // hour edge, or a historical snapshot needs exact detail rows instead of
     // mixing data outside the snapshot. Cost is safe to serve from a rollup
     // only when every bucket was built with the current pricing revision.
-    let only_time_filters = filters.kind.is_none()
+    let only_time_filters = !filters.has_agent_filter()
+        && filters.kind.is_none()
         && filters.outcome.is_none()
         && filters.client_kind.is_none()
+        && filters.client_variant.is_none()
+        && filters.agent_role.is_none()
+        && filters.agent_name.is_none()
+        && filters.parent_thread_id.is_none()
+        && filters.parent_turn_id.is_none()
+        && filters.root_turn_id.is_none()
         && filters.request_purpose.is_none()
         && filters.request_id.is_none()
         && filters.endpoint_id.is_none()

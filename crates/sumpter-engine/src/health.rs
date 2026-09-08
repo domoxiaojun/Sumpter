@@ -85,6 +85,12 @@ mod tests {
     fn client_event(status: i64, ts: f64) -> RuntimeEvent {
         RuntimeEvent {
             client_kind: None,
+            client_variant: None,
+            agent_role: None,
+            agent_name: None,
+            parent_thread_id: None,
+            parent_turn_id: None,
+            root_turn_id: None,
             codex_metadata: None,
             client_declared: None,
             grok_metadata: None,

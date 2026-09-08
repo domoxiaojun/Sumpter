@@ -78,6 +78,12 @@ function runtimeFilterValues(filters = {}) {
     kind: filters.kind,
     outcome: filters.outcome,
     clientKind: filters.clientKind,
+    clientVariant: filters.clientVariant,
+    agentRole: filters.agentRole,
+    agentName: filters.agentName,
+    parentThreadID: filters.parentThreadID,
+    parentTurnID: filters.parentTurnID,
+    rootTurnID: filters.rootTurnID,
     requestPurpose: filters.requestPurpose,
     requestID: filters.requestID,
     endpointID: filters.endpointID,
@@ -545,7 +551,7 @@ class ApiService {
         const from = timestampBoundary(query.get('from'));
         const to = timestampBoundary(query.get('to'));
         const exactFilters = {
-          kind: query.get('kind'), outcome: query.get('outcome'), clientKind: query.get('clientKind'),
+          kind: query.get('kind'), outcome: query.get('outcome'), clientKind: query.get('clientKind'), clientVariant: query.get('clientVariant'), agentRole: query.get('agentRole'), agentName: query.get('agentName'), parentThreadID: query.get('parentThreadID'), parentTurnID: query.get('parentTurnID'), rootTurnID: query.get('rootTurnID'),
           requestPurpose: query.get('requestPurpose'), requestID: query.get('requestID'),
           endpointID: query.get('endpointID'), projectID: query.get('projectID'),
           project: query.get('project') || query.get('projectName'),
@@ -1589,7 +1595,7 @@ class ApiService {
   getRuntimeDimensions(kind, {
     page = 1, pageSize = RUNTIME_DEFAULT_PAGE_SIZE, search, sort = 'last_seen', order = 'desc', snapshotSeq, historyGeneration, filters = {},
   } = {}, options = {}) {
-    const allowed = ['endpoint', 'model', 'clientKind', 'purpose', 'failureKind', 'failurePhase', 'protocol', 'streamTerminal', 'project', 'session'];
+    const allowed = ['endpoint', 'model', 'clientKind', 'purpose', 'failureKind', 'failurePhase', 'protocol', 'streamTerminal', 'project', 'session', 'clientVariant', 'agentRole', 'agentName', 'parentThread', 'parentTurn', 'rootTurn'];
     if (!allowed.includes(kind)) throw new TypeError(`不支持的 runtime 维度: ${kind}`);
     const query = new URLSearchParams({ kind, page: String(Math.max(1, Number(page) || 1)), pageSize: String(Number(pageSize) || RUNTIME_DEFAULT_PAGE_SIZE), sort, order });
     appendQueryValues(query, { search, snapshotSeq, historyGeneration, ...runtimeFilterValues(filters) });

@@ -261,6 +261,9 @@ impl Engine {
         headers: &[(String, String)],
         allow_ephemeral: bool,
     ) -> bool {
+        if self.runtime_database_issue().is_some() {
+            return false;
+        }
         let config = self.config();
         access::is_allowed(
             remote.map(|ip| ip.to_string()).as_deref(),

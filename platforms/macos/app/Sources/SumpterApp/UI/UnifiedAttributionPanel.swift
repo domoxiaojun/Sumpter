@@ -9,13 +9,14 @@ struct UnifiedAttributionPanel: View {
     @State private var failed = false
 
     var body: some View {
-        SectionPanel(title: "Claude / Grok / Gemini / pi 项目归因", hint: "检查并配置这台 Mac 上的客户端归因，需要 Node.js 18+；除 pi 外还需 bash/zsh。") {
+        SectionPanel(title: "Claude / Grok / Gemini / Codex / pi 项目归因", hint: "检查并配置这台 Mac 上的客户端归因，需要 Node.js 18+；除 pi 外还需 bash/zsh。") {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
                     Picker("客户端", selection: $client) {
                         Text("Claude Code").tag("claude")
                         Text("Grok Build").tag("grok")
                         Text("Gemini CLI").tag("gemini")
+                        Text("Codex CLI / TUI").tag("codex")
                         Text("pi").tag("pi")
                         Text("全部客户端").tag("all")
                     }
@@ -55,6 +56,7 @@ struct UnifiedAttributionPanel: View {
                 DisclosureGroup("归因说明与前提") {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("按启动时的 Git 根目录（非 Git 目录使用当前目录）发送项目、工作区、用户和已脱敏的 Git remote。中文目录使用 URI 编码。")
+                        Text("Codex 支持 -C / --cd，自动使用已有连接，无需指定 provider。新开终端后通过 codex 命令启动才生效；桌面 App 和已运行会话不会加载终端包装器。")
                         Text("请先将客户端连接到 Sumpter。Gemini 还需设置 SUMPTER_GEMINI_BASE_URL 和 SUMPTER_AUTH_TOKEN；密钥不写入归因配置。")
                         Text("pi 安装到 ~/.pi/agent/extensions/，不修改 shell 或 provider 配置。请在 ~/.pi/agent/models.json 的 Sumpter provider 中设置 headers: { \"X-Sumpter-Client\": \"pi\" }。扩展按当前项目和会话更新归因。")
                         Text("这里检查归因配置是否已安装。实际归因请在发送请求后查看统计；专用 header 不发往上游。")
@@ -82,6 +84,7 @@ struct UnifiedAttributionPanel: View {
         case "claude": "Claude Code"
         case "grok": "Grok Build"
         case "gemini": "Gemini CLI"
+        case "codex": "Codex CLI / TUI"
         default: name
         }
     }

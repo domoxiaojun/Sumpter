@@ -548,6 +548,12 @@ pub(super) fn websocket_client_event(
 ) -> RuntimeEvent {
     let mut event = RuntimeEvent {
         client_kind: Some(context.client_kind),
+        client_variant: None,
+        agent_role: None,
+        agent_name: None,
+        parent_thread_id: None,
+        parent_turn_id: None,
+        root_turn_id: None,
         codex_metadata: context.codex_metadata.clone(),
         client_declared: context.client_declared.clone(),
         grok_metadata: context.grok_metadata.clone(),

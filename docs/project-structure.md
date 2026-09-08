@@ -86,6 +86,7 @@ Swift 的 `SumpterCore` 是 App 使用的独立 Swift 模块。代理的共享 R
 - 根 `LICENSE`、`CHANGELOG.md` 和 `config.example.json` 维护公共内容；平台内相应文件由元数据工具同步。
 - `docs/templates/` 生成根和 Linux 包内 USAGE 的标记块；标记块以外的内容在各自文档维护。
 - `scripts/clients/` 中的共享归因程序与 pi 扩展会同步到 Linux、macOS 和 Swift 资源目录；Gemini 兼容入口也由工具生成。平台安装器和 Shell 脚本按 [脚本目录说明](../scripts/README.md) 维护。
+- `platforms/linux/scripts/setup-client-attribution.sh` 是跨 Linux/macOS 的客户端命令行安装入口，按需获取上面的共享资源；macOS App 直接调用内置副本。改动下载流程时同时核对 listener 资源路由、Linux 打包清单及 Swift 资源清单，不另建一套归因实现。
 - `target/`、`node_modules/`、Swift `.build/` 和各平台 `dist/` 是本机依赖、缓存或打包产物，不进入源码版本管理。真实配置、日志和运行数据库也不放入源码。
 
 具体的源文件、目标文件与同步命令只维护在 [生成副本说明](development.md#单一维护源与生成副本)。
