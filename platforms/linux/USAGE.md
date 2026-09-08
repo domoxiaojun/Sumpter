@@ -244,7 +244,14 @@ curl --proto '=https' --tlsv1.2 -fLo /tmp/sumpter-install.sh \
 bash /tmp/sumpter-install.sh --repo domoxiaojun/sumpter
 ```
 
-钉死版本时加上 `--version vX.Y.Z`。`sudo bash /tmp/sumpter-install.sh --repo domoxiaojun/sumpter` 会装成 system 服务（daemon 仍以低权限 `sumpter` 用户运行）。已有 `config.json` 与 `admin-password` 不会被覆盖。
+`--repo` 只指定下载来源，原来的安装选项仍可一起用，例如 `--admin-host 0.0.0.0`、`--admin-port 57879`、`--admin-password-file /绝对路径`；也可用环境变量 `SUMPTER_ADMIN_HOST` / `SUMPTER_ADMIN_PORT` / `SUMPTER_ADMIN_PASSWORD_FILE`。钉死版本时加上 `--version vX.Y.Z`。
+
+```bash
+bash /tmp/sumpter-install.sh --repo domoxiaojun/sumpter --admin-host 0.0.0.0
+sudo bash /tmp/sumpter-install.sh --repo domoxiaojun/sumpter --admin-host 0.0.0.0 --admin-port 57879
+```
+
+`sudo` 会装成 system 服务（daemon 仍以低权限 `sumpter` 用户运行）。已有 `config.json` 与 `admin-password` 不会被覆盖。
 
 已解压本发布包时，在包内运行 `./scripts/install.sh`。Docker、systemd、Admin HTTPS 反代、卸载见 [`README.md`](README.md)。
 
