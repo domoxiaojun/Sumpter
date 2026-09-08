@@ -633,15 +633,16 @@ SETFILE_BIN="$(command -v SetFile 2>/dev/null || true)"
 BLESS_BIN="$(command -v bless 2>/dev/null || true)"
 CHFLAGS_BIN="$(command -v chflags 2>/dev/null || true)"
 
-# 较新的 macOS 提供 diskutil image create/attach/info；旧版 macOS 仍只有
-# hdiutil，因此保留兼容分支，避免把最低支持系统的打包链切断。
-if "$DISKUTIL_BIN" image create from --help >/dev/null 2>&1 \
+# hdiutil 的 HFS+ -> UDZO 路径覆盖全部支持系统。diskutil 的帮助可用
+# 不代表当前系统支持从目录生成 UDZO；优先使用经过验证的 hdiutil 路径。
+if [[ -n "$HDIUTIL_BIN" ]]; then
+  echo "DMG 工具: hdiutil (HFS+ / UDZO)"
+elif "$DISKUTIL_BIN" image create from --help >/dev/null 2>&1 \
   && "$DISKUTIL_BIN" image attach --help >/dev/null 2>&1; then
   DISKUTIL_IMAGE_SUPPORTED=1
   echo "DMG 工具: diskutil image"
 else
-  echo "提示: 当前系统的 diskutil 不支持 image create，使用 hdiutil 兼容路径" >&2
-  [[ -n "$HDIUTIL_BIN" ]] || die "当前系统缺少 hdiutil，无法创建 DMG"
+  die "当前系统缺少 hdiutil 且 diskutil 不支持 image create，无法创建 DMG"
 fi
 
 # Homebrew rustup 是 keg-only；同时兼容 Intel/Apple Silicon 与标准 rustup 安装位置。

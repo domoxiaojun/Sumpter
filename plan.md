@@ -86,7 +86,13 @@
 
 - ✅ 补齐 macOS pi 一键安装及 Linux 远程管理，修复已报告 CI 失败。
 - ✅ 更新版本、锁文件、文档及 WebUI 产物；Rust 1.88 统一检查、macOS 197 XCTest + 34 Swift Testing、WebUI 135 项、客户端 17 项、文档契约 7 项及 Shell/TOML/文档链接检查通过。
-- [ ] 精确提交并推送 main，确认 CI 成功后推送 v0.3.6 标签。
-- [ ] 等待统一 Release 结束，核对两端资产、校验和、GHCR 与 Sparkle feed。
+- ✅ 提交 97f5f5b 已推送，CI 34197254163 的四个 job 全绿；v0.3.6 标签指向该提交。
+- ✅ Release 34197575223 已结束：Linux 和容器成功，macOS 编译/签名成功但 diskutil 生成 DMG 失败；Publish 跳过，未对外发布。
+
+## v0.3.7 打包修复与发布（2026-09-08）
+
+- ✅ 定位 diskutil 能力探测误判，优先使用已保留的 hdiutil HFS+ / UDZO 路径。
+- [ ] 本机正式打包验证与版本同步，提交后核对 CI。
+- [ ] 推送 v0.3.7 并核对统一发布的资产、校验和、容器与更新 feed。
 
 授权承接“按顺序做一下”；不改写已有正式标签，不安装替换本机 App。
