@@ -152,15 +152,6 @@ struct SecurityPane: View {
             authPanel
             launchPanel
             UnifiedAttributionPanel()
-            ClientAttributionResourcePanel(
-                title: "pi 项目归因",
-                subtitle: "在运行 pi 的主机安装扩展，为显式标记的 Sumpter provider 添加项目和会话归因。",
-                resourceName: "pi-project-attribution",
-                resourceExtension: "ts",
-                clientName: "pi",
-                command: { path in "mkdir -p \"$HOME/.pi/agent/extensions\" && cp '\(path)' \"$HOME/.pi/agent/extensions/pi-project-attribution.ts\"" },
-                detail: "安装后在 pi 中执行 /reload；provider 需要设置 X-Sumpter-Client: pi。"
-            )
         }
         .onAppear { loadDraftIfNeeded() }
         .task(id: attributionScriptURL?.path) {

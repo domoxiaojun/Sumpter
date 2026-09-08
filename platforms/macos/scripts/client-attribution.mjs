@@ -3,8 +3,8 @@
 import { spawn, execFileSync } from 'node:child_process';
 import { basename, dirname, join, resolve } from 'node:path';
 import { homedir, userInfo } from 'node:os';
-import { randomUUID } from 'node:crypto';
-import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, realpathSync, statSync, openSync, closeSync, unlinkSync } from 'node:fs';
+import { randomUUID, createHash } from 'node:crypto';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, realpathSync, statSync, lstatSync, openSync, closeSync, unlinkSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const clients = ['claude', 'grok', 'gemini'];
@@ -142,7 +142,68 @@ function atomic(path, contents, mode = 0o600) {
   try { writeFileSync(temp, contents, { mode, flag: 'wx' }); renameSync(temp, path); }
   finally { if (existsSync(temp)) unlinkSync(temp); }
 }
-export function manage(action, client, options, env = process.env, source = fileURLToPath(import.meta.url)) {
+function managePi(action, options, env, source) {
+  if (!['install', 'status', 'uninstall', 'restore'].includes(action)) throw new Error('pi 支持 install、status、uninstall、restore；临时加载请使用 pi -e');
+  const home = env.HOME || homedir();
+  const target = resolve(home, '.pi/agent/extensions/pi-project-attribution.ts');
+  const dir = join(env.XDG_DATA_HOME || join(home, '.local/share'), 'sumpter', 'attribution');
+  const key = createHash('sha256').update(target).digest('hex');
+  const statePath = join(dir, `pi-${key}.json`);
+  const snapshot = () => {
+    let info;
+    try { info = lstatSync(target); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+    if (!info.isFile()) throw new Error('pi 扩展路径不是普通文件，请先检查该路径');
+    return { bytes: readFileSync(target).toString('base64'), mode: info.mode & 0o777 };
+  };
+  const original = snapshot();
+  const stateText = read(statePath);
+  const previous = stateText ? parseConfig(stateText, 'pi 还原记录') : null;
+  if (previous && (previous.version !== 1 || previous.target !== target
+    || !(previous.original === null || (typeof previous.original?.bytes === 'string' && Number.isInteger(previous.original.mode))))) {
+    throw new Error('pi 还原记录不完整，未修改扩展');
+  }
+  const resource = join(dirname(source), 'pi-project-attribution.ts');
+  const expected = existsSync(resource) ? readFileSync(resource) : null;
+  if (['install', 'status'].includes(action) && !expected?.length) throw new Error('缺少配套 pi-project-attribution.ts，请使用完整安装包或重新下载');
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const status = !original ? 'absent' : expected && original.bytes === expected.toString('base64') ? 'installed' : 'outdated';
+  const item = { client: 'pi', status, rc: target, shell: 'extension', canRestore: Boolean(previous && !same(original, previous.original)) };
+  if (action === 'status') return [item];
+  if (action === 'restore' && !previous) return [{ ...item, status: 'unchanged' }];
+  if (options.dryRun) return [{ ...item, status: action === 'install' ? 'installed' : action === 'restore' ? 'restored' : 'uninstalled' }];
+  mkdirSync(dir, { recursive: true });
+  const lock = join(dir, 'install.lock');
+  const descriptor = openSync(lock, 'wx', 0o600);
+  try {
+    if (!same(snapshot(), original) || read(statePath) !== stateText) throw new Error('pi 配置已被其他进程修改，请重试');
+    if (action === 'install') {
+      // Keep the first snapshot through updates and repeated installs, including an absent original.
+      if (!previous) atomic(statePath, JSON.stringify({ version: 1, target, original }));
+      if (status !== 'installed') atomic(target, expected, original?.mode ?? 0o600);
+    } else {
+      if (original && (action === 'uninstall' || !same(original, previous.original))) {
+        atomic(`${target}.sumpter-attribution-bak-${Date.now()}-${randomUUID()}`, Buffer.from(original.bytes, 'base64'), original.mode);
+      }
+      const restored = action === 'restore' ? previous.original : null;
+      if (restored) atomic(target, Buffer.from(restored.bytes, 'base64'), restored.mode);
+      else if (original) unlinkSync(target);
+      if (action === 'restore') unlinkSync(statePath);
+    }
+  } finally { closeSync(descriptor); unlinkSync(lock); }
+  return [{ ...item, status: action === 'install' ? 'installed' : action === 'restore' ? 'restored' : 'uninstalled' }];
+}
+
+export function manage(action, client, options = {}, env = process.env, source = fileURLToPath(import.meta.url)) {
+  if (client === 'pi') return managePi(action, options, env, source);
+  if (client !== 'all') return manageShell(action, client, options, env, source);
+  // Validate both destinations and required resources before either installer writes.
+  const shellPreview = manageShell(action, client, { ...options, dryRun: true }, env, source);
+  const piPreview = managePi(action, { ...options, dryRun: true }, env, source);
+  if (action === 'status' || options.dryRun) return [...shellPreview, ...piPreview];
+  return [...manageShell(action, client, options, env, source), ...managePi(action, options, env, source)];
+}
+
+function manageShell(action, client, options, env, source) {
   if (!['install', 'status', 'uninstall', 'restore', 'snippet'].includes(action) || ![...clients, 'all'].includes(client)) throw new Error('用法：client-attribution.mjs install|status|uninstall|restore|snippet claude|grok|gemini|all [--shell bash|zsh] [--rc 文件] [--dry-run]');
   const shell = options.shell || basename(env.SHELL || '');
   if (!['bash', 'zsh'].includes(shell)) throw new Error('自动安装支持 bash/zsh；其他 shell 请使用 run 子命令');
@@ -220,7 +281,7 @@ export function manage(action, client, options, env = process.env, source = file
 }
 async function main(argv) {
   if (['--help', '-h'].includes(argv[0]) || argv.length === 0) {
-    console.log('用法：node client-attribution.mjs install|status|uninstall|restore|snippet claude|grok|gemini|all [--shell bash|zsh] [--rc 文件] [--dry-run]\n临时运行：node client-attribution.mjs run <客户端> -- [原始参数]\n需要 Node.js 18+。安装后新开终端；只在连接 Sumpter 的客户端上启用。');
+    console.log('用法：node client-attribution.mjs install|status|uninstall|restore claude|grok|gemini|pi|all [--shell bash|zsh] [--rc 文件] [--dry-run]\n临时运行：node client-attribution.mjs run claude|grok|gemini -- [原始参数]\n需要 Node.js 18+。pi 安装后执行 /reload，其他客户端新开终端；只在连接 Sumpter 的客户端上启用。');
     return;
   }
   let [action, client, ...rest] = argv;

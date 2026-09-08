@@ -79,6 +79,6 @@ USAGE 标记块以外的正文仍需直接维护。`scripts/check.sh docs` 只�
 
 对本次修改的现行 Markdown 文件运行 `lychee --offline --include-fragments <文件...>` 验证本地路径与 Markdown 章节锚点；外部链接使用 `lychee --exclude-loopback --exclude-link-local <文件...>`。开发服务地址不属于公网链接检查。`docs/templates/usage-onboarding.md` 含未替换的路径占位符，应检查生成后的两份 USAGE。历史 `docs/upstream/` 和 `docs/archive/` 正文保留快照语义，不作现行链接门禁。
 
-新增现行文档时，在 [文档索引](README.md) 加入入口，并更新 `.github/workflows/ci.yml` 的链接检查文件列表。
+新增现行文档时，在 [文档索引](README.md) 加入入口，并按需使用 lychee 检查该文档的链接。
 
 CI 在 PR、main push 和手动触发时运行 Rust、WebUI、macOS App 与仓库契约检查。容器镜像只在发布工作流中验证和发布。分支保护的建议和新仓库设置见 [迁移指南](repository-migration.md)。

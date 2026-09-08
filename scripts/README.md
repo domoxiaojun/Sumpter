@@ -34,7 +34,7 @@ node --test scripts/tests/*.test.mjs
 
 三个同步工具都支持 `--check` 只读检查。元数据和文档同步默认检查；客户端同步默认写入副本。完整的维护源与目标对应关系见 [开发指南](../docs/development.md#单一维护源与生成副本)。
 
-`clients/client-attribution.mjs` 是 Claude、Grok、Gemini 共用源码；不要单独编辑 `clients/gemini-sumpter-wrapper.mjs`。`clients/pi-project-attribution.ts` 是 pi 扩展，修改后运行同一个客户端同步命令更新三个平台资源副本，检查入口和测试会检查一致性。
+`clients/client-attribution.mjs` 是 Claude、Grok、Gemini、pi 的共用安装器；前三者还使用其中的启动包装逻辑。不要单独编辑 `clients/gemini-sumpter-wrapper.mjs`。`clients/pi-project-attribution.ts` 是 pi 扩展，修改后运行同一个客户端同步命令更新三个平台资源副本，检查入口和测试会检查一致性。
 
 平台 Shell 安装器、`cc-project-attribution.sh` 和 `grok-project-attribution.sh` 保留在平台目录；它们不由上述客户端同步工具生成，修改时应核对 Linux/macOS 脚本与 Swift App 内置资源。
 

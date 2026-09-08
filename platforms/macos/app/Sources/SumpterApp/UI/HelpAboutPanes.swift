@@ -120,16 +120,6 @@ struct HelpPane: View {
 
             UnifiedAttributionPanel()
 
-            ClientAttributionResourcePanel(
-                title: "pi 项目归因",
-                subtitle: "在运行 pi 的主机安装扩展，为显式标记的 Sumpter provider 添加项目和会话归因。",
-                resourceName: "pi-project-attribution",
-                resourceExtension: "ts",
-                clientName: "pi",
-                command: { path in "mkdir -p \"$HOME/.pi/agent/extensions\" && cp '\(path)' \"$HOME/.pi/agent/extensions/pi-project-attribution.ts\"" },
-                detail: "安装后在 pi 中执行 /reload；provider 需要设置 X-Sumpter-Client: pi。"
-            )
-
             SectionPanel(title: "配置与接入", hint: "两端均使用当前 schema 的 config.json；旧版本迁移会先创建备份。") {
                 VStack(alignment: .leading, spacing: 10) {
                     Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 8) {

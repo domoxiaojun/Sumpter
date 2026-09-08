@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -86,7 +87,7 @@ test('bash/zsh install is idempotent, migrates legacy blocks and restores locall
     assert.equal(installed.includes('synthetic/old'),false);
     assert.equal(installed.includes('synthetic-token'),false);
     manage('install','all',opts,f.env); assert.equal(readFileSync(rc,'utf8'),installed);
-    assert.deepEqual(manage('status','all',opts,f.env).map(x=>x.status),['installed','installed','installed']);
+    assert.deepEqual(manage('status','all',opts,f.env).map(x=>x.status),['installed','installed','installed','installed']);
     execFileSync(`/bin/${shell}`,['-n',rc]);
     writeFileSync(rc,installed+'# later user change\n');
     manage('restore','claude',opts,f.env);
@@ -142,7 +143,7 @@ test('status distinguishes outdated and missing scripts; restore all skips clien
   rmSync(installed);
   assert.equal(manage('status', 'claude', opts, f.env)[0].status, 'broken');
   const result = manage('restore', 'all', opts, f.env);
-  assert.deepEqual(result.map(x => x.status), ['restored', 'unchanged', 'unchanged']);
+  assert.deepEqual(result.map(x => x.status), ['restored', 'unchanged', 'unchanged', 'unchanged']);
   assert.equal(manage('status', 'claude', opts, f.env)[0].canRestore, false);
 });
 
@@ -153,9 +154,11 @@ test('Linux automation performs install, status and restore with isolated HOME',
   assert.match(run('status'), /claude：未安装/);
   assert.match(run('install'), /claude：已安装/);
   assert.match(run('status'), /grok：已安装/);
+  assert.match(run('status'), /pi：已安装/);
   const rc = join(f.home, '.bashrc');
   writeFileSync(rc, readFileSync(rc, 'utf8') + '# later edit\n');
   assert.match(run('restore'), /gemini：未安装/);
+  assert.equal(existsSync(join(f.home, '.pi/agent/extensions/pi-project-attribution.ts')), false);
   assert.match(readFileSync(rc, 'utf8'), /# later edit/);
 });
 
@@ -177,16 +180,22 @@ test('remote Linux setup downloads authenticated installer and preserves failure
   const f = fixture(t);
   const script = join(f.root, 'setup-client-attribution.sh');
   writeFileSync(script, readFileSync(new URL('../../platforms/linux/scripts/setup-client-attribution.sh', import.meta.url)));
+  let extensionMissing = false;
+  const resources = {
+    '/__sumpter/client-attribution.mjs': source,
+    '/__sumpter/pi-project-attribution.ts': fileURLToPath(new URL('../clients/pi-project-attribution.ts', import.meta.url)),
+  };
   const server = createServer((req, res) => {
-    if (req.url !== '/__sumpter/client-attribution.mjs' || req.headers.authorization !== 'Bearer synthetic-token') {
+    if (!resources[req.url] || req.headers.authorization !== 'Bearer synthetic-token') {
       res.writeHead(401).end(); return;
     }
-    res.end(readFileSync(source));
+    if (extensionMissing && req.url.endsWith('.ts')) { res.writeHead(404).end(); return; }
+    res.end(readFileSync(resources[req.url]));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => server.close());
-  const run = (token) => new Promise((resolve, reject) => {
-    const child = spawn('/bin/bash', [script, 'install', 'claude', '--shell', 'bash'], {
+  const run = (token, action = 'install') => new Promise((resolve, reject) => {
+    const child = spawn('/bin/bash', [script, action, 'all', '--shell', 'bash'], {
       env: { ...f.env, SUMPTER_BASE_URL: `http://127.0.0.1:${server.address().port}`, SUMPTER_AUTH_TOKEN: token },
     });
     let output = '';
@@ -197,7 +206,76 @@ test('remote Linux setup downloads authenticated installer and preserves failure
   });
   assert.notEqual((await run('incorrect')).code, 0);
   assert.equal(existsSync(join(f.home, '.bashrc')), false);
+  extensionMissing = true;
+  assert.notEqual((await run('synthetic-token')).code, 0);
+  assert.equal(existsSync(join(f.home, '.bashrc')), false);
+  assert.equal(existsSync(join(f.home, '.pi')), false);
+  extensionMissing = false;
   const result = await run('synthetic-token');
   assert.equal(result.code, 0, result.output);
   assert.match(result.output, /claude：已安装/);
+  assert.match(result.output, /pi：已安装/);
+  const restored = await run('synthetic-token', 'restore');
+  assert.equal(restored.code, 0, restored.output);
+  assert.match(restored.output, /pi：未安装/);
+  assert.equal(existsSync(join(f.home, '.pi/agent/extensions/pi-project-attribution.ts')), false);
+});
+
+test('pi install/update preserves first backup and restores exact bytes without touching provider or shell', (t) => {
+  const f = fixture(t);
+  const target = join(f.home, '.pi/agent/extensions/pi-project-attribution.ts');
+  mkdirSync(join(f.home, '.pi/agent/extensions'), { recursive: true });
+  const original = Buffer.from([0, 255, 10, 65]);
+  writeFileSync(target, original);
+  const provider = join(f.home, '.pi/agent/models.json');
+  writeFileSync(provider, '{"synthetic":"unchanged"}');
+  const opts = { shell: 'fish' }; // pi never reads or writes shell rc.
+  assert.equal(manage('status', 'pi', opts, f.env)[0].status, 'outdated');
+  manage('install', 'pi', { ...opts, dryRun: true }, f.env);
+  assert.deepEqual(readFileSync(target), original);
+  assert.equal(existsSync(f.env.XDG_DATA_HOME), false);
+  manage('install', 'pi', opts, f.env);
+  assert.equal(manage('status', 'pi', opts, f.env)[0].status, 'installed');
+  writeFileSync(target, '// later edit');
+  manage('install', 'pi', opts, f.env);
+  manage('install', 'pi', opts, f.env);
+  assert.equal(manage('status', 'pi', opts, f.env)[0].canRestore, true);
+  manage('restore', 'pi', opts, f.env);
+  assert.deepEqual(readFileSync(target), original);
+  assert.equal(manage('status', 'pi', opts, f.env)[0].canRestore, false);
+  assert.equal(readFileSync(provider, 'utf8'), '{"synthetic":"unchanged"}');
+  assert.equal(existsSync(join(f.home, '.bashrc')), false);
+});
+
+test('pi first install restores absence; missing resource fails all before shell mutation', (t) => {
+  const f = fixture(t);
+  const target = join(f.home, '.pi/agent/extensions/pi-project-attribution.ts');
+  manage('install', 'pi', {}, f.env);
+  manage('install', 'pi', {}, f.env);
+  manage('restore', 'pi', {}, f.env);
+  assert.equal(existsSync(target), false);
+  assert.equal(manage('restore', 'pi', {}, f.env)[0].status, 'unchanged');
+  const standalone = join(f.root, 'client-attribution.mjs');
+  writeFileSync(standalone, readFileSync(source));
+  assert.throws(() => manage('install', 'all', { shell: 'bash' }, f.env, standalone), /缺少配套/);
+  assert.equal(existsSync(join(f.home, '.bashrc')), false);
+  assert.equal(existsSync(target), false);
+});
+
+test('pi refuses symlink destinations and corrupt backup records before replacing data', (t) => {
+  const f = fixture(t);
+  const target = join(f.home, '.pi/agent/extensions/pi-project-attribution.ts');
+  mkdirSync(join(f.home, '.pi/agent/extensions'), { recursive: true });
+  const original = join(f.root, 'user-extension.ts');
+  writeFileSync(original, '// unchanged');
+  symlinkSync(original, target);
+  assert.throws(() => manage('install', 'pi', {}, f.env), /不是普通文件/);
+  assert.equal(readFileSync(original, 'utf8'), '// unchanged');
+  rmSync(target);
+  manage('install', 'pi', {}, f.env);
+  const key = createHash('sha256').update(target).digest('hex');
+  writeFileSync(join(f.env.XDG_DATA_HOME, 'sumpter/attribution', `pi-${key}.json`), '{broken');
+  const installed = readFileSync(target);
+  assert.throws(() => manage('restore', 'pi', {}, f.env), /不是有效 JSON/);
+  assert.deepEqual(readFileSync(target), installed);
 });

@@ -23,7 +23,7 @@ client=${2:-all}
 if [[ -z $action ]]; then
   [[ -t 0 ]] || { usage >&2; exit 2; }
   printf '客户端：1) Claude Code  2) Grok Build  3) Gemini CLI  4) pi  5) 全部\n'
-  read -r -p '请选择 [1-4，默认 4]：' choice
+  read -r -p '请选择 [1-5，默认 5]：' choice
   case ${choice:-5} in 1) client=claude;; 2) client=grok;; 3) client=gemini;; 4) client=pi;; 5) client=all;; *) exit 2;; esac
   printf '操作：1) 检查状态  2) 安装配置  3) 还原配置\n'
   read -r -p '请选择 [1-3，默认 1]：' choice
@@ -35,39 +35,19 @@ fi
 case $action in status|install|restore) ;; *) usage >&2; exit 2;; esac
 case $client in claude|grok|gemini|pi|all) ;; *) usage >&2; exit 2;; esac
 options=("$@")
-if [[ $client == all ]]; then
-  # pi 使用扩展目录，其他客户端使用 shell 归因块；处理同一命令的 pi 部分后继续统一安装器。
-  "$0" "$action" pi "${options[@]}"
-fi
 # Validate before attempting a download or changing configuration.
 while [[ $# -gt 0 ]]; do
   case $1 in --shell|--rc) [[ $# -ge 2 && -n $2 ]] || { usage >&2; exit 2; }; shift 2;; *) usage >&2; exit 2;; esac
 done
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-if [[ $client == pi ]]; then
-  source_file="$script_dir/pi-project-attribution.ts"
-  task_tmp=$(mktemp -d "${TMPDIR:-/tmp}/sumpter-pi-attribution.XXXXXX"); trap 'rm -rf -- "$task_tmp"' EXIT
-  if [[ ! -f $source_file ]]; then
-    : "${SUMPTER_BASE_URL:?请设置 SUMPTER_BASE_URL 为代理根地址}"
-    headers="$task_tmp/headers"; printf 'Authorization: Bearer %s\n' "${SUMPTER_AUTH_TOKEN:-}" > "$headers"
-    curl --fail --silent --show-error -H "@$headers" "${SUMPTER_BASE_URL%/}/__sumpter/pi-project-attribution.ts" -o "$task_tmp/pi-project-attribution.ts"
-    source_file="$task_tmp/pi-project-attribution.ts"
-  fi
-  target="$HOME/.pi/agent/extensions/pi-project-attribution.ts"; backup="$target.sumpter-bak"
-  case $action in
-    status) [[ -f $target ]] && echo 'pi：已安装' || echo 'pi：未安装'; exit 0;;
-    install) mkdir -p "$(dirname "$target")"; [[ -f $target ]] && cp "$target" "$backup"; cp "$source_file" "$target"; echo 'pi：已安装，请在 pi 中执行 /reload。'; exit 0;;
-    restore) [[ -f $backup ]] && cp "$backup" "$target" && echo 'pi：已还原，请在 pi 中执行 /reload。' || echo 'pi：无待还原配置。'; exit 0;;
-  esac
-fi
 installer="$script_dir/client-attribution.mjs"
 task_tmp=$(mktemp -d "${TMPDIR:-/tmp}/sumpter-attribution.XXXXXX")
 trap 'rm -rf -- "$task_tmp"' EXIT
-if [[ ! -f $installer ]]; then
+download_resource() {
+  local name=$1 destination=$2
   : "${SUMPTER_BASE_URL:?请设置 SUMPTER_BASE_URL 为代理根地址，或把脚本放在安装包 scripts 目录中}"
   command -v curl >/dev/null 2>&1 || { echo '未找到 curl。' >&2; exit 1; }
   case $SUMPTER_BASE_URL in http://*|https://*) ;; *) echo '代理根地址必须使用 http:// 或 https://' >&2; exit 2;; esac
-  installer="$task_tmp/client-attribution.mjs"
   # Keep the token out of curl's process arguments and any generated shell config.
   headers="$task_tmp/headers"
   if [[ -n ${SUMPTER_AUTH_TOKEN:-} ]]; then
@@ -77,11 +57,33 @@ if [[ ! -f $installer ]]; then
     : > "$headers"
   fi
   curl --fail --silent --show-error --connect-timeout 10 --max-time 60 \
-    -H "@$headers" "${SUMPTER_BASE_URL%/}/__sumpter/client-attribution.mjs" -o "$installer"
+    -H "@$headers" "${SUMPTER_BASE_URL%/}/__sumpter/$name" -o "$destination"
+}
+if [[ ! -f $installer ]]; then
+  installer="$task_tmp/client-attribution.mjs"
+  download_resource client-attribution.mjs "$installer"
+fi
+if [[ $client == pi || $client == all ]]; then
+  # Stage both files together without writing into the downloaded script's directory.
+  extension="$script_dir/pi-project-attribution.ts"
+  if [[ $installer != "$task_tmp/client-attribution.mjs" ]]; then
+    cp "$installer" "$task_tmp/client-attribution.mjs"
+    installer="$task_tmp/client-attribution.mjs"
+  fi
+  if [[ -f $extension ]]; then
+    cp "$extension" "$task_tmp/pi-project-attribution.ts"
+  else
+    download_resource pi-project-attribution.ts "$task_tmp/pi-project-attribution.ts"
+  fi
 fi
 node "$installer" "$action" "$client" "${options[@]}" > "$task_tmp/result.json"
 if [[ $action != status ]]; then
-  if [[ $action == install ]]; then echo '归因配置已安装，请新开终端。'; else echo '归因配置已还原；没有还原记录的客户端保持原样。请新开终端。'; fi
+  if [[ $action == install ]]; then echo '归因配置已安装。'; else echo '归因配置已还原；没有还原记录的客户端保持原样。'; fi
+  case $client in
+    pi) echo '请在 pi 中执行 /reload；provider 需要设置 X-Sumpter-Client: pi。';;
+    all) echo '其他客户端请新开终端；pi 请执行 /reload，并设置 provider 的 X-Sumpter-Client: pi。';;
+    *) echo '请新开终端。';;
+  esac
   node "$installer" status "$client" "${options[@]}" > "$task_tmp/result.json"
 fi
 node - "$task_tmp/result.json" <<'NODE'

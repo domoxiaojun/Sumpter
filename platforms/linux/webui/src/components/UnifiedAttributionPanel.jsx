@@ -10,8 +10,8 @@ export function UnifiedAttributionPanel() {
     ['还原配置', `bash setup-client-attribution.sh restore ${client}`],
   ];
   return <section className="glass-panel panel-padded-stack">
-    <h2>Claude / Grok / Gemini 项目归因</h2>
-    <p>在运行客户端的主机配置，需要 Node.js 18+ 与 bash/zsh。三个客户端共用项目、工作区、用户和 Git remote 归因；中文目录使用 URI 编码。</p>
+    <h2>Claude / Grok / Gemini / pi 项目归因</h2>
+    <p>在运行客户端的主机配置，需要 Node.js 18+；脚本通过 bash 执行，pi 扩展不修改终端配置。四个客户端共用项目、工作区、用户和 Git remote 归因；中文目录使用 URI 编码。</p>
     <label>客户端 <select className="form-select" value={client} onChange={(e) => setClient(e.target.value)}>
       <option value="claude">Claude Code</option><option value="grok">Grok Build</option><option value="gemini">Gemini CLI</option><option value="pi">pi</option><option value="all">全部客户端</option>
     </select></label>
@@ -27,7 +27,8 @@ export function UnifiedAttributionPanel() {
       }}>复制命令</button>
     </div>)}
     {feedback && <p role="status">{feedback}</p>}
-    <p>脚本自动获取配套安装器。安装前备份 rc 并替换所选客户端的旧标记块；安装、还原后新开终端。还原只处理该归因块，不覆盖后续 shell 改动。状态检查不等同于已观察到请求归因。</p>
+    <p>脚本自动获取配套安装器与 pi 扩展。安装前备份 rc 或已有扩展；重复安装保留首次备份。还原仅恢复所选客户端的归因块或 pi 扩展，pi 原先未安装时会移除扩展。pi 操作后执行 /reload，其他客户端新开终端。状态检查不等同于已观察到请求归因。</p>
+    <p>pi 的 Sumpter provider 需要设置 X-Sumpter-Client: pi；安装器不修改 provider 配置。</p>
     <p>请先将客户端连接到 Sumpter；Gemini 需设置 SUMPTER_GEMINI_BASE_URL 和 SUMPTER_AUTH_TOKEN。密钥不会写入安装块。工作区路径会发送到 Sumpter，Git remote 先删除凭据；专用 header 不发往上游。</p>
   </section>;
 }
