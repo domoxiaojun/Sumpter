@@ -47,7 +47,7 @@ Codex 专用请求沿用现有入口和认证配置，本扩展不替代 pi 登�
 其他服务的 provider 上设置该标识。无需改 pi 源码或 shell 启动文件。
 
 资源位置：Linux 包的 `scripts/pi-project-attribution.ts`；macOS App 的
-`Contents/Resources/pi-project-attribution.ts`；源码的 `scripts/pi-project-attribution.ts`。
+`Contents/Resources/pi-project-attribution.ts`；源码的 `scripts/clients/pi-project-attribution.ts`。
 
 先临时加载验证（将路径替换为实际资源位置）：
 
@@ -189,7 +189,7 @@ experimental_bearer_token = "填 listener.authToken（未启用鉴权时删除�
 
 不要把 `config.json`、API key、Token、Cookie 或 raw 诊断内容提交到 Git、Issue 或聊天记录。
 
-<!-- 由 scripts/sync-usage-docs.py 生成；请修改 docs/usage-onboarding.md 与 docs/usage-path-matrix.json 后同步。 -->
+<!-- 由 scripts/maintenance/sync-usage-docs.py 生成；请修改 docs/templates/usage-onboarding.md 与 docs/templates/usage-path-matrix.json 后同步。 -->
 
 <!-- END SUMPTER_CANONICAL_ONBOARDING -->
 
@@ -199,14 +199,14 @@ experimental_bearer_token = "填 listener.authToken（未启用鉴权时删除�
 
 源码仓库 [`domoxiaojun/sumpter`](https://github.com/domoxiaojun/sumpter) 是这份 monorepo。发布阶段会把
 `platforms/linux/` 提升为 Linux 发布包根，因此发布包里的指南位于包根；源码树里的 Linux 指南是
-[`platforms/linux/USAGE.md`](platforms/linux/USAGE.md)。改开箱模板时编辑 `docs/usage-onboarding.md`，
-由 `scripts/sync-usage-docs.py` 同步根 `USAGE.md` 与 Linux 那一份。
+[`platforms/linux/USAGE.md`](platforms/linux/USAGE.md)。改开箱模板时编辑 `docs/templates/usage-onboarding.md`，
+由 `scripts/maintenance/sync-usage-docs.py` 同步根 `USAGE.md` 与 Linux 那一份。
 
 ## 模型组调度
 
 需要多个 OpenAI、Claude、Gemini、Grok 等入口共用一个客户端地址时，在“模型组”中声明模型范围，再把入口库中的连接绑定到一个或多个组。客户端继续使用原模型名；基础候选依次按组优先级、组顺序、入口优先级和入口顺序排列。实际调度保留会话粘性与冷却规则；允许故障切换时继续尝试后续组中的同一模型，不自动更换模型。
 
-入口库负责地址、密钥和原始映射，模型组只负责模型范围与入口绑定。原有 HTTP 500 重试、跨轮重试、冷却、退避、`Retry-After`、会话粘性、超时、raw 透传和 Live/Realtime/Video 资源绑定继续由全局调度器处理。完整字段示例见 [`platforms/macos/CONFIG.md`](platforms/macos/CONFIG.md) 的 `modelGroups` 章节。
+入口库负责地址、密钥和原始映射，模型组只负责模型范围与入口绑定。原有 HTTP 500 重试、跨轮重试、冷却、退避、`Retry-After`、会话粘性、超时、raw 透传和 Live/Realtime/Video 资源绑定继续由全局调度器处理。完整字段示例见 [`docs/configuration.md`](docs/configuration.md) 的 `modelGroups` 章节。
 
 ## 文档怎么读
 
@@ -214,7 +214,7 @@ experimental_bearer_token = "填 listener.authToken（未启用鉴权时删除�
 |---|---|
 | 产品定位与仓库地图 | [`README.md`](README.md) |
 | 开箱、接客户端、排错 | 本文 |
-| 每个配置字段的含义 | [`platforms/macos/CONFIG.md`](platforms/macos/CONFIG.md)（两端同一份 schema） |
+| 每个配置字段的含义 | [`docs/configuration.md`](docs/configuration.md)（两端同一份 schema） |
 | Linux 安装、systemd、Docker、Admin 反代 | [`platforms/linux/README.md`](platforms/linux/README.md) |
 | macOS 首次打开被拦截 | [`platforms/macos/app/INSTALL.txt`](platforms/macos/app/INSTALL.txt) |
 | 改代码 / 架构 | [`docs/architecture.md`](docs/architecture.md)、[`AGENTS.md`](AGENTS.md) |
@@ -534,7 +534,7 @@ Live mapping 时返回 `no_live_provider`，避免语音请求误发到普通模
 }
 ```
 
-更完整的模板见 `platforms/macos/config.example.json` / `platforms/linux/config.example.json`。字段逐项说明见 [`platforms/macos/CONFIG.md`](platforms/macos/CONFIG.md)。
+更完整的模板见 `platforms/macos/config.example.json` / `platforms/linux/config.example.json`。字段逐项说明见 [`docs/configuration.md`](docs/configuration.md)。
 
 ### 旧配置怎么迁
 

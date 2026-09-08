@@ -1,56 +1,8 @@
 # Sumpter 当前架构
 
-维护基线是「一份共享引擎，多端适配器」：Linux 和 macOS 共用同一套数据面、请求透传、模型映射、重试和运行时存储；平台差异只出现在 adapter、app 和 `platforms/`。Codex Live 的 SDP/multipart bootstrap（`POST /v1/live`、`POST /v1/realtime`、`POST /v1/realtime/calls`）是共享引擎内的 quicksilver 封装特例；出站把 POST `/v1/realtime` 改写到 `/v1/realtime/calls?intent=quicksilver&architecture=avas`（avas 只允许出现在 WebRTC `/calls`）。无 `call_id` 的 `GET /v1/realtime` 仍是公开 Realtime WebSocket 原生透传，并剥掉这些 query。
+Linux 和 macOS 共用同一套数据面、请求透传、模型映射、重试和运行时存储；平台能力由 adapter、app 和 `platforms/` 组合。
 
-## 结构树
-
-```text
-.
-├── Cargo.toml                         # 唯一 Rust workspace
-├── Cargo.lock
-├── crates/                            # 跨平台真源
-│   ├── sumpter-core/                  # 配置、路由、调度、模型映射和事件契约
-│   ├── sumpter-runtime/               # SQLite worker、投影、rollup、查询、导出
-│   └── sumpter-engine/                # HTTP 数据面、转发、重试、relay、回放
-│       └── src/
-│           ├── boundary.rs            # PlatformBoundary / EngineServices
-│           ├── engine/                # 入站、转发、事件、捕获、生命周期
-│           ├── outbound.rs
-│           ├── request_build.rs
-│           ├── replay.rs
-│           └── health.rs
-├── adapters/                          # 平台实现，不承载共享业务逻辑
-│   ├── linux/sumpter-linux-adapter/
-│   │   ├── src/platform.rs            # Linux 权限、状态和平台动作
-│   │   ├── src/admin*.rs              # Linux Admin facade
-│   │   ├── src/server.rs              # Linux HTTP 组装和优雅关停
-│   │   └── src/engine.rs              # 注入 Linux boundary 的薄 wrapper
-│   └── macos/sumpter-macos-adapter/
-│       ├── src/platform.rs            # macOS control token、通知、reload
-│       ├── src/admin.rs               # macOS Admin facade
-│       ├── src/server.rs              # macOS HTTP 组装
-│       └── src/engine.rs              # 注入 macOS boundary 的薄 wrapper
-├── apps/                              # 可执行入口，只做 composition
-│   ├── linux/sumpterd/                # sumpterd-linux
-│   └── macos/sumpterd/                # sumpterd-macos
-├── platforms/                         # 非 Rust 的平台产品输入
-│   ├── linux/                         # WebUI、安装、systemd、Docker、发布输入
-│   │   ├── webui/                     # WebUI 源码
-│   │   ├── web/                       # 已构建静态资源
-│   │   ├── scripts/                   # 安装 / 交叉构建 / 发布输入
-│   │   ├── deploy/                    # service / 反代模板
-│   │   ├── specs/                     # Linux Admin API 规格
-│   │   ├── integrations/              # 外部客户端集成示例
-│   │   └── .github/workflows/         # 独立 Linux 发布树 workflow 输入
-│   └── macos/                         # SwiftUI 壳、脚本和打包输入
-│       ├── scripts/                   # macOS 随 App 内置的客户端配置脚本
-│       └── app/                       # Swift Package、测试、DMG / Sparkle
-├── .github/workflows/                 # 当前 monorepo 的 CI / Release / Container workflows
-├── docs/                              # 当前说明和历史对照
-└── scripts/                           # 仓库级辅助脚本
-```
-
-Rust 真源只在根 `crates/`、`adapters/` 和 `apps/`。没有嵌套 Rust workspace，也没有第二份 core / runtime / engine 或 legacy proxy。独立 Linux 发布包可以在发布阶段把 `platforms/linux/` 提升为包根，这不是源码树的目录约定。
+本文说明依赖方向、请求处理和运行时约束。完整目录、源码定位与测试归属统一见 [项目结构](project-structure.md)，执行命令见 [开发指南](development.md)。
 
 ## 依赖方向
 
@@ -65,11 +17,19 @@ apps/<platform>/sumpterd
 
 约束：
 
-1. `sumpter-core` 不依赖网络、SQLite、操作系统或 UI。
-2. `sumpter-runtime` 只依赖 core 和 bundled SQLite；不依赖 adapter 或 app。
+1. `sumpter-core` 不依赖网络客户端、SQLite、平台 adapter 或 UI；`config_store` 仍负责配置文件读写、权限和迁移，不是完全无文件 I/O 的纯函数库。
+2. `sumpter-runtime` 负责 bundled SQLite 存储与查询，依赖方向指向 core；不依赖 adapter 或 app。
 3. `sumpter-engine` 只通过 `PlatformBoundary`、`EngineServices` 接收平台能力和上游传输；不直接引用 Linux / macOS crate。
 4. adapter 可以依赖 shared crate，shared crate 不得反向依赖 adapter。
 5. app 只负责参数解析、配置目录、监听启动、信号 / EOF 生命周期和平台组合，不复制请求处理逻辑。
+
+## 请求处理与协议
+
+HTTP 请求经平台服务组装进入共享引擎，依次完成访问检查、协议识别与路由准备、候选选择和上游转发，再由 relay 和完成记账记录结果。WebSocket 在完成上游握手后才向客户端返回升级响应。
+
+原始请求的透传、必要模型映射、本地模型目录和已配置协议转换均由共享实现负责。客户端路径与能力范围见 [使用指南](../USAGE.md#4-协议与路径)。
+
+Codex Live 的 SDP/multipart bootstrap（`POST /v1/live`、`POST /v1/realtime`、`POST /v1/realtime/calls`）是共享引擎内的 quicksilver 封装特例；出站把 POST `/v1/realtime` 改写到 `/v1/realtime/calls?intent=quicksilver&architecture=avas`（avas 只允许出现在 WebRTC `/calls`）。无 `call_id` 的 `GET /v1/realtime` 仍是公开 Realtime WebSocket 原生透传，并剥掉这些 query。
 
 ## 共享引擎内部
 
@@ -143,40 +103,15 @@ AppModel 方法分布在 `AppModel+Lifecycle.swift`、`AppModel+RuntimeStatus.sw
 
 ## 变更归属
 
-| 需求 | 修改位置 | 不应修改 |
-| --- | --- | --- |
-| 配置、路由、模型映射、事件契约 | `crates/sumpter-core/` | adapter / app 内复制实现 |
-| SQLite 写入、投影、分页、导出 | `crates/sumpter-runtime/` | Linux / macOS 各维护一份 runtime |
-| 入站、重试、relay、回放、健康检查 | `crates/sumpter-engine/` | 平台目录中的 proxy engine |
-| Linux 权限、Admin、systemd、listener 内置脚本 | `adapters/linux/`、`apps/linux/` | shared engine 引入 Linux 依赖 |
-| macOS control token、通知、sidecar 生命周期 | `adapters/macos/`、`apps/macos/` | shared engine 引入 Swift / macOS 依赖 |
-| WebUI / SwiftUI / 安装和发布输入 | `platforms/linux/`、`platforms/macos/` | 把 UI 逻辑搬进 shared crate |
+按 [源码职责表](project-structure.md#按需求找源码) 定位实现。共享行为放在 core、runtime 或 engine，平台权限和生命周期放在 adapter / app，界面与安装打包输入放在 `platforms/`。保持上述依赖方向，避免在两个平台复制一套共享逻辑。
 
 HTTP header、环境变量、服务单元名、导出格式标识和 sticky domain 属于兼容协议或运行时数据字段。改工程包名或目录时不要机械替换这些字段。
 
 ## 构建与验证
 
-在仓库根目录：
+从仓库根运行统一检查，具体命令及最小验证范围见 [开发指南](development.md#按变更选择验证)。共享行为覆盖两个 adapter；WebUI、SwiftUI、安装脚本和发布包分别验证。
 
-```bash
-export PATH="/opt/homebrew/opt/rustup/bin:$PATH"
-
-cargo fmt --all -- --check
-cargo check --workspace --locked
-cargo test --workspace --locked
-cargo clippy --workspace --all-targets -- -D warnings
-uv run scripts/sync-usage-docs.py --check
-```
-
-workspace 有 7 个 Rust package：3 个共享库、2 个平台 adapter、2 个 daemon / sidecar。Linux WebUI、SwiftUI、安装脚本和发布包不在这组 Cargo 测试里，改动后走各自的前端 / 打包验证。
-
-本机测试 DMG：`./scripts/build-macos-dmg.sh`。该脚本走 monorepo 根 workspace，产物是 ad-hoc 签名的 `Sumpter-local.dmg`。
-
-发布输入分为当前 monorepo 根 workflow 与独立 Linux 发布树兼容脚本：
-
-- `platforms/linux/scripts/cross-build.sh` 已识别根 workspace，可从仓库根构建 `sumpterd-linux` 并生成双架构包；`assemble-shared-tree.sh` 与 `release-preflight.sh` 仍主要服务独立 Linux 发布树。
-- 当前 monorepo 的 GitHub workflow 在根 `.github/workflows/`；`platforms/linux/.github/workflows/` 仅保留独立 Linux 发布树输入，GitHub 不会发现该嵌套目录。
-- `platforms/macos/app/package-app.sh` 已识别 monorepo 根 workspace 并构建 `sumpterd-macos`，但仍保留独立发布树分支和 `ENGINE_PROFILE` 兼容选项。
+当前工作流统一位于根 `.github/workflows/`，版本发布入口为 `release.yml`。本机 DMG 构建见 [脚本目录](../scripts/README.md)，平台产物、签名和发布验收见 [发布指南](releasing.md)。
 
 ## 品牌与运行时名字
 

@@ -2,6 +2,8 @@
 
 macOS App 使用 Sparkle 2.9.6。Sparkle 只负责客户端更新逻辑，更新包和 `appcast.xml` 仍需托管在用户可访问的 HTTPS 地址。
 
+跨平台版本与发布门禁统一见 [发布指南](../../../docs/releasing.md)。当前自动发布为 arm64，Apple 签名与公证状态以实际构建结果为准。
+
 ## 首次安装与自动更新产物
 
 `package-app.sh` 会生成：

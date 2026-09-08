@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { collectHeaders, prepareLaunch, manage, sanitizeRemote } from './client-attribution.mjs';
-const source = fileURLToPath(new URL('./client-attribution.mjs', import.meta.url));
+import { collectHeaders, prepareLaunch, manage, sanitizeRemote } from '../clients/client-attribution.mjs';
+const source = fileURLToPath(new URL('../clients/client-attribution.mjs', import.meta.url));
 function fixture(t) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'sumpter-unified-')));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -109,10 +109,10 @@ test('actual shell functions forward argv and child-scoped headers; standalone G
     const out=execFileSync(`/bin/${shell}`,['-c','source "$1"; claude "a b" "$(printf x)"','test',rc],{env,cwd:f.repo,encoding:'utf8'});
     const result=JSON.parse(out);assert.deepEqual(result.args,['a b','x']);assert.ok(result.headers.includes('uri-v1'));
   }
-  const out=execFileSync(process.execPath,[fileURLToPath(new URL('./gemini-sumpter-wrapper.mjs',import.meta.url)),'--resume=last'],{env:{...f.env,GEMINI_CLI_BIN:fake},cwd:f.repo,encoding:'utf8'});
+  const out=execFileSync(process.execPath,[fileURLToPath(new URL('../clients/gemini-sumpter-wrapper.mjs',import.meta.url)),'--resume=last'],{env:{...f.env,GEMINI_CLI_BIN:fake},cwd:f.repo,encoding:'utf8'});
   assert.deepEqual(JSON.parse(out).args,['--resume=last']);
   const linked=join(f.root,'gemini-sumpter-wrapper.mjs');
-  symlinkSync(fileURLToPath(new URL('./gemini-sumpter-wrapper.mjs',import.meta.url)),linked);
+  symlinkSync(fileURLToPath(new URL('../clients/gemini-sumpter-wrapper.mjs',import.meta.url)),linked);
   const linkedOut=execFileSync(process.execPath,[linked,'--resume=last'],{env:{...f.env,GEMINI_CLI_BIN:fake},cwd:f.repo,encoding:'utf8'});
   assert.deepEqual(JSON.parse(linkedOut).args,['--resume=last']);
 });
@@ -127,7 +127,7 @@ test('malformed markers, rc symlinks and per-client uninstall preserve user stat
 });
 
 test('distributed scripts are generated from one canonical source', () => {
-  execFileSync(process.execPath,[fileURLToPath(new URL('./sync-client-attribution.mjs',import.meta.url)),'--check']);
+  execFileSync(process.execPath,[fileURLToPath(new URL('../maintenance/sync-client-attribution.mjs',import.meta.url)),'--check']);
 });
 
 test('status distinguishes outdated and missing scripts; restore all skips clients without records', (t) => {
@@ -148,7 +148,7 @@ test('status distinguishes outdated and missing scripts; restore all skips clien
 
 test('Linux automation performs install, status and restore with isolated HOME', (t) => {
   const f = fixture(t);
-  const script = fileURLToPath(new URL('../platforms/linux/scripts/setup-client-attribution.sh', import.meta.url));
+  const script = fileURLToPath(new URL('../../platforms/linux/scripts/setup-client-attribution.sh', import.meta.url));
   const run = (action) => execFileSync('/bin/bash', [script, action, 'all', '--shell', 'bash'], { env: f.env, encoding: 'utf8' });
   assert.match(run('status'), /claude：未安装/);
   assert.match(run('install'), /claude：已安装/);
@@ -176,7 +176,7 @@ test('remote Linux setup downloads authenticated installer and preserves failure
   const { spawn } = await import('node:child_process');
   const f = fixture(t);
   const script = join(f.root, 'setup-client-attribution.sh');
-  writeFileSync(script, readFileSync(new URL('../platforms/linux/scripts/setup-client-attribution.sh', import.meta.url)));
+  writeFileSync(script, readFileSync(new URL('../../platforms/linux/scripts/setup-client-attribution.sh', import.meta.url)));
   const server = createServer((req, res) => {
     if (req.url !== '/__sumpter/client-attribution.mjs' || req.headers.authorization !== 'Bearer synthetic-token') {
       res.writeHead(401).end(); return;

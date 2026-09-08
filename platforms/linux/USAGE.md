@@ -47,7 +47,7 @@ Codex 专用请求沿用现有入口和认证配置，本扩展不替代 pi 登�
 其他服务的 provider 上设置该标识。无需改 pi 源码或 shell 启动文件。
 
 资源位置：Linux 包的 `scripts/pi-project-attribution.ts`；macOS App 的
-`Contents/Resources/pi-project-attribution.ts`；源码的 `scripts/pi-project-attribution.ts`。
+`Contents/Resources/pi-project-attribution.ts`；源码的 `scripts/clients/pi-project-attribution.ts`。
 
 先临时加载验证（将路径替换为实际资源位置）：
 
@@ -189,7 +189,7 @@ experimental_bearer_token = "填 listener.authToken（未启用鉴权时删除�
 
 不要把 `config.json`、API key、Token、Cookie 或 raw 诊断内容提交到 Git、Issue 或聊天记录。
 
-<!-- 由 scripts/sync-usage-docs.py 生成；请修改 docs/usage-onboarding.md 与 docs/usage-path-matrix.json 后同步。 -->
+<!-- 由 scripts/maintenance/sync-usage-docs.py 生成；请修改 docs/templates/usage-onboarding.md 与 docs/templates/usage-path-matrix.json 后同步。 -->
 
 <!-- END SUMPTER_CANONICAL_ONBOARDING -->
 
@@ -199,7 +199,7 @@ experimental_bearer_token = "填 listener.authToken（未启用鉴权时删除�
 
 本文是 Linux 发布包的使用指南。源码 monorepo 中它位于 `platforms/linux/USAGE.md`；发布阶段会把
 `platforms/linux/` 提升为包根，届时本文与同目录 `README.md` 位于发布包根目录。开箱模板的真源是
-仓库根 `docs/usage-onboarding.md`，由 `scripts/sync-usage-docs.py` 同步到仓库根 `USAGE.md` 和本文件。
+仓库根 `docs/templates/usage-onboarding.md`，由 `scripts/maintenance/sync-usage-docs.py` 同步到仓库根 `USAGE.md` 和本文件。
 
 ## 模型组调度
 
@@ -212,7 +212,7 @@ experimental_bearer_token = "填 listener.authToken（未启用鉴权时删除�
 | 你想做什么 | 读哪份 |
 |---|---|
 | 开箱、接客户端、排错 | 本文 |
-| 每个配置字段的含义 | 本文第 5 节；macOS 字段完整说明仅在源码树的 `platforms/macos/CONFIG.md` |
+| 每个配置字段的含义 | 本文第 5 节；macOS 字段完整说明仅在源码树的 `docs/configuration.md` |
 | Linux 安装、systemd、Docker、Admin 反代 | [`README.md`](README.md) |
 | macOS 首次打开被拦截 | 该说明不随 Linux 发布包提供；请在源码树查看 `platforms/macos/app/INSTALL.txt` |
 
@@ -523,7 +523,7 @@ Linux 的 Web Admin 地址 **不是** 这个字段，默认永远是 `127.0.0.1:
 }
 ```
 
-更完整的 Linux 模板见 `config.example.json`；macOS 模板和字段逐项说明只在源码树 `platforms/macos/config.example.json` 与 `platforms/macos/CONFIG.md` 提供。
+更完整的 Linux 模板见 `config.example.json`；macOS 模板和字段逐项说明只在源码树 `platforms/macos/config.example.json` 与 `docs/configuration.md` 提供。
 
 ### 旧配置怎么迁
 

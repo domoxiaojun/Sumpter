@@ -2125,15 +2125,15 @@ async fn pi_and_gemini_attribution_script_download_uses_listener_access_policy()
         ),
         (
             sumpter_linux_adapter::engine::PI_ATTRIBUTION_SCRIPT_PATH,
-            include_bytes!("../../../../scripts/pi-project-attribution.ts").as_slice(),
+            include_bytes!("../../../../scripts/clients/pi-project-attribution.ts").as_slice(),
         ),
         (
             sumpter_linux_adapter::engine::GEMINI_WRAPPER_SCRIPT_PATH,
-            include_bytes!("../../../../scripts/gemini-sumpter-wrapper.mjs").as_slice(),
+            include_bytes!("../../../../scripts/clients/gemini-sumpter-wrapper.mjs").as_slice(),
         ),
         (
             sumpter_linux_adapter::engine::CLIENT_ATTRIBUTION_SCRIPT_PATH,
-            include_bytes!("../../../../scripts/client-attribution.mjs").as_slice(),
+            include_bytes!("../../../../scripts/clients/client-attribution.mjs").as_slice(),
         ),
     ] {
         assert_eq!(

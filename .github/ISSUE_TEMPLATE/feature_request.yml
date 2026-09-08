@@ -1,0 +1,23 @@
+name: 功能建议
+description: 描述用户场景与验收标准
+title: "[Feature] "
+body:
+  - type: textarea
+    id: scenario
+    attributes:
+      label: 使用场景与当前问题
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议行为与涉及平台
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 如何判断完成
+      description: 给出可验证的结果、兼容性要求或替代方案。
+    validations:
+      required: true

@@ -1,0 +1,40 @@
+name: 问题报告
+description: 提供可复现的问题和脱敏证据
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: 请勿上传 API key、令牌、真实请求体或运行数据库。安全漏洞请按 SECURITY.md 私下报告。
+  - type: input
+    id: version
+    attributes:
+      label: 版本与安装来源
+      placeholder: Sumpter 版本、Release / 本机构建 / 静态镜像
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 平台
+      options:
+        - Linux x86_64
+        - Linux aarch64
+        - macOS Apple Silicon
+        - macOS Intel（自行构建）
+        - 两端共有
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 最小复现步骤与环境
+      description: 系统版本、客户端、配置方式和能复现的操作；仅提供脱敏配置。
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: 预期与实际结果
+      description: 可附脱敏日志、状态码或截图。
+    validations:
+      required: true

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render the canonical onboarding block into both user-facing USAGE files.
 
-Run with ``uv run scripts/sync-usage-docs.py --write`` when the template or
+Run with ``uv run scripts/maintenance/sync-usage-docs.py --write`` when the template or
 path matrix changes.  ``--check`` is the read-only CI/preflight mode.
 """
 
@@ -12,9 +12,9 @@ import json
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
-TEMPLATE = ROOT / "docs" / "usage-onboarding.md"
-MATRIX = ROOT / "docs" / "usage-path-matrix.json"
+ROOT = Path(__file__).resolve().parents[2]
+TEMPLATE = ROOT / "docs" / "templates" / "usage-onboarding.md"
+MATRIX = ROOT / "docs" / "templates" / "usage-path-matrix.json"
 START = "<!-- BEGIN SUMPTER_CANONICAL_ONBOARDING -->"
 END = "<!-- END SUMPTER_CANONICAL_ONBOARDING -->"
 
@@ -65,7 +65,7 @@ def main() -> int:
             else:
                 print(f"需要同步 {path.relative_to(ROOT)}")
     if changed and not args.write:
-        print("USAGE 文档与 canonical 模板不一致；运行 uv run scripts/sync-usage-docs.py --write")
+        print("USAGE 文档与 canonical 模板不一致；运行 uv run scripts/maintenance/sync-usage-docs.py --write")
         return 1
     print("USAGE canonical onboarding 同步完成" if args.write else "USAGE canonical onboarding 检查通过")
     return 0

@@ -13,7 +13,7 @@ usage() {
 
 默认行为:
   - 构建 arm64 Release 版本
-  - 打包前运行 Rust workspace 与 Swift 测试
+  - 默认跳过测试；设置 RUN_TESTS=1 在打包前运行测试
   - 使用 ad-hoc 签名，仅适合本机测试
   - 输出到 platforms/macos/app/dist/
   - 产物名为 Sumpter-local

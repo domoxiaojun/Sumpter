@@ -23,7 +23,7 @@ Linux 专属边界：
 
 源码树的 Rust 门禁在**仓库根**运行：`cargo fmt` / `check` / `test` / `clippy`，覆盖共享 crate、Linux adapter 和 `sumpterd-linux`。WebUI 在 `platforms/linux/webui/` 跑 `npm ci`、契约测试和生产构建。
 
-`assemble-shared-tree.sh` 和 `release-preflight.sh` 仍按**独立 Linux 发布树**查找 `crates/`、`sumpterd`、`sumpter-core` 等输入；`cross-build.sh` 已支持根 workspace，但本机交叉构建、GHCR 镜像和真实 systemd 流量仍必须在目标 Linux 上按本文后半的「原生构建与打包」「真机冒烟」补齐。
+源码检查统一从仓库根运行 `./scripts/check.sh`；`cross-build.sh` 从根 workspace 构建并打包。交叉编译、镜像与真实 systemd 流量分别验收，目标 Linux 的检查见本文「原生构建与打包」「真机冒烟」。
 
 ## 部署包结构
 
@@ -59,13 +59,12 @@ sumpter-linux-<arch>/
 ## GitHub Actions 与发布资产
 
 GitHub 实际执行的 workflow 位于仓库根 `.github/workflows/`，已按当前 monorepo 的根 workspace 和
-`platforms/linux/` 输入适配。`platforms/linux/.github/workflows/` 保留为独立 Linux 发布树的输入，
-不会被当前 monorepo 的 GitHub 自动发现。macOS 发布工作流也位于根 `.github/workflows/`；本机测试
+`platforms/linux/` 输入适配。旧嵌套工作流已移除，Linux 与 macOS 共用唯一 Release 工作流；本机测试
 DMG 用仓库根 `scripts/build-macos-dmg.sh`。
 
-包根视角下的工作流：
+源码仓库的统一工作流：
 
-- `ci.yml`：pull request 或手动触发；Rust 1.88.0 的 fmt/check/test，以及 WebUI 的 `npm ci`、契约测试与生产构建。普通 push 不会自动消耗 CI 额度。
+- `ci.yml`：main push、pull request 或手动触发；Rust fmt/check/test/clippy、WebUI 构建与测试、macOS App 构建与测试、文档与资源同步检查。
 - `release.yml`：使用同一个已有的 `vX.Y.Z` tag 同时构建 Linux 包、GHCR 镜像和 macOS 包；只有三个构建 job 全部成功后才运行唯一的 publish job。
 - `container.yml`：只做 pull request 和手动的容器打包校验，不推送 GHCR。
 
@@ -643,7 +642,7 @@ Responses WebSocket、Realtime / Live、Files、Videos 与 `/v1/models` 已接�
 可直接从 Linux listener 的 Base URL 下载内置脚本；这个 URL 可以是局域网地址，也可以是转发该路径
 的 Nginx HTTPS 地址。Web Admin 的**安全**页
 有一份完整引导：当前是否已生效、三步命令（可直接复制）、macOS/Linux 与 shell 差异、三个实测
-陷阱、回退命令。细节与原理见 [`USAGE.md` §8](USAGE.md#8-让-claude-code-按项目统计可选)。
+陷阱、回退命令。细节与原理见 [`USAGE.md` §8](USAGE.md#8-让-claude-code--grok-build-按项目统计可选)。
 
 ```bash
 SUMPTER_LISTENER_BASE_URL='http://192.168.1.20:57878'
@@ -745,4 +744,4 @@ musl 兼容和真实上游请求必须另行验收。
 
 Linux listener 同样提供 `/__sumpter/gemini-sumpter-wrapper.mjs` 下载，沿用入站认证及访问控制。
 Claude Code、Grok、Gemini 和 pi 的仓库下载、安装、使用与移除命令见
-[`USAGE.md` 的客户端脚本安装说明](USAGE.md#linux-客户端归因脚本远程安装)。
+[`USAGE.md` 的客户端脚本安装说明](USAGE.md#linuxmacos-客户端归因脚本统一安装)。

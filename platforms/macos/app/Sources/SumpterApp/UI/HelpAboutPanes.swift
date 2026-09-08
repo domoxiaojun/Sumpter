@@ -32,16 +32,6 @@ struct HelpPane: View {
     @ObservedObject var model: AppModel
     var onNavigate: (SettingsSection) -> Void = { _ in }
 
-    private var piExtensionPath: String? {
-        (Bundle.main.url(forResource: "pi-project-attribution", withExtension: "ts")
-            ?? Bundle.module.url(forResource: "pi-project-attribution", withExtension: "ts"))?.path
-    }
-
-    private var geminiWrapperPath: String? {
-        (Bundle.main.url(forResource: "gemini-sumpter-wrapper", withExtension: "mjs")
-            ?? Bundle.module.url(forResource: "gemini-sumpter-wrapper", withExtension: "mjs"))?.path
-    }
-
     private var onboardingState: HelpOnboardingState {
         let counters = model.runtimeSummary?.counters
         return resolveHelpOnboardingState(
@@ -128,27 +118,17 @@ struct HelpPane: View {
                 }
             }
 
-            SectionPanel(title: "pi 客户端与项目归因", hint: "在运行 pi 的主机配置，发送请求后在运行与统计页验证。") {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("编辑 ~/.pi/agent/models.json，配置 Sumpter provider 的 API、Base URL、入站 Token 与已启用的客户端模型名。OpenAI 使用 /v1，Anthropic 使用根地址，Gemini 使用 /v1beta。")
-                        .font(.callout).foregroundStyle(.secondary)
-                    InfoRow(title: "provider 标识", value: #""headers": { "X-Sumpter-Client": "pi" }"#, copyable: true)
-                    InfoRow(title: "Token 环境变量", value: #""apiKey": "$SUMPTER_API_KEY""#, copyable: true)
-                    if let path = piExtensionPath {
-                        let quoted = "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
-                        InfoRow(title: "临时加载", value: "pi -e " + quoted, copyable: true)
-                        InfoRow(title: "安装扩展", value: "mkdir -p \"$HOME/.pi/agent/extensions\" && cp " + quoted + " \"$HOME/.pi/agent/extensions/pi-project-attribution.ts\"", copyable: true)
-                    } else {
-                        Text("App 缺少 pi 扩展资源，请使用完整安装包或仓库 scripts/pi-project-attribution.ts。")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Text("已有扩展先备份再更新；安装后执行 /reload。扩展仅为显式标记的 Sumpter provider 添加当前项目和会话。删除 ~/.pi/agent/extensions/pi-project-attribution.ts 并重新加载即可移除。")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Link("完整 pi 配置与安装说明", destination: URL(string: "https://github.com/domoxiaojun/sumpter/blob/main/USAGE.md#pi-客户端")!)
-                }
-            }
-
             UnifiedAttributionPanel()
+
+            ClientAttributionResourcePanel(
+                title: "pi 项目归因",
+                subtitle: "在运行 pi 的主机安装扩展，为显式标记的 Sumpter provider 添加项目和会话归因。",
+                resourceName: "pi-project-attribution",
+                resourceExtension: "ts",
+                clientName: "pi",
+                command: { path in "mkdir -p \"$HOME/.pi/agent/extensions\" && cp '\(path)' \"$HOME/.pi/agent/extensions/pi-project-attribution.ts\"" },
+                detail: "安装后在 pi 中执行 /reload；provider 需要设置 X-Sumpter-Client: pi。"
+            )
 
             SectionPanel(title: "配置与接入", hint: "两端均使用当前 schema 的 config.json；旧版本迁移会先创建备份。") {
                 VStack(alignment: .leading, spacing: 10) {
