@@ -191,6 +191,12 @@ jobs:
         run: |
           set -Eeuo pipefail
           source_date_epoch="$(git show -s --format=%ct "refs/tags/${TAG}")"
+          # A malformed tag/object timestamp must never reach GNU tar: it can
+          # become INT64_MIN and later crash the Linux Admin static file server.
+          if [[ ! "$source_date_epoch" =~ ^[0-9]+$ ]] || (( source_date_epoch > 4102444800 )); then
+            echo "invalid source date epoch: $source_date_epoch" >&2
+            source_date_epoch=0
+          fi
           for arch in x86_64 aarch64; do
             package="sumpter-linux-${arch}"
             test -d "platforms/linux/dist/${package}"

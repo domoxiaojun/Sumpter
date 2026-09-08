@@ -820,6 +820,10 @@ resolve_remote_package() {
     validate_archive_paths "$archive"
     install -d -m 0700 "$DOWNLOAD_DIR/extracted"
     tar --no-same-owner --no-same-permissions -xzf "$archive" -C "$DOWNLOAD_DIR/extracted"
+    # Some release re-packers can preserve an invalid pre-epoch mtime.  tower-http's
+    # static file service converts mtime to HTTP-date and panics on that value, so
+    # normalize extracted files before they are copied into the live installation.
+    find "$DOWNLOAD_DIR/extracted" -exec touch -h -t 197001010000 {} +
     if find "$DOWNLOAD_DIR/extracted" -type l -print -quit | grep -q .; then
         die "发布包包含符号链接，拒绝安装"
     fi
