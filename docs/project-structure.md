@@ -44,13 +44,11 @@ Sumpter 在一个仓库内维护共享 Rust 代理、Linux 服务与 macOS App�
 ├── .github/                        # CI、发布工作流、Issue / PR 模板
 └── docs/
     ├── README.md                   # 文档索引
-    ├── *.md                        # 当前结构、架构、配置、开发与发布说明
-    ├── templates/                  # 文档生成输入
-    ├── archive/                    # 历史审查与来源记录
-    └── upstream/                   # 重构前的平台文档快照
+    ├── *.md                        # 结构、架构、配置、开发与发布说明
+    └── templates/                  # 文档生成输入
 ```
 
-根目录保留 README、USAGE、CHANGELOG、LICENSE、贡献/安全政策和工具规则，便于仓库与分发工具直接发现。`plan.md` 用于长任务进度，不承担产品文档职责。
+根目录保留 README、USAGE、CHANGELOG、LICENSE、贡献/安全政策和工具规则，便于仓库与分发工具直接发现。任务草稿（`todos.md` / `plan.md`）已忽略，不入库。
 
 ## 按需求找源码
 
@@ -90,7 +88,7 @@ Swift 的 `SumpterCore` 是 App 使用的独立 Swift 模块。代理的共享 R
 - `scripts/clients/` 中的共享归因程序与 pi 扩展会同步到 Linux、macOS 和 Swift 资源目录；Gemini 兼容入口也由工具生成。平台安装器和 Shell 脚本按 [脚本目录说明](../scripts/README.md) 维护。
 - `target/`、`node_modules/`、Swift `.build/` 和各平台 `dist/` 是本机依赖、缓存或打包产物，不进入源码版本管理。真实配置、日志和运行数据库也不放入源码。
 
-具体的源文件、目标文件与同步命令只维护在 [生成副本说明](development.md#单一维护源与生成副本)。历史记录放在 [archive](archive/README.md) 和 [upstream](upstream/README.md)，不作为现行配置或构建指南。
+具体的源文件、目标文件与同步命令只维护在 [生成副本说明](development.md#单一维护源与生成副本)。
 
 ## 源码目录与安装包
 

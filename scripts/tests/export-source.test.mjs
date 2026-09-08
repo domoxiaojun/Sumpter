@@ -22,6 +22,7 @@ test('exports current bytes, new files and executable mode without history or ig
   chmodSync(join(source, 'app.sh'), 0o755);
   writeFileSync(join(source, 'deleted.txt'), 'gone');
   writeFileSync(join(source, 'plan.md'), 'local');
+  writeFileSync(join(source, 'todos.md'), 'local');
   mkdirSync(join(source, '.claude'));
   writeFileSync(join(source, '.claude', 'settings.local.json'), '{}');
   execFileSync('git', ['add', '.'], { cwd: source });
@@ -33,7 +34,7 @@ test('exports current bytes, new files and executable mode without history or ig
   assert.equal(result.count, 3);
   assert.equal(readFileSync(join(target, 'app.sh'), 'utf8'), '#!/bin/sh\nexit 1\n');
   assert.ok(statSync(join(target, 'app.sh')).mode & 0o111);
-  for (const name of ['.git', 'config.json', 'plan.md', 'deleted.txt']) assert.equal(existsSync(join(target, name)), false);
+  for (const name of ['.git', 'config.json', 'plan.md', 'todos.md', 'deleted.txt']) assert.equal(existsSync(join(target, name)), false);
   const manifest = JSON.parse(readFileSync(result.manifestPath));
   for (const file of manifest.files) assert.equal(file.sha256, createHash('sha256').update(readFileSync(join(target, file.path))).digest('hex'));
   assert.equal(realpathSync(join(parent, 'export.manifest.json')), result.manifestPath);

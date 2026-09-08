@@ -77,6 +77,6 @@ npm ci --prefix platforms/linux/webui
 | `platforms/linux/` | WebUI、systemd、安装与打包 |
 | `platforms/macos/` | SwiftUI、通知、DMG / Sparkle |
 | `scripts/`、`.github/` | 检查、资源同步、CI 与 Release |
-| `docs/` | 现行指南；`templates/` 生成输入；`archive/` 与 `upstream/` 只作历史 |
+| `docs/` | 现行指南；`templates/` 为 USAGE 生成输入 |
 
 CI（`ci.yml`）只验证。推送 `vX.Y.Z` tag 才会跑 Release：Linux 包、GHCR、macOS 包与 GitHub Release。构建通过不等于已发布或已安装。

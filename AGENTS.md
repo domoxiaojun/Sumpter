@@ -15,7 +15,7 @@
 ## 工作流程
 
 - 用户描述模糊时先梳理用户场景、范围与验收条件，用中文给出专业表达。
-- 长任务写 `plan.md`，每步完成标记 ✅。OpenSpec 与计划使用中文。
+- 长任务在仓库根写 `todos.md`，每步完成后标记完成。该文件已忽略，不入库。OpenSpec 与计划使用中文。
 - 搜索先用 fd、rg 或 git grep；只在需要语法结构时使用 ast-grep，避免无目的全仓扫描。
 - 保留无关工作区改动，精确暂存文件；不自行 push、重写历史或发布。
 - 使用实际 Git 作者身份；不得追加 AI 的 Author、Co-Authored-By 或自动工具署名。
@@ -29,7 +29,7 @@
 - TOML 用 taplo，Shell 用 shellcheck，GitHub Actions 用 actionlint，文档链接用 lychee。验证默认只读，不做全仓自动修复。
 - 修改 WebUI 后重建并提交 `platforms/linux/web/`；同步命令见开发指南。
 - 根 `config.example.json` 只放禁用的合成入口与 `.invalid` 主机；不要提交密钥、数据库、诊断捕获、target 或其他缓存。
-- `docs/upstream/` 与旧审查仅作历史参考；不要把其中的旧 schema 和发布路径恢复到现行代码。
+- 不要把已删除的历史快照、旧 schema 或旧发布路径恢复到现行代码或文档。
 
 ## 交付说明
 

@@ -1,6 +1,6 @@
 # 文档索引
 
-按任务选择入口。当前产品版本以根 `Cargo.toml` 为准（0.3.8），磁盘格式为 schema v7，安装入口为 [GitHub Releases](https://github.com/domoxiaojun/sumpter/releases/latest) 与仓库 raw 脚本。行为以源码、平台契约测试和现行文档共同核对；`docs/upstream/` 与 `docs/archive/` 只作历史。
+按任务选择入口。当前产品版本以根 `Cargo.toml` 为准（0.3.8），磁盘格式为 schema v7，安装入口为 [GitHub Releases](https://github.com/domoxiaojun/sumpter/releases/latest) 与仓库 raw 脚本。行为以源码、平台契约测试和现行文档共同核对。
 
 ## 使用与运维
 
@@ -30,8 +30,6 @@
 | --- | --- |
 | 两端版本变化 | [CHANGELOG](../CHANGELOG.md) |
 | 版本、CI、签名、发布验收 | [发布指南](releasing.md) |
-| 首次公开源码的准备和验收 | [仓库公开流程](publishing.md) |
-| 全新历史与仓库设置迁移 | [新仓库迁移](repository-migration.md) |
 | 漏洞报告与密钥处理 | [安全政策](../SECURITY.md) |
 
 ## 平台补充
@@ -44,5 +42,3 @@
 - 当前公共文档放在 `docs/`；平台安装、运维与接口细节保留在对应平台目录。
 - 配置字段维护在 `configuration.md`，目录地图维护在 `project-structure.md`，验证与同步命令维护在 `development.md`；其他文档通过链接引用。
 - [templates](templates/README.md) 保存生成输入；两份 USAGE 的标记块由工具同步。维护源与副本关系见 [开发指南](development.md#单一维护源与生成副本)。
-- [archive](archive/README.md) 保存旧审查和来源记录，[upstream](upstream/README.md) 保存重构前快照；快照正文不参与现行契约或链接门禁。
-- `plan.md` 记录任务进度；已完成的行为、命令和约束应写入对应现行文档。

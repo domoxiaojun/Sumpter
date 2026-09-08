@@ -6,7 +6,7 @@ Sumpter 使用一个仓库维护 Linux 与 macOS。先按 [项目结构](docs/pr
 
 1. Bug 提供版本、平台、预期与实际行为、最小复现；功能先写用户场景、范围和验收条件。
 2. 从最新 `main` 建立短期分支，例如 `fix/runtime-pagination` 或 `feat/model-groups`。
-3. 按最小完整范围实现。较长任务在 `plan.md` 写中文步骤，每步完成后标记 ✅；任务记录不代替产品文档。
+3. 按最小完整范围实现。较长任务可在本地 `todos.md` 记录中文步骤；任务草稿不入库，完成后把行为写入产品文档。
 4. 使用 `scripts/check.sh` 运行受影响层的检查。共享行为覆盖 Linux/macOS 两个 adapter；UI 改动核对两端的字段、状态和主要交互。
 5. 更新配置、使用说明或 `CHANGELOG.md` 的 Unreleased 条目；同步生成副本。
 6. 提交 PR，说明问题、结果、影响平台、实际验证及限制。CI 成功并完成审阅后合并，删除临时分支。

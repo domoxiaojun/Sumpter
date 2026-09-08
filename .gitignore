@@ -49,3 +49,4 @@ admin-password
 # Local agent settings and task notes
 /.claude/
 /plan.md
+/todos.md

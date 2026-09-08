@@ -17,7 +17,7 @@ export function exportSource(source, destination) {
   const manifestPath = `${target}.manifest.json`;
   if (existsSync(target) || existsSync(manifestPath)) throw new Error('目标或旁置清单已存在，拒绝覆盖');
   const listed = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: root }).toString().split('\0').filter(Boolean);
-  const skipped = new Set(['plan.md', 'SOURCE_COMMIT']);
+  const skipped = new Set(['plan.md', 'todos.md', 'SOURCE_COMMIT']);
   const files = [];
   for (const name of [...new Set(listed)].sort()) {
     if (skipped.has(name) || name.startsWith('.claude/')) continue;
