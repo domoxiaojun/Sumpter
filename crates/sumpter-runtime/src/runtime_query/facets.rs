@@ -334,7 +334,7 @@ struct FacetProjectionRow {
     timestamp: f64,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FacetDimension {
     ClientVariant,
     AgentRole,
@@ -374,36 +374,36 @@ fn facet_row_matches(
     {
         return false;
     }
-    if !filter
-        .client_variant
-        .as_deref()
-        .is_none_or(|expected| row.client_variant.as_deref().unwrap_or("unknown") == expected)
-        || !filter
-            .agent_role
-            .as_deref()
-            .is_none_or(|expected| row.agent_role.as_deref().unwrap_or("unknown") == expected)
-            && !matches!(ignored, FacetDimension::AgentRole)
-        || !filter
-            .agent_name
-            .as_deref()
-            .is_none_or(|expected| row.agent_name.as_deref().unwrap_or("unknown") == expected)
-            && !matches!(ignored, FacetDimension::AgentName)
-        || !filter
-            .parent_thread_id
-            .as_deref()
-            .is_none_or(|expected| row.parent_thread_id.as_deref().unwrap_or("unknown") == expected)
-            && !matches!(ignored, FacetDimension::ParentThread)
-        || !filter
-            .parent_turn_id
-            .as_deref()
-            .is_none_or(|expected| row.parent_turn_id.as_deref().unwrap_or("unknown") == expected)
-            && !matches!(ignored, FacetDimension::ParentTurn)
-        || !filter
-            .root_turn_id
-            .as_deref()
-            .is_none_or(|expected| row.root_turn_id.as_deref().unwrap_or("unknown") == expected)
-            && !matches!(ignored, FacetDimension::RootTurn)
-    {
+    let matches_attribution =
+        |value: &Option<String>, expected: Option<&String>, dimension: FacetDimension| {
+            ignored == dimension
+                || expected.is_none_or(|expected| value.as_deref().unwrap_or("unknown") == expected)
+        };
+    if !matches_attribution(
+        &row.client_variant,
+        filter.client_variant.as_ref(),
+        FacetDimension::ClientVariant,
+    ) || !matches_attribution(
+        &row.agent_role,
+        filter.agent_role.as_ref(),
+        FacetDimension::AgentRole,
+    ) || !matches_attribution(
+        &row.agent_name,
+        filter.agent_name.as_ref(),
+        FacetDimension::AgentName,
+    ) || !matches_attribution(
+        &row.parent_thread_id,
+        filter.parent_thread_id.as_ref(),
+        FacetDimension::ParentThread,
+    ) || !matches_attribution(
+        &row.parent_turn_id,
+        filter.parent_turn_id.as_ref(),
+        FacetDimension::ParentTurn,
+    ) || !matches_attribution(
+        &row.root_turn_id,
+        filter.root_turn_id.as_ref(),
+        FacetDimension::RootTurn,
+    ) {
         return false;
     }
     if !matches(&row.client_kind, filter.client_kind.as_ref())

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
@@ -49,7 +49,7 @@ test('Codex install/update/restore keeps user edits and shell launch sees the ac
   const f = fixture(t);
   const shim = join(f.home, 'codex-shim');
   writeFileSync(shim, `#!${process.execPath}\nconsole.log(JSON.stringify({args:process.argv.slice(2),workspace:process.env.SUMPTER_CODEX_X_SUMPTER_WORKSPACE}));\n`, { mode: 0o700 });
-  for (const shell of ['bash', 'zsh']) {
+  for (const shell of ['bash', 'zsh'].filter((name) => existsSync(`/bin/${name}`))) {
     const rc = join(f.home, `.${shell}rc`);
     const options = { shell, rc };
     writeFileSync(rc, '# existing\n');

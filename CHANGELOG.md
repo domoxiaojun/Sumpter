@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-09
+
+### 修复
+
+- 兼容 Ubuntu Release runner 的 Clippy 版本，简化归因 facets 的条件判断并保持各维度忽略自身筛选的行为。
+- Codex 归因脚本测试在没有 zsh 的 Linux 环境中自动跳过 zsh 专属 shell 测试，保留 bash 覆盖。
+
 ## [0.4.0] - 2026-09-09
 
 ### 新增
