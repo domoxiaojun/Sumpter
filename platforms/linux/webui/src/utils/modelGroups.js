@@ -1,3 +1,5 @@
+import { createLocalID } from './helpers.js';
+
 export const cleanGroupModel = (value) => String(value ?? '').trim()
   .replace(/\[[^\]]*\]\s*$/, '').trim()
   .replace(/\s*\(\s*(?:none|auto|minimal|low|medium|high|xhigh|max|ultra)\s*\)$/i, '').trim();
@@ -49,6 +51,17 @@ export function modelMatches(pattern, model) {
   pattern = cleanGroupModel(pattern); model = cleanGroupModel(model);
   return !!pattern && (pattern === model
     || (pattern.endsWith('*') && model.startsWith(pattern.slice(0, -1))));
+}
+
+export function newModelGroup() {
+  return {
+    id: createLocalID('group'),
+    name: '新模型组',
+    enabled: true,
+    priority: 0,
+    models: [],
+    bindings: [],
+  };
 }
 
 export function groupModels(config) {

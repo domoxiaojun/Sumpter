@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { endpointGroupModels, groupModels, groupRoutePreview, modelCatalogCategories, modelGroupPrefix, pruneGroupReferences } from '../src/utils/modelGroups.js';
+import { createLocalID } from '../src/utils/helpers.js';
+import { endpointGroupModels, groupModels, groupRoutePreview, modelCatalogCategories, modelGroupPrefix, newModelGroup, pruneGroupReferences } from '../src/utils/modelGroups.js';
 
 globalThis.window = { location: { search: '?mock=1' } };
 const { fromWireConfig, toWireConfig } = await import('../src/services/api.js');
@@ -116,4 +117,21 @@ test('added client names and wildcards are deduplicated across endpoints', () =>
   ];
   assert.deepEqual(modelCatalogCategories(endpoints).flatMap((c) => c.models).sort(), ['alias', 'gpt-*', 'qwen3.7-plus']);
   assert.deepEqual(endpointGroupModels(endpoints[0], ['alias', 'qwen3.7-plus']), ['alias']);
+});
+
+test('new model groups get an id without crypto.randomUUID', () => {
+  const cryptoObj = globalThis.crypto;
+  const original = cryptoObj?.randomUUID;
+  Object.defineProperty(cryptoObj, 'randomUUID', { configurable: true, writable: true, value: undefined });
+  try {
+    const group = newModelGroup();
+    assert.match(group.id, /^group-[a-z0-9]+-[a-z0-9]+$/);
+    assert.equal(group.name, '新模型组');
+    assert.equal(group.enabled, true);
+    assert.deepEqual(group.models, []);
+    assert.deepEqual(group.bindings, []);
+    assert.notEqual(createLocalID('group'), createLocalID('group'));
+  } finally {
+    Object.defineProperty(cryptoObj, 'randomUUID', { configurable: true, writable: true, value: original });
+  }
 });

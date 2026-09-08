@@ -1,6 +1,20 @@
 // Helper utilities for formatters, models, request chains, and telemetry events
 import { routeModeLabel, sourceFormatLabel } from './protocols.js';
 
+// randomUUID is missing on plain HTTP LAN origins (not a secure context).
+export function createLocalID(prefix = 'id') {
+  const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
+  if (typeof randomUUID === 'function') {
+    try {
+      return randomUUID();
+    } catch {
+      // Fall through when the runtime exposes the method but rejects the call.
+    }
+  }
+  const token = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return `${prefix}-${token}`;
+}
+
 export function formatNumber(value) {
   if (value === null || value === undefined || value === '') return '0';
   const num = Number(value);

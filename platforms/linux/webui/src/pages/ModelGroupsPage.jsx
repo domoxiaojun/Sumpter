@@ -3,7 +3,7 @@ import { useApp } from '../context/AppContext.jsx';
 import { Icon } from '../utils/icons.jsx';
 import { ModelGroupBindingEditor } from '../components/ModelGroupBindingEditor.jsx';
 import { clone } from '../utils/helpers.js';
-import { endpointGroupModels, groupModels, modelCatalogCategories, modelMatches, pruneGroupReferences } from '../utils/modelGroups.js';
+import { endpointGroupModels, groupModels, modelCatalogCategories, modelMatches, newModelGroup, pruneGroupReferences } from '../utils/modelGroups.js';
 
 function CategoryPicker({ categories, selected, onChange }) {
   const [query, setQuery] = useState('');
@@ -90,9 +90,16 @@ export function ModelGroupsPage() {
         <p className="page-subtitle">按组优先级 → 入口优先级调度；数字越小越优先，同级按排列顺序。</p>
       </div>
       <div className="page-actions">
-        <button className="btn btn-secondary" disabled={saving} onClick={() => {
-          const id = crypto.randomUUID();
-          change((list) => list.push({ id, name: '新模型组', enabled: true, priority: 0, models: [], bindings: [] })); setSelected(id); setEditorTab('models');
+        <button type="button" className="btn btn-secondary" disabled={saving} onClick={() => {
+          try {
+            const group = newModelGroup();
+            change((list) => list.push(group));
+            setSelected(group.id);
+            setEditorTab('models');
+            addToast('已新建模型组，保存后才会写入配置', 'success');
+          } catch (error) {
+            addToast(`新建失败：${error.message || '未知错误'}`, 'error');
+          }
         }}>新建模型组</button>
         <button className="btn btn-primary" disabled={saving || (!isDirty && config?.modelGroups != null)} onClick={save}>{saving ? '保存中…' : '保存更改'}</button>
         {isDirty && <button className="btn btn-ghost" disabled={saving} onClick={() => { dirty.current = false; setDirty(false); setGroups(groupModels(config)); }}>撤销更改</button>}
