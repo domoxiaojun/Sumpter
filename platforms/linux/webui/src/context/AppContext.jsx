@@ -126,7 +126,13 @@ export function AppProvider({ children }) {
   });
 
   // Theme State
-  const [theme, setTheme] = useState(() => localStorage.getItem('sumpter-theme') || 'dark');
+  const [theme, setTheme] = useState(() => {
+    try {
+      return localStorage.getItem('sumpter-theme') || 'dark';
+    } catch {
+      return 'dark';
+    }
+  });
 
   // Core Data State
   const [configDoc, setConfigDoc] = useState(null);
@@ -267,7 +273,11 @@ export function AppProvider({ children }) {
   // Sync Theme to DOM
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('sumpter-theme', theme);
+    try {
+      localStorage.setItem('sumpter-theme', theme);
+    } catch {
+      // Theme still applies for this session when storage is unavailable.
+    }
   }, [theme]);
 
   // Sync Hash to Route

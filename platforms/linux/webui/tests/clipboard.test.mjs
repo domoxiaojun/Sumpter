@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { readdir, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 const {
@@ -77,4 +80,27 @@ test('Clipboard rejection on HTTPS reports a permission failure', async () => {
     }),
     /检查浏览器剪贴板权限/,
   );
+});
+
+test('pages do not call secure-context clipboard or randomUUID APIs directly', async () => {
+  const srcRoot = fileURLToPath(new URL('../src', import.meta.url));
+  const allowed = new Set([
+    fileURLToPath(new URL('../src/utils/clipboard.js', import.meta.url)),
+    fileURLToPath(new URL('../src/utils/helpers.js', import.meta.url)),
+  ]);
+  const walk = async (dir) => {
+    const files = [];
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) files.push(...await walk(path));
+      else if (/\.(js|jsx)$/.test(entry.name)) files.push(path);
+    }
+    return files;
+  };
+  for (const file of await walk(srcRoot)) {
+    if (allowed.has(file)) continue;
+    const text = await readFile(file, 'utf8');
+    assert.doesNotMatch(text, /crypto\.randomUUID/, `${file} 直接调用 randomUUID`);
+    assert.doesNotMatch(text, /navigator\.clipboard/, `${file} 直接调用 clipboard API`);
+  }
 });

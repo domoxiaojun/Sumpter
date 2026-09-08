@@ -19,6 +19,7 @@ import {
   statusKind,
 } from '../utils/helpers.js';
 import { Icon } from '../utils/icons.jsx';
+import { copyWithToast } from '../utils/clipboard.js';
 
 const RANGE_OPTIONS = [
   ['today', '今天'],
@@ -444,7 +445,7 @@ export function StatsPage() {
               <span className="panel-hint mono-cell" title={selectedEventID}>{selectedEventID}</span>
             </div>
             <div className="page-actions">
-              <button type="button" className="btn btn-ghost" onClick={() => navigator.clipboard?.writeText(JSON.stringify(selectedEvent || {}, null, 2))} disabled={!selectedEvent}><Icon name="copy" size={14} />复制源事件 JSON</button>
+              <button type="button" className="btn btn-ghost" onClick={() => copyWithToast(JSON.stringify(selectedEvent || {}, null, 2), '源事件 JSON', addToast)} disabled={!selectedEvent}><Icon name="copy" size={14} />复制源事件 JSON</button>
               <button type="button" className="btn btn-ghost" onClick={() => setSelectedEventID(null)}><Icon name="close" size={14} />关闭</button>
             </div>
           </div>
