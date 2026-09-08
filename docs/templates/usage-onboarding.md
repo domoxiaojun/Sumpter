@@ -37,7 +37,7 @@ Codex 专用请求沿用现有入口和认证配置，本扩展不替代 pi 登�
 其他服务的 provider 上设置该标识。无需改 pi 源码或 shell 启动文件。
 
 资源位置：Linux 包的 `scripts/pi-project-attribution.ts`；macOS App 的
-`Contents/Resources/pi-project-attribution.ts`；源码的 `scripts/pi-project-attribution.ts`。
+`Contents/Resources/pi-project-attribution.ts`；源码的 `scripts/clients/pi-project-attribution.ts`。
 
 先临时加载验证（将路径替换为实际资源位置）：
 
@@ -179,4 +179,4 @@ experimental_bearer_token = "填 listener.authToken（未启用鉴权时删除�
 
 不要把 `config.json`、API key、Token、Cookie 或 raw 诊断内容提交到 Git、Issue 或聊天记录。
 
-<!-- 由 scripts/sync-usage-docs.py 生成；请修改 docs/usage-onboarding.md 与 docs/usage-path-matrix.json 后同步。 -->
+<!-- 由 scripts/maintenance/sync-usage-docs.py 生成；请修改 docs/templates/usage-onboarding.md 与 docs/templates/usage-path-matrix.json 后同步。 -->

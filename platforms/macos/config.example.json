@@ -17,6 +17,7 @@
     "maxDeferredRounds": 0,
     "maxRetryDurationSeconds": 0
   },
+  "sessionStickyTtlHours": 72,
   "featureRules": [
     {
       "id": "websearch",

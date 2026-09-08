@@ -13,7 +13,7 @@ export function UnifiedAttributionPanel() {
     <h2>Claude / Grok / Gemini 项目归因</h2>
     <p>在运行客户端的主机配置，需要 Node.js 18+ 与 bash/zsh。三个客户端共用项目、工作区、用户和 Git remote 归因；中文目录使用 URI 编码。</p>
     <label>客户端 <select className="form-select" value={client} onChange={(e) => setClient(e.target.value)}>
-      <option value="claude">Claude Code</option><option value="grok">Grok Build</option><option value="gemini">Gemini CLI</option><option value="all">三个客户端</option>
+      <option value="claude">Claude Code</option><option value="grok">Grok Build</option><option value="gemini">Gemini CLI</option><option value="pi">pi</option><option value="all">全部客户端</option>
     </select></label>
     <p>自动化脚本支持一键安装、还原和状态检查，操作后自动显示结果。不带参数运行可进入交互菜单。请以普通用户在客户端主机执行；浏览器无法检查该主机的终端配置。</p>
     <p>从 Linux 安装包 scripts/setup-client-attribution.sh 获取，或设置以下环境变量后下载：</p>

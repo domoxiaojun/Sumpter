@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, rm, readFile, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import extension, { sanitizeRemote } from './pi-project-attribution.ts';
+import extension, { sanitizeRemote } from '../clients/pi-project-attribution.ts';
 
 test('pi attribution follows current workspace/session, opts in per provider, and clears stale headers', async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'sumpter-pi-')));
@@ -53,8 +53,8 @@ test('remote sanitizer rejects unsupported paths and removes credentials', () =>
 });
 
 test('Linux and macOS package resources match the canonical pi extension', async () => {
-  const source = await readFile(new URL('./pi-project-attribution.ts', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../clients/pi-project-attribution.ts', import.meta.url), 'utf8');
   for (const path of ['platforms/linux/scripts/pi-project-attribution.ts', 'platforms/macos/scripts/pi-project-attribution.ts', 'platforms/macos/app/Sources/SumpterApp/Resources/pi-project-attribution.ts']) {
-    assert.equal(await readFile(new URL(`../${path}`, import.meta.url), 'utf8'), source);
+    assert.equal(await readFile(new URL(`../../${path}`, import.meta.url), 'utf8'), source);
   }
 });

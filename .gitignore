@@ -25,3 +25,27 @@ __pycache__/
 
 # 系统
 .DS_Store
+
+# Local credentials and runtime databases
+.env
+.env.*
+!.env.example
+**/config.json
+admin-password
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.p12
+*.pfx
+.venv/
+.audit/
+
+# Local agent settings and task notes
+/.claude/
+/plan.md

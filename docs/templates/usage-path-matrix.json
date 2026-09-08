@@ -4,8 +4,8 @@
     "linux_config_path": "普通用户：`$XDG_CONFIG_HOME/sumpter/config.json`，否则 `~/.config/sumpter/config.json`；system 安装：`/var/lib/sumpter/config.json`",
     "macos_admin_address": "sidecar 握手返回的本机动态端口（App 内部使用）",
     "linux_admin_address": "`http://127.0.0.1:57879/admin/`（可由启动参数覆盖）",
-    "macos_config_reference": "[`platforms/macos/CONFIG.md`](platforms/macos/CONFIG.md)",
-    "linux_config_reference": "[`platforms/macos/CONFIG.md`](platforms/macos/CONFIG.md)",
+    "macos_config_reference": "[`docs/configuration.md`](docs/configuration.md)",
+    "linux_config_reference": "[`docs/configuration.md`](docs/configuration.md)",
     "attribution_location": "源码树 macOS=`platforms/macos/scripts/cc-project-attribution.sh`、Linux=`platforms/linux/scripts/cc-project-attribution.sh`；发布包按其 USAGE 路径",
     "topology_note": "本 monorepo 的 canonical 文档是 [`USAGE.md`](USAGE.md)；Linux 发布输入位于 `platforms/linux/`，发布包构建时会将其提升为包根。"
   },
@@ -14,7 +14,7 @@
     "linux_config_path": "普通用户：`$XDG_CONFIG_HOME/sumpter/config.json`，否则 `~/.config/sumpter/config.json`；system 安装：`/var/lib/sumpter/config.json`",
     "macos_admin_address": "sidecar 握手返回的本机动态端口（仅 macOS 客户端）",
     "linux_admin_address": "`http://127.0.0.1:57879/admin/`（可由启动参数覆盖）",
-    "macos_config_reference": "源码 monorepo 的 `platforms/macos/CONFIG.md`（Linux 发布包不包含 macOS 文档）",
+    "macos_config_reference": "源码 monorepo 的 `docs/configuration.md`（Linux 发布包不包含 macOS 文档）",
     "linux_config_reference": "本文第 5 节的 `listener`、入口与 mapping 说明",
     "attribution_location": "发布包 `scripts/cc-project-attribution.sh`（通常 `/opt/sumpter/scripts/`）；必须在跑 Claude Code 的机器执行",
     "topology_note": "本文件位于 monorepo 的 `platforms/linux/`；独立 Linux 发布包会将该目录内容提升为发布根，且不携带 macOS 文档。"

@@ -5,7 +5,7 @@ umask 077
 
 usage() {
   cat <<'HELP'
-用法：bash setup-client-attribution.sh [status|install|restore] [claude|grok|gemini|all] [--shell bash|zsh] [--rc 文件]
+用法：bash setup-client-attribution.sh [status|install|restore] [claude|grok|gemini|pi|all] [--shell bash|zsh] [--rc 文件]
 不带参数进入交互菜单；操作后自动检查当前状态。
 优先使用同目录 client-attribution.mjs；否则从 SUMPTER_BASE_URL 下载。
 SUMPTER_BASE_URL 为代理根地址；启用认证时设置 SUMPTER_AUTH_TOKEN。
@@ -22,9 +22,9 @@ action=${1:-}
 client=${2:-all}
 if [[ -z $action ]]; then
   [[ -t 0 ]] || { usage >&2; exit 2; }
-  printf '客户端：1) Claude Code  2) Grok Build  3) Gemini CLI  4) 全部\n'
+  printf '客户端：1) Claude Code  2) Grok Build  3) Gemini CLI  4) pi  5) 全部\n'
   read -r -p '请选择 [1-4，默认 4]：' choice
-  case ${choice:-4} in 1) client=claude;; 2) client=grok;; 3) client=gemini;; 4) client=all;; *) exit 2;; esac
+  case ${choice:-5} in 1) client=claude;; 2) client=grok;; 3) client=gemini;; 4) client=pi;; 5) client=all;; *) exit 2;; esac
   printf '操作：1) 检查状态  2) 安装配置  3) 还原配置\n'
   read -r -p '请选择 [1-3，默认 1]：' choice
   case ${choice:-1} in 1) action=status;; 2) action=install;; 3) action=restore;; *) exit 2;; esac
@@ -33,13 +33,33 @@ else
   if [[ $# -gt 0 ]]; then shift; fi
 fi
 case $action in status|install|restore) ;; *) usage >&2; exit 2;; esac
-case $client in claude|grok|gemini|all) ;; *) usage >&2; exit 2;; esac
+case $client in claude|grok|gemini|pi|all) ;; *) usage >&2; exit 2;; esac
 options=("$@")
+if [[ $client == all ]]; then
+  # pi 使用扩展目录，其他客户端使用 shell 归因块；处理同一命令的 pi 部分后继续统一安装器。
+  "$0" "$action" pi "${options[@]}"
+fi
 # Validate before attempting a download or changing configuration.
 while [[ $# -gt 0 ]]; do
   case $1 in --shell|--rc) [[ $# -ge 2 && -n $2 ]] || { usage >&2; exit 2; }; shift 2;; *) usage >&2; exit 2;; esac
 done
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+if [[ $client == pi ]]; then
+  source_file="$script_dir/pi-project-attribution.ts"
+  task_tmp=$(mktemp -d "${TMPDIR:-/tmp}/sumpter-pi-attribution.XXXXXX"); trap 'rm -rf -- "$task_tmp"' EXIT
+  if [[ ! -f $source_file ]]; then
+    : "${SUMPTER_BASE_URL:?请设置 SUMPTER_BASE_URL 为代理根地址}"
+    headers="$task_tmp/headers"; printf 'Authorization: Bearer %s\n' "${SUMPTER_AUTH_TOKEN:-}" > "$headers"
+    curl --fail --silent --show-error -H "@$headers" "${SUMPTER_BASE_URL%/}/__sumpter/pi-project-attribution.ts" -o "$task_tmp/pi-project-attribution.ts"
+    source_file="$task_tmp/pi-project-attribution.ts"
+  fi
+  target="$HOME/.pi/agent/extensions/pi-project-attribution.ts"; backup="$target.sumpter-bak"
+  case $action in
+    status) [[ -f $target ]] && echo 'pi：已安装' || echo 'pi：未安装'; exit 0;;
+    install) mkdir -p "$(dirname "$target")"; [[ -f $target ]] && cp "$target" "$backup"; cp "$source_file" "$target"; echo 'pi：已安装，请在 pi 中执行 /reload。'; exit 0;;
+    restore) [[ -f $backup ]] && cp "$backup" "$target" && echo 'pi：已还原，请在 pi 中执行 /reload。' || echo 'pi：无待还原配置。'; exit 0;;
+  esac
+fi
 installer="$script_dir/client-attribution.mjs"
 task_tmp=$(mktemp -d "${TMPDIR:-/tmp}/sumpter-attribution.XXXXXX")
 trap 'rm -rf -- "$task_tmp"' EXIT

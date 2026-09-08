@@ -84,6 +84,32 @@ jobs:
           [[ "$workspace_version" == "$TAG_VERSION" ]] \
             || { echo "tag 版本与 workspace 不一致: $TAG_VERSION != $workspace_version" >&2; exit 1; }
 
+  quality:
+    name: Verify release repository and WebUI
+    needs: resolve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.18.0
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - name: Check repository contracts
+        run: ./scripts/check.sh docs
+      - name: Install WebUI dependencies
+        run: npm ci --prefix platforms/linux/webui
+      - name: Test and verify committed WebUI
+        run: ./scripts/check.sh web
+
   linux:
     name: Build Linux packages
     needs: resolve
@@ -101,15 +127,14 @@ jobs:
 
       - name: Install Rust 1.88 and musl targets
         run: |
-          rustup toolchain install 1.88.0 --profile minimal --component rustfmt
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt --component clippy
           rustup target add --toolchain 1.88.0 \
             x86_64-unknown-linux-musl \
             aarch64-unknown-linux-musl
 
       - name: Verify source and tests before packaging
         run: |
-          cargo fmt --all -- --check
-          cargo test --workspace --locked
+          ./scripts/check.sh rust
 
       - name: Install Zig
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
@@ -139,14 +164,14 @@ jobs:
         run: |
           set -Eeuo pipefail
           mkdir -p release
-          test -f platforms/linux/CHANGELOG.md
+          test -f CHANGELOG.md
           body="$(awk -v ver="$VERSION" '
             index($0, "## [" ver "]") == 1 { inside = 1; next }
             inside && index($0, "## [") == 1 { exit }
             inside { print }
-          ' platforms/linux/CHANGELOG.md)"
+          ' CHANGELOG.md)"
           if [[ -z "${body//[[:space:]]/}" ]]; then
-            echo "platforms/linux/CHANGELOG.md 缺少 ## [$VERSION] 段落,拒绝发布" >&2
+            echo "CHANGELOG.md 缺少 ## [$VERSION] 段落,拒绝发布" >&2
             exit 1
           fi
           {
@@ -322,14 +347,26 @@ jobs:
           xcodebuild -version
           swift --version
           command -v rustup
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
-      - name: Build signed macOS packages
+      - name: Test macOS App
+        run: ./scripts/check.sh macos
+
+      - name: Resolve monotonic macOS build number
+        id: build_number
+        env:
+          BUILD_NUMBER_BASE: ${{ vars.MACOS_BUILD_NUMBER_BASE || '0' }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$BUILD_NUMBER_BASE" =~ ^(0|[1-9][0-9]{0,8})$ ]] \
+            || { echo "MACOS_BUILD_NUMBER_BASE 必须是最多九位的非负整数" >&2; exit 1; }
+          printf 'value=%s\n' "$((BUILD_NUMBER_BASE + GITHUB_RUN_NUMBER))" >> "$GITHUB_OUTPUT"
+
+      - name: Build macOS packages
         env:
           SHORT_VERSION: ${{ needs.resolve.outputs.version }}
-          BUILD_VERSION: ${{ github.run_number }}
+          BUILD_VERSION: ${{ steps.build_number.outputs.value }}
           SPARKLE_FEED_URL: https://raw.githubusercontent.com/${{ github.repository }}/macos-updates/macos/appcast.xml
           SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
           CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
@@ -377,7 +414,7 @@ jobs:
   publish:
     name: Publish all release outputs
     # 不使用 always()：默认 success() 会在任一构建 job 失败时跳过整个发布。
-    needs: [resolve, linux, container, macos]
+    needs: [resolve, quality, linux, container, macos]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     # 构建可以并行；发布必须跨版本串行，因为它们会共享 latest、GHCR

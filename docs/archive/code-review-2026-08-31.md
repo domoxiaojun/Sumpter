@@ -1,3 +1,5 @@
+> 历史快照：仅用于追溯，不是当前使用、架构或发布契约。现行入口见 [文档索引](README.md)。
+
 # Sumpter 深度代码审查与维护总结
 
 审查日期：2026-08-31  
@@ -303,7 +305,7 @@ cd macos && cargo test --workspace --locked
 cd linux && cargo test --workspace --features unified-engine --locked
 cd macos && cargo test --workspace --features unified-engine --locked
 
-uv run scripts/sync-usage-docs.py --check
+uv run scripts/maintenance/sync-usage-docs.py --check
 actionlint linux/.github/workflows/*.yml
 shellcheck linux/scripts/*.sh
 shellcheck macos/app/package-app.sh

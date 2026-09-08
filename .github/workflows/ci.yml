@@ -1,9 +1,8 @@
 name: CI
 
-# 私有仓库的 Actions 按分钟计费,所以 push 不再自动触发 —— 本地已有等价门禁
-# (cargo fmt/check/test、npm test、shellcheck、release-preflight)。需要在 CI 上验证时
-# 开 PR 或手动 workflow_dispatch。
 on:
+  push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -29,17 +28,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust 1.88 with rustfmt
-        run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt
+      - name: Install Rust 1.88 with rustfmt and clippy
+        run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt --component clippy
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Check workspace
-        run: cargo check --workspace --all-targets --locked
-
-      - name: Test workspace
-        run: cargo test --workspace --locked
+      - name: Check Rust workspace
+        run: ./scripts/check.sh rust
 
   web:
     name: Sumpter WebUI build and self-test
@@ -69,10 +62,10 @@ jobs:
         run: npm test
 
       - name: Test pi attribution extension and packaged copies
-        run: node --test scripts/pi-project-attribution.test.mjs
+        run: node --test scripts/tests/pi-project-attribution.test.mjs
 
       - name: Test unified client attribution and packaged copies
-        run: node --test scripts/client-attribution.test.mjs
+        run: node --test scripts/tests/client-attribution.test.mjs
 
       - name: Verify generated WebUI is synchronized
         run: |
@@ -99,3 +92,37 @@ jobs:
         run: ./platforms/linux/scripts/cc-project-attribution-selftest.sh
         env:
           SUMPTER_TEST_SHELLS: /bin/bash
+
+  macos:
+    name: macOS App
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check Swift toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+      - name: Build and test App
+        run: ./scripts/check.sh macos
+
+  repository:
+    name: Repository contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.18.0
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - name: Check documentation and source export contracts
+        run: ./scripts/check.sh docs
