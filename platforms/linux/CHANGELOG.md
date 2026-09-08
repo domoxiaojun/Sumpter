@@ -6,6 +6,23 @@
 
 ## [Unreleased]
 
+## [0.3.8] - 2026-09-08
+
+### 修复
+
+- Linux WebUI 在局域网 HTTP 管理页新建模型组无响应：不再依赖 `crypto.randomUUID`。
+- 统计页复制事件 JSON 在非 HTTPS 下无反馈；主题写入 localStorage 失败时不再整页起不来。
+
+### 新增
+
+- Linux system 安装可从标准 Kekulv 布局迁移：脚本单独放到旧服务器，按架构从 GitHub Release 下载并校验 SHA-256。
+- 统一归因 wrapper 支持临时运行 pi（`run pi`），与扩展同目录即可。
+
+### 文档
+
+- 安装、归因改为 GitHub Release / 仓库 raw；归因在启动客户端的主机执行，可先临时 `run` 再 `install`。
+- README 与使用说明对齐 schema v7 与当前客户端集合。
+
 ## [0.3.7] - 2026-09-08
 
 ### 修复

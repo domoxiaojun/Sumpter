@@ -55,7 +55,12 @@ export default function (pi: ExtensionAPI) {
       event.headers["x-sumpter-session-id"] = session;
     }
     const workspace = await git(ctx.cwd, ["rev-parse", "--show-toplevel"]) || ctx.cwd;
-    const remote = sanitizeRemote(await git(workspace, ["config", "--get", "remote.origin.url"]));
+    let remoteURL = await git(workspace, ["remote", "get-url", "origin"]);
+    if (!remoteURL) {
+      const firstRemote = (await git(workspace, ["remote"]))?.split("\n")[0];
+      if (firstRemote) remoteURL = await git(workspace, ["remote", "get-url", firstRemote]);
+    }
+    const remote = sanitizeRemote(remoteURL);
     let user: string | undefined;
     try { user = userInfo().username; } catch { /* Optional observation. */ }
     const values: Record<string, string | undefined> = {

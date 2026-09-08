@@ -22,6 +22,25 @@ function fixture(t) {
 }
 const textHeaders = (text, sep) => Object.fromEntries(text.split(sep).filter(Boolean).map((line) => { const i=line.indexOf(':'); return [line.slice(0,i).trim(), line.slice(i+1).trim()]; }));
 
+test('pi launcher loads the request hook and preserves arguments, environment and exit status', (t) => {
+  const f = fixture(t);
+  const args = ['--provider', 'sumpter', '--resume', 'session with spaces', '--no-extensions'];
+  const launch = prepareLaunch('pi', args, f.env, f.nested);
+  assert.equal(launch.command, 'pi');
+  assert.deepEqual(launch.args.slice(2), args);
+  assert.equal(launch.args[0], '-e');
+  assert.equal(launch.args[1], fileURLToPath(new URL('../clients/pi-project-attribution.ts', import.meta.url)));
+  assert.deepEqual(launch.env, f.env);
+  // Use an executable shim to verify the actual child command and exit propagation.
+  const shim = join(f.root, 'pi-shim');
+  writeFileSync(shim, '#!/bin/sh\nprintf "%s\\n" "$@"\nexit 7\n', { mode: 0o755 });
+  const child = spawnSync(process.execPath, [source, 'run', 'pi', '--', ...args], {
+    env: { ...f.env, SUMPTER_PI_BIN: shim }, encoding: 'utf8',
+  });
+  assert.equal(child.status, 7, child.stderr);
+  assert.deepEqual(child.stdout.trimEnd().split('\n'), launch.args);
+});
+
 test('three clients share Unicode project/root/user/sanitized remote and preserve unrelated settings', (t) => {
   const f = fixture(t);
   const base = collectHeaders('claude', f.nested, f.env);

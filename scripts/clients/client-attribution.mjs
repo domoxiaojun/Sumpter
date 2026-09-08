@@ -78,6 +78,13 @@ function claudeConflicts(cwd, env) {
   }
 }
 export function prepareLaunch(client, args, env = process.env, cwd = process.cwd()) {
+  if (client === 'pi') {
+    const extension = fileURLToPath(new URL('./pi-project-attribution.ts', import.meta.url));
+    if (!existsSync(extension)) throw new Error('缺少配套 pi-project-attribution.ts，请使用完整安装包');
+    // Use Pi's request hook so resumed/forked sessions and workspace changes
+    // are observed at dispatch time rather than frozen in launcher environment.
+    return { command: env.SUMPTER_PI_BIN || 'pi', args: ['-e', extension, ...args], env: { ...env } };
+  }
   if (!clients.includes(client)) throw new Error('客户端必须是 claude、grok 或 gemini');
   const headers = collectHeaders(client, cwd, env);
   const next = { ...env };
@@ -281,7 +288,7 @@ function manageShell(action, client, options, env, source) {
 }
 async function main(argv) {
   if (['--help', '-h'].includes(argv[0]) || argv.length === 0) {
-    console.log('用法：node client-attribution.mjs install|status|uninstall|restore claude|grok|gemini|pi|all [--shell bash|zsh] [--rc 文件] [--dry-run]\n临时运行：node client-attribution.mjs run claude|grok|gemini -- [原始参数]\n需要 Node.js 18+。pi 安装后执行 /reload，其他客户端新开终端；只在连接 Sumpter 的客户端上启用。');
+    console.log('用法：node client-attribution.mjs install|status|uninstall|restore claude|grok|gemini|pi|all [--shell bash|zsh] [--rc 文件] [--dry-run]\n临时运行：node client-attribution.mjs run claude|grok|gemini|pi -- [原始参数]\n需要 Node.js 18+。pi 的 Sumpter provider 需设置 X-Sumpter-Client: pi；安装后执行 /reload，其他客户端新开终端；只在连接 Sumpter 的客户端上启用。');
     return;
   }
   let [action, client, ...rest] = argv;

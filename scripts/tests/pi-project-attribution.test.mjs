@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm, readFile, realpath } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import extension, { sanitizeRemote } from '../clients/pi-project-attribution.ts';
@@ -28,9 +28,13 @@ test('pi attribution follows current workspace/session, opts in per provider, an
     assert.equal(headers['x-sumpter-session-id'], 'session-a');
     assert.equal(decodeURIComponent(headers['x-sumpter-workspace']), repo);
     assert.equal(decodeURIComponent(headers['x-sumpter-project']), '中文 project');
+    assert.equal(decodeURIComponent(headers['x-sumpter-user']), userInfo().username);
     assert.equal(decodeURIComponent(headers['x-sumpter-git-remote']), 'https://example.invalid/team/repo.git');
     assert.equal(headers.Authorization, 'Bearer synthetic');
     for (const value of Object.values(headers)) if (value !== null) assert.doesNotThrow(() => new Headers({ test: value }));
+    execFileSync('git', ['-C', repo, 'remote', 'rename', 'origin', 'upstream']);
+    await handler({ headers }, ctx);
+    assert.equal(decodeURIComponent(headers['x-sumpter-git-remote']), 'https://example.invalid/team/repo.git');
     session = 'fork-b'; ctx.cwd = plain;
     await handler({ headers }, ctx);
     assert.equal(headers['x-sumpter-session-id'], 'fork-b');

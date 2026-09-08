@@ -45,6 +45,16 @@ Codex 专用请求沿用现有入口和认证配置，本扩展不替代 pi 登�
 pi -e /path/to/pi-project-attribution.ts --provider sumpter --model your-enabled-model
 ```
 
+也可使用同目录的统一 wrapper，自动加载扩展并保留原始 Pi 参数：
+
+```sh
+node /path/to/client-attribution.mjs run pi -- --provider sumpter --model your-enabled-model
+```
+
+wrapper 与 `pi-project-attribution.ts` 需放在同一目录；可通过 `SUMPTER_PI_BIN` 指定 Pi 可执行文件。
+无需手动导出项目或用户名环境变量；扩展在每次请求时读取当前目录、系统用户名和真实会话 ID。
+provider 仍须设置 `X-Sumpter-Client: pi`；未标记的直连 provider 不会添加归因信息。
+
 macOS：在「设置 → 安全」或「帮助」的归因面板选择 **pi**，点击「安装配置」。App 使用内置扩展，自动检查本机实际安装状态；「还原配置」恢复安装前文件，原先没有文件则移除扩展。需要 Node.js 18+。
 
 Linux：使用下节的仓库脚本，在运行 pi 的主机管理扩展：
@@ -61,6 +71,7 @@ bash setup-client-attribution.sh restore pi
 
 扩展按当前会话获取 ID、项目目录及本地用户名；Git 项目使用仓库根目录，普通目录使用当前目录。
 恢复、分叉或切换会话后自动更新。Git remote 去掉用户名、密码、query 和 fragment 后才发送。
+远程仓库优先使用 `origin`，没有 `origin` 时使用 Git 列出的第一个 remote。
 中文路径通过带 `uri-v1` 标记的编码传输，Sumpter 解码后沿用现有归因清洗与本地存储规则。
 所有 `X-Sumpter-*` 归因头在出站前剥离，原生请求体、认证与协议会话头不由扩展改写。
 
