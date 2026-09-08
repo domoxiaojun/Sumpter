@@ -1269,7 +1269,7 @@ test('CC 归因提示判定:项目行与 clientKinds facets 合起来判', async
   assert.equal(shouldPromptCCAttribution(undefined, undefined), false);
 
   // 文案里必须给出可复制的命令,否则提示等于没用。
-  assert.match(CC_ATTRIBUTION_HINT.command, /cc-project-attribution\.sh install/);
+  assert.match(CC_ATTRIBUTION_HINT.command, /setup-client-attribution\.sh install claude/);
 });
 
 test('Grok 归因提示判定:未识别 grok_build 行才提示', async () => {
@@ -1293,7 +1293,7 @@ test('Grok 归因提示判定:未识别 grok_build 行才提示', async () => {
     ),
     CC_ATTRIBUTION_STATE.unknown,
   );
-  assert.match(GROK_ATTRIBUTION_GUIDE.steps[1].command, /grok-project-attribution\.sh install/);
+  assert.match(GROK_ATTRIBUTION_GUIDE.steps[1].command, /setup-client-attribution\.sh install grok/);
 });
 
 test('项目行副标题显示对应客户端且不把项目来源冒充客户端', async () => {
@@ -1393,11 +1393,10 @@ test('安全页面归因引导:三态文案齐全、命令可复制、三个陷�
 
   // 少一条命令,用户就配不完或退不回来,所以逐条钉死而不是只数个数。
   const stepCommands = CC_ATTRIBUTION_GUIDE.steps.map((step) => step.command);
-  assert.ok(stepCommands.includes('./cc-project-attribution.sh status'));
-  assert.ok(stepCommands.includes('./cc-project-attribution.sh install'));
+  assert.ok(stepCommands.includes('bash setup-client-attribution.sh status claude'));
+  assert.ok(stepCommands.includes('bash setup-client-attribution.sh install claude'));
   const rollback = CC_ATTRIBUTION_GUIDE.rollback.map((item) => item.command);
-  assert.ok(rollback.includes('./cc-project-attribution.sh restore'));
-  assert.ok(rollback.includes('./cc-project-attribution.sh uninstall'));
+  assert.ok(rollback.includes('bash setup-client-attribution.sh restore claude'));
 
   // 「新开终端」那步没有命令但必须有说明 —— 它正是最容易被跳过的一步。
   const commandless = CC_ATTRIBUTION_GUIDE.steps.filter((step) => !step.command);
@@ -1431,10 +1430,9 @@ test('安全页面归因引导:三态文案齐全、命令可复制、三个陷�
   assert.ok(CC_ATTRIBUTION_GUIDE.remoteMachines.every((item) => item.label && item.detail));
   assert.equal(CC_ATTRIBUTION_GUIDE.remoteScenarios.length, 3);
   assert.ok(CC_ATTRIBUTION_GUIDE.remoteScenarios.every((item) => item.title && item.detail));
-  assert.match(CC_ATTRIBUTION_GUIDE.remoteDownload.command, /__sumpter\/cc-project-attribution\.sh/);
-  assert.match(CC_ATTRIBUTION_GUIDE.remoteDownload.command, /192\.168\.1\.20:57878/);
-  assert.match(CC_ATTRIBUTION_GUIDE.remoteDownload.note, /Nginx/);
-  assert.match(CC_ATTRIBUTION_GUIDE.remoteDownload.note, /发布镜像/);
+  assert.match(CC_ATTRIBUTION_GUIDE.remoteDownload.command, /raw\.githubusercontent\.com\/domoxiaojun\/sumpter/);
+  assert.match(CC_ATTRIBUTION_GUIDE.remoteDownload.command, /setup-client-attribution\.sh install claude/);
+  assert.match(CC_ATTRIBUTION_GUIDE.remoteDownload.note, /GitHub/);
   assert.deepEqual(
     CC_ATTRIBUTION_GUIDE.remoteChecks.map((item) => item.command),
     ['hostname', 'whoami', 'pwd', 'printf \'%s\\n\' "$ANTHROPIC_BASE_URL"'],

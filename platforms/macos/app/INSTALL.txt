@@ -1,6 +1,9 @@
 Sumpter macOS 安装说明
 ====================
 
+从 GitHub Releases 下载 DMG：
+https://github.com/domoxiaojun/sumpter/releases/latest
+
 本版本没有 Apple Developer notarization。首次安装时，macOS 可能提示“无法验证开发者”。
 
 推荐方式：

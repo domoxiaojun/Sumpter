@@ -16,9 +16,9 @@ export function UnifiedAttributionPanel() {
       <option value="claude">Claude Code</option><option value="grok">Grok Build</option><option value="gemini">Gemini CLI</option><option value="pi">pi</option><option value="all">全部客户端</option>
     </select></label>
     <p>自动化脚本支持一键安装、还原和状态检查，操作后自动显示结果。不带参数运行可进入交互菜单。请以普通用户在客户端主机执行；浏览器无法检查该主机的终端配置。</p>
-    <p>从 Linux 安装包 scripts/setup-client-attribution.sh 获取，或设置以下环境变量后下载：</p>
-    <pre><code>{'export SUMPTER_BASE_URL="http://你的代理地址:57878"\nexport SUMPTER_AUTH_TOKEN="你的代理入站 Token"\ncurl -fsS -H "Authorization: Bearer $SUMPTER_AUTH_TOKEN" "${SUMPTER_BASE_URL%/}/__sumpter/setup-client-attribution.sh" -o setup-client-attribution.sh'}</code></pre>
-    <p>SUMPTER_BASE_URL 是可访问的代理根地址，请勿使用管理 API 地址。</p>
+    <p>从 Linux 安装包 <code>scripts/setup-client-attribution.sh</code> 获取，或从 GitHub 仓库下载：</p>
+    <pre><code>{'curl --proto "=https" --tlsv1.2 -fLo setup-client-attribution.sh \\\n  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/setup-client-attribution.sh'}</code></pre>
+    <p>无法访问 GitHub 且代理已运行时，可设 <code>SUMPTER_BASE_URL</code> 为代理根地址（不要用管理 API 地址），从 <code>/__sumpter/</code> 下载。</p>
     {commands.map(([label, command]) => <div key={label} className="panel-toolbar">
       <div><strong>{label}</strong><pre><code>{command}</code></pre></div>
       <button type="button" className="btn btn-secondary" onClick={async () => {

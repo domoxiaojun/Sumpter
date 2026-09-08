@@ -221,6 +221,37 @@ test('remote Linux setup downloads authenticated installer and preserves failure
   assert.equal(existsSync(join(f.home, '.pi/agent/extensions/pi-project-attribution.ts')), false);
 });
 
+test('remote Linux setup downloads from SUMPTER_RESOURCE_BASE without listener auth', async (t) => {
+  const { createServer } = await import('node:http');
+  const { spawn } = await import('node:child_process');
+  const f = fixture(t);
+  const script = join(f.root, 'setup-client-attribution.sh');
+  writeFileSync(script, readFileSync(new URL('../../platforms/linux/scripts/setup-client-attribution.sh', import.meta.url)));
+  const resources = {
+    '/client-attribution.mjs': source,
+    '/pi-project-attribution.ts': fileURLToPath(new URL('../clients/pi-project-attribution.ts', import.meta.url)),
+  };
+  const server = createServer((req, res) => {
+    if (!resources[req.url]) { res.writeHead(404).end(); return; }
+    res.end(readFileSync(resources[req.url]));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  const result = await new Promise((resolve, reject) => {
+    const child = spawn('/bin/bash', [script, 'install', 'all', '--shell', 'bash'], {
+      env: { ...f.env, SUMPTER_RESOURCE_BASE: `http://127.0.0.1:${server.address().port}` },
+    });
+    let output = '';
+    child.stdout.on('data', data => { output += data; });
+    child.stderr.on('data', data => { output += data; });
+    child.on('error', reject);
+    child.on('close', code => resolve({ code, output }));
+  });
+  assert.equal(result.code, 0, result.output);
+  assert.match(result.output, /claude：已安装/);
+  assert.match(result.output, /pi：已安装/);
+});
+
 test('pi install/update preserves first backup and restores exact bytes without touching provider or shell', (t) => {
   const f = fixture(t);
   const target = join(f.home, '.pi/agent/extensions/pi-project-attribution.ts');

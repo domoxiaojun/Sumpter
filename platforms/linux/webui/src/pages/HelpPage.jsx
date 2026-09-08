@@ -135,8 +135,8 @@ export function HelpPage() {
         <div className="panel-title"><Icon name="terminal" size={18} /><span>pi 客户端与项目归因</span></div>
         <p>在 pi 所在主机编辑 <code>~/.pi/agent/models.json</code>，为 Sumpter provider 配置 API、Base URL、入站 Token 与已启用的客户端模型名，并添加 <code>{'"headers": { "X-Sumpter-Client": "pi" }'}</code>。</p>
         <p>OpenAI Responses / Chat 使用 <code>/v1</code>；Anthropic 使用根地址；Gemini 使用 <code>/v1beta</code>。Token 可通过 <code>"apiKey": "$SUMPTER_API_KEY"</code> 引用环境变量。</p>
-        <p>从 Linux 包的 <code>scripts/pi-project-attribution.ts</code> 获取扩展，或从当前 listener 的 <code>/__sumpter/pi-project-attribution.ts</code> 下载（沿用入站认证）。</p>
-        <p>可在运行 pi 的主机执行远程安装器：<code>bash setup-client-attribution.sh install pi</code>；安装前自动备份，安装后在 pi 中执行 <code>/reload</code>。检查或还原分别使用 <code>status pi</code>、<code>restore pi</code>。</p>
+        <p>从 Linux 包的 <code>scripts/pi-project-attribution.ts</code> 获取扩展，或从 <a href={`${repoURL}/blob/main/platforms/linux/scripts/setup-client-attribution.sh`} target="_blank" rel="noreferrer">GitHub 仓库的统一安装器</a> 下载。运行中的 listener 仍提供 <code>/__sumpter/pi-project-attribution.ts</code>。</p>
+        <p>可在运行 pi 的主机执行：<code>bash setup-client-attribution.sh install pi</code>；安装前自动备份，安装后在 pi 中执行 <code>/reload</code>。检查或还原分别使用 <code>status pi</code>、<code>restore pi</code>。</p>
         <p>扩展随当前项目和会话更新归因。发送请求后，在“运行”查看客户端 pi、项目和会话，再按 pi 筛选统计；暂无数据不能说明扩展未安装。</p>
         <a className="btn btn-secondary" href={`${docsURL}#pi-客户端`} target="_blank" rel="noreferrer">完整 pi 配置与安装命令</a>
       </section>

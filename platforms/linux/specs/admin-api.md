@@ -145,23 +145,22 @@ Admin 与 proxy 是两个 listener：proxy 地址来自 `config.listener`，停�
 
 ### 1.0.1 Linux proxy 内置归因脚本
 
-Linux proxy listener 固定提供 `GET /__sumpter/cc-project-attribution.sh` 与
-`GET /__sumpter/grok-project-attribution.sh`，响应为编译期内置的对应脚本，并带
-`Content-Type: text/x-shellscript` 与 `Cache-Control: no-store`。
-它不读取运行目录中的脚本文件，也不会修改 daemon 主机；调用方应下载后在实际运行 Claude Code
-的客户端执行。该路径遵守 `listener.allowedCIDRs`；当 `listener.authToken` 非空时，必须带相同的
-`Authorization: Bearer <token>` 或 `x-api-key`。除 `GET` 外返回 405。macOS sidecar 不提供该路径。
+Linux proxy listener 固定提供 `GET /__sumpter/setup-client-attribution.sh`、
+`GET /__sumpter/client-attribution.mjs`、`GET /__sumpter/pi-project-attribution.ts`、
+以及兼容路径 `GET /__sumpter/cc-project-attribution.sh` 与
+`GET /__sumpter/grok-project-attribution.sh`。响应为编译期内置脚本，并带
+`Content-Type: text/x-shellscript` 或对应类型与 `Cache-Control: no-store`。
+用户文档的默认安装入口是 GitHub 仓库 raw；本路径供无法访问 GitHub 且代理已运行时使用。
+调用方应下载后在实际运行客户端的主机执行。该路径遵守 `listener.allowedCIDRs`；当
+`listener.authToken` 非空时，必须带相同的 `Authorization: Bearer <token>` 或 `x-api-key`。
+除 `GET` 外返回 405。macOS sidecar 不提供该路径。
 
-因此客户端的 Base URL 是 proxy listener 本身，可以是局域网 `http://host:port`，也可以是将该路径
-转发到 proxy listener 且保留 `Authorization`/`x-api-key` 的 Nginx HTTPS 地址，不是发布镜像地址。例如：
+例如：
 
 ```bash
-SUMPTER_LISTENER_BASE_URL="${SUMPTER_LISTENER_BASE_URL%/}"
-curl --fail --location \
-  "http://192.168.1.20:57878/__sumpter/cc-project-attribution.sh" \
-  -o /tmp/cc-project-attribution.sh
-bash /tmp/cc-project-attribution.sh install
-# Grok Build 把路径换成 /__sumpter/grok-project-attribution.sh
+curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh \
+  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/setup-client-attribution.sh
+bash setup-client-attribution.sh install all
 ```
 
 通过 Nginx 对外提供时建议（跨机器时应）设置非空 `listener.authToken`；不要把无认证的 proxy

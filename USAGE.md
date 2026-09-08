@@ -57,9 +57,11 @@ pi -e /path/to/pi-project-attribution.ts --provider sumpter --model your-enabled
 
 macOS：在「设置 → 安全」或「帮助」的归因面板选择 **pi**，点击「安装配置」。App 使用内置扩展，自动检查本机实际安装状态；「还原配置」恢复安装前文件，原先没有文件则移除扩展。需要 Node.js 18+。
 
-Linux：使用下节的远程脚本，在运行 pi 的主机管理扩展：
+Linux：使用下节的仓库脚本，在运行 pi 的主机管理扩展：
 
 ```sh
+curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh \
+  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/setup-client-attribution.sh
 bash setup-client-attribution.sh status pi
 bash setup-client-attribution.sh install pi
 bash setup-client-attribution.sh restore pi
@@ -82,14 +84,11 @@ Claude Code、Grok Build、Gemini CLI、pi 共用 `client-attribution.mjs` 安�
 
 macOS：在「设置 → 安全」或「帮助」的项目归因面板选择客户端，自动显示本机配置状态；点击「安装配置」或「还原配置」，操作后自动复查。选择 pi 时不需要终端 Shell，操作后执行 `/reload`；其他客户端选择 bash/zsh 并在操作后新开终端。需要 Node.js 18+。
 
-Linux：在运行客户端的主机执行，不要用 `sudo`。安装包内可直接运行 `bash scripts/setup-client-attribution.sh` 进入交互菜单，也可远程下载：
+Linux：在运行客户端的主机执行，不要用 `sudo`。安装包内可直接运行 `bash scripts/setup-client-attribution.sh` 进入交互菜单，也可从仓库下载：
 
 ```bash
-export SUMPTER_BASE_URL='http://127.0.0.1:57878'
-export SUMPTER_AUTH_TOKEN='替换为 Sumpter 入站 Token'
-curl --fail --show-error -H "Authorization: Bearer $SUMPTER_AUTH_TOKEN" \
-  "${SUMPTER_BASE_URL%/}/__sumpter/setup-client-attribution.sh" \
-  -o setup-client-attribution.sh
+curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh \
+  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/setup-client-attribution.sh
 
 # 选择 claude、grok、gemini、pi 或 all（全部四个客户端）
 bash setup-client-attribution.sh status all
@@ -97,7 +96,7 @@ bash setup-client-attribution.sh install all
 bash setup-client-attribution.sh restore all
 ```
 
-Linux 脚本自动获取配套安装器；pi/all 还会获取扩展，全部资源下载成功后才安装。下载沿用 listener 的入站认证，安装和还原后显示当前状态；`--shell bash|zsh` 与 `--rc 文件` 只影响前三个客户端。
+脚本优先使用同目录资源；缺失时从 GitHub 仓库 raw 拉取 `client-attribution.mjs` 与 pi 扩展，全部成功后才安装。无法访问 GitHub 且代理已运行时，可改设 `SUMPTER_BASE_URL`（及入站 Token）从 `/__sumpter/` 下载。安装和还原后显示当前状态；`--shell bash|zsh` 与 `--rc 文件` 只影响前三个客户端。
 
 安装器会备份 shell rc，并只替换 Sumpter 管理的对应归因标记块；重复安装幂等，`uninstall` 删除所选块，`restore` 只恢复所选客户端安装前的旧块并保留其他改动。安装、卸载、还原后新开终端。也可以不安装，直接临时运行：
 
@@ -110,7 +109,7 @@ Gemini 运行前还需设置 `SUMPTER_GEMINI_BASE_URL` 和 `SUMPTER_AUTH_TOKEN`�
 
 三者都只把归因 header 发送到 Sumpter；代理解析后从发往上游的请求剥离。工作区路径只在 Sumpter 本地统计中保存脱敏形态，Git remote 会删除凭据、query 和 fragment。
 
-pi 扩展由统一安装器从同目录资源或 listener 的 `/__sumpter/pi-project-attribution.ts` 获取；必须在 pi 的 Sumpter provider 上设置 `X-Sumpter-Client: pi`，安装器不会自动修改该标识或凭据。
+pi 扩展由统一安装器从同目录资源、GitHub 仓库 raw 或 listener 的 `/__sumpter/pi-project-attribution.ts` 获取；必须在 pi 的 Sumpter provider 上设置 `X-Sumpter-Client: pi`，安装器不会自动修改该标识或凭据。
 
 ## 开箱路径（固定顺序）
 
@@ -234,22 +233,23 @@ Linux 首次 Admin 用户名是 `kkl`，密码在同目录 `admin-password`（�
 
 ### 2.1 macOS
 
-打开 DMG，双击「安装Sumpter.command」，按提示确认。安装器只处理旁边的 `Sumpter.app`，只去掉这个 App 的 quarantine 标记，不会关闭全局 Gatekeeper。
+从 [GitHub Releases](https://github.com/domoxiaojun/sumpter/releases/latest) 下载 `sumpter-macos-*.dmg`。打开 DMG，双击「安装Sumpter.command」，按提示确认。安装器只处理旁边的 `Sumpter.app`，只去掉这个 App 的 quarantine 标记，不会关闭全局 Gatekeeper。
 
 不想用安装器时，把 App 拖到「应用程序」，再在 Finder 里右键 → 打开。不要用 `spctl --master-disable`，也不要对整个磁盘执行 `xattr -dr`。细节见 [`platforms/macos/app/INSTALL.txt`](platforms/macos/app/INSTALL.txt)。
 
 ### 2.2 Linux
 
-静态镜像一键安装（按架构自动取包）：
+从 GitHub Release 安装（按架构取包并校验 SHA-256）：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fLo /tmp/sumpter-install.sh https://sf.domob.org/kkl/sumpter-install.sh
-bash /tmp/sumpter-install.sh
+curl --proto '=https' --tlsv1.2 -fLo /tmp/sumpter-install.sh \
+  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/install.sh
+bash /tmp/sumpter-install.sh --repo domoxiaojun/sumpter
 ```
 
-`sudo bash /tmp/sumpter-install.sh` 会装成 system 服务（daemon 仍以低权限 `sumpter` 用户运行）。已有 `config.json` 与 `admin-password` 不会被覆盖。
+钉死版本时加上 `--version vX.Y.Z`。`sudo bash /tmp/sumpter-install.sh --repo domoxiaojun/sumpter` 会装成 system 服务（daemon 仍以低权限 `sumpter` 用户运行）。已有 `config.json` 与 `admin-password` 不会被覆盖。
 
-Docker、systemd、Admin HTTPS 反代、卸载见 [`platforms/linux/README.md`](platforms/linux/README.md)。
+已解压发布包时，在包内运行 `./scripts/install.sh`。Docker、systemd、Admin HTTPS 反代、卸载见 [`platforms/linux/README.md`](platforms/linux/README.md)。
 
 ---
 
@@ -547,114 +547,46 @@ Live mapping 时返回 `no_live_provider`，避免语音请求误发到普通模
 
 ## 8. 让 Claude Code / Grok Build 按项目统计（可选）
 
-统计页有「项目 Token 排行」。Codex 会自己上行工作区信息，天生分好项目；**Claude Code 和 Grok
-Build 默认不会**——工作目录不进发给代理的推理请求，所以未配置时都堆在「未识别项目」里。
+统计页有「项目 Token 排行」。Codex 会自己上行工作区信息，天生分好项目；**Claude Code、Grok
+Build、Gemini CLI 默认不会**——工作目录不进发给代理的推理请求，所以未配置时都堆在「未识别项目」里。
+pi 需要安装扩展并设置 `X-Sumpter-Client: pi`。
 
 要分项目，让客户端按启动目录带上 `X-Sumpter-Project` / `X-Sumpter-Workspace` /
 `X-Sumpter-Git-Remote` / `X-Sumpter-User`（代理读完即从出站剥离）。有工作区路径时来源是
 **本地项目**，带用户名时运行页显示例如 `sumpter 本地(kkl)`。只有项目名、没有路径时仍是
 「客户端声明」。
 
-### Claude Code
+> **在哪台机器配？** 在**跑客户端的那台机器**上，不是跑 daemon 的那台。daemon 常在远程
+> 或容器里，但归因 header 只能在客户端本地设。每台客户端主机各配一次。
 
-CC 的 `cwd` 只给本机 statusLine/hook 用。会话统计零配置就有（`X-Claude-Code-Session-Id`）。
+### 统一安装器
 
-> **在哪台机器配？** 在**跑 Claude Code 的那台机器**上，不是跑 daemon 的那台。daemon 常在远程
-> 或容器里（比如你连的是 `192.168.0.8`），但归因 header 是 CC 进程的环境变量，只能在 CC 本地设。
-> 每台跑 CC 的机器各配一次。
-
-### 一键配置
-
-配置器 `cc-project-attribution.sh` 随发布包分发（Linux 解包后在 `/opt/sumpter/scripts/`；macOS
-打包进 App 内的 `Sumpter.app/Contents/Resources/`，从源码构建则 macOS 使用
-`platforms/macos/scripts/`、Linux 使用 `platforms/linux/scripts/`）。支持 zsh 与 bash，两个平台通用。
-
-两个产品的**安全页面**都有一份完整引导（安装命令、平台差异、常见陷阱和回退命令），命令可直接复制；
-macOS 那份还带「在 Finder 中显示」直接定位到脚本。
-
-安装配置器：
+Claude Code、Grok Build、Gemini CLI、pi 共用仓库里的 `setup-client-attribution.sh`。
+macOS：在 App「设置 → 安全」或「帮助」选择客户端后点「安装配置」。
+Linux 已解压发布包：`bash scripts/setup-client-attribution.sh`。
+其它 Linux / 远程客户端主机从 GitHub 仓库下载：
 
 ```bash
-# 装前想预演就加 --dry-run
-./cc-project-attribution.sh install
+curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh \
+  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/setup-client-attribution.sh
+bash setup-client-attribution.sh install all
 ```
 
-Linux 的 Claude Code 若在另一台机器上运行，可从 **Sumpter Linux listener 的 Base URL** 取得配置器。
-这个 URL 可以是局域网监听地址，也可以是转发该路径的 Nginx HTTPS 地址；不是发布镜像地址：
-
-```bash
-SUMPTER_LISTENER_BASE_URL='http://192.168.1.20:57878'
-SUMPTER_LISTENER_BASE_URL="${SUMPTER_LISTENER_BASE_URL%/}"
-curl --fail --location \
-  "$SUMPTER_LISTENER_BASE_URL/__sumpter/cc-project-attribution.sh" \
-  -o /tmp/cc-project-attribution.sh
-bash /tmp/cc-project-attribution.sh install
-```
-
-如果 listener 配置了 `authToken`，下载时加同一个 Bearer token：
-
-```bash
-SUMPTER_LISTENER_BASE_URL="${SUMPTER_LISTENER_BASE_URL%/}"
-curl --fail --location \
-  -H "Authorization: Bearer $SUMPTER_LISTENER_TOKEN" \
-  "$SUMPTER_LISTENER_BASE_URL/__sumpter/cc-project-attribution.sh" \
-  -o /tmp/cc-project-attribution.sh
-```
-
-Nginx 反代必须把 `__sumpter/cc-project-attribution.sh` 原样转发到 proxy listener，并保留
-`Authorization`/`x-api-key`；脚本只在
-Claude Code 客户端本地执行，不会修改 daemon 主机。
-通过 Nginx 对外提供时建议（跨机器时应）设置非空 `listener.authToken`；不要把无认证的 proxy
-listener 直接暴露到公网。
-
-安装后新开终端，在项目目录发消息即可使用项目统计。
-
-出问题随时回退，装前状态有时间戳备份：
-
-```bash
-./cc-project-attribution.sh restore     # 还原 rc 到装前
-./cc-project-attribution.sh uninstall   # 移除 wrapper,保留备份
-```
-
-配置器做了什么：往 rc 文件（zsh→`~/.zshrc`；bash 在 macOS→`~/.bash_profile`，Linux→`~/.bashrc`）
-加一段带标记的 `source` 块，指向一个独立 snippet。改动最小、可精确移除，装前自动备份。它还会
-**拒绝**在 `settings.json` 已写死该 header 时安装（那样装了也不生效，见下），并处理好尾随斜杠、
-非 `origin` remote、非 ASCII 目录名这些边角。
-
-**fish 用户**：自动安装只支持 zsh/bash。跑 `./cc-project-attribution.sh fish-snippet` 打印一段
-等价的 fish 配置，粘进 `~/.config/fish/config.fish`。
-
-### macOS 与 Linux 的差别
+检查或还原：`status` / `restore`，客户端可选 `claude`、`grok`、`gemini`、`pi` 或 `all`。
+缺失的配套文件默认从同一 GitHub raw 目录下载。无法访问 GitHub 且代理已运行时，可设
+`SUMPTER_BASE_URL`（及入站 Token）从 `/__sumpter/` 取脚本。需要 Node.js 18+，不要用 `sudo`。
+安装后 Claude / Grok / Gemini 新开终端；pi 执行 `/reload`，并在 provider 上设置
+`X-Sumpter-Client: pi`。
 
 | | macOS | Linux |
 |---|---|---|
-| 谁在跑 CC | 本机菜单栏 App 旁边就是 CC | CC 可能在本机，也可能在别的机器上连远程 daemon |
-| 配置器位置 | App 内 `Sumpter.app/Contents/Resources/`（源码构建则是 `platforms/macos/scripts/`） | 发布包解包后 `/opt/sumpter/scripts/`（源码树 `platforms/linux/scripts/`） |
-| 默认 shell | 通常 zsh | 视发行版，zsh 或 bash 都常见 |
-| 看统计 | 菜单栏 App 的「统计」页 | Web Admin 的统计页（`http://<daemon>:57879/admin`） |
+| 谁在跑客户端 | 本机菜单栏 App 旁边 | 可能本机，也可能连远程 daemon |
+| 推荐入口 | App 安全页一键安装 | 仓库 raw 或发布包 `scripts/setup-client-attribution.sh` |
+| 看统计 | 菜单栏 App 的「统计」页 | Web Admin 的统计页 |
 
-配置器两边命令完全一样，自己会探测 shell 与平台。
-
-### Grok Build
-
-Grok 没有 `ANTHROPIC_CUSTOM_HEADERS`。配置器注入 `grok()`，每次启动用 `GROK_CONFIG` overlay
-写入 `[models].extra_headers`，**不改** `~/.grok/config.toml`。
-
-```bash
-./grok-project-attribution.sh install
-```
-
-Linux 也可从 listener 下载：
-
-```bash
-curl --fail --location \
-  "$SUMPTER_LISTENER_BASE_URL/__sumpter/grok-project-attribution.sh" \
-  -o /tmp/grok-project-attribution.sh
-bash /tmp/grok-project-attribution.sh install
-```
-
-已设置 `GROK_CONFIG_PATH` 时默认拒装（`--force` 才继续），因为 `GROK_CONFIG` 会挡住 path overlay。
-归因的是启动 grok 时所在目录；`grok-desktop` / 绝对路径不走 shell 函数。值必须是可见 ASCII。
+统一安装器只支持 bash/zsh。旧的 `cc-project-attribution.sh` / `grok-project-attribution.sh`
+仍随包分发，仅用于已有安装的维护；新安装请用统一安装器。已设置 `GROK_CONFIG_PATH` 时 Grok
+默认拒装。
 
 ### 手工配置（不想用配置器时）
 
@@ -716,10 +648,14 @@ curl 风格 `名字: 值`，**一行一个**，三个都可选。但手工设有
 
 #### Gemini CLI 客户端 wrapper
 
-仓库提供 `platforms/linux/scripts/gemini-sumpter-wrapper.mjs`（macOS App 同样内置在 `Contents/Resources/`）。在客户端机器上设置 `SUMPTER_GEMINI_BASE_URL` 为 Sumpter listener 地址、`SUMPTER_AUTH_TOKEN` 为 listener 的 `authToken`，再运行：
+Gemini 已纳入统一安装器。临时运行可从仓库取包装脚本（macOS App 内置在 `Contents/Resources/`）：
 
 ```bash
-node platforms/linux/scripts/gemini-sumpter-wrapper.mjs --model gemini-2.5-pro
+curl --proto '=https' --tlsv1.2 -fLo gemini-sumpter-wrapper.mjs \
+  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/gemini-sumpter-wrapper.mjs
+export SUMPTER_GEMINI_BASE_URL='http://127.0.0.1:57878'
+export SUMPTER_AUTH_TOKEN='替换为 Sumpter 入站 Token'
+node gemini-sumpter-wrapper.mjs --model gemini-2.5-pro
 ```
 
 wrapper 会让 Gemini CLI 使用 Developer API Gateway（`GOOGLE_GEMINI_BASE_URL` + `GEMINI_API_KEY`），把新会话 UUID 通过 CLI 的 `--session-id` 与 `X-Sumpter-Session-Id` 同时固定，并声明安全的 `X-Sumpter-Project`。使用 `--resume`、`--session-file` 或显式 `--session-id` 时，wrapper 不猜测会话。它会清除 Vertex/GCA/ADC 环境变量；本接入不支持 Vertex、OAuth、Service Account 或 Code Assist/Cloud Code 协议。

@@ -45,6 +45,6 @@ App 更新 feed 使用 `macos-updates` 分支。新仓库的 `github.run_number`
 - Release 公开状态、两个 Linux 包、DMG、zip、appcast、两个 checksum 文件均完整且校验匹配。
 - GHCR manifest 确实包含两架构，appcast 下载 URL 可达且签名与 App 公钥匹配。
 - 在目标 Linux 上验证 systemd 启动、Admin 登录与实际代理请求；在 macOS 上验证安装启动、sidecar 与更新检查。
-- `sf.domob.org` 静态镜像仍需单独同步并核对；GitHub 发布成功不会自动更新该镜像。
+- 用户安装入口是 GitHub Release 与仓库 raw 脚本。若仍维护 `sf.domob.org` 静态镜像，须单独同步并核对；GitHub 发布成功不会自动更新该镜像。
 
 记录执行过的验证与未执行的安装/流量验收。不要把历史测试数、编译退出码或上传成功当作完整交付证明。

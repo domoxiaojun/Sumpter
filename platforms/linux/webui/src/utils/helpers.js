@@ -442,8 +442,8 @@ export function codexWorkspaceSummary(metadataOrEvent) {
 export const CC_ATTRIBUTION_HINT = {
   title: 'Claude Code 项目归因未配置',
   message: '这些 Claude Code 请求没有项目归因。Linux 常见是浏览器在本机、daemon 在远程服务器；wrapper 必须装在 Claude Code 实际运行的那台机器，让它随请求带上项目名。会话统计不受影响。',
-  command: './cc-project-attribution.sh status\n./cc-project-attribution.sh install',
-  hint: '从远程 WebUI 复制后，先 SSH/进入 Claude Code 主机，再在脚本所在目录执行；没有本地脚本时可从 Sumpter listener Base URL 下载。若 CC 与 daemon 不同机，确认 ANTHROPIC_BASE_URL 指向 daemon 的可达地址；装完要新开终端。',
+  command: 'curl --proto \'=https\' --tlsv1.2 -fLo setup-client-attribution.sh https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/setup-client-attribution.sh\nbash setup-client-attribution.sh status claude\nbash setup-client-attribution.sh install claude',
+  hint: '从远程 WebUI 复制后，先 SSH/进入 Claude Code 主机执行。脚本默认从 GitHub 仓库下载配套文件。若 CC 与 daemon 不同机，确认 ANTHROPIC_BASE_URL 指向 daemon 的可达地址；装完要新开终端。',
 };
 
 // 安全页面的完整引导。与统计页的小提示卡(CC_ATTRIBUTION_HINT)分开:那里是"发现症状后的
@@ -467,12 +467,12 @@ export const CC_ATTRIBUTION_GUIDE = {
   steps: [
     {
       title: '只读体检',
-      command: './cc-project-attribution.sh status',
+      command: 'bash setup-client-attribution.sh status claude',
       note: '在 Claude Code 实际运行主机执行；远程 WebUI 场景先 SSH 登录该主机，再 cd 到脚本所在目录。看当前 shell、要改哪个 rc 文件、有没有 settings.json 覆盖陷阱，不改任何文件。',
     },
     {
       title: '安装 wrapper',
-      command: './cc-project-attribution.sh install',
+      command: 'bash setup-client-attribution.sh install claude',
       note: '仍在 Claude Code 主机执行，不能装到只运行 daemon 的服务器上。想先预演就加 --dry-run；装前自动给 rc 打时间戳备份，改动是一段带标记的 source 块，可精确移除。',
     },
     {
@@ -488,12 +488,12 @@ export const CC_ATTRIBUTION_GUIDE = {
   ],
   remoteScenarios: [
     { title: 'CC 与 daemon 同机', detail: '在这台 Linux 主机执行 status/install；Claude Code 可使用 http://127.0.0.1:57878 访问 daemon。' },
-    { title: '本地电脑调用远程 daemon', detail: '在运行 Claude Code 的本地电脑安装 wrapper，不要只在远程 daemon 服务器安装；若本地没有脚本，从 Sumpter listener Base URL 的 /__sumpter/cc-project-attribution.sh 下载。ANTHROPIC_BASE_URL 指向远程 daemon 的安全可达地址。' },
+    { title: '本地电脑调用远程 daemon', detail: '在运行 Claude Code 的本地电脑安装统一安装器，不要只在远程 daemon 服务器安装；从 GitHub 仓库 raw 下载 setup-client-attribution.sh。ANTHROPIC_BASE_URL 指向远程 daemon 的安全可达地址。' },
     { title: '远程开发机调用另一台 daemon', detail: '先 SSH/进入远程开发机，再执行配置器；让该机的 ANTHROPIC_BASE_URL 指向 daemon。若 daemon 仅监听 127.0.0.1，使用 SSH 隧道、反向代理或安全内网，不要裸露无认证端口。' },
   ],
   remoteDownload: {
-    command: "SUMPTER_LISTENER_BASE_URL='http://192.168.1.20:57878'\nSUMPTER_LISTENER_BASE_URL=\"\${SUMPTER_LISTENER_BASE_URL%/}\"\ncurl --fail --location \"\$SUMPTER_LISTENER_BASE_URL/__sumpter/cc-project-attribution.sh\" -o /tmp/cc-project-attribution.sh\nbash /tmp/cc-project-attribution.sh install",
-    note: 'Base URL 是 Sumpter Linux listener 地址，可以是局域网 host:port 或转发该路径的 Nginx HTTPS 地址，不是发布镜像地址。若 listener.authToken 非空，给 curl 加 Authorization: Bearer；Nginx 对外提供时建议（跨机器时应）开启非空 authToken。脚本只在 Claude Code 客户端本地执行。',
+    command: "curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/setup-client-attribution.sh\nbash setup-client-attribution.sh install claude",
+    note: '默认从 GitHub 仓库下载。无法访问 GitHub 且代理已运行时，可改用 listener 的 /__sumpter/setup-client-attribution.sh（入站认证非空时带 Bearer）。脚本只在 Claude Code 客户端本地执行。',
   },
   remoteChecks: [
     { command: 'hostname', note: '确认当前终端确实是 Claude Code 将要运行的主机。' },
@@ -523,8 +523,7 @@ export const CC_ATTRIBUTION_GUIDE = {
     },
   ],
   rollback: [
-    { command: './cc-project-attribution.sh restore', note: '还原 rc 到装前（取最新备份，并先把当前 rc 另存为 .sumpter-prerestore-*）' },
-    { command: './cc-project-attribution.sh uninstall', note: '移除 wrapper，保留备份' },
+    { command: 'bash setup-client-attribution.sh restore claude', note: '还原所选客户端的归因配置' },
   ],
   privacy: 'header 会被代理从出站剥离，上游中转站看不到。但同一请求的 body 本来就带工作目录绝对路径、CLAUDE.md 全文和 git status —— 配这三个 header 不增不减外泄面，只决定能否按项目统计。',
 };
@@ -629,12 +628,12 @@ export const GROK_ATTRIBUTION_GUIDE = {
   steps: [
     {
       title: '只读体检',
-      command: './grok-project-attribution.sh status',
+      command: 'bash setup-client-attribution.sh status grok',
       note: '在运行 grok 的主机执行。看当前 shell、要改哪个 rc、GROK_CONFIG_PATH 会不会挡住 overlay。',
     },
     {
       title: '安装 wrapper',
-      command: './grok-project-attribution.sh install',
+      command: 'bash setup-client-attribution.sh install grok',
       note: '仍在 grok 主机执行。想先预演加 --dry-run。装前自动备份 rc。',
     },
     {
@@ -644,12 +643,11 @@ export const GROK_ATTRIBUTION_GUIDE = {
     },
   ],
   remoteDownload: {
-    command: "SUMPTER_LISTENER_BASE_URL='http://192.168.1.20:57878'\nSUMPTER_LISTENER_BASE_URL=\"${SUMPTER_LISTENER_BASE_URL%/}\"\ncurl --fail --location \"$SUMPTER_LISTENER_BASE_URL/__sumpter/grok-project-attribution.sh\" -o /tmp/grok-project-attribution.sh\nbash /tmp/grok-project-attribution.sh install",
-    note: 'Base URL 是 Sumpter Linux listener 地址。脚本只在 Grok Build 客户端本地执行。',
+    command: "curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/setup-client-attribution.sh\nbash setup-client-attribution.sh install grok",
+    note: '默认从 GitHub 仓库下载。脚本只在 Grok Build 客户端本地执行。',
   },
   rollback: [
-    { command: './grok-project-attribution.sh restore', note: '还原 rc 到装前' },
-    { command: './grok-project-attribution.sh uninstall', note: '移除 wrapper，保留备份' },
+    { command: 'bash setup-client-attribution.sh restore grok', note: '还原所选客户端的归因配置' },
   ],
 };
 

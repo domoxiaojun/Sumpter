@@ -7,8 +7,11 @@ usage() {
   cat <<'HELP'
 用法：bash setup-client-attribution.sh [status|install|restore] [claude|grok|gemini|pi|all] [--shell bash|zsh] [--rc 文件]
 不带参数进入交互菜单；操作后自动检查当前状态。
-优先使用同目录 client-attribution.mjs；否则从 SUMPTER_BASE_URL 下载。
-SUMPTER_BASE_URL 为代理根地址；启用认证时设置 SUMPTER_AUTH_TOKEN。
+优先使用同目录 client-attribution.mjs 与 pi-project-attribution.ts。
+缺失时默认从 GitHub 仓库 raw 下载：
+  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/
+可用 SUMPTER_RESOURCE_BASE 覆盖该目录 URL。
+已运行的代理可选 SUMPTER_BASE_URL（代理根地址）从 /__sumpter/ 下载；启用认证时设置 SUMPTER_AUTH_TOKEN。
 需要 Node.js 18+，请在运行客户端的主机执行，不要使用 sudo。
 HELP
 }
@@ -43,21 +46,28 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 installer="$script_dir/client-attribution.mjs"
 task_tmp=$(mktemp -d "${TMPDIR:-/tmp}/sumpter-attribution.XXXXXX")
 trap 'rm -rf -- "$task_tmp"' EXIT
+DEFAULT_RESOURCE_BASE='https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts'
 download_resource() {
-  local name=$1 destination=$2
-  : "${SUMPTER_BASE_URL:?请设置 SUMPTER_BASE_URL 为代理根地址，或把脚本放在安装包 scripts 目录中}"
+  local name=$1 destination=$2 url=''
   command -v curl >/dev/null 2>&1 || { echo '未找到 curl。' >&2; exit 1; }
-  case $SUMPTER_BASE_URL in http://*|https://*) ;; *) echo '代理根地址必须使用 http:// 或 https://' >&2; exit 2;; esac
-  # Keep the token out of curl's process arguments and any generated shell config.
   headers="$task_tmp/headers"
-  if [[ -n ${SUMPTER_AUTH_TOKEN:-} ]]; then
-    [[ $SUMPTER_AUTH_TOKEN != *$'\n'* && $SUMPTER_AUTH_TOKEN != *$'\r'* ]] || { echo 'Token 包含无效换行。' >&2; exit 2; }
-    printf 'Authorization: Bearer %s\n' "$SUMPTER_AUTH_TOKEN" > "$headers"
+  if [[ -n ${SUMPTER_BASE_URL:-} ]]; then
+    case $SUMPTER_BASE_URL in http://*|https://*) ;; *) echo '代理根地址必须使用 http:// 或 https://' >&2; exit 2;; esac
+    url="${SUMPTER_BASE_URL%/}/__sumpter/$name"
+    if [[ -n ${SUMPTER_AUTH_TOKEN:-} ]]; then
+      [[ $SUMPTER_AUTH_TOKEN != *$'\n'* && $SUMPTER_AUTH_TOKEN != *$'\r'* ]] || { echo 'Token 包含无效换行。' >&2; exit 2; }
+      printf 'Authorization: Bearer %s\n' "$SUMPTER_AUTH_TOKEN" > "$headers"
+    else
+      : > "$headers"
+    fi
   else
+    local base="${SUMPTER_RESOURCE_BASE:-$DEFAULT_RESOURCE_BASE}"
+    case $base in http://*|https://*) ;; *) echo '资源地址必须使用 http:// 或 https://' >&2; exit 2;; esac
+    url="${base%/}/$name"
     : > "$headers"
   fi
   curl --fail --silent --show-error --connect-timeout 10 --max-time 60 \
-    -H "@$headers" "${SUMPTER_BASE_URL%/}/__sumpter/$name" -o "$destination"
+    -H "@$headers" "$url" -o "$destination"
 }
 if [[ ! -f $installer ]]; then
   installer="$task_tmp/client-attribution.mjs"

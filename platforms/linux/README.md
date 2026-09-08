@@ -65,8 +65,7 @@ DMG 用仓库根 `scripts/build-macos-dmg.sh`。
 源码仓库的统一工作流：
 
 - `ci.yml`：main push、pull request 或手动触发；Rust fmt/check/test/clippy、WebUI 构建与测试、macOS App 构建与测试、文档与资源同步检查。
-- `release.yml`：使用同一个已有的 `vX.Y.Z` tag 同时构建 Linux 包、GHCR 镜像和 macOS 包；只有三个构建 job 全部成功后才运行唯一的 publish job。
-- `container.yml`：只做 pull request 和手动的容器打包校验，不推送 GHCR。
+- `release.yml`：使用同一个已有的 `vX.Y.Z` tag 同时构建 Linux 包、校验多架构容器并发布 GHCR 镜像和 macOS 包；所有构建成功后才运行唯一的 publish job。
 
 Release 固定提供：
 
@@ -76,32 +75,23 @@ sumpter-linux-aarch64.tar.gz
 SHA256SUMS
 ```
 
-所有第三方 Actions 固定到完整 commit SHA；Release 发布 job 才有 `contents:write`，容器发布 job
-才有 `packages:write`。源码仓库为 [`domoxiaojun/sumpter`](https://github.com/domoxiaojun/sumpter)，
-可以设为私有；面向用户的二进制分发由下文的静态镜像承担。许可证是 MIT，发布包内见本目录
+所有第三方 Actions 固定到完整 commit SHA；Release 发布 job 才有 `contents:write` 和
+`packages:write`。源码仓库为 [`domoxiaojun/sumpter`](https://github.com/domoxiaojun/sumpter)。
+面向用户的二进制和镜像来自 GitHub Release 与 GHCR。许可证是 MIT，发布包内见本目录
 [LICENSE](LICENSE)；源码树的 Cargo workspace 也声明 `license = "MIT"`。
-推送与 Cargo workspace 版本一致的 `v<version>` tag 会创建 GitHub Release；许可证不是 GitHub
-Release 的技术前置条件，但它明确下游可获得的使用权。
+推送与 Cargo workspace 版本一致的 `v<version>` tag 会创建 GitHub Release。
 
 ## 自动安装、升级与卸载
 
 安装器按调用身份选择 scope：普通用户安装为 systemd user 服务；root 或 `sudo` 安装为 system
-service，但 daemon 始终使用专用的低权限 `sumpter` 用户运行。源码仓库可以保持私有，发布包改由
-静态镜像 `https://sf.domob.org/kkl` 提供。镜像目录必须同时提供：
-
-```text
-sumpter-install.sh
-sumpter-uninstall.sh
-sumpter-linux-x86_64.tar.gz
-sumpter-linux-aarch64.tar.gz
-```
-
-把仓库内的 `scripts/bootstrap-install.sh` 和 `scripts/bootstrap-uninstall.sh` 原样上传为镜像根目录的
-`sumpter-install.sh` 和 `sumpter-uninstall.sh` 后，普通用户使用下面命令安装最新包：
+service，但 daemon 始终使用专用的低权限 `sumpter` 用户运行。公开安装从
+[`domoxiaojun/sumpter`](https://github.com/domoxiaojun/sumpter) 的 GitHub Release 取包，并校验
+`SHA256SUMS`：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fLo /tmp/sumpter-install.sh https://sf.domob.org/kkl/sumpter-install.sh
-bash /tmp/sumpter-install.sh
+curl --proto '=https' --tlsv1.2 -fLo /tmp/sumpter-install.sh \
+  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/install.sh
+bash /tmp/sumpter-install.sh --repo domoxiaojun/sumpter
 ```
 
 首次安装会在配置目录生成 0600 随机 `admin-password`，不在终端回显，升级与普通卸载都会保留。
@@ -110,11 +100,13 @@ bash /tmp/sumpter-install.sh
 HTTPS 反代通常无需改默认 loopback：
 
 ```bash
-bash /tmp/sumpter-install.sh --admin-password-file /absolute/path/admin-password
-bash /tmp/sumpter-install.sh --admin-host 0.0.0.0 --admin-port 57879 \
+bash /tmp/sumpter-install.sh --repo domoxiaojun/sumpter \
+  --admin-password-file /absolute/path/admin-password
+bash /tmp/sumpter-install.sh --repo domoxiaojun/sumpter --admin-host 0.0.0.0 --admin-port 57879 \
   --admin-password-file /absolute/path/admin-password
 # 或环境变量
-SUMPTER_ADMIN_PASSWORD_FILE=/absolute/path/admin-password bash /tmp/sumpter-install.sh
+SUMPTER_ADMIN_PASSWORD_FILE=/absolute/path/admin-password \
+  bash /tmp/sumpter-install.sh --repo domoxiaojun/sumpter
 ```
 
 如需先审查已下载的脚本，可在安装命令前单独运行下面这条非交互命令：
@@ -123,19 +115,19 @@ SUMPTER_ADMIN_PASSWORD_FILE=/absolute/path/admin-password bash /tmp/sumpter-inst
 sed -n '1,$p' /tmp/sumpter-install.sh
 ```
 
-引导安装器根据当前机器架构下载同名压缩包，不需要指定版本。root/system 安装使用同一份脚本，
-但必须明确通过 `sudo` 运行：
+root/system 安装使用同一份 `install.sh`，但必须明确通过 `sudo` 运行：
 
 ```bash
-sudo bash /tmp/sumpter-install.sh
+sudo bash /tmp/sumpter-install.sh --repo domoxiaojun/sumpter
 ```
 
-静态镜像路径按你的要求**不校验 SHA-256**；它只校验 HTTPS、归档结构、路径与符号链接，并由包内
-安装器继续检查布局和可执行文件架构。镜像被替换、TLS 被错误终止或发布包被篡改时，安装器无法证明
-内容真实性。**静态镜像需发布方手工替换**，可能落后于 GitHub Release。
+钉死版本时加上 `--version vX.Y.Z`。`install.sh --repo` 会下载 `SHA256SUMS` 并校验当前架构的
+tar.gz。`bootstrap-install.sh` 也可从
+`https://github.com/domoxiaojun/sumpter/releases/latest/download` 取同名压缩包，但**不校验
+SHA-256**，只检查 HTTPS、归档结构和符号链接；需要校验时不要用引导脚本。
 
-`--repo` / `--version` 只属于包内 `scripts/install.sh`（公开 GitHub Release + SHA-256），
-**不能**加在 `sumpter-install.sh` / `bootstrap-install.sh` 后面（已从静态镜像取包）。
+可选静态镜像仍须手工同步，可能落后于 GitHub Release。仅在无法访问 GitHub 时把
+`bootstrap-install.sh` 的 `--base-url` 指到镜像根目录。
 
 已手动下载并解压 Release 包时，普通用户直接在包内执行；root/system 则加 `sudo`：
 
@@ -173,10 +165,11 @@ root/system 安装则运行：
 sudo /opt/sumpter/scripts/uninstall.sh
 ```
 
-也可下载静态镜像的引导卸载器；它会按当前身份调用对应的包内卸载器。普通用户：
+也可从仓库下载引导卸载器；它会按当前身份调用已安装包内的卸载器。普通用户：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fLo /tmp/sumpter-uninstall.sh https://sf.domob.org/kkl/sumpter-uninstall.sh
+curl --proto '=https' --tlsv1.2 -fLo /tmp/sumpter-uninstall.sh \
+  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/bootstrap-uninstall.sh
 bash /tmp/sumpter-uninstall.sh
 ```
 
@@ -193,12 +186,9 @@ sudo bash /tmp/sumpter-uninstall.sh
 bash /tmp/sumpter-uninstall.sh --purge
 ```
 
-静态镜像引导安装器不依赖 GitHub 仓库可见性，适合源码私有、二进制公开分发。当前已确认
-`https://sf.domob.org/kkl/sumpter-linux-x86_64.tar.gz` 和
-`https://sf.domob.org/kkl/sumpter-linux-aarch64.tar.gz` 均可访问；还需上传引导脚本
-`sumpter-install.sh` 和 `sumpter-uninstall.sh` 后才能分享上面的安装和卸载命令。若改回
-`scripts/install.sh --repo domoxiaojun/sumpter`，该路径只支持 `github.com` 的公开 Release，并会下载
-`SHA256SUMS` 校验资产。
+GitHub Release 安装路径要求仓库公开（或已登录可下载资产）。私有源码、单独托管二进制时，把
+`bootstrap-install.sh --base-url` 指到自备 HTTPS 目录，目录内需提供
+`sumpter-linux-x86_64.tar.gz` 与 `sumpter-linux-aarch64.tar.gz`。
 
 ## 首次配置
 
@@ -636,28 +626,18 @@ TargetFormat 自动保留 Anthropic 原生 `web_search`、为 OpenAI Chat 使用
 
 Responses WebSocket、Realtime / Live、Files、Videos 与 `/v1/models` 已接入共享 engine。`GET /v1/models` 按本地 mapping 生成目录（Codex `client_version` 返回 `{models:[...]}`），不转发到上游。其余资源 HTTP 与 WebSocket 由 engine 做统一鉴权、按 mapping 选择 Provider、必要的上游模型名替换、failover 和连接 relay；原始 path/query、请求与响应、二进制内容，以及两类 WebSocket 的 path/query 与文本/二进制/关闭帧都交给上游，不在本地重建协议或改写路径别名。Provider 的实际权限和媒体/Realtime 能力仍需目标上游实测。更完整的使用说明见同目录 [`USAGE.md`](USAGE.md#4-协议与路径)（源码树里对应仓库根 `USAGE.md`）。
 
-想让 Web Admin 的「项目 Token 排行」按项目区分 Claude Code 请求（默认全堆在「未识别项目」），
-在**跑 CC 的机器**上运行 `scripts/cc-project-attribution.sh install`。Linux 发布包会把它安装到
-`/opt/sumpter/scripts/`（普通用户为 `~/.local/share/sumpter/scripts/`）。如果 CC 在另一台机器，
-可直接从 Linux listener 的 Base URL 下载内置脚本；这个 URL 可以是局域网地址，也可以是转发该路径
-的 Nginx HTTPS 地址。Web Admin 的**安全**页
-有一份完整引导：当前是否已生效、三步命令（可直接复制）、macOS/Linux 与 shell 差异、三个实测
-陷阱、回退命令。细节与原理见 [`USAGE.md` §8](USAGE.md#8-让-claude-code--grok-build-按项目统计可选)。
+想让 Web Admin 的「项目 Token 排行」按项目区分 Claude Code / Grok / Gemini / pi 请求，
+在**跑客户端的机器**上使用统一安装器。发布包内为 `scripts/setup-client-attribution.sh`；
+其它主机从仓库下载：
 
 ```bash
-SUMPTER_LISTENER_BASE_URL='http://192.168.1.20:57878'
-SUMPTER_LISTENER_BASE_URL="${SUMPTER_LISTENER_BASE_URL%/}"
-curl --fail --location \
-  "$SUMPTER_LISTENER_BASE_URL/__sumpter/cc-project-attribution.sh" \
-  -o /tmp/cc-project-attribution.sh
-bash /tmp/cc-project-attribution.sh install
+curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh \
+  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/setup-client-attribution.sh
+bash setup-client-attribution.sh install all
 ```
 
-若 listener 配置了 `authToken`，下载命令加 `-H "Authorization: Bearer $SUMPTER_LISTENER_TOKEN"`。
-Nginx 反代需原样转发 `__sumpter/cc-project-attribution.sh` 到 proxy listener，并保留
-`Authorization`/`x-api-key`；脚本始终在 CC 客户端本地执行。
-通过 Nginx 对外提供时建议（跨机器时应）设置非空 `listener.authToken`；不要把无认证的 proxy
-listener 直接暴露到公网。
+Web Admin 的**安全**页可复制命令。无法访问 GitHub 且代理已运行时，可设 `SUMPTER_BASE_URL`
+从 `/__sumpter/` 取脚本。细节见 [`USAGE.md` §8](USAGE.md#8-让-claude-code--grok-build-按项目统计可选)。
 
 ## 原生构建与打包
 
@@ -742,6 +722,7 @@ musl 兼容和真实上游请求必须另行验收。
 `SUMPTER_GEMINI_SESSION_ID` 后通过 `node` 运行 wrapper；请求使用原生 Gemini JSON/SSE，
 项目和会话归因只写入 Sumpter 事件，不发送给 Provider。
 
-Linux listener 同样提供 `/__sumpter/gemini-sumpter-wrapper.mjs` 下载，沿用入站认证及访问控制。
-Claude Code、Grok、Gemini 和 pi 的仓库下载、安装、使用与移除命令见
-[`USAGE.md` 的客户端脚本安装说明](USAGE.md#linuxmacos-客户端归因脚本统一安装)。
+包装脚本也可从
+[仓库 raw](https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/gemini-sumpter-wrapper.mjs)
+下载；运行中的 listener 仍提供 `/__sumpter/gemini-sumpter-wrapper.mjs`。Claude Code、Grok、Gemini
+和 pi 的安装命令见 [`USAGE.md` 的客户端脚本安装说明](USAGE.md#linuxmacos-客户端归因脚本统一安装)。

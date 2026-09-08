@@ -2,7 +2,7 @@
 
 本地优先的 AI 请求代理，支持 **Linux 服务端与 macOS 桌面端**。客户端连接一个地址，Sumpter 负责入口选择、模型映射、会话粘性、重试与运行记录。
 
-采用一份 Rust 共享引擎和独立平台适配器。当前版本以 [Cargo.toml](Cargo.toml) 为准（0.3.4），配置格式为 schema v7，使用 [MIT 许可证](LICENSE)。
+采用一份 Rust 共享引擎和独立平台适配器。当前版本以 [Cargo.toml](Cargo.toml) 为准，配置格式为 schema v7，使用 [MIT 许可证](LICENSE)。
 
 ## 平台支持
 
@@ -63,4 +63,4 @@ npm ci --prefix platforms/linux/webui
 - [新仓库迁移](docs/repository-migration.md)：导出源码、重新建立作者历史及迁移发布设置。
 - [安全政策](SECURITY.md)：敏感信息处理与漏洞报告。
 
-GitHub Release、容器发布与静态镜像同步是独立结果；构建通过不表示已安装或部署。
+GitHub Release 与 GHCR 发布是独立结果；构建通过不表示已安装或部署。

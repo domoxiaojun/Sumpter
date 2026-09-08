@@ -29,7 +29,7 @@ cargo build --locked -p sumpterd-macos
 
 sidecar 使用共享引擎处理 HTTP、流式响应和 WebSocket。完整路径、协议转换、模型目录及 Realtime/Live 特例统一见 [使用指南](../../USAGE.md#4-协议与路径)，入口协议字段见 [配置说明](../../docs/configuration.md#入站协议与入口五态)。Provider 的实际权限和媒体/Realtime 能力仍需目标上游实测。
 
-想让「统计」页按项目区分 Claude Code 请求，在跑 CC 的机器上运行 `cc-project-attribution.sh install`。打包后的 App 里脚本在 `Sumpter.app/Contents/Resources/`，源码树则是 `platforms/macos/scripts/`。App 的**安全**页有完整引导。原理见 [客户端项目归因](../../USAGE.md#8-让-claude-code--grok-build-按项目统计可选)。
+想让「统计」页按项目区分 Claude Code / Grok / Gemini / pi 请求，在 App 的**安全**页选择客户端并安装配置。打包后的统一安装器在 `Sumpter.app/Contents/Resources/`。原理见 [客户端项目归因](../../USAGE.md#8-让-claude-code--grok-build-按项目统计可选)。
 
 ## 统一通知
 

@@ -38,4 +38,4 @@ node --test scripts/tests/*.test.mjs
 
 平台 Shell 安装器、`cc-project-attribution.sh` 和 `grok-project-attribution.sh` 保留在平台目录；它们不由上述客户端同步工具生成，修改时应核对 Linux/macOS 脚本与 Swift App 内置资源。
 
-`platforms/linux/scripts/`、`platforms/macos/scripts/` 和 macOS App 内置资源属于安装包布局，保留原来的文件名和位置。整理根目录不会改变客户端安装命令或 listener 下载地址。
+`platforms/linux/scripts/`、`platforms/macos/scripts/` 和 macOS App 内置资源属于安装包布局，保留原来的文件名和位置。用户文档中的远程安装命令指向 GitHub 仓库 raw 与 Release；listener 的 `/__sumpter/` 仍可作为已运行代理的备用下载。

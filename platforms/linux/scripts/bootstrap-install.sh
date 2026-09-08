@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Download the current architecture package from the static mirror and invoke
-# the package's transactional installer. This bootstrap intentionally does not
-# verify a SHA-256 checksum; it still rejects unsafe archive layouts.
+# Download the current architecture package from GitHub Releases (or another
+# HTTPS root) and invoke the package's transactional installer. This bootstrap
+# intentionally does not verify a SHA-256 checksum; it still rejects unsafe
+# archive layouts. Prefer scripts/install.sh --repo for checksum verification.
 #
 # Bootstrap-only options: --base-url, -h/--help.
 # All other arguments (and values after --) are forwarded to package install.sh,
@@ -9,7 +10,7 @@
 set -Eeuo pipefail
 umask 077
 
-DEFAULT_DOWNLOAD_BASE="https://sf.domob.org/kkl"
+DEFAULT_DOWNLOAD_BASE="https://github.com/domoxiaojun/sumpter/releases/latest/download"
 DOWNLOAD_BASE="${SUMPTER_DOWNLOAD_BASE:-$DEFAULT_DOWNLOAD_BASE}"
 WORK_DIR=""
 INSTALL_ARGS=()
@@ -29,25 +30,25 @@ usage() {
   bootstrap-install.sh [--base-url HTTPS_URL] [install.sh 选项...]
   bootstrap-install.sh [--base-url HTTPS_URL] -- [install.sh 选项...]
 
-从静态镜像下载当前 Linux 架构的 sumpter 发布包，再运行包内安装器。
-默认镜像: https://sf.domob.org/kkl
+从 GitHub Release 下载当前 Linux 架构的 sumpter 发布包，再运行包内安装器。
+默认地址: https://github.com/domoxiaojun/sumpter/releases/latest/download
 下载路径: <base-url>/sumpter-linux-<x86_64|aarch64>.tar.gz
 归因配置器也随包安装到 `/opt/sumpter/scripts/`（普通用户安装则在
-`~/.local/share/sumpter/scripts/`）。若 Claude Code 在另一台机器上运行，可从 daemon 的
-Listener Base URL `/__sumpter/cc-project-attribution.sh` 下载后在客户端执行，不能只在 daemon 主机执行。
+`~/.local/share/sumpter/scripts/`）。客户端主机也可从仓库 raw 下载统一安装器：
+https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/setup-client-attribution.sh
 
-静态镜像由发布方手工更新，可能落后于 GitHub Release。需要指定仓库/版本时，
-请直接使用已解压 Release 包内的 scripts/install.sh --repo/--version，不要加在本脚本后。
+需要 SHA-256 校验或钉死版本时，请使用 scripts/install.sh --repo domoxiaojun/sumpter [--version vX.Y.Z]，
+不要把 --repo/--version 加在本脚本后。
 
 引导脚本自身选项:
-  --base-url HTTPS_URL  覆盖静态镜像根目录
+  --base-url HTTPS_URL  覆盖下载根目录（须提供同名 tar.gz）
   -h, --help            显示帮助
 
 其余参数原样传给包内 scripts/install.sh，例如（高级路径覆盖）:
   --admin-password-file /absolute/path/admin-password
 
-注意：这里的 `--base-url` 只用于下载 Linux 发布包；Claude Code 归因脚本的远程下载使用
-运行中 daemon 的 Listener Base URL `/__sumpter/cc-project-attribution.sh`，两者不是同一个地址。
+注意：这里的 `--base-url` 只用于下载 Linux 发布包。归因脚本默认从 GitHub 仓库 raw 获取，
+与本引导安装器的发布包地址不是同一个 URL。
 
 示例:
   bash sumpter-install.sh
@@ -100,7 +101,7 @@ while (($# > 0)); do
             exit 0
             ;;
         --repo | --version)
-            die "引导安装器已从静态镜像取包，不支持 $1。请改用包内 scripts/install.sh $1 ..."
+            die "引导安装器自己下载发布包，不支持 $1。请改用 scripts/install.sh $1 ..."
             ;;
         --)
             shift
@@ -118,7 +119,7 @@ done
 for forwarded in "${INSTALL_ARGS[@]+"${INSTALL_ARGS[@]}"}"; do
     case "$forwarded" in
         --repo | --version | --repo=* | --version=*)
-            die "引导安装器已从静态镜像取包，不支持 ${forwarded}。请改用包内 scripts/install.sh"
+            die "引导安装器自己下载发布包，不支持 ${forwarded}。请改用 scripts/install.sh --repo domoxiaojun/sumpter"
             ;;
     esac
 done

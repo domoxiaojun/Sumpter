@@ -13,6 +13,10 @@
 - macOS 打包优先使用 hdiutil 创建 HFS+ / UDZO 镜像，修复发布 runner 上 diskutil 格式不受支持导致的 DMG 生成失败。
 - 包含 0.3.6 的 pi 本机安装、远程管理及 CI 修复。
 
+### 文档
+
+- 使用说明与 Linux 安装入口改为 GitHub Release / 仓库 raw 链接；归因脚本默认从仓库下载，旧的独立 CC/Grok 配置器说明降为兼容路径。
+
 ## [0.3.6] - 2026-09-08
 
 ### 修复

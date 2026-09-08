@@ -47,9 +47,11 @@ pi -e /path/to/pi-project-attribution.ts --provider sumpter --model your-enabled
 
 macOS：在「设置 → 安全」或「帮助」的归因面板选择 **pi**，点击「安装配置」。App 使用内置扩展，自动检查本机实际安装状态；「还原配置」恢复安装前文件，原先没有文件则移除扩展。需要 Node.js 18+。
 
-Linux：使用下节的远程脚本，在运行 pi 的主机管理扩展：
+Linux：使用下节的仓库脚本，在运行 pi 的主机管理扩展：
 
 ```sh
+curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh \
+  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/setup-client-attribution.sh
 bash setup-client-attribution.sh status pi
 bash setup-client-attribution.sh install pi
 bash setup-client-attribution.sh restore pi
@@ -72,14 +74,11 @@ Claude Code、Grok Build、Gemini CLI、pi 共用 `client-attribution.mjs` 安�
 
 macOS：在「设置 → 安全」或「帮助」的项目归因面板选择客户端，自动显示本机配置状态；点击「安装配置」或「还原配置」，操作后自动复查。选择 pi 时不需要终端 Shell，操作后执行 `/reload`；其他客户端选择 bash/zsh 并在操作后新开终端。需要 Node.js 18+。
 
-Linux：在运行客户端的主机执行，不要用 `sudo`。安装包内可直接运行 `bash scripts/setup-client-attribution.sh` 进入交互菜单，也可远程下载：
+Linux：在运行客户端的主机执行，不要用 `sudo`。安装包内可直接运行 `bash scripts/setup-client-attribution.sh` 进入交互菜单，也可从仓库下载：
 
 ```bash
-export SUMPTER_BASE_URL='http://127.0.0.1:57878'
-export SUMPTER_AUTH_TOKEN='替换为 Sumpter 入站 Token'
-curl --fail --show-error -H "Authorization: Bearer $SUMPTER_AUTH_TOKEN" \
-  "${SUMPTER_BASE_URL%/}/__sumpter/setup-client-attribution.sh" \
-  -o setup-client-attribution.sh
+curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh \
+  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/setup-client-attribution.sh
 
 # 选择 claude、grok、gemini、pi 或 all（全部四个客户端）
 bash setup-client-attribution.sh status all
@@ -87,7 +86,7 @@ bash setup-client-attribution.sh install all
 bash setup-client-attribution.sh restore all
 ```
 
-Linux 脚本自动获取配套安装器；pi/all 还会获取扩展，全部资源下载成功后才安装。下载沿用 listener 的入站认证，安装和还原后显示当前状态；`--shell bash|zsh` 与 `--rc 文件` 只影响前三个客户端。
+脚本优先使用同目录资源；缺失时从 GitHub 仓库 raw 拉取 `client-attribution.mjs` 与 pi 扩展，全部成功后才安装。无法访问 GitHub 且代理已运行时，可改设 `SUMPTER_BASE_URL`（及入站 Token）从 `/__sumpter/` 下载。安装和还原后显示当前状态；`--shell bash|zsh` 与 `--rc 文件` 只影响前三个客户端。
 
 安装器会备份 shell rc，并只替换 Sumpter 管理的对应归因标记块；重复安装幂等，`uninstall` 删除所选块，`restore` 只恢复所选客户端安装前的旧块并保留其他改动。安装、卸载、还原后新开终端。也可以不安装，直接临时运行：
 
@@ -100,7 +99,7 @@ Gemini 运行前还需设置 `SUMPTER_GEMINI_BASE_URL` 和 `SUMPTER_AUTH_TOKEN`�
 
 三者都只把归因 header 发送到 Sumpter；代理解析后从发往上游的请求剥离。工作区路径只在 Sumpter 本地统计中保存脱敏形态，Git remote 会删除凭据、query 和 fragment。
 
-pi 扩展由统一安装器从同目录资源或 listener 的 `/__sumpter/pi-project-attribution.ts` 获取；必须在 pi 的 Sumpter provider 上设置 `X-Sumpter-Client: pi`，安装器不会自动修改该标识或凭据。
+pi 扩展由统一安装器从同目录资源、GitHub 仓库 raw 或 listener 的 `/__sumpter/pi-project-attribution.ts` 获取；必须在 pi 的 Sumpter provider 上设置 `X-Sumpter-Client: pi`，安装器不会自动修改该标识或凭据。
 
 ## 开箱路径（固定顺序）
 
