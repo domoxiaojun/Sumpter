@@ -82,9 +82,7 @@ bash setup-client-attribution.sh restore pi
 
 Claude Code、Grok Build、Gemini CLI、pi 共用 `client-attribution.mjs` 安装器。前三者管理 shell 归因块，pi 管理原生扩展文件；客户端的原生启动参数与会话恢复参数保持不变。
 
-macOS：在「设置 → 安全」或「帮助」的项目归因面板选择客户端，自动显示本机配置状态；点击「安装配置」或「还原配置」，操作后自动复查。选择 pi 时不需要终端 Shell，操作后执行 `/reload`；其他客户端选择 bash/zsh 并在操作后新开终端。需要 Node.js 18+。
-
-Linux：在运行客户端的主机执行，不要用 `sudo`。安装包内可直接运行 `bash scripts/setup-client-attribution.sh` 进入交互菜单，也可从仓库下载：
+必须在**启动客户端的主机**执行，不要装到只跑 Sumpter daemon 的 Linux 上。本机 macOS App 可在「设置 → 安全」或「帮助」选择客户端后点「安装配置」。其它机器从仓库下载，不要用 `sudo`：
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh \
@@ -568,10 +566,9 @@ pi 需要安装扩展并设置 `X-Sumpter-Client: pi`。
 
 ### 统一安装器
 
-Claude Code、Grok Build、Gemini CLI、pi 共用仓库里的 `setup-client-attribution.sh`。
-macOS：在 App「设置 → 安全」或「帮助」选择客户端后点「安装配置」。
-Linux 已解压发布包：`bash scripts/setup-client-attribution.sh`。
-其它 Linux / 远程客户端主机从 GitHub 仓库下载：
+Claude Code、Grok Build、Gemini CLI、pi 共用 `setup-client-attribution.sh`。
+在**启动客户端的主机**安装，不要装到只跑 daemon 的 Linux。本机 macOS App 可在「设置 → 安全」安装；
+发布包内可运行 `bash scripts/setup-client-attribution.sh`。连远程 Linux 代理的笔记本或其它主机从仓库下载：
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh \
@@ -585,11 +582,11 @@ bash setup-client-attribution.sh install all
 安装后 Claude / Grok / Gemini 新开终端；pi 执行 `/reload`，并在 provider 上设置
 `X-Sumpter-Client: pi`。
 
-| | macOS | Linux |
+| | 客户端在本机 Mac | 客户端在其它机器（常见：连远程 Linux daemon） |
 |---|---|---|
-| 谁在跑客户端 | 本机菜单栏 App 旁边 | 可能本机，也可能连远程 daemon |
-| 推荐入口 | App 安全页一键安装 | 仓库 raw 或发布包 `scripts/setup-client-attribution.sh` |
-| 看统计 | 菜单栏 App 的「统计」页 | Web Admin 的统计页 |
+| 归因装哪 | 这台 Mac；可用 App「安全」页 | 启动 Claude / Grok / Gemini / pi 的那台电脑 |
+| 怎么装 | App 一键安装，或仓库 raw 脚本 | 仓库 raw：`setup-client-attribution.sh` |
+| 看统计 | 本机 App「统计」，或打开远程 Admin | daemon 所在 Linux 的 Web Admin |
 
 统一安装器只支持 bash/zsh。旧的 `cc-project-attribution.sh` / `grok-project-attribution.sh`
 仍随包分发，仅用于已有安装的维护；新安装请用统一安装器。已设置 `GROK_CONFIG_PATH` 时 Grok
@@ -651,7 +648,7 @@ curl 风格 `名字: 值`，**一行一个**，三个都可选。但手工设有
 3. 定位配置文件路径；没有就从 example 复制，不要在仓库 example 里填真实 key。
 4. 写入 `config.json`，确认 `schemaVersion: 7`、顶层是 `endpoints` 与可选 `modelGroups`（没有 `pools`），至少一条入口 `enabled: true`，客户端模型被模型组或 `mappings` 接住。
 5. 告诉用户对应客户端的 Base URL：Claude Code 用根地址；Codex 必须带 `/v1`；pi 要设 `X-Sumpter-Client: pi`。
-6. 需要项目统计时，macOS 用 App 安全页；Linux 从仓库 raw 下载 `setup-client-attribution.sh`。
+6. 需要项目统计时，在**启动客户端的主机**安装归因，不要装到只跑 daemon 的 Linux。本机 App 可用安全页；远程调用则在客户端电脑下载 `setup-client-attribution.sh`。
 7. **不要**把 key 写进回复；**不要** `git add` 配置；**不要**改源码。
 
 #### Gemini CLI 客户端 wrapper

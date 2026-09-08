@@ -34,16 +34,16 @@ bash /tmp/sumpter-install.sh --repo domoxiaojun/sumpter
 
 ## 接入客户端
 
-先在入口库添加上游并绑定模型组，再让客户端指向本机代理。
+先在入口库添加上游并绑定模型组，再让**跑客户端的机器**指向代理。本机 daemon 用 `127.0.0.1`；Linux 服务常被远程调用，此时改成该主机可达的 `host:port`，并设置入站 `authToken`。
 
 | 客户端 | 怎么接 |
 | --- | --- |
-| Claude Code | `ANTHROPIC_BASE_URL=http://127.0.0.1:57878` |
+| Claude Code | `ANTHROPIC_BASE_URL=http://<代理>:57878` |
 | Codex | Base URL 必须带 `/v1` |
 | Grok Build / Gemini CLI / OpenAI 兼容 | 按协议选根地址或 `/v1` |
 | pi | `~/.pi/agent/models.json` 增加 provider，并设 `X-Sumpter-Client: pi` |
 
-需要按项目统计时，macOS 用 App「安全」页安装配置；Linux 从仓库下载统一安装器：
+项目统计的归因装在**启动 Claude / Grok / Gemini / pi 的那台电脑**，不要装到只跑 daemon 的 Linux 上。客户端就在这台 Mac、且用本机 App 时，打开「设置 → 安全」安装。其它机器（包括连远程 Linux 代理的笔记本）在客户端主机执行：
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh \

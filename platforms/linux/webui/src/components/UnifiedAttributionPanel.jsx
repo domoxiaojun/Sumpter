@@ -11,12 +11,12 @@ export function UnifiedAttributionPanel() {
   ];
   return <section className="glass-panel panel-padded-stack">
     <h2>Claude / Grok / Gemini / pi 项目归因</h2>
-    <p>在运行客户端的主机配置，需要 Node.js 18+；脚本通过 bash 执行，pi 扩展不修改终端配置。四个客户端共用项目、工作区、用户和 Git remote 归因；中文目录使用 URI 编码。</p>
+    <p>在<strong>启动 Claude / Grok / Gemini / pi 的那台电脑</strong>配置，不要装到只跑本 daemon 的 Linux。需要 Node.js 18+；脚本通过 bash 执行，pi 扩展不修改终端配置。</p>
     <label>客户端 <select className="form-select" value={client} onChange={(e) => setClient(e.target.value)}>
       <option value="claude">Claude Code</option><option value="grok">Grok Build</option><option value="gemini">Gemini CLI</option><option value="pi">pi</option><option value="all">全部客户端</option>
     </select></label>
     <p>自动化脚本支持一键安装、还原和状态检查，操作后自动显示结果。不带参数运行可进入交互菜单。请以普通用户在客户端主机执行；浏览器无法检查该主机的终端配置。</p>
-    <p>从 Linux 安装包 <code>scripts/setup-client-attribution.sh</code> 获取，或从 GitHub 仓库下载：</p>
+    <p>客户端主机从 GitHub 仓库下载（本机若已有发布包可用 <code>scripts/setup-client-attribution.sh</code>）：</p>
     <pre><code>{'curl --proto "=https" --tlsv1.2 -fLo setup-client-attribution.sh \\\n  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/setup-client-attribution.sh'}</code></pre>
     <p>无法访问 GitHub 且代理已运行时，可设 <code>SUMPTER_BASE_URL</code> 为代理根地址（不要用管理 API 地址），从 <code>/__sumpter/</code> 下载。</p>
     {commands.map(([label, command]) => <div key={label} className="panel-toolbar">

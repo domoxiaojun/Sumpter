@@ -132,6 +132,29 @@ SHA-256**，只检查 HTTPS、归档结构和符号链接；需要校验时不�
 可选静态镜像仍须手工同步，可能落后于 GitHub Release。仅在无法访问 GitHub 时把
 `bootstrap-install.sh` 的 `--base-url` 指到镜像根目录。
 
+### 从旧 Kekulv system 安装迁移
+
+旧版本使用 `/opt/kekulv`、`/var/lib/kekulv` 和 `kekulv.service` 时，将本目录的
+[迁移脚本](scripts/migrate-kekulv.sh) 单独复制到旧服务器的 `/tmp/sumpter-migrate-kekulv.sh`，先检查再执行：
+
+```bash
+sudo bash /tmp/sumpter-migrate-kekulv.sh --check
+sudo bash /tmp/sumpter-migrate-kekulv.sh --version v0.3.7 --admin-host 0.0.0.0
+```
+
+脚本不依赖同目录的其他文件。省略 `--version` 下载最新正式版；省略监听参数则继承旧安装器的
+Admin host/port。新版直接使用复制的登录凭据和统计文件，并负责迁移兼容的配置 schema；
+复制件及 SQLite/WAL 的所有者改为 `sumpter`，文件权限收紧为 0600，目录为 0700。
+
+迁移器先下载并校验新包，停旧服务后完整复制 `/var/lib/kekulv` 到 `/var/lib/sumpter`；
+原目录保留。新服务保持同一 PID 且 `/healthz` 连续通过五次后，旧程序、上一版本、unit 和
+drop-in 才移至 `/var/lib/sumpter-migration.*`。失败时停新服务并保留失败现场，再恢复旧服务
+的启停状态。已有 Sumpter 目录/服务、自定义 ExecStart/drop-in、外部密码路径或链接数据会在
+停服前拒绝；不支持 user 安装。公网绑定继续使用现有 HTTPS 反代，客户端归因配置需另外更新。
+上述检查证明进程存活，实际 Provider 代理请求仍需在迁移后验证。
+
+### 从已解压发布包安装与卸载
+
 已手动下载并解压 Release 包时，普通用户直接在包内执行；root/system 则加 `sudo`：
 
 ```bash
@@ -629,9 +652,9 @@ TargetFormat 自动保留 Anthropic 原生 `web_search`、为 OpenAI Chat 使用
 
 Responses WebSocket、Realtime / Live、Files、Videos 与 `/v1/models` 已接入共享 engine。`GET /v1/models` 按本地 mapping 生成目录（Codex `client_version` 返回 `{models:[...]}`），不转发到上游。其余资源 HTTP 与 WebSocket 由 engine 做统一鉴权、按 mapping 选择 Provider、必要的上游模型名替换、failover 和连接 relay；原始 path/query、请求与响应、二进制内容，以及两类 WebSocket 的 path/query 与文本/二进制/关闭帧都交给上游，不在本地重建协议或改写路径别名。Provider 的实际权限和媒体/Realtime 能力仍需目标上游实测。更完整的使用说明见同目录 [`USAGE.md`](USAGE.md#4-协议与路径)（源码树里对应仓库根 `USAGE.md`）。
 
-想让 Web Admin 的「项目 Token 排行」按项目区分 Claude Code / Grok / Gemini / pi 请求，
-在**跑客户端的机器**上使用统一安装器。发布包内为 `scripts/setup-client-attribution.sh`；
-其它主机从仓库下载：
+想让 Web Admin 的「项目 Token 排行」按项目区分请求，在**启动 Claude / Grok / Gemini / pi
+的那台电脑**上安装归因，不要装到只跑 daemon 的这台 Linux。发布包里的脚本给本机客户端用；
+远程调用的笔记本从仓库下载：
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh \

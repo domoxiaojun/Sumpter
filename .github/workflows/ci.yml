@@ -83,7 +83,9 @@ jobs:
         run: ./platforms/linux/scripts/bootstrap-uninstaller-selftest.sh
 
       - name: Run installer transaction self-test
-        run: ./platforms/linux/scripts/installer-selftest.sh
+        run: |
+          ./platforms/linux/scripts/installer-selftest.sh
+          node --test scripts/tests/kekulv-migration.test.mjs
 
       # Claude Code 项目归因配置器。runner 上没有 zsh,显式只跑 bash 分支——
       # 不依赖 runner 恰好装了什么。zsh 与 bash 3.2 的覆盖在 macOS 本地跑。

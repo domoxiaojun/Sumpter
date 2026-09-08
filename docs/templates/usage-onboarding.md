@@ -72,9 +72,7 @@ bash setup-client-attribution.sh restore pi
 
 Claude Code、Grok Build、Gemini CLI、pi 共用 `client-attribution.mjs` 安装器。前三者管理 shell 归因块，pi 管理原生扩展文件；客户端的原生启动参数与会话恢复参数保持不变。
 
-macOS：在「设置 → 安全」或「帮助」的项目归因面板选择客户端，自动显示本机配置状态；点击「安装配置」或「还原配置」，操作后自动复查。选择 pi 时不需要终端 Shell，操作后执行 `/reload`；其他客户端选择 bash/zsh 并在操作后新开终端。需要 Node.js 18+。
-
-Linux：在运行客户端的主机执行，不要用 `sudo`。安装包内可直接运行 `bash scripts/setup-client-attribution.sh` 进入交互菜单，也可从仓库下载：
+必须在**启动客户端的主机**执行，不要装到只跑 Sumpter daemon 的 Linux 上。本机 macOS App 可在「设置 → 安全」或「帮助」选择客户端后点「安装配置」。其它机器从仓库下载，不要用 `sudo`：
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh \

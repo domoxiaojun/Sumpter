@@ -82,9 +82,7 @@ bash setup-client-attribution.sh restore pi
 
 Claude Code、Grok Build、Gemini CLI、pi 共用 `client-attribution.mjs` 安装器。前三者管理 shell 归因块，pi 管理原生扩展文件；客户端的原生启动参数与会话恢复参数保持不变。
 
-macOS：在「设置 → 安全」或「帮助」的项目归因面板选择客户端，自动显示本机配置状态；点击「安装配置」或「还原配置」，操作后自动复查。选择 pi 时不需要终端 Shell，操作后执行 `/reload`；其他客户端选择 bash/zsh 并在操作后新开终端。需要 Node.js 18+。
-
-Linux：在运行客户端的主机执行，不要用 `sudo`。安装包内可直接运行 `bash scripts/setup-client-attribution.sh` 进入交互菜单，也可从仓库下载：
+必须在**启动客户端的主机**执行，不要装到只跑 Sumpter daemon 的 Linux 上。本机 macOS App 可在「设置 → 安全」或「帮助」选择客户端后点「安装配置」。其它机器从仓库下载，不要用 `sudo`：
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh \
@@ -556,8 +554,9 @@ pi 需要安装扩展并设置 `X-Sumpter-Client: pi`。会话维度不受影响
 
 ### 统一安装器
 
-四个客户端共用 `scripts/setup-client-attribution.sh`。本发布包内直接运行；其它主机从
-[GitHub 仓库](https://github.com/domoxiaojun/sumpter) raw 下载：
+四个客户端共用 `setup-client-attribution.sh`。在**启动客户端的主机**安装，不要装到只跑
+daemon 的 Linux。本机发布包可运行 `bash scripts/setup-client-attribution.sh`；连这台代理的
+笔记本或其它主机从 [GitHub 仓库](https://github.com/domoxiaojun/sumpter) raw 下载：
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh \
@@ -569,8 +568,8 @@ bash setup-client-attribution.sh install all
 GitHub 且本机代理已运行时，可设 `SUMPTER_BASE_URL` 从 `/__sumpter/` 取脚本。需要 Node.js 18+，
 不要用 `sudo`。安装后新开终端；pi 执行 `/reload`。
 
-macOS 用户在 App 安全页一键安装。旧的 `cc-project-attribution.sh` / `grok-project-attribution.sh`
-仅用于已有安装维护。
+客户端就在这台 Mac 时可用 App「安全」页。旧的 `cc-project-attribution.sh` /
+`grok-project-attribution.sh` 仅用于已有安装维护。
 
 ### 手工配置（不想用配置器时）
 
@@ -626,5 +625,5 @@ curl 风格 `名字: 值`，**一行一个**，三个都可选。但手工设有
 3. 定位配置文件路径；没有就从 example 复制，不要在仓库 example 里填真实 key。
 4. 写入 `config.json`，确认 `schemaVersion: 7`、顶层是 `endpoints` 与可选 `modelGroups`（没有 `pools`），至少一条入口 `enabled: true`，客户端模型被模型组或 `mappings` 接住。
 5. 告诉用户对应客户端的 Base URL：Claude Code 用根地址；Codex 必须带 `/v1`；pi 要设 `X-Sumpter-Client: pi`。
-6. 需要项目统计时，macOS 用 App 安全页；Linux 从仓库 raw 下载 `setup-client-attribution.sh`。
+6. 需要项目统计时，在**启动客户端的主机**安装归因，不要装到只跑 daemon 的 Linux。本机 App 可用安全页；远程调用则在客户端电脑下载 `setup-client-attribution.sh`。
 7. **不要**把 key 写进回复；**不要** `git add` 配置；**不要**改源码。
