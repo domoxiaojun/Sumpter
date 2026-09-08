@@ -1,6 +1,6 @@
 # Sumpter使用指南
 
-给第一次安装并接入客户端的用户。当前版本 **0.3.8**，配置 **schema v7**。
+给第一次安装并接入客户端的用户。当前版本 **0.3.9**，配置 **schema v7**。
 
 **范围**：从 GitHub 安装、填写 `config.json`、接入 Claude Code / Codex / Grok Build / Gemini CLI / pi、项目归因、常见错误。  
 **不包含**：改源码、编译、发版。
