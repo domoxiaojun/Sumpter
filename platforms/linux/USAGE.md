@@ -96,12 +96,19 @@ bash setup-client-attribution.sh restore all
 
 脚本优先使用同目录资源；缺失时从 GitHub 仓库 raw 拉取 `client-attribution.mjs` 与 pi 扩展，全部成功后才安装。无法访问 GitHub 且代理已运行时，可改设 `SUMPTER_BASE_URL`（及入站 Token）从 `/__sumpter/` 下载。安装和还原后显示当前状态；`--shell bash|zsh` 与 `--rc 文件` 只影响前三个客户端。
 
-安装器会备份 shell rc，并只替换 Sumpter 管理的对应归因标记块；重复安装幂等，`uninstall` 删除所选块，`restore` 只恢复所选客户端安装前的旧块并保留其他改动。安装、卸载、还原后新开终端。也可以不安装，直接临时运行：
+安装器会备份 shell rc，并只替换 Sumpter 管理的对应归因标记块；重复安装幂等，`uninstall` 删除所选块，`restore` 只恢复所选客户端安装前的旧块并保留其他改动。安装、卸载、还原后新开终端。
+
+也可以不改 rc，在客户端电脑临时跑（需 Node.js 18+）。从仓库拉启动器后，把代理地址换成 daemon 的可达地址：
 
 ```bash
-node client-attribution.mjs run claude -- --help
-node client-attribution.mjs run grok -- --help
+curl --proto '=https' --tlsv1.2 -fLo client-attribution.mjs \
+  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/client-attribution.mjs
+export ANTHROPIC_BASE_URL='http://127.0.0.1:57878'   # 远程 daemon 改成实际 host:port
+node client-attribution.mjs run claude --
+node client-attribution.mjs run grok --
 ```
+
+`--` 后面是原来的客户端参数。关掉这次进程即不再注入 header。pi 没有临时 `run`，仍用上面的 `install pi`。
 
 Gemini 运行前还需设置 `SUMPTER_GEMINI_BASE_URL` 和 `SUMPTER_AUTH_TOKEN`；统一入口会设置 Gemini 的 Base URL、认证方式和归因 header。显式 `--resume`、`--session-id`、`--session-file` 或 `--list-sessions` 时不生成新会话 ID，避免改变客户端恢复语义。
 
@@ -554,9 +561,16 @@ pi 需要安装扩展并设置 `X-Sumpter-Client: pi`。会话维度不受影响
 
 ### 统一安装器
 
-四个客户端共用 `setup-client-attribution.sh`。在**启动客户端的主机**安装，不要装到只跑
-daemon 的 Linux。本机发布包可运行 `bash scripts/setup-client-attribution.sh`；连这台代理的
-笔记本或其它主机从 [GitHub 仓库](https://github.com/domoxiaojun/sumpter) raw 下载：
+在**启动客户端的主机**操作，不要装到只跑 daemon 的 Linux。可先临时跑：
+
+```bash
+curl --proto '=https' --tlsv1.2 -fLo client-attribution.mjs \
+  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/client-attribution.mjs
+export ANTHROPIC_BASE_URL='http://127.0.0.1:57878'
+node client-attribution.mjs run claude --
+```
+
+要每次启动都带归因，再安装（本机发布包也可用 `bash scripts/setup-client-attribution.sh`）：
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh \
@@ -625,5 +639,5 @@ curl 风格 `名字: 值`，**一行一个**，三个都可选。但手工设有
 3. 定位配置文件路径；没有就从 example 复制，不要在仓库 example 里填真实 key。
 4. 写入 `config.json`，确认 `schemaVersion: 7`、顶层是 `endpoints` 与可选 `modelGroups`（没有 `pools`），至少一条入口 `enabled: true`，客户端模型被模型组或 `mappings` 接住。
 5. 告诉用户对应客户端的 Base URL：Claude Code 用根地址；Codex 必须带 `/v1`；pi 要设 `X-Sumpter-Client: pi`。
-6. 需要项目统计时，在**启动客户端的主机**安装归因，不要装到只跑 daemon 的 Linux。本机 App 可用安全页；远程调用则在客户端电脑下载 `setup-client-attribution.sh`。
+6. 需要项目统计时，在**启动客户端的主机**处理，不要装到只跑 daemon 的 Linux。可先 `node client-attribution.mjs run …` 临时跑；要持久再 `setup-client-attribution.sh install`。
 7. **不要**把 key 写进回复；**不要** `git add` 配置；**不要**改源码。

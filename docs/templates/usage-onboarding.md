@@ -86,12 +86,19 @@ bash setup-client-attribution.sh restore all
 
 脚本优先使用同目录资源；缺失时从 GitHub 仓库 raw 拉取 `client-attribution.mjs` 与 pi 扩展，全部成功后才安装。无法访问 GitHub 且代理已运行时，可改设 `SUMPTER_BASE_URL`（及入站 Token）从 `/__sumpter/` 下载。安装和还原后显示当前状态；`--shell bash|zsh` 与 `--rc 文件` 只影响前三个客户端。
 
-安装器会备份 shell rc，并只替换 Sumpter 管理的对应归因标记块；重复安装幂等，`uninstall` 删除所选块，`restore` 只恢复所选客户端安装前的旧块并保留其他改动。安装、卸载、还原后新开终端。也可以不安装，直接临时运行：
+安装器会备份 shell rc，并只替换 Sumpter 管理的对应归因标记块；重复安装幂等，`uninstall` 删除所选块，`restore` 只恢复所选客户端安装前的旧块并保留其他改动。安装、卸载、还原后新开终端。
+
+也可以不改 rc，在客户端电脑临时跑（需 Node.js 18+）。从仓库拉启动器后，把代理地址换成 daemon 的可达地址：
 
 ```bash
-node client-attribution.mjs run claude -- --help
-node client-attribution.mjs run grok -- --help
+curl --proto '=https' --tlsv1.2 -fLo client-attribution.mjs \
+  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/client-attribution.mjs
+export ANTHROPIC_BASE_URL='http://127.0.0.1:57878'   # 远程 daemon 改成实际 host:port
+node client-attribution.mjs run claude --
+node client-attribution.mjs run grok --
 ```
+
+`--` 后面是原来的客户端参数。关掉这次进程即不再注入 header。pi 没有临时 `run`，仍用上面的 `install pi`。
 
 Gemini 运行前还需设置 `SUMPTER_GEMINI_BASE_URL` 和 `SUMPTER_AUTH_TOKEN`；统一入口会设置 Gemini 的 Base URL、认证方式和归因 header。显式 `--resume`、`--session-id`、`--session-file` 或 `--list-sessions` 时不生成新会话 ID，避免改变客户端恢复语义。
 

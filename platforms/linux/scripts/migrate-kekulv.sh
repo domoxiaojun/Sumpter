@@ -29,8 +29,11 @@ usage() {
   kekulv.service /opt/kekulv /var/lib/kekulv
   → sumpter.service /opt/sumpter /var/lib/sumpter
 
-先从 domoxiaojun/sumpter 的 GitHub Release 下载并校验 SHA256SUMS，再停服复制。
-默认下载 latest；Admin 监听继承旧安装器 drop-in（未设置则 127.0.0.1:57879）。
+本脚本可单独放到旧服务器。省略 --version 时从
+https://github.com/domoxiaojun/sumpter/releases/latest/download
+按架构下载 tar.gz 与 SHA256SUMS；--version vX.Y.Z 则改下该 tag。
+--admin-host/--admin-port 只改新服务监听，与下载无关。
+Admin 监听继承旧安装器 drop-in（未设置则 127.0.0.1:57879）。
 保留 config.json、admin-password、统计和 SQLite/WAL 文件，复制件交给新版迁移 schema。
 原 /var/lib/kekulv 保持不变；旧程序和 unit 移至 /var/lib/sumpter-migration.* 备份。
 新服务连续通过存活检查后才卸下旧程序；失败自动恢复原服务启停状态。

@@ -134,24 +134,39 @@ SHA-256**，只检查 HTTPS、归档结构和符号链接；需要校验时不�
 
 ### 从旧 Kekulv system 安装迁移
 
-旧版本使用 `/opt/kekulv`、`/var/lib/kekulv` 和 `kekulv.service` 时，将本目录的
-[迁移脚本](scripts/migrate-kekulv.sh) 单独复制到旧服务器的 `/tmp/sumpter-migrate-kekulv.sh`，先检查再执行：
+只适用于标准 root 安装：`kekulv.service`、`/opt/kekulv`、`/var/lib/kekulv`。user 安装、自定义
+unit 或数据目录不在范围内。
+
+在**旧服务器**上只要这一份脚本。它会按机器架构从 GitHub Release 下载
+`sumpter-linux-x86_64.tar.gz` 或 `sumpter-linux-aarch64.tar.gz`，并核对 `SHA256SUMS`。
+不必事先把发布包拷到服务器。
 
 ```bash
+curl --proto '=https' --tlsv1.2 -fLo /tmp/sumpter-migrate-kekulv.sh \
+  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/migrate-kekulv.sh
 sudo bash /tmp/sumpter-migrate-kekulv.sh --check
-sudo bash /tmp/sumpter-migrate-kekulv.sh --version v0.3.7 --admin-host 0.0.0.0
+# 省略 --version 即下载 latest；钉死版本再加 --version v0.3.7
+sudo bash /tmp/sumpter-migrate-kekulv.sh --admin-host 0.0.0.0
 ```
 
-脚本不依赖同目录的其他文件。省略 `--version` 下载最新正式版；省略监听参数则继承旧安装器的
-Admin host/port。新版直接使用复制的登录凭据和统计文件，并负责迁移兼容的配置 schema；
-复制件及 SQLite/WAL 的所有者改为 `sumpter`，文件权限收紧为 0600，目录为 0700。
+| 参数 | 作用 |
+| --- | --- |
+| （默认） | 下载 `https://github.com/domoxiaojun/sumpter/releases/latest/download/` 下当前架构包 |
+| `--version vX.Y.Z` | 改为该 tag 的 Release 资产，例如 `.../download/v0.3.7/` |
+| `--admin-host` / `--admin-port` | 写入新服务的 Admin 监听，与下载无关；省略则沿用旧 drop-in |
+| `--check` | 只检查布局和参数，**不下载、不停服、不改文件** |
 
-迁移器先下载并校验新包，停旧服务后完整复制 `/var/lib/kekulv` 到 `/var/lib/sumpter`；
-原目录保留。新服务保持同一 PID 且 `/healthz` 连续通过五次后，旧程序、上一版本、unit 和
-drop-in 才移至 `/var/lib/sumpter-migration.*`。失败时停新服务并保留失败现场，再恢复旧服务
-的启停状态。已有 Sumpter 目录/服务、自定义 ExecStart/drop-in、外部密码路径或链接数据会在
-停服前拒绝；不支持 user 安装。公网绑定继续使用现有 HTTPS 反代，客户端归因配置需另外更新。
-上述检查证明进程存活，实际 Provider 代理请求仍需在迁移后验证。
+`--check` 通过后才会下载。下载并校验成功后才停旧服务，把 `/var/lib/kekulv` 完整复制到
+`/var/lib/sumpter`（含配置、登录凭据、SQLite/WAL），所有者改为 `sumpter`。原
+`/var/lib/kekulv` 不动。新服务同一 PID 且 `/healthz` 连续五次通过后，旧程序和 unit 才挪到
+`/var/lib/sumpter-migration.*`。失败会停新服务并尽量恢复旧服务启停状态。
+
+已有 `/opt/sumpter` 或 `sumpter.service`、自定义 ExecStart/drop-in、外部密码路径或链接数据
+会在停服前拒绝。公网 Admin 仍走原来的 HTTPS 反代。`/healthz` 通过不等于代理请求已验证。
+
+迁移改的是服务器上的 daemon，**不会**改笔记本上的 Claude / Grok / Gemini / pi。客户端继续把
+Base URL 指到这台机器；项目统计要在**启动客户端的电脑**上处理，见下一节，不要在这台
+Linux 上对 shell 做归因安装。
 
 ### 从已解压发布包安装与卸载
 
@@ -652,9 +667,22 @@ TargetFormat 自动保留 Anthropic 原生 `web_search`、为 OpenAI Chat 使用
 
 Responses WebSocket、Realtime / Live、Files、Videos 与 `/v1/models` 已接入共享 engine。`GET /v1/models` 按本地 mapping 生成目录（Codex `client_version` 返回 `{models:[...]}`），不转发到上游。其余资源 HTTP 与 WebSocket 由 engine 做统一鉴权、按 mapping 选择 Provider、必要的上游模型名替换、failover 和连接 relay；原始 path/query、请求与响应、二进制内容，以及两类 WebSocket 的 path/query 与文本/二进制/关闭帧都交给上游，不在本地重建协议或改写路径别名。Provider 的实际权限和媒体/Realtime 能力仍需目标上游实测。更完整的使用说明见同目录 [`USAGE.md`](USAGE.md#4-协议与路径)（源码树里对应仓库根 `USAGE.md`）。
 
-想让 Web Admin 的「项目 Token 排行」按项目区分请求，在**启动 Claude / Grok / Gemini / pi
-的那台电脑**上安装归因，不要装到只跑 daemon 的这台 Linux。发布包里的脚本给本机客户端用；
-远程调用的笔记本从仓库下载：
+想按项目统计时，在**启动 Claude / Grok / Gemini / pi 的那台电脑**操作，不要装到只跑 daemon
+的 Linux。需要 Node.js 18+，不要 `sudo`。
+
+先临时跑一趟（不改 shell rc，关掉终端即失效）：
+
+```bash
+curl --proto '=https' --tlsv1.2 -fLo client-attribution.mjs \
+  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/client-attribution.mjs
+# Base URL 换成这台 daemon 的可达地址；本机代理可用 127.0.0.1
+export ANTHROPIC_BASE_URL='http://sumpter.example:57878'
+node client-attribution.mjs run claude --
+node client-attribution.mjs run grok --
+# Gemini 还需 SUMPTER_GEMINI_BASE_URL 与 SUMPTER_AUTH_TOKEN
+```
+
+要每次启动都带归因，再在同一台客户端电脑安装：
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh \
@@ -662,8 +690,9 @@ curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh \
 bash setup-client-attribution.sh install all
 ```
 
-Web Admin 的**安全**页可复制命令。无法访问 GitHub 且代理已运行时，可设 `SUMPTER_BASE_URL`
-从 `/__sumpter/` 取脚本。细节见 [`USAGE.md` §8](USAGE.md#8-让-claude-code--grok-build-按项目统计可选)。
+`install` 会改该用户的 bash/zsh rc 或 pi 扩展；`status` / `restore` 只作用于这台客户端主机。
+无法访问 GitHub 且代理已运行时，可设 `SUMPTER_BASE_URL` 从 `/__sumpter/` 取脚本。细节见
+[`USAGE.md` §8](USAGE.md#8-让-claude-code--grok-build-按项目统计可选)。
 
 ## 原生构建与打包
 
