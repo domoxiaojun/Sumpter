@@ -590,7 +590,7 @@ ensure_system_account() {
 
 configure_scope
 validate_admin_password_override
-for command_name in chmod cp dirname find grep id install mktemp mv od realpath rm systemctl tr; do
+for command_name in chmod cp dirname env find grep id install mktemp mv od realpath rm systemctl touch tr; do
     command -v "$command_name" >/dev/null 2>&1 || die "缺少命令:$command_name"
 done
 if [[ "$SYSTEMD_SCOPE" == "system" ]]; then
@@ -823,7 +823,8 @@ resolve_remote_package() {
     # Some release re-packers can preserve an invalid pre-epoch mtime.  tower-http's
     # static file service converts mtime to HTTP-date and panics on that value, so
     # normalize extracted files before they are copied into the live installation.
-    find "$DOWNLOAD_DIR/extracted" -exec touch -h -t 197001010000 {} +
+    # `touch -t` uses local time; force UTC so epoch zero stays non-negative.
+    find "$DOWNLOAD_DIR/extracted" -exec env TZ=UTC touch -h -t 197001010000 {} +
     if find "$DOWNLOAD_DIR/extracted" -type l -print -quit | grep -q .; then
         die "发布包包含符号链接，拒绝安装"
     fi

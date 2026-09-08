@@ -130,7 +130,7 @@ DOWNLOAD_BASE="${DOWNLOAD_BASE%/}"
 [[ "$DOWNLOAD_BASE" != "https:" && "$DOWNLOAD_BASE" != "https://" ]] \
     || die "--base-url 缺少主机名"
 
-for command_name in curl find grep mktemp tar uname; do
+for command_name in curl env find grep mktemp tar touch uname; do
     command -v "$command_name" >/dev/null 2>&1 || die "远程安装缺少命令:$command_name"
 done
 
@@ -187,9 +187,10 @@ validate_archive_paths "$archive" "$package_name"
 
 mkdir -p "$WORK_DIR/extracted"
 tar --no-same-owner --no-same-permissions -xzf "$archive" -C "$WORK_DIR/extracted"
-# Normalize archive mtimes before invoking the bundled installer.  This protects
-# bootstrap installs from malformed pre-epoch timestamps in a release archive.
-find "$WORK_DIR/extracted" -exec touch -h -t 197001010000 {} +
+# Normalize archive mtimes before invoking the bundled installer.  `touch -t`
+# interprets its timestamp in the local timezone; force UTC so epoch zero never
+# becomes a pre-epoch timestamp on UTC+ hosts.
+find "$WORK_DIR/extracted" -exec env TZ=UTC touch -h -t 197001010000 {} +
 if find "$WORK_DIR/extracted" -type l -print -quit | grep -q .; then
     die "发布包包含符号链接，拒绝安装"
 fi

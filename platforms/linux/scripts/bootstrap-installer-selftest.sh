@@ -14,6 +14,7 @@ BAD_ARCHIVE="$TEST_ROOT/bad.tar.gz"
 MARKER="$TEST_ROOT/inner-installer-ran"
 REQUEST_URL="$TEST_ROOT/request-url"
 BOOTSTRAP_OUTPUT="$TEST_ROOT/bootstrap-output"
+MTIME_FILE="$TEST_ROOT/normalized-mtime"
 BASE_URL="https://mirror.example.invalid/sumpter"
 
 cleanup() {
@@ -48,6 +49,15 @@ cat >"$PACKAGE_ROOT/scripts/install.sh" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 printf 'package installer ran\n' >"${SUMPTER_BOOTSTRAP_MARKER:?}"
+if [[ -n "${SUMPTER_BOOTSTRAP_MTIME:-}" ]]; then
+    package_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+    if mtime="$(stat -c '%Y' "$package_root/CHANGELOG.md" 2>/dev/null)"; then
+        :
+    else
+        mtime="$(stat -f '%m' "$package_root/CHANGELOG.md")"
+    fi
+    printf '%s\n' "$mtime" >"$SUMPTER_BOOTSTRAP_MTIME"
+fi
 if (($# > 0)); then
     printf '%s\n' "$*" >"${SUMPTER_BOOTSTRAP_INSTALL_ARGS:?}"
 else
@@ -105,13 +115,15 @@ cp -- "${SUMPTER_BOOTSTRAP_ARCHIVE:?}" "$destination"
 EOF
 chmod 0755 "$STUB_BIN/curl"
 
-PATH="$STUB_BIN:$PATH" \
+TZ=Asia/Shanghai PATH="$STUB_BIN:$PATH" \
     SUMPTER_BOOTSTRAP_ARCHIVE="$GOOD_ARCHIVE" \
     SUMPTER_BOOTSTRAP_MARKER="$MARKER" \
     SUMPTER_BOOTSTRAP_INSTALL_ARGS="$INSTALL_ARGS_FILE" \
     SUMPTER_BOOTSTRAP_REQUEST_URL="$REQUEST_URL" \
+    SUMPTER_BOOTSTRAP_MTIME="$MTIME_FILE" \
     bash "$BOOTSTRAP" --base-url "$BASE_URL" >"$BOOTSTRAP_OUTPUT"
 [[ "$(cat "$MARKER")" == "package installer ran" ]]
+[[ "$(cat "$MTIME_FILE")" == 0 ]]
 [[ "$(cat "$REQUEST_URL")" == "$BASE_URL/$PACKAGE_NAME.tar.gz" ]]
 [[ -f "$INSTALL_ARGS_FILE" && ! -s "$INSTALL_ARGS_FILE" ]]
 grep -Fq '# v9.8.7' "$BOOTSTRAP_OUTPUT"
