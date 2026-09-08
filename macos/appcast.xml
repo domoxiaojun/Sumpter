@@ -1,0 +1,15 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>Sumpter</title>
+        <item>
+            <title>0.3.7</title>
+            <pubDate>Tue, 08 Sep 2026 07:28:20 +0000</pubDate>
+            <sparkle:version>2</sparkle:version>
+            <sparkle:shortVersionString>0.3.7</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/domoxiaojun/Sumpter/releases/download/v0.3.7/sumpter-macos-0.3.7.zip" length="11781750" type="application/octet-stream" sparkle:edSignature="OD/nmWhzO8KswlWndpJ7AFPlCbcq46eKArUGVguaC/9CfEq4wNb/18R+dYWS/8niAEcVoZZzI7+wE95VK+8SBw=="/>
+        </item>
+    </channel>
+</rss>
