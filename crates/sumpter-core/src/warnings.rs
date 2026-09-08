@@ -177,8 +177,7 @@ fn append_shared_resource_warnings(endpoints: &[Endpoint], risks: &mut Vec<Strin
                 .collect::<Vec<_>>()
                 .join(", ");
             risks.push(format!(
-                "粘性组 {} 内入口优先级不一致（{}）；调度按组内最低值 {}，组内仍按配置顺序。",
-                group, details, minimum
+                "粘性组 {group} 内入口优先级不一致（{details}）；调度按组内最低值 {minimum}，组内仍按配置顺序。"
             ));
         }
     }
@@ -336,7 +335,7 @@ mod tests {
     fn provider_endpoint_without_mappings_is_not_a_model_candidate() {
         let mut c = config();
         c.endpoints.push(endpoint("b", "sk-33334444"));
-        assert!(!c.endpoints[1].mapping_for("claude-opus-5").is_some());
+        assert!(c.endpoints[1].mapping_for("claude-opus-5").is_none());
     }
 
     #[test]

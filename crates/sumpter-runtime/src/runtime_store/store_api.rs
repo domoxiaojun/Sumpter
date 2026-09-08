@@ -788,12 +788,11 @@ impl RuntimeStore {
                 .filter(|change| change.change_seq > cursor)
                 .filter(|change| {
                     let event = &change.event;
-                    !before_seq.is_some_and(|value| change.seq >= value)
-                        && !kind.is_some_and(|value| value != event.kind)
-                        && !request_id
-                            .is_some_and(|value| event.request_id.as_deref() != Some(value))
-                        && !outcome
-                            .is_some_and(|value| option_token(event.outcome) != Some(value.into()))
+                    before_seq.is_none_or(|value| change.seq < value)
+                        && kind.is_none_or(|value| value == event.kind)
+                        && request_id.is_none_or(|value| event.request_id.as_deref() == Some(value))
+                        && outcome
+                            .is_none_or(|value| option_token(event.outcome) == Some(value.into()))
                         && !from.is_some_and(|value| event.timestamp < value)
                         && !to.is_some_and(|value| event.timestamp > value)
                 })

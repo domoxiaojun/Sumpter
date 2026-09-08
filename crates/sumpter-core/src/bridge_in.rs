@@ -547,7 +547,7 @@ pub fn chat_to_anthropic(body: &Value) -> Result<Value, String> {
                             .and_then(Value::as_str)
                             .filter(|v| !v.is_empty())
                             .map(str::to_string)
-                            .unwrap_or_else(|| format!("toolu_in_{}", offset));
+                            .unwrap_or_else(|| format!("toolu_in_{offset}"));
                         push_block(
                             &mut messages,
                             "assistant",
