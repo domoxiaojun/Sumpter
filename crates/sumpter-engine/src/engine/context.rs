@@ -23,6 +23,7 @@ use sumpter_core::stream_terminal::SseDialect;
 /// path never contains a query string.
 #[derive(Clone)]
 pub(super) struct InboundRequestContext {
+    pub(super) session_source: Option<String>,
     pub(super) method: String,
     pub(super) path: String,
     pub(super) route_intent: String,
@@ -51,15 +52,6 @@ pub(super) fn merge_codex_metadata(
     let Some(mut base) = base else {
         return Some(overlay);
     };
-    let inherits_parent = base.parent_thread_id.is_none();
-    if base.parent_thread_id_inferred
-        && overlay.parent_thread_id.is_some()
-        && !overlay.parent_thread_id_inferred
-    {
-        // An authoritative header parent beats a parent inferred from a fork.
-        base.parent_thread_id = overlay.parent_thread_id.clone();
-        base.parent_thread_id_inferred = false;
-    }
     macro_rules! fill {
         ($field:ident) => {
             if let Some(value) = overlay.$field.take() {
@@ -121,9 +113,6 @@ pub(super) fn merge_codex_metadata(
     }
     if base.extras.is_empty() {
         base.extras = overlay.extras.clone();
-    }
-    if inherits_parent {
-        base.parent_thread_id_inferred = overlay.parent_thread_id_inferred;
     }
     base.malformed |= overlay.malformed;
     base.truncated |= overlay.truncated;
@@ -332,6 +321,9 @@ pub(super) fn apply_current_request_context(event: &mut RuntimeEvent) {
     if event.session_id.is_none() {
         event.session_id = context.session_id;
     }
+    if event.session_source.is_none() {
+        event.session_source = context.session_source;
+    }
     if event.grok_metadata.is_none() {
         event.grok_metadata = context.grok_metadata;
     }
@@ -356,6 +348,10 @@ pub(super) fn retain_codex_metadata_for_client(
 }
 
 pub(super) fn observed_session_id(headers: &[(String, String)]) -> Option<String> {
+    observed_session(headers).map(|(id, _)| id)
+}
+
+pub(super) fn observed_session(headers: &[(String, String)]) -> Option<(String, &'static str)> {
     [
         "x-sumpter-session-id",
         "x-claude-code-session-id",
@@ -376,8 +372,42 @@ pub(super) fn observed_session_id(headers: &[(String, String)]) -> Option<String
         while !value.is_char_boundary(end) {
             end -= 1;
         }
-        Some(value[..end].to_string())
+        let source = match *name {
+            "x-sumpter-session-id" => "client_declared",
+            "x-grok-session-id" => "grok_session",
+            "x-grok-conv-id" => "grok_conversation",
+            _ => "header",
+        };
+        Some((value[..end].to_string(), source))
     })
+}
+
+pub(super) fn observe_request_session(
+    client: ClientKind,
+    headers: &[(String, String)],
+    raw: &serde_json::Map<String, serde_json::Value>,
+) -> Option<(String, &'static str)> {
+    let observed = observed_session(headers).or_else(|| {
+        if client != ClientKind::ClaudeCode {
+            return None;
+        }
+        let encoded = raw.get("metadata")?.get("user_id")?.as_str()?;
+        if encoded.len() > 8192 {
+            return None;
+        }
+        let identity: serde_json::Value = serde_json::from_str(encoded).ok()?;
+        let id = identity.get("session_id")?.as_str()?.trim();
+        (!id.is_empty() && id.len() <= 256 && !id.chars().any(char::is_control))
+            .then(|| (id.to_owned(), "claude_metadata"))
+    });
+    if let Some((id, source)) = &observed {
+        let _ = INBOUND_REQUEST_CONTEXT.try_with(|context| {
+            let mut context = context.borrow_mut();
+            context.session_id = Some(id.clone());
+            context.session_source = Some((*source).to_owned());
+        });
+    }
+    observed
 }
 
 pub(super) fn is_hop_by_hop(name: &str) -> bool {
@@ -392,4 +422,41 @@ pub(super) fn is_hop_by_hop(name: &str) -> bool {
             | "transfer-encoding"
             | "upgrade"
     )
+}
+
+#[cfg(test)]
+mod session_observation_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn claude_native_session_is_bounded_and_header_identity_keeps_priority() {
+        let raw = json!({"metadata":{"user_id": "{\"device_id\":\"device\",\"account_uuid\":\"account\",\"session_id\":\"native-session\"}"}}).as_object().unwrap().clone();
+        assert_eq!(
+            observe_request_session(ClientKind::ClaudeCode, &[], &raw),
+            Some(("native-session".into(), "claude_metadata"))
+        );
+        assert_eq!(
+            observe_request_session(
+                ClientKind::ClaudeCode,
+                &[("x-sumpter-session-id".into(), "explicit".into())],
+                &raw
+            ),
+            Some(("explicit".into(), "client_declared"))
+        );
+        assert_eq!(
+            observe_request_session(ClientKind::GrokBuild, &[], &raw),
+            None
+        );
+        for id in ["".to_owned(), "bad\nvalue".into(), "x".repeat(257)] {
+            let raw = json!({"metadata":{"user_id": json!({"session_id":id}).to_string()}})
+                .as_object()
+                .unwrap()
+                .clone();
+            assert_eq!(
+                observe_request_session(ClientKind::ClaudeCode, &[], &raw),
+                None
+            );
+        }
+    }
 }

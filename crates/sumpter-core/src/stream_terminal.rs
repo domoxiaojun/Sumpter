@@ -7,6 +7,7 @@
 
 use serde_json::Value;
 
+use crate::cache_read::{CacheReadEvidence, CacheReadFinality, CacheReadReason};
 use crate::events::ResponseUsage;
 
 /// 单个未闭合 SSE frame 的最大观察缓冲。超限只放弃当前 frame 的观察，不影响转发。
@@ -33,11 +34,13 @@ pub struct SseTerminalTracker {
     pending: Vec<u8>,
     terminal_seen: bool,
     tool_calls: Vec<String>,
+    tool_calls_truncated: bool,
     usage: ResponseUsage,
     stop_reason: Option<String>,
     json_pending: Vec<u8>,
     json_observed: bool,
     observation_truncated: bool,
+    cache_read_evidence: CacheReadEvidence,
     gemini_terminal: Option<SseTerminal>,
 }
 
@@ -48,11 +51,13 @@ impl SseTerminalTracker {
             pending: Vec::new(),
             terminal_seen: false,
             tool_calls: Vec::new(),
+            tool_calls_truncated: false,
             usage: ResponseUsage::default(),
             stop_reason: None,
             json_pending: Vec::new(),
             json_observed: false,
             observation_truncated: false,
+            cache_read_evidence: CacheReadEvidence::default(),
             gemini_terminal: None,
         }
     }
@@ -60,6 +65,10 @@ impl SseTerminalTracker {
     /// 本轮流中已经观察到的实际工具调用名称；只来自响应事件，不来自 tools 声明。
     pub fn tool_calls(&self) -> &[String] {
         &self.tool_calls
+    }
+
+    pub fn tool_calls_truncated(&self) -> bool {
+        self.tool_calls_truncated
     }
 
     pub fn usage(&self) -> Option<ResponseUsage> {
@@ -70,6 +79,12 @@ impl SseTerminalTracker {
         self.stop_reason.as_deref()
     }
 
+    pub fn cache_read_evidence(&self) -> CacheReadEvidence {
+        let mut evidence = self.cache_read_evidence.clone();
+        evidence.truncated |= self.observation_truncated;
+        evidence
+    }
+
     /// Gemini may send usage-only frames after finishReason. Observe until
     /// transport EOF so those frames reach the client and the accounting.
     pub fn finish(&mut self) -> Option<SseTerminal> {
@@ -78,6 +93,12 @@ impl SseTerminalTracker {
         }
         if !self.pending.is_empty() {
             let _ = self.push(b"\n\n");
+        }
+        if self.gemini_terminal.is_some() {
+            self.cache_read_evidence.complete = true;
+            if self.usage.cache_read_input_tokens.is_some() && !self.observation_truncated {
+                self.cache_read_evidence.finality = CacheReadFinality::Confirmed;
+            }
         }
         self.gemini_terminal.take()
     }
@@ -126,13 +147,21 @@ impl SseTerminalTracker {
             return None;
         };
         self.json_observed = true;
-        observe_tool_call_value(self.dialect, &value, &mut self.tool_calls);
+        observe_tool_call_value(
+            self.dialect,
+            &value,
+            &mut self.tool_calls,
+            &mut self.tool_calls_truncated,
+        );
         observe_response_summary_value(
             self.dialect,
             &value,
             &mut self.usage,
             &mut self.stop_reason,
+            &mut self.cache_read_evidence,
+            true,
         );
+        self.cache_read_evidence.complete = true;
         let terminal = classify_json(self.dialect, &value);
         if self.dialect == SseDialect::Gemini {
             self.gemini_terminal = terminal;
@@ -169,12 +198,18 @@ impl SseTerminalTracker {
             let Some(payload) = data_payload(&frame) else {
                 continue;
             };
-            observe_tool_call(self.dialect, &payload, &mut self.tool_calls);
+            observe_tool_call(
+                self.dialect,
+                &payload,
+                &mut self.tool_calls,
+                &mut self.tool_calls_truncated,
+            );
             observe_response_summary(
                 self.dialect,
                 &payload,
                 &mut self.usage,
                 &mut self.stop_reason,
+                &mut self.cache_read_evidence,
             );
             if let Some(terminal) = classify(self.dialect, &payload)
                 .or_else(|| classify_event_name(self.dialect, frame_event_name(&frame)))
@@ -189,6 +224,7 @@ impl SseTerminalTracker {
                     continue;
                 }
                 self.terminal_seen = true;
+                self.cache_read_evidence.complete = true;
                 self.pending.clear();
                 return Some(terminal);
             }
@@ -198,6 +234,7 @@ impl SseTerminalTracker {
         // 跳过该异常 frame，后续独立终止 frame 仍可被识别。
         if self.pending.len() > MAX_PENDING_BYTES {
             self.pending.clear();
+            self.observation_truncated = true;
         }
         None
     }
@@ -208,11 +245,12 @@ fn observe_response_summary(
     payload: &str,
     usage: &mut ResponseUsage,
     stop_reason: &mut Option<String>,
+    evidence: &mut CacheReadEvidence,
 ) {
     let Ok(value) = serde_json::from_str::<Value>(payload) else {
         return;
     };
-    observe_response_summary_value(dialect, &value, usage, stop_reason);
+    observe_response_summary_value(dialect, &value, usage, stop_reason, evidence, false);
 }
 
 fn observe_response_summary_value(
@@ -220,7 +258,10 @@ fn observe_response_summary_value(
     value: &Value,
     usage: &mut ResponseUsage,
     stop_reason: &mut Option<String>,
+    evidence: &mut CacheReadEvidence,
+    unary: bool,
 ) {
+    evidence.observed = true;
     let usage_value = match dialect {
         SseDialect::Anthropic => value
             .get("usage")
@@ -243,25 +284,6 @@ fn observe_response_summary_value(
             value,
             &["output_tokens", "completion_tokens"],
         );
-        merge_max(
-            &mut usage.cache_read_input_tokens,
-            value,
-            &[
-                "cache_read_input_tokens",
-                "cache_read_tokens",
-                "cached_tokens",
-            ],
-        );
-        merge_nested_max(
-            &mut usage.cache_read_input_tokens,
-            value,
-            &[
-                "/input_tokens_details/cached_tokens",
-                "/input_tokens_details/cache_read_tokens",
-                "/prompt_tokens_details/cached_tokens",
-                "/prompt_tokens_details/cache_read_tokens",
-            ],
-        );
         if dialect == SseDialect::Gemini {
             merge_max(&mut usage.input_tokens, value, &["promptTokenCount"]);
             let output = value.get("candidatesTokenCount").and_then(Value::as_u64);
@@ -273,11 +295,6 @@ fn observe_response_summary_value(
                 );
             }
             merge_max(&mut usage.reasoning_tokens, value, &["thoughtsTokenCount"]);
-            merge_max(
-                &mut usage.cache_read_input_tokens,
-                value,
-                &["cachedContentTokenCount"],
-            );
         }
         merge_max(
             &mut usage.cache_creation_input_tokens,
@@ -319,6 +336,9 @@ fn observe_response_summary_value(
             ],
         );
     }
+    if let Some(usage_value) = usage_value {
+        observe_cache_read(dialect, value, usage_value, usage, evidence, unary);
+    }
     if let Some(next) = value.get("thinking_tokens").and_then(Value::as_u64) {
         merge_token_count(&mut usage.reasoning_tokens, next);
     }
@@ -345,6 +365,92 @@ fn observe_response_summary_value(
     {
         *stop_reason = Some(candidate.to_string());
     }
+}
+
+fn observe_cache_read(
+    dialect: SseDialect,
+    response: &Value,
+    usage_value: &Value,
+    usage: &mut ResponseUsage,
+    evidence: &mut CacheReadEvidence,
+    unary: bool,
+) {
+    let paths: &[&str] = if dialect == SseDialect::Gemini {
+        &["/cachedContentTokenCount"]
+    } else {
+        &[
+            "/cache_read_input_tokens",
+            "/cache_read_tokens",
+            "/cached_tokens",
+            "/input_tokens_details/cached_tokens",
+            "/input_tokens_details/cache_read_tokens",
+            "/prompt_tokens_details/cached_tokens",
+            "/prompt_tokens_details/cache_read_tokens",
+        ]
+    };
+    let mut reported = None;
+    for value in paths
+        .iter()
+        .filter_map(|path| usage_value.pointer(path))
+        .filter(|v| !v.is_null())
+    {
+        let Some(count) = value.as_u64().filter(|&count| count <= i64::MAX as u64) else {
+            evidence.issue = Some(CacheReadReason::InvalidValue);
+            return;
+        };
+        if reported.is_some_and(|previous| previous != count) {
+            evidence.issue = Some(CacheReadReason::ConflictingEvidence);
+            return;
+        }
+        reported = Some(count);
+    }
+    let Some(count) = reported else {
+        return;
+    };
+    let event_type = response
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let authoritative = match dialect {
+        SseDialect::Anthropic => {
+            matches!(event_type, "message_start" | "message_delta")
+                || (unary && event_type == "message")
+        }
+        SseDialect::OpenAiResponses => {
+            matches!(
+                event_type,
+                "response.completed" | "response.failed" | "response.incomplete"
+            ) || (unary
+                && matches!(
+                    response.get("status").and_then(Value::as_str),
+                    Some("completed" | "failed" | "incomplete")
+                ))
+        }
+        SseDialect::OpenAiChat => response
+            .get("choices")
+            .and_then(Value::as_array)
+            .is_some_and(|choices| {
+                choices.is_empty()
+                    || choices
+                        .iter()
+                        .any(|choice| choice.get("finish_reason").is_some_and(|v| !v.is_null()))
+            }),
+        SseDialect::Gemini => unary,
+        SseDialect::OpenAiImages => false,
+    };
+    if usage.cache_read_input_tokens.is_some_and(|previous| {
+        count < previous || (evidence.finality == CacheReadFinality::Confirmed && previous != count)
+    }) {
+        evidence.issue = Some(CacheReadReason::ConflictingEvidence);
+        return;
+    }
+    // Protocol updates are cumulative snapshots, never per-frame increments.
+    usage.cache_read_input_tokens = Some(count);
+    evidence.finality = if authoritative || evidence.finality == CacheReadFinality::Confirmed {
+        CacheReadFinality::Confirmed
+    } else {
+        CacheReadFinality::Provisional
+    };
 }
 
 fn classify_json(dialect: SseDialect, value: &Value) -> Option<SseTerminal> {
@@ -439,17 +545,27 @@ fn merge_token_count(slot: &mut Option<u64>, next: u64) {
     *slot = Some(slot.map_or(next, |current| current.max(next)));
 }
 
-const MAX_TOOL_CALLS: usize = 32;
-const MAX_TOOL_NAME_CHARS: usize = 160;
+pub const MAX_TOOL_CALLS: usize = 32;
+pub const MAX_TOOL_NAME_BYTES: usize = 128;
 
-fn observe_tool_call(dialect: SseDialect, payload: &str, calls: &mut Vec<String>) {
+fn observe_tool_call(
+    dialect: SseDialect,
+    payload: &str,
+    calls: &mut Vec<String>,
+    truncated: &mut bool,
+) {
     let Ok(value) = serde_json::from_str::<Value>(payload) else {
         return;
     };
-    observe_tool_call_value(dialect, &value, calls);
+    observe_tool_call_value(dialect, &value, calls, truncated);
 }
 
-fn observe_tool_call_value(dialect: SseDialect, value: &Value, calls: &mut Vec<String>) {
+fn observe_tool_call_value(
+    dialect: SseDialect,
+    value: &Value,
+    calls: &mut Vec<String>,
+    truncated: &mut bool,
+) {
     let candidates = match dialect {
         SseDialect::OpenAiResponses => responses_tool_names(value),
         SseDialect::OpenAiChat => chat_tool_names(value),
@@ -476,13 +592,15 @@ fn observe_tool_call_value(dialect: SseDialect, value: &Value, calls: &mut Vec<S
     };
     for name in candidates {
         let name = name.trim();
-        if name.is_empty()
-            || name.chars().count() > MAX_TOOL_NAME_CHARS
-            || calls.iter().any(|existing| existing == name)
-        {
+        if name.len() > MAX_TOOL_NAME_BYTES || name.chars().any(char::is_control) {
+            *truncated = true;
+            continue;
+        }
+        if name.is_empty() || calls.iter().any(|existing| existing == name) {
             continue;
         }
         if calls.len() >= MAX_TOOL_CALLS {
+            *truncated = true;
             break;
         }
         calls.push(name.to_string());

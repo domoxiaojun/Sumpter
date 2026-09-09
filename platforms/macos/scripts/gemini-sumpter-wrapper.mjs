@@ -171,7 +171,22 @@ export function prepareLaunch(client, args, env = process.env, cwd = process.cwd
     const url = new URL(base);
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('Gemini Base URL 必须是无凭据、query、fragment 的 HTTP(S) 地址');
     const sessionArg = args.some((arg) => /^--(session-id|session-file|resume|list-sessions)(=|$)/u.test(arg) || /^-r(?:$|=)/u.test(arg));
-    // Explicit/resumed sessions must keep the CLI's identity. Optional override only for a fresh session.
+    const optionValue = (name) => {
+      const inline = args.find((arg) => arg.startsWith(`${name}=`));
+      if (inline) return inline.slice(name.length + 1);
+      const index = args.indexOf(name);
+      return index >= 0 && args[index + 1] && !args[index + 1].startsWith('-') ? args[index + 1] : undefined;
+    };
+    const explicit = optionValue('--session-id');
+    const resume = optionValue('--resume') ?? optionValue('-r');
+    // Only a complete UUID identifies a resumed session; ordinals/latest/prefixes
+    // are selectors resolved by Gemini and cannot become the analytics identity.
+    const resolvedResume = typeof resume === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(resume) ? resume : undefined;
+    const provided = explicit ?? resolvedResume;
+    if (provided && safe(provided, 256) && /^[\x21-\x7e]+$/u.test(provided)) {
+      headers['X-Sumpter-Session-Id'] = provided;
+    }
+    // Fresh sessions receive the same ID in the native CLI and the header.
     if (!sessionArg) {
       const id = env.SUMPTER_GEMINI_SESSION_ID || randomUUID();
       if (!safe(id, 256) || !/^[\x21-\x7e]+$/u.test(id)) throw new Error('SUMPTER_GEMINI_SESSION_ID 必须是有界 ASCII 标识');

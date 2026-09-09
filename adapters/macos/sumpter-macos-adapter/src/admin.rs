@@ -1611,6 +1611,7 @@ async fn events(
                                     json!({"seq": seq, "changeSeq": change_seq, "event": event}),
                                 ),
                                 EngineNotice::PlatformNotice(PlatformNotice::Notify {
+                                    hook_event,
                                     client_kind,
                                     title,
                                     message,
@@ -1629,6 +1630,7 @@ async fn events(
                                         "message": message,
                                         "sound": sound,
                                         "type": "notification",
+                                        "hookEvent": hook_event,
                                         "category": category,
                                         "priority": priority,
                                         "actionID": action_id,
@@ -2321,6 +2323,7 @@ mod tests {
             PlatformNotice::Notify {
                 client_kind: ClientKind::Codex,
                 kind: "stop".into(),
+                hook_event: Some("Stop".into()),
                 title: "Codex CLI · 回合完成".into(),
                 message: "Codex CLI 主回合已完成".into(),
                 sound: None,
@@ -2339,6 +2342,7 @@ mod tests {
         let text = String::from_utf8_lossy(&chunk);
         assert!(text.contains("event: notify"), "{text}");
         assert!(text.contains("\"clientKind\":\"codex\""), "{text}");
+        assert!(text.contains("\"hookEvent\":\"Stop\""), "{text}");
         assert!(text.contains("Codex CLI 主回合已完成"), "{text}");
 
         server.abort();

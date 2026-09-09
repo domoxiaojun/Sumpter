@@ -1443,6 +1443,12 @@ extension AppModel {
             runtimeEventDetail = nil
             return
         }
+        let expected = max(runtimePage?.events.first(where: { $0.id == id })?.changeSeq ?? 0,
+                           runHistoryPage?.events.first(where: { $0.id == id })?.changeSeq ?? 0)
+        if let cached = runtimeEventDetails[id], cached.changeSeq >= expected {
+            runtimeEventDetail = cached
+            return
+        }
         // Do not leave the previous selection visible while this selection is
         // still loading; a slower response is rejected by the generation check.
         if runtimeEventDetail?.event.id != id {
@@ -1451,8 +1457,12 @@ extension AppModel {
         Task {
             guard let admin else { return }
             do {
-                let detail = try await admin.runtimeEvent(id: id)
+                let fetchedDetail = try await admin.runtimeEvent(id: id)
                 guard generation == detailRequestGeneration else { return }
+                let current = runtimeEventDetails[id]
+                let detail = current.map { $0.changeSeq > fetchedDetail.changeSeq ? $0 : fetchedDetail } ?? fetchedDetail
+                runtimeEventDetails[id] = detail
+                if runtimeEventDetails.count > 200, let oldest = runtimeEventDetails.min(by: { $0.value.changeSeq < $1.value.changeSeq })?.key { runtimeEventDetails.removeValue(forKey: oldest) }
                 runtimeEventDetail = detail
                 var events = runtime.recentEvents
                 if let index = events.firstIndex(where: { $0.id == id }) {

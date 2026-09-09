@@ -2,6 +2,22 @@ import { normalizeTimestampMS } from './helpers.js';
 
 const DEFAULT_PER_KIND_LIMIT = 200;
 
+const omittedDetailFields = ['codexMetadata', 'clientDeclared', 'grokMetadata', 'failureDetail', 'message', 'streamTrace', 'toolCalls', 'timeoutMS', 'upstreamHost', 'upstreamRequestID'];
+
+export function mergeRuntimeEvent(previous, incoming) {
+  if (!previous || previous.id !== incoming?.id) return incoming;
+  if (Number(previous.changeSeq || 0) > Number(incoming.changeSeq || 0) && Number(incoming.changeSeq || 0) > 0) return previous;
+  const merged = { ...previous, ...incoming };
+  if (incoming.detailsOmitted === true) {
+    for (const key of omittedDetailFields) {
+      if (incoming[key] == null && previous[key] != null) merged[key] = previous[key];
+    }
+  } else if ('streamTrace' in incoming) {
+    merged.usageSummary = incoming.streamTrace?.usage ?? null;
+  }
+  return merged;
+}
+
 function eventPhase(event) {
   return event?.phase === 'in_flight' ? 'inFlight' : event?.phase;
 }
@@ -29,7 +45,7 @@ export function upsertRuntimeEvent(events = [], event, perKindLimit = DEFAULT_PE
   const next = [...events];
   const existingIndex = next.findIndex((item) => item?.id === event.id);
   if (existingIndex >= 0) {
-    next[existingIndex] = event;
+    next[existingIndex] = mergeRuntimeEvent(next[existingIndex], event);
     // Match the Rust/macOS contract: a terminal update must never make the
     // row disappear before its failure/tool/stream details can be inspected.
     // Upserts do not grow the array; the next new event re-applies quotas.

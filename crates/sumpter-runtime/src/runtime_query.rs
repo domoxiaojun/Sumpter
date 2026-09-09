@@ -465,6 +465,7 @@ pub struct TrendPoint {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrendSeries {
+    pub cache_read: sumpter_core::cache_read::CacheReadStatistics,
     pub api_version: u8,
     pub rollup_used: bool,
     pub granularity: TrendGranularity,
@@ -575,6 +576,8 @@ pub struct RuntimeFacetSnapshot {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalyticsSummary {
+    pub cache_read: sumpter_core::cache_read::CacheReadStatistics,
+    pub upstream_cache_read: sumpter_core::cache_read::CacheReadStatistics,
     pub api_version: u8,
     pub range: String,
     pub from: Option<f64>,
@@ -1290,6 +1293,15 @@ struct ExportEventRow {
 /// available through `/runtime/events/{id}`.
 #[derive(Debug, sea_orm::FromQueryResult)]
 struct EventListProjection {
+    hook_event: Option<String>,
+    cache_read_state: Option<String>,
+    cache_read_finality: Option<String>,
+    cache_read_reason: Option<String>,
+    input_tokens: Option<i64>,
+    output_tokens: Option<i64>,
+    cache_read_input_tokens: Option<i64>,
+    cache_creation_input_tokens: Option<i64>,
+    reasoning_tokens: Option<i64>,
     seq: i64,
     change_seq: i64,
     id: String,
@@ -1349,10 +1361,45 @@ fn event_list_item_from_projection(row: EventListProjection) -> RuntimeEventList
     // event has no explicit session header.  Preserve the old list contract:
     // expose `sessionID` only when it came from the event itself; the derived
     // key remains available to server-side filters and dimension pages.
-    let session_id = (row.session_source.as_deref() == Some("event"))
-        .then_some(row.session_key)
-        .flatten();
+    let session_id = matches!(
+        row.session_source.as_deref(),
+        Some(
+            "event"
+                | "header"
+                | "client_declared"
+                | "claude_metadata"
+                | "codex_session"
+                | "grok_session"
+                | "grok_conversation"
+        )
+    )
+    .then_some(row.session_key)
+    .flatten();
+    let tokens = |value: Option<i64>| value.and_then(|value| u64::try_from(value).ok());
+    let usage = sumpter_core::events::ResponseUsage {
+        input_tokens: tokens(row.input_tokens),
+        output_tokens: tokens(row.output_tokens),
+        cache_read_input_tokens: tokens(row.cache_read_input_tokens),
+        cache_creation_input_tokens: tokens(row.cache_creation_input_tokens),
+        reasoning_tokens: tokens(row.reasoning_tokens),
+    };
+    let usage_present = usage != sumpter_core::events::ResponseUsage::default();
     RuntimeEventListItem {
+        details_omitted: true,
+        session_source: row.session_source,
+        hook_event: row.hook_event,
+        cache_read: sumpter_core::cache_read::CacheReadSummary {
+            state: decode_projection_enum(row.cache_read_state)
+                .unwrap_or(sumpter_core::cache_read::CacheReadState::Unknown),
+            read_tokens: if row.cache_read_reason.is_none() {
+                tokens(row.cache_read_input_tokens)
+            } else {
+                None
+            },
+            finality: decode_projection_enum(row.cache_read_finality).unwrap_or_default(),
+            reason: decode_projection_enum(row.cache_read_reason),
+        },
+        usage_summary: usage_present.then_some(usage),
         seq: row.seq,
         change_seq: row.change_seq,
         id: row.id,

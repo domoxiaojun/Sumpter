@@ -33,25 +33,15 @@ for (const [label, url] of SHELLS) {
   });
 }
 
-test('RunPage 请求详情按主信息、路由和诊断渐进披露', () => {
+test('RunPage uses the shared inspector with independent collapsed groups', () => {
   const source = readFileSync(RUN_PAGE, 'utf8');
-  const primary = source.indexOf('data-event-detail-tier="primary"');
-  const secondary = source.indexOf('data-event-detail-tier="secondary"');
-  const diagnostics = source.indexOf('data-event-detail-tier="diagnostics"');
-  const codex = source.indexOf('<CodexMetadataDetails metadata={selectedCodexMetadata}');
-
-  assert.ok(primary >= 0, '必须保留首屏核心摘要');
-  assert.ok(secondary > primary, '路由与协议应位于核心摘要之后的折叠区');
-  assert.ok(diagnostics > secondary, '失败、工具、流和长 ID 应进入诊断折叠区');
-  assert.ok(codex > diagnostics, 'Codex 完整元数据应保持独立折叠并置于诊断层之后');
-
-  const primarySource = source.slice(primary, secondary);
-  assert.match(primarySource, /最终结果/);
-  assert.match(primarySource, /HTTP 状态/);
-  assert.match(primarySource, /生命周期/);
-  assert.match(primarySource, /总耗时/);
-  assert.doesNotMatch(primarySource, /协议路由/);
-  assert.doesNotMatch(primarySource, /Request ID/);
+  const inspector = readFileSync(new URL('../src/components/EventInspector.jsx', import.meta.url), 'utf8');
+  assert.match(source, /<EventInspector/);
+  assert.match(inspector, /data-event-detail-tier="primary"/);
+  assert.match(inspector, /<details[\s\S]*?<summary>/);
+  assert.match(inspector, /open=\{open\}/);
+  assert.match(inspector, /eventHttpTone\(event\)/);
+  assert.match(inspector, /eventCacheLabel\(event\)/);
 });
 
 test('RunPage 分页控件位于事件列表上方', () => {
@@ -63,44 +53,17 @@ test('RunPage 分页控件位于事件列表上方', () => {
   assert.doesNotMatch(source, /加载更多.*1000|最多 1000 条/);
 });
 
-test('RunPage 客户端字段对 Codex 与其他客户端使用统一来源标签', () => {
-  const source = readFileSync(RUN_PAGE, 'utf8');
-  for (const label of ['客户端原始项目', '客户端原始工作区', '客户端声明项目', '客户端声明工作区', '客户端声明 Git 仓库', '客户端声明用户']) {
-    assert.match(source, new RegExp(label));
-  }
-  assert.match(source, /<span>代理身份<\/span>/);
-  assert.match(source, /<span>代理路径<\/span>/);
+test('event identity fields are shared across clients and remain in expandable details', () => {
+  const source = readFileSync(new URL('../src/components/EventInspector.jsx', import.meta.url), 'utf8');
+  for (const label of ['会话来源', '父线程', '父回合', '根回合', 'Grok agent ID', '项目来源', '工作区']) assert.ok(source.includes(label));
+  assert.match(source, /clientDeclared: event.clientDeclared/);
 });
 
-test('StatsPage 请求下钻保留主次层级和完整技术字段', () => {
+test('StatsPage shares the same inspector and unwraps the canonical detail envelope', () => {
   const source = readFileSync(STATS_PAGE, 'utf8');
-  const drilldown = source.indexOf('id="analytics-request-drilldown"');
-  const primary = source.indexOf('data-event-detail-tier="primary"', drilldown);
-  const secondary = source.indexOf('data-event-detail-tier="secondary"', primary);
-  const diagnostics = source.indexOf('data-event-detail-tier="diagnostics"', secondary);
-  const codex = source.indexOf('className="analytics-selected-codex"', diagnostics);
-
-  assert.ok(drilldown >= 0, '统计页必须保留事件下钻');
-  assert.ok(primary > drilldown, '下钻首屏必须先展示主信息');
-  assert.ok(secondary > primary, '路由和协议必须放在次级折叠区');
-  assert.ok(diagnostics > secondary, '失败、工具、流和长 ID 必须放在诊断折叠区');
-  assert.ok(codex > diagnostics, 'Codex 元数据必须保持独立折叠');
-
-  const primarySource = source.slice(primary, secondary);
-  assert.match(primarySource, /最终结果/);
-  assert.match(primarySource, /入口/);
-  assert.match(primarySource, /故障转移/);
-  assert.doesNotMatch(primarySource, /Request ID/);
-  assert.doesNotMatch(primarySource, /原始引擎消息/);
-
-  const diagnosticsSource = source.slice(diagnostics, codex);
-  for (const label of [
-    'Request ID', '事件 ID', '入口 ID', '入口名称', '上游 Host',
-    '上游请求 ID', '实际超时阈值', '原始引擎消息',
-  ]) {
-    assert.match(diagnosticsSource, new RegExp(label));
-  }
-  assert.match(source, /复制源事件 JSON/);
+  assert.match(source, /id="analytics-request-drilldown"/);
+  assert.match(source, /<EventInspector/);
+  assert.match(source, /runtimeEventDetail\?\.event\?\.id/);
 });
 
 test('StatsPage Token 展示统一术语并把缓存命中率并入缓存读取', () => {

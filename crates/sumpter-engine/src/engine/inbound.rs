@@ -181,6 +181,8 @@ impl Engine {
         let route_intent =
             route_intent_for_path(method, path_and_query, query_model.as_deref(), client_kind);
         InboundRequestContext {
+            session_source: super::context::observed_session(headers)
+                .map(|(_, source)| source.to_owned()),
             method: bounded_request_method(method),
             path,
             route_intent: route_intent.to_string(),

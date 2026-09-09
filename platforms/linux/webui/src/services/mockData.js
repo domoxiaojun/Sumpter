@@ -378,7 +378,6 @@ export const mockRuntime = {
         truncated: false,
         hasConflicts: false,
         isSubagent: false,
-        parentThreadIDInferred: false,
       },
       upstreamStatusCode: 200,
       upstreamRequestID: 'req_openai_failed_200_demo',
@@ -469,7 +468,6 @@ export const mockRuntime = {
         truncated: false,
         hasConflicts: false,
         isSubagent: true,
-        parentThreadIDInferred: false,
       },
       streamTrace: {
         chunkCount: 36,

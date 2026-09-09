@@ -56,6 +56,8 @@ pub fn trends_on(connection: &mut Connection, request: &TrendRequest) -> QueryRe
         request.history_generation,
     )?;
     let prices = load_price_catalog(&transaction)?;
+    let cache_builder = super::analytics_client_builder(&filters, snapshot.snapshot_seq);
+    let cache_read = super::analytics_queries::cache_read_statistics(&transaction, &cache_builder)?;
     if let Some((points, totals)) = try_hourly_rollup(
         &transaction,
         &filters,
@@ -67,6 +69,7 @@ pub fn trends_on(connection: &mut Connection, request: &TrendRequest) -> QueryRe
     )? {
         transaction.commit()?;
         return Ok(TrendSeries {
+            cache_read,
             api_version: API_VERSION,
             rollup_used: true,
             granularity,
@@ -153,6 +156,7 @@ pub fn trends_on(connection: &mut Connection, request: &TrendRequest) -> QueryRe
     let totals = totals.finish(request.from, request.to, &prices);
     transaction.commit()?;
     Ok(TrendSeries {
+        cache_read,
         api_version: API_VERSION,
         rollup_used: false,
         granularity,

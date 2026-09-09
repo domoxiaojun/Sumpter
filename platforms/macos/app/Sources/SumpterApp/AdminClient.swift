@@ -679,211 +679,77 @@ public enum AdminWire {
     public struct RuntimeEventListItem: Decodable, Equatable, Identifiable, Sendable {
         public let seq: Int
         public let changeSeq: Int
-        public let id: String
-        public let timestamp: Double
-        public let kind: String
-        public let phase: RuntimeEventPhase?
-        public let outcome: RuntimeEventOutcome?
-        public let statusCode: Int
-        public let requestID: String?
-        public let requestMethod: String?
-        public let requestPath: String?
-        public let routeIntent: String?
-        public let sessionID: String?
-        public let clientKind: ClientKind?
-        /// The compact projection mirrors the high-signal routing fields so
-        /// list/SSE updates remain useful before the full detail request
-        /// completes.  Optional values are intentionally nullable for old
-        /// daemons and legacy events.
-        public let clientModel: String?
-        public let requestPurpose: RequestPurpose?
-        public let featureRuleID: String?
-        public let endpointID: String?
-        public let endpointName: String?
-        public let modelGroupID: String?
-        public let modelGroupName: String?
-        public let upstreamHost: String?
-        public let sourceFormat: ProviderProtocol?
-        public let targetFormat: ProviderProtocol?
-        public let routeMode: RouteMode?
-        public let effectiveModel: String?
-        public let upstreamModel: String?
-        public let failureKind: RuntimeFailureKind?
-        public let failurePhase: RuntimeFailurePhase?
-        public let failureDetail: String?
-        public let message: String?
-        public let toolCalls: [String]?
-        public let streamTrace: StreamTrace?
-        public let durationMS: Int
-        public let ttfbMS: Int?
-        public let timeoutMS: Int?
-        public let upstreamStatusCode: Int?
-        public let upstreamRequestID: String?
-        public let codexMetadata: CodexMetadata?
-        /// Client-declared project attribution. Kept in the projection because the
-        /// event list is this app's primary load path; without it a Claude Code
-        /// request would render as an unidentified project until its detail is fetched.
-        public let clientDeclared: ClientDeclaredMetadata?
-        public let grokMetadata: GrokMetadata?
-        public let projectName: String?
-        public let projectSource: String?
-        public let localUser: String?
-        public let codexThreadClass: String?
-        public let attributionScope: String?
-        public let failover: Bool
+        private let payload: RuntimeEvent
+        private enum CodingKeys: String, CodingKey { case seq, changeSeq }
 
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            seq = try container.decode(Int.self, forKey: .seq)
+            changeSeq = try container.decode(Int.self, forKey: .changeSeq)
+            payload = try RuntimeEvent(from: decoder)
+        }
         public init(change: RuntimeChange) {
-            let event = change.event
             seq = change.seq
             changeSeq = change.changeSeq
-            id = event.id
-            timestamp = event.timestamp.timeIntervalSinceReferenceDate
-            kind = event.kind
-            phase = event.phase
-            outcome = event.outcome
-            statusCode = event.statusCode
-            requestID = event.requestID
-            requestMethod = event.requestMethod
-            requestPath = event.requestPath
-            routeIntent = event.routeIntent
-            sessionID = event.sessionID
-            clientKind = event.clientKind
-            clientModel = event.clientModel
-            requestPurpose = event.requestPurpose
-            featureRuleID = event.featureRuleID
-            endpointID = event.endpointID
-            endpointName = event.endpointName
-            modelGroupID = event.modelGroupID
-            modelGroupName = event.modelGroupName
-            upstreamHost = event.upstreamHost
-            sourceFormat = event.sourceFormat
-            targetFormat = event.targetFormat
-            routeMode = event.routeMode
-            effectiveModel = event.effectiveModel
-            upstreamModel = event.upstreamModel
-            failureKind = event.failureKind
-            failurePhase = event.failurePhase
-            failureDetail = event.failureDetail
-            message = event.message
-            toolCalls = event.toolCalls
-            streamTrace = event.streamTrace
-            durationMS = event.durationMS
-            ttfbMS = event.ttfbMS
-            timeoutMS = event.timeoutMS
-            upstreamStatusCode = event.upstreamStatusCode
-            upstreamRequestID = event.upstreamRequestID
-            codexMetadata = event.codexMetadata
-            clientDeclared = event.clientDeclared
-            grokMetadata = event.grokMetadata
-            projectName = event.projectName
-            projectSource = event.projectSource
-            localUser = event.localUser
-            codexThreadClass = event.codexThreadClass
-            attributionScope = event.attributionScope
-            failover = event.failover
+            payload = change.event
         }
-
-        public var runtimeEvent: RuntimeEvent {
-            RuntimeEvent(
-                id: id,
-                timestamp: RuntimeEvent.Timestamp.date(from: timestamp),
-                kind: kind,
-                endpointID: endpointID,
-                endpointName: endpointName,
-                upstreamHost: upstreamHost,
-                clientModel: clientModel,
-                clientKind: clientKind,
-                sourceFormat: sourceFormat,
-                targetFormat: targetFormat,
-                routeMode: routeMode,
-                upstreamModel: upstreamModel,
-                effectiveModel: effectiveModel,
-                statusCode: statusCode,
-                durationMS: durationMS,
-                failover: failover,
-                message: message,
-                toolCalls: toolCalls,
-                streamTrace: streamTrace,
-                outcome: outcome,
-                phase: phase,
-                featureRuleID: featureRuleID,
-                failureDetail: failureDetail,
-                failureKind: failureKind,
-                failurePhase: failurePhase,
-                requestPurpose: requestPurpose,
-                requestID: requestID,
-                requestMethod: requestMethod,
-                requestPath: requestPath,
-                routeIntent: routeIntent,
-                sessionID: sessionID,
-                ttfbMS: ttfbMS,
-                timeoutMS: timeoutMS,
-                upstreamStatusCode: upstreamStatusCode,
-                upstreamRequestID: upstreamRequestID,
-                codexMetadata: codexMetadata,
-                clientDeclared: clientDeclared,
-                grokMetadata: grokMetadata,
-                projectName: projectName,
-                projectSource: projectSource,
-                localUser: localUser,
-                codexThreadClass: codexThreadClass,
-                attributionScope: attributionScope
-            )
-        }
-
-        /// Merge a list projection into an already-loaded full event.
-        ///
-        /// `/admin/runtime/events` intentionally returns a compact projection;
-        /// optional `nil` fields therefore mean "not present in this projection",
-        /// not "clear the value from the full detail". Keeping the merge here
-        /// makes SSE updates and pagination use the same lossless rule.
+        public var id: String { payload.id }
+        public var timestamp: Double { payload.timestamp.timeIntervalSinceReferenceDate }
+        public var kind: String { payload.kind }
+        public var phase: RuntimeEventPhase? { payload.phase }
+        public var outcome: RuntimeEventOutcome? { payload.outcome }
+        public var statusCode: Int { payload.statusCode }
+        public var requestID: String? { payload.requestID }
+        public var requestMethod: String? { payload.requestMethod }
+        public var requestPath: String? { payload.requestPath }
+        public var routeIntent: String? { payload.routeIntent }
+        public var sessionID: String? { payload.sessionID }
+        public var clientKind: ClientKind? { payload.clientKind }
+        public var clientModel: String? { payload.clientModel }
+        public var requestPurpose: RequestPurpose? { payload.requestPurpose }
+        public var featureRuleID: String? { payload.featureRuleID }
+        public var endpointID: String? { payload.endpointID }
+        public var endpointName: String? { payload.endpointName }
+        public var modelGroupID: String? { payload.modelGroupID }
+        public var modelGroupName: String? { payload.modelGroupName }
+        public var upstreamHost: String? { payload.upstreamHost }
+        public var sourceFormat: ProviderProtocol? { payload.sourceFormat }
+        public var targetFormat: ProviderProtocol? { payload.targetFormat }
+        public var routeMode: RouteMode? { payload.routeMode }
+        public var effectiveModel: String? { payload.effectiveModel }
+        public var upstreamModel: String? { payload.upstreamModel }
+        public var failureKind: RuntimeFailureKind? { payload.failureKind }
+        public var failurePhase: RuntimeFailurePhase? { payload.failurePhase }
+        public var failureDetail: String? { payload.failureDetail }
+        public var message: String? { payload.message }
+        public var toolCalls: [String]? { payload.toolCalls }
+        public var streamTrace: StreamTrace? { payload.streamTrace }
+        public var durationMS: Int { payload.durationMS }
+        public var ttfbMS: Int? { payload.ttfbMS }
+        public var timeoutMS: Int? { payload.timeoutMS }
+        public var upstreamStatusCode: Int? { payload.upstreamStatusCode }
+        public var upstreamRequestID: String? { payload.upstreamRequestID }
+        public var codexMetadata: CodexMetadata? { payload.codexMetadata }
+        public var clientDeclared: ClientDeclaredMetadata? { payload.clientDeclared }
+        public var grokMetadata: GrokMetadata? { payload.grokMetadata }
+        public var projectName: String? { payload.projectName }
+        public var projectSource: String? { payload.projectSource }
+        public var localUser: String? { payload.localUser }
+        public var codexThreadClass: String? { payload.codexThreadClass }
+        public var attributionScope: String? { payload.attributionScope }
+        public var failover: Bool { payload.failover }
+        public var clientVariant: String? { payload.clientVariant }
+        public var agentRole: String? { payload.agentRole }
+        public var agentName: String? { payload.agentName }
+        public var parentThreadID: String? { payload.parentThreadID }
+        public var parentTurnID: String? { payload.parentTurnID }
+        public var rootTurnID: String? { payload.rootTurnID }
+        public var cacheRead: CacheReadSummary? { payload.cacheRead }
+        public var usageSummary: ResponseUsage? { payload.usageSummary }
+        public var detailsOmitted: Bool? { payload.detailsOmitted }
+        public var runtimeEvent: RuntimeEvent { payload }
         public func mergedRuntimeEvent(with existing: RuntimeEvent?) -> RuntimeEvent {
-            guard var event = existing else { return runtimeEvent }
-            event.timestamp = RuntimeEvent.Timestamp.date(from: timestamp)
-            event.kind = kind
-            event.statusCode = statusCode
-            event.durationMS = durationMS
-            event.failover = failover
-            if let phase { event.phase = phase }
-            if let outcome { event.outcome = outcome }
-            if let requestID { event.requestID = requestID }
-            if let requestMethod { event.requestMethod = requestMethod }
-            if let requestPath { event.requestPath = requestPath }
-            if let routeIntent { event.routeIntent = routeIntent }
-            if let sessionID { event.sessionID = sessionID }
-            if let clientKind { event.clientKind = clientKind }
-            if let clientModel { event.clientModel = clientModel }
-            if let requestPurpose { event.requestPurpose = requestPurpose }
-            if let featureRuleID { event.featureRuleID = featureRuleID }
-            if let endpointID { event.endpointID = endpointID }
-            if let endpointName { event.endpointName = endpointName }
-            if let modelGroupID { event.modelGroupID = modelGroupID }
-            if let modelGroupName { event.modelGroupName = modelGroupName }
-            if let upstreamHost { event.upstreamHost = upstreamHost }
-            if let sourceFormat { event.sourceFormat = sourceFormat }
-            if let targetFormat { event.targetFormat = targetFormat }
-            if let routeMode { event.routeMode = routeMode }
-            if let effectiveModel { event.effectiveModel = effectiveModel }
-            if let upstreamModel { event.upstreamModel = upstreamModel }
-            if let failureKind { event.failureKind = failureKind }
-            if let failurePhase { event.failurePhase = failurePhase }
-            if let failureDetail { event.failureDetail = failureDetail }
-            if let message { event.message = message }
-            if let toolCalls { event.toolCalls = toolCalls }
-            if let streamTrace { event.streamTrace = streamTrace }
-            if let ttfbMS { event.ttfbMS = ttfbMS }
-            if let timeoutMS { event.timeoutMS = timeoutMS }
-            if let upstreamStatusCode { event.upstreamStatusCode = upstreamStatusCode }
-            if let upstreamRequestID { event.upstreamRequestID = upstreamRequestID }
-            if let codexMetadata { event.codexMetadata = codexMetadata }
-            if let clientDeclared { event.clientDeclared = clientDeclared }
-            if let grokMetadata { event.grokMetadata = grokMetadata }
-            if let projectName { event.projectName = projectName }
-            if let projectSource { event.projectSource = projectSource }
-            if let localUser { event.localUser = localUser }
-            if let codexThreadClass { event.codexThreadClass = codexThreadClass }
-            if let attributionScope { event.attributionScope = attributionScope }
-            return event
+            existing?.mergingProjection(payload) ?? payload
         }
     }
 
@@ -1103,6 +969,7 @@ public enum AdminWire {
     }
 
     public struct RuntimeTrendSeries: Decodable, Equatable, Sendable {
+        public let cacheRead: CacheReadStatistics?
         public let apiVersion: Int
         public let rollupUsed: Bool
         public let granularity: String
@@ -1379,6 +1246,8 @@ public enum AdminWire {
     public typealias RuntimeEventDetail = RuntimeChange
 
     public struct RuntimeAnalytics: Decodable, Equatable, Sendable {
+        public let cacheRead: CacheReadStatistics?
+        public let upstreamCacheRead: CacheReadStatistics?
         /// Count of requests for which each usage field was explicitly present.
         /// A present field with value `0` is still counted; absent fields remain
         /// distinguishable from an explicit zero in the token columns.

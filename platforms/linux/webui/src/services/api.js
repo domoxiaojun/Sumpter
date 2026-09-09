@@ -170,6 +170,12 @@ function normalizeSecretStatus(value) {
 
 function runtimeEventListItem(event, sequence) {
   return {
+    cacheRead: event.cacheRead,
+    usageSummary: event.usageSummary ?? event.streamTrace?.usage,
+    clientVariant: event.clientVariant, agentRole: event.agentRole, agentName: event.agentName,
+    parentThreadId: event.parentThreadId, parentTurnId: event.parentTurnId, rootTurnId: event.rootTurnId,
+    sessionSource: event.sessionSource, hookEvent: event.hookEvent, detailsOmitted: false,
+    clientDeclared: event.clientDeclared, grokMetadata: event.grokMetadata,
     seq: Number(event?.seq ?? sequence ?? 0),
     changeSeq: Number(event?.changeSeq ?? event?.seq ?? sequence ?? 0),
     id: event.id,

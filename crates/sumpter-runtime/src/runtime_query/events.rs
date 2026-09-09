@@ -75,7 +75,9 @@ pub fn events_page_on(
                 source_format,target_format,route_mode,upstream_status_code,\
                 COALESCE(duration_ms,0) AS duration_ms,ttfb_ms,COALESCE(failover,0) AS failover,project_name,project_source,local_user,\
                 codex_thread_class,attribution_scope \
-                ,request_method,request_path,route_intent,model_group_id,model_group_name \
+                ,request_method,request_path,route_intent,model_group_id,model_group_name, \
+                cache_read_state,cache_read_finality,cache_read_reason,hook_event,input_tokens,output_tokens, \
+                cache_read_input_tokens,cache_creation_input_tokens,reasoning_tokens \
          FROM runtime_events{where_sql} ORDER BY seq DESC LIMIT ? OFFSET ?"
     );
     let events = {

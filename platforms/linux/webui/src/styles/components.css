@@ -1282,20 +1282,16 @@ html[data-theme="light"] .brand-title {
   scrollbar-gutter: stable;
 }
 
-.table-scroll-hint {
-  position: absolute;
-  right: 8px;
-  top: 8px;
-  z-index: 3;
-  pointer-events: none;
-  padding: 2px 7px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--bg-surface-elevated) 88%, transparent);
-  color: var(--text-muted);
-  font-size: 0.68rem;
-  opacity: 0.85;
-}
+.data-table-shell { position: relative; width: 100%; min-width: 0; max-width: 100%; }
+.table-scroll-controls { position: sticky; bottom: 0; z-index: 3; padding: 5px 10px 8px; background: var(--bg-surface-elevated); border: 1px solid var(--border-subtle); border-top: 0; border-radius: 0 0 var(--radius-md) var(--radius-md); }
+.table-scroll-hint { display: block; color: var(--text-muted); font-size: 0.7rem; text-align: right; margin-bottom: 3px; }
+.table-scrollbar { display: block; width: 100%; height: 14px; margin: 0; appearance: none; -webkit-appearance: none; background: transparent; cursor: ew-resize; }
+.table-scrollbar::-webkit-slider-runnable-track { height: 10px; border-radius: 8px; background: var(--bg-surface-glass); border: 1px solid var(--border-medium); }
+.table-scrollbar::-webkit-slider-thumb { appearance: none; -webkit-appearance: none; height: 8px; width: var(--table-scroll-thumb); border-radius: 8px; background: color-mix(in srgb, var(--primary) 65%, var(--border-medium)); }
+.table-scrollbar::-moz-range-track { height: 10px; border-radius: 8px; background: var(--bg-surface-glass); border: 1px solid var(--border-medium); }
+.table-scrollbar::-moz-range-thumb { height: 8px; width: var(--table-scroll-thumb); border: 0; border-radius: 8px; background: var(--primary); }
+.table-scrollbar:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 8px; }
+.data-table-shell > .table-container::-webkit-scrollbar:horizontal { height: 0; }
 
 .table-container:focus-visible {
   outline: 2px solid var(--primary);
@@ -7131,3 +7127,22 @@ button.responsive-data-card {
 @media(min-width:1480px) { .run-metric-grid { grid-template-columns:repeat(6,minmax(0,1fr)); } }
 @media(max-width:600px) { .run-metric-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media(prefers-reduced-motion:reduce) { .btn:active:not(:disabled), .btn-icon:active:not(:disabled) { transform:none; } }
+.telemetry-cache-summary { display: block; color: var(--text-primary); font-weight: 600; margin-bottom: 4px; }
+.telemetry-cache-summary small { display: block; color: var(--text-secondary); font-weight: 400; font-size: 0.75rem; }
+.event-inspector { padding: clamp(16px, 3vw, 24px); border-top: 1px solid var(--border-subtle); }
+.event-inspector-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 12px 24px; margin: 0; }
+.event-inspector-field { min-width: 0; }
+.event-inspector-field dt { font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px; }
+.event-inspector-field dd { margin: 0; color: var(--text-primary); font-size: 0.82rem; overflow-wrap: anywhere; white-space: pre-wrap; }
+.event-inspector-message { margin: 12px 0; font-size: 0.82rem; overflow-wrap: anywhere; }
+.event-inspector-message:empty { display: none; }
+.event-inspector-message.is-error { color: var(--status-critical); }
+.event-inspector-group { border-top: 1px solid var(--border-subtle); }
+.event-inspector-group summary { cursor: pointer; padding: 14px 4px; min-height: 44px; color: var(--text-primary); font-size: 0.85rem; }
+.event-inspector-group summary span { margin-left: 12px; color: var(--text-muted); font-size: 0.75rem; overflow-wrap: anywhere; }
+.event-inspector-group summary:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.event-inspector-content { padding: 0 4px 16px 20px; }
+.event-inspector-json { max-height: 480px; overflow: auto; margin-top: 12px; }
+.event-chain-button { text-align: left; display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; color: var(--text-primary); background: var(--bg-surface-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); cursor: pointer; }
+.event-chain-button[aria-pressed="true"] { border-color: var(--primary); }
+.event-chain-button span { color: var(--text-secondary); font-size: 0.75rem; }

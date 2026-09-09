@@ -384,9 +384,10 @@ impl RuntimeStore {
 
     pub fn enqueue(
         &self,
-        event: RuntimeEvent,
+        mut event: RuntimeEvent,
         counters: RuntimeCounters,
     ) -> Result<RuntimeChange, String> {
+        event.refresh_cache_read();
         let payload_size = serde_json::to_vec(&event)
             .map_err(|error| error.to_string())?
             .len();

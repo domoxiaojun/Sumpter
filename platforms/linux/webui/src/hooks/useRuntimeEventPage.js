@@ -32,6 +32,9 @@ export function useRuntimeEventPage({
   const [result, setResult] = useState(null);
   const [mode, setMode] = useState('loading');
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const backgroundRefreshRef = useRef(false);
+  const lastAutoRefreshRef = useRef(null);
   const [error, setError] = useState(null);
   const [reloadGeneration, setReloadGeneration] = useState(0);
   const requestGenerationRef = useRef(0);
@@ -40,6 +43,8 @@ export function useRuntimeEventPage({
   const queryKey = `${eventKind || 'all'}:${pageSize}:${Number(resetGeneration || 0)}`;
 
   useEffect(() => {
+    backgroundRefreshRef.current = false;
+    lastAutoRefreshRef.current = null;
     snapshotRef.current = null;
     setMode('loading');
     setLoading(true);
@@ -53,7 +58,10 @@ export function useRuntimeEventPage({
     const controller = new AbortController();
     const requestedPage = Math.max(1, Number(page) || 1);
     const snapshot = snapshotRef.current;
-    setLoading(true);
+    const background = backgroundRefreshRef.current;
+    backgroundRefreshRef.current = false;
+    setLoading(!background);
+    setRefreshing(true);
     setError(null);
 
     const fetchPage = async (useSnapshot = true) => {
@@ -107,7 +115,7 @@ export function useRuntimeEventPage({
         }
         setError(requestError?.message || '加载事件历史失败');
       } finally {
-        if (generation === requestGenerationRef.current) setLoading(false);
+        if (generation === requestGenerationRef.current) { setLoading(false); setRefreshing(false); }
       }
     })();
 
@@ -116,10 +124,12 @@ export function useRuntimeEventPage({
 
   const setPage = useCallback((value) => {
     const next = clampRuntimeEventPage(value, result?.totalPages || 1);
+    backgroundRefreshRef.current = false;
     setPageState(next);
   }, [result?.totalPages]);
 
   const setPageSize = useCallback((value) => {
+    backgroundRefreshRef.current = false;
     const next = persistRuntimeEventPageSize(value);
     snapshotRef.current = null;
     setPageSizeState(next);
@@ -147,11 +157,20 @@ export function useRuntimeEventPage({
   // SSE had already delivered the event. Debounce the reset so a burst of
   // completed events results in one stable-snapshot request.
   useEffect(() => {
-    if (mode !== 'page' || page !== 1 || loading || snapshotRef.current == null) return undefined;
+    if (mode !== 'page' || page !== 1 || refreshing || snapshotRef.current == null) return undefined;
     const pending = completedNewEventCount(recentEvents, snapshotRef.current.snapshotSeq, eventKind);
     if (pending <= 0 || autoRefreshTimerRef.current != null) return undefined;
+    const newest = recentEvents.filter((event) => eventMatchesKind(event, eventKind) && !eventIsInFlight(event))
+      .reduce((value, event) => Math.max(value, Number(event.seq || 0)), 0);
+    const signature = `${eventKind}:${snapshotRef.current.snapshotSeq}:${newest}`;
+    // A persisted snapshot can lag its SSE notice. Do not restart the same
+    // refresh on every loading transition; retry only with progress or a later poll.
+    const last = lastAutoRefreshRef.current;
+    if (last?.signature === signature && Date.now() - last.at < 5000) return undefined;
     autoRefreshTimerRef.current = window.setTimeout(() => {
       autoRefreshTimerRef.current = null;
+      lastAutoRefreshRef.current = { signature, at: Date.now() };
+      backgroundRefreshRef.current = true;
       snapshotRef.current = null;
       setReloadGeneration((value) => value + 1);
     }, 220);
@@ -161,7 +180,7 @@ export function useRuntimeEventPage({
         autoRefreshTimerRef.current = null;
       }
     };
-  }, [eventKind, loading, mode, page, recentEvents]);
+  }, [eventKind, refreshing, mode, page, recentEvents]);
 
   return {
     mode,
@@ -184,6 +203,6 @@ export function useRuntimeEventPage({
     historyGeneration: result?.historyGeneration ?? null,
     setPage,
     setPageSize,
-    retry: () => setReloadGeneration((value) => value + 1),
+    retry: () => { backgroundRefreshRef.current = false; setReloadGeneration((value) => value + 1); },
   };
 }

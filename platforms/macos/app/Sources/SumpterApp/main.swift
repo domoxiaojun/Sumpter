@@ -515,6 +515,7 @@ final class AppModel: ObservableObject {
     var lastRuntimeV2RefreshAt: Date?
     var lastRuntimeFacetsRefreshAt: Date?
     var detailRequestGeneration = 0
+    var runtimeEventDetails: [String: AdminWire.RuntimeEventDetail] = [:]
     var diagnosticCaptureRequestGeneration = 0
     var diagnosticCaptureDetailRequestGeneration = 0
     var diagnosticCaptureExportRequestGeneration = 0

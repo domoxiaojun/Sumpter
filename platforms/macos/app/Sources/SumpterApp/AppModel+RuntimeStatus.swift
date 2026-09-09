@@ -243,6 +243,7 @@ extension AppModel {
             }
             if resetGenerationChanged {
                 runtimeChangeSeq = 0
+                runtimeEventDetails.removeAll()
                 runtimeEventDetail = nil
                 runtimePage = nil
                 runHistoryRequestGeneration &+= 1

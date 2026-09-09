@@ -93,6 +93,7 @@ extension AppModel {
             do {
                 try await admin.resetRuntime()
                 runtimeChangeSeq = 0
+                runtimeEventDetails.removeAll()
                 runtimeEventDetail = nil
                 runtimePage = nil
                 runHistoryRequestGeneration &+= 1
@@ -119,6 +120,7 @@ extension AppModel {
             do {
                 try await admin.recreateRuntime()
                 runtimeChangeSeq = 0
+                runtimeEventDetails.removeAll()
                 runtimeEventDetail = nil
                 runtimePage = nil
                 runHistoryRequestGeneration &+= 1
@@ -149,6 +151,7 @@ extension AppModel {
         guard let admin else { throw AppModelError.invalidInput("管理连接尚未就绪") }
         let mutation = try await admin.cleanupRuntime(olderThan: olderThan)
         runtimeChangeSeq = 0
+        runtimeEventDetails.removeAll()
         runtimeEventDetail = nil
         runtimePage = nil
         runHistoryRequestGeneration &+= 1
@@ -175,6 +178,7 @@ extension AppModel {
                     confirmUnidentified: confirmUnidentified
                 )
                 runtimeChangeSeq = 0
+                runtimeEventDetails.removeAll()
                 runtimeEventDetail = nil
                 runtimePage = nil
                 runHistoryRequestGeneration &+= 1

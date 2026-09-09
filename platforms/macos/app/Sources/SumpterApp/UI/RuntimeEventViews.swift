@@ -129,33 +129,10 @@ enum RuntimeEventDisplay {
     }
 
     static func requestSummary(_ event: RuntimeEvent) -> String {
-        let metadata = event.codexMetadata
-        return [
-            RuntimeEventPresentation.projectAttribution(
-                eventKind: event.kind,
-                metadata: metadata,
-                declared: event.clientDeclared,
-                projectedName: event.projectName,
-                projectedSource: event.projectSource,
-                projectedLocalUser: event.localUser
-            ),
-            kind(event.kind), clientKind(event),
-            RuntimeEventPresentation.grokSummary(event.grokMetadata),
-            metadata.flatMap { meta in
-                if event.clientKind == .grokBuild && !meta.hasRequestIdentity {
-                    return nil
-                }
-                let role = codexAgentRole(meta)
-                if event.clientKind == .grokBuild && role == "代理身份未确定" {
-                    return nil
-                }
-                return "代理: \(role)"
-            },
-            purpose(event),
-            toolCalls(event).map { "工具: \($0)" },
-            metadata?.agentName.map { "路径: \($0)" },
-            event.featureRuleID.map { "规则: \(featureRule($0))" },
-        ].compactMap { $0 }.joined(separator: " · ")
+        [RuntimeEventPresentation.projectAttribution(
+            eventKind: event.kind, metadata: event.codexMetadata, declared: event.clientDeclared,
+            projectedName: event.projectName, projectedSource: event.projectSource, projectedLocalUser: event.localUser
+        ), kind(event.kind), clientKind(event), event.agentSummaryLabel].compactMap { $0 }.joined(separator: " · ")
     }
 
     static func streamTrace(_ event: RuntimeEvent) -> String? {
@@ -201,6 +178,16 @@ enum RuntimeEventDisplay {
             return "不适用（通知事件）"
         case nil:
             return "旧事件（阶段未记录）"
+        }
+    }
+
+    static func httpStatusColor(_ event: RuntimeEvent) -> Color {
+        switch event.statusCode {
+        case 101: .accentColor
+        case 200..<300: .green
+        case 300..<400: .orange
+        case 400...: .red
+        default: .secondary
         }
     }
 
@@ -258,21 +245,12 @@ enum RuntimeEventDisplay {
     }
 
     static func endpoint(_ event: RuntimeEvent) -> String {
-        let name = event.endpointName?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let id = event.endpointID?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let identity: String
-        switch (name?.isEmpty == false ? name : nil, id?.isEmpty == false ? id : nil) {
-        case let (.some(name), .some(id)):
-            identity = "\(name) (\(id))"
-        case let (.some(name), nil):
-            identity = name
-        case let (nil, .some(id)):
-            identity = id
-        default:
-            identity = "-"
+        for value in [event.endpointName, event.endpointID] {
+            if let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
+                return value
+            }
         }
-        if let host = event.upstreamHost, !host.isEmpty { return "\(identity) @ \(host)" }
-        return identity
+        return "-"
     }
 
     /// 命中的特征规则:内建规则显示可读名(如 WebSearch),自定义规则回退到 id 本身。
@@ -367,6 +345,7 @@ enum RuntimeEventDisplay {
 private struct RuntimeEventStatusSummary: View {
     let event: RuntimeEvent
     var compact = false
+    var includeUsage = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -376,89 +355,13 @@ private struct RuntimeEventStatusSummary: View {
                 .lineLimit(1)
             Text(RuntimeEventDisplay.statusDetail(event))
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(RuntimeEventDisplay.httpStatusColor(event))
                 .lineLimit(2)
+            if includeUsage && event.kind != "notify" {
+                Text(event.cacheReadLabel).font(.caption).foregroundStyle(.primary)
+                Text(event.usageSummaryLabel).font(.caption2).foregroundStyle(.secondary)
+            }
         }
-    }
-}
-
-private struct RuntimeEventTraceExport: Encodable {
-    let id: String
-    let timestamp: Date
-    let requestID: String?
-    let sessionID: String?
-    let kind: String
-    let endpointID: String?
-    let endpointName: String?
-    let upstreamHost: String?
-    let clientKind: ClientKind?
-    let sourceFormat: ProviderProtocol?
-    let targetFormat: ProviderProtocol?
-    let routeMode: RouteMode?
-    let clientModel: String?
-    let effectiveModel: String?
-    let upstreamModel: String?
-    let statusCode: Int
-    let durationMS: Int
-    let failover: Bool
-    let message: String?
-    let toolCalls: [String]?
-    let requestPurpose: RequestPurpose?
-    let outcome: RuntimeEventOutcome?
-    let phase: RuntimeEventPhase?
-    let featureRuleID: String?
-    let failureDetail: String?
-    let ttfbMS: Int?
-    let timeoutMS: Int?
-    let failureKind: RuntimeFailureKind?
-    let failurePhase: RuntimeFailurePhase?
-    let upstreamStatusCode: Int?
-    let upstreamRequestID: String?
-    let streamTrace: StreamTrace?
-    let codexMetadata: CodexMetadata?
-    let grokMetadata: GrokMetadata?
-
-    init(event: RuntimeEvent) {
-        id = event.id
-        timestamp = event.timestamp
-        requestID = event.requestID
-        sessionID = event.sessionID
-        kind = event.kind
-        endpointID = event.endpointID
-        endpointName = event.endpointName
-        upstreamHost = event.upstreamHost
-        clientKind = event.clientKind
-        sourceFormat = event.sourceFormat
-        targetFormat = event.targetFormat
-        routeMode = event.routeMode
-        clientModel = event.clientModel
-        effectiveModel = event.effectiveModel
-        upstreamModel = event.upstreamModel
-        statusCode = event.statusCode
-        durationMS = event.durationMS
-        failover = event.failover
-        message = event.message
-        toolCalls = event.toolCalls
-        requestPurpose = event.requestPurpose
-        outcome = event.outcome
-        phase = event.phase
-        featureRuleID = event.featureRuleID
-        failureDetail = event.failureDetail
-        ttfbMS = event.ttfbMS
-        timeoutMS = event.timeoutMS
-        failureKind = event.failureKind
-        failurePhase = event.failurePhase
-        upstreamStatusCode = event.upstreamStatusCode
-        upstreamRequestID = event.upstreamRequestID
-        streamTrace = event.streamTrace
-        codexMetadata = event.codexMetadata
-        grokMetadata = event.grokMetadata
-    }
-
-    func prettyJSON() -> String? {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        return try? String(decoding: encoder.encode(self), as: UTF8.self)
     }
 }
 
@@ -527,6 +430,7 @@ struct RecentEventsPanel: View {
     var requestChainLoading = false
     var onSelectEvent: ((String?) -> Void)?
     @State private var selectedEventID: String?
+    @State private var expandedEventGroups: Set<String> = []
     @Environment(\.sumpterPalette) private var palette
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -549,7 +453,7 @@ struct RecentEventsPanel: View {
     }
 
     private var eventRowHeight: CGFloat {
-        dynamicTypeSize.isAccessibilitySize ? 72 : 48
+        dynamicTypeSize.isAccessibilitySize ? 104 : 76
     }
 
     var body: some View {
@@ -610,28 +514,10 @@ struct RecentEventsPanel: View {
                 }
                 if let event = selectedEvent {
                     Divider()
-                    ViewThatFits(in: .horizontal) {
-                        HStack(alignment: .top, spacing: 16) {
-                            RuntimeRequestTraceView(
-                                chain: selectedRequestChain,
-                                selectedEventID: $selectedEventID
-                            )
-                            .frame(width: 310, alignment: .topLeading)
-                            Divider()
-                            RuntimeEventDetail(event: event)
-                                .frame(minWidth: 380, maxWidth: .infinity, alignment: .topLeading)
-                        }
-                        VStack(alignment: .leading, spacing: 16) {
-                            RuntimeRequestTraceView(
-                                chain: selectedRequestChain,
-                                selectedEventID: $selectedEventID,
-                                maxHeight: 280
-                            )
-                            Divider()
-                            RuntimeEventDetail(event: event)
-                                .frame(maxWidth: .infinity, alignment: .topLeading)
-                        }
-                    }
+                    RuntimeEventInspector(
+                        event: event, chain: selectedRequestChain,
+                        selectedEventID: $selectedEventID, expanded: $expandedEventGroups
+                    )
                 }
             }
         }
@@ -826,6 +712,9 @@ struct RecentEventsPanel: View {
 
     private func eventRouteCell(_ event: RuntimeEvent) -> some View {
         VStack(alignment: .leading, spacing: 2) {
+            if event.kind == "notify" {
+                Text(event.hookEvent ?? "通知").font(.callout)
+            } else {
             Text(RuntimeEventDisplay.model(event))
                 .font(.callout)
                 .lineLimit(1)
@@ -835,24 +724,34 @@ struct RecentEventsPanel: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
                 .help(RuntimeEventDisplay.endpoint(event))
+            }
         }
         .frame(maxWidth: .infinity, minHeight: eventRowHeight - 6, alignment: .leading)
     }
 
     private func eventResultCell(_ event: RuntimeEvent) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            RuntimeEventStatusSummary(event: event)
+            if event.kind == "notify" {
+                Text("通知事件").font(.callout)
+            } else {
+            RuntimeEventStatusSummary(event: event, includeUsage: false)
             RuntimeEventDurationText(event: event)
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(RuntimeEventDisplay.durationColor(event))
                 .help(RuntimeEventDisplay.durationHelp(event))
+            }
         }
         .frame(maxWidth: .infinity, minHeight: eventRowHeight - 6, alignment: .leading)
     }
 
     private func eventMessageCell(_ event: RuntimeEvent) -> some View {
         let friendly = RuntimeEventDisplay.friendlyMessage(event)
-        return Text(friendly.isEmpty ? "-" : friendly)
+        return VStack(alignment: .leading, spacing: 2) {
+            if event.kind != "notify" {
+                Text(event.cacheReadLabel).font(.caption)
+                Text(event.usageSummaryLabel).font(.caption2).foregroundStyle(.secondary)
+            }
+            Text(friendly.isEmpty ? "-" : friendly)
             .foregroundStyle(RuntimeEventDisplay.messageColor(event, friendly: friendly))
             .font(.callout)
             .lineLimit(2)
@@ -864,7 +763,8 @@ struct RecentEventsPanel: View {
                     )
                     ?? friendly
             )
-            .frame(maxWidth: .infinity, minHeight: eventRowHeight - 6, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, minHeight: eventRowHeight - 6, alignment: .leading)
     }
 
     private func liveEventRow(_ event: RuntimeEvent) -> some View {
@@ -1230,557 +1130,7 @@ private struct RuntimeRequestTraceView: View {
 
 /// 选中事件按“操作摘要 → 诊断字段”分层。首屏只放判断请求是否正常所需的信息，
 /// 长 ID、流计时与完整 Codex 元数据渐进披露，避免把所有采集字段铺成信息墙。
-private struct RuntimeEventDetail: View {
-    let event: RuntimeEvent
-    @State private var copyFeedback: String?
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("选中事件")
-                    .font(.callout.weight(.semibold))
-                Spacer(minLength: 8)
-                RuntimeEventStatusSummary(event: event, compact: true)
-            }
-
-            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 6) {
-                InfoRow(title: "时间", value: RuntimeEventDisplay.dateTime(event.timestamp))
-                InfoRow(
-                    title: "事件状态",
-                    value: "\(RuntimeEventDisplay.kind(event.kind)) · \(RuntimeEventDisplay.phase(event))"
-                )
-                InfoRow(title: "最终结果", value: RuntimeEventDisplay.outcome(event))
-                InfoRow(title: "HTTP 状态", value: RuntimeEventDisplay.httpStatus(event))
-                runtimeDurationRow
-                InfoRow(title: "入站客户端", value: RuntimeEventDisplay.clientKind(event))
-                InfoRow(title: "请求用途", value: RuntimeEventDisplay.purpose(event))
-                InfoRow(title: "模型链", value: modelChain)
-                InfoRow(title: "路由入口", value: routeSummary)
-                InfoRow(title: "故障转移", value: event.failover ? "是（已切换入口）" : "否")
-                // 归因对 Codex 的结构化 workspace 和 Claude Code 的 X-Sumpter-* 声明都要生效;
-                // 只看 codexMetadata 会让所有 CC 请求恒显示「未识别项目」。
-                if let project = RuntimeEventPresentation.projectContext(
-                    eventKind: event.kind,
-                    metadata: event.codexMetadata,
-                    declared: event.clientDeclared,
-                    projectedName: event.projectName,
-                    projectedSource: event.projectSource,
-                    projectedLocalUser: event.localUser,
-                    attributionScope: event.attributionScope
-                ) {
-                    let unidentified = project.source == .missingWorkspaceMetadata
-                    let workspaceValue: String = if let metadata = event.codexMetadata,
-                        !metadata.workspaces.isEmpty {
-                        // Codex 情形交给 workspace 摘要:它还带干净/未提交与提交短哈希。
-                        RuntimeEventDisplay.codexWorkspaceSummary(metadata)
-                    } else if let detail = project.detail {
-                        "\(project.name)（\(detail)）"
-                    } else {
-                        project.name
-                    }
-                    InfoRow(
-                        title: "项目 / 工作区",
-                        value: unidentified ? "未识别项目 · 来源未记录" : workspaceValue,
-                        copyable: !unidentified,
-                        muted: unidentified
-                    )
-                    InfoRow(
-                        title: "项目来源",
-                        value: project.source.displayLabel(localUser: project.localUser),
-                        muted: unidentified
-                    )
-                }
-                if let thread = event.codexThreadClass {
-                    InfoRow(title: "功能线程", value: thread)
-                }
-                if let scope = event.attributionScope {
-                    InfoRow(title: "归因范围", value: scope == "internal_feature" ? "后台功能" : scope)
-                }
-                if let declared = event.clientDeclared {
-                    if let sourceProject = declared.sourceProject, !sourceProject.isEmpty {
-                        InfoRow(title: "源项目", value: sourceProject, copyable: true)
-                    }
-                    if let sourceWorkspace = declared.sourceWorkspace, !sourceWorkspace.isEmpty {
-                        InfoRow(title: "源工作区", value: sourceWorkspace, copyable: true)
-                    }
-                }
-                if let grok = event.grokMetadata, !grok.isEmpty {
-                    if let identifier = grok.clientIdentifier, !identifier.isEmpty {
-                        let version = grok.clientVersion.map { " \($0)" } ?? ""
-                        let mode = grok.clientMode.map { " · \($0)" } ?? ""
-                        InfoRow(title: "Grok 客户端", value: "\(identifier)\(version)\(mode)")
-                    }
-                    if let session = grok.sessionID, !session.isEmpty {
-                        InfoRow(title: "Grok 会话", value: session, copyable: true)
-                    }
-                    if let conv = grok.convID, !conv.isEmpty {
-                        InfoRow(title: "Grok 对话", value: conv, copyable: true)
-                    }
-                    if let request = grok.requestID, !request.isEmpty {
-                        InfoRow(title: "Grok 请求", value: request, copyable: true)
-                    }
-                    if let turn = grok.turnIndex, !turn.isEmpty {
-                        InfoRow(title: "Grok 回合", value: turn)
-                    }
-                }
-                if let metadata = event.codexMetadata, metadata.hasRequestIdentity {
-                    InfoRow(title: "代理身份", value: RuntimeEventDisplay.codexAgentRole(metadata))
-                    InfoRow(title: "代理路径", value: metadata.agentName ?? "未记录代理路径", copyable: metadata.agentName != nil)
-                    if let remote = RuntimeEventDisplay.codexWorkspaceRemoteSummary(metadata) {
-                        InfoRow(title: "远程仓库", value: remote, copyable: true)
-                    }
-                    if let installation = metadata.sourceInstallationID, !installation.isEmpty {
-                        InfoRow(title: "源 installation", value: installation, copyable: true)
-                    }
-                    if !metadata.sourceWorkspacePaths.isEmpty {
-                        InfoRow(
-                            title: "源工作区路径",
-                            value: metadata.sourceWorkspacePaths.joined(separator: "\n"),
-                            copyable: true
-                        )
-                    }
-                }
-                if !friendly.isEmpty {
-                    InfoRow(title: "摘要", value: friendly)
-                } else if rawEngineMessage.isEmpty {
-                    InfoRow(title: "摘要", value: "无(仅错误、桥接或上游重跑时记录)", muted: true)
-                }
-            }
-
-            FullRowDisclosure(label: {
-                Label("路由与请求标识", systemImage: "point.3.connected.trianglepath.dotted")
-                    .font(.callout.weight(.semibold))
-            }) {
-                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 6) {
-                    InfoRow(title: "事件 ID", value: event.id, copyable: true)
-                    if let requestID = event.requestID, !requestID.isEmpty {
-                        InfoRow(title: "请求 ID", value: requestID, copyable: true)
-                    }
-                    if let sessionID = event.sessionID, !sessionID.isEmpty {
-                        InfoRow(title: "会话 ID", value: sessionID, copyable: true)
-                    }
-                    if let ruleID = event.featureRuleID, !ruleID.isEmpty {
-                        InfoRow(title: "命中规则", value: RuntimeEventDisplay.featureRule(ruleID))
-                    }
-                    InfoRow(title: "客户端模型", value: RuntimeEventDisplay.displayedModelName(event.clientModel) ?? "-")
-                    InfoRow(title: "路由模型", value: RuntimeEventDisplay.displayedModelName(event.effectiveModel) ?? "-")
-                    InfoRow(title: "上游模型", value: RuntimeEventDisplay.displayedModelName(event.upstreamModel) ?? "-")
-                    InfoRow(title: "入口名称", value: event.endpointName ?? "-")
-                    InfoRow(title: "模型组", value: event.modelGroupName ?? event.modelGroupID ?? "-")
-                    InfoRow(title: "入口 ID", value: event.endpointID ?? "-", copyable: true)
-                    InfoRow(title: "上游 Host", value: event.upstreamHost ?? "-", copyable: true)
-                    InfoRow(title: "SourceFormat", value: RuntimeEventPresentation.protocolDisplay(event.sourceFormat))
-                    InfoRow(title: "TargetFormat", value: RuntimeEventPresentation.protocolDisplay(event.targetFormat))
-                    InfoRow(title: "路由模式", value: RuntimeEventPresentation.routeModeDisplay(event.routeMode))
-                    InfoRow(
-                        title: "协议路径",
-                        value: RuntimeEventPresentation.protocolPath(
-                            sourceFormat: event.sourceFormat,
-                            targetFormat: event.targetFormat,
-                            routeMode: event.routeMode
-                        )
-                    )
-                    if let upstreamStatusCode = event.upstreamStatusCode {
-                        InfoRow(title: "上游 HTTP 状态", value: "\(upstreamStatusCode)")
-                    }
-                    if let upstreamRequestID = event.upstreamRequestID, !upstreamRequestID.isEmpty {
-                        InfoRow(title: "上游请求 ID", value: upstreamRequestID, copyable: true)
-                    }
-                    if let mode = RuntimeEventPresentation.forwardingModeDisplay(rawEngineMessage) {
-                        InfoRow(title: "转发方式", value: mode)
-                    }
-                }
-                .padding(.top, 8)
-            }
-
-            if hasFailureOrStreamDiagnostics {
-                FullRowDisclosure(label: {
-                    Label("失败、工具与流诊断", systemImage: "waveform.path.ecg")
-                        .font(.callout.weight(.semibold))
-                }) {
-                    Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 6) {
-                        if let failureKind = event.failureKind {
-                            InfoRow(title: "失败类型 / 阶段", value: failureSummary(failureKind))
-                        } else if event.isFailed {
-                            InfoRow(title: "失败类型 / 阶段", value: "未记录（旧事件）", muted: true)
-                        }
-                        if let toolCalls = RuntimeEventDisplay.toolCalls(event) {
-                            InfoRow(title: "实际工具调用", value: toolCalls)
-                        }
-                        if let timeoutMS = event.timeoutMS {
-                            InfoRow(title: "实际超时阈值", value: RuntimeEventPresentation.durationDisplay(timeoutMS))
-                        }
-                        streamRows
-                        if let failureDetail = event.failureDetail, !failureDetail.isEmpty {
-                            InfoRow(title: "技术详情", value: failureDetail, copyable: true)
-                        }
-                        if !rawEngineMessage.isEmpty {
-                            InfoRow(title: "原始引擎消息", value: rawEngineMessage, copyable: true)
-                        }
-                    }
-                    .padding(.top, 8)
-                }
-            }
-
-            if let grok = event.grokMetadata, !grok.isEmpty {
-                grokDisclosure(grok)
-            }
-
-            if let codex = event.codexMetadata, codex.hasRequestIdentity {
-                codexDisclosure(codex)
-            }
-
-            exportButtons
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .textSelection(.enabled)
-    }
-
-    private var friendly: String { RuntimeEventDisplay.friendlyMessage(event) }
-    private var rawEngineMessage: String { event.message ?? "" }
-
-    private var modelChain: String {
-        let rows: [(String, String?)] = [
-            ("客户端", RuntimeEventDisplay.displayedModelName(event.clientModel)),
-            ("路由", RuntimeEventDisplay.displayedModelName(event.effectiveModel)),
-            ("上游", RuntimeEventDisplay.displayedModelName(event.upstreamModel))
-        ]
-        let values = rows.compactMap { row in row.1.map { "\(row.0)=\($0)" } }
-        return values.isEmpty ? "未记录" : values.joined(separator: " → ")
-    }
-
-    private var routeSummary: String {
-        RuntimeEventDisplay.endpoint(event)
-    }
-
-    private func failureSummary(_ kind: RuntimeFailureKind) -> String {
-        RuntimeEventPresentation.failureKindDisplay(kind)
-            + (event.failurePhase.map { " / " + RuntimeEventPresentation.failurePhaseDisplay($0) } ?? "")
-    }
-
-    private var hasFailureOrStreamDiagnostics: Bool {
-        RuntimeEventPresentation.hasFailureToolOrStreamDiagnostics(event)
-    }
-
-    @ViewBuilder
-    private var streamRows: some View {
-        if let trace = event.streamTrace {
-            InfoRow(
-                title: "终止事件",
-                value: trace.terminalEvent
-                    ?? (event.isInFlight ? "等待协议终止" : "未观察到终止")
-            )
-            if let stopReason = trace.stopReason, !stopReason.isEmpty {
-                InfoRow(title: "停止原因", value: stopReason)
-            }
-            if let usage = trace.usage {
-                let usageParts: [String] = [
-                    usage.inputTokens.map { value in "输入 (\(RuntimeEventPresentation.tokenCountDisplay(value)))" },
-                    usage.outputTokens.map { value in "输出 (\(RuntimeEventPresentation.tokenCountDisplay(value)))" },
-                    usage.cacheReadInputTokens.map { value in "缓存读 (\(RuntimeEventPresentation.tokenCountDisplay(value)))" },
-                    usage.cacheCreationInputTokens.map { value in "缓存写 (\(RuntimeEventPresentation.tokenCountDisplay(value)))" },
-                    usage.reasoningTokens.map { value in "推理 (\(RuntimeEventPresentation.tokenCountDisplay(value)))" }
-                ].compactMap { value in value }
-                if !usageParts.isEmpty {
-                    InfoRow(title: "Token usage", value: usageParts.joined(separator: " · "))
-                }
-            }
-            if let chunkCount = trace.chunkCount {
-                InfoRow(title: "Chunk 数", value: "\(chunkCount)")
-            }
-            if let bytesReceived = trace.bytesReceived {
-                InfoRow(title: "接收字节", value: ByteCountFormatter.string(fromByteCount: Int64(bytesReceived), countStyle: .binary))
-            }
-            if let maxChunkGapMS = trace.maxChunkGapMS {
-                InfoRow(title: "最大 Chunk 间隔", value: RuntimeEventPresentation.durationDisplay(maxChunkGapMS))
-            }
-            if let lastChunkAtMS = trace.lastChunkAtMS {
-                InfoRow(title: "最后 Chunk", value: RuntimeEventPresentation.durationDisplay(lastChunkAtMS))
-                if !event.isInFlight {
-                    InfoRow(
-                        title: "结束前空闲",
-                        value: RuntimeEventPresentation.durationDisplay(max(0, event.durationMS - lastChunkAtMS))
-                    )
-                }
-            }
-        }
-    }
-
-    private func grokDisclosure(_ metadata: GrokMetadata) -> some View {
-        FullRowDisclosure(label: {
-            Label("Grok 请求上下文", systemImage: "terminal")
-                .font(.callout.weight(.semibold))
-        }) {
-            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 6) {
-                grokRows(metadata)
-            }
-            .padding(.top, 8)
-        }
-    }
-
-    @ViewBuilder
-    private func grokRows(_ metadata: GrokMetadata) -> some View {
-        let rows: [(String, String?)] = [
-            ("会话 ID", metadata.sessionID),
-            ("对话 ID", metadata.convID),
-            ("Grok 请求 ID", metadata.requestID),
-            ("Agent ID", metadata.agentID),
-            ("回合序号", metadata.turnIndex),
-            ("瞬时重试", metadata.transientRetry),
-            ("模型覆盖", metadata.modelOverride),
-            ("客户端标识", metadata.clientIdentifier),
-            ("客户端版本", metadata.clientVersion),
-            ("客户端模式", metadata.clientMode),
-            ("部署 ID", metadata.deploymentID),
-            ("账号 ID", metadata.userID),
-            ("User-Agent", metadata.userAgent),
-            ("剩余压缩次数", metadata.compactionsRemaining),
-            ("压缩阈值", metadata.compactionAt),
-            ("Doom loop 窗口", metadata.doomLoopCheck),
-            ("精确重复检测", metadata.exactRepetitionCheck)
-        ]
-        ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-            if let value = row.1, !value.isEmpty { InfoRow(title: row.0, value: value, copyable: true) }
-        }
-    }
-
-    private func codexDisclosure(_ metadata: CodexMetadata) -> some View {
-        FullRowDisclosure(label: {
-            Label("Codex 请求上下文", systemImage: "shippingbox")
-                .font(.callout.weight(.semibold))
-        }) {
-            VStack(alignment: .leading, spacing: 10) {
-                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 6) {
-                    InfoRow(title: "代理身份", value: RuntimeEventDisplay.codexAgentRole(metadata))
-                    InfoRow(title: "请求类型", value: metadata.requestKind ?? "未记录")
-                    InfoRow(
-                        title: "子代理类型",
-                        value: metadata.subagentKind ?? (metadata.isSubagent ? "已标记，类型未记录" : "不适用（主代理）")
-                    )
-                    InfoRow(title: "线程来源", value: metadata.threadSource ?? "未记录")
-                    InfoRow(title: "代理路径", value: metadata.agentName ?? "未记录", copyable: metadata.agentName != nil)
-                    InfoRow(title: "项目 / 工作区", value: RuntimeEventDisplay.codexWorkspaceSummary(metadata), copyable: !metadata.workspaces.isEmpty)
-                    if let remote = RuntimeEventDisplay.codexWorkspaceRemoteSummary(metadata) {
-                        InfoRow(title: "远程仓库", value: remote, copyable: true)
-                    }
-                    InfoRow(
-                        title: "工具命名空间",
-                        value: metadata.toolNamespacesInfo.isEmpty
-                            ? "未记录"
-                            : metadata.toolNamespacesInfo.keys.sorted().joined(separator: "、"),
-                        copyable: !metadata.toolNamespacesInfo.isEmpty
-                    )
-                    if let compaction = metadata.compaction {
-                        InfoRow(title: "Compaction", value: compactionSummary(compaction))
-                    }
-                    InfoRow(title: "元数据状态", value: codexMetadataState(metadata))
-                }
-                FullRowDisclosure(label: {
-                    Text("完整 Codex 技术字段")
-                }) {
-                    Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 6) {
-                        codexRows(metadata)
-                    }
-                    .padding(.top, 8)
-                }
-                .font(.caption.weight(.semibold))
-            }
-            .padding(.top, 8)
-        }
-    }
-
-    private func compactionSummary(_ compaction: CodexCompactionMetadata) -> String {
-        let parts = [
-            compaction.trigger.map { "触发=\($0)" },
-            compaction.reason.map { "原因=\($0)" },
-            compaction.phase.map { "阶段=\($0)" },
-            compaction.strategy.map { "策略=\($0)" }
-        ].compactMap { $0 }
-        return parts.isEmpty ? "已记录" : parts.joined(separator: " · ")
-    }
-
-    private func codexMetadataState(_ metadata: CodexMetadata) -> String {
-        let states = [
-            metadata.malformed ? "格式异常" : nil,
-            metadata.truncated ? "已截断" : nil,
-            metadata.hasConflicts ? "字段冲突" : nil,
-            metadata.redactedFields.isEmpty ? nil : "含脱敏字段"
-        ].compactMap { $0 }
-        return states.isEmpty ? "正常" : states.joined(separator: " · ")
-    }
-
-    private var exportButtons: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { eventExportButton; grokExportButton; codexExportButton }
-                VStack(alignment: .leading, spacing: 8) { eventExportButton; grokExportButton; codexExportButton }
-            }
-            if let copyFeedback {
-                Label(copyFeedback, systemImage: copyFeedback == "已复制" ? "checkmark.circle" : "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(copyFeedback == "已复制" ? .green : .red)
-                    .accessibilityAddTraits(.updatesFrequently)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var eventExportButton: some View {
-        if let payload = RuntimeEventTraceExport(event: event).prettyJSON() {
-            Button {
-                copyToPasteboard(payload)
-            } label: {
-                Label("复制源事件 JSON", systemImage: "doc.on.doc")
-            }
-            .buttonStyle(.bordered)
-            .help("复制事件、路由、状态、失败、工具调用、流诊断与有界源归属元数据；不包含请求或响应正文与凭据")
-        }
-    }
-
-    @ViewBuilder
-    private var grokExportButton: some View {
-        if let payload = RuntimeEventPresentation.grokJSON(event.grokMetadata) {
-            Button {
-                copyToPasteboard(payload)
-            } label: {
-                Label("复制 Grok 客户端元数据 JSON", systemImage: "doc.on.doc")
-            }
-            .buttonStyle(.bordered)
-            .help("复制已记录的 Grok 会话、对话、请求和客户端标识字段")
-        }
-    }
-
-    @ViewBuilder
-    private var codexExportButton: some View {
-        if let payload = RuntimeEventPresentation.codexJSON(event.codexMetadata) {
-            Button {
-                copyToPasteboard(payload)
-            } label: {
-                Label("复制完整 Codex 元数据 JSON", systemImage: "doc.on.doc")
-            }
-            .buttonStyle(.bordered)
-            .help("复制所有已记录的 Codex 回合、代理、工作区和工具命名空间字段")
-        }
-    }
-
-    private func copyToPasteboard(_ payload: String) {
-        copyFeedback = PasteboardCopy.write(payload) ? "已复制" : "复制失败"
-    }
-
-    private var runtimeDurationRow: some View {
-        GridRow {
-            Text(event.ttfbMS == nil ? "总耗时" : "TTFB / 总耗时")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .frame(width: 92, alignment: .trailing)
-            RuntimeEventDurationText(event: event)
-                .font(.callout.monospacedDigit())
-                .foregroundStyle(RuntimeEventDisplay.durationColor(event))
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .help(RuntimeEventDisplay.durationHelp(event))
-        }
-    }
-
-    @ViewBuilder
-    private func codexRows(_ metadata: CodexMetadata) -> some View {
-        let rows: [(String, String?)] = [
-            ("installation ID", metadata.installationID), ("session ID", metadata.sessionID),
-            ("thread ID", metadata.threadID), ("agent path", metadata.agentName),
-            ("turn ID", metadata.turnID),
-            ("window ID", metadata.windowID), ("request kind", metadata.requestKind),
-            ("context window ID", metadata.contextWindowID), ("turn trigger", metadata.turnTrigger),
-            ("forked-from thread ID", metadata.forkedFromThreadID),
-            ("parent thread ID", metadata.parentThreadID), ("parent turn ID", metadata.parentTurnID),
-            ("root turn ID", metadata.rootTurnID), ("x-openai-subagent", metadata.subagentHeader),
-            ("subagent kind", metadata.subagentKind), ("thread source", metadata.threadSource),
-            ("sandbox", metadata.sandbox), ("sandbox mode", metadata.sandboxMode),
-            ("originator", metadata.originator),
-            ("beta features", metadata.betaFeatures), ("memgen request", metadata.memgenRequest),
-            ("responses lite", metadata.responsesLite),
-            ("sources", metadata.sources.isEmpty ? nil : metadata.sources.joined(separator: ", ")),
-            ("redacted fields", metadata.redactedFields.isEmpty ? nil : metadata.redactedFields.joined(separator: ", ")),
-            ("conflicts", metadata.conflicts.isEmpty ? nil : metadata.conflicts.joined(separator: ", "))
-        ]
-        ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-            if let value = row.1, !value.isEmpty { InfoRow(title: row.0, value: value, copyable: true) }
-        }
-        if let value = metadata.turnStartedAtUnixMS { InfoRow(title: "turn started (Unix ms)", value: "\(value)") }
-        if let value = metadata.windowNumber { InfoRow(title: "window number", value: "\(value)") }
-        if let value = metadata.forkedFromOrdinalExclusive { InfoRow(title: "forked-from ordinal", value: "\(value)") }
-        if let value = metadata.wsStreamRequestStartMS { InfoRow(title: "WS request start (ms)", value: "\(value)") }
-        InfoRow(title: "auto review", value: metadata.autoReviewEnabled.map { $0 ? "true" : "false" } ?? "-")
-        InfoRow(title: "Node REPL review required", value: metadata.nodeReplAutoReviewRequired.map { $0 ? "true" : "false" } ?? "-")
-        InfoRow(title: "Node REPL disabled", value: metadata.nodeReplDisabled.map { $0 ? "true" : "false" } ?? "-")
-        InfoRow(title: "history ingest requested", value: metadata.historyIngestRequested.map { $0 ? "true" : "false" } ?? "-")
-        InfoRow(title: "is subagent", value: metadata.isSubagent ? "true" : "false")
-        InfoRow(title: "parent inferred", value: metadata.parentThreadIDInferred ? "true" : "false")
-        InfoRow(title: "malformed", value: metadata.malformed ? "true" : "false")
-        InfoRow(title: "truncated", value: metadata.truncated ? "true" : "false")
-        InfoRow(title: "has conflicts", value: metadata.hasConflicts ? "true" : "false")
-        if let compaction = metadata.compaction {
-            let rows: [(String, String?)] = [
-                ("trigger", compaction.trigger), ("reason", compaction.reason),
-                ("implementation", compaction.implementation), ("phase", compaction.phase),
-                ("strategy", compaction.strategy)
-            ]
-            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                if let value = row.1, !value.isEmpty {
-                    InfoRow(title: "compaction \(row.0)", value: value, copyable: true)
-                }
-            }
-        }
-        ForEach(metadata.workspaces.keys.sorted(), id: \.self) { path in
-            if let workspace = metadata.workspaces[path] {
-                InfoRow(title: "本地路径", value: path, copyable: true)
-                if let commit = workspace.latestGitCommitHash, !commit.isEmpty {
-                    InfoRow(title: "workspace commit", value: commit, copyable: true)
-                }
-                if let hasChanges = workspace.hasChanges {
-                    InfoRow(title: "workspace has changes", value: hasChanges ? "true" : "false")
-                }
-                ForEach(workspace.associatedRemoteURLs.keys.sorted(), id: \.self) { remoteKey in
-                    if let remoteURL = workspace.associatedRemoteURLs[remoteKey] {
-                        InfoRow(title: "workspace remote \(remoteKey)", value: remoteURL, copyable: true)
-                    }
-                }
-            }
-        }
-        ForEach(metadata.toolNamespacesInfo.keys.sorted(), id: \.self) { namespaceKey in
-            if let namespace = metadata.toolNamespacesInfo[namespaceKey] {
-                InfoRow(title: "tool namespace", value: namespace.name.map { "\(namespaceKey) (\($0))" } ?? namespaceKey, copyable: true)
-                ForEach(namespace.functions.keys.sorted(), id: \.self) { functionKey in
-                    if let function = namespace.functions[functionKey] {
-                        let source = function.source.map {
-                            [$0.kind, $0.serverName].compactMap { $0 }.joined(separator: ":")
-                        }
-                        let attributes = [
-                            function.name.map { "name=\($0)" },
-                            function.direct.map { "direct=\($0)" },
-                            function.codeModeName.map { "codeModeName=\($0)" },
-                            function.deferred.map { "deferred=\($0)" },
-                            source.map { "source=\($0)" }
-                        ].compactMap { $0 }.joined(separator: " · ")
-                        InfoRow(
-                            title: "tool function \(functionKey)",
-                            value: attributes.isEmpty ? "已记录" : attributes,
-                            copyable: true
-                        )
-                    }
-                }
-            }
-        }
-        ForEach(metadata.extras.keys.sorted(), id: \.self) { key in
-            if let value = metadata.extras[key] {
-                InfoRow(title: "extra \(key)", value: value, copyable: true)
-            }
-        }
-        let state = [metadata.malformed ? "malformed" : nil, metadata.truncated ? "truncated" : nil, metadata.hasConflicts ? "有冲突" : nil].compactMap { $0 }.joined(separator: " · ")
-        InfoRow(title: "metadata 状态", value: state.isEmpty ? "正常" : state)
-    }
-}
-
-/// Provider 候选序列 → 模型规则/入口数摘要（运行页与路由页共用）。
 struct PoolSummaryList: View {
     let config: AppConfig
 

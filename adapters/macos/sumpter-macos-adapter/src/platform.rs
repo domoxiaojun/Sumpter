@@ -123,6 +123,15 @@ impl Platform {
                 .filter(|value| !value.is_empty())
         };
 
+        let hook_event = pick("hook_event_name")
+            .or_else(|| pick("hookEventName"))
+            .or_else(|| Self::query_value(query, "event").map(str::to_string))
+            .or_else(|| pick("type"))
+            .filter(|value| {
+                value.len() <= 128
+                    && !value.trim().is_empty()
+                    && !value.chars().any(char::is_control)
+            });
         let event_kind = Self::query_value(query, "event")
             .map(str::to_string)
             .filter(|value| !value.is_empty())
@@ -224,6 +233,9 @@ impl Platform {
         };
 
         let event = RuntimeEvent {
+            session_source: None,
+            hook_event: hook_event.clone(),
+            cache_read: None,
             client_kind: Some(client_kind),
             client_variant: None,
             agent_role: None,
@@ -279,6 +291,7 @@ impl Platform {
         let notice = PlatformNotice::Notify {
             client_kind,
             kind: event_kind.clone(),
+            hook_event,
             title: title.clone(),
             message: message.clone(),
             sound: sound.clone(),

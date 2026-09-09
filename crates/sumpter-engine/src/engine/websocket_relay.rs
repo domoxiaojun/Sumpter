@@ -511,6 +511,8 @@ pub(super) fn websocket_trace(
     attempt_count: u64,
 ) -> StreamTrace {
     StreamTrace {
+        tool_calls_truncated: false,
+        cache_read_evidence: None,
         chunk_count: None,
         bytes_received: None,
         max_chunk_gap_ms: None,
@@ -543,6 +545,9 @@ pub(super) fn websocket_client_event(
     failure: Option<&FailureInfo>,
 ) -> RuntimeEvent {
     let mut event = RuntimeEvent {
+        session_source: None,
+        hook_event: None,
+        cache_read: None,
         client_kind: Some(context.client_kind),
         client_variant: None,
         agent_role: None,

@@ -41,6 +41,8 @@ pub(super) struct StreamTraceState {
     max_chunk_gap_ms: i64,
     terminal_event: Option<String>,
     usage: Option<sumpter_core::events::ResponseUsage>,
+    cache_read_evidence: Option<sumpter_core::cache_read::CacheReadEvidence>,
+    tool_calls_truncated: bool,
     stop_reason: Option<String>,
 }
 
@@ -75,12 +77,16 @@ impl StreamTraceState {
 
     pub(super) fn record_response_summary(&mut self, tracker: &SseTerminalTracker) {
         self.usage = tracker.usage();
+        self.cache_read_evidence = Some(tracker.cache_read_evidence());
+        self.tool_calls_truncated = tracker.tool_calls_truncated();
         self.stop_reason = tracker.stop_reason().map(str::to_string);
     }
 
     fn snapshot(&self) -> Option<StreamTrace> {
         let started = self.started?;
         Some(StreamTrace {
+            tool_calls_truncated: self.tool_calls_truncated,
+            cache_read_evidence: self.cache_read_evidence.clone(),
             chunk_count: Some(self.chunk_count),
             bytes_received: Some(self.bytes_received),
             max_chunk_gap_ms: (self.chunk_count > 1).then_some(self.max_chunk_gap_ms),
@@ -225,6 +231,40 @@ impl CompletionGuard {
         }
     }
 
+    pub(super) fn record_response_summary(&mut self, tracker: &SseTerminalTracker) {
+        let previous = self.stream_trace.snapshot().map(|trace| {
+            (
+                trace.usage.and_then(|usage| usage.cache_read_input_tokens),
+                trace.cache_read_evidence,
+            )
+        });
+        self.stream_trace.record_response_summary(tracker);
+        let current = self.stream_trace.snapshot().map(|trace| {
+            (
+                trace.usage.and_then(|usage| usage.cache_read_input_tokens),
+                trace.cache_read_evidence,
+            )
+        });
+        if previous != current && self.upstream.is_some() && !self.done {
+            self.record_streaming_started(self.streaming_message.clone());
+            let upstream = {
+                let state = self.engine.inner.state.lock().unwrap();
+                self.upstream.as_ref().and_then(|attempt| {
+                    state
+                        .runtime
+                        .recent_events
+                        .iter()
+                        .find(|event| event.id == attempt.event_id && event.is_in_flight())
+                        .cloned()
+                })
+            };
+            if let Some(mut event) = upstream {
+                event.stream_trace = self.stream_trace.snapshot();
+                self.engine.record_event(event);
+            }
+        }
+    }
+
     fn tool_calls_option(&self) -> Option<Vec<String>> {
         (!self.tool_calls.is_empty()).then(|| self.tool_calls.clone())
     }
@@ -275,6 +315,13 @@ impl CompletionGuard {
             .map(|attempt| &attempt.endpoint)
             .or(self.attempted_endpoint.as_ref());
         RuntimeEvent {
+            session_source: self
+                .meta
+                .request_context
+                .as_ref()
+                .and_then(|context| context.session_source.clone()),
+            hook_event: None,
+            cache_read: None,
             client_kind: Some(self.meta.client_kind),
             client_variant: None,
             agent_role: None,
@@ -388,6 +435,7 @@ impl CompletionGuard {
             event.request_method = Some(context.method.clone());
             event.request_path = Some(context.path.clone());
             event.route_intent = Some(context.route_intent.clone());
+            event.session_source = context.session_source.clone();
         }
         event.session_id = self.meta.session_id.clone();
         event.tool_calls = self.tool_calls_option();

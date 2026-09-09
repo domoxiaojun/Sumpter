@@ -65,6 +65,7 @@ pub enum PlatformNotice {
     Notify {
         client_kind: sumpter_core::events::ClientKind,
         kind: String,
+        hook_event: Option<String>,
         title: String,
         message: String,
         sound: Option<String>,

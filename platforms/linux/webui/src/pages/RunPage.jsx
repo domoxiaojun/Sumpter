@@ -6,44 +6,19 @@ import { DataTable } from '../components/DataTable.jsx';
 import { PaginationBar } from '../components/PaginationBar.jsx';
 import { useRuntimeEventPage } from '../hooks/useRuntimeEventPage.js';
 import { Icon } from '../utils/icons.jsx';
-import { orderRuntimeEvents } from '../utils/runtimeEvents.js';
+import { orderRuntimeEvents, mergeRuntimeEvent } from '../utils/runtimeEvents.js';
+import { EventInspector } from '../components/EventInspector.jsx';
+import { eventAgentLabel, eventCacheLabel, eventUsageLabel, eventUsage, eventHttpTone } from '../utils/eventPresentation.js';
 import { copyWithToast } from '../utils/clipboard.js';
 import { api } from '../services/api.js';
 import {
-  formatNumber, formatTokenCount, formatDuration, formatTimestamp,
-  eventModel, eventEndpoint, statusKind,
-  eventDurationText, friendlyEventMessage, eventPurposeLabel,
-  eventClientKindLabel, eventKindLabel, getRequestChain,
-  eventOutcomeLabel, eventPhaseLabel, eventHttpStatusLabel, eventStatusDetailLabel,
-  eventToolCalls, eventEndpointName, eventEndpointID,
-  eventUpstreamHost, eventUpstreamModel, eventFeatureRuleID,
-  eventRequestID, eventSessionID, eventUpstreamRequestID, eventMessage,
-  eventFailureDetail, eventTimeoutMS, eventTTFBMS, eventDurationMS, eventOutcome,
-  eventFailover, eventField, eventCodexMetadata, eventGrokMetadata, codexMetadataSummary, eventIsInFlight,
-  codexMetadataJSON, codexMetadataField, grokMetadataJSON, grokMetadataField, grokMetadataSummary,
-  eventFailureSummaryLabel, eventProtocolRouteLabel, eventResultKind,
-  eventStreamTrace, eventToolCallsLabel, eventUpstreamStatusLabel,
-  codexAgentPath, codexAgentRoleLabel, codexWorkspaceEntries, codexWorkspaceSummary,
-  eventProjectContext, projectSourceLabel, eventCodexThreadClass,
-  codexThreadClassLabel, attributionScopeLabel, codexHasRequestIdentity,
+  eventEndpointName, formatNumber, formatTokenCount, formatDuration, formatTimestamp, eventModel, eventEndpoint, statusKind, eventDurationText, friendlyEventMessage, eventPurposeLabel, eventClientKindLabel, eventKindLabel, getRequestChain, eventOutcomeLabel, eventPhaseLabel, eventHttpStatusLabel, eventRequestID, eventTTFBMS, eventOutcome, eventFailover, eventField, eventIsInFlight, eventFailureSummaryLabel, eventResultKind, eventProjectContext
 } from '../utils/helpers.js';
-
-function traceField(value, camel, snake) {
-  return value?.[camel] ?? value?.[snake];
-}
-
-function formatTraceBytes(value) {
-  const bytes = Number(value);
-  if (!Number.isFinite(bytes)) return '—';
-  if (bytes < 1024) return `${formatNumber(bytes)} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
-}
 
 function recentTokenTotals(events) {
   const usages = events
     .filter((event) => event.kind === 'client' && !eventIsInFlight(event) && eventResultKind(event) !== 'cancelled')
-    .map((event) => eventStreamTrace(event)?.usage)
+    .map(eventUsage)
     .filter((usage) => usage && typeof usage === 'object');
   const sum = (field, snakeField) => {
     const values = usages
@@ -113,24 +88,8 @@ function recentEventStatusDetail(event) {
 }
 
 function recentEventRequestSummary(event) {
-  const metadata = eventCodexMetadata(event);
-  const grok = eventGrokMetadata(event);
-  const grokClient = eventField(event, 'clientKind', 'client_kind') === 'grok_build';
-  const showCodexAgent = metadata && !(grokClient && !codexHasRequestIdentity(metadata));
-  const tools = eventToolCalls(event);
-  return [
-    recentEventProjectSummary(event),
-    eventKindLabel(event.kind),
-    eventClientKindLabel(event),
-    grok ? `Grok: ${grokMetadataSummary(grok)}` : null,
-    showCodexAgent ? `代理: ${codexAgentRoleLabel(metadata)}` : null,
-    recentEventPurposeLabel(event),
-    tools.length ? `工具: ${tools.join('、')}` : null,
-    showCodexAgent ? `路径: ${codexAgentPath(metadata)}` : null,
-    eventCodexThreadClass(event) ? `功能线程: ${codexThreadClassLabel(eventCodexThreadClass(event))}` : null,
-    eventField(event, 'attributionScope', 'attribution_scope') === 'internal_feature'
-      ? `归因范围: ${attributionScopeLabel('internal_feature')}` : null,
-  ].filter(Boolean).join(' · ');
+  return [recentEventProjectSummary(event), eventKindLabel(event.kind), eventClientKindLabel(event),
+    eventAgentLabel(event) ? `代理: ${eventAgentLabel(event)}` : null].filter(Boolean).join(' · ');
 }
 
 function RecentEventOutcome({ event, compact = false }) {
@@ -156,20 +115,22 @@ function RecentEventRequestCell({ event, live = false }) {
 }
 
 function RecentEventRouteCell({ event, live = false }) {
+  if (event.kind === 'notify') return <span>{event.hookEvent || '通知'}</span>;
   return (
     <span className={live ? 'telemetry-live-route' : 'telemetry-cell-stack telemetry-route-cell'}>
-      <strong className="telemetry-event-model">{eventModel(event)}</strong>
-      <span className="telemetry-route-meta">{eventEndpoint(event)}</span>
+      <strong className="telemetry-event-model">{event.clientModel || eventModel(event)}</strong>
+      <span className="telemetry-route-meta">{eventEndpointName(event)}</span>
     </span>
   );
 }
 
 function RecentEventResultCell({ event, live = false }) {
+  if (event.kind === 'notify') return <span className="telemetry-cell-stack">通知事件</span>;
   const slowTTFB = eventTTFBMS(event) >= 5000;
   return (
     <span className={live ? 'telemetry-live-result' : 'telemetry-cell-stack telemetry-result-cell'}>
       <RecentEventOutcome event={event} />
-      <span className="telemetry-result-detail">{recentEventStatusDetail(event)}</span>
+      <span className="telemetry-result-detail" style={{ color: eventHttpTone(event) }}>{recentEventStatusDetail(event)}</span>
       <span
         className={`mono-cell telemetry-result-duration${slowTTFB ? ' is-slow' : ''}`}
         title={slowTTFB ? '首字节超过 5 秒，上游可能排队中' : undefined}
@@ -181,138 +142,16 @@ function RecentEventResultCell({ event, live = false }) {
 }
 
 function RecentEventMessageCell({ event, live = false }) {
-  const friendly = friendlyEventMessage(event);
+  const friendly = friendlyEventMessage(event) || (event.outcome === 'failed' ? eventFailureSummaryLabel(event) : '');
   return (
     <span
       className={`${live ? 'telemetry-live-message' : 'telemetry-event-message'}${eventFailover(event) ? ' is-warning' : eventOutcome(event) === 'failed' ? ' is-error' : ''}`}
       title={friendly || undefined}
     >
+      {event.kind !== 'notify' && <span className="telemetry-cache-summary">{eventCacheLabel(event)}<small>{eventUsageLabel(event)}</small></span>}
       {eventFailover(event) && <strong>故障转移 · </strong>}
       {friendly || (live ? '请求进行中，等待最终结果' : '-')}
     </span>
-  );
-}
-
-function StreamTraceRows({ event }) {
-  const trace = eventStreamTrace(event);
-  if (!trace) {
-    return <div className="runtime-stream-trace-empty">{eventIsInFlight(event) ? '等待流诊断信息' : '无流诊断信息（未进入流式阶段或旧事件未记录）'}</div>;
-  }
-  const usage = trace.usage && typeof trace.usage === 'object' ? trace.usage : null;
-  const duration = eventDurationMS(event);
-  const lastChunkAtMS = traceField(trace, 'lastChunkAtMS', 'last_chunk_at_ms');
-  const tokenParts = usage ? [
-    ['输入', traceField(usage, 'inputTokens', 'input_tokens')],
-    ['输出', traceField(usage, 'outputTokens', 'output_tokens')],
-    ['缓存读', traceField(usage, 'cacheReadInputTokens', 'cache_read_input_tokens')],
-    ['缓存写', traceField(usage, 'cacheCreationInputTokens', 'cache_creation_input_tokens')],
-    ['推理', traceField(usage, 'reasoningTokens', 'reasoning_tokens')],
-  ].filter(([, value]) => value != null).map(([label, value]) => `${label} ${formatNumber(value)}`) : [];
-  const rows = [
-    ['终止事件', traceField(trace, 'terminalEvent', 'terminal_event') || (eventIsInFlight(event) ? '等待协议终止' : '未观察到终止')],
-    ['停止原因', traceField(trace, 'stopReason', 'stop_reason') || '—'],
-    ['Token usage', tokenParts.join(' · ') || '—'],
-    ['Chunk 数', traceField(trace, 'chunkCount', 'chunk_count') ?? '—'],
-    ['接收字节', formatTraceBytes(traceField(trace, 'bytesReceived', 'bytes_received'))],
-    ['最大 Chunk 间隔', traceField(trace, 'maxChunkGapMS', 'max_chunk_gap_ms') == null ? '—' : formatDuration(traceField(trace, 'maxChunkGapMS', 'max_chunk_gap_ms'))],
-    ['最后 Chunk', lastChunkAtMS == null ? '—' : formatDuration(lastChunkAtMS)],
-    ['结束前空闲', lastChunkAtMS == null || duration == null || eventIsInFlight(event) ? '—' : formatDuration(Math.max(0, duration - lastChunkAtMS))],
-  ];
-  return <div className="runtime-stream-trace-grid">{rows.map(([label, value]) => <div key={label}><span>{label}</span><strong className="mono-cell">{value}</strong></div>)}</div>;
-}
-
-const CODEX_METADATA_LABELS = {
-  installationID: 'Installation ID', sessionID: 'Session ID', threadID: 'Thread ID',
-  sourceInstallationID: '源 installation ID',
-  agentName: '代理路径 (agentName)', turnID: '回合 ID', windowID: '窗口 ID', requestKind: '请求类型',
-  forkedFromThreadID: '派生自线程 ID', parentThreadID: '父线程 ID',
-  parentTurnID: '父回合 ID', rootTurnID: '根回合 ID', subagentHeader: '子代理 Header',
-  subagentKind: '子代理类型', threadSource: '线程来源', sandbox: '沙箱',
-  sandboxMode: '沙箱模式', autoReviewEnabled: '自动审查',
-  nodeReplAutoReviewRequired: 'Node REPL 需要审查', nodeReplDisabled: 'Node REPL 已禁用',
-  turnStartedAtUnixMS: '回合开始时间（Unix ms）', windowNumber: '窗口序号', contextWindowID: '上下文窗口 ID',
-  forkedFromOrdinalExclusive: '派生起始序号', turnTrigger: '回合触发来源', historyIngestRequested: '请求导入历史', originator: '来源客户端',
-  betaFeatures: 'Beta 特性', memgenRequest: 'Memgen 请求',
-  responsesLite: 'Responses Lite',
-  wsStreamRequestStartMS: 'WebSocket 请求开始（ms）', malformed: '格式异常', truncated: '已截断',
-  hasConflicts: '字段冲突', isSubagent: '是否子代理', parentThreadIDInferred: '父线程是否推断',
-};
-
-const GROK_METADATA_LABELS = {
-  sessionID: '会话 ID', convID: '对话 ID', requestID: 'Grok 请求 ID',
-  agentID: 'Agent ID', turnIndex: '回合序号', transientRetry: '瞬时重试',
-  modelOverride: '模型覆盖', clientIdentifier: '客户端标识',
-  clientVersion: '客户端版本', clientMode: '客户端模式',
-  deploymentID: '部署 ID', userID: '账号 ID', userAgent: 'User-Agent',
-  compactionsRemaining: '剩余压缩次数', compactionAt: '压缩阈值',
-  doomLoopCheck: 'Doom loop 窗口', exactRepetitionCheck: '精确重复检测',
-};
-
-function GrokMetadataDetails({ metadata, onCopy }) {
-  if (!metadata) return null;
-  const scalarEntries = Object.entries(GROK_METADATA_LABELS)
-    .map(([camel, label]) => [label, grokMetadataField(metadata, camel)])
-    .filter(([, value]) => value !== undefined && value !== null && value !== '');
-  if (!scalarEntries.length) return null;
-  return (
-    <details className="codex-metadata-details">
-      <summary style={{ cursor: 'pointer', color: 'var(--text-primary)', fontWeight: 600 }}>Grok 客户端 / 会话全部元数据</summary>
-      <div className="grid-3col codex-metadata-grid" style={{ marginTop: '8px', gap: '8px', fontSize: '0.78rem' }}>
-        {scalarEntries.map(([label, value]) => <div key={label}><span style={{ color: 'var(--text-muted)' }}>{label}：</span><span className="mono-cell">{String(value)}</span></div>)}
-      </div>
-      <details className="codex-raw-details">
-        <summary>完整 Grok 元数据 JSON</summary>
-        <pre className="mono-cell technical-pre" style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>
-          {grokMetadataJSON(metadata)}
-        </pre>
-      </details>
-      <button type="button" className="btn btn-ghost" style={{ marginTop: '8px', padding: '4px 8px', fontSize: '0.75rem' }} onClick={() => onCopy(grokMetadataJSON(metadata), 'Grok 元数据 JSON')}>
-        <Icon name="copy" size={12} /> 复制完整 Grok 元数据 JSON
-      </button>
-    </details>
-  );
-}
-
-function CodexMetadataDetails({ metadata, onCopy }) {
-  if (!metadata) return null;
-  const scalarEntries = Object.entries(CODEX_METADATA_LABELS)
-    .map(([camel, label]) => [label, codexMetadataField(metadata, camel)])
-    .filter(([, value]) => value !== undefined && value !== null && value !== '');
-  const renderJSONSection = (label, value) => {
-    if (!value || typeof value !== 'object' || Object.keys(value).length === 0) return null;
-    return (
-      <div key={label} style={{ marginTop: '8px' }}>
-        <span style={{ color: 'var(--text-muted)' }}>{label}：</span>
-        <pre className="mono-cell technical-pre" style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>
-          {JSON.stringify(value, null, 2)}
-        </pre>
-      </div>
-    );
-  };
-  return (
-    <details className="codex-metadata-details">
-      <summary style={{ cursor: 'pointer', color: 'var(--text-primary)', fontWeight: 600 }}>Codex 回合 / 代理全部元数据</summary>
-      <div className="grid-3col codex-metadata-grid" style={{ marginTop: '8px', gap: '8px', fontSize: '0.78rem' }}>
-        {scalarEntries.map(([label, value]) => <div key={label}><span style={{ color: 'var(--text-muted)' }}>{label}：</span><span className="mono-cell">{typeof value === 'boolean' ? (value ? 'true' : 'false') : String(value)}</span></div>)}
-      </div>
-      {renderJSONSection('工作区完整字段', codexMetadataField(metadata, 'workspaces'))}
-      {renderJSONSection('源工作区路径', codexMetadataField(metadata, 'sourceWorkspacePaths', 'source_workspace_paths'))}
-      {renderJSONSection('工具命名空间', codexMetadataField(metadata, 'toolNamespacesInfo', 'tool_namespaces_info'))}
-      {renderJSONSection('上下文压缩', codexMetadataField(metadata, 'compaction'))}
-      {renderJSONSection('扩展字段', codexMetadataField(metadata, 'extras'))}
-      {renderJSONSection('元数据来源', codexMetadataField(metadata, 'sources'))}
-      {renderJSONSection('已脱敏字段', codexMetadataField(metadata, 'redactedFields', 'redacted_fields'))}
-      {renderJSONSection('冲突字段', codexMetadataField(metadata, 'conflicts'))}
-      <details className="codex-raw-details">
-        <summary>完整源元数据 JSON</summary>
-        <pre className="mono-cell technical-pre" style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>
-          {codexMetadataJSON(metadata)}
-        </pre>
-      </details>
-      <button type="button" className="btn btn-ghost" style={{ marginTop: '8px', padding: '4px 8px', fontSize: '0.75rem' }} onClick={() => onCopy(codexMetadataJSON(metadata), 'Codex 元数据 JSON')}>
-        <Icon name="copy" size={12} /> 复制完整源元数据 JSON
-      </button>
-    </details>
   );
 }
 
@@ -364,7 +203,7 @@ function MobileEventList({ events, selectedEventID, onSelect, loading }) {
         const projectContext = eventProjectContext(event);
         const outcome = eventOutcome(event);
         const slowTTFB = eventTTFBMS(event) >= 5000;
-        const friendly = friendlyEventMessage(event);
+        const friendly = friendlyEventMessage(event) || (event.outcome === 'failed' ? eventFailureSummaryLabel(event) : '');
         const selected = selectedEventID === event.id;
         return (
           <article key={event.id} role="listitem">
@@ -393,8 +232,8 @@ function MobileEventList({ events, selectedEventID, onSelect, loading }) {
               </span>
             </div>
             <div className="telemetry-mobile-route">
-              <strong className="mono-cell">{eventModel(event)}</strong>
-              <small>{eventEndpoint(event)}</small>
+              <strong className="mono-cell">{event.kind === 'notify' ? (event.hookEvent || '通知') : eventModel(event)}</strong>
+              {event.kind !== 'notify' && <small>{eventEndpointName(event)}</small>}
             </div>
             <div className="telemetry-mobile-context">
               <span className="telemetry-mobile-request-summary" title={recentEventRequestSummary(event)}>
@@ -408,6 +247,7 @@ function MobileEventList({ events, selectedEventID, onSelect, loading }) {
                 </p>
               )}
             </div>
+            {event.kind !== 'notify' && <div className="telemetry-cache-summary">{eventCacheLabel(event)}<small>{eventUsageLabel(event)}</small></div>}
             <span className="responsive-data-card-drill-hint">点击查看请求链路与诊断详情</span>
             </div>
           </article>
@@ -425,6 +265,8 @@ export function RunPage() {
   const [eventFilter, setEventFilter] = useState('client'); // 'client' | 'upstream' | 'all'
   const [eventSort, setEventSort] = useState('desc'); // 'desc' = 最新优先, 'asc' = 最早优先
   const [selectedEventID, setSelectedEventID] = useState(null);
+  const [expandedGroups, setExpandedGroups] = useState({});
+  const toggleGroup = (key, open) => setExpandedGroups((previous) => previous[key] === open ? previous : { ...previous, [key]: open });
   const [requestChainEvents, setRequestChainEvents] = useState([]);
   const [eventPageDirection, setEventPageDirection] = useState('none');
   const [, setDurationTick] = useState(0);
@@ -467,7 +309,7 @@ export function RunPage() {
 
   const baseEventContext = useMemo(() => {
     const byID = new Map();
-    for (const event of [...recentEvents, ...eventHistory.events]) byID.set(event.id, event);
+    for (const event of [...recentEvents, ...eventHistory.events]) byID.set(event.id, mergeRuntimeEvent(byID.get(event.id), event));
     return [...byID.values()];
   }, [eventHistory.events, recentEvents]);
 
@@ -480,18 +322,6 @@ export function RunPage() {
     : requestChainEvents.find((e) => e.id === currentSelectedID)
       || baseEventContext.find((e) => e.id === currentSelectedID)
       || visibleEvents.find((e) => e.id === currentSelectedID));
-  const selectedCodexMetadata = eventCodexMetadata(selectedEvent);
-  const selectedGrokMetadata = eventGrokMetadata(selectedEvent);
-  const selectedCodexHasIdentity = codexHasRequestIdentity(selectedCodexMetadata);
-  const selectedClientDeclared = eventField(selectedEvent, 'clientDeclared', 'client_declared') || {};
-  const selectedDeclaredProject = String(selectedClientDeclared.project ?? '').trim();
-  const selectedDeclaredWorkspace = String(selectedClientDeclared.workspace ?? '').trim();
-  const selectedDeclaredRemote = String(selectedClientDeclared.gitRemote ?? selectedClientDeclared.git_remote ?? '').trim();
-  const selectedDeclaredUser = String(selectedClientDeclared.user ?? '').trim();
-  const selectedSourceProject = String(selectedClientDeclared.sourceProject ?? selectedClientDeclared.source_project ?? '').trim();
-  const selectedSourceWorkspace = String(selectedClientDeclared.sourceWorkspace ?? selectedClientDeclared.source_workspace ?? '').trim();
-  const selectedProjectContext = eventProjectContext(selectedEvent);
-  const selectedResult = eventResultKind(selectedEvent);
 
   // Request chain for selected event
   const requestChain = useMemo(() => {
@@ -504,6 +334,7 @@ export function RunPage() {
   }, [baseEventContext, currentSelectedID, requestChainEvents, runtimeEventDetail]);
 
   const selectedRequestID = selectedEvent ? eventRequestID(selectedEvent) : '';
+  const selectedChangeSeq = Number(baseEventContext.find((event) => event.id === currentSelectedID)?.changeSeq || 0);
   useEffect(() => {
     setRequestChainEvents([]);
     if (!selectedRequestID || selectedRequestID === '-') return undefined;
@@ -523,10 +354,10 @@ export function RunPage() {
       loadRuntimeEvent(null);
       return;
     }
-    loadRuntimeEvent(currentSelectedID).catch((error) => {
+    loadRuntimeEvent(currentSelectedID, selectedChangeSeq).catch((error) => {
       addToast(`加载事件详情失败: ${error.message}`, 'error');
     });
-  }, [addToast, currentSelectedID, loadRuntimeEvent]);
+  }, [addToast, currentSelectedID, selectedChangeSeq, loadRuntimeEvent]);
 
   const copyText = (text, label = '内容') => copyWithToast(text, label, addToast);
   const changeEventPage = (nextPage) => {
@@ -844,12 +675,7 @@ export function RunPage() {
                 <div className="telemetry-selection-hint" role="status">选择一条事件查看请求链路与诊断详情</div>
               )}
             </div>
-            {eventHistory.loading && (
-              <div className="event-page-loading" role="status" aria-live="polite">
-                <span className="loading-dot" aria-hidden="true" />
-                <span>正在读取第 {formatNumber(eventHistory.page)} 页…</span>
-              </div>
-            )}
+
           </div>
           {eventHistory.mode === 'legacy' ? (
             <div className="event-page-compatibility" role="status">
@@ -858,300 +684,12 @@ export function RunPage() {
           ) : null}
         </div>
 
-        {/* Master-Detail Request Chain & Full Technical Inspector (macOS Parity) */}
-        {selectedEvent && (
-          <div
-            className="request-detail-grid"
-            style={{
-              padding: 'clamp(16px, 4vw, 24px)',
-              borderTop: '1px solid var(--border-subtle)',
-              background: 'var(--bg-surface-glass)',
-              display: 'grid',
-              gap: 'clamp(16px, 4vw, 24px)',
-            }}
-          >
-            {/* Left: Request Chain Visualization */}
-            <div className="request-chain-pane" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <div className="request-chain-header">
-                <strong style={{ fontSize: '0.95rem', color: 'var(--text-primary)' }}>完整请求链路 (Trace)</strong>
-                <span className="mono-cell" style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                  {requestChain.filter((e) => e.kind === 'upstream').length} 次上游尝试
-                </span>
-              </div>
+        {selectedEvent && <EventInspector
+          event={selectedEvent} chain={requestChain} onSelect={setSelectedEventID}
+          expanded={expandedGroups} onToggle={toggleGroup} onCopy={copyText}
+          loading={runtimeEventDetail?.event?.id !== selectedEvent.id && selectedEvent.detailsOmitted === true}
+        />}
 
-              <div className="request-chain-list" key={selectedRequestID} role="region" aria-label="请求链事件列表">
-                {requestChain.map((ev, idx) => {
-                  const isCur = ev.id === selectedEvent.id;
-                  const isClient = ev.kind === 'client';
-                  const upstreamIndex = requestChain
-                    .slice(idx + 1)
-                    .filter((candidate) => candidate.kind === 'upstream').length + 1;
-                  const tools = eventToolCalls(ev);
-                  return (
-                    <div
-                      key={ev.id}
-                      onClick={() => setSelectedEventID(ev.id)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.preventDefault();
-                          setSelectedEventID(ev.id);
-                        }
-                      }}
-                      role="button"
-                      tabIndex={0}
-                      aria-pressed={isCur}
-                      aria-label={`查看${isClient ? '客户端请求' : `第 ${upstreamIndex} 次上游尝试`}详情`}
-                      style={{
-                        padding: '10px 12px',
-                        borderRadius: 'var(--radius-md)',
-                        background: isCur ? 'var(--bg-active)' : 'var(--bg-surface-elevated)',
-                        border: `1px solid ${isCur ? 'var(--primary)' : 'var(--border-subtle)'}`,
-                        cursor: 'pointer',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '4px',
-                      }}
-                    >
-                      <div className="request-chain-card-header">
-                        <span style={{ fontSize: '0.78rem', fontWeight: 700, color: isClient ? 'var(--primary)' : 'var(--accent-purple)' }}>
-                          {isClient ? '端到端客户端请求' : `上游尝试 #${upstreamIndex}`}
-                        </span>
-                        <StatusBadge
-                          text={eventOutcomeLabel(ev)}
-                          kind={statusKind(ev)}
-                        />
-                      </div>
-                      <div className="mono-cell" style={{ fontSize: '0.75rem', color: 'var(--text-primary)', fontWeight: 600 }}>
-                        {eventEndpoint(ev)}
-                      </div>
-                      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                        {eventStatusDetailLabel(ev)} · 耗时: {eventDurationText(ev)} · {eventModel(ev)}
-                      </div>
-                      <div style={{ fontSize: '0.72rem', color: eventOutcome(ev) === 'failed' ? 'var(--status-critical)' : 'var(--text-muted)' }}>
-                        {eventFailover(ev) ? '故障转移 · ' : ''}{eventEndpointID(ev)} · {eventUpstreamRequestID(ev) !== '-' ? `上游请求 ${eventUpstreamRequestID(ev)}` : '上游请求 ID -'}
-                        {tools.length ? ` · 工具 ${tools.join(', ')}` : ''}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Right: Progressive event details: core first, forensic fields on demand. */}
-            <div className="event-inspector" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-              <div className="event-inspector-header">
-                <strong style={{ fontSize: '0.95rem', color: 'var(--text-primary)' }}>
-                  选中事件详情
-                </strong>
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  style={{ padding: '2px 8px', fontSize: '0.78rem' }}
-                  onClick={() => copyText(JSON.stringify(selectedEvent, null, 2), '完整事件 JSON')}
-                >
-                  <Icon name="copy" size={13} />
-                  <span>复制 JSON</span>
-                </button>
-              </div>
-
-              <div className="grid-3col event-core-summary" data-event-detail-tier="primary" style={{ fontSize: '0.82rem', gap: '10px' }}>
-                <div><span style={{ color: 'var(--text-muted)' }}>时间：</span><span className="mono-cell">{formatTimestamp(selectedEvent.timestamp, { date: true })}</span></div>
-                <div><span style={{ color: 'var(--text-muted)' }}>事件类型：</span><span className="mono-cell">{eventKindLabel(selectedEvent.kind)}</span></div>
-                <div><span style={{ color: 'var(--text-muted)' }}>入站客户端：</span><strong style={{ color: 'var(--text-primary)' }}>{eventClientKindLabel(selectedEvent)}</strong></div>
-                <div><span style={{ color: 'var(--text-muted)' }}>请求用途：</span><strong style={{ color: 'var(--primary)' }}>{eventPurposeLabel(selectedEvent)}</strong></div>
-                {eventCodexThreadClass(selectedEvent) && <div><span style={{ color: 'var(--text-muted)' }}>功能线程：</span><strong>{codexThreadClassLabel(eventCodexThreadClass(selectedEvent))}</strong></div>}
-                {eventField(selectedEvent, 'attributionScope', 'attribution_scope') && <div><span style={{ color: 'var(--text-muted)' }}>归因范围：</span><strong>{attributionScopeLabel(eventField(selectedEvent, 'attributionScope', 'attribution_scope'))}</strong></div>}
-                <div><span style={{ color: 'var(--text-muted)' }}>生命周期：</span><span className="mono-cell">{eventPhaseLabel(selectedEvent)}</span></div>
-                <div><span style={{ color: 'var(--text-muted)' }}>客户端模型：</span><span className="mono-cell">{eventField(selectedEvent, 'clientModel', 'client_model') || '-'}</span></div>
-                <div><span style={{ color: 'var(--text-muted)' }}>路由/逻辑模型：</span><span className="mono-cell" style={{ color: 'var(--status-good)' }}>{eventField(selectedEvent, 'effectiveModel', 'effective_model') || '-'}</span></div>
-                <div><span style={{ color: 'var(--text-muted)' }}>实际上游模型：</span><span className="mono-cell">{eventUpstreamModel(selectedEvent)}</span></div>
-                <div><span style={{ color: 'var(--text-muted)' }}>入口名称：</span><span>{eventEndpointName(selectedEvent)}</span></div>
-                <div><span style={{ color: 'var(--text-muted)' }}>模型组：</span><span>{selectedEvent.modelGroupName || selectedEvent.modelGroupID || '—'}</span></div>
-                <div><span style={{ color: 'var(--text-muted)' }}>HTTP 状态：</span><strong className="mono-cell" style={{ color: selectedResult === 'failed' ? 'var(--status-critical)' : 'var(--text-primary)' }}>{eventHttpStatusLabel(selectedEvent)}</strong></div>
-                <div><span style={{ color: 'var(--text-muted)' }}>最终结果：</span><strong style={{ color: selectedResult === 'failed' ? 'var(--status-critical)' : selectedResult === 'succeeded' ? 'var(--status-good)' : 'var(--text-secondary)' }}>{eventOutcomeLabel(selectedEvent)}</strong></div>
-                <div><span style={{ color: 'var(--text-muted)' }}>故障转移：</span><strong style={{ color: eventFailover(selectedEvent) ? 'var(--status-warning)' : 'var(--text-secondary)' }}>{eventFailover(selectedEvent) ? '已发生' : '未发生'}</strong></div>
-                <div><span style={{ color: 'var(--text-muted)' }}>首字节延迟 (TTFB)：</span><span className="mono-cell">{formatDuration(eventTTFBMS(selectedEvent))}</span></div>
-                <div><span style={{ color: 'var(--text-muted)' }}>总耗时：</span><span className="mono-cell">{formatDuration(eventDurationMS(selectedEvent))}</span></div>
-              </div>
-
-              <div className="event-project-context" data-event-detail-tier="primary">
-                {selectedGrokMetadata && (
-                  <>
-                    {grokMetadataField(selectedGrokMetadata, 'clientIdentifier', 'client_identifier') && (
-                      <div>
-                        <span>Grok 客户端</span>
-                        <strong className="mono-cell">{[
-                          grokMetadataField(selectedGrokMetadata, 'clientIdentifier', 'client_identifier'),
-                          grokMetadataField(selectedGrokMetadata, 'clientVersion', 'client_version'),
-                          grokMetadataField(selectedGrokMetadata, 'clientMode', 'client_mode'),
-                        ].filter(Boolean).join(' · ')}</strong>
-                      </div>
-                    )}
-                    {grokMetadataField(selectedGrokMetadata, 'sessionID', 'session_id') && (
-                      <div>
-                        <span>Grok 会话</span>
-                        <strong className="mono-cell">{grokMetadataField(selectedGrokMetadata, 'sessionID', 'session_id')}</strong>
-                      </div>
-                    )}
-                    {grokMetadataField(selectedGrokMetadata, 'convID', 'conv_id') && (
-                      <div>
-                        <span>Grok 对话</span>
-                        <strong className="mono-cell">{grokMetadataField(selectedGrokMetadata, 'convID', 'conv_id')}</strong>
-                      </div>
-                    )}
-                  </>
-                )}
-                {selectedCodexHasIdentity && (
-                  <>
-                    <div>
-                      <span>代理身份</span>
-                      <strong>{codexAgentRoleLabel(selectedCodexMetadata)}</strong>
-                    </div>
-                    <div>
-                      <span>代理路径</span>
-                      <strong className="mono-cell">{codexAgentPath(selectedCodexMetadata)}</strong>
-                    </div>
-                  </>
-                )}
-                <div>
-                  <span>项目 / 工作区</span>
-                  <strong>{selectedProjectContext.label}</strong>
-                </div>
-                <div>
-                  <span>项目来源</span>
-                  <strong>{selectedProjectContext.applicable ? projectSourceLabel(selectedProjectContext.source, selectedProjectContext.localUser) : '不适用'}</strong>
-                </div>
-                {selectedSourceProject && (
-                  <div>
-                    <span>客户端原始项目</span>
-                    <strong className="mono-cell">{selectedSourceProject}</strong>
-                  </div>
-                )}
-                {selectedSourceWorkspace && (
-                  <div>
-                    <span>客户端原始工作区</span>
-                    <strong className="mono-cell">{selectedSourceWorkspace}</strong>
-                  </div>
-                )}
-                {selectedDeclaredProject && (
-                  <div>
-                    <span>客户端声明项目</span>
-                    <strong className="mono-cell">{selectedDeclaredProject}</strong>
-                  </div>
-                )}
-                {selectedDeclaredWorkspace && (
-                  <div>
-                    <span>客户端声明工作区</span>
-                    <strong className="mono-cell">{selectedDeclaredWorkspace}</strong>
-                  </div>
-                )}
-                {selectedDeclaredRemote && (
-                  <div>
-                    <span>客户端声明 Git 仓库</span>
-                    <strong className="mono-cell">{selectedDeclaredRemote}</strong>
-                  </div>
-                )}
-                {selectedDeclaredUser && (
-                  <div>
-                    <span>客户端声明用户</span>
-                    <strong className="mono-cell">{selectedDeclaredUser}</strong>
-                  </div>
-                )}
-                {selectedCodexHasIdentity && (
-                  <div className="event-project-context-meta">
-                    {codexWorkspaceEntries(selectedCodexMetadata).map((workspace) => (
-                      <span key={workspace.path} className="mono-cell">
-                        {workspace.remote || workspace.path}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <details className="event-secondary-details" data-event-detail-tier="secondary">
-                <summary>路由与协议详情</summary>
-                <div className="grid-3col event-secondary-grid" style={{ fontSize: '0.82rem', gap: '10px' }}>
-                  <div><span style={{ color: 'var(--text-muted)' }}>命中特征规则：</span><span className="mono-cell">{eventFeatureRuleID(selectedEvent)}</span></div>
-                  <div><span style={{ color: 'var(--text-muted)' }}>上游 Host：</span><span className="mono-cell">{eventUpstreamHost(selectedEvent)}</span></div>
-                  <div><span style={{ color: 'var(--text-muted)' }}>上游 HTTP 状态：</span><span className="mono-cell">{eventUpstreamStatusLabel(selectedEvent)}</span></div>
-                  <div>
-                    <span style={{ color: 'var(--text-muted)' }}>协议路由：</span>
-                    <span className="mono-cell" style={{ color: 'var(--text-secondary)' }}>{eventProtocolRouteLabel(selectedEvent)}</span>
-                  </div>
-                </div>
-              </details>
-
-              <details className="event-diagnostics-details" data-event-detail-tier="diagnostics">
-                <summary>失败、工具与流诊断</summary>
-                <div className="event-technical-details" style={{ display: 'flex', flexDirection: 'column', gap: '8px', paddingTop: '10px', fontSize: '0.82rem' }}>
-                  <div>
-                    <span style={{ color: 'var(--text-muted)' }}>失败原因 / 阶段：</span>
-                    <span className="technical-inline-value" style={{ color: selectedResult === 'failed' ? 'var(--status-critical)' : 'var(--text-secondary)', fontWeight: selectedResult === 'failed' ? 600 : 400 }}>{eventFailureSummaryLabel(selectedEvent)}</span>
-                  </div>
-                  <div>
-                    <span style={{ color: 'var(--text-muted)' }}>实际工具调用：</span>
-                    <span className="mono-cell" style={{ color: 'var(--accent-cyan)' }}>{eventToolCallsLabel(selectedEvent)}</span>
-                  </div>
-
-                  <div>
-                    <span className="event-technical-section-label">流诊断信息</span>
-                    <StreamTraceRows event={selectedEvent} />
-                  </div>
-
-                  {eventFailureDetail(selectedEvent) && (
-                    <div>
-                      <span style={{ color: 'var(--text-muted)' }}>技术详情：</span>
-                      <pre
-                        className="mono-cell technical-pre"
-                        style={{
-                          color: 'var(--status-critical)',
-                          fontSize: '0.78rem',
-                        }}
-                      >
-                        {eventFailureDetail(selectedEvent)}
-                      </pre>
-                    </div>
-                  )}
-
-                  <div>
-                    <span style={{ color: 'var(--text-muted)' }}>原始引擎消息：</span>
-                    <span className="technical-inline-value" style={{ color: 'var(--text-secondary)' }}>{eventMessage(selectedEvent) || '无'}</span>
-                  </div>
-
-                  {eventRequestID(selectedEvent) !== '-' && (
-                    <div className="request-id-row">
-                      <span style={{ color: 'var(--text-muted)' }}>Request ID：</span>
-                      <span className="mono-cell">{eventRequestID(selectedEvent)}</span>
-                      <button
-                        type="button"
-                        className="btn btn-ghost"
-                        style={{ padding: '2px 6px', fontSize: '0.72rem' }}
-                        onClick={() => copyText(eventRequestID(selectedEvent), 'Request ID')}
-                        aria-label="复制 Request ID"
-                      >
-                        <Icon name="copy" size={11} />
-                      </button>
-                    </div>
-                  )}
-                  {eventSessionID(selectedEvent) !== '-' && (
-                    <div><span style={{ color: 'var(--text-muted)' }}>会话 ID：</span><span className="mono-cell">{eventSessionID(selectedEvent)}</span></div>
-                  )}
-                  <div><span style={{ color: 'var(--text-muted)' }}>事件 ID：</span><span className="mono-cell">{selectedEvent.id}</span></div>
-                  <div><span style={{ color: 'var(--text-muted)' }}>入口 ID：</span><span className="mono-cell">{eventEndpointID(selectedEvent)}</span></div>
-                  <div><span style={{ color: 'var(--text-muted)' }}>上游请求 ID：</span><span className="mono-cell">{eventUpstreamRequestID(selectedEvent)}</span></div>
-                  <div><span style={{ color: 'var(--text-muted)' }}>超时阈值：</span><span className="mono-cell">{eventTimeoutMS(selectedEvent) ? formatDuration(eventTimeoutMS(selectedEvent)) : '默认 / 未上报'}</span></div>
-                </div>
-              </details>
-
-              {selectedGrokMetadata && (
-                <GrokMetadataDetails metadata={selectedGrokMetadata} onCopy={copyText} />
-              )}
-              {selectedCodexHasIdentity && (
-                <CodexMetadataDetails metadata={selectedCodexMetadata} onCopy={copyText} />
-              )}
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );

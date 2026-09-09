@@ -73,10 +73,10 @@ export function PaginationBar({
         <span>
           {normalizedTotalCount
             ? `第 ${formatNumber(range.from)}–${formatNumber(range.to)} 条 · 第 ${formatNumber(currentPage)} / ${formatNumber(normalizedTotalPages)} 页`
-            : (emptySummary || `当前筛选没有${itemNoun}`)}
+            : (emptySummary || `当前筛选没有记录`)}
         </span>
         {liveItemCount > 0 && <span className="pagination-live-count">另有 {formatNumber(liveItemCount)} {liveItemNoun}</span>}
-        {loading && <span className="pagination-loading">读取中…</span>}
+        {loading && <span className="pagination-loading">正在读取第 {formatNumber(currentPage)} 页…</span>}
       </div>
 
       <div className="pagination-controls">

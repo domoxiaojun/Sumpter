@@ -34,6 +34,7 @@ pub(super) struct SessionContext {
 
 #[derive(Default, Clone, Copy)]
 pub(super) struct TokenUsage {
+    cache_read: sumpter_core::cache_read::CacheReadStatistics,
     input_tokens: i64,
     output_tokens: i64,
     cache_read_input_tokens: i64,
@@ -83,6 +84,10 @@ pub(super) enum TokenAccountingQuality {
 
 impl TokenUsage {
     fn add_trace(&mut self, event: &RuntimeEvent) {
+        if event.phase == Some(sumpter_core::events::RuntimeEventPhase::Completed) {
+            let cache = event.observed_cache_read();
+            self.cache_read.add(cache.state, cache.reason, 1);
+        }
         if event.request_purpose == Some(RequestPurpose::TokenCount) {
             return;
         }
@@ -121,38 +126,29 @@ impl TokenUsage {
         self.reasoning_tokens = self
             .reasoning_tokens
             .saturating_add(usage.reasoning_tokens.unwrap_or(0).min(i64::MAX as u64) as i64);
-        let input = usage.input_tokens.unwrap_or(0).min(i64::MAX as u64) as i64;
-        let cache_read = usage
-            .cache_read_input_tokens
-            .unwrap_or(0)
-            .min(i64::MAX as u64) as i64;
-        let cache_write = usage
-            .cache_creation_input_tokens
-            .unwrap_or(0)
-            .min(i64::MAX as u64) as i64;
-        let (semantics, processed_input, uncached_input) = match event
-            .target_format
-            .or(event.source_format)
-            .map(|format| format.token())
-        {
-            Some("anthropic") => (
-                TokenAccountingSemantics::Independent,
-                input.saturating_add(cache_read).saturating_add(cache_write),
-                input,
-            ),
-            Some("openai") | Some("openai-responses") => (
-                TokenAccountingSemantics::Subset,
-                input,
-                input.saturating_sub(cache_read).saturating_sub(cache_write),
-            ),
-            _ => (TokenAccountingSemantics::Unknown, input, input),
+        let (semantics, processed, uncached) = super::normalized_input_tokens(
+            event.target_format.or(event.source_format),
+            super::token_i64(usage.input_tokens),
+            super::token_i64(usage.cache_read_input_tokens),
+            super::token_i64(usage.cache_creation_input_tokens),
+        );
+        let semantics = match semantics {
+            "independent" => TokenAccountingSemantics::Independent,
+            "subset" => TokenAccountingSemantics::Subset,
+            _ => TokenAccountingSemantics::Unknown,
         };
+        let processed_input = processed.unwrap_or(0);
+        let uncached_input = uncached.unwrap_or(0);
         self.uncached_input_tokens = self.uncached_input_tokens.saturating_add(uncached_input);
         self.processed_input_tokens = self.processed_input_tokens.saturating_add(processed_input);
         self.processed_total_tokens = self
             .processed_total_tokens
             .saturating_add(processed_input)
-            .saturating_add(usage.output_tokens.unwrap_or(0).min(i64::MAX as u64) as i64);
+            .saturating_add(if processed.is_some() {
+                usage.output_tokens.unwrap_or(0).min(i64::MAX as u64) as i64
+            } else {
+                0
+            });
         if let Some(cache_read) = usage.cache_read_input_tokens {
             let cache_read = cache_read.min(i64::MAX as u64) as i64;
             self.cache_read_reported_requests = self.cache_read_reported_requests.saturating_add(1);
@@ -215,6 +211,7 @@ impl TokenUsage {
                     / self.cache_read_token_denominator as f64)
                     .clamp(0.0, 1.0)
             }),
+            "cacheRead": self.cache_read,
             "cacheReadRequestRate": (self.cache_read_reported_requests > 0).then(|| {
                 (self.cache_read_hit_requests as f64
                     / self.cache_read_reported_requests as f64)
@@ -647,7 +644,16 @@ pub(super) fn event_session_projection(event: &RuntimeEvent) -> (String, &'stati
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        return (value.to_owned(), "event");
+        let source = match event.session_source.as_deref() {
+            Some("client_declared") => "client_declared",
+            Some("claude_metadata") => "claude_metadata",
+            Some("grok_session") => "grok_session",
+            Some("codex_session") => "codex_session",
+            Some("grok_conversation") => "grok_conversation",
+            Some("header") => "header",
+            _ => "event",
+        };
+        return (value.to_owned(), source);
     }
     if let Some(metadata) = event.codex_metadata.as_ref() {
         if let Some(value) = metadata

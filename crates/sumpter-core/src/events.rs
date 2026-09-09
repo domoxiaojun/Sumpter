@@ -860,9 +860,6 @@ pub struct CodexMetadata {
     pub conflicts: Vec<String>,
     #[serde(default)]
     pub is_subagent: bool,
-    /// 仅在有独立 subagent 证据且缺 authoritative parent 时，才从 fork 关系推断。
-    #[serde(rename = "parentThreadIDInferred", default)]
-    pub parent_thread_id_inferred: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -1018,15 +1015,8 @@ impl CodexMetadata {
                 source.eq_ignore_ascii_case("subagent")
                     || source.eq_ignore_ascii_case("memory_consolidation")
             });
-        let mut parent_thread_id = merged.parent_thread_id;
-        let mut parent_thread_id_inferred = false;
-        if parent_thread_id.is_none()
-            && is_subagent
-            && let Some(forked_from_thread_id) = merged.forked_from_thread_id.as_ref()
-        {
-            parent_thread_id = Some(forked_from_thread_id.clone());
-            parent_thread_id_inferred = true;
-        }
+        // A fork records inherited history, not an explicit parent-task relationship.
+        let parent_thread_id = merged.parent_thread_id;
 
         Some(Self {
             installation_id: merged.installation_id,
@@ -1072,7 +1062,6 @@ impl CodexMetadata {
             has_conflicts: !state.conflicts.is_empty(),
             conflicts: state.conflicts,
             is_subagent,
-            parent_thread_id_inferred,
         })
     }
 
@@ -2366,6 +2355,15 @@ pub struct ResponseUsage {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StreamTrace {
+    #[serde(rename = "toolCallsTruncated", default)]
+    pub tool_calls_truncated: bool,
+    /// Cache field authority and bounded observation gaps, separate from usage totals.
+    #[serde(
+        rename = "cacheReadEvidence",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub cache_read_evidence: Option<crate::cache_read::CacheReadEvidence>,
     #[serde(rename = "chunkCount", default, skip_serializing_if = "is_none")]
     pub chunk_count: Option<u64>,
     #[serde(rename = "bytesReceived", default, skip_serializing_if = "is_none")]
@@ -2545,6 +2543,18 @@ impl Default for DiagnosticCaptureSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeEvent {
+    #[serde(
+        rename = "sessionSource",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub session_source: Option<String>,
+    /// Explicit original notification hook, never inferred from its message.
+    #[serde(rename = "hookEvent", default, skip_serializing_if = "Option::is_none")]
+    pub hook_event: Option<String>,
+    /// Derived API summary, refreshed at every event write boundary.
+    #[serde(rename = "cacheRead", default, skip_serializing_if = "Option::is_none")]
+    pub cache_read: Option<crate::cache_read::CacheReadSummary>,
     /// 入站客户端类型(client/upstream 请求事件都会记录)。None 表示旧 stats.json
     /// 或没有入站客户端的 notify；显式 Unknown 才表示无法识别的 Anthropic 客户端。
     #[serde(rename = "clientKind", default, skip_serializing_if = "is_none")]
@@ -2742,7 +2752,7 @@ impl RuntimeEvent {
             };
         }
         let Some(metadata) = self.codex_metadata.as_ref() else {
-            return "root";
+            return "unknown";
         };
         if let Some(kind) = metadata.subagent_kind.as_deref() {
             return match kind {
@@ -2759,7 +2769,9 @@ impl RuntimeEvent {
             Some("automation") => "automation",
             Some(value) if value.starts_with("ambient") => "ambient",
             _ if metadata.is_subagent => "subagent",
-            _ => "root",
+            Some("cli" | "tui" | "vscode" | "desktop" | "user") => "root",
+            _ if matches!(metadata.agent_name.as_deref(), Some("root" | "/root")) => "root",
+            _ => "unknown",
         }
     }
 
@@ -2853,7 +2865,8 @@ impl RuntimeSnapshot {
     /// 插入或原地更新事件:同 id 原地覆盖(数组位置不动,保住 in-flight→完成的行位置);
     /// 新事件插到最前,并按 per-kind 上限裁剪。**计数不在这里**——in-flight 插入不计数,
     /// 完成时由引擎按口径计数一次。
-    pub fn upsert_event(&mut self, event: RuntimeEvent) {
+    pub fn upsert_event(&mut self, mut event: RuntimeEvent) {
+        event.refresh_cache_read();
         if let Some(existing) = self.recent_events.iter_mut().find(|e| e.id == event.id) {
             *existing = event;
             return;
@@ -2944,6 +2957,9 @@ mod tests {
 
     fn event(id: &str, kind: &str, ts: f64) -> RuntimeEvent {
         RuntimeEvent {
+            session_source: None,
+            hook_event: None,
+            cache_read: None,
             client_kind: None,
             client_variant: None,
             agent_role: None,
@@ -2996,6 +3012,9 @@ mod tests {
 
     fn in_flight(id: &str, kind: &str, ts: f64) -> RuntimeEvent {
         RuntimeEvent {
+            session_source: None,
+            hook_event: None,
+            cache_read: None,
             phase: Some(RuntimeEventPhase::InFlight),
             status_code: 0,
             ..event(id, kind, ts)
@@ -3012,6 +3031,9 @@ mod tests {
 
         // 原地更新 b:位置不动、内容替换。
         snapshot.upsert_event(RuntimeEvent {
+            session_source: None,
+            hook_event: None,
+            cache_read: None,
             phase: None,
             status_code: 200,
             timestamp: 9.0,
@@ -3282,6 +3304,9 @@ mod tests {
         assert!(legacy_json.get("clientKind").is_none());
 
         let unknown = RuntimeEvent {
+            session_source: None,
+            hook_event: None,
+            cache_read: None,
             client_kind: Some(ClientKind::Unknown),
             ..event("unknown", KIND_CLIENT, 2.0)
         };
@@ -3337,6 +3362,8 @@ mod tests {
     fn stream_trace_roundtrips_with_camel_case_wire_names() {
         let mut current = event("trace", KIND_CLIENT, 1.0);
         current.stream_trace = Some(StreamTrace {
+            tool_calls_truncated: false,
+            cache_read_evidence: None,
             chunk_count: Some(3),
             bytes_received: Some(128),
             max_chunk_gap_ms: Some(60_000),
@@ -3376,6 +3403,9 @@ mod tests {
         assert!(legacy_json.get("routeMode").is_none());
 
         let current = RuntimeEvent {
+            session_source: None,
+            hook_event: None,
+            cache_read: None,
             source_format: Some(ProviderProtocol::OpenAIResponses),
             target_format: Some(ProviderProtocol::Anthropic),
             route_mode: Some(RouteMode::Translated),
@@ -3819,6 +3849,9 @@ mod tests {
     #[test]
     fn runtime_event_derives_client_variant_and_agent_role() {
         let event = RuntimeEvent {
+            session_source: None,
+            hook_event: None,
+            cache_read: None,
             client_kind: Some(ClientKind::Codex),
             codex_metadata: Some(CodexMetadata {
                 originator: Some("codex-tui".into()),
@@ -3832,13 +3865,16 @@ mod tests {
     }
 
     #[test]
-    fn codex_metadata_parser_infers_parent_only_for_subagent_and_old_stats_roundtrip() {
+    fn codex_fork_does_not_invent_parent_relationship() {
         let metadata = CodexMetadata::from_request(
             &[("x-openai-subagent".into(), "collab_spawn".into()), ("x-codex-window-id".into(), "thread-child:7".into())],
             Some(&serde_json::json!({"client_metadata":{"x-codex-turn-metadata":r#"{"forked_from_thread_id":"thread-parent"}"#}})),
         ).unwrap();
-        assert_eq!(metadata.parent_thread_id.as_deref(), Some("thread-parent"));
-        assert!(metadata.parent_thread_id_inferred);
+        assert!(metadata.parent_thread_id.is_none());
+        assert_eq!(
+            metadata.forked_from_thread_id.as_deref(),
+            Some("thread-parent")
+        );
         let legacy = RuntimeSnapshot::from_json(r#"{"recentEvents":[{"durationMS":1,"failover":false,"id":"old","kind":"client","statusCode":200,"timestamp":1.0}]}"#).unwrap();
         assert!(legacy.recent_events[0].codex_metadata.is_none());
         assert!(!legacy.to_json_pretty().unwrap().contains("codexMetadata"));

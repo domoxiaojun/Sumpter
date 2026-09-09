@@ -16,17 +16,44 @@
         ...template, id: 'scroll-client', requestID: 'scroll-long', timestamp: now - 1000,
         clientKind: 'codex', clientModel: 'gpt-6-astra', effectiveModel: 'gpt-6-astra', upstreamModel: 'gpt-6-astra',
         endpointID: 'scroll-endpoint', endpointName: '滚动验收入口', upstreamHost: 'example.invalid', failover: false,
+        statusCode: 200, upstreamStatusCode: 200, outcome: 'failed', phase: 'completed',
+        failureKind: 'upstream_response_failed', message: '上游报告执行失败',
+        sourceFormat: 'openai-responses', targetFormat: 'openai-responses', requestMethod: 'POST', requestPath: '/v1/responses',
+        projectName: 'Sumpter 演示项目', projectSource: 'client_declared', clientDeclared: { project: 'Sumpter 演示项目', workspace: '.../demo' },
+        clientVariant: 'desktop', agentRole: 'subagent', agentName: '/root/review',
+        parentThreadId: 'preview-parent', parentTurnId: 'preview-parent-turn', rootTurnId: 'preview-root-turn',
+        cacheRead: { state: 'hit', readTokens: 1280, finality: 'confirmed', reason: null },
+        usageSummary: { inputTokens: 8400, outputTokens: 1800, cacheReadInputTokens: 1280 },
       };
+      client.streamTrace = { ...client.streamTrace, usage: { ...client.usageSummary } };
       const attempts = Array.from({ length: 10 }, (_, index) => ({
         ...client, id: `scroll-attempt-${index + 1}`, kind: 'upstream', timestamp: now - 12000 + index * 1000,
         statusCode: index === 9 ? 200 : 500, upstreamStatusCode: index === 9 ? 200 : 500,
         outcome: index === 9 ? 'succeeded' : 'failed', upstreamRequestID: `preview-attempt-${index + 1}`,
         message: index === 9 ? '流式输出完成' : '上游返回 HTTP 500',
       }));
-      const shortClient = { ...client, id: 'scroll-short-client', requestID: 'scroll-short', timestamp: now - 30000, endpointName: '短列表验收入口' };
+      const shortClient = { ...client, id: 'scroll-short-client', requestID: 'scroll-short', timestamp: now - 30000, endpointName: '短列表验收入口', outcome: 'succeeded', failureKind: null, message: '响应完成', cacheRead: { state: 'miss', readTokens: 0, finality: 'confirmed', reason: null } };
+      shortClient.usageSummary = { ...client.usageSummary, cacheReadInputTokens: 0 };
+      shortClient.streamTrace = { ...client.streamTrace, usage: { ...shortClient.usageSummary } };
       mockRuntime.recentEvents = [client, ...attempts, shortClient];
-      mockRuntimeHistory.splice(0, mockRuntimeHistory.length);
+      const history = [client, ...attempts, shortClient, ...Array.from({ length: 24 }, (_, index) => ({
+        ...shortClient, id: `history-${index}`, requestID: `history-request-${index}`, timestamp: now - 60000 - index * 1000,
+      }))];
+      const emptyHistory = new URLSearchParams(location.search).get('empty-history') === '1';
+      if (emptyHistory) mockRuntime.recentEvents = [{ ...client, seq: 100, changeSeq: 100 }];
+      mockRuntimeHistory.splice(0, mockRuntimeHistory.length, ...(emptyHistory ? [] : history));
       await import('/src/main.jsx');
+      if (new URLSearchParams(location.search).get('check-refresh') === '1') {
+        let settled = false;
+        let foregroundReloads = 0;
+        const observer = new MutationObserver(() => {
+          const pager = document.querySelector('.pagination-bar');
+          if (pager?.dataset.loading === 'false') settled = true;
+          if (settled && pager?.dataset.loading === 'true') { foregroundReloads++; settled = false; }
+        });
+        observer.observe(document.getElementById('root'), { subtree: true, attributes: true, attributeFilter: ['data-loading'], childList: true });
+        setTimeout(() => { observer.disconnect(); console.info('refresh-check ' + JSON.stringify({ foregroundReloads })); }, 12000);
+      }
     </script>
   </body>
 </html>

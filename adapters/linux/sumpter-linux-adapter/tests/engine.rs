@@ -1356,8 +1356,21 @@ async fn streaming_relay_chunked_sse_and_events_upserted() {
         ]),
     );
 
+    let mut request: serde_json::Value = serde_json::from_slice(&body()).unwrap();
+    request["metadata"] =
+        json!({"user_id": json!({"session_id":"native-claude-session"}).to_string()});
+    let raw_body = Bytes::from(serde_json::to_vec(&request).unwrap());
     let response = engine
-        .handle_request(loopback(), "POST", "/v1/messages", vec![], body())
+        .handle_request(
+            loopback(),
+            "POST",
+            "/v1/messages",
+            vec![(
+                "user-agent".into(),
+                "claude-cli/2.1.220 (external, cli)".into(),
+            )],
+            raw_body.clone(),
+        )
         .await;
     assert_eq!(response.status(), 200);
     let response_request_id = response
@@ -1379,6 +1392,15 @@ async fn streaming_relay_chunked_sse_and_events_upserted() {
     // 一条 client + 一条 upstream,均 completed 且计数一次。
     assert_eq!(runtime.client_requests, 1);
     assert_eq!(runtime.upstream_attempts, 1);
+    for event in &runtime.recent_events {
+        assert_eq!(event.session_id.as_deref(), Some("native-claude-session"));
+        assert_eq!(event.session_source.as_deref(), Some("claude_metadata"));
+    }
+    let forwarded: serde_json::Value = serde_json::from_slice(&fake.requests()[0].body).unwrap();
+    assert_eq!(
+        forwarded["metadata"]["user_id"],
+        request["metadata"]["user_id"]
+    );
     let client = runtime
         .recent_events
         .iter()
@@ -1395,6 +1417,11 @@ async fn streaming_relay_chunked_sse_and_events_upserted() {
     assert!(trace.chunk_count.unwrap_or_default() >= 1);
     assert!(trace.bytes_received.unwrap_or_default() > 0);
     assert_eq!(trace.terminal_event.as_deref(), Some("completed"));
+    assert_eq!(
+        client.cache_read.as_ref().unwrap().state,
+        sumpter_core::cache_read::CacheReadState::Hit
+    );
+    assert_eq!(client.cache_read.as_ref().unwrap().read_tokens, Some(4));
     assert_eq!(
         trace.usage.as_ref().and_then(|usage| usage.input_tokens),
         Some(12)

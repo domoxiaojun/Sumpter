@@ -198,7 +198,7 @@ function tokenValue(tokens, camelCase, snakeCase = null) {
   return tokens[camelCase] ?? tokens[snake] ?? null;
 }
 
-function TokenCoreGrid({ tokens, compact = false }) {
+function TokenCoreGrid({ tokens, compact = false, cache = null }) {
   const cacheRead = tokenValue(tokens, 'cacheReadInputTokens');
   const cacheWrite = tokenValue(tokens, 'cacheCreationInputTokens');
   const cacheReadRate = runtimeCacheRate(tokens, 'token');
@@ -226,6 +226,11 @@ function TokenCoreGrid({ tokens, compact = false }) {
   ];
   return (
     <div className={`runtime-v2-token-core-grid${compact ? ' compact' : ''}`}>
+      <div className="runtime-v2-cache-confirmation" style={{ gridColumn: '1 / -1' }}>
+        <strong>已确认缓存命中率 {percent(cache?.confirmedHitRate)}</strong>
+        <span> · 结论覆盖率 {percent(cache?.confirmationCoverage)}</span>
+        {cache && <small style={{ display: 'block' }}>未知 {cache.unknownRequests} · 适用性不明 {cache.applicabilityUnknownRequests} · 不适用 {cache.notApplicableRequests}；命中率只统计已确认命中/未命中的已结束请求。</small>}
+      </div>
       {cards.map((card) => (
         <div key={card.id} className={`runtime-v2-token-card ${card.tone || ''}`} data-token-role={card.id} style={{ '--card-accent': card.accent || 'var(--primary)' }}>
           <div className="runtime-v2-token-card-heading">
@@ -235,7 +240,7 @@ function TokenCoreGrid({ tokens, compact = false }) {
           <div className="runtime-v2-token-card-footer">
             <small>{card.detail}</small>
             {card.id === 'cache-read' && (
-              <span className="runtime-v2-token-card-hit-rate">命中率 {percent(cacheReadRate)}</span>
+              <span className="runtime-v2-token-card-hit-rate">Token 读占比 {percent(cacheReadRate)}</span>
             )}
           </div>
         </div>
@@ -600,7 +605,7 @@ function ProjectOverviewTable({ page, loading, onPageChange, onPageSizeChange, o
     { title: '输出 Token', key: 'output_tokens', type: 'number', width: '132px', sortable: true, render: (row) => <span className="mono-cell">{dimensionTokenValue(row, 'outputTokens')}</span> },
     {
       title: '缓存读取', key: 'cache_read', type: 'number', width: '150px', sortable: true,
-      render: (row) => <div className="runtime-v2-usage-cell"><span className="mono-cell">{dimensionTokenValue(row, 'cacheReadInputTokens')}</span><small>命中率 {percent(runtimeCacheRate(row, 'token'))}</small></div>,
+      render: (row) => <div className="runtime-v2-usage-cell"><span className="mono-cell">{dimensionTokenValue(row, 'cacheReadInputTokens')}</span><small>Token 读占比 {percent(runtimeCacheRate(row, 'token'))}</small></div>,
     },
     { title: '缓存写入', key: 'cache_write', type: 'number', width: '132px', sortable: true, render: (row) => <span className="mono-cell">{dimensionTokenValue(row, 'cacheCreationInputTokens')}</span> },
     { title: '平均耗时', key: 'average_duration', type: 'time', width: '128px', sortable: true, render: (row) => <span className="mono-cell">{formatDuration(row.averageDurationMS)}</span> },
@@ -663,7 +668,7 @@ function DimensionTable({ page, loading, onPageChange, onPageSizeChange, onSearc
     { title: '失败', key: 'failures', type: 'number', width: '100px', sortable: true, render: (row) => <span className="mono-cell">{numberWithComma(row.failures)}</span> },
     { title: '输入 Token', key: 'input_tokens', type: 'number', width: '132px', sortable: true, render: (row) => <span className="mono-cell">{dimensionTokenValue(row, 'inputTokens')}</span> },
     { title: '输出 Token', key: 'output_tokens', type: 'number', width: '132px', sortable: true, render: (row) => <span className="mono-cell">{dimensionTokenValue(row, 'outputTokens')}</span> },
-    { title: '缓存读取', key: 'cache_read', type: 'number', width: '150px', sortable: true, render: (row) => <div className="runtime-v2-usage-cell"><span className="mono-cell">{dimensionTokenValue(row, 'cacheReadInputTokens')}</span><small>命中率 {percent(runtimeCacheRate(row, 'token'))}</small></div> },
+    { title: '缓存读取', key: 'cache_read', type: 'number', width: '150px', sortable: true, render: (row) => <div className="runtime-v2-usage-cell"><span className="mono-cell">{dimensionTokenValue(row, 'cacheReadInputTokens')}</span><small>Token 读占比 {percent(runtimeCacheRate(row, 'token'))}</small></div> },
     { title: '缓存写入', key: 'cache_write', type: 'number', width: '132px', sortable: true, render: (row) => <span className="mono-cell">{dimensionTokenValue(row, 'cacheCreationInputTokens')}</span> },
     { title: '平均耗时', key: 'average_duration', type: 'time', width: '128px', sortable: true, render: (row) => <span className="mono-cell">{formatDuration(row.averageDurationMS)}</span> },
     { title: '最近活动', key: 'last_seen', type: 'time', width: '190px', sortable: true, render: (row) => <span className="mono-cell">{dateLabel(row.lastSeen)}</span> },
@@ -996,7 +1001,7 @@ function TrendPanel({ trend, legacyAnalytics, loading, error, onRetry }) {
             <Metric label="慢请求" value={optionalNumberWithComma(thresholdExceeded(duration, thresholds.durationMS?.[0]))} detail={thresholds.durationMS?.[0] ? `完成耗时 > ${formatDuration(thresholds.durationMS[0])}` : '未提供阈值'} accent="var(--status-warning)" />
             <Metric label="严重慢请求" value={optionalNumberWithComma(thresholdExceeded(duration, thresholds.durationMS?.[1]))} detail={thresholds.durationMS?.[1] ? `完成耗时 > ${formatDuration(thresholds.durationMS[1])}` : '未提供阈值'} tone="runtime-v2-warning" accent="var(--status-danger)" />
             <Metric label="输入 Token" value={optionalNumberWithComma(tokenValue(tokens, 'inputTokens'))} detail="输入用量" accent="var(--primary)" />
-            <Metric label="缓存读取" value={optionalNumberWithComma(tokenValue(tokens, 'cacheReadInputTokens'))} detail={`命中率 ${percent(runtimeCacheRate(tokens, 'token'))}`} accent="var(--accent-cyan)" />
+            <Metric label="缓存读取" value={optionalNumberWithComma(tokenValue(tokens, 'cacheReadInputTokens'))} detail={`Token 读占比 ${percent(runtimeCacheRate(tokens, 'token'))}`} accent="var(--accent-cyan)" />
             <Metric label="估算成本" value={formatMoney(cost.estimatedCostMicros, cost.currency || 'USD')} detail="按已配置价格估算" accent="var(--status-good)" />
           </div>
           {trend && <label className="runtime-v2-trend-metric"><span>展示指标</span><select className="form-select" value={metric} onChange={(event) => setMetric(event.target.value)}>{TREND_METRICS.map(([value, label, unit]) => <option key={value} value={value}>{label}{unit === 'percent' ? '（比例）' : ''}</option>)}</select></label>}
@@ -1117,7 +1122,7 @@ function OverviewPanel({
               <h3>Token 与缓存</h3>
               <span>缓存读取下方显示缓存读取命中率</span>
             </div>
-            <TokenCoreGrid tokens={tokens} compact />
+            <TokenCoreGrid tokens={tokens} compact cache={trend?.cacheRead} />
           </div>
         </>
       )}
@@ -1518,7 +1523,7 @@ function TokenPanel({ trend, legacyAnalytics, loading, error, onRetry }) {
       <PanelMessage error={error} onRetry={onRetry} />
       {loading && !totals ? <LoadingLine text="正在读取 Token 汇总…" /> : totals ? (
         <>
-          <TokenCoreGrid tokens={tokens} />
+          <TokenCoreGrid tokens={tokens} cache={trend?.cacheRead ?? legacyAnalytics?.cacheRead} />
         </>
       ) : <div className="runtime-v2-empty">暂无 Token 数据</div>}
     </section>

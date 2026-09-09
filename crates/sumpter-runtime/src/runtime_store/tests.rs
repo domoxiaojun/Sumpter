@@ -2231,7 +2231,7 @@ fn newer_schema_is_rejected_before_writes() {
     connection
         .execute_batch(
             "CREATE TABLE runtime_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-                 INSERT INTO runtime_meta(key,value) VALUES('schema_version','5');",
+                 INSERT INTO runtime_meta(key,value) VALUES('schema_version','999');",
         )
         .unwrap();
     drop(connection);
@@ -2531,6 +2531,9 @@ fn old_event_projection_requires_recreation_without_backfill() {
     drop(store);
     let connection = Connection::open(&path).unwrap();
     connection.execute("UPDATE runtime_events SET projection_version=7,codex_thread_class='unknown',attribution_scope='unknown'", crate::database::params![]).unwrap();
+    connection
+        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+        .unwrap();
     drop(connection);
     let before = std::fs::read(&path).unwrap();
     assert!(RuntimeStore::new(&path).is_err());
@@ -2591,4 +2594,73 @@ fn list_item_wire_preserves_id_and_ms_acronyms() {
     for legacy in ["requestId", "endpointId", "durationMs", "ttfbMs"] {
         assert!(wire.get(legacy).is_none(), "unexpected wire key {legacy}");
     }
+}
+#[test]
+fn cache_projection_detail_statistics_and_gemini_export_agree() {
+    use sumpter_core::cache_read::CacheReadState;
+    let dir = test_dir("cache-projection");
+    let path = dir.join("runtime.sqlite3");
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    for (id, read, outcome) in [
+        ("hit", Some(20), RuntimeEventOutcome::Failed),
+        ("miss", Some(0), RuntimeEventOutcome::Succeeded),
+        ("unknown", None, RuntimeEventOutcome::Cancelled),
+    ] {
+        let mut value = event(
+            id,
+            KIND_CLIENT,
+            200,
+            RuntimeEventPhase::Completed,
+            Some(outcome),
+            event_now(),
+        );
+        value.session_id = Some("cache-session".into());
+        value.session_source = Some("claude_metadata".into());
+        value.route_intent = Some("gemini-generate".into());
+        value.target_format = Some(ProviderProtocol::Gemini);
+        value.stream_trace = Some(serde_json::from_value(json!({
+            "usage":{"inputTokens":100,"outputTokens":12,"reasoningTokens":2,"cacheReadInputTokens":read},
+            "cacheReadEvidence":{"finality":if read.is_some() {"confirmed"} else {"unknown"},"observed":true,"complete":true,"truncated":false,"issue":null}
+        })).unwrap());
+        store.enqueue(value, RuntimeCounters::default()).unwrap();
+    }
+    store.flush().unwrap();
+    let page =
+        crate::runtime_query::events_page(&path, &crate::runtime_query::EventPageQuery::default())
+            .unwrap();
+    let hit = page.events.iter().find(|event| event.id == "hit").unwrap();
+    assert!(hit.details_omitted);
+    assert!(hit.stream_trace.is_none());
+    assert_eq!(hit.cache_read.state, CacheReadState::Hit);
+    assert_eq!(hit.usage_summary.as_ref().unwrap().input_tokens, Some(100));
+    assert_eq!(hit.session_id.as_deref(), Some("cache-session"));
+    assert_eq!(hit.session_source.as_deref(), Some("claude_metadata"));
+    let detail = store.event("hit").unwrap().unwrap();
+    assert_eq!(detail.event.cache_read.as_ref(), Some(&hit.cache_read));
+    let analytics = crate::runtime_query::analytics(
+        &path,
+        "all",
+        &crate::runtime_query::RuntimeFilter::default(),
+    )
+    .unwrap();
+    assert_eq!(analytics.cache_read.hit_requests, 1);
+    assert_eq!(analytics.cache_read.miss_requests, 1);
+    assert_eq!(analytics.cache_read.unknown_requests, 1);
+    assert_eq!(analytics.cache_read.confirmed_hit_rate, Some(0.5));
+    assert_eq!(analytics.cache_read.confirmation_coverage, Some(2.0 / 3.0));
+    let export = store.export_session("cache-session").unwrap();
+    assert_eq!(
+        export["analytics"]["tokenUsage"]["tokenAccountingSemantics"],
+        "subset"
+    );
+    assert_eq!(
+        export["analytics"]["tokenUsage"]["processedInputTokens"],
+        analytics.token_usage.processed_input_tokens
+    );
+    assert_eq!(
+        export["analytics"]["tokenUsage"]["processedTotalTokens"],
+        analytics.token_usage.processed_total_tokens
+    );
+    drop(store);
+    remove_test_dir(&dir);
 }

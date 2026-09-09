@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { api, getAuthState, openEventStream, subscribeAuth } from '../services/api.js';
-import { upsertRuntimeEvent } from '../utils/runtimeEvents.js';
+import { upsertRuntimeEvent, mergeRuntimeEvent } from '../utils/runtimeEvents.js';
 import { fetchRuntimeChanges, mergeRuntimeListItems, RUNTIME_API_VERSION } from '../utils/runtimeSync.js';
 import { clone } from '../utils/helpers.js';
 
@@ -186,6 +186,7 @@ export function AppProvider({ children }) {
   const analyticsSummaryRevisionRef = useRef('');
   const analyticsFacetsRevisionRef = useRef('');
   const eventDetailGenerationRef = useRef(0);
+  const eventDetailCacheRef = useRef(new Map());
 
   configDocRef.current = configDoc;
 
@@ -411,6 +412,7 @@ export function AppProvider({ children }) {
       });
       if (resetGenerationChanged) {
         lastChangeSeqRef.current = 0;
+        eventDetailCacheRef.current.clear();
         setRuntimeEventDetail(null);
       }
       resetGenerationRef.current = nextResetGeneration;
@@ -527,15 +529,24 @@ export function AppProvider({ children }) {
     return fetchAnalyticsFacets(generation);
   }, [fetchAnalyticsFacets]);
 
-  const loadRuntimeEvent = useCallback(async (id) => {
+  const loadRuntimeEvent = useCallback(async (id, expectedChangeSeq = 0) => {
     const generation = ++eventDetailGenerationRef.current;
     if (!id) {
       setRuntimeEventDetail(null);
       return null;
     }
+    const cached = eventDetailCacheRef.current.get(id);
+    if (cached && cached.event?.detailsOmitted !== true && Number(cached.changeSeq || 0) >= Number(expectedChangeSeq || 0)) {
+      setRuntimeEventDetail(cached);
+      return cached;
+    }
     try {
-      const value = await api.getRuntimeEvent(id);
+      const fetched = await api.getRuntimeEvent(id);
       if (eventDetailGenerationRef.current !== generation) return null;
+      const latest = eventDetailCacheRef.current.get(id);
+      const value = latest && Number(latest.changeSeq || 0) > Number(fetched.changeSeq || 0) ? latest : fetched;
+      eventDetailCacheRef.current.set(id, value);
+      if (eventDetailCacheRef.current.size > 200) eventDetailCacheRef.current.delete(eventDetailCacheRef.current.keys().next().value);
       setRuntimeEventDetail(value);
       return value;
     } catch (error) {
@@ -546,6 +557,7 @@ export function AppProvider({ children }) {
 
   const deleteRuntimeSession = useCallback(async (sessionID, options = {}) => {
     const value = await api.deleteRuntimeSession(sessionID, options);
+    eventDetailCacheRef.current.clear();
     setRuntimeEventDetail(null);
     await refreshCore();
     return value;
@@ -676,10 +688,14 @@ export function AppProvider({ children }) {
             changeSeq: change?.changeSeq,
           }),
         }));
-        // 详情接口可能已经提供了完整 trace；轻量实时更新不能把它覆盖掉。
-        setRuntimeEventDetail((previous) => previous?.event?.id === change?.event?.id
-          ? { ...previous, seq: change.seq, changeSeq: change.changeSeq }
-          : previous);
+        const priorDetail = eventDetailCacheRef.current.get(change.event.id);
+        const incoming = { ...change.event, seq: change.seq, changeSeq: change.changeSeq };
+        if (!priorDetail || Number(priorDetail.changeSeq || 0) <= Number(change.changeSeq)) {
+          const updated = { ...change, event: mergeRuntimeEvent(priorDetail?.event, incoming) };
+          if (incoming.detailsOmitted !== true || priorDetail) eventDetailCacheRef.current.set(change.event.id, updated);
+          if (eventDetailCacheRef.current.size > 200) eventDetailCacheRef.current.delete(eventDetailCacheRef.current.keys().next().value);
+          setRuntimeEventDetail((previous) => previous?.event?.id === change.event.id ? updated : previous);
+        }
         scheduleRuntimeAggregatesRefresh();
       },
       onConfigReloaded: () => refreshCore(),
@@ -687,6 +703,7 @@ export function AppProvider({ children }) {
       onStatsReset: () => {
         lastChangeSeqRef.current = 0;
         resetGenerationRef.current = 0;
+        eventDetailCacheRef.current.clear();
         setRuntimeEventDetail(null);
         setRuntime((previous) => previous ? { ...previous, recentEvents: [], eventPage: null, resetGeneration: 0 } : previous);
         refreshCore();
@@ -821,6 +838,7 @@ export function AppProvider({ children }) {
 
   const logout = useCallback(async () => {
     await api.logout();
+    eventDetailCacheRef.current.clear();
     setConfigDoc(null); setStatus(null); setRuntime(null); setRuntimeEventDetail(null); setDiagnostics(null);
   }, []);
 

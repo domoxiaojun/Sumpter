@@ -89,6 +89,7 @@ pub(super) fn normalize_startup(
         }
         let outcome = option_token(event.outcome);
         let failure_kind = option_token(event.failure_kind);
+        event.refresh_cache_read();
         let payload = serde_json::to_string(&event)
             .map_err(|error| crate::database::Error::Conversion(Box::new(error)))?;
         transaction.execute(

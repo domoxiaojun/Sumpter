@@ -49,6 +49,7 @@ extension AppModel {
         // the new daemon has already normalized it on startup.
         runtimePage = nil
         runtimeChangeSeq = 0
+        runtimeEventDetails.removeAll()
         runHistoryRequestGeneration &+= 1
         runHistoryPage = nil
         runHistoryLoading = false
@@ -382,6 +383,7 @@ extension AppModel {
         case .statsReset:
             guard autoRefreshEnabled else { return }
             runtimeChangeSeq = 0
+            runtimeEventDetails.removeAll()
             runtimeEventDetail = nil
             runtimePage = nil
             runHistoryRequestGeneration &+= 1
@@ -396,8 +398,10 @@ extension AppModel {
                 return
             }
             applyRuntimeListItem(AdminWire.RuntimeEventListItem(change: change))
-            if !statisticsVisible, runtimeEventDetail?.event.id == change.event.id {
-                loadRuntimeEvent(id: change.event.id)
+            if change.changeSeq >= (runtimeEventDetails[change.event.id]?.changeSeq ?? 0) {
+                runtimeEventDetails[change.event.id] = change
+                if runtimeEventDetails.count > 200, let oldest = runtimeEventDetails.min(by: { $0.value.changeSeq < $1.value.changeSeq })?.key { runtimeEventDetails.removeValue(forKey: oldest) }
+                if runtimeEventDetail?.event.id == change.event.id { runtimeEventDetail = change }
             }
         }
     }

@@ -26,7 +26,7 @@ use super::Engine;
 use super::catalog::is_media_only_conversation_model;
 use super::completion::CompletionGuard;
 use super::context::{
-    ClientMeta, ClientOut, current_request_context, observed_session_id,
+    ClientMeta, ClientOut, current_request_context, observe_request_session,
     retain_codex_metadata_for_client, upstream_request_id,
 };
 use super::events::new_event_id;
@@ -328,6 +328,7 @@ impl Engine {
         client_kind: ClientKind,
         codex_metadata: Option<CodexMetadata>,
     ) -> Response {
+        let observed_session = observe_request_session(client_kind, &headers, &request.raw);
         let purpose = purpose_override.unwrap_or_else(|| inspector::request_purpose(&request));
         // 该形状告警只用于 Claude Code 的 Anthropic 内部辅助请求。
         // Codex/Responses 转成 Anthropic 后同样可能是「system + 单条 user + 无 tools」,
@@ -801,7 +802,7 @@ impl Engine {
         // passthrough_intent:排在 plan 之后时,route_mode 已经被 plan_for_passthrough
         // 压成 Native,条件永不成立。
 
-        let observed_session_id = observed_session_id(&headers);
+        let observed_session_id = observed_session.map(|(id, _)| id);
         let session_identity =
             sticky::resolve_session_identity(&request, observed_session_id.as_deref());
         let sticky_key = sticky::StickyKey::new(
@@ -901,6 +902,9 @@ impl Engine {
             &client_meta,
         );
         self.record_event(RuntimeEvent {
+            session_source: None,
+            hook_event: None,
+            cache_read: None,
             client_kind: Some(client_kind),
             client_variant: None,
             agent_role: None,

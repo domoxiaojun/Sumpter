@@ -95,10 +95,21 @@ test('new directory clears stale metadata, fallbacks and validation do not expos
 
 test('Gemini explicit/resume session arguments never acquire a new wrapper identity', (t) => {
   const f=fixture(t);
-  for(const args of [['--resume','last'],['--resume=last'],['-r'],['--session-id','existing'],['--session-file=data'],['--list-sessions']]) {
+  for(const args of [['--resume','last'],['--resume=last'],['-r'],['--session-file=data'],['--list-sessions']]) {
     const launch=prepareLaunch('gemini',args,{...f.env,SUMPTER_GEMINI_SESSION_ID:'stale'},f.repo);
     assert.deepEqual(launch.args,args);
     assert.equal(/X-Sumpter-Session-Id:/i.test(launch.env.GEMINI_CLI_CUSTOM_HEADERS),false);
+  }
+});
+
+test('Gemini preserves explicit IDs and complete UUID resume identity without changing arguments', (t) => {
+  const f = fixture(t);
+  const id = '12345678-1234-4234-8234-123456789abc';
+  for (const args of [['--session-id', id], [`--session-id=${id}`], ['--resume', id], [`-r=${id}`]]) {
+    const launch = prepareLaunch('gemini', args, { ...f.env, SUMPTER_GEMINI_SESSION_ID: 'stale' }, f.repo);
+    assert.deepEqual(launch.args, args);
+    assert.ok(launch.env.GEMINI_CLI_CUSTOM_HEADERS.includes(`X-Sumpter-Session-Id: ${id}`));
+    assert.ok(!launch.env.GEMINI_CLI_CUSTOM_HEADERS.includes('stale'));
   }
 });
 

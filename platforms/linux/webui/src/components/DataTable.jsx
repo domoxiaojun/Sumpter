@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { tableScrollMetrics, tableScrollHint } from '../utils/tableScroll.js';
 
 const COLUMN_TYPE_DEFAULTS = Object.freeze({
   status: { width: '152px', minWidth: '132px' },
@@ -49,6 +50,27 @@ export function DataTable({
   beforeTable = null,
 }) {
   const hasData = Boolean(data && data.length > 0);
+  const scrollerRef = useRef(null);
+  const [scroll, setScroll] = useState({ left: 0, max: 0, viewport: 0, total: 0 });
+  const attachScroller = useCallback((node) => {
+    scrollerRef.current = node;
+    if (typeof containerRef === 'function') containerRef(node);
+    else if (containerRef) containerRef.current = node;
+  }, [containerRef]);
+  const measure = useCallback(() => {
+    const next = tableScrollMetrics(scrollerRef.current);
+    setScroll((previous) => Object.keys(next).every((key) => previous[key] === next[key]) ? previous : next);
+  }, []);
+  useLayoutEffect(() => {
+    const node = scrollerRef.current;
+    if (!node) return undefined;
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    for (const child of node.children) observer.observe(child);
+    return () => observer.disconnect();
+  }, [hasData, columns, data, beforeTable, tableMinWidth, measure]);
+
   const emptyState = (
     <div
       style={{
@@ -70,16 +92,16 @@ export function DataTable({
   }
 
   return (
+    <div className="data-table-shell">
     <div
-      ref={containerRef}
+      ref={attachScroller}
       className={`table-container ${scrollHeight ? 'table-container-scroll' : ''} ${className}`}
       style={{ ...(containerStyle || {}), ...(scrollHeight ? { maxHeight: scrollHeight, overflowY: 'auto' } : {}) }}
-      onScroll={onContainerScroll}
+      onScroll={(event) => { measure(); onContainerScroll?.(event); }}
       tabIndex={0}
       role="region"
-      aria-label={ariaLabel ? `${ariaLabel}（可横向滚动）` : '可横向滚动的数据表'}
+      aria-label={`${ariaLabel || '数据表'}${scroll.max > 0 ? '（可横向滚动）' : ''}`}
     >
-      <span className="table-scroll-hint" aria-hidden="true">左右滚动查看更多列</span>
       {beforeTable}
       {hasData ? (
         <table
@@ -190,6 +212,15 @@ export function DataTable({
           </tbody>
         </table>
       ) : emptyState}
+    </div>
+    {scroll.max > 0 && <div className="table-scroll-controls">
+      <span className="table-scroll-hint">{tableScrollHint(scroll)}</span>
+      <input type="range" className="table-scrollbar" aria-label={`${ariaLabel || '数据表'}横向滚动`}
+        min="0" max={scroll.max} step="1" value={scroll.left}
+        aria-valuetext={`${Math.round(scroll.left / scroll.max * 100)}%`}
+        style={{ '--table-scroll-thumb': `${Math.max(8, scroll.viewport / scroll.total * 100)}%` }}
+        onChange={(event) => { scrollerRef.current.scrollLeft = Number(event.target.value); measure(); }} />
+    </div>}
     </div>
   );
 }

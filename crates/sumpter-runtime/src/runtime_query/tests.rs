@@ -32,6 +32,7 @@ fn test_connection() -> Connection {
                    upstream_status_code INTEGER,duration_ms INTEGER,ttfb_ms INTEGER,
                    failover INTEGER,stream_terminal TEXT,codex_metadata_present INTEGER,
                    usage_present INTEGER,input_tokens INTEGER,output_tokens INTEGER,
+                   cache_read_state TEXT,cache_read_finality TEXT,cache_read_reason TEXT,hook_event TEXT,
                    cache_read_input_tokens INTEGER,cache_creation_input_tokens INTEGER,
                    reasoning_tokens INTEGER,uncached_input_tokens INTEGER,
                    processed_input_tokens INTEGER,processed_total_tokens INTEGER,
@@ -174,7 +175,7 @@ fn insert_100k(connection: &Connection) {
                    'endpoint-a',CASE WHEN seq%10=0 THEN 'upstream_http_status' END,0,
                    CASE WHEN seq>99975 THEN '{\"id\":\"page-event\",\"kind\":\"client\"}'
                         ELSE '{not-json' END,
-                   9,80,printf('session-%03d',seq%500),'header',printf('project-%03d',seq%100),
+                   10,80,printf('session-%03d',seq%500),'header',printf('project-%03d',seq%100),
                    printf('Project %03d',seq%100),'workspace_local','[\".../projects/test\"]',
                    'Endpoint A','gpt-test',CASE WHEN seq%10=0 THEN 'response' END,
                    'openai-responses','openai-responses','native',

@@ -4,6 +4,7 @@
 pub mod access;
 pub mod bridge;
 pub mod bridge_in;
+pub mod cache_read;
 pub mod capability;
 pub mod config;
 pub mod config_store;

@@ -954,6 +954,10 @@ pub(super) fn database_issue_on(
                 "parent_thread_id",
                 "parent_turn_id",
                 "root_turn_id",
+                "cache_read_state",
+                "cache_read_finality",
+                "cache_read_reason",
+                "hook_event",
             ]
             .iter()
             .any(|column| !columns.contains(*column));

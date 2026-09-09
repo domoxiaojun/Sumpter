@@ -122,15 +122,17 @@ test('event table keeps pagination outside horizontal scrolling and exposes sort
   assert.match(runPageSource, /title: '结果'/);
   assert.match(runPageSource, /title: '说明'/);
   assert.match(runPageSource, /recentEventRequestSummary/);
-  assert.match(runPageSource, /代理: \$\{codexAgentRoleLabel\(metadata\)\}/);
-  assert.match(runPageSource, /路径: \$\{codexAgentPath\(metadata\)\}/);
+  assert.match(runPageSource, /eventAgentLabel\(event\)/);
+  assert.match(runPageSource, /eventCacheLabel\(event\)/);
   assert.match(runPageSource, /key === 'standard'\) return '主请求'/);
   const paginationSource = await readFile(new URL('../src/components/PaginationBar.jsx', import.meta.url), 'utf8');
   assert.match(paginationSource, /pagination-page-jump/);
   assert.match(paginationSource, /onPageChange\?\.\(target\)/);
   assert.match(runPageSource, /event-page-stage/);
   assert.match(runPageSource, /data-page-direction=\{eventPageDirection\}/);
-  assert.match(runPageSource, /event-page-loading/);
+  assert.doesNotMatch(runPageSource, /className="event-page-loading"/);
+  assert.match(hookSource, /setLoading\(!background\)/);
+  assert.match(hookSource, /lastAutoRefreshRef/);
   assert.match(paginationSource, /data-loading=\{loading \? 'true' : 'false'\}/);
   assert.match(tableSource, /getRowProps/);
   assert.match(tableSource, /beforeTable = null/);
@@ -173,10 +175,10 @@ test('Run page places input/output Token cards before the routing counters', asy
   assert.doesNotMatch(runPageSource, /run-pulse-grid/);
 });
 
-test('Run page recent-event mobile route matches macOS wording without Provider prefix', async () => {
+test('Run page recent-event mobile route uses the same primary endpoint name as desktop', async () => {
   const runPageSource = await readFile(new URL('../src/pages/RunPage.jsx', import.meta.url), 'utf8');
-  assert.match(runPageSource, /<small>\{eventEndpoint\(event\)\}<\/small>/);
-  assert.doesNotMatch(runPageSource, /<small>Provider · \{eventEndpoint\(event\)\}<\/small>/);
+  assert.match(runPageSource, /<small>\{eventEndpointName\(event\)\}<\/small>/);
+  assert.doesNotMatch(runPageSource, /<small>Provider · \{eventEndpointName\(event\)\}<\/small>/);
 });
 
 test('runtime page motion is directional, compositor-friendly, and reduced-motion safe', async () => {

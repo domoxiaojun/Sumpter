@@ -17,15 +17,25 @@ enum PasteboardCopy {
 /// reliable hit target. This keeps the familiar disclosure affordance while
 /// making the whole 44pt row a keyboard- and VoiceOver-accessible toggle.
 struct FullRowDisclosure<Label: View, Content: View>: View {
-    @State private var isExpanded = false
+    @State private var localIsExpanded = false
+    private let expandedBinding: Binding<Bool>?
+    private var isExpanded: Bool {
+        get { expandedBinding?.wrappedValue ?? localIsExpanded }
+        nonmutating set {
+            if let expandedBinding { expandedBinding.wrappedValue = newValue }
+            else { localIsExpanded = newValue }
+        }
+    }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let label: Label
     private let content: Content
 
     init(
+        isExpanded: Binding<Bool>? = nil,
         @ViewBuilder label: () -> Label,
         @ViewBuilder content: () -> Content
     ) {
+        self.expandedBinding = isExpanded
         self.label = label()
         self.content = content()
     }

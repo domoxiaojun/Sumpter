@@ -120,6 +120,7 @@ impl Engine {
     pub(super) fn record_event(&self, mut event: RuntimeEvent) {
         apply_current_request_context(&mut event);
         let _runtime_write = self.inner.runtime_write.lock().unwrap();
+        event.refresh_cache_read();
         let snapshot = {
             let mut state = self.inner.state.lock().unwrap();
             state.runtime.upsert_event(event.clone());
@@ -171,6 +172,7 @@ impl Engine {
         // newly finalized events, including rejections and cancellations.
         event.phase = Some(RuntimeEventPhase::Completed);
         self.capture_finish(&event);
+        event.refresh_cache_read();
         let snapshot = {
             let mut state = self.inner.state.lock().unwrap();
             state.runtime.upsert_event(event.clone());
@@ -231,6 +233,7 @@ impl Engine {
                 event.sticky_key = event.sticky_key.or(client.sticky_key);
             }
         }
+        event.refresh_cache_read();
         let snapshot = {
             let mut state = self.inner.state.lock().unwrap();
             state.runtime.upsert_event(event.clone());
@@ -326,6 +329,9 @@ impl Engine {
             });
         let message = bounded_failure_detail(message);
         let event = RuntimeEvent {
+            session_source: None,
+            hook_event: None,
+            cache_read: None,
             client_kind: Some(client_kind),
             client_variant: None,
             agent_role: None,
@@ -460,6 +466,9 @@ impl Engine {
         request_id: &str,
     ) -> RuntimeEvent {
         RuntimeEvent {
+            session_source: None,
+            hook_event: None,
+            cache_read: None,
             client_kind: Some(client_kind),
             client_variant: None,
             agent_role: None,

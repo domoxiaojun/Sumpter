@@ -35,6 +35,7 @@ async fn realtime_root_live_bootstrap_is_the_only_root_that_registers_a_call() {
     INBOUND_REQUEST_CONTEXT
         .scope(
             RefCell::new(InboundRequestContext {
+                session_source: None,
                 method: "POST".into(),
                 path: "/v1/realtime".into(),
                 route_intent: "live".into(),

@@ -83,6 +83,8 @@ public struct ResponseUsage: Codable, Equatable, Sendable {
 }
 
 public struct StreamTrace: Codable, Equatable, Sendable {
+    public var cacheReadEvidence: CacheReadEvidence? = nil
+    public var toolCallsTruncated: Bool? = nil
     public var chunkCount: Int?
     public var bytesReceived: Int?
     public var maxChunkGapMS: Int?
@@ -382,7 +384,6 @@ public struct CodexMetadata: Codable, Equatable, Sendable {
     public var hasConflicts: Bool
     public var conflicts: [String]
     public var isSubagent: Bool
-    public var parentThreadIDInferred: Bool
 
     private enum CodingKeys: String, CodingKey {
         case installationID, sourceInstallationID, sessionID, threadID, agentName, turnID, windowID, windowNumber, contextWindowID, requestKind
@@ -392,7 +393,7 @@ public struct CodexMetadata: Codable, Equatable, Sendable {
         case turnStartedAtUnixMS, workspaces, sourceWorkspacePaths, toolNamespacesInfo, compaction, extras
         case originator, betaFeatures, memgenRequest, responsesLite, wsStreamRequestStartMS
         case sources, redactedFields, malformed, truncated, hasConflicts, conflicts
-        case isSubagent, parentThreadIDInferred
+        case isSubagent
     }
 
     public init(from decoder: Decoder) throws {
@@ -440,7 +441,6 @@ public struct CodexMetadata: Codable, Equatable, Sendable {
         hasConflicts = try c.decodeIfPresent(Bool.self, forKey: .hasConflicts) ?? false
         conflicts = try c.decodeIfPresent([String].self, forKey: .conflicts) ?? []
         isSubagent = try c.decodeIfPresent(Bool.self, forKey: .isSubagent) ?? false
-        parentThreadIDInferred = try c.decodeIfPresent(Bool.self, forKey: .parentThreadIDInferred) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -490,7 +490,6 @@ public struct CodexMetadata: Codable, Equatable, Sendable {
         try c.encode(hasConflicts, forKey: .hasConflicts)
         if !conflicts.isEmpty { try c.encode(conflicts, forKey: .conflicts) }
         try c.encode(isSubagent, forKey: .isSubagent)
-        try c.encode(parentThreadIDInferred, forKey: .parentThreadIDInferred)
     }
 
     public var isEmpty: Bool {
@@ -509,7 +508,6 @@ public struct CodexMetadata: Codable, Equatable, Sendable {
             && responsesLite == nil && wsStreamRequestStartMS == nil
             && sources.isEmpty && redactedFields.isEmpty && conflicts.isEmpty
             && !malformed && !truncated && !hasConflicts && !isSubagent
-            && !parentThreadIDInferred
     }
 
     public var hasRequestIdentity: Bool {
@@ -525,6 +523,17 @@ public struct CodexMetadata: Codable, Equatable, Sendable {
 }
 
 public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
+    public var clientVariant: String? = nil
+    public var agentRole: String? = nil
+    public var agentName: String? = nil
+    public var parentThreadID: String? = nil
+    public var parentTurnID: String? = nil
+    public var rootTurnID: String? = nil
+    public var cacheRead: CacheReadSummary? = nil
+    public var usageSummary: ResponseUsage? = nil
+    public var sessionSource: String? = nil
+    public var hookEvent: String? = nil
+    public var detailsOmitted: Bool? = nil
     public var id: String
     public var timestamp: Date
     public var kind: String
@@ -603,6 +612,10 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
     public var attributionScope: String?
 
     private enum CodingKeys: String, CodingKey {
+        case clientVariant, agentRole, agentName, cacheRead, usageSummary, sessionSource, hookEvent, detailsOmitted
+        case parentThreadID = "parentThreadId"
+        case parentTurnID = "parentTurnId"
+        case rootTurnID = "rootTurnId"
         case id, timestamp, kind, endpointID, endpointName, upstreamHost, modelGroupID, modelGroupName
         case clientModel, clientKind, sourceFormat, targetFormat, routeMode
         case upstreamModel, effectiveModel, statusCode, durationMS, failover
@@ -626,6 +639,17 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        clientVariant = try c.decodeIfPresent(String.self, forKey: .clientVariant)
+        agentRole = try c.decodeIfPresent(String.self, forKey: .agentRole)
+        agentName = try c.decodeIfPresent(String.self, forKey: .agentName)
+        parentThreadID = try c.decodeIfPresent(String.self, forKey: .parentThreadID)
+        parentTurnID = try c.decodeIfPresent(String.self, forKey: .parentTurnID)
+        rootTurnID = try c.decodeIfPresent(String.self, forKey: .rootTurnID)
+        cacheRead = try c.decodeIfPresent(CacheReadSummary.self, forKey: .cacheRead)
+        usageSummary = try c.decodeIfPresent(ResponseUsage.self, forKey: .usageSummary)
+        sessionSource = try c.decodeIfPresent(String.self, forKey: .sessionSource)
+        hookEvent = try c.decodeIfPresent(String.self, forKey: .hookEvent)
+        detailsOmitted = try c.decodeIfPresent(Bool.self, forKey: .detailsOmitted)
         id = try c.decode(String.self, forKey: .id)
         timestamp = Timestamp.date(from: try c.decode(Double.self, forKey: .timestamp))
         kind = try c.decode(String.self, forKey: .kind)
@@ -676,6 +700,17 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
 
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(clientVariant, forKey: .clientVariant)
+        try c.encodeIfPresent(agentRole, forKey: .agentRole)
+        try c.encodeIfPresent(agentName, forKey: .agentName)
+        try c.encodeIfPresent(parentThreadID, forKey: .parentThreadID)
+        try c.encodeIfPresent(parentTurnID, forKey: .parentTurnID)
+        try c.encodeIfPresent(rootTurnID, forKey: .rootTurnID)
+        try c.encodeIfPresent(cacheRead, forKey: .cacheRead)
+        try c.encodeIfPresent(usageSummary, forKey: .usageSummary)
+        try c.encodeIfPresent(sessionSource, forKey: .sessionSource)
+        try c.encodeIfPresent(hookEvent, forKey: .hookEvent)
+        try c.encodeIfPresent(detailsOmitted, forKey: .detailsOmitted)
         try c.encode(id, forKey: .id)
         try c.encode(Timestamp.appleReferenceSeconds(timestamp), forKey: .timestamp)
         try c.encode(kind, forKey: .kind)

@@ -71,6 +71,10 @@ pub struct Model {
     pub output_tokens: Option<i64>,
     #[sea_orm(column_type = "Integer")]
     pub cache_read_input_tokens: Option<i64>,
+    pub cache_read_state: Option<String>,
+    pub cache_read_finality: Option<String>,
+    pub cache_read_reason: Option<String>,
+    pub hook_event: Option<String>,
     #[sea_orm(column_type = "Integer")]
     pub cache_creation_input_tokens: Option<i64>,
     #[sea_orm(column_type = "Integer")]

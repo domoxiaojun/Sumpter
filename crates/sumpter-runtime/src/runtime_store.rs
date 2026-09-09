@@ -15,7 +15,9 @@ use crate::database::{Connection, OpenFlags, OptionalExtension, params};
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use sumpter_core::cache_read::CacheReadSummary;
 use sumpter_core::config::ProviderProtocol;
+use sumpter_core::events::ResponseUsage;
 use sumpter_core::events::{
     APPLE_EPOCH_OFFSET_SECS, ClientDeclaredMetadata, ClientKind, CodexMetadata, GrokMetadata,
     KIND_CLIENT, KIND_NOTIFY, KIND_UPSTREAM, RuntimeEvent, RuntimeEventOutcome, RuntimeEventPhase,
@@ -24,8 +26,8 @@ use sumpter_core::events::{
 };
 use sumpter_core::routing::{RESOURCE_ROUTING_MODEL, RequestPurpose, RouteMode};
 
-pub(crate) const SCHEMA_VERSION: i64 = 4;
-pub(crate) const PROJECTION_VERSION: i64 = 9;
+pub(crate) const SCHEMA_VERSION: i64 = 5;
+pub(crate) const PROJECTION_VERSION: i64 = 10;
 const PROJECTION_BACKFILL_BATCH: usize = 500;
 const BATCH_EVENTS: usize = 64;
 const BATCH_BYTES: usize = 256 * 1024;
@@ -157,6 +159,10 @@ struct EventProjection {
     input_tokens: Option<i64>,
     output_tokens: Option<i64>,
     cache_read_input_tokens: Option<i64>,
+    cache_read_state: String,
+    cache_read_finality: String,
+    cache_read_reason: Option<String>,
+    hook_event: Option<String>,
     cache_creation_input_tokens: Option<i64>,
     reasoning_tokens: Option<i64>,
     uncached_input_tokens: Option<i64>,
@@ -182,6 +188,7 @@ impl EventProjection {
             .stream_trace
             .as_ref()
             .and_then(|trace| trace.usage.as_ref());
+        let cache_read = event.observed_cache_read();
         let input_tokens = usage.and_then(|usage| token_i64(usage.input_tokens));
         let output_tokens = usage.and_then(|usage| token_i64(usage.output_tokens));
         let cache_read_input_tokens =
@@ -189,36 +196,13 @@ impl EventProjection {
         let cache_creation_input_tokens =
             usage.and_then(|usage| token_i64(usage.cache_creation_input_tokens));
         let reasoning_tokens = usage.and_then(|usage| token_i64(usage.reasoning_tokens));
-        let token_accounting_semantics = match event
-            .target_format
-            .or(event.source_format)
-            .map(|format| format.token())
-        {
-            Some("anthropic") => "independent",
-            Some("openai") | Some("openai-responses") | Some("gemini") => "subset",
-            _ => "unknown",
-        };
-        let (processed_input_tokens, uncached_input_tokens) =
-            match (token_accounting_semantics, input_tokens) {
-                ("independent", Some(input)) => (
-                    Some(
-                        input
-                            .saturating_add(cache_read_input_tokens.unwrap_or(0))
-                            .saturating_add(cache_creation_input_tokens.unwrap_or(0)),
-                    ),
-                    Some(input),
-                ),
-                ("subset", Some(input)) => (
-                    Some(input),
-                    Some(
-                        input
-                            .saturating_sub(cache_read_input_tokens.unwrap_or(0))
-                            .saturating_sub(cache_creation_input_tokens.unwrap_or(0)),
-                    ),
-                ),
-                (_, Some(input)) => (Some(input), Some(input)),
-                _ => (None, None),
-            };
+        let (token_accounting_semantics, processed_input_tokens, uncached_input_tokens) =
+            normalized_input_tokens(
+                event.target_format.or(event.source_format),
+                input_tokens,
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
+            );
         let processed_total_tokens =
             processed_input_tokens.map(|input| input.saturating_add(output_tokens.unwrap_or(0)));
         let token_accounting_quality = match usage {
@@ -282,6 +266,10 @@ impl EventProjection {
             input_tokens,
             output_tokens,
             cache_read_input_tokens,
+            cache_read_state: option_token(Some(cache_read.state)).unwrap(),
+            cache_read_finality: option_token(Some(cache_read.finality)).unwrap(),
+            cache_read_reason: option_token(cache_read.reason),
+            hook_event: event.hook_event.clone(),
             cache_creation_input_tokens,
             reasoning_tokens,
             uncached_input_tokens,
@@ -292,10 +280,13 @@ impl EventProjection {
             tool_calls_json: event.tool_calls.as_ref().and_then(|calls| {
                 let bounded = calls
                     .iter()
-                    .take(32)
+                    .take(sumpter_core::stream_terminal::MAX_TOOL_CALLS)
                     .filter_map(|call| {
                         let value = call.trim();
-                        (!value.is_empty() && value.len() <= 128).then_some(value.to_owned())
+                        (!value.is_empty()
+                            && value.len() <= sumpter_core::stream_terminal::MAX_TOOL_NAME_BYTES
+                            && !value.chars().any(char::is_control))
+                        .then_some(value.to_owned())
                     })
                     .collect::<Vec<_>>();
                 (!bounded.is_empty()).then(|| serde_json::to_string(&bounded).unwrap_or_default())
@@ -339,6 +330,43 @@ impl EventProjection {
     }
 }
 
+/// One normalization contract for database projections and session exports.
+fn normalized_input_tokens(
+    protocol: Option<ProviderProtocol>,
+    input: Option<i64>,
+    read: Option<i64>,
+    write: Option<i64>,
+) -> (&'static str, Option<i64>, Option<i64>) {
+    let semantics = match protocol {
+        Some(ProviderProtocol::Anthropic) => "independent",
+        Some(
+            ProviderProtocol::OpenAI | ProviderProtocol::OpenAIResponses | ProviderProtocol::Gemini,
+        ) => "subset",
+        None => "unknown",
+    };
+    let (processed, uncached) = match (semantics, input) {
+        ("independent", Some(input)) => (
+            Some(
+                input
+                    .saturating_add(read.unwrap_or(0))
+                    .saturating_add(write.unwrap_or(0)),
+            ),
+            Some(input),
+        ),
+        ("subset", Some(input)) => (
+            Some(input),
+            Some(
+                input
+                    .saturating_sub(read.unwrap_or(0))
+                    .saturating_sub(write.unwrap_or(0))
+                    .max(0),
+            ),
+        ),
+        (_, input) => (input, input),
+    };
+    (semantics, processed, uncached)
+}
+
 fn token_i64(value: Option<u64>) -> Option<i64> {
     value.map(|value| value.min(i64::MAX as u64) as i64)
 }
@@ -380,6 +408,11 @@ pub struct RuntimeChange {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeEventListItem {
+    pub session_source: Option<String>,
+    pub hook_event: Option<String>,
+    pub details_omitted: bool,
+    pub cache_read: CacheReadSummary,
+    pub usage_summary: Option<ResponseUsage>,
     pub seq: i64,
     pub change_seq: i64,
     pub id: String,
@@ -488,6 +521,12 @@ impl RuntimeEventListItem {
     /// is intentionally public at the crate boundary rather than duplicated
     /// in each platform facade.
     pub fn from_change(seq: i64, change_seq: i64, event: RuntimeEvent) -> Self {
+        let cache_read = event.observed_cache_read();
+        let usage_summary = event
+            .stream_trace
+            .as_ref()
+            .and_then(|trace| trace.usage.clone());
+        let session_source = event_session_projection(&event).1.to_owned();
         let derived_client_variant = event.derived_client_variant().to_owned();
         let derived_agent_role = event.derived_agent_role().to_owned();
         // 必须在 event 被逐字段移动之前算:两个投影值都要借用整个 event。
@@ -504,6 +543,11 @@ impl RuntimeEventListItem {
         let attribution_scope =
             is_codex_event.then(|| event_attribution_scope(&event).as_str().to_owned());
         Self {
+            cache_read,
+            usage_summary,
+            details_omitted: false,
+            session_source: Some(session_source),
+            hook_event: event.hook_event,
             seq,
             change_seq,
             id: event.id,

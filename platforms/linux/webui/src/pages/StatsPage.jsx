@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { AnalyticsWorkspace } from '../components/AnalyticsWorkspace.jsx';
-import { StatusBadge } from '../components/StatusBadge.jsx';
+import { EventInspector } from '../components/EventInspector.jsx';
 import { useApp } from '../context/AppContext.jsx';
 import { api } from '../services/api.js';
 import {
@@ -214,6 +214,8 @@ export function StatsPage() {
     addToast,
   } = useApp();
   const [selectedEventID, setSelectedEventID] = useState(null);
+  const [expandedGroups, setExpandedGroups] = useState({});
+  const [eventChain, setEventChain] = useState([]);
   const [eventDetailError, setEventDetailError] = useState('');
   const [openExportSignal, setOpenExportSignal] = useState(0);
   const [cleanupOpen, setCleanupOpen] = useState(false);
@@ -293,7 +295,17 @@ export function StatsPage() {
     }
   };
 
-  const selectedEvent = runtimeEventDetail?.id === selectedEventID ? runtimeEventDetail : null;
+  const selectedEvent = runtimeEventDetail?.event?.id === selectedEventID ? runtimeEventDetail.event : null;
+  const requestID = selectedEvent?.requestID;
+  useEffect(() => {
+    setEventChain([]);
+    if (!requestID) return undefined;
+    const controller = new AbortController();
+    api.getRuntimeRequestChain(requestID, { signal: controller.signal }).then((value) => {
+      if (!controller.signal.aborted) setEventChain(value.events || []);
+    }).catch(() => {});
+    return () => controller.abort();
+  }, [requestID]);
   return (
     <div className="analytics-page analytics-v3-page">
       <div className="page-header analytics-v3-page-header">
@@ -454,49 +466,14 @@ export function StatsPage() {
 
       {selectedEventID && (
         <section id="analytics-request-drilldown" className="glass-panel analytics-v3-event-detail" aria-labelledby="analytics-v3-event-heading">
-          <div className="panel-header">
-            <div className="panel-title-group">
-              <h2 className="panel-title" id="analytics-v3-event-heading">错误样本详情</h2>
-              <span className="panel-hint mono-cell" title={selectedEventID}>{selectedEventID}</span>
-            </div>
-            <div className="page-actions">
-              <button type="button" className="btn btn-ghost" onClick={() => copyWithToast(JSON.stringify(selectedEvent || {}, null, 2), '源事件 JSON', addToast)} disabled={!selectedEvent}><Icon name="copy" size={14} />复制源事件 JSON</button>
-              <button type="button" className="btn btn-ghost" onClick={() => setSelectedEventID(null)}><Icon name="close" size={14} />关闭</button>
-            </div>
+          <div className="panel-header"><h2 id="analytics-v3-event-heading">请求详情</h2>
+            <button type="button" className="btn btn-ghost" onClick={() => setSelectedEventID(null)}>关闭</button>
           </div>
-          <div className="panel-body">
-            {eventDetailError ? <div className="runtime-v2-message" role="alert">{eventDetailError}</div> : selectedEvent ? (
-              <>
-              <div className="analytics-v3-event-grid" data-event-detail-tier="primary">
-                <div><span>时间</span><strong className="mono-cell">{formatTimestamp(selectedEvent.timestamp, { date: true })}</strong></div>
-                <div><span>最终结果</span><strong><StatusBadge text={eventOutcomeLabel(selectedEvent)} kind={statusKind(selectedEvent)} /></strong></div>
-                <div><span>入口</span><strong title={eventEndpointName(selectedEvent)}>{eventEndpointName(selectedEvent)}</strong></div>
-                <div><span>耗时</span><strong className="mono-cell">{eventDurationText(selectedEvent)}</strong></div>
-                <div><span>故障转移</span><strong>{selectedEvent.failover ? '已发生' : '未发生'}</strong></div>
-                <div><span>生命周期</span><strong>{selectedEvent.phase || '终态'}</strong></div>
-              </div>
-              <details className="event-secondary-details" data-event-detail-tier="secondary">
-                <summary>路由与协议详情</summary>
-                <div className="analytics-v3-event-grid"><div><span>入口</span><strong>{eventEndpointName(selectedEvent)}</strong></div><div><span>客户端模型</span><strong>{selectedEvent.clientModel || '—'}</strong></div></div>
-              </details>
-              <details className="event-diagnostics-details" data-event-detail-tier="diagnostics">
-                <summary>失败、工具与流诊断</summary>
-                <div className="analytics-v3-event-grid">
-                  <div><span>Request ID</span><strong className="mono-cell">{eventRequestID(selectedEvent)}</strong></div>
-                  <div><span>事件 ID</span><strong className="mono-cell">{selectedEvent.id || '—'}</strong></div>
-                  <div><span>入口 ID</span><strong className="mono-cell">{selectedEvent.endpointID || '—'}</strong></div>
-                  <div><span>入口名称</span><strong>{eventEndpointName(selectedEvent)}</strong></div>
-                  <div><span>上游 Host</span><strong className="mono-cell">{selectedEvent.upstreamHost || '—'}</strong></div>
-                  <div><span>上游请求 ID</span><strong className="mono-cell">{selectedEvent.upstreamRequestID || '—'}</strong></div>
-                  <div><span>实际超时阈值</span><strong className="mono-cell">{selectedEvent.timeoutMS == null ? '—' : `${selectedEvent.timeoutMS} ms`}</strong></div>
-                  <div><span>原始引擎消息</span><strong>{selectedEvent.message || '—'}</strong></div>
-                  <div><span>诊断</span><strong className={eventResultKind(selectedEvent) === 'failed' ? 'runtime-v2-critical' : ''}>{eventFailureSummaryLabel(selectedEvent)}</strong></div>
-                </div>
-              </details>
-              <details className="analytics-selected-codex"><summary>Codex 元数据（如有）</summary><p>完整 Codex 元数据仅在明确展开后读取。</p></details>
-              </>
-            ) : <div className="runtime-v2-loading" role="status">正在按需读取单条详情…</div>}
-          </div>
+          {eventDetailError ? <div className="runtime-v2-message" role="alert">{eventDetailError}</div> : selectedEvent ? (
+            <EventInspector event={selectedEvent} chain={eventChain} onSelect={setSelectedEventID}
+              expanded={expandedGroups} onToggle={(key, open) => setExpandedGroups((previous) => previous[key] === open ? previous : { ...previous, [key]: open })}
+              onCopy={(text, label) => copyWithToast(text, label, addToast)} />
+          ) : <div className="runtime-v2-loading" role="status">正在按需读取单条详情…</div>}
         </section>
       )}
     </div>

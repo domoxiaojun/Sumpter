@@ -1137,7 +1137,7 @@ struct UsagePane: View {
             TableColumn("缓存读取", value: \.cacheReadInputTokens) { row in
                 VStack(alignment: .leading, spacing: 2) {
                     Text(dimensionTokenText(row.cacheReadInputTokens, related: row.requests)).monospacedDigit()
-                    Text("命中率 " + rateText(dimensionCacheTokenRate(row))).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                    Text("Token 读占比 " + rateText(dimensionCacheTokenRate(row))).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                 }
             }.width(min: 114, ideal: 136)
             TableColumn("缓存写入", value: \.cacheCreationInputTokens) { row in Text(dimensionTokenText(row.cacheCreationInputTokens, related: row.requests)).monospacedDigit() }.width(min: 108, ideal: 126)
@@ -1386,10 +1386,19 @@ struct UsagePane: View {
             Text("Token 与缓存")
                 .font(.subheadline.weight(.semibold))
             let usage = model.runtimeTrendSeries?.totals.tokens
+            let cache = model.runtimeTrendSeries?.cacheRead
+            HStack(spacing: 16) {
+                Text("已确认缓存命中率 " + rateText(cache?.confirmedHitRate))
+                Text("结论覆盖率 " + rateText(cache?.confirmationCoverage))
+            }.font(.callout)
+            if let cache {
+                Text("未知 \(cache.unknownRequests) · 适用性不明 \(cache.applicabilityUnknownRequests) · 不适用 \(cache.notApplicableRequests)；命中率只统计已确认命中/未命中的已结束请求。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
                 MetricTile(title: "输入 Token", value: tokenText(usage?.inputTokens, presence: usage?.usageFieldPresence.inputTokens), detail: "输入用量", systemImage: "arrow.down.doc", minimumHeight: overviewMetricMinimumHeight)
                 MetricTile(title: "输出 Token", value: tokenText(usage?.outputTokens, presence: usage?.usageFieldPresence.outputTokens), detail: "输出用量", systemImage: "arrow.up.doc", minimumHeight: overviewMetricMinimumHeight)
-                MetricTile(title: "缓存读取", value: tokenText(usage?.cacheReadInputTokens, presence: usage?.usageFieldPresence.cacheReadInputTokens), detail: "缓存读取用量", footerAccessory: "命中率 " + rateText(usage?.cacheReadTokenRate), systemImage: "externaldrive.badge.checkmark", minimumHeight: overviewMetricMinimumHeight)
+                MetricTile(title: "缓存读取", value: tokenText(usage?.cacheReadInputTokens, presence: usage?.usageFieldPresence.cacheReadInputTokens), detail: "缓存读取用量", footerAccessory: "Token 读占比 " + rateText(usage?.cacheReadTokenRate), systemImage: "externaldrive.badge.checkmark", minimumHeight: overviewMetricMinimumHeight)
                 MetricTile(title: "缓存写入", value: tokenText(usage?.cacheCreationInputTokens, presence: usage?.usageFieldPresence.cacheCreationInputTokens), detail: "缓存写入 Token", systemImage: "externaldrive.badge.plus", minimumHeight: overviewMetricMinimumHeight)
             }
         }
@@ -1538,7 +1547,7 @@ struct UsagePane: View {
         if let rows = analytics?.endpoints {
             SectionPanel(
                 title: "入口排行",
-                hint: "上游尝试按入口聚合；缓存读取下方显示缓存读取命中率，— 表示上游未返回该字段。"
+                hint: "上游尝试按入口聚合；缓存读取下方显示 Token 读占比，— 表示计数或输入分母不足以计算。"
             ) {
                 if rows.isEmpty {
                     EmptyStateView(title: "暂无可排行的入口", systemImage: "chart.bar")
@@ -1563,7 +1572,7 @@ struct UsagePane: View {
                             TableColumn("缓存读取") { row in
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(tokenText(row.cacheReadInputTokens, presence: row.usageFieldPresence?.cacheReadInputTokens)).monospacedDigit()
-                                    Text("命中率 " + rateText(row.cacheReadTokenRate))
+                                    Text("Token 读占比 " + rateText(row.cacheReadTokenRate))
                                         .font(.caption2.monospacedDigit())
                                         .foregroundStyle(.secondary)
                                 }
@@ -1602,7 +1611,7 @@ struct UsagePane: View {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
                     MetricTile(title: "输入 Token", value: tokenText(usage?.inputTokens, presence: usage?.usageFieldPresence.inputTokens), detail: "输入用量", systemImage: "arrow.down.doc")
                     MetricTile(title: "输出 Token", value: tokenText(usage?.outputTokens, presence: usage?.usageFieldPresence.outputTokens), detail: "输出用量", systemImage: "arrow.up.doc")
-                    MetricTile(title: "缓存读取", value: tokenText(usage?.cacheReadInputTokens, presence: usage?.usageFieldPresence.cacheReadInputTokens), detail: "缓存读取用量", footerAccessory: "命中率 " + rateText(usage?.cacheReadTokenRate), systemImage: "externaldrive.badge.checkmark")
+                    MetricTile(title: "缓存读取", value: tokenText(usage?.cacheReadInputTokens, presence: usage?.usageFieldPresence.cacheReadInputTokens), detail: "缓存读取用量", footerAccessory: "Token 读占比 " + rateText(usage?.cacheReadTokenRate), systemImage: "externaldrive.badge.checkmark")
                     MetricTile(title: "缓存写入", value: tokenText(usage?.cacheCreationInputTokens, presence: usage?.usageFieldPresence.cacheCreationInputTokens), systemImage: "externaldrive.badge.plus")
                 }
             }
@@ -1741,7 +1750,7 @@ struct UsagePane: View {
                 TableColumn("缓存读取") { row in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(tokenText(row.cacheReadInputTokens, presence: row.usageFieldPresence?.cacheReadInputTokens)).monospacedDigit()
-                        Text("命中率 " + rateText(row.cacheReadTokenRate))
+                        Text("Token 读占比 " + rateText(row.cacheReadTokenRate))
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
@@ -1894,7 +1903,7 @@ struct UsagePane: View {
                     TableColumn("缓存读取") { row in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(tokenText(row.cacheReadInputTokens, presence: row.usageFieldPresence?.cacheReadInputTokens)).monospacedDigit()
-                            Text("命中率 " + rateText(row.cacheReadTokenRate))
+                            Text("Token 读占比 " + rateText(row.cacheReadTokenRate))
                                 .font(.caption2.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
@@ -2402,7 +2411,7 @@ struct UsagePane: View {
                     TableColumn("缓存读取", value: \.cacheReadInputTokens) { row in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(dimensionTokenText(row.cacheReadInputTokens, related: row.requests)).monospacedDigit()
-                            Text("命中率 \(rateText(dimensionCacheTokenRate(row)))")
+                            Text("Token 读占比 \(rateText(dimensionCacheTokenRate(row)))")
                                 .font(.caption2.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
@@ -3355,7 +3364,7 @@ struct UsagePane: View {
                     TableColumn("缓存读取", value: \.cacheReadInputTokens) { row in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(tokenText(row.cacheReadInputTokens, presence: row.cacheReadTokenPresence)).monospacedDigit()
-                            Text("命中率 " + rateText(row.cacheReadTokenRate))
+                            Text("Token 读占比 " + rateText(row.cacheReadTokenRate))
                                 .font(.caption2.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }

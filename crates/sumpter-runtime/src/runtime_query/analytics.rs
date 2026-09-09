@@ -123,6 +123,8 @@ pub fn analytics_on(
         },
     )?;
     let token_usage = analytics_token_metrics(&transaction, &client_builder)?;
+    let cache_read = cache_read_statistics(&transaction, &client_builder)?;
+    let upstream_cache_read = cache_read_statistics(&transaction, &upstream_builder)?;
     let dimensions = AnalyticsDimensions {
         endpoints: endpoint_dimensions(&transaction, &client_builder, &upstream_builder)?,
         models: analytics_dimension(
@@ -242,6 +244,8 @@ pub fn analytics_on(
         .saturating_add(client_failures)
         .saturating_add(client_cancelled);
     Ok(AnalyticsSummary {
+        cache_read,
+        upstream_cache_read,
         api_version: API_VERSION,
         range: range.to_owned(),
         // Report the effective lower bound after applying the caller's
@@ -310,6 +314,28 @@ pub fn analytics_on(
             session_id: filters.session_id.clone(),
         },
     })
+}
+
+pub(super) fn cache_read_statistics(
+    connection: &Connection,
+    builder: &SqlFilter,
+) -> QueryResult<sumpter_core::cache_read::CacheReadStatistics> {
+    use sumpter_core::cache_read::{CacheReadState, CacheReadStatistics};
+    let sql = format!(
+        "SELECT cache_read_state,cache_read_reason,COUNT(*) FROM runtime_events{} AND phase='completed' GROUP BY cache_read_state,cache_read_reason",
+        builder.where_sql()
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let mut rows = statement.query(params_from_iter(builder.values.iter()))?;
+    let mut stats = CacheReadStatistics::default();
+    while let Some(row) = rows.next()? {
+        stats.add(
+            super::decode_projection_enum(row.get(0)?).unwrap_or(CacheReadState::Unknown),
+            super::decode_projection_enum(row.get(1)?),
+            row.get(2)?,
+        );
+    }
+    Ok(stats)
 }
 
 struct AnalyticsDimensions {

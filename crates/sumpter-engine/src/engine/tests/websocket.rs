@@ -95,8 +95,8 @@ fn websocket_codex_frame_preserves_workspace_and_canonical_identity() {
     assert_eq!(result.workspaces, metadata.workspaces);
     assert!(!result.workspaces.is_empty());
     assert_eq!(result.tool_namespaces_info, metadata.tool_namespaces_info);
-    assert_eq!(result.parent_thread_id.as_deref(), Some("parent"));
-    assert!(result.parent_thread_id_inferred);
+    assert!(result.parent_thread_id.is_none());
+    assert_eq!(result.forked_from_thread_id.as_deref(), Some("parent"));
     assert_eq!(result.context_window_id.as_deref(), Some("context"));
     assert_eq!(result.window_number, Some(0));
     assert_eq!(result.history_ingest_requested, Some(false));
@@ -121,7 +121,6 @@ fn websocket_codex_frame_preserves_workspace_and_canonical_identity() {
         result.parent_thread_id.as_deref(),
         Some("authoritative-parent")
     );
-    assert!(!result.parent_thread_id_inferred);
 }
 
 #[test]

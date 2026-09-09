@@ -496,7 +496,7 @@ impl Engine {
                             } else {
                                 tracker.observe_json(&chunk);
                             }
-                            st.guard.stream_trace.record_response_summary(tracker);
+                            st.guard.record_response_summary(tracker);
                         }
                         let mut out = match &mut st.bridge {
                             Some(bridge) => bridge.feed(&chunk),
@@ -544,7 +544,7 @@ impl Engine {
                         st.finalize_response_metadata();
                         if let Some(tracker) = &mut st.upstream_summary_tracker {
                             let _ = tracker.finish();
-                            st.guard.stream_trace.record_response_summary(tracker);
+                            st.guard.record_response_summary(tracker);
                         }
                         let mut tail = st.bridge.as_mut().map(|b| b.finish()).unwrap_or_default();
                         if let Some(client) = &mut st.client_bridge {
