@@ -4395,6 +4395,12 @@ html[data-theme="light"] .brand-title {
   padding: 0;
 }
 
+.analytics-v3-advanced-filters { margin-top: var(--space-3); border-top: 1px solid var(--border-subtle); padding-top: var(--space-3); }
+.analytics-v3-advanced-filters > summary { cursor: pointer; color: var(--text-secondary); font-size: 0.85rem; }
+.analytics-v3-advanced-filters > summary:focus-visible { outline: 2px solid var(--primary); outline-offset: 4px; }
+.analytics-v3-advanced-filters .analytics-v3-filter-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); }
+.analytics-v3-active-filters { color: var(--text-secondary); font-size: 0.8rem; overflow-wrap: anywhere; }
+
 .analytics-v3-filter-grid label,
 .analytics-v3-range {
   display: grid;

@@ -45,10 +45,11 @@ test('Run uses readable phone event cards and a bounded sticky desktop table', (
   assert.match(componentStyles, /\.telemetry-table \.data-table thead\s*\{[\s\S]*?position: sticky;/);
 });
 
-test('Statistics keeps every optional filter visible, ordered by scan priority, and selectable', () => {
-  assert.doesNotMatch(statisticsSource, /filtersOpen|更多筛选|收起筛选/);
+test('Statistics keeps common filters visible and advanced selections discoverable', () => {
+  assert.match(statisticsSource, /<details className="analytics-v3-advanced-filters">/);
+  assert.match(statisticsSource, /advancedFilterLabels.join/);
   assert.match(statisticsSource, /id="analytics-v3-filter-grid" className="analytics-v3-filter-grid"/);
-  assert.match(statisticsSource, /所有条件均可选；留空时显示全部/);
+  assert.match(statisticsSource, /默认显示全部数据/);
   const order = ['<span>入口</span>', '<span>项目</span>', '<span>会话</span>', '<span>客户端</span>', '<span>模型</span>', '<span>最终结果</span>', '<span>用途</span>', '<span>失败类型</span>', '<span>失败阶段</span>'];
   let previous = -1;
   for (const marker of order) {

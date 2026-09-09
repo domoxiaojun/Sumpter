@@ -238,6 +238,11 @@ export function StatsPage() {
   }, [loadRuntimeEvent, selectedEventID]);
 
   const filters = analyticsFilters || { clientKind: '', clientVariant: '', agentRole: '', agentName: '', parentThreadID: '', parentTurnID: '', rootTurnID: '', endpointID: '', project: '', projectID: '', sessionID: '', model: '', requestPurpose: '', outcome: '', failureKind: '', failurePhase: '' };
+  const advancedFilterLabels = [
+    ['clientVariant', '客户端变体'], ['agentRole', '代理角色'], ['agentName', '代理名称'],
+    ['parentThreadID', '父线程'], ['parentTurnID', '父回合'], ['rootTurnID', '根回合'],
+    ['requestPurpose', '用途'], ['failureKind', '失败类型'], ['failurePhase', '失败阶段'],
+  ].filter(([key]) => filters[key]).map(([key, label]) => `${label}=${filters[key]}`);
   const activeFilterCount = [filters.clientKind, filters.clientVariant, filters.agentRole, filters.agentName, filters.parentThreadID, filters.parentTurnID, filters.rootTurnID, filters.endpointID, filters.projectID, filters.project, filters.sessionID, filters.model, filters.requestPurpose, filters.outcome, filters.failureKind, filters.failurePhase, selectedProject?.key, selectedSession?.key]
     .filter((value) => String(value || '').trim()).length;
   const facets = useMemo(() => ({
@@ -328,7 +333,7 @@ export function StatsPage() {
         <div className="analytics-v3-filter-status">
           <div>
             <h2 id="analytics-v3-filter-heading">范围与筛选</h2>
-            <p>所有条件均可选；留空时显示全部，选择后下面的指标和列表会一起更新。</p>
+            <p>默认显示全部数据；常用条件直接选择，其他条件在高级筛选中展开。</p>
           </div>
         </div>
 
@@ -352,74 +357,45 @@ export function StatsPage() {
           <label>
             <span>入口</span>
             <select className="form-select" value={filters.endpointID || ''} onChange={(event) => updateFilter('endpointID', event.target.value)}>
-              <option value="">不限入口</option>
+              <option value="">全部</option>
               {facets.endpoints.map((item) => <option key={item.value} value={item.value}>{item.label} · {formatNumber(item.count)}</option>)}
             </select>
           </label>
           <label>
             <span>项目</span>
             <select className="form-select" value={filters.project || ''} onChange={(event) => updateFilter('project', event.target.value)}>
-              <option value="">不限项目</option>
+              <option value="">全部</option>
               {facets.projects.map((item) => <option key={item.value} value={item.value}>{projectLabel(item.value)} · {formatNumber(item.count)}</option>)}
             </select>
           </label>
           <label>
             <span>会话</span>
             <select className="form-select" value={filters.sessionID || ''} onChange={(event) => updateFilter('sessionID', event.target.value)}>
-              <option value="">不限会话</option>
+              <option value="">全部</option>
               {facets.sessions.map((item) => <option key={item.value} value={item.value}>{sessionLabel(item.value)} · {formatNumber(item.count)}</option>)}
             </select>
           </label>
           <label>
             <span>客户端</span>
             <select className="form-select" value={filters.clientKind || ''} onChange={(event) => updateFilter('clientKind', event.target.value)}>
-              <option value="">不限客户端</option>
+              <option value="">全部</option>
               {facets.clientKinds.map((item) => <option key={item.value} value={item.value}>{clientKindLabel(item.value)} · {formatNumber(item.count)}</option>)}
             </select>
           </label>
-          {[
-            ['clientVariant', '客户端变体', 'clientVariants'], ['agentRole', '代理角色', 'agentRoles'], ['agentName', '代理名称', 'agentNames'],
-            ['parentThreadID', '父线程', 'parentThreads'], ['parentTurnID', '父回合', 'parentTurns'], ['rootTurnID', '根回合', 'rootTurns'],
-          ].map(([key, label, facetKey]) => (
-            <label key={key}><span>{label}</span><select className="form-select" value={filters[key] || ''} onChange={(event) => updateFilter(key, event.target.value)}>
-              <option value="">不限{label}</option>{(facets[facetKey] || []).map((item) => <option key={item.value} value={item.value}>{item.value} · {formatNumber(item.count)}</option>)}
-            </select></label>
-          ))}
           <label>
             <span>模型</span>
             <select className="form-select" value={filters.model || ''} onChange={(event) => updateFilter('model', event.target.value)}>
-              <option value="">不限模型</option>
+              <option value="">全部</option>
               {facets.models.map((item) => <option key={item.value} value={item.value}>{facetOptionLabel(item, 'model')}</option>)}
             </select>
           </label>
           <label>
             <span>最终结果</span>
             <select className="form-select" value={filters.outcome || ''} onChange={(event) => updateFilter('outcome', event.target.value)}>
-              <option value="">不限结果</option>
+              <option value="">全部</option>
               <option value="succeeded">成功</option>
               <option value="failed">失败</option>
               <option value="cancelled">已取消</option>
-            </select>
-          </label>
-          <label>
-            <span>用途</span>
-            <select className="form-select" value={filters.requestPurpose || ''} onChange={(event) => updateFilter('requestPurpose', event.target.value)}>
-              <option value="">不限用途</option>
-              {facets.requestPurposes.map((item) => <option key={item.value} value={item.value}>{facetOptionLabel(item, 'purpose')}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>失败类型</span>
-            <select className="form-select" value={filters.failureKind || ''} onChange={(event) => updateFilter('failureKind', event.target.value)}>
-              <option value="">不限失败类型</option>
-              {facets.failureKinds.map((item) => <option key={item.value} value={item.value}>{facetOptionLabel(item, 'failureKind')}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>失败阶段</span>
-            <select className="form-select" value={filters.failurePhase || ''} onChange={(event) => updateFilter('failurePhase', event.target.value)}>
-              <option value="">不限失败阶段</option>
-              {facets.failurePhases.map((item) => <option key={item.value} value={item.value}>{facetOptionLabel(item, 'failurePhase')}</option>)}
             </select>
           </label>
           <button
@@ -431,6 +407,41 @@ export function StatsPage() {
             清除筛选
           </button>
         </div>
+        <details className="analytics-v3-advanced-filters">
+          <summary>高级筛选{advancedFilterLabels.length > 0 ? ` · 已选 ${advancedFilterLabels.length} 项` : ' · 代理、用途与失败诊断'}</summary>
+          <div className="analytics-v3-filter-grid">
+          {[
+            ['clientVariant', '客户端变体', 'clientVariants'], ['agentRole', '代理角色', 'agentRoles'], ['agentName', '代理名称', 'agentNames'],
+            ['parentThreadID', '父线程', 'parentThreads'], ['parentTurnID', '父回合', 'parentTurns'], ['rootTurnID', '根回合', 'rootTurns'],
+          ].map(([key, label, facetKey]) => (
+            <label key={key}><span>{label}</span><select className="form-select" value={filters[key] || ''} onChange={(event) => updateFilter(key, event.target.value)}>
+              <option value="">全部</option>{(facets[facetKey] || []).map((item) => <option key={item.value} value={item.value}>{item.value} · {formatNumber(item.count)}</option>)}
+            </select></label>
+          ))}
+          <label>
+            <span>用途</span>
+            <select className="form-select" value={filters.requestPurpose || ''} onChange={(event) => updateFilter('requestPurpose', event.target.value)}>
+              <option value="">全部</option>
+              {facets.requestPurposes.map((item) => <option key={item.value} value={item.value}>{facetOptionLabel(item, 'purpose')}</option>)}
+            </select>
+          </label>
+          <label>
+            <span>失败类型</span>
+            <select className="form-select" value={filters.failureKind || ''} onChange={(event) => updateFilter('failureKind', event.target.value)}>
+              <option value="">全部</option>
+              {facets.failureKinds.map((item) => <option key={item.value} value={item.value}>{facetOptionLabel(item, 'failureKind')}</option>)}
+            </select>
+          </label>
+          <label>
+            <span>失败阶段</span>
+            <select className="form-select" value={filters.failurePhase || ''} onChange={(event) => updateFilter('failurePhase', event.target.value)}>
+              <option value="">全部</option>
+              {facets.failurePhases.map((item) => <option key={item.value} value={item.value}>{facetOptionLabel(item, 'failurePhase')}</option>)}
+            </select>
+          </label>
+          </div>
+        </details>
+        {advancedFilterLabels.length > 0 && <p className="analytics-v3-active-filters">{advancedFilterLabels.join(' · ')}</p>}
         <div className="analytics-v3-filter-feedback" role={analyticsError ? 'alert' : 'status'} aria-live="polite">
           {analyticsError
             ? `统计刷新失败：${analyticsError}${analyticsStale ? '；当前保留上一份结果。' : ''}`

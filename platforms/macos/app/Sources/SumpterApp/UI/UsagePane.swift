@@ -50,7 +50,7 @@ private struct AttributionFacetPicker: View {
     let rows: [AdminWire.RuntimeAnalytics.FacetRow]
     var body: some View {
         Picker(title, selection: $selection) {
-            Text("不限\(title)").tag("")
+            Text("全部").tag("")
             ForEach(rows) { item in Text("\(item.value) · \(item.count)").tag(item.value) }
         }
     }
@@ -535,6 +535,7 @@ struct UsagePane: View {
     @State private var exportFormat = "jsonl"
     @State private var confirmStoredEstimate = false
     @State private var selectedBoard: StatisticsBoard = .overview
+    @State private var advancedFiltersExpanded = false
     @State private var exportExpanded = false
     @State private var storageSettingsPresented = false
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -783,10 +784,21 @@ struct UsagePane: View {
                     }
                 }
                 Divider()
-                Text("筛选条件")
-                    .font(.subheadline.weight(.semibold))
+                HStack {
+                    Text("筛选条件").font(.subheadline.weight(.semibold))
+                    Spacer()
+                    clearAnalyticsFiltersButton
+                }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 12)], spacing: 10) {
                     analyticsFilterPickers
+                }
+                DisclosureGroup(isExpanded: $advancedFiltersExpanded) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 12)], spacing: 10) {
+                        advancedAnalyticsFilterPickers
+                    }.padding(.top, 8)
+                } label: {
+                    Text(advancedRuntimeFilterLabels.isEmpty ? "高级筛选 · 代理、用途与失败诊断" : "高级筛选 · 已选 \(advancedRuntimeFilterLabels.count) 项")
+                        .font(.callout)
                 }
                 analyticsFilterStatus
                 Divider()
@@ -863,7 +875,7 @@ struct UsagePane: View {
             get: { model.runtimeAnalyticsEndpointID },
             set: { model.setRuntimeAnalyticsFilters(endpointID: $0) }
         )) {
-            Text("不限入口").tag("")
+            Text("全部").tag("")
             ForEach(facets?.endpoints ?? []) { item in
                 Text("\(model.config.endpoints.first(where: { $0.id == item.value })?.name ?? item.value) · \(item.count)")
                     .tag(item.value)
@@ -873,7 +885,7 @@ struct UsagePane: View {
             get: { model.runtimeAnalyticsProject },
             set: { model.setRuntimeAnalyticsFilters(project: $0, sessionID: "") }
         )) {
-            Text("不限项目").tag("")
+            Text("全部").tag("")
             ForEach(facets?.projects ?? []) { item in
                 Text("\(projectDisplayName(item.value)) · \(item.count)").tag(item.value)
             }
@@ -882,7 +894,7 @@ struct UsagePane: View {
             get: { model.runtimeAnalyticsSessionID },
             set: { model.setRuntimeAnalyticsFilters(sessionID: $0) }
         )) {
-            Text("不限会话").tag("")
+            Text("全部").tag("")
             ForEach(facets?.sessions ?? []) { item in
                 Text("\(sessionDisplayName(item.value)) · \(item.count)").tag(item.value)
             }
@@ -891,22 +903,16 @@ struct UsagePane: View {
             get: { model.runtimeAnalyticsClientKind },
             set: { model.setRuntimeAnalyticsFilters(clientKind: $0) }
         )) {
-            Text("不限客户端").tag("")
+            Text("全部").tag("")
             ForEach(facets?.clientKinds ?? []) { item in
                 Text("\(clientDisplayName(item.value)) · \(item.count)").tag(item.value)
             }
         }
-        AttributionFacetPicker(title: "客户端变体", selection: Binding(get: { model.runtimeAnalyticsClientVariant }, set: { model.setRuntimeAnalyticsFilters(clientVariant: $0) }), rows: facets?.clientVariants ?? [])
-        AttributionFacetPicker(title: "代理角色", selection: Binding(get: { model.runtimeAnalyticsAgentRole }, set: { model.setRuntimeAnalyticsFilters(agentRole: $0) }), rows: facets?.agentRoles ?? [])
-        AttributionFacetPicker(title: "代理名称", selection: Binding(get: { model.runtimeAnalyticsAgentName }, set: { model.setRuntimeAnalyticsFilters(agentName: $0) }), rows: facets?.agentNames ?? [])
-        AttributionFacetPicker(title: "父线程", selection: Binding(get: { model.runtimeAnalyticsParentThreadID }, set: { model.setRuntimeAnalyticsFilters(parentThreadID: $0) }), rows: facets?.parentThreads ?? [])
-        AttributionFacetPicker(title: "父回合", selection: Binding(get: { model.runtimeAnalyticsParentTurnID }, set: { model.setRuntimeAnalyticsFilters(parentTurnID: $0) }), rows: facets?.parentTurns ?? [])
-        AttributionFacetPicker(title: "根回合", selection: Binding(get: { model.runtimeAnalyticsRootTurnID }, set: { model.setRuntimeAnalyticsFilters(rootTurnID: $0) }), rows: facets?.rootTurns ?? [])
         Picker("模型", selection: Binding(
             get: { model.runtimeAnalyticsModel },
             set: { model.setRuntimeAnalyticsFilters(model: $0) }
         )) {
-            Text("不限模型").tag("")
+            Text("全部").tag("")
             ForEach(facets?.models ?? []) { item in
                 Text("\(item.value) · \(item.count)").tag(item.value)
             }
@@ -915,16 +921,26 @@ struct UsagePane: View {
             get: { model.runtimeAnalyticsOutcome },
             set: { model.setRuntimeAnalyticsFilters(outcome: $0) }
         )) {
-            Text("不限结果").tag("")
+            Text("全部").tag("")
             Text("成功").tag("succeeded")
             Text("失败").tag("failed")
             Text("已取消").tag("cancelled")
         }
+    }
+
+    @ViewBuilder
+    private var advancedAnalyticsFilterPickers: some View {
+        AttributionFacetPicker(title: "客户端变体", selection: Binding(get: { model.runtimeAnalyticsClientVariant }, set: { model.setRuntimeAnalyticsFilters(clientVariant: $0) }), rows: facets?.clientVariants ?? [])
+        AttributionFacetPicker(title: "代理角色", selection: Binding(get: { model.runtimeAnalyticsAgentRole }, set: { model.setRuntimeAnalyticsFilters(agentRole: $0) }), rows: facets?.agentRoles ?? [])
+        AttributionFacetPicker(title: "代理名称", selection: Binding(get: { model.runtimeAnalyticsAgentName }, set: { model.setRuntimeAnalyticsFilters(agentName: $0) }), rows: facets?.agentNames ?? [])
+        AttributionFacetPicker(title: "父线程", selection: Binding(get: { model.runtimeAnalyticsParentThreadID }, set: { model.setRuntimeAnalyticsFilters(parentThreadID: $0) }), rows: facets?.parentThreads ?? [])
+        AttributionFacetPicker(title: "父回合", selection: Binding(get: { model.runtimeAnalyticsParentTurnID }, set: { model.setRuntimeAnalyticsFilters(parentTurnID: $0) }), rows: facets?.parentTurns ?? [])
+        AttributionFacetPicker(title: "根回合", selection: Binding(get: { model.runtimeAnalyticsRootTurnID }, set: { model.setRuntimeAnalyticsFilters(rootTurnID: $0) }), rows: facets?.rootTurns ?? [])
         Picker("用途", selection: Binding(
             get: { model.runtimeAnalyticsRequestPurpose },
             set: { model.setRuntimeAnalyticsFilters(requestPurpose: $0) }
         )) {
-            Text("不限用途").tag("")
+            Text("全部").tag("")
             ForEach(facets?.requestPurposes ?? []) { item in
                 Text("\(dimensionValueDisplayName(item.value, kind: "purpose")) · \(item.count)").tag(item.value)
             }
@@ -933,7 +949,7 @@ struct UsagePane: View {
             get: { model.runtimeAnalyticsFailureKind },
             set: { model.setRuntimeAnalyticsFilters(failureKind: $0) }
         )) {
-            Text("不限失败类型").tag("")
+            Text("全部").tag("")
             ForEach(facets?.failureKinds ?? []) { item in
                 Text("\(dimensionValueDisplayName(item.value, kind: "failure_kind")) · \(item.count)").tag(item.value)
             }
@@ -942,11 +958,14 @@ struct UsagePane: View {
             get: { model.runtimeAnalyticsFailurePhase },
             set: { model.setRuntimeAnalyticsFilters(failurePhase: $0) }
         )) {
-            Text("不限失败阶段").tag("")
+            Text("全部").tag("")
             ForEach(facets?.failurePhases ?? []) { item in
                 Text("\(dimensionValueDisplayName(item.value, kind: "failure_phase")) · \(item.count)").tag(item.value)
             }
         }
+    }
+
+    private var clearAnalyticsFiltersButton: some View {
         Button("清除筛选") {
             model.setRuntimeAnalyticsFilters(clientKind: "", clientVariant: "", agentRole: "", agentName: "", parentThreadID: "", parentTurnID: "", rootTurnID: "", endpointID: "", project: "", sessionID: "", model: "", requestPurpose: "", outcome: "", failureKind: "", failurePhase: "")
         }
@@ -2934,8 +2953,28 @@ struct UsagePane: View {
             || !model.runtimeLocalSessionName.isEmpty
     }
 
+    private var advancedRuntimeFilterLabels: [String] {
+        [
+            model.runtimeAnalyticsClientVariant.isEmpty ? nil : "客户端变体=\(model.runtimeAnalyticsClientVariant)",
+            model.runtimeAnalyticsAgentRole.isEmpty ? nil : "代理角色=\(model.runtimeAnalyticsAgentRole)",
+            model.runtimeAnalyticsAgentName.isEmpty ? nil : "代理名称=\(model.runtimeAnalyticsAgentName)",
+            model.runtimeAnalyticsParentThreadID.isEmpty ? nil : "父线程=\(model.runtimeAnalyticsParentThreadID)",
+            model.runtimeAnalyticsParentTurnID.isEmpty ? nil : "父回合=\(model.runtimeAnalyticsParentTurnID)",
+            model.runtimeAnalyticsRootTurnID.isEmpty ? nil : "根回合=\(model.runtimeAnalyticsRootTurnID)",
+            model.runtimeAnalyticsRequestPurpose.isEmpty ? nil : "用途=\(model.runtimeAnalyticsRequestPurpose)",
+            model.runtimeAnalyticsFailureKind.isEmpty ? nil : "失败类型=\(model.runtimeAnalyticsFailureKind)",
+            model.runtimeAnalyticsFailurePhase.isEmpty ? nil : "失败阶段=\(model.runtimeAnalyticsFailurePhase)",
+        ].compactMap { $0 }
+    }
+
     private var activeRuntimeFilterLabels: [String] {
         [
+            model.runtimeAnalyticsClientVariant.isEmpty ? nil : "客户端变体=\(model.runtimeAnalyticsClientVariant)",
+            model.runtimeAnalyticsAgentRole.isEmpty ? nil : "代理角色=\(model.runtimeAnalyticsAgentRole)",
+            model.runtimeAnalyticsAgentName.isEmpty ? nil : "代理名称=\(model.runtimeAnalyticsAgentName)",
+            model.runtimeAnalyticsParentThreadID.isEmpty ? nil : "父线程=\(model.runtimeAnalyticsParentThreadID)",
+            model.runtimeAnalyticsParentTurnID.isEmpty ? nil : "父回合=\(model.runtimeAnalyticsParentTurnID)",
+            model.runtimeAnalyticsRootTurnID.isEmpty ? nil : "根回合=\(model.runtimeAnalyticsRootTurnID)",
             model.runtimeAnalyticsClientKind.isEmpty ? nil : "客户端=\(clientDisplayName(model.runtimeAnalyticsClientKind))",
             model.runtimeAnalyticsEndpointID.isEmpty ? nil : "入口=\(model.runtimeAnalyticsEndpointID)",
             model.runtimeAnalyticsProject.isEmpty ? nil : "项目=\(projectDisplayName(model.runtimeAnalyticsProject))",
