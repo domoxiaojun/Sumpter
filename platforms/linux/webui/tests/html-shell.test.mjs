@@ -54,6 +54,24 @@ test('RunPage 请求详情按主信息、路由和诊断渐进披露', () => {
   assert.doesNotMatch(primarySource, /Request ID/);
 });
 
+test('RunPage 分页控件位于事件列表上方', () => {
+  const source = readFileSync(RUN_PAGE, 'utf8');
+  const pager = source.indexOf('<PaginationBar');
+  const eventContent = source.indexOf('className="event-page-content"');
+  assert.ok(pager >= 0, '运行页必须保留分页控件');
+  assert.ok(eventContent > pager, '分页控件必须在事件列表内容之前');
+  assert.doesNotMatch(source, /加载更多.*1000|最多 1000 条/);
+});
+
+test('RunPage 客户端字段对 Codex 与其他客户端使用统一来源标签', () => {
+  const source = readFileSync(RUN_PAGE, 'utf8');
+  for (const label of ['客户端原始项目', '客户端原始工作区', '客户端声明项目', '客户端声明工作区', '客户端声明 Git 仓库', '客户端声明用户']) {
+    assert.match(source, new RegExp(label));
+  }
+  assert.match(source, /<span>代理身份<\/span>/);
+  assert.match(source, /<span>代理路径<\/span>/);
+});
+
 test('StatsPage 请求下钻保留主次层级和完整技术字段', () => {
   const source = readFileSync(STATS_PAGE, 'utf8');
   const drilldown = source.indexOf('id="analytics-request-drilldown"');

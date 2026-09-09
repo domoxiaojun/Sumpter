@@ -126,8 +126,9 @@ sudo bash /tmp/sumpter-install.sh --repo domoxiaojun/sumpter
 
 钉死版本时加上 `--version vX.Y.Z`。`install.sh --repo` 会下载 `SHA256SUMS` 并校验当前架构的
 tar.gz。`bootstrap-install.sh` 也可从
-`https://github.com/domoxiaojun/sumpter/releases/latest/download` 取同名压缩包，但**不校验
-SHA-256**，只检查 HTTPS、归档结构和符号链接；需要校验时不要用引导脚本。
+`https://github.com/domoxiaojun/sumpter/releases/latest/download` 取同名压缩包，并强制验证 `SHA256SUMS`，
+校验失败时停止安装，同时检查 HTTPS、归档结构和符号链接。
+同源校验用于验证完整性，不替代发布方身份签名。
 
 可选静态镜像仍须手工同步，可能落后于 GitHub Release。仅在无法访问 GitHub 时把
 `bootstrap-install.sh` 的 `--base-url` 指到镜像根目录。
@@ -229,7 +230,7 @@ bash /tmp/sumpter-uninstall.sh --purge
 
 GitHub Release 安装路径要求仓库公开（或已登录可下载资产）。私有源码、单独托管二进制时，把
 `bootstrap-install.sh --base-url` 指到自备 HTTPS 目录，目录内需提供
-`sumpter-linux-x86_64.tar.gz` 与 `sumpter-linux-aarch64.tar.gz`。
+`sumpter-linux-x86_64.tar.gz`、`sumpter-linux-aarch64.tar.gz` 和对应的 `SHA256SUMS`。
 
 ## 首次配置
 

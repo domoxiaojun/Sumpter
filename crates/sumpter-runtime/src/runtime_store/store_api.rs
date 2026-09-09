@@ -1,19 +1,19 @@
 use super::{
     AnalyticsFilter, Arc, AtomicBool, AtomicUsize, BACKPRESSURE_BYTES, BACKPRESSURE_EVENTS,
     BATCH_BYTES, BATCH_EVENTS, Command, Connection, Duration, HashMap, HashSet, Inner, Mutex,
-    OptionalExtension, Ordering, PENDING_BYTES_LIMIT, PENDING_EVENTS_LIMIT, Path, PathBuf,
-    PendingBatch, RETENTION_IDLE_CHECK_INTERVAL, RETRY_INITIAL, RETRY_MAX, RuntimeChange,
-    RuntimeCleanupMutation, RuntimeCleanupPreview, RuntimeCounters, RuntimeEvent,
-    RuntimeEventListItem, RuntimePricingMutation, RuntimePricingUpdate, RuntimeRetentionMutation,
-    RuntimeRetentionUpdate, RuntimeSnapshot, RuntimeStorageStatus, RuntimeStore, RuntimeSummary,
-    SessionMutation, Value, WriteMessage, check_existing_schema, cleanup_before_database,
-    cleanup_before_preview_database, commit_pending, database_file_sizes, delete_session_database,
-    export_session_json, harden_database_file, load_snapshot, load_state, meta_i64, mpsc,
-    normalize_startup, now, option_token, params, projection_maintenance_needed, read_connection,
-    recreate_database, refresh_cached_storage, replace_pricing_database, reset_database,
-    rotate_retention_now, run_projection_maintenance, run_retention_maintenance, set_meta,
-    set_retention_database, setup_connection, thread, validate_cleanup_cutoff,
-    validate_pricing_update, validate_retention_update,
+    Ordering, PENDING_BYTES_LIMIT, PENDING_EVENTS_LIMIT, Path, PathBuf, PendingBatch,
+    RETENTION_IDLE_CHECK_INTERVAL, RETRY_INITIAL, RETRY_MAX, RuntimeChange, RuntimeCleanupMutation,
+    RuntimeCleanupPreview, RuntimeCounters, RuntimeEvent, RuntimeEventListItem,
+    RuntimePricingMutation, RuntimePricingUpdate, RuntimeRetentionMutation, RuntimeRetentionUpdate,
+    RuntimeSnapshot, RuntimeStorageStatus, RuntimeStore, RuntimeSummary, SessionMutation, Value,
+    WriteMessage, check_existing_schema, cleanup_before_database, cleanup_before_preview_database,
+    commit_pending, database_file_sizes, delete_session_database, export_session_json,
+    harden_database_file, load_snapshot, load_state, meta_i64, mpsc, normalize_startup, now,
+    option_token, params, projection_maintenance_needed, read_connection, recreate_database,
+    refresh_cached_storage, replace_pricing_database, reset_database, rotate_retention_now,
+    run_projection_maintenance, run_retention_maintenance, set_meta, set_retention_database,
+    setup_connection, thread, validate_cleanup_cutoff, validate_pricing_update,
+    validate_retention_update,
 };
 
 impl RuntimeStore {
@@ -59,7 +59,7 @@ impl RuntimeStore {
         // channel sender, so holding a strong reference here would create a
         // self-retaining cycle and leave one blocked thread per store.
         let worker_ref = Arc::downgrade(&inner);
-        thread::Builder::new()
+        let worker_thread = thread::Builder::new()
             .name("runtime-sqlite".into())
             .spawn(move || {
                 let mut connection = match Connection::open(worker_path) {
@@ -169,6 +169,7 @@ impl RuntimeStore {
                         }
                     };
                     match command {
+                        Command::Shutdown => break,
                         Command::Write(message) => {
                             let Some(worker_inner) = worker_ref.upgrade() else {
                                 break;
@@ -339,7 +340,17 @@ impl RuntimeStore {
                 }
             })
             .map_err(|error| error.to_string())?;
-        Ok((Self { inner }, snapshot))
+        let worker = Arc::new(super::WorkerLifecycle {
+            inner: inner.clone(),
+            thread: Some(worker_thread),
+        });
+        Ok((
+            Self {
+                inner,
+                _worker: worker,
+            },
+            snapshot,
+        ))
     }
 
     pub fn path(&self) -> &Path {
@@ -813,7 +824,7 @@ impl RuntimeStore {
         };
         // Keep one positional parameter set for every branch.  This avoids
         // binding optional named parameters that are absent from a dynamically
-        // assembled statement (rusqlite correctly rejects those bindings).
+        // assembled statement; every binding must correspond to a parameter.
         let sql = format!(
             "SELECT seq,change_seq,payload_json FROM runtime_events
              WHERE (?1 IS NULL OR seq < ?1)
@@ -913,28 +924,37 @@ impl RuntimeStore {
             return Ok(Some(change));
         }
         let connection = read_connection(&self.inner.path)?;
-        connection
-            .query_row(
-                "SELECT seq,change_seq,payload_json FROM runtime_events WHERE event_id=?1",
-                params![id],
-                |row| {
-                    let event: RuntimeEvent = serde_json::from_str(&row.get::<_, String>(2)?)
-                        .map_err(|error| {
-                            rusqlite::Error::FromSqlConversionFailure(
-                                2,
-                                rusqlite::types::Type::Text,
-                                Box::new(error),
-                            )
-                        })?;
-                    Ok(RuntimeChange {
-                        seq: row.get(0)?,
-                        change_seq: row.get(1)?,
-                        event,
-                    })
-                },
-            )
-            .optional()
-            .map_err(|e| e.to_string())
+        use crate::entities::runtime_events::{Column, Entity};
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
+        #[derive(sea_orm::FromQueryResult)]
+        struct Detail {
+            seq: i64,
+            change_seq: i64,
+            payload_json: String,
+        }
+        let id = id.to_owned();
+        let detail = connection
+            .orm(move |db| async move {
+                Entity::find()
+                    .select_only()
+                    .columns([Column::Seq, Column::ChangeSeq, Column::PayloadJson])
+                    .filter(Column::EventId.eq(id))
+                    .into_model::<Detail>()
+                    .one(db.as_ref())
+                    .await
+            })
+            .map_err(|error| error.to_string())?;
+        detail
+            .map(|detail| {
+                let event = serde_json::from_str(&detail.payload_json)
+                    .map_err(|error| error.to_string())?;
+                Ok(RuntimeChange {
+                    seq: detail.seq,
+                    change_seq: detail.change_seq,
+                    event,
+                })
+            })
+            .transpose()
     }
 
     pub fn analytics(&self, range: &str) -> Result<Value, String> {

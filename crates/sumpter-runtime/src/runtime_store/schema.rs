@@ -4,11 +4,11 @@ use super::{
     TTFB_CRITICAL_MS, TTFB_SLOW_MS, meta_i64, now, params, set_meta, update_event_projection,
 };
 
-pub(super) fn setup_connection(connection: &mut Connection) -> rusqlite::Result<()> {
+pub(super) fn setup_connection(connection: &mut Connection) -> crate::database::Result<()> {
     if let Some(issue) =
-        database_issue_on(connection).map_err(rusqlite::Error::InvalidParameterName)?
+        database_issue_on(connection).map_err(crate::database::Error::InvalidParameterName)?
     {
-        return Err(rusqlite::Error::InvalidParameterName(issue.message));
+        return Err(crate::database::Error::InvalidParameterName(issue.message));
     }
     connection.execute_batch(
         "PRAGMA journal_mode = WAL;
@@ -18,48 +18,13 @@ pub(super) fn setup_connection(connection: &mut Connection) -> rusqlite::Result<
          PRAGMA wal_autocheckpoint = 1000;
          PRAGMA cache_size = -2048;",
     )?;
-    connection.execute_batch(
-        "CREATE TABLE IF NOT EXISTS runtime_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-         CREATE TABLE IF NOT EXISTS runtime_counters (
-             id INTEGER PRIMARY KEY CHECK (id = 1),
-             client_requests INTEGER NOT NULL,
-             client_successes INTEGER NOT NULL,
-             client_failures INTEGER NOT NULL,
-             upstream_attempts INTEGER NOT NULL,
-             upstream_successes INTEGER NOT NULL,
-             upstream_failures INTEGER NOT NULL,
-             failovers INTEGER NOT NULL
-         );
-         CREATE TABLE IF NOT EXISTS runtime_events (
-             seq INTEGER PRIMARY KEY,
-             change_seq INTEGER NOT NULL UNIQUE,
-             event_id TEXT NOT NULL UNIQUE,
-             request_id TEXT,
-             timestamp REAL NOT NULL,
-             kind TEXT NOT NULL,
-             phase TEXT,
-             outcome TEXT,
-             status_code INTEGER NOT NULL,
-             client_kind TEXT,
-             request_purpose TEXT,
-             endpoint_id TEXT,
-             failure_kind TEXT,
-             is_in_flight INTEGER NOT NULL,
-             payload_json TEXT NOT NULL,
-             created_at REAL NOT NULL,
-             updated_at REAL NOT NULL
-         );
-         CREATE INDEX IF NOT EXISTS runtime_events_kind_seq ON runtime_events(kind, seq DESC);
-         CREATE INDEX IF NOT EXISTS runtime_events_request_id ON runtime_events(request_id);
-         CREATE INDEX IF NOT EXISTS runtime_events_timestamp ON runtime_events(timestamp);",
-    )?;
+    crate::entities::create_schema(connection)?;
     let previous_version = meta_i64(connection, "schema_version")?.unwrap_or(0);
     if previous_version > SCHEMA_VERSION {
-        return Err(rusqlite::Error::InvalidParameterName(format!(
+        return Err(crate::database::Error::InvalidParameterName(format!(
             "runtime schema {previous_version} is newer than supported {SCHEMA_VERSION}"
         )));
     }
-    ensure_v2_schema(connection)?;
     let hourly_rollup_meta_exists = meta_i64(connection, "hourly_rollup_complete")?.is_some();
     let unprojected_exists = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM runtime_events
@@ -67,13 +32,13 @@ pub(super) fn setup_connection(connection: &mut Connection) -> rusqlite::Result<
         params![PROJECTION_VERSION],
         |row| row.get::<_, bool>(0),
     )?;
-    let retained_event_count =
-        connection.query_row("SELECT COUNT(*) FROM runtime_events", [], |row| {
-            row.get::<_, i64>(0)
-        })?;
+    let retained_event_count = connection.query_row(
+        "SELECT COUNT(*) FROM runtime_events",
+        crate::database::params![],
+        |row| row.get::<_, i64>(0),
+    )?;
     let retained_from_seq = connection.query_row(
-        "SELECT COALESCE(MIN(seq), COALESCE((SELECT CAST(value AS INTEGER) FROM runtime_meta WHERE key='next_seq'), 1)) FROM runtime_events",
-        [],
+        "SELECT COALESCE(MIN(seq), COALESCE((SELECT CAST(value AS INTEGER) FROM runtime_meta WHERE key='next_seq'), 1)) FROM runtime_events", crate::database::params![],
         |row| row.get::<_, i64>(0),
     )?;
     let defaults = [
@@ -113,7 +78,7 @@ pub(super) fn setup_connection(connection: &mut Connection) -> rusqlite::Result<
     }
     connection.execute(
         "INSERT INTO runtime_counters VALUES(1,0,0,0,0,0,0,0) ON CONFLICT(id) DO NOTHING",
-        [],
+        crate::database::params![],
     )?;
     connection.execute(
         "INSERT INTO runtime_retention(
@@ -131,7 +96,10 @@ pub(super) fn setup_connection(connection: &mut Connection) -> rusqlite::Result<
         // Rollup columns and threshold semantics changed in v3. Rebuild all
         // retained buckets from projection columns; never read payload_json
         // for analytics.
-        connection.execute("DELETE FROM runtime_hourly_rollups", [])?;
+        connection.execute(
+            "DELETE FROM runtime_hourly_rollups",
+            crate::database::params![],
+        )?;
         connection.execute(
             "INSERT OR IGNORE INTO runtime_hourly_rollup_dirty(bucket_start)
              SELECT DISTINCT (CAST(timestamp AS INTEGER) / 3600) * 3600
@@ -141,7 +109,7 @@ pub(super) fn setup_connection(connection: &mut Connection) -> rusqlite::Result<
         )?;
         let dirty_exists = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM runtime_hourly_rollup_dirty LIMIT 1)",
-            [],
+            crate::database::params![],
             |row| row.get::<_, bool>(0),
         )?;
         set_meta(
@@ -161,243 +129,7 @@ pub(super) fn setup_connection(connection: &mut Connection) -> rusqlite::Result<
     Ok(())
 }
 
-pub(super) fn ensure_v2_schema(connection: &mut Connection) -> rusqlite::Result<()> {
-    let existing = {
-        let mut statement = connection.prepare("PRAGMA table_info(runtime_events)")?;
-        statement
-            .query_map([], |row| row.get::<_, String>(1))?
-            .collect::<Result<HashSet<_>, _>>()?
-    };
-    let columns = [
-        ("projection_version", "INTEGER NOT NULL DEFAULT 0"),
-        ("payload_bytes", "INTEGER NOT NULL DEFAULT 0"),
-        ("session_key", "TEXT"),
-        ("session_source", "TEXT"),
-        // 会话粘性归属键(affinity 哈希)。旧库 ALTER 后回填 NULL(未建立粘性)。
-        ("sticky_key", "TEXT"),
-        ("project_id", "TEXT"),
-        ("project_name", "TEXT"),
-        ("project_source", "TEXT"),
-        ("local_user", "TEXT"),
-        ("workspace_paths_json", "TEXT"),
-        ("endpoint_name", "TEXT"),
-        ("model_group_id", "TEXT"),
-        ("model_group_name", "TEXT"),
-        ("feature_rule_id", "TEXT"),
-        ("client_model", "TEXT"),
-        ("effective_model", "TEXT"),
-        ("upstream_model", "TEXT"),
-        ("failure_phase", "TEXT"),
-        ("source_format", "TEXT"),
-        ("target_format", "TEXT"),
-        ("route_mode", "TEXT"),
-        ("upstream_status_code", "INTEGER"),
-        ("duration_ms", "INTEGER"),
-        ("ttfb_ms", "INTEGER"),
-        ("failover", "INTEGER"),
-        ("stream_terminal", "TEXT"),
-        ("codex_metadata_present", "INTEGER"),
-        ("usage_present", "INTEGER"),
-        ("input_tokens", "INTEGER"),
-        ("output_tokens", "INTEGER"),
-        ("cache_read_input_tokens", "INTEGER"),
-        ("cache_creation_input_tokens", "INTEGER"),
-        ("reasoning_tokens", "INTEGER"),
-        ("uncached_input_tokens", "INTEGER"),
-        ("processed_input_tokens", "INTEGER"),
-        ("processed_total_tokens", "INTEGER"),
-        ("token_accounting_semantics", "TEXT"),
-        ("token_accounting_quality", "TEXT"),
-        ("tool_calls_json", "TEXT"),
-        ("codex_thread_class", "TEXT"),
-        ("attribution_scope", "TEXT"),
-        ("request_method", "TEXT"),
-        ("request_path", "TEXT"),
-        ("route_intent", "TEXT"),
-        ("client_variant", "TEXT"),
-        ("agent_role", "TEXT"),
-        ("agent_name", "TEXT"),
-        ("parent_thread_id", "TEXT"),
-        ("parent_turn_id", "TEXT"),
-        ("root_turn_id", "TEXT"),
-    ];
-    let transaction = connection.transaction()?;
-    for (name, definition) in columns {
-        if !existing.contains(name) {
-            transaction.execute_batch(&format!(
-                "ALTER TABLE runtime_events ADD COLUMN {name} {definition};"
-            ))?;
-        }
-    }
-    transaction.execute_batch(
-        "CREATE TABLE IF NOT EXISTS runtime_hourly_rollups (
-             bucket_start INTEGER PRIMARY KEY,
-             bucket_end INTEGER NOT NULL,
-             max_seq INTEGER NOT NULL DEFAULT 0,
-             client_requests INTEGER NOT NULL DEFAULT 0,
-             client_successes INTEGER NOT NULL DEFAULT 0,
-             client_failures INTEGER NOT NULL DEFAULT 0,
-             client_cancelled INTEGER NOT NULL DEFAULT 0,
-             failovers INTEGER NOT NULL DEFAULT 0,
-             duration_ms_sum INTEGER NOT NULL DEFAULT 0,
-             duration_count INTEGER NOT NULL DEFAULT 0,
-             duration_slow_count INTEGER NOT NULL DEFAULT 0,
-             duration_critical_count INTEGER NOT NULL DEFAULT 0,
-             ttfb_ms_sum INTEGER NOT NULL DEFAULT 0,
-             ttfb_count INTEGER NOT NULL DEFAULT 0,
-             ttfb_slow_count INTEGER NOT NULL DEFAULT 0,
-             ttfb_critical_count INTEGER NOT NULL DEFAULT 0,
-             client_unknown_results INTEGER NOT NULL DEFAULT 0,
-             failover_terminal_requests INTEGER NOT NULL DEFAULT 0,
-             failover_recovered_requests INTEGER NOT NULL DEFAULT 0,
-             upstream_attempts INTEGER NOT NULL DEFAULT 0,
-             upstream_successes INTEGER NOT NULL DEFAULT 0,
-             upstream_failures INTEGER NOT NULL DEFAULT 0,
-             input_tokens INTEGER NOT NULL DEFAULT 0,
-             output_tokens INTEGER NOT NULL DEFAULT 0,
-             cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,
-             cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
-             reasoning_tokens INTEGER NOT NULL DEFAULT 0,
-             uncached_input_tokens INTEGER NOT NULL DEFAULT 0,
-             processed_input_tokens INTEGER NOT NULL DEFAULT 0,
-             processed_total_tokens INTEGER NOT NULL DEFAULT 0,
-             usage_present_requests INTEGER NOT NULL DEFAULT 0,
-             accounting_known_requests INTEGER NOT NULL DEFAULT 0,
-             accounting_unknown_requests INTEGER NOT NULL DEFAULT 0,
-             cache_read_reported_requests INTEGER NOT NULL DEFAULT 0,
-             cache_read_hit_requests INTEGER NOT NULL DEFAULT 0,
-             cache_eligible_requests INTEGER NOT NULL DEFAULT 0,
-             cache_unknown_requests INTEGER NOT NULL DEFAULT 0,
-             cache_read_token_numerator INTEGER NOT NULL DEFAULT 0,
-             cache_read_token_denominator INTEGER NOT NULL DEFAULT 0,
-             input_tokens_present INTEGER NOT NULL DEFAULT 0,
-             output_tokens_present INTEGER NOT NULL DEFAULT 0,
-             cache_read_input_tokens_present INTEGER NOT NULL DEFAULT 0,
-             cache_creation_input_tokens_present INTEGER NOT NULL DEFAULT 0,
-             reasoning_tokens_present INTEGER NOT NULL DEFAULT 0,
-             cost_accounting_complete_requests INTEGER NOT NULL DEFAULT 0,
-             cost_unknown_accounting_requests INTEGER NOT NULL DEFAULT 0,
-             cost_numerator INTEGER NOT NULL DEFAULT 0,
-             cost_priced_requests INTEGER NOT NULL DEFAULT 0,
-             cost_unpriced_requests INTEGER NOT NULL DEFAULT 0,
-             cost_unknown_requests INTEGER NOT NULL DEFAULT 0,
-             cost_price_revision INTEGER,
-             updated_at REAL NOT NULL DEFAULT 0
-         );
-         CREATE TABLE IF NOT EXISTS runtime_hourly_rollup_dirty (
-             bucket_start INTEGER PRIMARY KEY
-         );
-         CREATE TABLE IF NOT EXISTS runtime_retention (
-             id INTEGER PRIMARY KEY CHECK(id=1),
-             revision INTEGER NOT NULL DEFAULT 1,
-             updated_at REAL NOT NULL
-         );
-         CREATE TABLE IF NOT EXISTS runtime_pricing_meta (
-             id INTEGER PRIMARY KEY CHECK(id=1),
-             revision INTEGER NOT NULL DEFAULT 1,
-             currency TEXT NOT NULL DEFAULT 'USD',
-             updated_at REAL NOT NULL
-         );
-         CREATE TABLE IF NOT EXISTS runtime_model_prices (
-             id INTEGER PRIMARY KEY,
-             model_key TEXT NOT NULL,
-             effective_from REAL NOT NULL,
-             effective_to REAL,
-             input_per_million_micros INTEGER,
-             output_per_million_micros INTEGER,
-             cache_read_per_million_micros INTEGER,
-             cache_creation_per_million_micros INTEGER,
-             created_at REAL NOT NULL,
-             updated_at REAL NOT NULL,
-             UNIQUE(model_key,effective_from),
-             CHECK(effective_to IS NULL OR effective_to>effective_from),
-             CHECK(input_per_million_micros IS NULL OR input_per_million_micros>=0),
-             CHECK(output_per_million_micros IS NULL OR output_per_million_micros>=0),
-             CHECK(cache_read_per_million_micros IS NULL OR cache_read_per_million_micros>=0),
-             CHECK(cache_creation_per_million_micros IS NULL OR cache_creation_per_million_micros>=0)
-         );
-         CREATE INDEX IF NOT EXISTS runtime_model_prices_lookup_v2
-             ON runtime_model_prices(model_key,effective_from DESC);",
-    )?;
-    let rollup_columns = {
-        let mut statement = transaction.prepare("PRAGMA table_info(runtime_hourly_rollups)")?;
-        statement
-            .query_map([], |row| row.get::<_, String>(1))?
-            .collect::<Result<HashSet<_>, _>>()?
-    };
-    let required_rollup_columns = [
-        ("bucket_end", "INTEGER NOT NULL DEFAULT 0"),
-        ("max_seq", "INTEGER NOT NULL DEFAULT 0"),
-        ("duration_slow_count", "INTEGER NOT NULL DEFAULT 0"),
-        ("duration_critical_count", "INTEGER NOT NULL DEFAULT 0"),
-        ("ttfb_slow_count", "INTEGER NOT NULL DEFAULT 0"),
-        ("ttfb_critical_count", "INTEGER NOT NULL DEFAULT 0"),
-        ("client_unknown_results", "INTEGER NOT NULL DEFAULT 0"),
-        ("failover_terminal_requests", "INTEGER NOT NULL DEFAULT 0"),
-        ("failover_recovered_requests", "INTEGER NOT NULL DEFAULT 0"),
-        ("upstream_attempts", "INTEGER NOT NULL DEFAULT 0"),
-        ("upstream_successes", "INTEGER NOT NULL DEFAULT 0"),
-        ("upstream_failures", "INTEGER NOT NULL DEFAULT 0"),
-        ("accounting_known_requests", "INTEGER NOT NULL DEFAULT 0"),
-        ("accounting_unknown_requests", "INTEGER NOT NULL DEFAULT 0"),
-        ("cache_read_reported_requests", "INTEGER NOT NULL DEFAULT 0"),
-        ("cache_read_hit_requests", "INTEGER NOT NULL DEFAULT 0"),
-        ("cache_read_token_numerator", "INTEGER NOT NULL DEFAULT 0"),
-        ("cache_read_token_denominator", "INTEGER NOT NULL DEFAULT 0"),
-        ("input_tokens_present", "INTEGER NOT NULL DEFAULT 0"),
-        ("output_tokens_present", "INTEGER NOT NULL DEFAULT 0"),
-        (
-            "cache_read_input_tokens_present",
-            "INTEGER NOT NULL DEFAULT 0",
-        ),
-        (
-            "cache_creation_input_tokens_present",
-            "INTEGER NOT NULL DEFAULT 0",
-        ),
-        ("reasoning_tokens_present", "INTEGER NOT NULL DEFAULT 0"),
-        (
-            "cost_accounting_complete_requests",
-            "INTEGER NOT NULL DEFAULT 0",
-        ),
-        (
-            "cost_unknown_accounting_requests",
-            "INTEGER NOT NULL DEFAULT 0",
-        ),
-        ("cost_numerator", "INTEGER NOT NULL DEFAULT 0"),
-        ("cost_priced_requests", "INTEGER NOT NULL DEFAULT 0"),
-        ("cost_unpriced_requests", "INTEGER NOT NULL DEFAULT 0"),
-        ("cost_unknown_requests", "INTEGER NOT NULL DEFAULT 0"),
-        ("cost_price_revision", "INTEGER"),
-        ("updated_at", "REAL NOT NULL DEFAULT 0"),
-    ];
-    for (name, definition) in required_rollup_columns {
-        if !rollup_columns.contains(name) {
-            transaction.execute_batch(&format!(
-                "ALTER TABLE runtime_hourly_rollups ADD COLUMN {name} {definition};"
-            ))?;
-        }
-    }
-    // A v3 database may already have the rollup table while the cost columns
-    // were introduced by a later v3 patch. Rebuild those buckets once so a
-    // stale zero-cost row is never served as a complete trend.
-    if !rollup_columns.contains("cost_numerator")
-        || !rollup_columns.contains("cost_priced_requests")
-        || !rollup_columns.contains("cost_unpriced_requests")
-        || !rollup_columns.contains("cost_unknown_requests")
-    {
-        transaction.execute("DELETE FROM runtime_hourly_rollups", [])?;
-        transaction.execute(
-            "INSERT OR IGNORE INTO runtime_hourly_rollup_dirty(bucket_start)
-             SELECT DISTINCT (CAST(timestamp AS INTEGER) / 3600) * 3600
-             FROM runtime_events WHERE is_in_flight=0 AND kind IN ('client','upstream')",
-            [],
-        )?;
-        set_meta(&transaction, "hourly_rollup_complete", 0)?;
-    }
-    transaction.commit()
-}
-
-pub(super) fn create_projection_indexes(connection: &Connection) -> rusqlite::Result<()> {
+pub(super) fn create_projection_indexes(connection: &Connection) -> crate::database::Result<()> {
     connection.execute_batch(
         "CREATE INDEX IF NOT EXISTS runtime_events_inflight_change_v2
              ON runtime_events(change_seq) WHERE is_in_flight=1;
@@ -434,7 +166,7 @@ pub(super) fn hourly_bucket_start(timestamp: f64) -> i64 {
 pub(super) fn mark_hourly_rollup_bucket(
     connection: &Connection,
     bucket_start: i64,
-) -> rusqlite::Result<()> {
+) -> crate::database::Result<()> {
     connection.execute(
         "INSERT OR IGNORE INTO runtime_hourly_rollup_dirty(bucket_start) VALUES(?1)",
         params![bucket_start],
@@ -445,7 +177,7 @@ pub(super) fn mark_hourly_rollup_bucket(
 pub(super) fn mark_event_hourly_rollup_dirty(
     connection: &Connection,
     event: &RuntimeEvent,
-) -> rusqlite::Result<()> {
+) -> crate::database::Result<()> {
     if event.kind == KIND_CLIENT && !event.is_in_flight() {
         mark_hourly_rollup_bucket(connection, hourly_bucket_start(event.timestamp))?;
     }
@@ -455,7 +187,7 @@ pub(super) fn mark_event_hourly_rollup_dirty(
 pub(super) fn mark_request_hourly_rollups_dirty(
     connection: &Connection,
     request_id: &str,
-) -> rusqlite::Result<()> {
+) -> crate::database::Result<()> {
     connection.execute(
         "INSERT OR IGNORE INTO runtime_hourly_rollup_dirty(bucket_start)
          SELECT DISTINCT (CAST(timestamp AS INTEGER) / 3600) * 3600
@@ -542,12 +274,12 @@ pub(super) fn split_rollup_price_key(value: String) -> (Option<String>, String) 
 }
 
 pub(super) fn load_rollup_prices(
-    transaction: &rusqlite::Transaction<'_>,
-) -> rusqlite::Result<(Option<i64>, Vec<RollupPrice>)> {
+    transaction: &crate::database::Transaction<'_>,
+) -> crate::database::Result<(Option<i64>, Vec<RollupPrice>)> {
     let revision = transaction
         .query_row(
             "SELECT revision FROM runtime_pricing_meta WHERE id=1",
-            [],
+            crate::database::params![],
             |row| row.get::<_, i64>(0),
         )
         .optional()?;
@@ -558,7 +290,7 @@ pub(super) fn load_rollup_prices(
          FROM runtime_model_prices ORDER BY model_key,effective_from DESC,id DESC",
     )?;
     let prices = statement
-        .query_map([], |row| {
+        .query_map(crate::database::params![], |row| {
             let (endpoint_id, model_key) = split_rollup_price_key(row.get(0)?);
             Ok(RollupPrice {
                 endpoint_id,
@@ -680,7 +412,7 @@ pub(super) fn add_optional_token(total: &mut i64, presence: &mut i64, value: Opt
 pub(super) fn rebuild_hourly_rollup_bucket(
     connection: &mut Connection,
     bucket_start: i64,
-) -> rusqlite::Result<bool> {
+) -> crate::database::Result<bool> {
     let transaction = connection.transaction()?;
     let bucket_end = bucket_start.saturating_add(3_600);
     let mut accumulator = HourlyRollupAccumulator::default();
@@ -990,13 +722,13 @@ pub(super) fn rebuild_hourly_rollup_bucket(
     )?;
     let dirty_exists = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM runtime_hourly_rollup_dirty LIMIT 1)",
-        [],
+        crate::database::params![],
         |row| row.get::<_, bool>(0),
     )?;
     if !dirty_exists && meta_i64(&transaction, "projection_backfill_complete")?.unwrap_or(0) == 1 {
         let max_seq = transaction.query_row(
             "SELECT COALESCE(MAX(seq),0) FROM runtime_events WHERE is_in_flight=0",
-            [],
+            crate::database::params![],
             |row| row.get::<_, i64>(0),
         )?;
         set_meta(&transaction, "hourly_rollup_max_seq", max_seq)?;
@@ -1011,10 +743,12 @@ pub(super) fn rebuild_hourly_rollup_bucket(
     Ok(dirty_exists)
 }
 
-pub(super) fn projection_maintenance_needed(connection: &Connection) -> rusqlite::Result<bool> {
+pub(super) fn projection_maintenance_needed(
+    connection: &Connection,
+) -> crate::database::Result<bool> {
     let rollup_dirty = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM runtime_hourly_rollup_dirty LIMIT 1)",
-        [],
+        crate::database::params![],
         |row| row.get::<_, bool>(0),
     )?;
     Ok(
@@ -1025,7 +759,9 @@ pub(super) fn projection_maintenance_needed(connection: &Connection) -> rusqlite
     )
 }
 
-pub(super) fn backfill_projection_batch(connection: &mut Connection) -> rusqlite::Result<bool> {
+pub(super) fn backfill_projection_batch(
+    connection: &mut Connection,
+) -> crate::database::Result<bool> {
     let transaction = connection.transaction()?;
     let rows = {
         let mut statement = transaction.prepare(
@@ -1083,7 +819,7 @@ pub(super) fn backfill_projection_batch(connection: &mut Connection) -> rusqlite
     Ok(more)
 }
 
-pub(super) fn advance_projection_indexes(connection: &Connection) -> rusqlite::Result<bool> {
+pub(super) fn advance_projection_indexes(connection: &Connection) -> crate::database::Result<bool> {
     let indexes = [
         (
             "runtime_events_inflight_change_v2",
@@ -1125,7 +861,7 @@ pub(super) fn advance_projection_indexes(connection: &Connection) -> rusqlite::R
             |row| row.get::<_, bool>(0),
         )?;
         if !exists {
-            connection.execute(sql, [])?;
+            connection.execute(sql, crate::database::params![])?;
             return Ok(true);
         }
     }
@@ -1138,7 +874,9 @@ pub(super) fn advance_projection_indexes(connection: &Connection) -> rusqlite::R
     Ok(false)
 }
 
-pub(super) fn run_projection_maintenance(connection: &mut Connection) -> rusqlite::Result<bool> {
+pub(super) fn run_projection_maintenance(
+    connection: &mut Connection,
+) -> crate::database::Result<bool> {
     if meta_i64(connection, "projection_backfill_complete")?.unwrap_or(0) == 0 {
         let more = backfill_projection_batch(connection)?;
         if more {
@@ -1153,8 +891,7 @@ pub(super) fn run_projection_maintenance(connection: &mut Connection) -> rusqlit
     }
     let dirty_bucket = connection
         .query_row(
-            "SELECT bucket_start FROM runtime_hourly_rollup_dirty ORDER BY bucket_start ASC LIMIT 1",
-            [],
+            "SELECT bucket_start FROM runtime_hourly_rollup_dirty ORDER BY bucket_start ASC LIMIT 1", crate::database::params![],
             |row| row.get::<_, i64>(0),
         )
         .optional()?;
@@ -1164,7 +901,7 @@ pub(super) fn run_projection_maintenance(connection: &mut Connection) -> rusqlit
     if meta_i64(connection, "hourly_rollup_complete")?.unwrap_or(0) == 0 {
         let max_seq = connection.query_row(
             "SELECT COALESCE(MAX(seq),0) FROM runtime_events WHERE is_in_flight=0",
-            [],
+            crate::database::params![],
             |row| row.get::<_, i64>(0),
         )?;
         set_meta(connection, "hourly_rollup_max_seq", max_seq)?;
@@ -1181,10 +918,10 @@ pub(super) fn run_projection_maintenance(connection: &mut Connection) -> rusqlit
 pub(super) fn database_issue_on(
     connection: &Connection,
 ) -> Result<Option<super::RuntimeDatabaseIssue>, String> {
-    let inspect = || -> rusqlite::Result<Option<super::RuntimeDatabaseIssue>> {
+    let inspect = || -> crate::database::Result<Option<super::RuntimeDatabaseIssue>> {
         let tables = connection
             .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'runtime_%'")?
-            .query_map([], |row| row.get::<_, String>(0))?
+            .query_map(crate::database::params![], |row| row.get::<_, String>(0))?
             .collect::<Result<HashSet<_>, _>>()?;
         if tables.is_empty() {
             return Ok(None);
@@ -1207,7 +944,7 @@ pub(super) fn database_issue_on(
         if !incompatible && tables.contains("runtime_events") {
             let columns = connection
                 .prepare("PRAGMA table_info(runtime_events)")?
-                .query_map([], |row| row.get::<_, String>(1))?
+                .query_map(crate::database::params![], |row| row.get::<_, String>(1))?
                 .collect::<Result<HashSet<_>, _>>()?;
             incompatible = [
                 "projection_version",

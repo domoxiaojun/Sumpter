@@ -484,6 +484,10 @@ export function RunPage() {
   const selectedGrokMetadata = eventGrokMetadata(selectedEvent);
   const selectedCodexHasIdentity = codexHasRequestIdentity(selectedCodexMetadata);
   const selectedClientDeclared = eventField(selectedEvent, 'clientDeclared', 'client_declared') || {};
+  const selectedDeclaredProject = String(selectedClientDeclared.project ?? '').trim();
+  const selectedDeclaredWorkspace = String(selectedClientDeclared.workspace ?? '').trim();
+  const selectedDeclaredRemote = String(selectedClientDeclared.gitRemote ?? selectedClientDeclared.git_remote ?? '').trim();
+  const selectedDeclaredUser = String(selectedClientDeclared.user ?? '').trim();
   const selectedSourceProject = String(selectedClientDeclared.sourceProject ?? selectedClientDeclared.source_project ?? '').trim();
   const selectedSourceWorkspace = String(selectedClientDeclared.sourceWorkspace ?? selectedClientDeclared.source_workspace ?? '').trim();
   const selectedProjectContext = eventProjectContext(selectedEvent);
@@ -785,6 +789,20 @@ export function RunPage() {
             data-page-direction={eventPageDirection}
             aria-busy={eventHistory.loading}
           >
+            {eventHistory.mode === 'page' ? (
+              <PaginationBar
+                page={eventHistory.page}
+                pageSize={eventHistory.pageSize}
+                totalCount={eventHistory.totalCount}
+                totalPages={eventHistory.totalPages}
+                itemCount={visibleEvents.length}
+                liveItemCount={eventHistory.liveEventCount}
+                loading={eventHistory.loading}
+                onPageChange={changeEventPage}
+                onPageSizeChange={changeEventPageSize}
+                ariaLabel="持久事件分页"
+              />
+            ) : null}
             <div className="event-page-content">
               <div className="telemetry-live-mobile">
                 <LiveEventList
@@ -833,20 +851,7 @@ export function RunPage() {
               </div>
             )}
           </div>
-          {eventHistory.mode === 'page' ? (
-            <PaginationBar
-              page={eventHistory.page}
-              pageSize={eventHistory.pageSize}
-              totalCount={eventHistory.totalCount}
-              totalPages={eventHistory.totalPages}
-              itemCount={visibleEvents.length}
-              liveItemCount={eventHistory.liveEventCount}
-              loading={eventHistory.loading}
-              onPageChange={changeEventPage}
-              onPageSizeChange={changeEventPageSize}
-              ariaLabel="持久事件分页"
-            />
-          ) : eventHistory.mode === 'legacy' ? (
+          {eventHistory.mode === 'legacy' ? (
             <div className="event-page-compatibility" role="status">
               当前 daemon 尚未提供全量快照分页，暂时显示最近事件；升级 daemon 后可选择每页 10 / 25 / 50 / 100 / 200 条。
             </div>
@@ -874,7 +879,7 @@ export function RunPage() {
                 </span>
               </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div className="request-chain-list" key={selectedRequestID} role="region" aria-label="请求链事件列表">
                 {requestChain.map((ev, idx) => {
                   const isCur = ev.id === selectedEvent.id;
                   const isClient = ev.kind === 'client';
@@ -1018,14 +1023,38 @@ export function RunPage() {
                 </div>
                 {selectedSourceProject && (
                   <div>
-                    <span>源项目</span>
+                    <span>客户端原始项目</span>
                     <strong className="mono-cell">{selectedSourceProject}</strong>
                   </div>
                 )}
                 {selectedSourceWorkspace && (
                   <div>
-                    <span>源工作区</span>
+                    <span>客户端原始工作区</span>
                     <strong className="mono-cell">{selectedSourceWorkspace}</strong>
+                  </div>
+                )}
+                {selectedDeclaredProject && (
+                  <div>
+                    <span>客户端声明项目</span>
+                    <strong className="mono-cell">{selectedDeclaredProject}</strong>
+                  </div>
+                )}
+                {selectedDeclaredWorkspace && (
+                  <div>
+                    <span>客户端声明工作区</span>
+                    <strong className="mono-cell">{selectedDeclaredWorkspace}</strong>
+                  </div>
+                )}
+                {selectedDeclaredRemote && (
+                  <div>
+                    <span>客户端声明 Git 仓库</span>
+                    <strong className="mono-cell">{selectedDeclaredRemote}</strong>
+                  </div>
+                )}
+                {selectedDeclaredUser && (
+                  <div>
+                    <span>客户端声明用户</span>
+                    <strong className="mono-cell">{selectedDeclaredUser}</strong>
                   </div>
                 )}
                 {selectedCodexHasIdentity && (

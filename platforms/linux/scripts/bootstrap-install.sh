@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Download the current architecture package from GitHub Releases (or another
 # HTTPS root) and invoke the package's transactional installer. This bootstrap
-# intentionally does not verify a SHA-256 checksum; it still rejects unsafe
-# archive layouts. Prefer scripts/install.sh --repo for checksum verification.
+# verifies the architecture-specific SHA-256 checksum before inspecting or
+# extracting the archive. The HTTPS root must also provide SHA256SUMS.
 #
 # Bootstrap-only options: --base-url, -h/--help.
 # All other arguments (and values after --) are forwarded to package install.sh,
@@ -37,11 +37,11 @@ usage() {
 `~/.local/share/sumpter/scripts/`）。客户端主机也可从仓库 raw 下载统一安装器：
 https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/setup-client-attribution.sh
 
-需要 SHA-256 校验或钉死版本时，请使用 scripts/install.sh --repo domoxiaojun/sumpter [--version vX.Y.Z]，
+需要钉死版本时，请使用 scripts/install.sh --repo domoxiaojun/sumpter [--version vX.Y.Z]，
 不要把 --repo/--version 加在本脚本后。
 
 引导脚本自身选项:
-  --base-url HTTPS_URL  覆盖下载根目录（须提供同名 tar.gz）
+  --base-url HTTPS_URL  覆盖下载根目录（须提供同名 tar.gz 和 SHA256SUMS）
   -h, --help            显示帮助
 
 其余参数原样传给包内 scripts/install.sh，例如（高级路径覆盖）:
@@ -56,8 +56,9 @@ https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scrip
   bash sumpter-install.sh --admin-password-file /absolute/path/admin-password
   SUMPTER_ADMIN_PASSWORD_FILE=/absolute/path/admin-password bash sumpter-install.sh
 
-注意: 此引导安装器按发布方要求不校验 SHA-256。它仍会拒绝路径穿越、
-符号链接和错误的发布包根目录，但 HTTPS 传输与镜像内容本身仍须由发布方负责。
+下载包必须与同目录 SHA256SUMS 中当前架构的唯一校验值匹配，否则停止安装。
+同时拒绝路径穿越、符号链接和错误的发布包根目录。校验清单与发布包来自同一
+HTTPS 源，校验用于验证完整性，不替代发布方身份签名。
 安装器会生成配置目录/admin-password；首次登录用户名为 kkl，之后可在 WebUI 安全页修改。
 Admin API/SSE 使用会话 Cookie；公网仍必须使用外层 HTTPS，推荐保持 Admin loopback 绑定。
 
@@ -130,7 +131,7 @@ DOWNLOAD_BASE="${DOWNLOAD_BASE%/}"
 [[ "$DOWNLOAD_BASE" != "https:" && "$DOWNLOAD_BASE" != "https://" ]] \
     || die "--base-url 缺少主机名"
 
-for command_name in curl env find grep mktemp tar touch uname; do
+for command_name in awk curl env find grep mktemp sha256sum tar touch uname; do
     command -v "$command_name" >/dev/null 2>&1 || die "远程安装缺少命令:$command_name"
 done
 
@@ -177,12 +178,35 @@ package_name="sumpter-linux-${arch}"
 archive_url="$DOWNLOAD_BASE/${package_name}.tar.gz"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sumpter-bootstrap.XXXXXX")"
 archive="$WORK_DIR/${package_name}.tar.gz"
+sums="$WORK_DIR/SHA256SUMS"
 
 note "下载:$archive_url"
-note "按配置跳过 SHA-256 校验"
 curl --fail --location --silent --show-error \
     --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 --connect-timeout 15 --max-time 600 \
     --output "$archive" "$archive_url"
+curl --fail --location --silent --show-error \
+    --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 --connect-timeout 15 --max-time 600 \
+    --output "$sums" "$DOWNLOAD_BASE/SHA256SUMS"
+expected_hash="$(awk -v wanted="${package_name}.tar.gz" '
+    {
+        name = $2
+        sub(/^\*/, "", name)
+        sub(/^\.\//, "", name)
+        sub(/\r$/, "", name)
+        if (name == wanted) {
+            count++
+            hash = $1
+            if (NF != 2 || length(hash) != 64 || hash ~ /[^0-9A-Fa-f]/) invalid = 1
+        }
+    }
+    END {
+        if (count != 1 || invalid) exit 1
+        print tolower(hash)
+    }
+' "$sums")" || die "SHA256SUMS 必须且只能包含一条 ${package_name}.tar.gz 的 64 位校验值"
+actual_hash="$(sha256sum "$archive" | awk '{print tolower($1)}')"
+[[ "$actual_hash" == "$expected_hash" ]] || die "SHA-256 校验失败:${package_name}.tar.gz"
+note "SHA-256 校验通过:${package_name}.tar.gz"
 validate_archive_paths "$archive" "$package_name"
 
 mkdir -p "$WORK_DIR/extracted"

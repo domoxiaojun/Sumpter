@@ -1,6 +1,6 @@
 //! Runtime query facets domain.
 
-use rusqlite::params_from_iter;
+use crate::database::params_from_iter;
 
 use super::{
     API_VERSION, AnalyticsFacetRow, AnalyticsFacets, Connection, HashMap, PROJECTION_VERSION, Path,

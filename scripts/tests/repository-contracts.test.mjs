@@ -35,3 +35,13 @@ test('shared crates do not depend on platform crates and obsolete workflows stay
     assert.equal(existsSync(new URL(`platforms/linux/.github/workflows/${name}.yml`, root)), false);
   }
 });
+test('macOS build paths pin the same stable Xcode and SDK baseline', () => {
+  const selector = text('platforms/macos/app/select-xcode.sh');
+  assert.match(selector, /required_version=26\.6/);
+  assert.match(selector, /required_build=17F113/);
+  assert.match(selector, /required_sdk=26\.5/);
+  for (const workflow of ['.github/workflows/ci.yml', '.github/workflows/release.yml']) {
+    assert.match(text(workflow), /runs-on: macos-26/);
+    assert.match(text(workflow), /select-xcode\.sh/);
+  }
+});

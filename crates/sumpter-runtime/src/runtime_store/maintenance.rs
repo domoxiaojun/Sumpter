@@ -24,7 +24,7 @@ pub(super) fn refresh_cached_storage(
     inner: &Arc<Inner>,
     connection: &Connection,
     force: bool,
-) -> rusqlite::Result<()> {
+) -> crate::database::Result<()> {
     let should_refresh = force
         || inner.state.lock().unwrap().storage_refreshed_at.elapsed() >= Duration::from_secs(1);
     if !should_refresh {
@@ -42,7 +42,7 @@ pub(super) fn reconcile_rotation_state(
     inner: &Arc<Inner>,
     connection: &Connection,
     rotation: &StorageRotation,
-) -> rusqlite::Result<()> {
+) -> crate::database::Result<()> {
     if rotation.deleted_event_ids.is_empty() {
         return Ok(());
     }
@@ -61,7 +61,7 @@ pub(super) fn reconcile_rotation_state(
 pub(super) fn run_retention_maintenance(
     inner: &Arc<Inner>,
     connection: &mut Connection,
-) -> rusqlite::Result<bool> {
+) -> crate::database::Result<bool> {
     let rotation = rotate_retention_now(connection)?;
     if rotation.deleted_event_ids.is_empty() {
         return Ok(false);
@@ -75,13 +75,13 @@ pub(super) fn commit_pending(
     inner: &Arc<Inner>,
     connection: &mut Connection,
     pending: &mut PendingBatch,
-) -> rusqlite::Result<()> {
+) -> crate::database::Result<()> {
     if pending.is_empty() {
         return Ok(());
     }
     #[cfg(test)]
     if inner.fail_writes.load(Ordering::Acquire) {
-        return Err(rusqlite::Error::InvalidQuery);
+        return Err(crate::database::Error::InvalidQuery);
     }
     let mut batch = pending.take();
     batch.sort_by_key(|message| message.change_seq);
@@ -130,20 +130,15 @@ pub(super) fn validate_retention_update(update: &RuntimeRetentionUpdate) -> Resu
 pub(super) fn load_retention_mutation(
     connection: &Connection,
 ) -> Result<RuntimeRetentionMutation, String> {
-    connection
-        .query_row(
-            "SELECT revision
-             FROM runtime_retention WHERE id=1",
-            [],
-            |row| {
-                Ok(RuntimeRetentionMutation {
-                    revision: row.get(0)?,
-                    max_age_days: meta_i64(connection, "retention_max_age_days")?,
-                    storage_limit_bytes: meta_i64(connection, "storage_limit_bytes")?,
-                })
-            },
-        )
-        .map_err(|error| error.to_string())
+    Ok(RuntimeRetentionMutation {
+        revision: super::models::retention(connection)
+            .map_err(|error| error.to_string())?
+            .revision,
+        max_age_days: meta_i64(connection, "retention_max_age_days")
+            .map_err(|error| error.to_string())?,
+        storage_limit_bytes: meta_i64(connection, "storage_limit_bytes")
+            .map_err(|error| error.to_string())?,
+    })
 }
 
 pub(super) fn set_retention_database(
@@ -155,13 +150,9 @@ pub(super) fn set_retention_database(
     let transaction = connection
         .transaction()
         .map_err(|error| error.to_string())?;
-    let revision = transaction
-        .query_row(
-            "SELECT revision FROM runtime_retention WHERE id=1",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .map_err(|error| error.to_string())?;
+    let revision = super::models::retention(&transaction)
+        .map_err(|error| error.to_string())?
+        .revision;
     if revision != update.expected_revision {
         return Err(format!(
             "retention_revision_conflict: expected {}, current {revision}",
@@ -169,11 +160,7 @@ pub(super) fn set_retention_database(
         ));
     }
     let next_revision = revision.saturating_add(1);
-    transaction
-        .execute(
-            "UPDATE runtime_retention SET revision=?1,updated_at=?2 WHERE id=1",
-            params![next_revision, now()],
-        )
+    super::models::save_retention_revision(&transaction, next_revision)
         .map_err(|error| error.to_string())?;
     set_retention_max_age_meta(&transaction, update.max_age_days)
         .map_err(|error| error.to_string())?;
@@ -252,13 +239,8 @@ pub(super) fn replace_pricing_database(
     let transaction = connection
         .transaction()
         .map_err(|error| error.to_string())?;
-    let revision = transaction
-        .query_row(
-            "SELECT revision FROM runtime_pricing_meta WHERE id=1",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .map_err(|error| error.to_string())?;
+    let revision =
+        super::models::pricing_revision(&transaction).map_err(|error| error.to_string())?;
     if revision != update.expected_revision {
         return Err(format!(
             "pricing_revision_conflict: expected {}, current {revision}",
@@ -266,63 +248,32 @@ pub(super) fn replace_pricing_database(
         ));
     }
     let next_revision = revision.saturating_add(1);
-    transaction
-        .execute("DELETE FROM runtime_model_prices", [])
+    super::models::save_pricing(&transaction, &update, next_revision)
         .map_err(|error| error.to_string())?;
-    let updated_at = now();
-    for price in &update.prices {
-        transaction
-            .execute(
-                "INSERT INTO runtime_model_prices(
-                    model_key,effective_from,effective_to,input_per_million_micros,
-                    output_per_million_micros,cache_read_per_million_micros,
-                    cache_creation_per_million_micros,created_at,updated_at
-                 ) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?8)",
-                params![
-                    price
-                        .endpoint_id
-                        .as_deref()
-                        .filter(|value| !value.trim().is_empty())
-                        .map(|endpoint| format!("{endpoint}\u{1f}{}", price.model_key.trim()))
-                        .unwrap_or_else(|| price.model_key.trim().to_owned()),
-                    price.effective_from,
-                    price.effective_to,
-                    price.input_per_million_micros,
-                    price.output_per_million_micros,
-                    price.cache_read_per_million_micros,
-                    price.cache_creation_per_million_micros,
-                    updated_at,
-                ],
-            )
-            .map_err(|error| error.to_string())?;
-    }
     let currency = update.currency.trim().to_owned();
-    transaction
-        .execute(
-            "UPDATE runtime_pricing_meta SET revision=?1,currency=?2,updated_at=?3 WHERE id=1",
-            params![next_revision, currency, updated_at],
-        )
-        .map_err(|error| error.to_string())?;
     // Pricing is part of the rollup contract.  Never serve a bucket whose
     // cost was computed with the previous revision: clear the materialized
     // rows, mark every retained terminal-event bucket dirty, and let the
     // normal worker rebuild it before a rollup-backed trend is considered
     // complete.  The original event projections remain untouched.
     transaction
-        .execute("DELETE FROM runtime_hourly_rollups", [])
+        .execute(
+            "DELETE FROM runtime_hourly_rollups",
+            crate::database::params![],
+        )
         .map_err(|error| error.to_string())?;
     transaction
         .execute(
             "INSERT OR IGNORE INTO runtime_hourly_rollup_dirty(bucket_start)
              SELECT DISTINCT (CAST(timestamp AS INTEGER) / 3600) * 3600
              FROM runtime_events WHERE is_in_flight=0 AND kind IN ('client','upstream')",
-            [],
+            crate::database::params![],
         )
         .map_err(|error| error.to_string())?;
     let dirty = transaction
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM runtime_hourly_rollup_dirty LIMIT 1)",
-            [],
+            crate::database::params![],
             |row| row.get::<_, bool>(0),
         )
         .map_err(|error| error.to_string())?;
@@ -345,12 +296,18 @@ pub(super) fn replace_pricing_database(
 pub(super) fn reset_database(
     inner: &Arc<Inner>,
     connection: &mut Connection,
-) -> Result<i64, rusqlite::Error> {
+) -> Result<i64, crate::database::Error> {
     let transaction = connection.transaction()?;
-    transaction.execute("DELETE FROM runtime_events", [])?;
-    transaction.execute("DELETE FROM runtime_hourly_rollups", [])?;
-    transaction.execute("DELETE FROM runtime_hourly_rollup_dirty", [])?;
-    transaction.execute("UPDATE runtime_counters SET client_requests=0,client_successes=0,client_failures=0,upstream_attempts=0,upstream_successes=0,upstream_failures=0,failovers=0 WHERE id=1", [])?;
+    transaction.execute("DELETE FROM runtime_events", crate::database::params![])?;
+    transaction.execute(
+        "DELETE FROM runtime_hourly_rollups",
+        crate::database::params![],
+    )?;
+    transaction.execute(
+        "DELETE FROM runtime_hourly_rollup_dirty",
+        crate::database::params![],
+    )?;
+    transaction.execute("UPDATE runtime_counters SET client_requests=0,client_successes=0,client_failures=0,upstream_attempts=0,upstream_successes=0,upstream_failures=0,failovers=0 WHERE id=1", crate::database::params![])?;
     let generation = meta_i64(&transaction, "reset_generation")?.unwrap_or(0) + 1;
     set_meta(&transaction, "reset_generation", generation)?;
     let history_generation = meta_i64(&transaction, "history_generation")?.unwrap_or(0) + 1;
@@ -395,7 +352,7 @@ type ExpiredEventRow = (String, Option<String>, String, f64);
 pub(super) fn cleanup_before_ids(
     connection: &Connection,
     older_than: f64,
-) -> rusqlite::Result<Vec<ExpiredEventRow>> {
+) -> crate::database::Result<Vec<ExpiredEventRow>> {
     let mut statement = connection.prepare(
         "SELECT event_id,request_id,kind,timestamp
          FROM runtime_events AS candidate
@@ -434,7 +391,7 @@ pub(super) fn cleanup_before_ids(
 pub(super) fn cleanup_before_preview_database(
     connection: &Connection,
     older_than: f64,
-) -> rusqlite::Result<RuntimeCleanupPreview> {
+) -> crate::database::Result<RuntimeCleanupPreview> {
     let deletable = cleanup_before_ids(connection, older_than)?;
     let deletable_events = deletable.len() as i64;
     let deletable_requests = deletable
@@ -449,9 +406,11 @@ pub(super) fn cleanup_before_preview_database(
         })
         .collect::<HashSet<_>>()
         .len() as i64;
-    let retained = connection.query_row("SELECT COUNT(*) FROM runtime_events", [], |row| {
-        row.get::<_, i64>(0)
-    })?;
+    let retained = connection.query_row(
+        "SELECT COUNT(*) FROM runtime_events",
+        crate::database::params![],
+        |row| row.get::<_, i64>(0),
+    )?;
     Ok(RuntimeCleanupPreview {
         older_than,
         deletable_events,
@@ -464,14 +423,15 @@ pub(super) fn cleanup_before_database(
     inner: &Arc<Inner>,
     connection: &mut Connection,
     older_than: f64,
-) -> rusqlite::Result<RuntimeCleanupMutation> {
+) -> crate::database::Result<RuntimeCleanupMutation> {
     let transaction = connection.transaction()?;
     let deletable = cleanup_before_ids(&transaction, older_than)?;
     if deletable.is_empty() {
-        let remaining_events =
-            transaction.query_row("SELECT COUNT(*) FROM runtime_events", [], |row| {
-                row.get::<_, i64>(0)
-            })?;
+        let remaining_events = transaction.query_row(
+            "SELECT COUNT(*) FROM runtime_events",
+            crate::database::params![],
+            |row| row.get::<_, i64>(0),
+        )?;
         let history_generation = meta_i64(&transaction, "history_generation")?.unwrap_or(0);
         transaction.commit()?;
         return Ok(RuntimeCleanupMutation {
@@ -524,14 +484,14 @@ pub(super) fn cleanup_before_database(
         .len() as i64;
     let history_generation = meta_i64(&transaction, "history_generation")?.unwrap_or(0) + 1;
     set_meta(&transaction, "history_generation", history_generation)?;
-    let retained_events =
-        transaction.query_row("SELECT COUNT(*) FROM runtime_events", [], |row| {
-            row.get::<_, i64>(0)
-        })?;
+    let retained_events = transaction.query_row(
+        "SELECT COUNT(*) FROM runtime_events",
+        crate::database::params![],
+        |row| row.get::<_, i64>(0),
+    )?;
     set_meta(&transaction, "retained_event_count", retained_events)?;
     let retained_from_seq = transaction.query_row(
-        "SELECT COALESCE(MIN(seq), COALESCE((SELECT CAST(value AS INTEGER) FROM runtime_meta WHERE key='next_seq'),1)) FROM runtime_events",
-        [],
+        "SELECT COALESCE(MIN(seq), COALESCE((SELECT CAST(value AS INTEGER) FROM runtime_meta WHERE key='next_seq'),1)) FROM runtime_events", crate::database::params![],
         |row| row.get::<_, i64>(0),
     )?;
     set_meta(&transaction, "retained_from_seq", retained_from_seq)?;
@@ -565,14 +525,14 @@ pub(super) fn cleanup_before_database(
 pub(super) fn recreate_database(
     inner: &Arc<Inner>,
     connection: &mut Connection,
-) -> Result<i64, rusqlite::Error> {
+) -> Result<i64, crate::database::Error> {
     let generation = rebuild_schema(connection)?;
     refresh_cached_storage(inner, connection, true)?;
     inner.state.lock().unwrap().last_commit_at = Some(now());
     Ok(generation)
 }
 
-pub(super) fn rebuild_schema(connection: &mut Connection) -> rusqlite::Result<i64> {
+pub(super) fn rebuild_schema(connection: &mut Connection) -> crate::database::Result<i64> {
     let previous_generation = meta_i64(connection, "reset_generation")
         .ok()
         .flatten()

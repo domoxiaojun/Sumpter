@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>请求链滚动验收</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      if (new URLSearchParams(location.search).get('mock') !== '1') throw new Error('Mock mode required');
+      const { mockRuntime, mockRuntimeHistory } = await import('/src/services/mockData.js');
+      const template = structuredClone(mockRuntime.recentEvents.find((event) => event.kind === 'client' && event.phase === 'completed'));
+      const now = Date.now();
+      const client = {
+        ...template, id: 'scroll-client', requestID: 'scroll-long', timestamp: now - 1000,
+        clientKind: 'codex', clientModel: 'gpt-6-astra', effectiveModel: 'gpt-6-astra', upstreamModel: 'gpt-6-astra',
+        endpointID: 'scroll-endpoint', endpointName: '滚动验收入口', upstreamHost: 'example.invalid', failover: false,
+      };
+      const attempts = Array.from({ length: 10 }, (_, index) => ({
+        ...client, id: `scroll-attempt-${index + 1}`, kind: 'upstream', timestamp: now - 12000 + index * 1000,
+        statusCode: index === 9 ? 200 : 500, upstreamStatusCode: index === 9 ? 200 : 500,
+        outcome: index === 9 ? 'succeeded' : 'failed', upstreamRequestID: `preview-attempt-${index + 1}`,
+        message: index === 9 ? '流式输出完成' : '上游返回 HTTP 500',
+      }));
+      const shortClient = { ...client, id: 'scroll-short-client', requestID: 'scroll-short', timestamp: now - 30000, endpointName: '短列表验收入口' };
+      mockRuntime.recentEvents = [client, ...attempts, shortClient];
+      mockRuntimeHistory.splice(0, mockRuntimeHistory.length);
+      await import('/src/main.jsx');
+    </script>
+  </body>
+</html>

@@ -1,6 +1,6 @@
 //! Runtime query events domain.
 
-use rusqlite::params_from_iter;
+use crate::database::params_from_iter;
 
 use super::{
     API_VERSION, Connection, EventListProjection, EventPage, EventPageQuery, EventPageRequest,
@@ -68,12 +68,12 @@ pub fn events_page_on(
     values.push(SqlValue::Integer(request.page_size as i64));
     values.push(SqlValue::Integer(offset.min(i64::MAX as usize) as i64));
     let sql = format!(
-        "SELECT seq,change_seq,event_id,timestamp,kind,client_variant,agent_role,agent_name,parent_thread_id,parent_turn_id,root_turn_id,phase,outcome,status_code,\
+        "SELECT seq,change_seq,event_id AS id,timestamp,kind,client_variant,agent_role,agent_name,parent_thread_id,parent_turn_id,root_turn_id,phase,outcome,status_code,\
                 request_id,session_key,session_source,client_kind,request_purpose,\
                 endpoint_id,endpoint_name,feature_rule_id,client_model,\
                 effective_model,upstream_model,failure_kind,failure_phase,\
                 source_format,target_format,route_mode,upstream_status_code,\
-                duration_ms,ttfb_ms,failover,project_name,project_source,local_user,\
+                COALESCE(duration_ms,0) AS duration_ms,ttfb_ms,COALESCE(failover,0) AS failover,project_name,project_source,local_user,\
                 codex_thread_class,attribution_scope \
                 ,request_method,request_path,route_intent,model_group_id,model_group_name \
          FROM runtime_events{where_sql} ORDER BY seq DESC LIMIT ? OFFSET ?"
@@ -81,52 +81,7 @@ pub fn events_page_on(
     let events = {
         let mut statement = transaction.prepare(&sql)?;
         let rows = statement.query_map(params_from_iter(values.iter()), |row| {
-            Ok(EventListProjection {
-                seq: row.get(0)?,
-                change_seq: row.get(1)?,
-                id: row.get(2)?,
-                timestamp: row.get(3)?,
-                kind: row.get(4)?,
-                client_variant: row.get(5)?,
-                agent_role: row.get(6)?,
-                agent_name: row.get(7)?,
-                parent_thread_id: row.get(8)?,
-                parent_turn_id: row.get(9)?,
-                root_turn_id: row.get(10)?,
-                phase: row.get(11)?,
-                outcome: row.get(12)?,
-                status_code: row.get(13)?,
-                request_id: row.get(14)?,
-                session_key: row.get(15)?,
-                session_source: row.get(16)?,
-                client_kind: row.get(17)?,
-                request_purpose: row.get(18)?,
-                endpoint_id: row.get(19)?,
-                endpoint_name: row.get(20)?,
-                feature_rule_id: row.get(21)?,
-                client_model: row.get(22)?,
-                effective_model: row.get(23)?,
-                upstream_model: row.get(24)?,
-                failure_kind: row.get(25)?,
-                failure_phase: row.get(26)?,
-                source_format: row.get(27)?,
-                target_format: row.get(28)?,
-                route_mode: row.get(29)?,
-                upstream_status_code: row.get(30)?,
-                duration_ms: row.get::<_, Option<i64>>(31)?.unwrap_or_default(),
-                ttfb_ms: row.get(32)?,
-                failover: row.get::<_, Option<i64>>(33)?.unwrap_or_default(),
-                project_name: row.get(34)?,
-                project_source: row.get(35)?,
-                local_user: row.get(36)?,
-                codex_thread_class: row.get(37)?,
-                attribution_scope: row.get(38)?,
-                request_method: row.get(39)?,
-                request_path: row.get(40)?,
-                route_intent: row.get(41)?,
-                model_group_id: row.get(42)?,
-                model_group_name: row.get(43)?,
-            })
+            row.model::<EventListProjection>()
         })?;
         rows.map(|row| row.map(event_list_item_from_projection))
             .collect::<Result<Vec<_>, _>>()?

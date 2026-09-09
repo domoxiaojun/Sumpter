@@ -10,8 +10,8 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use rusqlite::types::Value as SqlValue;
-use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior};
+use crate::database::types::Value as SqlValue;
+use crate::database::{Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use sumpter_core::config::ProviderProtocol;
@@ -60,7 +60,7 @@ pub enum RuntimeQueryError {
         detail: String,
     },
     Output(String),
-    Sql(rusqlite::Error),
+    Sql(crate::database::Error),
 }
 
 impl fmt::Display for RuntimeQueryError {
@@ -104,8 +104,8 @@ impl std::error::Error for RuntimeQueryError {
     }
 }
 
-impl From<rusqlite::Error> for RuntimeQueryError {
-    fn from(error: rusqlite::Error) -> Self {
+impl From<crate::database::Error> for RuntimeQueryError {
+    fn from(error: crate::database::Error) -> Self {
         Self::Sql(error)
     }
 }
@@ -1288,7 +1288,7 @@ struct ExportEventRow {
 /// not deserialize `payload_json` here.  Optional diagnostic fields (Codex
 /// metadata, stream trace, tool calls, message and raw failure detail) remain
 /// available through `/runtime/events/{id}`.
-#[derive(Debug)]
+#[derive(Debug, sea_orm::FromQueryResult)]
 struct EventListProjection {
     seq: i64,
     change_seq: i64,
@@ -1752,7 +1752,7 @@ fn load_price_catalog(transaction: &Transaction<'_>) -> QueryResult<PriceCatalog
     let meta = transaction
         .query_row(
             "SELECT revision,currency FROM runtime_pricing_meta WHERE id=1",
-            [],
+            crate::database::params![],
             |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
         )
         .optional()?;
@@ -1767,7 +1767,7 @@ fn load_price_catalog(transaction: &Transaction<'_>) -> QueryResult<PriceCatalog
                 cache_creation_per_million_micros \
          FROM runtime_model_prices ORDER BY model_key,effective_from DESC,id DESC",
     )?;
-    let rows = statement.query_map([], |row| {
+    let rows = statement.query_map(crate::database::params![], |row| {
         Ok(ModelPrice {
             id: row.get(0)?,
             endpoint_id: None,
@@ -1914,7 +1914,7 @@ fn history_snapshot(
     }
     let max_seq = transaction.query_row(
         "SELECT COALESCE(MAX(seq),0) FROM runtime_events WHERE is_in_flight=0",
-        [],
+        crate::database::params![],
         |row| row.get(0),
     )?;
     let snapshot_seq = requested_seq.unwrap_or(max_seq);

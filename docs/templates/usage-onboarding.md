@@ -33,8 +33,8 @@ Codex 专用请求沿用现有入口和认证配置，本扩展不替代 pi 登�
 ### pi 项目与会话归因扩展
 
 在**运行 pi 的主机**安装 `pi-project-attribution.ts`。扩展要求当前 pi 支持
-`before_provider_headers`，只为带 `X-Sumpter-Client: pi` 的 provider 追加归因；不要在直连
-其他服务的 provider 上设置该标识。无需改 pi 源码或 shell 启动文件。
+`before_provider_headers`。推荐用统一 wrapper 安装 zsh/bash 启动入口；它只在该入口的进程中启用
+动态归因，不修改 provider 配置，也不会影响直连其他服务的 provider。
 
 资源位置：Linux 包的 `scripts/pi-project-attribution.ts`；macOS App 的
 `Contents/Resources/pi-project-attribution.ts`；源码的 `scripts/clients/pi-project-attribution.ts`。
@@ -53,7 +53,7 @@ node /path/to/client-attribution.mjs run pi -- --provider sumpter --model your-e
 
 wrapper 与 `pi-project-attribution.ts` 需放在同一目录；可通过 `SUMPTER_PI_BIN` 指定 Pi 可执行文件。
 无需手动导出项目或用户名环境变量；扩展在每次请求时读取当前目录、系统用户名和真实会话 ID。
-provider 仍须设置 `X-Sumpter-Client: pi`；未标记的直连 provider 不会添加归因信息。
+也可以只在 provider 中设置 `X-Sumpter-Client: pi` 作为显式 opt-in；未标记且未通过 wrapper 启动的直连 provider 不会添加归因信息。
 
 macOS：在「设置 → 安全」或「帮助」的归因面板选择 **pi**，点击「安装配置」。App 使用内置扩展，自动检查本机实际安装状态；「还原配置」恢复安装前文件，原先没有文件则移除扩展。需要 Node.js 18+。
 
@@ -67,7 +67,7 @@ bash setup-client-attribution.sh install pi
 bash setup-client-attribution.sh restore pi
 ```
 
-安装器写入 `~/.pi/agent/extensions/pi-project-attribution.ts`，首次安装前自动备份；重复安装或更新不会覆盖原始备份。还原只处理该扩展，不修改 provider 或 shell 配置。操作后重启 pi 或执行 `/reload`。
+安装器写入 `~/.pi/agent/extensions/pi-project-attribution.ts`，首次安装前自动备份；重复安装或更新不会覆盖原始备份。使用 `client-attribution.mjs install pi --shell zsh`（或 `bash`）可同时安装 shell wrapper；还原只处理扩展和该 wrapper，不修改 provider 凭据。操作后重启 pi 或执行 `/reload`。
 
 扩展按当前会话获取 ID、项目目录及本地用户名；Git 项目使用仓库根目录，普通目录使用当前目录。
 恢复、分叉或切换会话后自动更新。Git remote 去掉用户名、密码、query 和 fragment 后才发送。
@@ -117,7 +117,7 @@ Gemini 运行前还需设置 `SUMPTER_GEMINI_BASE_URL` 和 `SUMPTER_AUTH_TOKEN`�
 
 仅在已经连接 Sumpter 的客户端上启用；包装器随该客户端请求附加归因头，Sumpter 在上游转发前剥离。统计投影使用脱敏路径，Codex 源元数据和诊断捕获可能包含原始路径。Git remote 会删除凭据、query 和 fragment。
 
-pi 扩展由统一安装器从同目录资源、GitHub 仓库 raw 或 listener 的 `/__sumpter/pi-project-attribution.ts` 获取；必须在 pi 的 Sumpter provider 上设置 `X-Sumpter-Client: pi`，安装器不会自动修改该标识或凭据。
+pi 扩展由统一安装器从同目录资源、GitHub 仓库 raw 或 listener 的 `/__sumpter/pi-project-attribution.ts` 获取；shell wrapper 会在进程环境中启用归因并由扩展写入 `X-Sumpter-Client: pi`，安装器不会修改 provider 凭据。
 
 ## 开箱路径（固定顺序）
 

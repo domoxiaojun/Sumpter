@@ -1,11 +1,11 @@
 import Foundation
 
-// 运行事件与内存统计快照。字段仍兼容旧 stats.json，但当前持久化后端是 runtime.sqlite3；
+// 运行事件与内存统计快照，持久化后端是 runtime.sqlite3；
 // 引擎移往 Rust sidecar(sumpterd)后,这些纯数据类型上移到 Core 供 UI 与 admin 客户端使用。
 // wire 兼容:字段名、Date(secondsSinceReferenceDate)、可选字段省略 —— 与 sumpterd 的
-// serde 输出/输入完全同构,见 rust/specs/spec-engine.md §5。
+// serde 输出/输入完全同构,见 docs/architecture.md §5。
 
-/// 事件阶段:进行中(已入流未结束)或已完成。nil 视作已完成,保证老 stats.json 兼容。
+/// 事件阶段:进行中或已完成。缺失表示未记录，不从 HTTP 状态推断。
 public enum RuntimeEventPhase: String, Codable, Sendable {
     case inFlight
     case completed
@@ -122,7 +122,6 @@ public struct WebSocketTrace: Codable, Equatable, Sendable {
     public var bytesReceived: Int?
     public var clientMessageCount: Int?
     public var upstreamMessageCount: Int?
-    public var closeCode: Int?
     public var clientCloseCode: Int?
     public var upstreamCloseCode: Int?
     public var closedBy: String?
@@ -136,7 +135,6 @@ public struct WebSocketTrace: Codable, Equatable, Sendable {
         bytesReceived: Int? = nil,
         clientMessageCount: Int? = nil,
         upstreamMessageCount: Int? = nil,
-        closeCode: Int? = nil,
         clientCloseCode: Int? = nil,
         upstreamCloseCode: Int? = nil,
         closedBy: String? = nil,
@@ -149,7 +147,6 @@ public struct WebSocketTrace: Codable, Equatable, Sendable {
         self.bytesReceived = bytesReceived
         self.clientMessageCount = clientMessageCount
         self.upstreamMessageCount = upstreamMessageCount
-        self.closeCode = closeCode
         self.clientCloseCode = clientCloseCode
         self.upstreamCloseCode = upstreamCloseCode
         self.closedBy = closedBy
@@ -531,7 +528,6 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
     public var id: String
     public var timestamp: Date
     public var kind: String
-    public var poolID: String?
     public var endpointID: String?
     public var endpointName: String?
     public var modelGroupID: String? = nil
@@ -607,7 +603,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
     public var attributionScope: String?
 
     private enum CodingKeys: String, CodingKey {
-        case id, timestamp, kind, poolID, endpointID, endpointName, upstreamHost, modelGroupID, modelGroupName
+        case id, timestamp, kind, endpointID, endpointName, upstreamHost, modelGroupID, modelGroupName
         case clientModel, clientKind, sourceFormat, targetFormat, routeMode
         case upstreamModel, effectiveModel, statusCode, durationMS, failover
         case message, toolCalls, streamTrace, outcome, phase, featureRuleID
@@ -617,20 +613,9 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         case codexMetadata, clientDeclared, grokMetadata, projectName, projectSource, localUser, codexThreadClass, attributionScope
     }
 
-    /// Runtime JSON has existed in three timestamp dialects over its lifetime:
-    /// Apple reference seconds, Unix seconds, and Unix milliseconds.  Keep the
-    /// wire contract backwards compatible while making the boundary explicit so
-    /// a Unix value is never interpreted as Apple reference time (or multiplied
-    /// twice).
+    /// RuntimeEvent 使用 Apple reference 秒；诊断捕获的 Unix 时间由对应模型处理。
     public enum Timestamp: Sendable {
         public static func date(from value: Double) -> Date {
-            let magnitude = abs(value)
-            if magnitude >= 1_000_000_000_000 {
-                return Date(timeIntervalSince1970: value / 1_000)
-            }
-            if magnitude >= 1_000_000_000 {
-                return Date(timeIntervalSince1970: value)
-            }
             return Date(timeIntervalSinceReferenceDate: value)
         }
 
@@ -644,7 +629,6 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         id = try c.decode(String.self, forKey: .id)
         timestamp = Timestamp.date(from: try c.decode(Double.self, forKey: .timestamp))
         kind = try c.decode(String.self, forKey: .kind)
-        poolID = try c.decodeIfPresent(String.self, forKey: .poolID)
         endpointID = try c.decodeIfPresent(String.self, forKey: .endpointID)
         endpointName = try c.decodeIfPresent(String.self, forKey: .endpointName)
         modelGroupID = try c.decodeIfPresent(String.self, forKey: .modelGroupID)
@@ -695,8 +679,6 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         try c.encode(id, forKey: .id)
         try c.encode(Timestamp.appleReferenceSeconds(timestamp), forKey: .timestamp)
         try c.encode(kind, forKey: .kind)
-        // poolID is a legacy routing/configuration field. Decode it for old
-        // stats files, but keep it out of new runtime/detail JSON.
         try c.encodeIfPresent(endpointID, forKey: .endpointID)
         try c.encodeIfPresent(endpointName, forKey: .endpointName)
         try c.encodeIfPresent(modelGroupID, forKey: .modelGroupID)
@@ -743,29 +725,26 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
     }
 
     public var isInFlight: Bool { phase == .inFlight }
-    /// 兼容曾把已收到响应头的 client 事件写成 statusCode=0 的旧 stats.json。
-    /// 新事件始终直接使用 statusCode；仅在 0 时回退已明确记录的上游状态。
+    /// 客户端 HTTP 状态保持独立，不能用另一个链路的上游状态补值。
     public var effectiveHTTPStatusCode: Int {
-        statusCode == 0 ? (upstreamStatusCode ?? statusCode) : statusCode
+        statusCode
     }
     public var isSucceeded: Bool {
         guard !isInFlight else { return false }
-        return outcome.map { $0 == .succeeded } ?? (200..<400).contains(effectiveHTTPStatusCode)
+        return outcome == .succeeded
     }
     public var isFailed: Bool {
         guard !isInFlight else { return false }
-        return outcome.map { $0 == .failed }
-            ?? (effectiveHTTPStatusCode != 499 && !(200..<400).contains(effectiveHTTPStatusCode))
+        return outcome == .failed
     }
     public var isCancelled: Bool {
-        outcome.map { $0 == .cancelled } ?? (effectiveHTTPStatusCode == 499)
+        !isInFlight && outcome == .cancelled
     }
 
     public init(
         id: String = UUID().uuidString,
         timestamp: Date = Date(),
         kind: String,
-        poolID: String? = nil,
         endpointID: String? = nil,
         endpointName: String? = nil,
         upstreamHost: String? = nil,
@@ -810,7 +789,6 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         self.id = id
         self.timestamp = timestamp
         self.kind = kind
-        self.poolID = poolID
         self.endpointID = endpointID
         self.endpointName = endpointName
         self.upstreamHost = upstreamHost

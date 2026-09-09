@@ -14,12 +14,11 @@ final class SumpterCoreTests: XCTestCase {
         XCTAssertEqual(state.applying(.closed), .accessory)
     }
 
-    func testRuntimeTimestampAcceptsAppleUnixSecondsAndMilliseconds() {
+    func testRuntimeTimestampUsesAppleReferenceSeconds() {
         let date = Date(timeIntervalSince1970: 1_756_000_000)
         let apple = RuntimeEvent.Timestamp.appleReferenceSeconds(date)
         XCTAssertEqual(RuntimeEvent.Timestamp.date(from: apple).timeIntervalSince1970, date.timeIntervalSince1970, accuracy: 0.001)
-        XCTAssertEqual(RuntimeEvent.Timestamp.date(from: date.timeIntervalSince1970).timeIntervalSince1970, date.timeIntervalSince1970, accuracy: 0.001)
-        XCTAssertEqual(RuntimeEvent.Timestamp.date(from: date.timeIntervalSince1970 * 1_000).timeIntervalSince1970, date.timeIntervalSince1970, accuracy: 0.001)
+        XCTAssertEqual(RuntimeEvent.Timestamp.date(from: 1_000_000_000).timeIntervalSinceReferenceDate, 1_000_000_000, accuracy: 0.001)
     }
 
     private func webFetchPrompt(content: String = "example page") -> String {

@@ -127,7 +127,11 @@ export function prepareLaunch(client, args, env = process.env, cwd = process.cwd
     if (!existsSync(extension)) throw new Error('缺少配套 pi-project-attribution.ts，请使用完整安装包');
     // Use Pi's request hook so resumed/forked sessions and workspace changes
     // are observed at dispatch time rather than frozen in launcher environment.
-    return { command: env.SUMPTER_PI_BIN || 'pi', args: ['-e', extension, ...args], env: { ...env } };
+    return {
+      command: env.SUMPTER_PI_BIN || 'pi',
+      args: ['-e', extension, ...args],
+      env: { ...env, SUMPTER_PI_ATTRIBUTION: '1' },
+    };
   }
   if (!clients.includes(client)) throw new Error('客户端必须是 claude、grok、gemini 或 codex');
   // Informational invocations should work even before the client is connected.
@@ -261,7 +265,13 @@ function managePi(action, options, env, source) {
 }
 
 export function manage(action, client, options = {}, env = process.env, source = fileURLToPath(import.meta.url)) {
-  if (client === 'pi') return managePi(action, options, env, source);
+  if (client === 'pi') {
+    const extension = managePi(action, options, env, source);
+    const wantsShell = Boolean(options.rc)
+      || (options.shell && ['bash', 'zsh'].includes(options.shell));
+    if (!wantsShell) return extension;
+    return [...extension, ...manageShell(action, client, options, env, source)];
+  }
   if (client !== 'all') return manageShell(action, client, options, env, source);
   // Validate both destinations and required resources before either installer writes.
   const shellPreview = manageShell(action, client, { ...options, dryRun: true }, env, source);
@@ -271,7 +281,7 @@ export function manage(action, client, options = {}, env = process.env, source =
 }
 
 function manageShell(action, client, options, env, source) {
-  if (!['install', 'status', 'uninstall', 'restore', 'snippet'].includes(action) || ![...clients, 'all'].includes(client)) throw new Error('用法：client-attribution.mjs install|status|uninstall|restore|snippet claude|grok|gemini|codex|all [--shell bash|zsh] [--rc 文件] [--dry-run]');
+  if (!['install', 'status', 'uninstall', 'restore', 'snippet'].includes(action) || ![...clients, 'pi', 'all'].includes(client)) throw new Error('用法：client-attribution.mjs install|status|uninstall|restore|snippet claude|grok|gemini|codex|pi|all [--shell bash|zsh] [--rc 文件] [--dry-run]');
   const shell = options.shell || basename(env.SHELL || '');
   if (!['bash', 'zsh'].includes(shell)) throw new Error('自动安装支持 bash/zsh；其他 shell 请使用 run 子命令');
   const home = env.HOME || homedir();
@@ -288,6 +298,8 @@ function manageShell(action, client, options, env, source) {
   rc = join(realpathSync(ancestor), ...suffix); // Preserve rc symlinks.
   const dir = join(env.XDG_DATA_HOME || join(home, '.local/share'), 'sumpter', 'attribution');
   const installed = join(dir, 'client-attribution.mjs');
+  const piExtensionSource = join(dirname(source), 'pi-project-attribution.ts');
+  const piExtensionInstalled = join(dir, 'pi-project-attribution.ts');
   const selected = client === 'all' ? clients : [client];
   const original = read(rc);
   let text = original;
@@ -335,6 +347,9 @@ function manageShell(action, client, options, env, source) {
     if (read(rc) !== original) throw new Error('rc 已被其他进程修改，请重试');
     if (action === 'install') {
       atomic(installed, readFileSync(source), 0o600);
+      if (selected.includes('pi') && existsSync(piExtensionSource)) {
+        atomic(piExtensionInstalled, readFileSync(piExtensionSource), 0o600);
+      }
       for (const change of changes) atomic(change.statePath, JSON.stringify(change.state));
     }
     if (text !== original) {

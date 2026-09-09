@@ -101,7 +101,6 @@ fn diagnostic_attempt_size(attempt: &DiagnosticAttemptCapture) -> usize {
         + attempt.endpoint_id.len()
         + attempt.endpoint_name.len()
         + attempt.protocol.len()
-        + attempt.pinned_ip.as_ref().map_or(0, String::len)
         + attempt.outbound_method.len()
         + attempt.outbound_url.len()
         + attempt.outbound_body.len()
@@ -611,7 +610,6 @@ impl Engine {
             source_format: Some(endpoint.source_format),
             target_format: Some(endpoint.protocol),
             route_mode: Some(endpoint.route_mode),
-            pinned_ip: None,
             started_at_ms,
             outbound_method: request.method.clone(),
             outbound_url,

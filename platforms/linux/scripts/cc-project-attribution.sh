@@ -25,7 +25,15 @@ FORCE=0
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
-run() { if [ "$DRY_RUN" -eq 1 ]; then printf '  [dry-run] %s\n' "$*"; else eval "$*"; fi; }
+run() {
+    if [ "$DRY_RUN" -eq 1 ]; then
+        printf '  [dry-run]'
+        printf ' %q' "$@"
+        printf '\n'
+    else
+        "$@"
+    fi
+}
 
 usage() { sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; }
 
@@ -295,11 +303,11 @@ do_install() {
 
     if [ -f "$rc" ]; then
         backup="$rc.sumpter-bak-$(date +%Y%m%d-%H%M%S)"
-        run "cp -p \"$rc\" \"$backup\""
+        run cp -p -- "$rc" "$backup"
         info "已备份: $backup"
     else
         info "rc 不存在,将新建"
-        run "mkdir -p \"$(dirname "$rc")\""
+        run mkdir -p -- "$(dirname "$rc")"
     fi
 
     write_snippet
@@ -313,7 +321,7 @@ do_install() {
     if [ -f "$rc" ]; then strip_block "$rc" > "$tmp"; fi
     {
         printf '%s\n' "$MARK_BEGIN"
-        printf '[ -f "%s" ] && . "%s"\n' "$SNIPPET" "$SNIPPET"
+        printf '[ -f %q ] && . %q\n' "$SNIPPET" "$SNIPPET"
         printf '%s\n' "$MARK_END"
     } >> "$tmp"
     cat "$tmp" > "$rc"
@@ -337,7 +345,7 @@ do_uninstall() {
         info "已从 $rc 移除标记块"
     fi
     if [ -f "$SNIPPET" ]; then
-        run "rm -f \"$SNIPPET\""
+        run rm -f -- "$SNIPPET"
         info "已删除 snippet: $SNIPPET"
     fi
     info "备份保留未动（restore 可还原到装前状态）"

@@ -3527,12 +3527,25 @@ html[data-theme="light"] .brand-title {
 }
 
 .request-chain-pane {
+  align-self: start;
+  border-right: 1px solid var(--border-subtle);
+  padding-right: var(--space-5);
+}
+
+.request-chain-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
   max-height: min(52dvh, 560px);
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
-  border-right: 1px solid var(--border-subtle);
-  padding-right: var(--space-5);
+  scrollbar-gutter: stable;
+}
+
+.request-chain-list > * {
+  flex-shrink: 0;
 }
 
 .event-inspector {
@@ -5236,11 +5249,14 @@ html[data-theme="light"] .form-select { color-scheme: light; }
   }
 
   .request-chain-pane {
-    max-height: 280px;
     border-right: 0;
     border-bottom: 1px solid var(--border-subtle);
     padding-right: 0;
     padding-bottom: var(--space-5);
+  }
+
+  .request-chain-list {
+    max-height: 280px;
   }
 
   .event-inspector {
@@ -5500,11 +5516,14 @@ html[data-theme="light"] .form-select { color-scheme: light; }
   }
 
   .request-chain-pane {
-    max-height: 280px;
     border-right: 0;
     border-bottom: 1px solid var(--border-subtle);
     padding-right: 0;
     padding-bottom: var(--space-5);
+  }
+
+  .request-chain-list {
+    max-height: 280px;
   }
 
   .event-inspector {
@@ -5799,7 +5818,7 @@ html[data-theme="light"] .form-select { color-scheme: light; }
 }
 
 @media (max-height: 720px) and (min-width: 901px) {
-  .request-chain-pane {
+  .request-chain-list {
     max-height: 34dvh;
   }
 }

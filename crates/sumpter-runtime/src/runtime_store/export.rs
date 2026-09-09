@@ -6,15 +6,14 @@ use super::{
     meta_i64, now, params, project_key, refresh_cached_storage, set_meta,
 };
 
-pub(super) fn decode_runtime_event(payload: &str) -> rusqlite::Result<RuntimeEvent> {
-    serde_json::from_str(payload).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
-    })
+pub(super) fn decode_runtime_event(payload: &str) -> crate::database::Result<RuntimeEvent> {
+    serde_json::from_str(payload)
+        .map_err(|error| crate::database::Error::Conversion(Box::new(error)))
 }
 
 pub(super) fn counters_from_connection(
     connection: &Connection,
-) -> rusqlite::Result<RuntimeCounters> {
+) -> crate::database::Result<RuntimeCounters> {
     connection.query_row(
         "SELECT
             SUM(CASE WHEN kind=?1 THEN 1 ELSE 0 END),
@@ -44,7 +43,7 @@ pub(super) fn delete_session_database(
     inner: &Arc<Inner>,
     connection: &mut Connection,
     session_id: &str,
-) -> rusqlite::Result<SessionMutation> {
+) -> crate::database::Result<SessionMutation> {
     let transaction = connection.transaction()?;
     let (client_event_ids, request_ids) = {
         let mut statement = transaction.prepare(
@@ -64,7 +63,7 @@ pub(super) fn delete_session_database(
         )
     };
     if client_event_ids.is_empty() {
-        return Err(rusqlite::Error::QueryReturnedNoRows);
+        return Err(crate::database::Error::QueryReturnedNoRows);
     }
     let mut delete_ids = client_event_ids.clone();
     for request_id in &request_ids {
@@ -106,8 +105,7 @@ pub(super) fn delete_session_database(
         .saturating_sub(delete_ids.len() as i64);
     set_meta(&transaction, "retained_event_count", remaining)?;
     let retained_from_seq = transaction.query_row(
-        "SELECT COALESCE(MIN(seq), COALESCE((SELECT CAST(value AS INTEGER) FROM runtime_meta WHERE key='next_seq'),1)) FROM runtime_events",
-        [],
+        "SELECT COALESCE(MIN(seq), COALESCE((SELECT CAST(value AS INTEGER) FROM runtime_meta WHERE key='next_seq'),1)) FROM runtime_events", crate::database::params![],
         |row| row.get::<_, i64>(0),
     )?;
     set_meta(&transaction, "retained_from_seq", retained_from_seq)?;
@@ -276,7 +274,7 @@ pub(super) fn load_snapshot(connection: &Connection) -> Result<RuntimeSnapshot, 
         upstream_successes: 0,
         upstream_failures: 0,
     };
-    let counters = connection.query_row("SELECT client_requests,client_successes,client_failures,upstream_attempts,upstream_successes,upstream_failures,failovers FROM runtime_counters WHERE id=1", [], |row| Ok(RuntimeCounters { client_requests: row.get(0)?, client_successes: row.get(1)?, client_failures: row.get(2)?, upstream_attempts: row.get(3)?, upstream_successes: row.get(4)?, upstream_failures: row.get(5)?, failovers: row.get(6)? })).map_err(|e| e.to_string())?;
+    let counters = connection.query_row("SELECT client_requests,client_successes,client_failures,upstream_attempts,upstream_successes,upstream_failures,failovers FROM runtime_counters WHERE id=1", crate::database::params![], |row| Ok(RuntimeCounters { client_requests: row.get(0)?, client_successes: row.get(1)?, client_failures: row.get(2)?, upstream_attempts: row.get(3)?, upstream_successes: row.get(4)?, upstream_failures: row.get(5)?, failovers: row.get(6)? })).map_err(|e| e.to_string())?;
     snapshot.client_requests = counters.client_requests;
     snapshot.client_successes = counters.client_successes;
     snapshot.client_failures = counters.client_failures;

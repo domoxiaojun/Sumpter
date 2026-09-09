@@ -1,10 +1,10 @@
 use super::{
     APPLE_EPOCH_OFFSET_SECS, CachedStorageMetrics, Connection, EventProjection, HashMap,
-    KIND_CLIENT, KIND_UPSTREAM, OptionalExtension, PROJECTION_VERSION, Path, RuntimeChange,
-    RuntimeCounters, RuntimeEvent, RuntimeEventOutcome, RuntimeEventPhase, RuntimeFailureKind,
-    RuntimeFailurePhase, STATUS_CLIENT_DISCONNECTED, StoreState, VecDeque, WriteMessage,
-    counters_from_connection, hourly_bucket_start, mark_event_hourly_rollup_dirty,
-    mark_hourly_rollup_bucket, mark_request_hourly_rollups_dirty, now, option_token, params,
+    KIND_CLIENT, KIND_UPSTREAM, OptionalExtension, Path, RuntimeChange, RuntimeEvent,
+    RuntimeEventOutcome, RuntimeEventPhase, RuntimeFailureKind, RuntimeFailurePhase,
+    STATUS_CLIENT_DISCONNECTED, StoreState, VecDeque, WriteMessage, counters_from_connection,
+    hourly_bucket_start, mark_event_hourly_rollup_dirty, mark_hourly_rollup_bucket,
+    mark_request_hourly_rollups_dirty, now, option_token, params,
 };
 
 /// Read-only preflight; rejected files must never enter schema setup or backfill.
@@ -32,12 +32,12 @@ pub(super) fn harden_database_file(path: &Path) {
 /// headers had already arrived.
 pub(super) fn normalize_startup(
     connection: &mut Connection,
-) -> rusqlite::Result<Vec<RuntimeChange>> {
+) -> crate::database::Result<Vec<RuntimeChange>> {
     let transaction = connection.transaction()?;
     let stored_next_change_seq = meta_i64(&transaction, "next_change_seq")?.unwrap_or(1);
     let max_change_seq = transaction.query_row(
         "SELECT COALESCE(MAX(change_seq), 0) FROM runtime_events",
-        [],
+        crate::database::params![],
         |row| row.get::<_, i64>(0),
     )?;
     let mut next_change_seq = stored_next_change_seq.max(max_change_seq + 1).max(1);
@@ -48,7 +48,7 @@ pub(super) fn normalize_startup(
          FROM runtime_events WHERE is_in_flight = 1 ORDER BY change_seq ASC",
     )?;
     let rows = statement
-        .query_map([], |row| {
+        .query_map(crate::database::params![], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, String>(1)?,
@@ -68,13 +68,8 @@ pub(super) fn normalize_startup(
             retained_event_count = retained_event_count.saturating_sub(1);
             continue;
         }
-        let mut event: RuntimeEvent = serde_json::from_str(&payload).map_err(|error| {
-            rusqlite::Error::FromSqlConversionFailure(
-                0,
-                rusqlite::types::Type::Text,
-                Box::new(error),
-            )
-        })?;
+        let mut event: RuntimeEvent = serde_json::from_str(&payload)
+            .map_err(|error| crate::database::Error::Conversion(Box::new(error)))?;
         event.phase = Some(RuntimeEventPhase::Completed);
         if status_code == STATUS_CLIENT_DISCONNECTED {
             event.outcome = Some(RuntimeEventOutcome::Cancelled);
@@ -95,7 +90,7 @@ pub(super) fn normalize_startup(
         let outcome = option_token(event.outcome);
         let failure_kind = option_token(event.failure_kind);
         let payload = serde_json::to_string(&event)
-            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+            .map_err(|error| crate::database::Error::Conversion(Box::new(error)))?;
         transaction.execute(
             "UPDATE runtime_events SET change_seq=?2,is_in_flight=0,phase='completed',
              outcome=?3,failure_kind=?4,payload_json=?5,updated_at=?6 WHERE event_id=?1",
@@ -139,7 +134,7 @@ pub(super) fn normalize_startup(
     let retained_from_seq = transaction.query_row(
         "SELECT COALESCE(MIN(seq), COALESCE((SELECT CAST(value AS INTEGER)
          FROM runtime_meta WHERE key='next_seq'),1)) FROM runtime_events",
-        [],
+        crate::database::params![],
         |row| row.get::<_, i64>(0),
     )?;
     set_meta(&transaction, "retained_from_seq", retained_from_seq)?;
@@ -147,27 +142,45 @@ pub(super) fn normalize_startup(
     Ok(normalized_changes)
 }
 
-pub(super) fn meta_i64(connection: &Connection, key: &str) -> rusqlite::Result<Option<i64>> {
-    let value = connection
-        .query_row(
-            "SELECT value FROM runtime_meta WHERE key=?1",
-            params![key],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?;
-    Ok(value.map(|value| value.parse::<i64>().unwrap_or_default()))
+pub(super) fn meta_i64(connection: &Connection, key: &str) -> crate::database::Result<Option<i64>> {
+    use crate::entities::runtime_meta;
+    use sea_orm::EntityTrait;
+    let key = key.to_owned();
+    let value = connection.orm(move |db| async move {
+        runtime_meta::Entity::find_by_id(key).one(db.as_ref()).await
+    })?;
+    Ok(value.map(|value| value.value.parse::<i64>().unwrap_or_default()))
 }
 
-pub(super) fn set_meta(connection: &Connection, key: &str, value: i64) -> rusqlite::Result<()> {
-    connection.execute(
-        "INSERT INTO runtime_meta(key,value) VALUES(?1,?2)
-         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        params![key, value.to_string()],
-    )?;
-    Ok(())
+pub(super) fn set_meta(
+    connection: &Connection,
+    key: &str,
+    value: i64,
+) -> crate::database::Result<()> {
+    use crate::entities::runtime_meta;
+    use sea_orm::{EntityTrait, Set, sea_query::OnConflict};
+    let model = runtime_meta::ActiveModel {
+        key: Set(key.to_owned()),
+        value: Set(value.to_string()),
+    };
+    connection.orm(move |db| async move {
+        runtime_meta::Entity::insert(model)
+            .on_conflict(
+                OnConflict::column(runtime_meta::Column::Key)
+                    .update_column(runtime_meta::Column::Value)
+                    .to_owned(),
+            )
+            .exec_without_returning(db.as_ref())
+            .await
+            .map(|_| ())
+    })
 }
 
-pub(super) fn set_meta_max(connection: &Connection, key: &str, value: i64) -> rusqlite::Result<()> {
+pub(super) fn set_meta_max(
+    connection: &Connection,
+    key: &str,
+    value: i64,
+) -> crate::database::Result<()> {
     let current = meta_i64(connection, key)?.unwrap_or(value);
     set_meta(connection, key, current.max(value))
 }
@@ -175,13 +188,13 @@ pub(super) fn set_meta_max(connection: &Connection, key: &str, value: i64) -> ru
 pub(super) fn set_storage_limit_meta(
     connection: &Connection,
     value: Option<i64>,
-) -> rusqlite::Result<()> {
+) -> crate::database::Result<()> {
     match value {
         Some(value) => set_meta(connection, "storage_limit_bytes", value),
         None => {
             connection.execute(
                 "DELETE FROM runtime_meta WHERE key='storage_limit_bytes'",
-                [],
+                crate::database::params![],
             )?;
             Ok(())
         }
@@ -191,13 +204,13 @@ pub(super) fn set_storage_limit_meta(
 pub(super) fn set_retention_max_age_meta(
     connection: &Connection,
     value: Option<i64>,
-) -> rusqlite::Result<()> {
+) -> crate::database::Result<()> {
     match value {
         Some(value) => set_meta(connection, "retention_max_age_days", value),
         None => {
             connection.execute(
                 "DELETE FROM runtime_meta WHERE key='retention_max_age_days'",
-                [],
+                crate::database::params![],
             )?;
             Ok(())
         }
@@ -206,7 +219,7 @@ pub(super) fn set_retention_max_age_meta(
 
 pub(super) fn load_cached_storage(
     connection: &Connection,
-) -> rusqlite::Result<CachedStorageMetrics> {
+) -> crate::database::Result<CachedStorageMetrics> {
     let (
         event_count,
         completed_event_count,
@@ -220,7 +233,7 @@ pub(super) fn load_cached_storage(
                 COALESCE(SUM(CASE WHEN is_in_flight=1 THEN 1 ELSE 0 END),0),
                 MIN(timestamp),MAX(timestamp),COALESCE(SUM(payload_bytes),0)
          FROM runtime_events",
-        [],
+        crate::database::params![],
         |row| {
             Ok((
                 row.get::<_, i64>(0)?,
@@ -232,13 +245,21 @@ pub(super) fn load_cached_storage(
             ))
         },
     )?;
-    let page_size = connection.query_row("PRAGMA page_size", [], |row| row.get::<_, i64>(0))?;
-    let page_count = connection.query_row("PRAGMA page_count", [], |row| row.get::<_, i64>(0))?;
+    let page_size =
+        connection.query_row("PRAGMA page_size", crate::database::params![], |row| {
+            row.get::<_, i64>(0)
+        })?;
+    let page_count =
+        connection.query_row("PRAGMA page_count", crate::database::params![], |row| {
+            row.get::<_, i64>(0)
+        })?;
     let freelist_count =
-        connection.query_row("PRAGMA freelist_count", [], |row| row.get::<_, i64>(0))?;
+        connection.query_row("PRAGMA freelist_count", crate::database::params![], |row| {
+            row.get::<_, i64>(0)
+        })?;
     let rollup_dirty_buckets = connection.query_row(
         "SELECT COUNT(*) FROM runtime_hourly_rollup_dirty",
-        [],
+        crate::database::params![],
         |row| row.get::<_, i64>(0),
     )?;
     let page_size = page_size.max(0) as u64;
@@ -272,31 +293,16 @@ pub(super) fn load_cached_storage(
     })
 }
 
-pub(super) fn load_state(connection: &Connection) -> rusqlite::Result<StoreState> {
-    let counters = connection.query_row(
-        "SELECT client_requests,client_successes,client_failures,upstream_attempts,
-                upstream_successes,upstream_failures,failovers FROM runtime_counters WHERE id=1",
-        [],
-        |row| {
-            Ok(RuntimeCounters {
-                client_requests: row.get(0)?,
-                client_successes: row.get(1)?,
-                client_failures: row.get(2)?,
-                upstream_attempts: row.get(3)?,
-                upstream_successes: row.get(4)?,
-                upstream_failures: row.get(5)?,
-                failovers: row.get(6)?,
-            })
-        },
-    )?;
+pub(super) fn load_state(connection: &Connection) -> crate::database::Result<StoreState> {
+    let counters = super::models::load_counters(connection)?;
     let max_seq = connection.query_row(
         "SELECT COALESCE(MAX(seq), 0) FROM runtime_events",
-        [],
+        crate::database::params![],
         |row| row.get::<_, i64>(0),
     )?;
     let max_change_seq = connection.query_row(
         "SELECT COALESCE(MAX(change_seq), 0) FROM runtime_events",
-        [],
+        crate::database::params![],
         |row| row.get::<_, i64>(0),
     )?;
     let next_seq = meta_i64(connection, "next_seq")?
@@ -312,19 +318,13 @@ pub(super) fn load_state(connection: &Connection) -> rusqlite::Result<StoreState
     let latest_event = connection
         .query_row(
             "SELECT payload_json FROM runtime_events ORDER BY seq DESC LIMIT 1",
-            [],
+            crate::database::params![],
             |row| row.get::<_, String>(0),
         )
         .optional()?
         .map(|payload| serde_json::from_str(&payload))
         .transpose()
-        .map_err(|error| {
-            rusqlite::Error::FromSqlConversionFailure(
-                0,
-                rusqlite::types::Type::Text,
-                Box::new(error),
-            )
-        })?;
+        .map_err(|error| crate::database::Error::Conversion(Box::new(error)))?;
     Ok(StoreState {
         next_seq,
         next_change_seq,
@@ -346,80 +346,18 @@ pub(super) fn update_event_projection(
     seq: i64,
     event: &RuntimeEvent,
     payload: &str,
-) -> rusqlite::Result<()> {
+) -> crate::database::Result<()> {
     let projection = EventProjection::from_event(event, payload.len());
-    connection.execute(
-        "UPDATE runtime_events SET
-            projection_version=?2,payload_bytes=?3,session_key=?4,session_source=?5,
-            project_id=?6,project_name=?7,project_source=?8,local_user=?9,workspace_paths_json=?10,
-            endpoint_name=?11,feature_rule_id=?12,client_model=?13,
-            effective_model=?14,upstream_model=?15,failure_phase=?16,source_format=?17,
-            target_format=?18,route_mode=?19,upstream_status_code=?20,duration_ms=?21,
-            ttfb_ms=?22,failover=?23,stream_terminal=?24,codex_metadata_present=?25,
-            usage_present=?26,input_tokens=?27,output_tokens=?28,
-            cache_read_input_tokens=?29,cache_creation_input_tokens=?30,
-            reasoning_tokens=?31,uncached_input_tokens=?32,processed_input_tokens=?33,
-            processed_total_tokens=?34,token_accounting_semantics=?35,
-            token_accounting_quality=?36,tool_calls_json=?37
-            ,codex_thread_class=?38,attribution_scope=?39,request_method=?40,
-            request_path=?41,route_intent=?42,model_group_id=?43,model_group_name=?44,
-            sticky_key=?45,client_variant=?46,agent_role=?47,agent_name=?48,
-            parent_thread_id=?49,parent_turn_id=?50,root_turn_id=?51
-         WHERE seq=?1",
-        params![
-            seq,
-            PROJECTION_VERSION,
-            projection.payload_bytes,
-            projection.session_key,
-            projection.session_source,
-            projection.project_id,
-            projection.project_name,
-            projection.project_source,
-            projection.local_user,
-            projection.workspace_paths_json,
-            projection.endpoint_name,
-            projection.feature_rule_id,
-            projection.client_model,
-            projection.effective_model,
-            projection.upstream_model,
-            projection.failure_phase,
-            projection.source_format,
-            projection.target_format,
-            projection.route_mode,
-            projection.upstream_status_code,
-            projection.duration_ms,
-            projection.ttfb_ms,
-            projection.failover,
-            projection.stream_terminal,
-            projection.codex_metadata_present,
-            projection.usage_present,
-            projection.input_tokens,
-            projection.output_tokens,
-            projection.cache_read_input_tokens,
-            projection.cache_creation_input_tokens,
-            projection.reasoning_tokens,
-            projection.uncached_input_tokens,
-            projection.processed_input_tokens,
-            projection.processed_total_tokens,
-            projection.token_accounting_semantics,
-            projection.token_accounting_quality,
-            projection.tool_calls_json,
-            projection.codex_thread_class,
-            projection.attribution_scope,
-            projection.request_method,
-            projection.request_path,
-            projection.route_intent,
-            projection.model_group_id,
-            projection.model_group_name,
-            projection.sticky_key,
-            projection.client_variant,
-            projection.agent_role,
-            projection.agent_name,
-            projection.parent_thread_id,
-            projection.parent_turn_id,
-            projection.root_turn_id,
-        ],
-    )?;
+    use crate::entities::runtime_events;
+    use sea_orm::{EntityTrait, Set};
+    let mut model = projection.active_model();
+    model.seq = Set(seq);
+    connection.orm(move |db| async move {
+        runtime_events::Entity::update(model)
+            .exec(db.as_ref())
+            .await
+            .map(|_| ())
+    })?;
     Ok(())
 }
 
@@ -428,11 +366,19 @@ pub(super) struct StorageRotation {
     pub(super) deleted_event_ids: Vec<String>,
 }
 
-pub(super) fn sqlite_live_bytes(connection: &Connection) -> rusqlite::Result<u64> {
-    let page_size = connection.query_row("PRAGMA page_size", [], |row| row.get::<_, i64>(0))?;
-    let page_count = connection.query_row("PRAGMA page_count", [], |row| row.get::<_, i64>(0))?;
+pub(super) fn sqlite_live_bytes(connection: &Connection) -> crate::database::Result<u64> {
+    let page_size =
+        connection.query_row("PRAGMA page_size", crate::database::params![], |row| {
+            row.get::<_, i64>(0)
+        })?;
+    let page_count =
+        connection.query_row("PRAGMA page_count", crate::database::params![], |row| {
+            row.get::<_, i64>(0)
+        })?;
     let freelist_count =
-        connection.query_row("PRAGMA freelist_count", [], |row| row.get::<_, i64>(0))?;
+        connection.query_row("PRAGMA freelist_count", crate::database::params![], |row| {
+            row.get::<_, i64>(0)
+        })?;
     Ok((page_count.max(0) as u64)
         .saturating_sub(freelist_count.max(0) as u64)
         .saturating_mul(page_size.max(0) as u64))
@@ -442,7 +388,9 @@ pub(super) fn sqlite_live_bytes(connection: &Connection) -> rusqlite::Result<u64
 /// Runtime events use Apple reference-date seconds, while metadata timestamps
 /// use Unix seconds; keeping this conversion at the storage boundary avoids
 /// local-time and daylight-saving surprises.
-pub(super) fn retention_age_cutoff(connection: &Connection) -> rusqlite::Result<Option<f64>> {
+pub(super) fn retention_age_cutoff(
+    connection: &Connection,
+) -> crate::database::Result<Option<f64>> {
     let Some(days) = meta_i64(connection, "retention_max_age_days")? else {
         return Ok(None);
     };
@@ -457,7 +405,7 @@ pub(super) fn retention_age_cutoff(connection: &Connection) -> rusqlite::Result<
 pub(super) fn has_expired_completed_event(
     connection: &Connection,
     cutoff: Option<f64>,
-) -> rusqlite::Result<bool> {
+) -> crate::database::Result<bool> {
     let Some(cutoff) = cutoff else {
         return Ok(false);
     };
@@ -499,7 +447,9 @@ pub(super) fn has_expired_completed_event(
 /// A request group is indivisible for rotation. If any row in the group is
 /// still in flight, the entire group is protected; this prevents a partial
 /// request chain from appearing in analytics or exports.
-pub(super) fn rotate_retention(connection: &Connection) -> rusqlite::Result<StorageRotation> {
+pub(super) fn rotate_retention(
+    connection: &Connection,
+) -> crate::database::Result<StorageRotation> {
     let capacity_limit = meta_i64(connection, "storage_limit_bytes")?
         .filter(|value| *value > 0)
         .map(|value| value as u64);
@@ -626,15 +576,16 @@ pub(super) fn rotate_retention(connection: &Connection) -> rusqlite::Result<Stor
         "hourly_rollup_history_generation",
         history_generation,
     )?;
-    let retained_event_count =
-        connection.query_row("SELECT COUNT(*) FROM runtime_events", [], |row| {
-            row.get::<_, i64>(0)
-        })?;
+    let retained_event_count = connection.query_row(
+        "SELECT COUNT(*) FROM runtime_events",
+        crate::database::params![],
+        |row| row.get::<_, i64>(0),
+    )?;
     set_meta(connection, "retained_event_count", retained_event_count)?;
     let retained_from_seq = connection.query_row(
         "SELECT COALESCE(MIN(seq), COALESCE((SELECT CAST(value AS INTEGER)
          FROM runtime_meta WHERE key='next_seq'),1)) FROM runtime_events",
-        [],
+        crate::database::params![],
         |row| row.get::<_, i64>(0),
     )?;
     set_meta(connection, "retained_from_seq", retained_from_seq)?;
@@ -643,7 +594,7 @@ pub(super) fn rotate_retention(connection: &Connection) -> rusqlite::Result<Stor
 
 pub(super) fn rotate_retention_now(
     connection: &mut Connection,
-) -> rusqlite::Result<StorageRotation> {
+) -> crate::database::Result<StorageRotation> {
     let transaction = connection.transaction()?;
     let rotation = rotate_retention(&transaction)?;
     transaction.commit()?;
@@ -653,7 +604,7 @@ pub(super) fn rotate_retention_now(
 fn apply_session_project_fallback(
     connection: &Connection,
     projection: &mut EventProjection,
-) -> rusqlite::Result<()> {
+) -> crate::database::Result<()> {
     if projection.project_source != "missing_workspace_metadata"
         || projection.session_key == "unidentified_session"
     {
@@ -688,7 +639,7 @@ fn apply_session_project_fallback(
 pub(super) fn write_batch(
     connection: &mut Connection,
     batch: &[WriteMessage],
-) -> rusqlite::Result<StorageRotation> {
+) -> crate::database::Result<StorageRotation> {
     if batch.is_empty() {
         return Ok(StorageRotation::default());
     }
@@ -715,142 +666,44 @@ pub(super) fn write_batch(
             mark_hourly_rollup_bucket(&transaction, hourly_bucket_start(*timestamp))?;
         }
         let payload = serde_json::to_string(&message.event)
-            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+            .map_err(|error| crate::database::Error::Conversion(Box::new(error)))?;
         let mut projection = EventProjection::from_event(&message.event, payload.len());
         apply_session_project_fallback(&transaction, &mut projection)?;
         let created_at = now();
-        transaction.execute(
-            "INSERT INTO runtime_events(
-                seq,change_seq,event_id,request_id,timestamp,kind,phase,outcome,status_code,
-                client_kind,request_purpose,endpoint_id,failure_kind,is_in_flight,payload_json,
-                created_at,updated_at,projection_version,payload_bytes,session_key,session_source,
-                project_id,project_name,project_source,local_user,workspace_paths_json,endpoint_name,
-                feature_rule_id,client_model,effective_model,upstream_model,failure_phase,
-                source_format,target_format,route_mode,upstream_status_code,duration_ms,ttfb_ms,
-                failover,stream_terminal,codex_metadata_present,usage_present,input_tokens,
-                output_tokens,cache_read_input_tokens,cache_creation_input_tokens,reasoning_tokens,
-                uncached_input_tokens,processed_input_tokens,processed_total_tokens,
-                token_accounting_semantics,token_accounting_quality,tool_calls_json
-                ,codex_thread_class,attribution_scope,request_method,request_path,route_intent,model_group_id,model_group_name,
-                sticky_key,client_variant,agent_role,agent_name,parent_thread_id,parent_turn_id,root_turn_id
-             ) VALUES(
-                ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?16,
-                ?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,
-                ?32,?33,?34,?35,?36,?37,?38,?39,?40,?41,?42,?43,?44,?45,?46,
-                ?47,?48,?49,?50,?51,?52,?53,?54,?55,?56,?57,?58,?59,?60,?61,?62,?63,?64,?65,?66
-             )
-             ON CONFLICT(event_id) DO UPDATE SET
-                change_seq=excluded.change_seq,payload_json=excluded.payload_json,
-                request_id=excluded.request_id,timestamp=excluded.timestamp,kind=excluded.kind,
-                phase=excluded.phase,outcome=excluded.outcome,status_code=excluded.status_code,
-                client_kind=excluded.client_kind,request_purpose=excluded.request_purpose,
-                endpoint_id=excluded.endpoint_id,failure_kind=excluded.failure_kind,
-                is_in_flight=excluded.is_in_flight,updated_at=excluded.updated_at,
-                projection_version=excluded.projection_version,payload_bytes=excluded.payload_bytes,
-                session_key=excluded.session_key,session_source=excluded.session_source,
-                project_id=excluded.project_id,project_name=excluded.project_name,
-                project_source=excluded.project_source,
-                local_user=excluded.local_user,
-                workspace_paths_json=excluded.workspace_paths_json,
-                endpoint_name=excluded.endpoint_name,
-                feature_rule_id=excluded.feature_rule_id,client_model=excluded.client_model,
-                effective_model=excluded.effective_model,upstream_model=excluded.upstream_model,
-                failure_phase=excluded.failure_phase,source_format=excluded.source_format,
-                target_format=excluded.target_format,route_mode=excluded.route_mode,
-                upstream_status_code=excluded.upstream_status_code,duration_ms=excluded.duration_ms,
-                ttfb_ms=excluded.ttfb_ms,failover=excluded.failover,
-                stream_terminal=excluded.stream_terminal,
-                codex_metadata_present=excluded.codex_metadata_present,
-                usage_present=excluded.usage_present,input_tokens=excluded.input_tokens,
-                output_tokens=excluded.output_tokens,
-                cache_read_input_tokens=excluded.cache_read_input_tokens,
-                cache_creation_input_tokens=excluded.cache_creation_input_tokens,
-                reasoning_tokens=excluded.reasoning_tokens,
-                uncached_input_tokens=excluded.uncached_input_tokens,
-                processed_input_tokens=excluded.processed_input_tokens,
-                processed_total_tokens=excluded.processed_total_tokens,
-                token_accounting_semantics=excluded.token_accounting_semantics,
-                token_accounting_quality=excluded.token_accounting_quality,
-                tool_calls_json=excluded.tool_calls_json,
-                codex_thread_class=excluded.codex_thread_class,
-                attribution_scope=excluded.attribution_scope,
-                request_method=excluded.request_method,
-                request_path=excluded.request_path,
-                route_intent=excluded.route_intent,
-                model_group_id=excluded.model_group_id,model_group_name=excluded.model_group_name,
-                sticky_key=excluded.sticky_key,client_variant=excluded.client_variant,
-                agent_role=excluded.agent_role,agent_name=excluded.agent_name,
-                parent_thread_id=excluded.parent_thread_id,parent_turn_id=excluded.parent_turn_id,
-                root_turn_id=excluded.root_turn_id",
-            params![
-                message.seq,
-                message.change_seq,
-                message.event.id,
-                message.event.request_id,
-                message.event.timestamp,
-                message.event.kind,
-                option_token(message.event.phase),
-                option_token(message.event.outcome),
-                message.event.status_code,
-                option_token(message.event.client_kind),
-                option_token(message.event.request_purpose),
-                message.event.endpoint_id,
-                option_token(message.event.failure_kind),
-                i64::from(message.event.is_in_flight()),
-                payload,
-                created_at,
-                PROJECTION_VERSION,
-                projection.payload_bytes,
-                projection.session_key,
-                projection.session_source,
-                projection.project_id,
-                projection.project_name,
-                projection.project_source,
-                projection.local_user,
-                projection.workspace_paths_json,
-                projection.endpoint_name,
-                projection.feature_rule_id,
-                projection.client_model,
-                projection.effective_model,
-                projection.upstream_model,
-                projection.failure_phase,
-                projection.source_format,
-                projection.target_format,
-                projection.route_mode,
-                projection.upstream_status_code,
-                projection.duration_ms,
-                projection.ttfb_ms,
-                projection.failover,
-                projection.stream_terminal,
-                projection.codex_metadata_present,
-                projection.usage_present,
-                projection.input_tokens,
-                projection.output_tokens,
-                projection.cache_read_input_tokens,
-                projection.cache_creation_input_tokens,
-                projection.reasoning_tokens,
-                projection.uncached_input_tokens,
-                projection.processed_input_tokens,
-                projection.processed_total_tokens,
-                projection.token_accounting_semantics,
-                projection.token_accounting_quality,
-                projection.tool_calls_json,
-                projection.codex_thread_class,
-                projection.attribution_scope,
-                projection.request_method,
-                projection.request_path,
-                projection.route_intent,
-            projection.model_group_id,
-            projection.model_group_name,
-                projection.sticky_key,
-                projection.client_variant,
-                projection.agent_role,
-                projection.agent_name,
-                projection.parent_thread_id,
-                projection.parent_turn_id,
-                projection.root_turn_id,
-            ],
-        )?;
+        use crate::entities::runtime_events;
+        use sea_orm::{EntityTrait, Iterable, Set, sea_query::OnConflict};
+        let mut model = projection.active_model();
+        model.seq = Set(message.seq);
+        model.change_seq = Set(message.change_seq);
+        model.event_id = Set(message.event.id.clone());
+        model.request_id = Set(message.event.request_id.clone());
+        model.timestamp = Set(message.event.timestamp);
+        model.kind = Set(message.event.kind.clone());
+        model.phase = Set(option_token(message.event.phase));
+        model.outcome = Set(option_token(message.event.outcome));
+        model.status_code = Set(message.event.status_code);
+        model.client_kind = Set(option_token(message.event.client_kind));
+        model.request_purpose = Set(option_token(message.event.request_purpose));
+        model.endpoint_id = Set(message.event.endpoint_id.clone());
+        model.failure_kind = Set(option_token(message.event.failure_kind));
+        model.is_in_flight = Set(i64::from(message.event.is_in_flight()));
+        model.payload_json = Set(payload);
+        model.created_at = Set(created_at);
+        model.updated_at = Set(created_at);
+        transaction.orm(move |db| async move {
+            use runtime_events::Column;
+            runtime_events::Entity::insert(model)
+                .on_conflict(
+                    OnConflict::column(Column::EventId)
+                        .update_columns(Column::iter().filter(|column| {
+                            !matches!(column, Column::Seq | Column::EventId | Column::CreatedAt)
+                        }))
+                        .to_owned(),
+                )
+                .exec_without_returning(db.as_ref())
+                .await
+                .map(|_| ())
+        })?;
         mark_event_hourly_rollup_dirty(&transaction, &message.event)?;
         if previous.is_none() {
             retained_event_count = retained_event_count.saturating_add(1);
@@ -860,21 +713,7 @@ pub(super) fn write_batch(
         .iter()
         .max_by_key(|message| message.change_seq)
         .expect("non-empty batch");
-    transaction.execute(
-        "UPDATE runtime_counters SET client_requests=?2,client_successes=?3,
-         client_failures=?4,upstream_attempts=?5,upstream_successes=?6,
-         upstream_failures=?7,failovers=?8 WHERE id=1",
-        params![
-            1,
-            latest.counters.client_requests,
-            latest.counters.client_successes,
-            latest.counters.client_failures,
-            latest.counters.upstream_attempts,
-            latest.counters.upstream_successes,
-            latest.counters.upstream_failures,
-            latest.counters.failovers,
-        ],
-    )?;
+    super::models::save_counters(&transaction, &latest.counters)?;
     let max_seq = batch.iter().map(|message| message.seq).max().unwrap_or(0);
     let max_change_seq = batch
         .iter()

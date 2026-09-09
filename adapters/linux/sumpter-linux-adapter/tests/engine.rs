@@ -1,4 +1,4 @@
-//! 引擎行为测试:FakeTransport 脚本化上游,对照 specs/spec-engine.md §8 的核心条目。
+//! 引擎行为测试:FakeTransport 脚本化上游,对照 docs/architecture.md §8 的核心条目。
 
 #[path = "../../../../tests/contracts/gemini.rs"]
 mod gemini;
@@ -389,7 +389,7 @@ fn codex_responses_body() -> Bytes {
     )
 }
 
-/// 事件消息词表前缀清单(specs/spec-engine.md §5.1)。
+/// 事件消息词表前缀清单(docs/architecture.md §5.1)。
 /// 与 Swift 侧 `RuntimeEventPresentationTests` 的清单互钉:两边不同步会各自红。
 const MESSAGE_TOKEN_PREFIXES: &[&str] = &[
     "bridge ",
@@ -427,7 +427,7 @@ fn assert_messages_in_vocabulary(runtime: &sumpter_core::events::RuntimeSnapshot
                 MESSAGE_TOKEN_PREFIXES
                     .iter()
                     .any(|p| segment.starts_with(p)),
-                "消息段不在词表(specs/spec-engine.md §5.1): {segment}"
+                "消息段不在词表(docs/architecture.md §5.1): {segment}"
             );
         }
     }
@@ -5803,8 +5803,9 @@ async fn legacy_stats_is_ignored_and_preserved_across_requests_and_reset() {
     let dir = temp_config_dir("stats-invalid-protection");
     dir.ensure_exists().unwrap();
     let original = "{broken-stats";
-    std::fs::write(dir.stats_path(), original).unwrap();
-    let before = std::fs::metadata(dir.stats_path())
+    let archived_stats = dir.config_path().with_file_name("stats.json");
+    std::fs::write(&archived_stats, original).unwrap();
+    let before = std::fs::metadata(&archived_stats)
         .unwrap()
         .modified()
         .unwrap();
@@ -5824,9 +5825,9 @@ async fn legacy_stats_is_ignored_and_preserved_across_requests_and_reset() {
     );
     engine.flush_stats().unwrap();
     engine.reset_runtime().unwrap();
-    assert_eq!(std::fs::read_to_string(dir.stats_path()).unwrap(), original);
+    assert_eq!(std::fs::read_to_string(&archived_stats).unwrap(), original);
     assert_eq!(
-        std::fs::metadata(dir.stats_path())
+        std::fs::metadata(&archived_stats)
             .unwrap()
             .modified()
             .unwrap(),

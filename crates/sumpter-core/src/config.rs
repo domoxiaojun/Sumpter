@@ -302,7 +302,7 @@ impl Default for ListenerConfig {
     }
 }
 
-/// 全局转发/重试参数。语义(见 specs/spec-engine.md §2-3):
+/// 全局转发/重试参数。语义(见 docs/architecture.md §2-3):
 /// - `response_timeout_seconds`:流式 = 响应头截止;非流式 = 整响应截止。None = 普通请求不限；
 ///   原生 Realtime/Live 启动由引擎额外施加有界保护。
 /// - `stream_idle_timeout_seconds`:流式两次吐字最大间隔。None = 不限。

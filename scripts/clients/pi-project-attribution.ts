@@ -1,4 +1,4 @@
-/** Opt in only on Sumpter providers with headers: { "X-Sumpter-Client": "pi" }. */
+/** Opt in from the Sumpter shell wrapper or a provider header marker. */
 import { execFile } from "node:child_process";
 import { basename } from "node:path";
 import { userInfo } from "node:os";
@@ -7,6 +7,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const exec = promisify(execFile);
 const attributionHeaders = [
+  "x-sumpter-client",
   "x-sumpter-project", "x-sumpter-workspace", "x-sumpter-user",
   "x-sumpter-git-remote", "x-sumpter-session-id", "x-sumpter-attribution-encoding",
 ];
@@ -42,8 +43,11 @@ export function sanitizeRemote(remote: string | undefined): string | undefined {
 export default function (pi: ExtensionAPI) {
   pi.on("before_provider_headers", async (event, ctx) => {
     const markers = Object.entries(event.headers)
-      .filter(([name]) => name.toLowerCase() === "x-sumpter-client");
-    if (!markers.length || markers.some(([, value]) => value?.trim().toLowerCase() !== "pi")) return;
+      .filter(([name, value]) => name.toLowerCase() === "x-sumpter-client" && value != null);
+    const providerOptIn = markers.length > 0
+      && markers.every(([, value]) => value?.trim().toLowerCase() === "pi");
+    const shellOptIn = process.env.SUMPTER_PI_ATTRIBUTION === "1";
+    if (!providerOptIn && !shellOptIn) return;
 
     // Clear previous values including alternate casing; failures must not
     // leave another session's metadata on reused headers.
@@ -64,6 +68,7 @@ export default function (pi: ExtensionAPI) {
     let user: string | undefined;
     try { user = userInfo().username; } catch { /* Optional observation. */ }
     const values: Record<string, string | undefined> = {
+      "x-sumpter-client": "pi",
       "x-sumpter-project": basename(workspace),
       "x-sumpter-workspace": workspace,
       "x-sumpter-user": user,

@@ -81,6 +81,7 @@ pub fn evaluate(events: &[RuntimeEvent], running: bool) -> HealthSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sumpter_core::events::{RuntimeEventOutcome, RuntimeEventPhase};
 
     fn client_event(status: i64, ts: f64) -> RuntimeEvent {
         RuntimeEvent {
@@ -113,9 +114,12 @@ mod tests {
             kind: KIND_CLIENT.into(),
             message: None,
             tool_calls: None,
-            outcome: None,
-            phase: None,
-            pool_id: None,
+            outcome: Some(match status {
+                499 => RuntimeEventOutcome::Cancelled,
+                200..=399 => RuntimeEventOutcome::Succeeded,
+                _ => RuntimeEventOutcome::Failed,
+            }),
+            phase: Some(RuntimeEventPhase::Completed),
             request_purpose: None,
             request_id: None,
             request_method: None,

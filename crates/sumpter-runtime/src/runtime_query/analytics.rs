@@ -2,7 +2,7 @@
 
 use super::facets_queries::analytics_facets_for_filter;
 
-use rusqlite::params_from_iter;
+use crate::database::params_from_iter;
 
 use super::csv_values;
 

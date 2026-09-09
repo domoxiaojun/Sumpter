@@ -11,10 +11,12 @@
 | Rust / Cargo | 1.88+，CI 使用 1.88.0 | 共享引擎与两个 adapter |
 | Node.js / npm | Node 22，CI 使用 22.18.0 | WebUI、资源同步与脚本测试 |
 | uv | 可用的稳定版，Python 3.11+ | 文档生成脚本 |
-| Xcode / Swift | 完整 Xcode，Swift 6+ | macOS 14+ App，仅 macOS 主机 |
+| Xcode / Swift | Xcode 26.6 (17F113)，Swift 6.3.3，macOS SDK 26.5 | macOS 14+ App，仅 macOS 主机 |
 | actionlint / shellcheck / taplo / lychee | 本机或 CI 可用 | 对应文件静态检查；链接检查按需手动执行 |
 
 macOS Homebrew rustup 若未进入 PATH，先执行 `export PATH="/opt/homebrew/opt/rustup/bin:$PATH"`。SwiftUI 宏需完整 Xcode，只有 Command Line Tools 不足；使用 `xcode-select -p` 与 `swift --version` 核对。
+
+macOS CI 与 Release 使用 `macos-26` arm64 runner；与本地检查、打包共用 `platforms/macos/app/select-xcode.sh` 中固定的最新稳定工具链基线。脚本校验 Xcode 版本、构建号和 SDK，不会因多个版本都使用 Swift 6 而选中旧 Xcode。非默认位置可通过 `DEVELOPER_DIR` 指向同一版本；版本不匹配会停止并提示，不自动降级或安装。升级工具链时同步更新该脚本与本表，最低运行系统仍为 macOS 14。相同 SDK 可消除构建环境引入的样式差异，实际外观仍受运行系统和外观设置影响。
 
 ```bash
 npm ci --prefix platforms/linux/webui
@@ -49,6 +51,22 @@ swift test --package-path platforms/macos/app --filter RuntimeV2WireContractTest
 ```
 
 不要并行运行共享同一 `.build` 的 SwiftPM 命令。
+
+## runtime ORM 开发
+
+共享 runtime 使用 SeaORM 1.1.20 与内嵌 SQLite，保持 Rust 1.88 支持；SeaORM 2.x
+要求更高的 Rust 版本，升级依赖时须一起核对 workspace 和 CI 工具链。
+实体维护源是 `crates/sumpter-runtime/src/entities/`，新库结构由实体生成，检查约束
+与查询索引在同层显式定义。事件投影和常规数据操作使用 ORM，复杂统计保留参数化 SQL。
+所有读写经 `database.rs` 管理的 SeaORM 连接、事务与有界流式通道执行；不要新增平行数据库驱动。
+
+新增或删减事件字段时，同时检查实体、`runtime_store/models.rs`、相关查询结果模型、
+统计 SQL 与两个 adapter 的 wire 契约。修改实体不会自动改写现有数据库；旧版本库
+继续在只读检查后阻断，清空重建仍需用户明确操作。不要将 ORM 接入视为旧库迁移授权。
+
+先运行 `cargo +1.88.0 test --locked -p sumpter-runtime`，覆盖临时数据库上的约束、事务
+回滚、流式取消、只读访问、重启恢复和十万行查询；随后运行两个 adapter 的定向测试。
+测试数据库使用临时目录或独立内存连接，不指向正在使用的配置目录。
 
 ## 运行开发实例
 

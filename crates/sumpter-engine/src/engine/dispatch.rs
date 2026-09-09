@@ -859,11 +859,11 @@ impl Engine {
                 &[("error", "unsupported_translation"), ("message", &message)],
             );
         }
-        // Apply the persistent provider/model cooldown at request admission.
-        // Once admitted, this request's explicit retry/failover policy must be
-        // allowed to run to completion; otherwise its first retryable response
-        // would quarantine every candidate and short-circuit recovery.
-        let initial_ordered = self.ordered_endpoint_candidates(&candidates, &session_key, true);
+        // A cooldown is accounting/scheduling metadata only. Keep every
+        // compatible candidate dispatchable so a request can reach the
+        // provider and return its actual response status/body. The proxy must
+        // not synthesize a 503 merely because its local health map is warm.
+        let initial_ordered = self.ordered_endpoint_candidates(&candidates, &session_key, false);
         // 路由计划定型且粘性排序已完成：此时首选入口已经确定，虽然尚未真正
         // 发起网络尝试。先写入候选协议，accepted/failover 后仍由 guard 用实际
         // 胜出入口覆盖，避免长时间等待首响应时三元组一直为空。
@@ -932,7 +932,6 @@ impl Engine {
             grok_metadata: client_meta.grok_metadata.clone(),
             outcome: None,
             phase: Some(RuntimeEventPhase::InFlight),
-            pool_id: None,
             request_purpose: Some(purpose),
             request_id: Some(client_event_id.clone()),
             request_method: client_meta
@@ -983,19 +982,11 @@ impl Engine {
         .await
     }
 
-    pub(super) fn ordered_endpoints(
-        &self,
-        plan: &sumpter_core::routing::RoutePlan,
-        session_key: &sticky::SessionKey,
-    ) -> Vec<PlannedEndpoint> {
-        self.ordered_endpoint_candidates(&plan.endpoints, session_key, true)
-    }
-
     /// Apply provider/model cooldown (when requested) and sticky-group
     /// ordering to a stable route candidate list. Cooldown is an admission
     /// gate for new requests; an already admitted request may explicitly
     /// retry the same candidate according to its retry policy.
-    fn ordered_endpoint_candidates(
+    pub(super) fn ordered_endpoint_candidates(
         &self,
         candidates: &[PlannedEndpoint],
         session_key: &sticky::SessionKey,
@@ -1066,49 +1057,6 @@ impl Engine {
         output
     }
 
-    /// Return the shortest remaining provider/model cooldown only when every
-    /// candidate is currently cooling. `None` means at least one candidate is
-    /// dispatchable (or the route has no candidates at all).
-    pub(super) fn provider_model_cooldown_retry_after(
-        &self,
-        candidates: &[PlannedEndpoint],
-    ) -> Option<f64> {
-        if candidates.is_empty() {
-            return None;
-        }
-        let now = now_unix();
-        let state = self.inner.state.lock().unwrap();
-        let mut shortest = None;
-        for endpoint in candidates {
-            let until = provider_model_cooling_until(&state.provider_model_health, endpoint, now)?;
-            let remaining = (until - now).clamp(0.0, MAX_RETRY_AFTER_SECS);
-            shortest = Some(shortest.map_or(remaining, |current: f64| current.min(remaining)));
-        }
-        shortest
-    }
-
-    fn provider_cooldown_response(
-        &self,
-        mut guard: CompletionGuard,
-        retry_after: f64,
-        message: &str,
-    ) -> Response {
-        let request_id = guard.request_id().to_string();
-        let failure = FailureInfo::provider_cooldown(retry_after);
-        guard.complete(503, Some(message.to_string()), failure.clone());
-        // Cooldown is a local admission decision, so Retry-After remains
-        // mandatory even when the user's ordinary upstream retry-delay
-        // passthrough option is disabled.
-        proxy_failure_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "provider_cooldown",
-            &request_id,
-            &failure,
-            None,
-            true,
-        )
-    }
-
     #[allow(clippy::too_many_arguments)]
     async fn forward(
         &self,
@@ -1158,20 +1106,10 @@ impl Engine {
             // weakening cooldowns created by 429/5xx/transport failures.
             self.clear_realtime_unauthorized_cooldowns(&candidates);
         }
-        // Keep the full, translation-compatible candidate set. Cooldown is a
-        // dispatch-time concern and is intentionally recomputed below for
-        // every retry round; passing an already-filtered vector here would
-        // make a cooling endpoint disappear until process restart.
-        let ordered = self.ordered_endpoint_candidates(&candidates, &session_key, true);
-        if ordered.is_empty()
-            && let Some(retry_after) = self.provider_model_cooldown_retry_after(&candidates)
-        {
-            return self.provider_cooldown_response(
-                guard,
-                retry_after,
-                "all compatible providers are cooling down",
-            );
-        }
+        // Keep the full, translation-compatible candidate set. A local
+        // cooldown must never turn an otherwise routable request into a
+        // locally generated 503; the upstream response is authoritative.
+        let ordered = self.ordered_endpoint_candidates(&candidates, &session_key, false);
         let initial_group = ordered
             .first()
             .map(|endpoint| endpoint.scheduling_group().to_string())

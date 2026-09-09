@@ -1,6 +1,6 @@
 //! Runtime query trends domain.
 
-use rusqlite::params_from_iter;
+use crate::database::params_from_iter;
 
 use super::{
     API_VERSION, BTreeMap, Connection, CostCoverage, DURATION_CRITICAL_MS, DURATION_SLOW_MS,

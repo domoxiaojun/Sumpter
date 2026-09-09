@@ -524,10 +524,6 @@ pub(super) fn websocket_trace(
             bytes_received: Some(bytes_received),
             client_message_count: Some(client_message_count),
             upstream_message_count: Some(upstream_message_count),
-            // Keep the historical aggregate field for old UI versions: an
-            // upstream close is more authoritative, otherwise use the client
-            // close code.
-            close_code: upstream_close_code.or(client_close_code),
             client_close_code,
             upstream_close_code,
             closed_by,
@@ -582,7 +578,6 @@ pub(super) fn websocket_client_event(
             RuntimeEventOutcome::Failed
         }),
         phase: Some(RuntimeEventPhase::Completed),
-        pool_id: None,
         request_purpose: Some(RequestPurpose::Standard),
         request_id: Some(context.request_id.clone()),
         request_method: Some("GET".into()),

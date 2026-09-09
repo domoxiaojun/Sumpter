@@ -102,7 +102,10 @@ test('event table keeps pagination outside horizontal scrolling and exposes sort
     readFile(new URL('../src/hooks/useRuntimeEventPage.js', import.meta.url), 'utf8'),
     readFile(new URL('../src/components/DataTable.jsx', import.meta.url), 'utf8'),
   ]);
-  assert.match(runPageSource, /<DataTable[\s\S]*?<PaginationBar/);
+  assert.ok(
+    runPageSource.indexOf('<PaginationBar') < runPageSource.indexOf('className="event-page-content"'),
+    '分页控件应位于事件列表上方',
+  );
   assert.match(runPageSource, /<LiveEventList/);
   assert.match(runPageSource, /data=\{visibleEvents\}/);
   assert.match(hookSource, /persistedEvents/);

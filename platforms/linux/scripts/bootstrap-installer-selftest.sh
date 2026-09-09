@@ -110,8 +110,25 @@ while (($# > 0)); do
     esac
 done
 [[ -n "$destination" && -n "$url" ]] || exit 1
-printf '%s\n' "$url" >"${SUMPTER_BOOTSTRAP_REQUEST_URL:?}"
-cp -- "${SUMPTER_BOOTSTRAP_ARCHIVE:?}" "$destination"
+printf '%s\n' "$url" >>"${SUMPTER_BOOTSTRAP_REQUEST_URL:?}"
+case "$url" in
+    */SHA256SUMS)
+        [[ "${SUMPTER_BOOTSTRAP_SUM_MODE:-}" != missing ]] || exit 22
+        hash="$(sha256sum "${SUMPTER_BOOTSTRAP_ARCHIVE:?}" | awk '{print $1}')"
+        asset="$(sed -n '1p' "$SUMPTER_BOOTSTRAP_REQUEST_URL")"
+        asset="${asset##*/}"
+        case "${SUMPTER_BOOTSTRAP_SUM_MODE:-}" in
+            mismatch) hash="$(printf '%064d' 0)" ;;
+            malformed) hash="not-a-sha256" ;;
+            wrong-asset) asset="other-architecture.tar.gz" ;;
+        esac
+        printf '%s  %s\n' "$hash" "$asset" >"$destination"
+        if [[ "${SUMPTER_BOOTSTRAP_SUM_MODE:-}" == duplicate ]]; then
+            printf '%s  %s\n' "$hash" "$asset" >>"$destination"
+        fi
+        ;;
+    *) cp -- "${SUMPTER_BOOTSTRAP_ARCHIVE:?}" "$destination" ;;
+esac
 EOF
 chmod 0755 "$STUB_BIN/curl"
 
@@ -124,7 +141,9 @@ TZ=Asia/Shanghai PATH="$STUB_BIN:$PATH" \
     bash "$BOOTSTRAP" --base-url "$BASE_URL" >"$BOOTSTRAP_OUTPUT"
 [[ "$(cat "$MARKER")" == "package installer ran" ]]
 [[ "$(cat "$MTIME_FILE")" == 0 ]]
-[[ "$(cat "$REQUEST_URL")" == "$BASE_URL/$PACKAGE_NAME.tar.gz" ]]
+[[ "$(sed -n '1p' "$REQUEST_URL")" == "$BASE_URL/$PACKAGE_NAME.tar.gz" ]]
+[[ "$(sed -n '2p' "$REQUEST_URL")" == "$BASE_URL/SHA256SUMS" ]]
+grep -Fq 'SHA-256 校验通过' "$BOOTSTRAP_OUTPUT"
 [[ -f "$INSTALL_ARGS_FILE" && ! -s "$INSTALL_ARGS_FILE" ]]
 grep -Fq '# v9.8.7' "$BOOTSTRAP_OUTPUT"
 grep -Fq '* bootstrap changelog display fixture' "$BOOTSTRAP_OUTPUT"
@@ -186,5 +205,20 @@ if PATH="$STUB_BIN:$PATH" \
     exit 1
 fi
 [[ ! -e "$MARKER" ]]
+
+for sum_mode in missing mismatch malformed wrong-asset duplicate; do
+    rm -f -- "$MARKER" "$REQUEST_URL" "$INSTALL_ARGS_FILE"
+    if PATH="$STUB_BIN:$PATH" \
+        SUMPTER_BOOTSTRAP_ARCHIVE="$GOOD_ARCHIVE" \
+        SUMPTER_BOOTSTRAP_SUM_MODE="$sum_mode" \
+        SUMPTER_BOOTSTRAP_MARKER="$MARKER" \
+        SUMPTER_BOOTSTRAP_INSTALL_ARGS="$INSTALL_ARGS_FILE" \
+        SUMPTER_BOOTSTRAP_REQUEST_URL="$REQUEST_URL" \
+        bash "$BOOTSTRAP" --base-url "$BASE_URL" >"$BOOTSTRAP_OUTPUT" 2>&1; then
+        echo "校验清单 $sum_mode 应在安装前失败" >&2
+        exit 1
+    fi
+    [[ ! -e "$MARKER" && ! -e "$INSTALL_ARGS_FILE" ]]
+done
 
 echo "static mirror bootstrap self-test: PASS"

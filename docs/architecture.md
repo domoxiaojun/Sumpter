@@ -58,6 +58,20 @@ rollup，`worker.rs` 负责写入 worker，`maintenance.rs` 负责保留策略/�
 `errors.rs`、`dimensions.rs`、`export.rs` 与 `storage.rs`；这些模块共享过滤器、
 快照和 SQL 辅助函数，但不改变 crate 的公开查询函数合同。
 
+runtime 的数据库访问统一使用 SeaORM 1.1（支持 workspace 的 Rust 1.88 基线）与
+内嵌 SQLite。`entities/` 定义当前 8 张表，`entities.rs` 从实体创建完整新库并补充
+唯一约束、检查约束和索引；不通过补列或实体自动同步转换旧库。
+`runtime_store/models.rs` 管理按字段名映射的事件投影、计数、价格和保留设置，
+事件写入使用 ORM upsert 保留既有 `seq` 与创建时间；事件列表使用具名结果映射。
+统计聚合保留参数化 SQL，并经同一 SeaORM 连接和事务执行。
+
+`database.rs` 将 SeaORM 异步执行封装在专用 executor 中，对外保留同步存储 API。
+每个连接最多持有一个 SQLite 连接，写入仍由有界队列和单一 worker 批量提交。
+只读事务保持查询快照；流式查询通过有界通道传递结果，中途取消会释放游标，
+失败事务在退出时回滚。最后一个存储句柄释放时等待写入线程与数据库连接关闭，
+避免退出后的 WAL 合并与下一次打开交错。ORM 实体不进入平台或 Admin 的序列化协议。
+本次接入保留事件字段及 schema/projection 版本；字段精简须单独核对查询、投影与协议。
+
 配置文件与 runtime 数据库各自维护版本。`config.json` 当前是 schema v7；runtime 的
 `SCHEMA_VERSION` / `PROJECTION_VERSION` 当前分别为 4 / 9，由 `runtime_store.rs` 定义。
 现行 `schema.rs` 只允许全新数据库进入初始化；检测到旧 schema、缺少归因列或旧 projection 时返回结构化 `runtime_recreate_required`，代理保持停止，确认后通过 `runtime/recreate` 清空重建且不回填历史。高于支持版本仍返回 `runtime_schema_newer` 并拒绝启动。

@@ -97,17 +97,23 @@ jobs:
 
   macos:
     name: macOS App
-    runs-on: macos-15
+    # 稳定工具链版本由 platforms/macos/app/select-xcode.sh 统一校验。
+    runs-on: macos-26
     timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Check Swift toolchain
+      - name: Select stable Xcode toolchain
         run: |
+          set -euo pipefail
+          selected="$(bash platforms/macos/app/select-xcode.sh)"
+          export DEVELOPER_DIR="$selected"
+          echo "DEVELOPER_DIR=$selected" >> "$GITHUB_ENV"
           xcodebuild -version
           swift --version
+          xcrun --sdk macosx --show-sdk-version
       - name: Build and test App
         run: ./scripts/check.sh macos
 

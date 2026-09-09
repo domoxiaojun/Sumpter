@@ -1,1 +1,0 @@
-../../../../scripts/grok-project-attribution.sh

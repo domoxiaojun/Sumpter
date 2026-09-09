@@ -153,7 +153,7 @@ test('Grok Build client kind uses its product label', () => {
   assert.equal(clientKindLabel('grok_build'), 'Grok Build');
 });
 
-test('client attribution separates explicit unknown, legacy missing, and non-applicable events', () => {
+test('client attribution separates explicit unknown, missing, and non-applicable events', () => {
   const explicitUnknown = { kind: 'client', clientKind: 'unknown' };
   const legacyClient = { kind: 'client', statusCode: 200 };
   const legacyUpstream = { kind: 'upstream', statusCode: 200 };
@@ -161,9 +161,9 @@ test('client attribution separates explicit unknown, legacy missing, and non-app
   assert.equal(eventClientKindState(explicitUnknown), 'explicit');
   assert.equal(eventClientKindLabel(explicitUnknown), '未知客户端');
   assert.equal(eventClientKindState(legacyClient), 'missing');
-  assert.equal(eventClientKindLabel(legacyClient), '旧事件（未记录）');
+  assert.equal(eventClientKindLabel(legacyClient), '客户端未记录');
   assert.equal(eventClientKindState(legacyUpstream), 'missing');
-  assert.equal(eventClientKindLabel(legacyUpstream), '旧事件（未记录）');
+  assert.equal(eventClientKindLabel(legacyUpstream), '客户端未记录');
   assert.equal(eventClientKindState(notification), 'not_applicable');
   assert.equal(eventClientKindLabel(notification), '不适用（通知事件）');
   assert.equal(eventResultKind(notification), null);
@@ -182,48 +182,34 @@ test('client attribution separates explicit unknown, legacy missing, and non-app
 
 test('request purpose separates explicit values, legacy missing, and notifications', () => {
   assert.equal(eventPurposeLabel({ kind: 'client', requestPurpose: 'websearch' }), 'WebSearch 搜索');
-  assert.equal(eventPurposeLabel({ kind: 'client' }), '旧事件（未记录）');
+  assert.equal(eventPurposeLabel({ kind: 'client' }), '请求用途未记录');
   assert.equal(eventPurposeLabel({ kind: 'notify' }), '不适用（通知事件）');
 });
 
-test('legacy result fallback matches core status classification', () => {
-  assert.equal(eventResultKind({ statusCode: 204 }), 'succeeded');
-  assert.equal(eventResultKind({ statusCode: 302 }), 'succeeded');
-  assert.equal(eventResultKind({ statusCode: 404 }), 'failed');
-  assert.equal(eventResultKind({ statusCode: 499 }), 'cancelled');
+test('HTTP responses never fabricate an unreported final result', () => {
+  for (const statusCode of [200, 204, 302, 404, 499, 503]) {
+    const event = { statusCode };
+    assert.equal(eventResultKind(event), null);
+    assert.equal(eventHTTPStatusCode(event), statusCode);
+    assert.equal(eventOutcomeLabel(event), '未上报 (Unknown)');
+    assert.equal(friendlyEventMessage(event), '最终结果未上报');
+    assert.equal(statusKind(event), 'muted');
+  }
   assert.equal(eventResultKind({ statusCode: 200, outcome: 'failed' }), 'failed');
   assert.equal(eventResultKind({ statusCode: 200, phase: 'inFlight' }), null);
-  assert.equal(statusKind({ statusCode: 404 }), 'critical');
-  assert.equal(eventOutcomeLabel({ statusCode: 204 }), '成功（旧事件推断）');
-  assert.equal(eventOutcomeLabel({ statusCode: 404 }), '失败（旧事件推断）');
-  assert.equal(eventOutcomeLabel({ statusCode: 499 }), '已取消（旧事件推断）');
-  assert.equal(friendlyEventMessage({ statusCode: 204 }), '旧事件：按 HTTP 状态推断为成功');
-  assert.equal(friendlyEventMessage({ statusCode: 404 }), '旧事件：按 HTTP 状态推断为失败');
+  assert.equal(statusKind(200), 'good', '独立 HTTP 状态仍表示 HTTP 成功');
 });
 
-test('legacy completed rows fall back to recorded upstream HTTP status consistently', () => {
-  const succeeded = {
-    kind: 'client', statusCode: 0, upstreamStatusCode: 200, phase: 'completed',
-  };
-  const failed = {
-    kind: 'client', statusCode: 0, upstreamStatusCode: 503, phase: 'completed',
-  };
-  const cancelled = {
-    kind: 'client', statusCode: 0, upstreamStatusCode: 499, phase: 'completed',
-  };
-  assert.equal(eventHTTPStatusCode(succeeded), 200);
-  assert.equal(eventResultKind(succeeded), 'succeeded');
-  assert.equal(eventOutcomeLabel(succeeded), '成功（最终结果未上报）');
-  assert.equal(statusKind(succeeded), 'good');
-  assert.equal(friendlyEventMessage(succeeded), '最终结果未上报（HTTP 状态仅供参考）');
-  assert.equal(eventResultKind(failed), 'failed');
-  assert.equal(eventOutcomeLabel(failed), '失败（最终结果未上报）');
-  assert.equal(statusKind(failed), 'critical');
-  assert.equal(friendlyEventMessage(failed), '最终结果未上报（HTTP 状态仅供参考）');
-  assert.equal(eventResultKind(cancelled), 'cancelled');
-  assert.equal(eventOutcomeLabel(cancelled), '已取消（最终结果未上报）');
-  assert.equal(statusKind(cancelled), 'muted');
-  assert.equal(friendlyEventMessage(cancelled), '最终结果未上报（HTTP 499 仅供参考）');
+test('client and upstream HTTP statuses remain separate without a final result', () => {
+  for (const upstreamStatusCode of [200, 503, 499]) {
+    const event = { kind: 'client', statusCode: 0, upstreamStatusCode, phase: 'completed' };
+    assert.equal(eventHTTPStatusCode(event), 0);
+    assert.equal(eventUpstreamStatusLabel(event), `HTTP ${upstreamStatusCode}`);
+    assert.equal(eventResultKind(event), null);
+    assert.equal(eventOutcomeLabel(event), '未上报 (Unknown)');
+    assert.equal(statusKind(event), 'muted');
+    assert.equal(friendlyEventMessage(event), '最终结果未上报');
+  }
 });
 
 test('routing tokens use recorded outcome and stream trace for the user-facing summary', () => {
@@ -269,21 +255,21 @@ test('technical labels distinguish recorded facts from legacy or pre-route gaps'
   assert.equal(failureKindLabel('client_request_rejected'), '客户端请求被代理拒绝');
   assert.equal(
     eventProtocolRouteLabel({ kind: 'client', statusCode: 401, phase: 'completed', outcome: 'failed' }),
-    '未记录（路由前拒绝）',
+    '未记录',
   );
   assert.equal(
     eventProtocolRouteLabel({ kind: 'client', statusCode: 200 }),
-    '未记录（旧事件）',
+    '未记录',
   );
   assert.equal(
     eventProtocolRouteLabel({ kind: 'client', sourceFormat: 'openai-responses', phase: 'completed', outcome: 'failed' }),
     'OpenAI Responses → 未记录 · 未记录',
   );
-  assert.equal(eventFailureSummaryLabel({ kind: 'client', statusCode: 200 }), '不适用（请求成功）');
-  assert.equal(eventFailureSummaryLabel({ kind: 'client', statusCode: 500 }), '未记录（旧事件 / 非结构化失败）');
-  assert.equal(eventToolCallsLabel({ kind: 'client', statusCode: 200 }), '未记录（旧事件）');
-  assert.equal(eventStreamTraceLabel({ kind: 'client', statusCode: 200 }), '未记录（旧事件）');
-  assert.equal(eventUpstreamStatusLabel({ kind: 'upstream', statusCode: 200 }), 'HTTP 200（旧事件推断）');
+  assert.equal(eventFailureSummaryLabel({ kind: 'client', statusCode: 200 }), '未记录');
+  assert.equal(eventFailureSummaryLabel({ kind: 'client', statusCode: 500 }), '未记录');
+  assert.equal(eventToolCallsLabel({ kind: 'client', statusCode: 200 }), '工具调用未记录');
+  assert.equal(eventStreamTraceLabel({ kind: 'client', statusCode: 200 }), '流诊断信息未记录');
+  assert.equal(eventUpstreamStatusLabel({ kind: 'upstream', statusCode: 200 }), '未收到响应头 / 未记录');
 });
 
 test('runtime SSE updates replace an event in place instead of duplicating it', () => {
@@ -466,7 +452,7 @@ test('Codex metadata summary and full JSON tolerate legacy wire forms', () => {
   assert.equal(eventCodexMetadata({ codex_metadata: { thread_id: 'legacy' } }).thread_id, 'legacy');
   assert.match(codexMetadataJSON(event), /"workspaces"/);
   assert.doesNotThrow(() => codexMetadataSummary({ id: 'old' }));
-  assert.equal(codexMetadataSummary({ id: 'old', codex_metadata: { thread_id: 'legacy' } }), '未发现子代理证据 · 线程 legacy');
+  assert.equal(codexMetadataSummary({ id: 'old', codex_metadata: { thread_id: 'legacy' } }), '主代理 · 线程 legacy');
 });
 
 test('Grok metadata summary exposes sampling headers and empty Codex OTel is not identity', () => {
@@ -522,7 +508,7 @@ test('Codex workspace context prefers local project names and keeps remote as se
     },
   ]);
   assert.equal(codexWorkspaceSummary(metadata), 'automode-proxy · 有未提交改动 · 提交 12345678；local-only · 工作区干净');
-  assert.equal(codexAgentRoleLabel(metadata), '未发现子代理证据');
+  assert.equal(codexAgentRoleLabel(metadata), '主代理');
 });
 
 test('runtime event UI keeps HTTP 200 separate from a failed final outcome', () => {
@@ -532,7 +518,7 @@ test('runtime event UI keeps HTTP 200 separate from a failed final outcome', () 
     failureKind: 'stream_interrupted', failurePhase: 'response_stream',
   };
   assert.equal(eventStatus(event), 'HTTP 200 · 失败');
-  assert.equal(eventOutcomeLabel(event), '请求失败 (Failed)');
+  assert.equal(eventOutcomeLabel(event), '最终结果失败 (Failed)');
   assert.equal(eventStatusDetailLabel(event), 'HTTP 200 · 已完成 (Completed)');
   assert.equal(statusKind(event), 'critical');
 });
@@ -545,11 +531,12 @@ test('runtime event status separates pending outcome from the in-flight phase', 
   assert.equal(eventDurationText({ ...event, ttfbMS: 412 }), 'TTFB 412ms');
 });
 
-test('legacy in-flight rows use recorded upstream HTTP status instead of showing no headers', () => {
+test('in-flight client status is not replaced by the upstream HTTP status', () => {
   const event = { kind: 'client', statusCode: 0, upstreamStatusCode: 200, phase: 'inFlight' };
-  assert.equal(eventStatus(event), 'HTTP 200 · 传输中');
-  assert.equal(eventHttpStatusLabel(event), 'HTTP 200');
-  assert.equal(eventStatusDetailLabel(event), 'HTTP 200 · 进行中 (In Flight)');
+  assert.equal(eventStatus(event), 'HTTP 未收到 · 传输中');
+  assert.equal(eventHttpStatusLabel(event), '未收到响应头');
+  assert.equal(eventUpstreamStatusLabel(event), 'HTTP 200');
+  assert.equal(eventStatusDetailLabel(event), '未收到响应头 · 进行中 (In Flight)');
 });
 
 test('in-flight duration is excluded from analytics averages', () => {
@@ -582,14 +569,14 @@ test('protocol route aggregation is a client-only secondary diagnostic', () => {
   assert.equal(rows.reduce((sum, row) => sum + row.attempts, 0), 2);
 });
 
-test('runtime event phase treats missing legacy phase as completed', () => {
+test('runtime event phase does not infer completion from a status or outcome', () => {
   assert.equal(
     eventStatusDetailLabel({ statusCode: 200 }),
-    'HTTP 200 · 已结束（旧事件未记录阶段）',
+    'HTTP 200 · 阶段未记录',
   );
   assert.equal(
     eventStatusDetailLabel({ statusCode: 200, outcome: 'succeeded' }),
-    'HTTP 200 · 已完成 (Completed)',
+    'HTTP 200 · 阶段未记录',
   );
   assert.equal(
     eventStatusDetailLabel({ statusCode: 200, phase: 'inFlight' }),
@@ -777,7 +764,7 @@ test('runtime mock covers main and subagent Codex metadata with nested wire fiel
   const subagent = (await api.getRuntimeEvent(subagentItem.id)).event;
   assert.equal(main.codexMetadata.isSubagent, false);
   assert.equal(main.codexMetadata.agentName, '/root');
-  assert.equal(codexMetadataSummary(main), '未发现子代理证据 · 代理路径 /root · 请求 turn · 线程 thread-main-0001 · 回合 turn-main-0041');
+  assert.equal(codexMetadataSummary(main), '主代理 · 代理路径 /root · 请求 turn · 线程 thread-main-0001 · 回合 turn-main-0041');
   assert.equal(subagent.codexMetadata.isSubagent, true);
   assert.equal(subagent.codexMetadata.agentName, '/root/linux_final_tests');
   assert.equal(subagent.codexMetadata.originator, 'codex_cli_rs');

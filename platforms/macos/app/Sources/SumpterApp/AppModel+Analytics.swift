@@ -1436,40 +1436,6 @@ extension AppModel {
         runtimeExportEstimateError = nil
     }
 
-    func loadMoreRuntimeEvents() {
-        Task {
-            guard let admin else { return }
-            do {
-                var beforeSeq = runtimePage?.events.last?.seq
-                var page: AdminWire.RuntimeEventPage?
-                var merged = runtimePage?.events ?? []
-                let known = Set(merged.map(\.id))
-                var knownIDs = known
-                for _ in 0..<5 {
-                    let next = try await admin.runtimeEvents(beforeSeq: beforeSeq, limit: 200)
-                    page = next
-                    for event in next.events where knownIDs.insert(event.id).inserted {
-                        merged.append(event)
-                    }
-                    guard next.hasMore, let nextBeforeSeq = next.events.last?.seq else { break }
-                    beforeSeq = nextBeforeSeq
-                }
-                guard let lastPage = page else { return }
-                runtimePage = AdminWire.RuntimeEventPage(
-                    events: merged,
-                    hasMore: lastPage.hasMore,
-                    resetGeneration: lastPage.resetGeneration,
-                    cursorValid: lastPage.cursorValid
-                )
-                let existing = Dictionary(uniqueKeysWithValues: runtime.recentEvents.map { ($0.id, $0) })
-                runtime.recentEvents = merged.map { $0.mergedRuntimeEvent(with: existing[$0.id]) }
-            } catch {
-                runtimeEventsError = "\(error)"
-                flash("加载历史事件失败")
-            }
-        }
-    }
-
     func loadRuntimeEvent(id: String?) {
         detailRequestGeneration &+= 1
         let generation = detailRequestGeneration

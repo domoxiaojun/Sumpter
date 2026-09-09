@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use crate::database::{Connection, OpenFlags, OptionalExtension, params};
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -706,6 +706,7 @@ enum Command {
         reply: mpsc::Sender<Result<RuntimePricingMutation, String>>,
     },
     Flush(mpsc::Sender<Result<(), String>>),
+    Shutdown,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -845,11 +846,29 @@ struct Inner {
 #[derive(Clone)]
 pub struct RuntimeStore {
     inner: Arc<Inner>,
+    // Only public store handles own this guard; the worker never does.
+    // The last handle waits for the writer and ORM connection to close.
+    _worker: Arc<WorkerLifecycle>,
+}
+
+struct WorkerLifecycle {
+    inner: Arc<Inner>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl Drop for WorkerLifecycle {
+    fn drop(&mut self) {
+        let _ = self.inner.sender.send(Command::Shutdown);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
 }
 
 mod analytics;
 mod export;
 mod maintenance;
+mod models;
 mod schema;
 mod store_api;
 mod worker;

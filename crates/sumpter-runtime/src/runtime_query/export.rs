@@ -1,6 +1,6 @@
 //! Runtime query export domain.
 
-use rusqlite::params_from_iter;
+use crate::database::params_from_iter;
 
 use super::{
     API_VERSION, Connection, ExportEstimate, ExportEventRow, ExportFormat, ExportManifest,

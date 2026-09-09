@@ -269,9 +269,15 @@ listener 直接暴露到公网。
 ### 运行事件字段语义（适用于 v1 payload）
 
 `RuntimeEvent` 使用 `id` 原地更新 in-flight 行；`timestamp` 是 2001-01-01 UTC 起的秒数，
-`durationMS`/`ttfbMS` 是毫秒，`phase` 为 `inFlight|completed`。新事件必须显式写入，缺失仅
-兼容历史归档事件并按已完成处理。统计与排行优先按 `outcome` 判定，不能把
-`statusCode=200 + outcome=failed` 的断流计为成功。完整事件只通过详情接口返回，禁止返回原始
+`durationMS`/`ttfbMS` 是毫秒，`phase` 为 `inFlight|completed`。生产者显式写入阶段与最终结果；
+字段缺失表示未记录，不从 HTTP 状态推断完成、成功、失败或取消。
+
+`statusCode=200` 表示客户端链路记录了 HTTP 成功状态；`upstreamStatusCode` 是直接上游返回的
+HTTP 状态。中转服务即使返回 200，仍可能在响应协议中报告内部调用失败，此时 `outcome=failed`
+与 HTTP 200 同时保留。断流只说明响应传输/完成失败，不能据此断言中转内部模型调用失败。
+未被上游明确报告的内部状态保持未知。统计与排行按 `outcome` 判定最终结果。
+
+完整事件通过详情接口和 `runtime-change.event` 提供，分页使用轻量投影。普通事件不包含
 请求正文、Authorization、Cookie 或 API Key。
 
 ### `GET /admin/api/events`
@@ -471,12 +477,13 @@ SIGHUP 必须复用同一条 reload/rebind 路径。失败保持原运行配置�
 索引与详情共用一套大写 ID 键名（`requestID` / `featureRuleID`，尝试里是
 `endpointID` / `outboundURL`）：索引是手写 JSON，详情是直接序列化
 `DiagnosticRequestCapture`，所以详情侧靠字段级 `rename` 保持一致——落到 serde 的 camelCase
-默认规则上会变成 `requestId`/`endpointId`，WebUI 与 macOS 侧都读不出来（`alias` 只为读回旧
-`diagnostic_capture.json`）。详情另有 `clientDeclared`（客户端 `X-Sumpter-*` 声明的项目归因，
+默认规则上会变成 `requestId`/`endpointId`，WebUI 与 macOS 侧都读不出来。仅接受当前大写键，
+不再维护旧捕获的大小写别名。详情另有 `clientDeclared`（客户端 `X-Sumpter-*` 声明的项目归因，
 可选）；Codex 的结构化 workspace 不复制进捕获，仍只在入站 Body 的 `client_metadata` 里。
 
-捕获记录里不带 `poolID`：池概念只剩配置 schema、路由内部；捕获和新的事件 wire 都不再
-输出这个恒为 `primary` 的展示残留。旧捕获/旧事件中的 `poolID` 仅作为未知/兼容字段读取。
+事件与诊断模型已删除 `poolID`；诊断尝试同时删除新请求始终为空的 `pinnedIP`。
+WebSocket 摘要只保留 `clientCloseCode` / `upstreamCloseCode` 和结束方，不再提供旧汇总
+`closeCode`。上述删除不触碰已有数据库或捕获文件。
 
 索引记录包含 `requestID`、时间、请求方法/路径、客户端/模型/入口摘要、协议路径、状态/结果、
 截断标记、尝试次数和客户端 Chunk 数。为避免历史抓包过多时刷新卡顿，`records` 最多返回最近

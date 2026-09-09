@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 
 use crate::config::{AppConfig, SCHEMA_VERSION};
-use crate::events::{DiagnosticCaptureSnapshot, RuntimeSnapshot};
+use crate::events::DiagnosticCaptureSnapshot;
 
 const MIGRATABLE_SCHEMA_V3: u32 = 3;
 const MIGRATABLE_SCHEMA_V4: u32 = 4;
@@ -193,10 +193,6 @@ impl ConfigDir {
 
     pub fn legacy_keys_path(&self) -> PathBuf {
         self.root.join("keys.json")
-    }
-
-    pub fn stats_path(&self) -> PathBuf {
-        self.root.join("stats.json")
     }
 
     pub fn session_affinity_path(&self) -> PathBuf {
@@ -490,31 +486,6 @@ impl ConfigDir {
         atomic_write(&self.config_path(), data.as_bytes())
     }
 
-    /// 文件缺失视作空快照；损坏则返回错误，由 Engine 禁止后续覆盖原文件。
-    pub fn load_stats(&self) -> Result<RuntimeSnapshot, StatsLoadError> {
-        let path = self.stats_path();
-        let data = match std::fs::read_to_string(&path) {
-            Ok(data) => data,
-            Err(source) if source.kind() == io::ErrorKind::NotFound => {
-                return Ok(RuntimeSnapshot::default());
-            }
-            Err(source) => return Err(StatsLoadError::Io { path, source }),
-        };
-        let mut snapshot = RuntimeSnapshot::from_json(&data)
-            .map_err(|source| StatsLoadError::Parse { path, source })?;
-        snapshot.normalize_loaded();
-        Ok(snapshot)
-    }
-
-    pub fn save_stats(&self, snapshot: &RuntimeSnapshot) -> io::Result<PersistOutcome> {
-        let mut data = snapshot
-            .to_json_pretty()
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        data.push('\n');
-        self.ensure_exists()?;
-        atomic_write(&self.stats_path(), data.as_bytes())
-    }
-
     /// 只持久化稳定 Claude 会话 ID 的 SHA-256 摘要和调度组；不落原始 session ID。
     pub fn load_session_affinity(&self) -> io::Result<HashMap<String, StickySessionAssignment>> {
         let path = self.session_affinity_path();
@@ -701,17 +672,6 @@ pub enum ConfigLoadError {
         path: PathBuf,
         verify_error: String,
         rollback_error: Option<String>,
-    },
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum StatsLoadError {
-    #[error("读取统计失败 {path}: {source}")]
-    Io { path: PathBuf, source: io::Error },
-    #[error("解析统计失败 {path}: {source}；为保护原文件，本次运行禁止覆盖 stats.json")]
-    Parse {
-        path: PathBuf,
-        source: serde_json::Error,
     },
 }
 
@@ -1659,21 +1619,6 @@ mod tests {
                     .file_name()
                     .to_string_lossy()
                     .starts_with("config.before-schema-v7-"))
-        );
-    }
-
-    #[test]
-    fn corrupt_stats_returns_error_and_is_not_rewritten_by_loader() {
-        let dir = temp_dir("stats-corrupt");
-        dir.ensure_exists().unwrap();
-        std::fs::write(dir.stats_path(), "{broken").unwrap();
-        assert!(matches!(
-            dir.load_stats(),
-            Err(StatsLoadError::Parse { .. })
-        ));
-        assert_eq!(
-            std::fs::read_to_string(dir.stats_path()).unwrap(),
-            "{broken"
         );
     }
 

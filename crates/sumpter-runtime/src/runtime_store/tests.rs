@@ -1,6 +1,28 @@
 use super::*;
 
 #[test]
+fn last_store_handle_closes_writer_before_returning() {
+    let dir = test_dir("orm-writer-shutdown");
+    let path = dir.join("runtime.sqlite3");
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    let remaining = store.clone();
+    let inner = Arc::downgrade(&store.inner);
+    drop(store);
+    remaining.flush().unwrap();
+    assert!(inner.upgrade().is_some());
+    drop(remaining);
+    assert!(
+        inner.upgrade().is_none(),
+        "the worker must not retain the final store state"
+    );
+    assert!(
+        !path.with_extension("sqlite3-wal").exists(),
+        "the last writer must finish closing before a new reader opens the database"
+    );
+    remove_test_dir(&dir);
+}
+
+#[test]
 fn pi_persistence_filters_and_session_export_preserve_attribution() {
     let dir = test_dir("pi-attribution");
     let path = dir.join("runtime.sqlite3");
@@ -47,8 +69,7 @@ fn pi_persistence_filters_and_session_export_preserve_attribution() {
     assert!(exported["codexMetadata"].is_null());
     let connection = Connection::open(&path).unwrap();
     let projection: (String, String, Option<String>, Option<String>) = connection.query_row(
-        "SELECT client_kind,session_key,codex_thread_class,attribution_scope FROM runtime_events WHERE event_id='pi-client'",
-        [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        "SELECT client_kind,session_key,codex_thread_class,attribution_scope FROM runtime_events WHERE event_id='pi-client'", crate::database::params![], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
     ).unwrap();
     assert_eq!(projection, ("pi".into(), "pi-session".into(), None, None));
     drop(connection);
@@ -230,7 +251,11 @@ fn schema_bootstrap_is_private_and_integral() {
     );
     assert_eq!(
         connection
-            .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+            .query_row(
+                "PRAGMA integrity_check",
+                crate::database::params![],
+                |row| row.get::<_, String>(0)
+            )
             .unwrap(),
         "ok"
     );
@@ -323,7 +348,10 @@ fn legacy_schema_is_unchanged_until_explicit_recreation() {
     assert_eq!(issue.code, "runtime_recreate_required");
     assert!(issue.requires_recreate);
     assert!(RuntimeStore::new(&path).is_err());
-    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert!(
+        std::fs::read(&path).unwrap() == before,
+        "read-only rejection must preserve database bytes"
+    );
     let (store, snapshot) = RuntimeStore::recreate_legacy(&path).unwrap();
     assert!(snapshot.recent_events.is_empty());
     assert_eq!(store.summary().storage.event_count, 0);
@@ -540,8 +568,7 @@ fn model_group_attribution_survives_update_reopen_and_list_projection() {
     assert_eq!(detail.event.model_group_id.as_deref(), Some("backup"));
     assert_eq!(page[0].model_group_name.as_deref(), Some("备用"));
     let row: (String, String) = Connection::open(&path).unwrap().query_row(
-        "SELECT model_group_id,model_group_name FROM runtime_events WHERE event_id='group-event'",
-        [], |row| Ok((row.get(0)?, row.get(1)?)),
+        "SELECT model_group_id,model_group_name FROM runtime_events WHERE event_id='group-event'", crate::database::params![], |row| Ok((row.get(0)?, row.get(1)?)),
     ).unwrap();
     assert_eq!(row, ("backup".into(), "备用".into()));
     drop(store);
@@ -872,17 +899,21 @@ fn retention_and_pricing_mutations_are_serialized_by_the_worker() {
     let connection = Connection::open(&path).unwrap();
     assert_eq!(
         connection
-            .query_row("SELECT COUNT(*) FROM runtime_events", [], |row| {
-                row.get::<_, i64>(0)
-            })
+            .query_row(
+                "SELECT COUNT(*) FROM runtime_events",
+                crate::database::params![],
+                |row| { row.get::<_, i64>(0) }
+            )
             .unwrap(),
         3
     );
     assert_eq!(
         connection
-            .query_row("SELECT model_key FROM runtime_model_prices", [], |row| {
-                row.get::<_, String>(0)
-            })
+            .query_row(
+                "SELECT model_key FROM runtime_model_prices",
+                crate::database::params![],
+                |row| { row.get::<_, String>(0) }
+            )
             .unwrap(),
         "gpt-test"
     );
@@ -1178,7 +1209,7 @@ fn startup_detects_legacy_retention_without_migration() {
     let retention = connection
         .query_row(
             "SELECT revision FROM runtime_retention WHERE id=1",
-            [],
+            crate::database::params![],
             |row| row.get::<_, i64>(0),
         )
         .unwrap();
@@ -1191,7 +1222,7 @@ fn startup_detects_legacy_retention_without_migration() {
     let columns = connection
         .prepare("PRAGMA table_info(runtime_retention)")
         .unwrap()
-        .query_map([], |row| row.get::<_, String>(1))
+        .query_map(crate::database::params![], |row| row.get::<_, String>(1))
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
@@ -2499,7 +2530,7 @@ fn old_event_projection_requires_recreation_without_backfill() {
     store.flush().unwrap();
     drop(store);
     let connection = Connection::open(&path).unwrap();
-    connection.execute("UPDATE runtime_events SET projection_version=7,codex_thread_class='unknown',attribution_scope='unknown'", []).unwrap();
+    connection.execute("UPDATE runtime_events SET projection_version=7,codex_thread_class='unknown',attribution_scope='unknown'", crate::database::params![]).unwrap();
     drop(connection);
     let before = std::fs::read(&path).unwrap();
     assert!(RuntimeStore::new(&path).is_err());
@@ -2546,7 +2577,6 @@ fn list_item_wire_preserves_id_and_ms_acronyms() {
     value.request_id = Some("request-wire".into());
     value.session_id = Some("session-wire".into());
     value.endpoint_id = Some("endpoint-wire".into());
-    value.pool_id = Some("primary".into());
     value.message = Some("bridge openai-responses".into());
     value.duration_ms = 42;
     value.ttfb_ms = Some(7);
@@ -2558,32 +2588,7 @@ fn list_item_wire_preserves_id_and_ms_acronyms() {
     assert_eq!(wire["message"], "bridge openai-responses");
     assert_eq!(wire["durationMS"], 42);
     assert_eq!(wire["ttfbMS"], 7);
-    assert!(
-        wire.get("poolID").is_none(),
-        "新列表 wire 不得输出废弃 poolID"
-    );
     for legacy in ["requestId", "endpointId", "durationMs", "ttfbMs"] {
         assert!(wire.get(legacy).is_none(), "unexpected wire key {legacy}");
     }
-}
-
-#[test]
-fn runtime_change_wire_omits_legacy_pool_id_from_detail_and_sse_shapes() {
-    let mut value = event(
-        "wire-detail-pool",
-        KIND_CLIENT,
-        200,
-        RuntimeEventPhase::Completed,
-        Some(RuntimeEventOutcome::Succeeded),
-        event_now(),
-    );
-    value.pool_id = Some("primary".into());
-    let wire = serde_json::to_value(RuntimeChange {
-        seq: 7,
-        change_seq: 8,
-        event: value,
-    })
-    .unwrap();
-    assert!(wire["event"].get("poolID").is_none());
-    assert!(wire["event"].get("poolId").is_none());
 }

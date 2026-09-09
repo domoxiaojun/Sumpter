@@ -87,18 +87,6 @@ impl FailureInfo {
         }
     }
 
-    pub(super) fn provider_cooldown(retry_after_seconds: f64) -> Self {
-        Self {
-            kind: RuntimeFailureKind::EndpointsExhausted,
-            phase: RuntimeFailurePhase::BeforeResponse,
-            detail: Some("all compatible providers are cooling down".into()),
-            timeout_ms: None,
-            upstream_status_code: None,
-            upstream_request_id: None,
-            retry_after_seconds: Some(retry_after_seconds),
-        }
-    }
-
     pub(super) fn from_stream(error: &StreamReadError) -> Self {
         match error {
             StreamReadError::IdleTimeout(deadline) => Self {

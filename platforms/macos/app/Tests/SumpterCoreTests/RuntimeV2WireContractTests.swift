@@ -4,16 +4,6 @@ import Foundation
 import XCTest
 
 final class RuntimeV2WireContractTests: XCTestCase {
-    func testLegacyPoolIDIsReadableButNeverEncodedInRuntimeEventJSON() throws {
-        let data = Data(#"{"id":"legacy-1","timestamp":1.5,"kind":"client","poolID":"primary","statusCode":200,"durationMS":12,"failover":false}"#.utf8)
-        let event = try JSONDecoder().decode(RuntimeEvent.self, from: data)
-
-        XCTAssertEqual(event.poolID, "primary", "旧事件仍需可读")
-        let encoded = try JSONEncoder().encode(event)
-        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
-        XCTAssertNil(object["poolID"], "新 runtime JSON 不得重新输出已废弃字段")
-    }
-
     func testStickyKeyRoundTripsAndOmitsWhenAbsent() throws {
         // Rust 事件 wire 的 stickyKey 是会话粘性归属键(affinity 哈希)。
         // 带:解码并回写;不带(早期拒绝/旧事件):保持 nil 且编码省略。

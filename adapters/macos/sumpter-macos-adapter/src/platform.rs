@@ -257,7 +257,6 @@ impl Platform {
             // the legacy event shape (no success/failure counter outcome).
             outcome: None,
             phase: Some(RuntimeEventPhase::Completed),
-            pool_id: None,
             request_purpose: None,
             request_id: None,
             request_method: None,

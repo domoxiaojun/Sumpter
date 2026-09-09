@@ -248,7 +248,7 @@ impl Engine {
 
     /// 请求未进入转发就被拒(入站鉴权/请求体解析/路由规划失败):记一条完成态 client
     /// 事件并按失败计数(Swift 版语义;Rust 首版漏掉,事件表看不到这类失败)。
-    /// 无 pool/endpoint 归属;message 走词表(specs/spec-engine.md §5.1)。
+    /// 无 pool/endpoint 归属;message 走词表(docs/architecture.md §5.1)。
     #[allow(clippy::too_many_arguments)]
     pub(super) fn record_rejected_client_with_metadata(
         &self,
@@ -359,7 +359,6 @@ impl Engine {
             tool_calls: None,
             outcome: Some(RuntimeEventOutcome::Failed),
             phase: Some(RuntimeEventPhase::Completed),
-            pool_id: None,
             request_purpose: purpose,
             request_id: Some(event_id),
             request_method,
@@ -496,7 +495,6 @@ impl Engine {
                 RuntimeEventOutcome::Failed
             }),
             phase: Some(RuntimeEventPhase::Completed),
-            pool_id: None,
             request_purpose: Some(purpose),
             request_id: Some(request_id.to_string()),
             request_method: None,

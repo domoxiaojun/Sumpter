@@ -22,7 +22,7 @@ fn has_legacy_retention_columns(connection: &Connection) -> QueryResult<bool> {
     ];
     let mut statement = connection.prepare("PRAGMA table_info(runtime_retention)")?;
     let columns = statement
-        .query_map([], |row| row.get::<_, String>(1))?
+        .query_map(crate::database::params![], |row| row.get::<_, String>(1))?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(columns
         .iter()
@@ -60,7 +60,7 @@ pub fn storage_details_on(
                 MIN(seq),MAX(seq),MIN(timestamp),MAX(timestamp),\
                 COALESCE(SUM(payload_bytes),0) \
          FROM runtime_events",
-        [],
+        crate::database::params![],
         |row| {
             Ok((
                 row.get::<_, i64>(0)?,
@@ -81,7 +81,7 @@ pub fn storage_details_on(
     let retention = transaction.query_row(
         "SELECT revision \
          FROM runtime_retention WHERE id=1",
-        [],
+        crate::database::params![],
         |row| {
             Ok(RetentionStatus {
                 revision: row.get(0)?,
@@ -95,7 +95,7 @@ pub fn storage_details_on(
             "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'runtime_events_%_v2'",
         )?;
         statement
-            .query_map([], |row| row.get::<_, String>(0))?
+            .query_map(crate::database::params![], |row| row.get::<_, String>(0))?
             .collect::<Result<Vec<_>, _>>()?
     };
     let missing_indexes = REQUIRED_INDEXES
@@ -104,13 +104,19 @@ pub fn storage_details_on(
         .map(ToOwned::to_owned)
         .collect::<Vec<_>>();
     let page_size = transaction
-        .query_row("PRAGMA page_size", [], |row| row.get::<_, i64>(0))?
+        .query_row("PRAGMA page_size", crate::database::params![], |row| {
+            row.get::<_, i64>(0)
+        })?
         .max(0) as u64;
     let page_count = transaction
-        .query_row("PRAGMA page_count", [], |row| row.get::<_, i64>(0))?
+        .query_row("PRAGMA page_count", crate::database::params![], |row| {
+            row.get::<_, i64>(0)
+        })?
         .max(0) as u64;
     let freelist_count = transaction
-        .query_row("PRAGMA freelist_count", [], |row| row.get::<_, i64>(0))?
+        .query_row("PRAGMA freelist_count", crate::database::params![], |row| {
+            row.get::<_, i64>(0)
+        })?
         .max(0) as u64;
     let allocated_bytes = page_size.saturating_mul(page_count);
     let freelist_bytes = page_size.saturating_mul(freelist_count);
@@ -121,7 +127,7 @@ pub fn storage_details_on(
         && missing_indexes.is_empty();
     let hourly_rollup_dirty_buckets = transaction.query_row(
         "SELECT COUNT(*) FROM runtime_hourly_rollup_dirty",
-        [],
+        crate::database::params![],
         |row| row.get::<_, i64>(0),
     )?;
     let result = StorageProbe {

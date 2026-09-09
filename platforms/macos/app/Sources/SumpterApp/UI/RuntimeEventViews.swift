@@ -505,8 +505,7 @@ struct RecentEventsPanel: View {
     var hint = "客户端请求和上游尝试通过请求 ID 关联；HTTP 状态与最终结果分开显示，200 后的协议失败不会被误报为成功。"
     var detailedEvent: RuntimeEvent?
     var hasMore = false
-    /// v2 stable-page metadata. Kept optional so the run view can continue to
-    /// use the legacy cursor endpoint with the same component.
+    /// 稳定分页元数据；首次加载完成前为空。
     var currentPage: Int?
     var totalPages: Int?
     var totalCount: Int?
@@ -527,7 +526,6 @@ struct RecentEventsPanel: View {
     var requestChainEvents: [RuntimeEvent]?
     var requestChainLoading = false
     var onSelectEvent: ((String?) -> Void)?
-    var onLoadMore: (() -> Void)?
     @State private var selectedEventID: String?
     @Environment(\.sumpterPalette) private var palette
     @Environment(\.colorScheme) private var colorScheme
@@ -558,6 +556,7 @@ struct RecentEventsPanel: View {
         SectionPanel(title: "最近事件", hint: hint) {
             VStack(alignment: .leading, spacing: 10) {
                 eventToolbar
+                eventPaginationFooter
                 if !visibleLiveEvents.isEmpty {
                     // Attach the aura as a background of the sized request
                     // stack.  An unconstrained ZStack/NSViewRepresentable has
@@ -598,7 +597,7 @@ struct RecentEventsPanel: View {
                     .accessibilityLabel("\(visibleLiveEvents.count) 个进行中请求")
                 }
                 if visibleEvents.isEmpty && visibleLiveEvents.isEmpty {
-                    if pageLoading, currentPage != nil {
+                    if pageLoading {
                         eventsTableContainer
                     } else {
                         EmptyStateView(
@@ -625,7 +624,8 @@ struct RecentEventsPanel: View {
                         VStack(alignment: .leading, spacing: 16) {
                             RuntimeRequestTraceView(
                                 chain: selectedRequestChain,
-                                selectedEventID: $selectedEventID
+                                selectedEventID: $selectedEventID,
+                                maxHeight: 280
                             )
                             Divider()
                             RuntimeEventDetail(event: event)
@@ -633,10 +633,6 @@ struct RecentEventsPanel: View {
                         }
                     }
                 }
-                // Pagination belongs below the table: it follows the content
-                // being paged and remains easy to reach without competing
-                // with the filter at the top of the panel.
-                eventPaginationFooter
             }
         }
         .onAppear { ensureSelection() }
@@ -697,8 +693,8 @@ struct RecentEventsPanel: View {
         "\(currentPage ?? 0)-\(pageSize ?? 0)-\(eventKindFilter.rawValue)"
     }
 
-    /// The top toolbar is reserved for filtering.  Paging is rendered below
-    /// the table so the content hierarchy reads filter → rows → navigation.
+    /// Filtering and paging stay above the event rows so navigation remains
+    /// visible without scrolling through a long history page.
     @ViewBuilder
     private var eventToolbar: some View {
         ViewThatFits(in: .horizontal) {
@@ -769,11 +765,6 @@ struct RecentEventsPanel: View {
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
-        } else if hasMore {
-            VStack(alignment: .leading, spacing: 8) {
-                Divider()
-                eventPageControls(compact: false)
-            }
         }
     }
 
@@ -796,12 +787,6 @@ struct RecentEventsPanel: View {
                     onPageSizeChange?(size)
                 }
             )
-        } else if hasMore, let onLoadMore {
-            Button("加载更早一批（最多 1000 条）") {
-                guard !pageLoading else { return }
-                onLoadMore()
-            }
-            .disabled(pageLoading)
         }
     }
 
@@ -1101,6 +1086,8 @@ struct RecentEventsPanel: View {
 private struct RuntimeRequestTraceView: View {
     let chain: [RuntimeEvent]
     @Binding var selectedEventID: String?
+    var maxHeight: CGFloat = 440
+    @State private var contentHeight: CGFloat = 440
 
     private var clientEvent: RuntimeEvent? { chain.first { $0.kind == "client" } }
     private var upstreamAttempts: [RuntimeEvent] {
@@ -1117,6 +1104,25 @@ private struct RuntimeRequestTraceView: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
+            ScrollView(.vertical, showsIndicators: true) {
+                traceContent
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.trailing, 8)
+                    .onGeometryChange(for: CGFloat.self) { proxy in
+                        proxy.size.height
+                    } action: { height in
+                        contentHeight = height
+                    }
+            }
+            .frame(height: min(contentHeight, maxHeight))
+            .scrollBounceBehavior(.basedOnSize)
+            .id(clientEvent?.requestID ?? chain.first?.requestID ?? chain.first?.id)
+            .accessibilityLabel("请求链事件列表")
+        }
+    }
+
+    private var traceContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
             if let clientEvent {
                 Button {
                     selectedEventID = clientEvent.id

@@ -1,5 +1,5 @@
 //! 出站请求构造:header 过滤/强制注入、anthropic body 改写(model/thinking/effort)、
-//! 桥接 body 与路径。纯函数,对齐 Swift `makeOutboundRequest`(specs/spec-engine.md §3-4)。
+//! 桥接 body 与路径。纯函数,对齐 Swift `makeOutboundRequest`(docs/architecture.md §3-4)。
 
 use serde_json::{Value, json};
 use sumpter_core::bridge;

@@ -916,18 +916,9 @@ impl Engine {
             value: format!("websocket:{}", request.model),
             persistent: false,
         };
-        let ordered = self.ordered_endpoints(&plan, &ordering_key);
-        if ordered.is_empty()
-            && let Some(retry_after) = self.provider_model_cooldown_retry_after(&plan.endpoints)
-        {
-            let mut error = WebSocketPrepareError::new(
-                503,
-                "provider_cooldown",
-                "all compatible providers are cooling down",
-            );
-            error.retry_after_seconds = Some(retry_after);
-            return Err(error);
-        }
+        // Local provider health must not synthesize a 503. Always attempt the
+        // compatible upstream and preserve its handshake status/error.
+        let ordered = self.ordered_endpoint_candidates(&plan.endpoints, &ordering_key, false);
         let mut last_error = None;
         let mut attempt_count = 0_u64;
         for endpoint in &ordered {

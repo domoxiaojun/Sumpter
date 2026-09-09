@@ -24,7 +24,6 @@ md-5 = { workspace = true }
 sha2 = { workspace = true }
 async-trait = { workspace = true }
 tokio-util = { workspace = true }
-rusqlite = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

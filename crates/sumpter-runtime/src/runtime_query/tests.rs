@@ -1,7 +1,7 @@
 use super::MAX_TREND_POINTS;
 use super::export_queries::stream_export_on;
+use crate::database::{Connection, params};
 use crate::runtime_query::*;
-use rusqlite::{Connection, params};
 
 fn test_connection() -> Connection {
     let connection = Connection::open_in_memory().expect("open in-memory runtime db");
@@ -631,7 +631,7 @@ fn event_page_waits_for_projection_even_without_filters() {
     connection
         .execute(
             "UPDATE runtime_meta SET value='0' WHERE key='projection_backfill_complete'",
-            [],
+            crate::database::params![],
         )
         .unwrap();
     let error = events_page_on(&mut connection, &EventPageRequest::default()).unwrap_err();
@@ -649,7 +649,7 @@ fn snapshot_generation_and_retention_are_enforced() {
     connection
         .execute(
             "UPDATE runtime_meta SET value='3' WHERE key='history_generation'",
-            [],
+            crate::database::params![],
         )
         .unwrap();
     let expired = events_page_on(
@@ -672,7 +672,7 @@ fn snapshot_generation_and_retention_are_enforced() {
     connection
         .execute(
             "UPDATE runtime_meta SET value='50' WHERE key='retained_from_seq'",
-            [],
+            crate::database::params![],
         )
         .unwrap();
     let trimmed = events_page_on(
@@ -745,7 +745,7 @@ fn attribution_filters_match_variant_and_parent_chain_fields() {
     let mut connection = test_connection();
     connection.execute(
         "INSERT INTO runtime_events(seq,change_seq,event_id,timestamp,kind,phase,outcome,status_code,is_in_flight,payload_json,projection_version,client_variant,agent_role,agent_name,parent_thread_id,parent_turn_id,root_turn_id)
-         VALUES(1,1,'attrib',1.0,'client','completed','succeeded',200,0,'{}',8,'tui','subagent','worker','thread-1','turn-2','turn-0')", [],
+         VALUES(1,1,'attrib',1.0,'client','completed','succeeded',200,0,'{}',8,'tui','subagent','worker','thread-1','turn-2','turn-0')", crate::database::params![],
     ).unwrap();
     let filter = RuntimeFilter {
         client_variant: Some("tui".into()),

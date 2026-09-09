@@ -322,7 +322,6 @@ impl CompletionGuard {
             } else {
                 RuntimeEventPhase::Completed
             }),
-            pool_id: None,
             request_purpose: Some(self.meta.purpose),
             request_id: Some(self.client_event_id.clone()),
             request_method: self

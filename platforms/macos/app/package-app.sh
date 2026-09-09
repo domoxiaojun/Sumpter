@@ -320,92 +320,21 @@ acquire_lock() {
   printf '%s\n' "$$" > "$LOCK_DIR/pid"
 }
 
-normalize_developer_dir() {
-  local candidate="$1"
-  candidate="${candidate%/}"
-  case "$candidate" in
-    *.app) candidate="$candidate/Contents/Developer" ;;
-  esac
-  printf '%s' "$candidate"
-}
-
-swift_binary_for() {
-  printf '%s/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift' "$1"
-}
-
-swiftc_binary_for() {
-  printf '%s/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc' "$1"
-}
-
-xcode_candidate_valid() {
-  local candidate="$1"
-  [[ -d "$candidate" \
-    && -x "$(swift_binary_for "$candidate")" \
-    && -x "$(swiftc_binary_for "$candidate")" ]]
-}
-
-swift_major_for() {
-  local candidate="$1"
-  local output
-  output="$(DEVELOPER_DIR="$candidate" "$(swift_binary_for "$candidate")" --version 2>&1 || true)"
-  printf '%s\n' "$output" \
-    | awk 'match($0, /Swift version [0-9][0-9]*/) && value == "" { value = substr($0, RSTART + 14, RLENGTH - 14) } END { print value }'
-}
-
 ensure_xcode_toolchain() {
-  local requested="${DEVELOPER_DIR:-}"
-  local active=""
-  local candidate=""
-  local selected=""
-  local selected_major=0
-  local major=0
+  # 先通过共享选择器锁定稳定版本，再执行下面的完整 Swift/SDK 校验。
+  # 这样直接调用 package-app.sh 也不会绕过 CI 的工具链基线。
+  local selected_by_policy
+  selected_by_policy="$(bash "$ROOT/select-xcode.sh")"
+  export DEVELOPER_DIR="$selected_by_policy"
+  local selected="$selected_by_policy"
   local sdk=""
   local sdk_root=""
   local sdk_candidate=""
-  local app=""
-  local candidates=()
-
-  if [[ -n "$requested" ]]; then
-    requested="$(normalize_developer_dir "$requested")"
-    [[ "$requested" != *CommandLineTools* ]] \
-      || die "DEVELOPER_DIR 指向 Command Line Tools；SwiftUI 宏需要完整 Xcode"
-    xcode_candidate_valid "$requested" \
-      || die "DEVELOPER_DIR 不是可用的完整 Xcode: $requested"
-    major="$(swift_major_for "$requested")"
-    if [[ ! "$major" =~ ^[0-9]+$ ]] || (( major < 6 )); then
-      die "当前 Xcode 的 Swift 版本低于 6.0，Package.swift 无法编译: $requested"
-    fi
-    selected="$requested"
-    selected_major="$major"
-  else
-    active="$(xcode-select -p 2>/dev/null || true)"
-    if [[ -n "$active" ]]; then
-      active="$(normalize_developer_dir "$active")"
-      if [[ "$active" != *CommandLineTools* ]] && xcode_candidate_valid "$active"; then
-        candidates+=("$active")
-      fi
-    fi
-    for app in /Applications/Xcode.app /Applications/Xcode-beta.app /Applications/Xcode*.app; do
-      candidate="$(normalize_developer_dir "$app")"
-      if xcode_candidate_valid "$candidate"; then
-        candidates+=("$candidate")
-      fi
-    done
-    for candidate in "${candidates[@]}"; do
-      major="$(swift_major_for "$candidate")"
-      if [[ "$major" =~ ^[0-9]+$ ]] && (( major > selected_major )); then
-        selected="$candidate"
-        selected_major="$major"
-      fi
-    done
-    [[ -n "$selected" && "$selected_major" -ge 6 ]] \
-      || die "找不到带 Swift 6.0+ 的完整 Xcode；当前 Package.swift 的 swift-tools-version 是 6.0"
-  fi
 
   DEVELOPER_DIR_SELECTED="$selected"
   export DEVELOPER_DIR="$selected"
-  SWIFT_BIN="$(swift_binary_for "$selected")"
-  SWIFTC_BIN="$(swiftc_binary_for "$selected")"
+  SWIFT_BIN="$selected/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift"
+  SWIFTC_BIN="$selected/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
   export PATH="$selected/Toolchains/XcodeDefault.xctoolchain/usr/bin:$selected/usr/bin:$PATH"
 
   XCRUN_BIN="$(command -v xcrun 2>/dev/null || true)"

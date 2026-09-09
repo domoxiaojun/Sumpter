@@ -19,7 +19,7 @@ struct OverviewPane: View {
                 hint: model.runHistoryError.map { "读取稳定事件页失败：\($0)；当前暂显示本地缓存。" }
                     ?? "客户端请求和上游尝试通过请求 ID 关联；进行中请求单独显示，不占持久事件分页名额。",
                 detailedEvent: model.runtimeEventDetail?.event,
-                hasMore: model.runHistoryPage?.hasNext ?? (model.runtimePage?.hasMore == true),
+                hasMore: model.runHistoryPage?.hasNext == true,
                 currentPage: model.runHistoryPage?.page,
                 totalPages: model.runHistoryPage?.totalPages,
                 totalCount: model.runHistoryPage?.totalCount,
@@ -48,10 +48,6 @@ struct OverviewPane: View {
                 onSelectEvent: { eventID in
                     model.loadRuntimeEvent(id: eventID)
                     model.loadRuntimeRequestChain(for: eventID)
-                },
-                onLoadMore: {
-                    guard model.runHistoryPage == nil else { return }
-                    model.loadMoreRuntimeEvents()
                 }
             )
             if let lastError = model.lastError, !lastError.isEmpty {

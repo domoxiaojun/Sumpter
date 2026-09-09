@@ -1,7 +1,6 @@
-//! 运行事件与内存统计快照。字段兼容旧 stats.json，当前持久化由 proxy 的 SQLite store 负责。
-//! (ProxyEngine.swift)。
+//! 运行事件与内存统计快照；持久化由共享 runtime 的 SQLite store 负责。
 //!
-//! 磁盘形状铁律(来自真实 stats.json):
+//! 当前 JSON 契约：
 //! - `timestamp` 是 **Apple reference date(2001-01-01T00:00:00Z)秒数** 的浮点;
 //! - 可选字段 None 时省略键;`id` 为大写 UUID;键序字母序;
 //! - `durationMS` / `statusCode` 为整数;`kind` 是自由字符串("client"/"upstream"/"notify")。
@@ -37,7 +36,7 @@ pub const MAX_RECENT_EVENTS_PER_KIND: usize = 200;
 /// 客户端取消的记账状态码:不计成功也不计失败。
 pub const STATUS_CLIENT_DISCONNECTED: i64 = 499;
 
-/// 事件消息词表(specs/spec-engine.md §5.1)。
+/// 事件消息词表(docs/architecture.md §5.1)。
 ///
 /// `RuntimeEvent.message` 只放机器可读 token(或「token: 原因」形状),多 token 用 `"; "`
 /// 连接;中文翻译全部在 UI 层(Swift `RuntimeEventPresentation`)。改词表必须同步
@@ -93,8 +92,7 @@ pub mod message_tokens {
     }
 }
 
-/// 事件阶段:进行中(已入流未结束)或已完成。新事件必须显式写入阶段；None
-/// 仅用于升级前的 stats.json，并按已完成处理以保持兼容。
+/// 事件阶段:进行中或已完成。事件生产者显式写入；缺失仅表示未记录，不推断完成。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RuntimeEventPhase {
     #[serde(rename = "inFlight")]
@@ -103,7 +101,7 @@ pub enum RuntimeEventPhase {
     Completed,
 }
 
-/// 请求/尝试的最终结果。None 只用于 in-flight、非请求事件或旧 stats.json。
+/// 请求/尝试的最终结果。None 用于 in-flight、非请求事件或未报告结果。
 ///
 /// 不能仅靠 HTTP 状态判断最终结果：响应头已经是 200 后仍可能发生流中断，
 /// 此时线上状态仍是 200，但最终结果必须记为 failed。
@@ -2404,8 +2402,6 @@ pub struct WebSocketTrace {
     pub client_message_count: Option<u64>,
     #[serde(default, skip_serializing_if = "is_none")]
     pub upstream_message_count: Option<u64>,
-    #[serde(default, skip_serializing_if = "is_none")]
-    pub close_code: Option<i64>,
     /// Close code observed from the downstream/client side.
     #[serde(default, skip_serializing_if = "is_none")]
     pub client_close_code: Option<i64>,
@@ -2447,7 +2443,7 @@ pub struct DiagnosticChunk {
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticAttemptCapture {
     pub id: String,
-    #[serde(rename = "endpointID", alias = "endpointId")]
+    #[serde(rename = "endpointID")]
     pub endpoint_id: String,
     pub endpoint_name: String,
     pub protocol: String,
@@ -2457,18 +2453,10 @@ pub struct DiagnosticAttemptCapture {
     pub target_format: Option<ProviderProtocol>,
     #[serde(rename = "routeMode", default, skip_serializing_if = "is_none")]
     pub route_mode: Option<RouteMode>,
-    /// Historical captures may carry a fixed IP; new attempts omit this field.
-    #[serde(
-        rename = "pinnedIP",
-        alias = "pinnedIp",
-        default,
-        skip_serializing_if = "is_none"
-    )]
-    pub pinned_ip: Option<String>,
     #[serde(rename = "startedAtMS")]
     pub started_at_ms: i64,
     pub outbound_method: String,
-    #[serde(rename = "outboundURL", alias = "outboundUrl")]
+    #[serde(rename = "outboundURL")]
     pub outbound_url: String,
     pub outbound_headers: Vec<DiagnosticHeader>,
     pub outbound_body: String,
@@ -2487,8 +2475,8 @@ pub struct DiagnosticAttemptCapture {
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticRequestCapture {
     // ID 结尾字段必须显式 rename:详情端点直接序列化这个结构体,而 WebUI/macOS 读的是
-    // 大写口径(engine.rs 手写的索引记录也是)。alias 保住旧 diagnostic_capture.json。
-    #[serde(rename = "requestID", alias = "requestId")]
+    // 大写口径，与诊断索引的手写 JSON 一致。
+    #[serde(rename = "requestID")]
     pub request_id: String,
     pub timestamp: f64,
     pub method: String,
@@ -2502,7 +2490,7 @@ pub struct DiagnosticRequestCapture {
     pub request_purpose: RequestPurpose,
     pub client_model: String,
     pub effective_model: String,
-    #[serde(rename = "featureRuleID", alias = "featureRuleId")]
+    #[serde(rename = "featureRuleID")]
     pub feature_rule_id: Option<String>,
     /// 客户端 `X-Sumpter-*` 声明的项目归因(与事件里同一份,已脱敏、有界)。捕获里带上,
     /// 排障时不必再去 inbound_headers 里翻这三个 header。Codex 的结构化 workspace 不复制
@@ -2635,12 +2623,6 @@ pub struct RuntimeEvent {
     pub outcome: Option<RuntimeEventOutcome>,
     #[serde(default, skip_serializing_if = "is_none")]
     pub phase: Option<RuntimeEventPhase>,
-    // Pool selection remains an internal routing/configuration concern. Keep
-    // accepting the legacy key on read, but never emit it in runtime events;
-    // older persisted JSON remains forward-readable without leaking this
-    // deprecated presentation field into Admin/diagnostic responses.
-    #[serde(rename = "poolID", default, skip_serializing)]
-    pub pool_id: Option<String>,
     /// None 仅表示事件来自升级前的 stats.json,或事件本身不是模型请求。
     #[serde(rename = "requestPurpose", default, skip_serializing_if = "is_none")]
     pub request_purpose: Option<RequestPurpose>,
@@ -2785,35 +2767,17 @@ impl RuntimeEvent {
         self.phase == Some(RuntimeEventPhase::InFlight)
     }
 
-    /// 新事件按 outcome 判定；旧 stats.json 回退到既有状态码口径。
+    /// HTTP 状态与最终执行结果分别记录；缺 outcome 时不能从状态码推断。
     pub fn is_succeeded(&self) -> bool {
-        if self.is_in_flight() {
-            return false;
-        }
-        self.outcome.map_or_else(
-            || (200..=399).contains(&self.status_code),
-            |v| v == RuntimeEventOutcome::Succeeded,
-        )
+        !self.is_in_flight() && self.outcome == Some(RuntimeEventOutcome::Succeeded)
     }
 
     pub fn is_failed(&self) -> bool {
-        if self.is_in_flight() {
-            return false;
-        }
-        self.outcome.map_or_else(
-            || {
-                self.status_code != STATUS_CLIENT_DISCONNECTED
-                    && !(200..=399).contains(&self.status_code)
-            },
-            |v| v == RuntimeEventOutcome::Failed,
-        )
+        !self.is_in_flight() && self.outcome == Some(RuntimeEventOutcome::Failed)
     }
 
     pub fn is_cancelled(&self) -> bool {
-        self.outcome
-            .map_or(self.status_code == STATUS_CLIENT_DISCONNECTED, |v| {
-                v == RuntimeEventOutcome::Cancelled
-            })
+        !self.is_in_flight() && self.outcome == Some(RuntimeEventOutcome::Cancelled)
     }
 
     /// 展示用:按类型过滤并按时间降序;时间戳相同保持原数组顺序(插入序,新的在前)。
@@ -2899,13 +2863,6 @@ impl RuntimeSnapshot {
         self.recent_events = RuntimeEvent::trimmed(events, MAX_RECENT_EVENTS_PER_KIND);
     }
 
-    /// 供旧 stats.json 离线兼容读取使用：丢弃全部 in-flight 残迹。进程重启后这些请求已不可能继续，
-    /// 但仅凭已经收到的 HTTP 状态无法推断最终结果；保留并改成 completed 会把
-    /// `HTTP 200 + outcome=None` 误报为成功。
-    pub fn normalize_loaded(&mut self) {
-        self.recent_events.retain(|event| !event.is_in_flight());
-    }
-
     pub fn from_json(data: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(data)
     }
@@ -2924,12 +2881,10 @@ mod tests {
     /// 一旦 ID 结尾字段落到 serde 的 camelCase 规则上就会变成 `requestId`/`endpointId`,
     /// 而 WebUI 读 `record.requestID`、`attempt.endpointID`/`attempt.outboundURL`,
     /// macOS 侧那三个字段还是非可选的——整条详情会直接解码失败。
-    /// 旧 `diagnostic_capture.json` 写的是小写形状,alias 必须保住它能读回来,
-    /// 否则启动恢复失败会让 daemon 本次运行拒写原文件。
     #[test]
     fn diagnostic_capture_detail_wire_keeps_uppercase_id_keys() {
-        let legacy = serde_json::json!({
-            "requestId": "REQ-1",
+        let payload = serde_json::json!({
+            "requestID": "REQ-1",
             "timestamp": 1.0,
             "method": "POST",
             "path": "/v1/messages",
@@ -2940,18 +2895,15 @@ mod tests {
             "requestPurpose": "standard",
             "clientModel": "claude-opus-5",
             "effectiveModel": "claude-opus-5",
-            // 旧捕获文件里的池字段:字段已删,反序列化必须当未知字段忽略而不是报错。
-            "poolId": "primary",
-            "featureRuleId": "rule-1",
+            "featureRuleID": "rule-1",
             "attempts": [{
                 "id": "A-1",
-                "endpointId": "ep-1",
+                "endpointID": "ep-1",
                 "endpointName": "up",
                 "protocol": "anthropic",
-                "pinnedIp": "203.0.113.7",
                 "startedAtMS": 1,
                 "outboundMethod": "POST",
-                "outboundUrl": "https://up.invalid/v1/messages",
+                "outboundURL": "https://up.invalid/v1/messages",
                 "outboundHeaders": [],
                 "outboundBody": "{}",
                 "outboundBodyBytes": 2,
@@ -2969,17 +2921,12 @@ mod tests {
             "failureDetail": null,
         });
         let record: DiagnosticRequestCapture =
-            serde_json::from_value(legacy).expect("旧小写形状必须仍能读回");
+            serde_json::from_value(payload).expect("当前诊断形状必须可读");
         let wire = serde_json::to_value(&record).expect("序列化");
 
         assert_eq!(wire["requestID"], "REQ-1");
         assert_eq!(wire["featureRuleID"], "rule-1");
-        // 池概念只剩事件 wire 与路由内部;捕获记录里那个恒为 primary 的展示残留已摘掉。
-        for pool in ["poolID", "poolId"] {
-            assert!(wire.get(pool).is_none(), "捕获详情残留池字段 {pool}");
-        }
         assert_eq!(wire["attempts"][0]["endpointID"], "ep-1");
-        assert_eq!(wire["attempts"][0]["pinnedIP"], "203.0.113.7");
         assert_eq!(
             wire["attempts"][0]["outboundURL"],
             "https://up.invalid/v1/messages"
@@ -2987,7 +2934,7 @@ mod tests {
         for stale in ["requestId", "featureRuleId"] {
             assert!(wire.get(stale).is_none(), "详情 wire 残留小写键 {stale}");
         }
-        for stale in ["endpointId", "outboundUrl", "pinnedIp"] {
+        for stale in ["endpointId", "outboundUrl"] {
             assert!(
                 wire["attempts"][0].get(stale).is_none(),
                 "尝试 wire 残留小写键 {stale}"
@@ -3028,7 +2975,6 @@ mod tests {
             tool_calls: None,
             outcome: None,
             phase: None,
-            pool_id: None,
             request_purpose: None,
             request_id: None,
             request_method: None,
@@ -3130,31 +3076,8 @@ mod tests {
     }
 
     #[test]
-    fn normalize_loaded_drops_all_stale_in_flight_events() {
-        let mut snapshot = RuntimeSnapshot {
-            recent_events: vec![
-                in_flight("dead", KIND_CLIENT, 1.0),
-                RuntimeEvent {
-                    status_code: 200,
-                    ..in_flight("accepted-client", KIND_CLIENT, 2.0)
-                },
-                RuntimeEvent {
-                    status_code: 503,
-                    ..in_flight("accepted-upstream", KIND_UPSTREAM, 2.5)
-                },
-                event("done", KIND_CLIENT, 3.0),
-            ],
-            ..Default::default()
-        };
-        snapshot.normalize_loaded();
-        assert_eq!(snapshot.recent_events.len(), 1);
-        assert_eq!(snapshot.recent_events[0].id, "done");
-        assert!(!snapshot.recent_events[0].is_in_flight());
-    }
-
-    #[test]
-    fn stats_json_roundtrip_matches_swift_shape() {
-        // 真实 stats.json 的事件片段(Swift 写出的形状)。
+    fn runtime_snapshot_roundtrip_matches_swift_shape() {
+        // 当前运行快照的 Swift/Rust 公共形状。
         let source = r#"{
   "clientFailures" : 7,
   "clientRequests" : 76,
@@ -3169,7 +3092,6 @@ mod tests {
       "id" : "EED36CA5-7D07-4F67-8307-F0E810E6730F",
       "kind" : "upstream",
       "phase" : "inFlight",
-      "poolID" : "primary",
       "requestPurpose" : "standard",
       "statusCode" : 200,
       "timestamp" : 807287975.215088,
@@ -3196,25 +3118,11 @@ mod tests {
         );
         assert!((apple_to_unix_epoch(ev.timestamp) - 1_785_595_175.215_088).abs() < 1.0);
 
-        // 重编码后的值树保持兼容形状。旧文件里的 poolID 仍可读，但它是
-        // 已废弃的展示字段，新 runtime JSON 不再重新写出。
+        // 重编码后的值树保持公共 wire 形状。
         let reencoded = snapshot.to_json_pretty().unwrap();
         let original: serde_json::Value = serde_json::from_str(source).unwrap();
         let ours: serde_json::Value = serde_json::from_str(&reencoded).unwrap();
-        assert_eq!(original["recentEvents"][0]["poolID"], "primary");
-        assert!(ours["recentEvents"][0].get("poolID").is_none());
-        let mut expected = original;
-        expected["recentEvents"][0]
-            .as_object_mut()
-            .expect("legacy event object")
-            .remove("poolID");
-        assert_eq!(expected, ours);
-
-        // 新事件即使内部仍保留旧路由值，也不得把它泄漏到公开 wire。
-        let mut current = event("new-event", KIND_CLIENT, 2.0);
-        current.pool_id = Some("primary".into());
-        let current_json = serde_json::to_value(&current).unwrap();
-        assert!(current_json.get("poolID").is_none());
+        assert_eq!(original, ours);
 
         // 缺 requestPurpose / phase / ttfbMS 的旧事件正常往返,且不凭空产出新键
         // ——老版 app 写出的 stats.json 必须原样读回,否则回退一次就丢数据。
@@ -3384,7 +3292,7 @@ mod tests {
     }
 
     #[test]
-    fn structured_failure_roundtrips_without_changing_legacy_inference() {
+    fn structured_failure_preserves_http_status_without_inferring_missing_outcome() {
         assert_eq!(
             RuntimeFailureKind::ClientRequestRejected.as_str(),
             "client_request_rejected"
@@ -3409,12 +3317,14 @@ mod tests {
         let decoded: RuntimeEvent = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded, current);
 
-        let legacy_success = event("legacy-ok", KIND_CLIENT, 1.0);
-        let mut legacy_cancelled = event("legacy-cancel", KIND_CLIENT, 1.0);
-        legacy_cancelled.status_code = STATUS_CLIENT_DISCONNECTED;
-        assert!(legacy_success.is_succeeded());
-        assert!(legacy_cancelled.is_cancelled());
-        assert!(!legacy_cancelled.is_failed());
+        for status in [200, 499, 503] {
+            let mut missing_outcome = event("missing-outcome", KIND_CLIENT, 1.0);
+            missing_outcome.status_code = status;
+            missing_outcome.outcome = None;
+            assert!(!missing_outcome.is_succeeded());
+            assert!(!missing_outcome.is_cancelled());
+            assert!(!missing_outcome.is_failed());
+        }
 
         let mut in_flight_with_headers = event("streaming", KIND_CLIENT, 3.0);
         in_flight_with_headers.status_code = 200;

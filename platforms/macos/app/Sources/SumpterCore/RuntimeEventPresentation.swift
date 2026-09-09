@@ -289,37 +289,18 @@ public enum RuntimeEventPresentation {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         return try? String(decoding: encoder.encode(metadata), as: UTF8.self)
     }
-    /// 兼容旧 stats.json：早期引擎会把 Codex/OpenAI 的正常无工具请求误记为
-    /// `unmatched_no_tools`。仅隐藏这个已知误报，其他真实引擎标记原样保留。
+    /// 保留当前事件说明；空值不显示。
     public static func messageForDisplay(
         _ message: String?,
-        clientKind: ClientKind?
+        clientKind _: ClientKind?
     ) -> String? {
         guard let message, !message.isEmpty else { return nil }
-        guard clientKind == .codex || clientKind == .openaiCompat else { return message }
-        let segments = message
-            .components(separatedBy: "; ")
-            .filter { $0 != "unmatched_no_tools" }
-        return segments.isEmpty ? nil : segments.joined(separator: "; ")
-    }
-
-    /// 客户端断开/取消导致的写回失败特征(EPIPE/ECONNRESET/ENOTCONN 等)。
-    public static func isClientDisconnect(message: String) -> Bool {
-        let lowered = message.lowercased()
-        let markers = [
-            "posixerrorcode(rawvalue: 32",
-            "posixerrorcode(rawvalue: 54",
-            "posixerrorcode(rawvalue: 57",
-            "broken pipe",
-            "connection reset",
-            "socket is not connected",
-        ]
-        return markers.contains { lowered.contains($0) }
+        return message
     }
 
     /// 事件消息的中文摘要。返回空串表示无需展示(调用侧显示 `-`)。
     ///
-    /// 消息词表见 rust/specs/spec-engine.md §5.1:引擎只发机器可读 token(`"; "` 连接),
+    /// 消息词表见 docs/architecture.md §5.1:引擎只发机器可读 token(`"; "` 连接),
     /// 翻译集中在这里。词表变更必须同步 spec、`message_tokens` 常量、引擎测试
     /// `MESSAGE_TOKEN_PREFIXES` 与本文件测试清单——两边清单互钉,漂移即红。
     public static func friendlyMessage(
@@ -335,14 +316,9 @@ public enum RuntimeEventPresentation {
         clientKind: ClientKind? = nil,
         streamTrace: StreamTrace? = nil
     ) -> String {
-        let effectiveStatusCode = statusCode == 0 ? (upstreamStatusCode ?? statusCode) : statusCode
+        let effectiveStatusCode = statusCode
         if outcome == .cancelled || failureKind == .clientCancelled {
             return "客户端断开/取消"
-        }
-        if outcome == nil, effectiveStatusCode == 499 {
-            return phase == .completed
-                ? "最终结果未上报（HTTP 499 仅供参考）"
-                : "客户端断开/取消"
         }
         // The user-facing explanation follows the recorded lifecycle result.
         // Protocol tokens and free-form engine notes stay in the diagnostic
@@ -453,7 +429,7 @@ public enum RuntimeEventPresentation {
             MappedSegment(text: text, explainsFailure: true)
         }
 
-        // —— 现行词表(rust/specs/spec-engine.md §5.1)——
+        // —— 现行词表(docs/architecture.md §5.1)——
         // 历史事件可能带有已移除的固定 IP token；不在新的运行详情中展示。
         if segment.hasPrefix("pinned ") {
             return info("")
@@ -519,32 +495,6 @@ public enum RuntimeEventPresentation {
             return failure("分流规则不存在")
         }
 
-        // —— legacy:Swift 时代 stats.json 历史事件(引擎已不再产出,只读兼容)——
-        if segment == "no_endpoint" {
-            return failure("池内无可用入口")
-        }
-        if let status = retryableStatus(in: segment) {
-            return failure("上游返回 \(status)\(legacyRetryableHint(status))")
-        }
-        if isClientDisconnect(message: segment) {
-            return failure(kind == "client" ? "客户端断开/取消" : "连接中断(对端断开)")
-        }
-        if segment.contains("connectionFailed") {
-            return failure("连接失败")
-        }
-        if segment.contains("invalidResponse") {
-            return failure("上游响应无法解析")
-        }
-        if segment.hasPrefix("noEnabledEndpoint") {
-            return failure("目标池中没有该模型的可用映射")
-        }
-        if segment.hasPrefix("noPoolForModel") {
-            return failure("没有匹配该模型的池")
-        }
-        if segment.hasPrefix("poolNotFound") {
-            return failure("目标池不存在")
-        }
-
         // 未识别:原样透传并视作失败解释(不再叠加合成段,行为对齐旧版兜底)。
         return failure(segment)
     }
@@ -576,7 +526,7 @@ public enum RuntimeEventPresentation {
         upstreamStatusCode: Int? = nil,
         clientKind: ClientKind? = nil
     ) -> MessageSeverity {
-        let effectiveStatusCode = statusCode == 0 ? (upstreamStatusCode ?? statusCode) : statusCode
+        let effectiveStatusCode = statusCode
         // 失败行:状态列已经是红的,消息列跟上一档,别让原因埋在灰字里。
         // 499 是用户主动取消,不算异常。
         if !inFlight,
@@ -604,7 +554,7 @@ public enum RuntimeEventPresentation {
         return .none
     }
 
-    /// 真实协议名。`nil` 不是“未知协议”：它表示旧事件或请求尚未完成路由定型。
+    /// 真实协议名。nil 表示事件未记录协议，不凭缺失值推断请求阶段。
     public static func protocolDisplay(_ format: ProviderProtocol?) -> String {
         switch format {
         case .anthropic:
@@ -616,7 +566,7 @@ public enum RuntimeEventPresentation {
         case .gemini:
             return "Gemini Developer API"
         case nil:
-            return "未记录（旧事件或路由未完成）"
+            return "未记录"
         }
     }
 
@@ -627,7 +577,7 @@ public enum RuntimeEventPresentation {
         case .translated:
             return "协议转换"
         case nil:
-            return "未记录（旧事件或路由未完成）"
+            return "未记录"
         }
     }
 
@@ -670,12 +620,9 @@ public enum RuntimeEventPresentation {
         if inFlight {
             return "streaming"
         }
-        let effectiveStatusCode = statusCode == 0 ? (upstreamStatusCode ?? statusCode) : statusCode
+        let effectiveStatusCode = statusCode
         if outcome == .cancelled {
             return effectiveStatusCode == 499 ? "取消" : "\(effectiveStatusCode) · 已取消"
-        }
-        if outcome == nil, effectiveStatusCode == 499 {
-            return "取消"
         }
         if effectiveStatusCode == 0 {
             switch outcome {
@@ -716,17 +663,12 @@ public enum RuntimeEventPresentation {
         if inFlight {
             return "传输中"
         }
-        let effectiveStatusCode = statusCode == 0 ? (upstreamStatusCode ?? statusCode) : statusCode
         switch outcome {
         case .succeeded: return "成功"
         case .failed: return "失败"
         case .cancelled: return "已取消"
-        case nil where effectiveStatusCode == 499:
-            return phase == .completed ? "已取消（最终结果未上报）" : "已取消（旧事件推断）"
-        case nil where (200..<400).contains(effectiveStatusCode):
-            return phase == .completed ? "成功（最终结果未上报）" : "成功（旧事件推断）"
         case nil:
-            return phase == .completed ? "失败（最终结果未上报）" : "失败（旧事件推断）"
+            return "最终结果未上报"
         }
     }
 
@@ -896,13 +838,6 @@ public enum RuntimeEventPresentation {
         return "\(durationDisplay(ttfbMS)) → \(total)"
     }
 
-    private static func retryableStatus(in message: String) -> Int? {
-        guard message.hasPrefix("retryableStatus("), message.hasSuffix(")") else {
-            return nil
-        }
-        return Int(message.dropFirst("retryableStatus(".count).dropLast())
-    }
-
     /// 状态码合成段的括注(无错误解释时的兜底);未知码不加括注。
     private static func statusCodeHint(_ status: Int) -> String {
         switch status {
@@ -922,25 +857,4 @@ public enum RuntimeEventPresentation {
         }
     }
 
-    /// legacy `retryableStatus(NNN)` 的括注:该串只出现在可重试尝试上,默认「可重试」。
-    private static func legacyRetryableHint(_ status: Int) -> String {
-        switch status {
-        case 401:
-            return "(认证失败)"
-        case 403:
-            return "(拒绝访问)"
-        case 429:
-            return "(限流)"
-        case 500:
-            return "(服务端错误)"
-        case 502:
-            return "(网关错误)"
-        case 503:
-            return "(暂不可用)"
-        case 520...530:
-            return "(源站不可达)"
-        default:
-            return "(可重试)"
-        }
-    }
 }

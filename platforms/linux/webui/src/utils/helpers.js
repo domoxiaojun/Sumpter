@@ -239,8 +239,7 @@ export function eventToolCallsLabel(event) {
   const calls = eventToolCalls(event);
   if (calls.length) return calls.join('、');
   if (eventIsInFlight(event)) return '尚未观察到工具调用';
-  if (!eventPhase(event) && !eventOutcome(event)) return '未记录（旧事件）';
-  return '未观察到工具调用';
+  return '工具调用未记录';
 }
 
 export function eventStreamTrace(event) {
@@ -257,8 +256,7 @@ export function eventStreamTraceLabel(event) {
     });
   }
   if (eventIsInFlight(event)) return '等待流诊断信息';
-  if (!eventPhase(event) && !eventOutcome(event)) return '未记录（旧事件）';
-  return '无流诊断信息（未进入流式阶段）';
+  return '流诊断信息未记录';
 }
 
 export function eventEndpointName(event) {
@@ -922,7 +920,7 @@ export function codexAgentRoleLabel(metadataOrEvent) {
   if (codexMetadataField(metadata, 'agentName', 'agent_name')
     || codexMetadataField(metadata, 'threadID', 'thread_id')
     || codexMetadataField(metadata, 'turnID', 'turn_id')) {
-    return '未发现子代理证据';
+    return '主代理';
   }
   return '代理身份未确定';
 }
@@ -933,7 +931,11 @@ function codexAgentRoleSummary(metadata) {
     const kind = codexSubagentKind(metadata);
     return `子代理${kind ? ` ${kind}` : ''}`;
   }
-  return '未发现子代理证据';
+  return codexMetadataField(metadata, 'agentName', 'agent_name')
+    || codexMetadataField(metadata, 'threadID', 'thread_id')
+    || codexMetadataField(metadata, 'turnID', 'turn_id')
+    ? '主代理'
+    : '未发现子代理证据';
 }
 
 export function codexMetadataSummary(metadataOrEvent) {
@@ -1065,7 +1067,7 @@ export function eventPurposeLabel(event) {
   const purpose = eventField(event, 'requestPurpose');
   if (cleanText(purpose)) return purposeLabel(purpose);
   if (cleanText(event?.kind).toLowerCase() === 'notify') return '不适用（通知事件）';
-  return '旧事件（未记录）';
+  return '请求用途未记录';
 }
 
 export function clientKindLabel(kind) {
@@ -1111,21 +1113,17 @@ export function eventClientKindState(event) {
 export function eventClientKindLabel(event) {
   const state = eventClientKindState(event);
   if (state === 'not_applicable') return '不适用（通知事件）';
-  if (state === 'missing') return '旧事件（未记录）';
+  if (state === 'missing') return '客户端未记录';
   return clientKindLabel(eventField(event, 'clientKind'));
 }
 
 export function eventResultKind(event) {
   if (cleanText(event?.kind).toLowerCase() === 'notify') return null;
-  const outcome = eventOutcome(event);
-  if (outcome === 'succeeded' || outcome === 'failed' || outcome === 'cancelled') return outcome;
   // A streaming response can already have HTTP 200 headers while its final
   // protocol outcome is still unknown. Keep it pending until completion.
   if (eventIsInFlight(event)) return null;
-  const statusCode = eventHTTPStatusCode(event);
-  if (statusCode === 499) return 'cancelled';
-  if (statusCode !== null && statusCode >= 200 && statusCode < 400) return 'succeeded';
-  if (statusCode !== null && statusCode >= 400) return 'failed';
+  const outcome = eventOutcome(event);
+  if (outcome === 'succeeded' || outcome === 'failed' || outcome === 'cancelled') return outcome;
   return null;
 }
 
@@ -1172,12 +1170,7 @@ export function eventDurationText(event) {
 }
 
 export function eventHTTPStatusCode(event) {
-  const statusCode = eventStatusCode(event);
-  if (statusCode !== null && statusCode !== 0) return statusCode;
-  const upstreamStatus = eventField(event, 'upstreamStatusCode', 'upstream_status_code');
-  if (upstreamStatus === null || upstreamStatus === undefined || upstreamStatus === '') return statusCode;
-  const normalized = Number(upstreamStatus);
-  return Number.isNaN(normalized) || normalized === 0 ? statusCode : normalized;
+  return eventStatusCode(event);
 }
 
 export function eventStatus(event) {
@@ -1201,17 +1194,7 @@ export function eventOutcomeLabel(event) {
   if (eventIsInFlight(event)) return '待定 (Pending)';
   if (outcome === 'succeeded') return '成功 (Succeeded)';
   if (outcome === 'cancelled') return '客户端主动取消 (Cancelled)';
-  if (outcome === 'failed') return '请求失败 (Failed)';
-  const inferred = eventResultKind(event);
-  // A completed event with a missing outcome is a field gap, not necessarily
-  // a legacy row. Only rows missing both phase and outcome may use the HTTP
-  // status fallback wording; this keeps a current 200/failed protocol result
-  // and a completed-but-unreported result visibly distinct.
-  const phase = eventPhase(event);
-  const resultSuffix = phase === 'completed' ? '（最终结果未上报）' : '（旧事件推断）';
-  if (inferred === 'succeeded') return `成功${resultSuffix}`;
-  if (inferred === 'cancelled') return `已取消${resultSuffix}`;
-  if (inferred === 'failed') return `失败${resultSuffix}`;
+  if (outcome === 'failed') return '最终结果失败 (Failed)';
   return '未上报 (Unknown)';
 }
 
@@ -1226,10 +1209,7 @@ export function eventPhaseLabel(phaseOrEvent) {
     completed: '已完成 (Completed)',
   };
   if (map[phase]) return map[phase];
-  // Newer event snapshots always carry a final outcome, but older engines
-  // omitted phase on completion.  Do not call those current events legacy.
-  if (isEvent && eventOutcome(phaseOrEvent)) return '已完成 (Completed)';
-  return phase || '已结束（旧事件未记录阶段）';
+  return phase || '阶段未记录';
 }
 
 export function eventHttpStatusLabel(event) {
@@ -1250,11 +1230,6 @@ export function eventUpstreamStatusLabel(event) {
   if (cleanText(event?.kind).toLowerCase() === 'notify') return '不适用（通知事件）';
   const explicit = eventField(event, 'upstreamStatusCode', 'upstream_status_code');
   if (explicit !== null && explicit !== undefined && explicit !== '') return `HTTP ${explicit}`;
-  const legacyStatus = eventStatusCode(event);
-  if (cleanText(event?.kind).toLowerCase() === 'upstream'
-    && !eventPhase(event) && !eventOutcome(event) && legacyStatus) {
-    return `HTTP ${legacyStatus}（旧事件推断）`;
-  }
   return '未收到响应头 / 未记录';
 }
 
@@ -1265,8 +1240,7 @@ export function eventProtocolRouteLabel(event) {
   const mode = eventField(event, 'routeMode', 'route_mode');
   if (!source && !target && !mode) {
     if (eventIsInFlight(event)) return '尚未记录（路由未定型）';
-    if (!eventPhase(event) && !eventOutcome(event)) return '未记录（旧事件）';
-    return '未记录（路由前拒绝）';
+    return '未记录';
   }
   return `${source ? sourceFormatLabel(source) : '未记录'} → ${target ? sourceFormatLabel(target) : '未记录'} · ${mode ? routeModeLabel(mode) : '未记录'}`;
 }
@@ -1278,7 +1252,7 @@ export function eventFailureSummaryLabel(event) {
     return `${failureKindLabel(kind)}${phase ? ` · ${failurePhaseLabel(phase)}` : ''}`;
   }
   const result = eventResultKind(event);
-  if (result === 'failed') return '未记录（旧事件 / 非结构化失败）';
+  if (result === 'failed') return '未记录结构化失败信息';
   if (eventIsInFlight(event)) return '尚无失败信息（进行中）';
   if (result === 'cancelled') return '不适用（请求已取消）';
   if (result === 'succeeded') return '不适用（请求成功）';
@@ -1334,10 +1308,7 @@ export function friendlyEventMessage(event) {
   const message = eventMessage(event);
   const failureDetail = eventFailureDetail(event);
   if (phase === 'inFlight' || eventIsInFlight(event)) return '流式输出中';
-  if (statusCode === 499 || outcome === 'cancelled') {
-    if (!outcome && phase === 'completed') {
-      return '最终结果未上报（HTTP 499 仅供参考）';
-    }
+  if (outcome === 'cancelled') {
     return '客户端主动断开连接 / 取消请求 (499)';
   }
   // A successful request is described by its recorded lifecycle result. The
@@ -1372,24 +1343,8 @@ export function friendlyEventMessage(event) {
     return `请求失败（最终结果为 Failed）：${failureDetail}`;
   }
   if (outcome === 'failed') return '请求失败（最终结果为 Failed）';
-  const inferred = eventResultKind(event);
-  if (!outcome && inferred === 'succeeded') {
-    return eventPhase(event) === 'completed'
-      ? '最终结果未上报（HTTP 状态仅供参考）'
-      : '旧事件：按 HTTP 状态推断为成功';
-  }
-  if (!outcome && inferred === 'cancelled') {
-    return eventPhase(event) === 'completed'
-      ? '最终结果未上报（HTTP 499 仅供参考）'
-      : '旧事件：按 HTTP 499 推断为客户端取消';
-  }
-  if (!outcome && inferred === 'failed') {
-    return eventPhase(event) === 'completed'
-      ? '最终结果未上报（HTTP 状态仅供参考）'
-      : '旧事件：按 HTTP 状态推断为失败';
-  }
   if (failureDetail) return failureDetail;
-  return '已结束';
+  return '最终结果未上报';
 }
 
 export function statusKind(statusCodeOrEvent, inFlight, outcome) {
@@ -1400,6 +1355,9 @@ export function statusKind(statusCodeOrEvent, inFlight, outcome) {
   const finalOutcome = isEvent ? eventOutcome(statusCodeOrEvent) : outcome;
   if (live) return 'live';
   if (finalOutcome === 'failed') return 'critical';
+  if (finalOutcome === 'succeeded') return 'good';
+  if (finalOutcome === 'cancelled') return 'muted';
+  if (isEvent) return 'muted';
   if (statusCode === 499 || finalOutcome === 'cancelled') return 'muted';
   if (statusCode >= 200 && statusCode < 400 && finalOutcome !== 'failed') return 'good';
   // Match the core outcome fallback: every non-499 HTTP 4xx/5xx is a failed

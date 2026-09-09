@@ -6,5 +6,8 @@
 pub mod runtime_query;
 pub mod runtime_store;
 
+mod database;
+mod entities;
+
 pub use runtime_query::*;
 pub use runtime_store::*;

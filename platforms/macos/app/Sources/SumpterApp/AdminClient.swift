@@ -1640,7 +1640,6 @@ public enum AdminWire {
         public let sourceFormat: ProviderProtocol?
         public let targetFormat: ProviderProtocol?
         public let routeMode: RouteMode?
-        public let pinnedIP: String?
         public let startedAtMS: Int
         public let outboundMethod: String
         public let outboundURL: String

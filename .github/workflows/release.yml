@@ -294,7 +294,8 @@ jobs:
   macos:
     name: Build macOS packages
     needs: resolve
-    runs-on: macos-15
+    # 稳定工具链版本由 platforms/macos/app/select-xcode.sh 统一校验。
+    runs-on: macos-26
     timeout-minutes: 60
     permissions:
       contents: read
@@ -320,38 +321,12 @@ jobs:
       - name: Select Xcode and Rust toolchain
         run: |
           set -Eeuo pipefail
-          # Package.swift 要求 swift-tools-version 6.0，选择 runner 上可用的最高 Swift 6+ Xcode。
-          swift_binary() {
-            printf '%s' "$1/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift"
-          }
-          swift_version_output() {
-            DEVELOPER_DIR="$1" "$(swift_binary "$1")" --version 2>&1
-          }
-          swift_major() {
-            local reported
-            reported="$(swift_version_output "$1" \
-              | sed -n 's/.*Swift version \([0-9][0-9]*\).*/\1/p' | head -1)"
-            printf '%s' "${reported:-0}"
-          }
-          selected=""
-          selected_major=0
-          for app in /Applications/Xcode*.app; do
-            developer="$app/Contents/Developer"
-            [[ -x "$(swift_binary "$developer")" ]] || continue
-            major="$(swift_major "$developer")"
-            if (( major > selected_major )); then
-              selected="$developer"
-              selected_major="$major"
-            fi
-          done
-          if [[ -z "$selected" ]] || (( selected_major < 6 )); then
-            echo "找不到带 Swift 6+ 的 Xcode(Package.swift 要求 6.0)" >&2
-            exit 1
-          fi
-          sudo xcode-select -s "$selected"
-          echo "选中 Swift major $selected_major: $selected"
+          selected="$(bash platforms/macos/app/select-xcode.sh)"
+          export DEVELOPER_DIR="$selected"
+          echo "DEVELOPER_DIR=$selected" >> "$GITHUB_ENV"
           xcodebuild -version
           swift --version
+          xcrun --sdk macosx --show-sdk-version
           command -v rustup
           rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"

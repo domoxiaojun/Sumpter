@@ -30,7 +30,9 @@ test('pi launcher loads the request hook and preserves arguments, environment an
   assert.deepEqual(launch.args.slice(2), args);
   assert.equal(launch.args[0], '-e');
   assert.equal(launch.args[1], fileURLToPath(new URL('../clients/pi-project-attribution.ts', import.meta.url)));
-  assert.deepEqual(launch.env, f.env);
+  assert.equal(launch.env.SUMPTER_PI_ATTRIBUTION, '1');
+  assert.equal(launch.env.SUMPTER_PI_BIN, undefined);
+  assert.equal(launch.env.USER, f.env.USER);
   // Use an executable shim to verify the actual child command and exit propagation.
   const shim = join(f.root, 'pi-shim');
   writeFileSync(shim, '#!/bin/sh\nprintf "%s\\n" "$@"\nexit 7\n', { mode: 0o755 });
@@ -39,6 +41,16 @@ test('pi launcher loads the request hook and preserves arguments, environment an
   });
   assert.equal(child.status, 7, child.stderr);
   assert.deepEqual(child.stdout.trimEnd().split('\n'), launch.args);
+});
+
+test('pi install can add the same dynamic wrapper pattern as the other clients', (t) => {
+  const f = fixture(t);
+  const rc = join(f.home, '.zshrc');
+  const result = manage('install', 'pi', { shell: 'zsh', rc }, f.env);
+  assert.equal(result.some((item) => item.client === 'pi' && item.shell === 'extension'), true);
+  assert.match(readFileSync(rc, 'utf8'), /pi\(\) \{ command node .* run pi --/u);
+  assert.match(readFileSync(join(f.home, '.pi/agent/extensions/pi-project-attribution.ts'), 'utf8'), /before_provider_headers/u);
+  assert.match(readFileSync(join(f.home, '.local/share/sumpter/attribution/pi-project-attribution.ts'), 'utf8'), /before_provider_headers/u);
 });
 
 test('clients share Unicode project/root/user/sanitized remote and preserve unrelated settings', (t) => {
@@ -329,3 +341,38 @@ test('pi refuses symlink destinations and corrupt backup records before replacin
   assert.throws(() => manage('restore', 'pi', {}, f.env), /不是有效 JSON/);
   assert.deepEqual(readFileSync(target), installed);
 });
+
+for (const platform of ['linux', 'macos']) {
+  for (const client of ['cc', 'grok']) {
+    test(`legacy ${platform}/${client} treats shell metacharacters in paths as data`, (t) => {
+      const f = fixture(t);
+      const installer = fileURLToPath(new URL(`../../platforms/${platform}/scripts/${client}-project-attribution.sh`, import.meta.url));
+      const rc = join(f.home, 'new " \' $(touch rc-injected) `touch rc-backtick`', 'profile');
+      const snippet = join(f.home, 'snippet " \' $(touch snippet-injected) `touch snippet-backtick`\nfile.sh');
+      const env = { ...f.env, [client === 'cc' ? 'SUMPTER_CC_SNIPPET' : 'SUMPTER_GROK_SNIPPET']: snippet };
+      const options = { env, cwd: f.root, encoding: 'utf8' };
+      const run = (action, ...args) => execFileSync('/bin/bash', [installer, action, '--shell', 'bash', '--rc', rc, ...args], options);
+      run('install', '--dry-run');
+      assert.equal(existsSync(rc), false);
+      assert.equal(existsSync(snippet), false);
+      run('install'); // exercise mkdir with an untrusted path
+      const installed = readFileSync(rc, 'utf8');
+      run('install'); // exercise backup with an untrusted path
+      assert.equal(readFileSync(rc, 'utf8'), installed);
+      for (const shell of ['/bin/bash', '/bin/zsh'].filter(existsSync)) {
+        const command = client === 'cc' ? 'claude' : 'grok';
+        const result = execFileSync(shell, ['-c', `. "$1"; typeset -f ${command}`, 'source-test', rc], options);
+        assert.match(result, new RegExp(`${command}\\s*\\(\\)`));
+      }
+      run('uninstall', '--dry-run');
+      assert.equal(readFileSync(rc, 'utf8'), installed);
+      assert.equal(existsSync(snippet), true);
+      run('uninstall'); // exercise rm with an untrusted path
+      assert.equal(existsSync(snippet), false);
+      assert.equal(readFileSync(rc, 'utf8'), '');
+      for (const marker of ['rc-injected', 'rc-backtick', 'snippet-injected', 'snippet-backtick']) {
+        assert.equal(existsSync(join(f.root, marker)), false, `executed filename: ${marker}`);
+      }
+    });
+  }
+}

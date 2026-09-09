@@ -177,38 +177,6 @@ final class RuntimeEventPresentationTests: XCTestCase {
         XCTAssertNil(RuntimeEventPresentation.codexSummary(metadata))
     }
 
-    func testIsClientDisconnect() {
-        XCTAssertTrue(RuntimeEventPresentation.isClientDisconnect(
-            message: #"connectionFailed("POSIXErrorCode(rawValue: 54): Connection reset by peer")"#
-        ))
-        XCTAssertTrue(RuntimeEventPresentation.isClientDisconnect(
-            message: #"connectionFailed("POSIXErrorCode(rawValue: 32): Broken pipe")"#
-        ))
-        XCTAssertTrue(RuntimeEventPresentation.isClientDisconnect(message: "Socket is not connected"))
-        XCTAssertFalse(RuntimeEventPresentation.isClientDisconnect(message: "retryableStatus(403)"))
-        XCTAssertFalse(RuntimeEventPresentation.isClientDisconnect(message: "timeout"))
-        XCTAssertFalse(RuntimeEventPresentation.isClientDisconnect(message: ""))
-    }
-
-    func testFriendlyMessageRetryableStatus() {
-        XCTAssertEqual(
-            RuntimeEventPresentation.friendlyMessage(kind: "upstream", statusCode: 403, failover: true, message: "retryableStatus(403)"),
-            "上游返回 403(拒绝访问)"
-        )
-        XCTAssertEqual(
-            RuntimeEventPresentation.friendlyMessage(kind: "upstream", statusCode: 429, failover: false, message: "retryableStatus(429)"),
-            "上游返回 429(限流)"
-        )
-        XCTAssertEqual(
-            RuntimeEventPresentation.friendlyMessage(kind: "upstream", statusCode: 521, failover: false, message: "retryableStatus(521)"),
-            "上游返回 521(源站不可达)"
-        )
-        XCTAssertEqual(
-            RuntimeEventPresentation.friendlyMessage(kind: "upstream", statusCode: 418, failover: false, message: "retryableStatus(418)"),
-            "上游返回 418(可重试)"
-        )
-    }
-
     func testFriendlyMessageBasics() {
         XCTAssertEqual(
             RuntimeEventPresentation.friendlyMessage(kind: "upstream", statusCode: 502, failover: false, message: "timeout"),
@@ -227,10 +195,6 @@ final class RuntimeEventPresentationTests: XCTestCase {
             ""
         )
         XCTAssertEqual(
-            RuntimeEventPresentation.friendlyMessage(kind: "client", statusCode: 400, failover: false, message: #"noEnabledEndpoint("fallback")"#),
-            "目标池中没有该模型的可用映射"
-        )
-        XCTAssertEqual(
             RuntimeEventPresentation.friendlyMessage(kind: "client", statusCode: 400, failover: false, message: "自定义消息原样透传"),
             "自定义消息原样透传"
         )
@@ -246,7 +210,9 @@ final class RuntimeEventPresentationTests: XCTestCase {
                 kind: "client",
                 statusCode: 400,
                 failover: false,
-                message: #"connectionFailed("POSIXErrorCode(rawValue: 54): Connection reset by peer")"#
+                message: nil,
+                outcome: .cancelled,
+                failureKind: .clientCancelled
             ),
             "客户端断开/取消"
         )
@@ -255,13 +221,15 @@ final class RuntimeEventPresentationTests: XCTestCase {
                 kind: "upstream",
                 statusCode: 502,
                 failover: false,
-                message: #"connectionFailed("POSIXErrorCode(rawValue: 54): Connection reset by peer")"#
+                message: nil,
+                outcome: .failed,
+                failureKind: .connectionFailed
             ),
-            "连接中断(对端断开)"
+            "连接失败（未收到响应头）"
         )
     }
 
-    /// 现行词表全 token 覆盖(rust/specs/spec-engine.md §5.1)。
+    /// 现行词表全 token 覆盖(docs/architecture.md §5.1)。
     /// 清单与 crates/sumpter-proxy/tests/engine.rs 的 `MESSAGE_TOKEN_PREFIXES` 互钉:
     /// 引擎新增 token 而这里没映射,对应断言会以「原样透传」失败暴露。
     func testFriendlyMessageVocabulary() {
@@ -412,15 +380,15 @@ final class RuntimeEventPresentationTests: XCTestCase {
         )
         XCTAssertEqual(
             RuntimeEventPresentation.outcomeDisplay(nil, statusCode: 0),
-            "失败（旧事件推断）"
+            "最终结果未上报"
         )
         XCTAssertEqual(
             RuntimeEventPresentation.outcomeDisplay(nil, statusCode: 0, upstreamStatusCode: 200),
-            "成功（旧事件推断）"
+            "最终结果未上报"
         )
         XCTAssertEqual(
             RuntimeEventPresentation.outcomeDisplay(nil, statusCode: 0, upstreamStatusCode: 499),
-            "已取消（旧事件推断）"
+            "最终结果未上报"
         )
         XCTAssertEqual(
             RuntimeEventPresentation.friendlyMessage(
@@ -430,7 +398,7 @@ final class RuntimeEventPresentationTests: XCTestCase {
                 message: nil,
                 upstreamStatusCode: 503
             ),
-            "上游返回 503(暂不可用)"
+            ""
         )
         XCTAssertEqual(
             RuntimeEventPresentation.friendlyMessage(
@@ -440,7 +408,7 @@ final class RuntimeEventPresentationTests: XCTestCase {
                 message: nil,
                 upstreamStatusCode: 499
             ),
-            "客户端断开/取消"
+            ""
         )
     }
 
@@ -456,20 +424,20 @@ final class RuntimeEventPresentationTests: XCTestCase {
         )
         XCTAssertEqual(
             RuntimeEventPresentation.outcomeDisplay(nil, statusCode: 200),
-            "成功（旧事件推断）",
-            "默认参数保持普通旧事件兼容"
+            "最终结果未上报",
+            "HTTP 成功不能代替明确的最终执行结果"
         )
     }
 
-    func testHistoricalCodexUnmatchedTokenIsHiddenWithoutAffectingClaudeCode() {
+    func testCurrentMessagesArePreservedWithoutHistoricalClientRewrites() {
         let raw = "passthrough responses; unmatched_no_tools"
         XCTAssertEqual(
             RuntimeEventPresentation.messageForDisplay(raw, clientKind: .codex),
-            "passthrough responses"
+            raw
         )
         XCTAssertEqual(
             RuntimeEventPresentation.messageForDisplay(raw, clientKind: .openaiCompat),
-            "passthrough responses"
+            raw
         )
         XCTAssertEqual(
             RuntimeEventPresentation.messageForDisplay(raw, clientKind: .claudeCode),
@@ -607,13 +575,14 @@ final class RuntimeEventPresentationTests: XCTestCase {
         )
     }
 
-    func testRuntimeEventStructuredFieldsRemainLegacyCompatible() throws {
+    func testRuntimeEventKeepsHttpStatusIndependentFromFinalResult() throws {
         let legacy = #"{"id":"OLD","timestamp":1.5,"kind":"client","statusCode":200,"durationMS":5,"failover":false}"#.data(using: .utf8)!
         let oldEvent = try JSONDecoder().decode(RuntimeEvent.self, from: legacy)
         XCTAssertNil(oldEvent.outcome)
         XCTAssertNil(oldEvent.failureKind)
         XCTAssertNil(oldEvent.effectiveModel)
-        XCTAssertTrue(oldEvent.isSucceeded)
+        XCTAssertFalse(oldEvent.isSucceeded)
+        XCTAssertFalse(oldEvent.isFailed)
 
         let current = RuntimeEvent(
             id: "REQUEST-1",
@@ -647,8 +616,8 @@ final class RuntimeEventPresentationTests: XCTestCase {
             phase: .completed,
             upstreamStatusCode: 200
         )
-        XCTAssertEqual(completedWithLegacyZero.effectiveHTTPStatusCode, 200)
-        XCTAssertTrue(completedWithLegacyZero.isSucceeded)
+        XCTAssertEqual(completedWithLegacyZero.effectiveHTTPStatusCode, 0)
+        XCTAssertFalse(completedWithLegacyZero.isSucceeded)
         XCTAssertFalse(completedWithLegacyZero.isFailed)
 
         let failedWithLegacyZero = RuntimeEvent(
@@ -658,7 +627,7 @@ final class RuntimeEventPresentationTests: XCTestCase {
             phase: .completed,
             upstreamStatusCode: 503
         )
-        XCTAssertTrue(failedWithLegacyZero.isFailed)
+        XCTAssertFalse(failedWithLegacyZero.isFailed)
         XCTAssertFalse(failedWithLegacyZero.isSucceeded)
 
         let cancelledWithLegacyZero = RuntimeEvent(
@@ -668,7 +637,7 @@ final class RuntimeEventPresentationTests: XCTestCase {
             phase: .completed,
             upstreamStatusCode: 499
         )
-        XCTAssertTrue(cancelledWithLegacyZero.isCancelled)
+        XCTAssertFalse(cancelledWithLegacyZero.isCancelled)
 
         let inFlightWithHeaders = RuntimeEvent(
             kind: "client",
@@ -806,10 +775,10 @@ final class RuntimeEventPresentationTests: XCTestCase {
 
     func testStatusAndDurationDisplay() {
         XCTAssertEqual(RuntimeEventPresentation.statusDisplay(200), "200")
-        XCTAssertEqual(RuntimeEventPresentation.statusDisplay(499), "取消")
+        XCTAssertEqual(RuntimeEventPresentation.statusDisplay(499), "499")
         XCTAssertEqual(
             RuntimeEventPresentation.statusDisplay(0, upstreamStatusCode: 200),
-            "200"
+            "未收到响应头"
         )
 
         XCTAssertEqual(RuntimeEventPresentation.durationDisplay(850), "850ms")
