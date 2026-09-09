@@ -47,7 +47,9 @@ test('pi install can add the same dynamic wrapper pattern as the other clients',
   const f = fixture(t);
   const rc = join(f.home, '.zshrc');
   const result = manage('install', 'pi', { shell: 'zsh', rc }, f.env);
-  assert.equal(result.some((item) => item.client === 'pi' && item.shell === 'extension'), true);
+  assert.deepEqual(result.map((item) => item.client), ['pi']);
+  assert.equal(result[0].shell, 'zsh');
+  assert.equal(result[0].extension, join(f.home, '.pi/agent/extensions/pi-project-attribution.ts'));
   assert.match(readFileSync(rc, 'utf8'), /pi\(\) \{ command node .* run pi --/u);
   assert.match(readFileSync(join(f.home, '.pi/agent/extensions/pi-project-attribution.ts'), 'utf8'), /before_provider_headers/u);
   assert.match(readFileSync(join(f.home, '.local/share/sumpter/attribution/pi-project-attribution.ts'), 'utf8'), /before_provider_headers/u);
@@ -294,7 +296,7 @@ test('remote Linux setup downloads from SUMPTER_RESOURCE_BASE without listener a
   assert.match(result.output, /pi：已安装/);
 });
 
-test('pi install/update preserves first backup and restores exact bytes without touching provider or shell', (t) => {
+test('pi install/update preserves first backup and restores exact extension bytes and shell block without touching provider', (t) => {
   const f = fixture(t);
   const target = join(f.home, '.pi/agent/extensions/pi-project-attribution.ts');
   mkdirSync(join(f.home, '.pi/agent/extensions'), { recursive: true });
@@ -302,8 +304,8 @@ test('pi install/update preserves first backup and restores exact bytes without 
   writeFileSync(target, original);
   const provider = join(f.home, '.pi/agent/models.json');
   writeFileSync(provider, '{"synthetic":"unchanged"}');
-  const opts = { shell: 'fish' }; // pi never reads or writes shell rc.
-  assert.equal(manage('status', 'pi', opts, f.env)[0].status, 'outdated');
+  const opts = { shell: 'bash' };
+  assert.equal(manage('status', 'pi', opts, f.env)[0].status, 'broken');
   manage('install', 'pi', { ...opts, dryRun: true }, f.env);
   assert.deepEqual(readFileSync(target), original);
   assert.equal(existsSync(f.env.XDG_DATA_HOME), false);
@@ -317,7 +319,7 @@ test('pi install/update preserves first backup and restores exact bytes without 
   assert.deepEqual(readFileSync(target), original);
   assert.equal(manage('status', 'pi', opts, f.env)[0].canRestore, false);
   assert.equal(readFileSync(provider, 'utf8'), '{"synthetic":"unchanged"}');
-  assert.equal(existsSync(join(f.home, '.bashrc')), false);
+  assert.equal(readFileSync(join(f.home, '.bashrc'), 'utf8'), '');
 });
 
 test('pi first install restores absence; missing resource fails all before shell mutation', (t) => {
@@ -327,11 +329,13 @@ test('pi first install restores absence; missing resource fails all before shell
   manage('install', 'pi', {}, f.env);
   manage('restore', 'pi', {}, f.env);
   assert.equal(existsSync(target), false);
+  assert.equal(existsSync(join(f.home, '.bashrc')), true);
   assert.equal(manage('restore', 'pi', {}, f.env)[0].status, 'unchanged');
   const standalone = join(f.root, 'client-attribution.mjs');
   writeFileSync(standalone, readFileSync(source));
+  const before = readFileSync(join(f.home, '.bashrc'), 'utf8');
   assert.throws(() => manage('install', 'all', { shell: 'bash' }, f.env, standalone), /缺少配套/);
-  assert.equal(existsSync(join(f.home, '.bashrc')), false);
+  assert.equal(readFileSync(join(f.home, '.bashrc'), 'utf8'), before);
   assert.equal(existsSync(target), false);
 });
 
@@ -387,3 +391,53 @@ for (const platform of ['linux', 'macos']) {
     });
   }
 }
+
+for (const shell of ['bash', 'zsh']) {
+  test(`pi and all share one complete ${shell} status and preserve user edits on restore`, { skip: !existsSync(`/bin/${shell}`) }, (t) => {
+    const f = fixture(t);
+    const opts = { shell };
+    const rc = join(f.home, shell === 'zsh' ? '.zshrc' : '.bashrc');
+    const provider = join(f.home, '.pi/agent/models.json');
+    mkdirSync(join(f.home, '.pi/agent'), { recursive: true });
+    writeFileSync(provider, '{"keep":true}');
+    writeFileSync(rc, '# original\n');
+    const initial = manage('status', 'all', opts, f.env);
+    assert.equal(initial.length, 5);
+    assert.equal(new Set(initial.map(item => item.client)).size, 5);
+    manage('install', 'all', opts, f.env);
+    const status = manage('status', 'pi', opts, f.env);
+    assert.equal(status.length, 1);
+    assert.equal(status[0].shell, shell);
+    assert.equal(status[0].rc, rc);
+    assert.equal(status[0].status, 'installed');
+    assert.deepEqual(manage('status', 'all', opts, f.env).filter(item => item.client === 'pi'), status);
+    assert.match(readFileSync(rc, 'utf8'), /pi\(\) \{ command node .* run pi --/u);
+    const shim = join(f.root, 'pi-shim');
+    writeFileSync(shim, '#!/bin/sh\nprintf "%s\\n" "$SUMPTER_PI_ATTRIBUTION" "$@"\nexit 7\n', { mode: 0o755 });
+    const child = spawnSync(`/bin/${shell}`, ['-c', 'source "$1"; pi --resume "session with spaces"', 'test', rc], {
+      env: { ...f.env, SUMPTER_PI_BIN: shim }, encoding: 'utf8',
+    });
+    assert.equal(child.status, 7, child.stderr);
+    assert.deepEqual(child.stdout.trimEnd().split('\n'), ['1', '-e', join(f.env.XDG_DATA_HOME, 'sumpter/attribution/pi-project-attribution.ts'), '--resume', 'session with spaces']);
+    const resource = join(f.env.XDG_DATA_HOME, 'sumpter/attribution/pi-project-attribution.ts');
+    rmSync(resource);
+    assert.equal(manage('status', 'pi', opts, f.env)[0].status, 'broken');
+    manage('install', 'pi', opts, f.env);
+    writeFileSync(rc, readFileSync(rc, 'utf8') + '# later edit\n');
+    manage('restore', 'all', opts, f.env);
+    assert.equal(readFileSync(rc, 'utf8'), '# original\n# later edit\n');
+    assert.equal(readFileSync(provider, 'utf8'), '{"keep":true}');
+    assert.equal(manage('status', 'pi', opts, f.env)[0].status, 'absent');
+    assert.equal(manage('status', 'pi', opts, f.env)[0].canRestore, false);
+    assert.equal(manage('restore', 'pi', opts, f.env)[0].status, 'unchanged');
+  });
+}
+
+test('pi rejects unsupported shells and broken markers before installing extension', (t) => {
+  const f = fixture(t);
+  assert.throws(() => manage('install', 'pi', { shell: 'fish' }, f.env), /bash\/zsh/);
+  assert.equal(existsSync(join(f.home, '.pi')), false);
+  writeFileSync(join(f.home, '.bashrc'), '# >>> sumpter client-attribution pi >>>\n');
+  assert.throws(() => manage('install', 'pi', {}, f.env), /不完整/);
+  assert.equal(existsSync(join(f.home, '.pi')), false);
+});

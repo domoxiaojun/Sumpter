@@ -38,15 +38,20 @@ final class UnifiedAttributionInstallerTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: home) }
         let env = ["HOME": home.path, "XDG_DATA_HOME": home.appendingPathComponent("data").path, "PATH": "/usr/bin:/bin"]
         let target = home.appendingPathComponent(".pi/agent/extensions/pi-project-attribution.ts")
-        _ = try await UnifiedAttributionInstaller.run(.install, client: "pi", shell: "fish", environment: env)
-        _ = try await UnifiedAttributionInstaller.run(.install, client: "pi", shell: "fish", environment: env)
-        let output = try await UnifiedAttributionInstaller.run(.status, client: "pi", shell: "fish", environment: env)
-        let status = try XCTUnwrap(UnifiedAttributionInstaller.parseStatus(output).first)
+        _ = try await UnifiedAttributionInstaller.run(.install, client: "pi", shell: "zsh", environment: env)
+        _ = try await UnifiedAttributionInstaller.run(.install, client: "pi", shell: "zsh", environment: env)
+        let output = try await UnifiedAttributionInstaller.run(.status, client: "pi", shell: "zsh", environment: env)
+        let items = try UnifiedAttributionInstaller.parseStatus(output)
+        XCTAssertEqual(items.count, 1)
+        let status = try XCTUnwrap(items.first)
+        XCTAssertEqual(status.shell, "zsh")
+        XCTAssertTrue(status.rc.hasSuffix("/.zshrc"))
+        XCTAssertEqual(status.extension, target.path)
         XCTAssertEqual(status.status, "installed")
         XCTAssertTrue(status.canRestore)
         XCTAssertTrue(FileManager.default.fileExists(atPath: target.path))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: home.appendingPathComponent(".zshrc").path))
-        _ = try await UnifiedAttributionInstaller.run(.restore, client: "pi", shell: "fish", environment: env)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: home.appendingPathComponent(".zshrc").path))
+        _ = try await UnifiedAttributionInstaller.run(.restore, client: "pi", shell: "zsh", environment: env)
         XCTAssertFalse(FileManager.default.fileExists(atPath: target.path))
     }
 }

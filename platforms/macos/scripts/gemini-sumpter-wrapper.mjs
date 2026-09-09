@@ -7,7 +7,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, realpathSync, statSync, lstatSync, openSync, closeSync, unlinkSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const clients = ['claude', 'grok', 'gemini', 'codex'];
+const clients = ['claude', 'grok', 'gemini', 'codex', 'pi'];
 const ownedHeaders = new Set(['x-sumpter-client', 'x-sumpter-project', 'x-sumpter-workspace',
   'x-sumpter-git-remote', 'x-sumpter-user', 'x-sumpter-session-id', 'x-sumpter-attribution-encoding']);
 const safe = (value, max = 4096) => typeof value === 'string' && value.trim()
@@ -280,23 +280,31 @@ function managePi(action, options, env, source) {
 }
 
 export function manage(action, client, options = {}, env = process.env, source = fileURLToPath(import.meta.url)) {
-  if (client === 'pi') {
-    const extension = managePi(action, options, env, source);
-    const wantsShell = Boolean(options.rc)
-      || (options.shell && ['bash', 'zsh'].includes(options.shell));
-    if (!wantsShell) return extension;
-    return [...extension, ...manageShell(action, client, options, env, source)];
-  }
-  if (client !== 'all') return manageShell(action, client, options, env, source);
-  // Validate both destinations and required resources before either installer writes.
-  const shellPreview = manageShell(action, client, { ...options, dryRun: true }, env, source);
-  const piPreview = managePi(action, { ...options, dryRun: true }, env, source);
-  if (action === 'status' || options.dryRun) return [...shellPreview, ...piPreview];
-  return [...manageShell(action, client, options, env, source), ...managePi(action, options, env, source)];
+  if (!['pi', 'all'].includes(client) || action === 'snippet') return manageShell(action, client, options, env, source);
+  // Preflight every destination before writing either the shell or extension.
+  const preview = { ...options, dryRun: true };
+  const shells = manageShell(action, client, preview, env, source);
+  const [extension] = managePi(action, preview, env, source);
+  const merge = (items, extra) => items.map(item => item.client === 'pi' ? combinePiStatus(extra, item) : item);
+  if (action === 'status' || options.dryRun) return merge(shells, extension);
+  return merge(manageShell(action, client, options, env, source), managePi(action, options, env, source)[0]);
+}
+
+function combinePiStatus(extensionItem, shellItem) {
+  const states = [extensionItem.status, shellItem.status];
+  const status = states[0] === states[1] ? states[0]
+    : states.includes('restored') ? 'restored'
+      : states.includes('broken') || states.includes('absent') ? 'broken' : 'outdated';
+  return {
+    ...shellItem,
+    status,
+    canRestore: Boolean(extensionItem.canRestore || shellItem.canRestore),
+    extension: extensionItem.rc,
+  };
 }
 
 function manageShell(action, client, options, env, source) {
-  if (!['install', 'status', 'uninstall', 'restore', 'snippet'].includes(action) || ![...clients, 'pi', 'all'].includes(client)) throw new Error('用法：client-attribution.mjs install|status|uninstall|restore|snippet claude|grok|gemini|codex|pi|all [--shell bash|zsh] [--rc 文件] [--dry-run]');
+  if (!['install', 'status', 'uninstall', 'restore', 'snippet'].includes(action) || ![...clients, 'all'].includes(client)) throw new Error('用法：client-attribution.mjs install|status|uninstall|restore|snippet claude|grok|gemini|codex|pi|all [--shell bash|zsh] [--rc 文件] [--dry-run]');
   const shell = options.shell || basename(env.SHELL || '');
   if (!['bash', 'zsh'].includes(shell)) throw new Error('自动安装支持 bash/zsh；其他 shell 请使用 run 子命令');
   const home = env.HOME || homedir();
@@ -316,6 +324,9 @@ function manageShell(action, client, options, env, source) {
   const piExtensionSource = join(dirname(source), 'pi-project-attribution.ts');
   const piExtensionInstalled = join(dir, 'pi-project-attribution.ts');
   const selected = client === 'all' ? clients : [client];
+  if (action === 'install' && selected.includes('pi') && !read(piExtensionSource)) {
+    throw new Error('缺少配套 pi-project-attribution.ts，请使用完整安装包或重新下载');
+  }
   const original = read(rc);
   let text = original;
   const changes = [];
@@ -325,9 +336,13 @@ function manageShell(action, client, options, env, source) {
     const statePath = join(dir, `${name}-${Buffer.from(rc).toString('base64url')}.json`);
     const previous = existsSync(statePath) ? JSON.parse(read(statePath)) : null;
     const block = `${marker(name)[0]}\n${name}() { command node ${shellQuote(installed)} run ${name} -- "$@"; }\n${marker(name)[1]}\n`;
-    const status = current.captured && existsSync(installed)
+    let status = current.captured && existsSync(installed)
       ? (current.captured === block && read(installed) === read(source) ? 'installed' : 'outdated')
       : current.captured ? 'broken' : legacy.captured ? 'legacy' : 'absent';
+    if (name === 'pi' && status === 'installed') {
+      if (!existsSync(piExtensionInstalled)) status = 'broken';
+      else if (read(piExtensionInstalled) !== read(piExtensionSource)) status = 'outdated';
+    }
     const canRestore = Boolean(previous && (current.captured || legacy.captured !== previous.legacy));
     if (action === 'status') { changes.push({ client: name, status, rc, shell, canRestore }); continue; }
     if (action === 'snippet') { changes.push({ client: name, snippet: `${name}() { command node ${shellQuote(source)} run ${name} -- "$@"; }` }); continue; }
@@ -338,11 +353,11 @@ function manageShell(action, client, options, env, source) {
       if (text && !text.endsWith('\n')) text += '\n';
       text += block;
       // Reinstall does not overwrite the pre-migration block retained for restore.
-      changes.push({ client: name, statePath, state: previous || { rc, legacy: legacy.captured }, status: 'installed' });
+      changes.push({ client: name, statePath, state: previous || { rc, legacy: legacy.captured }, status: 'installed', shell, rc });
     } else {
-      if (action === 'restore' && !previous) {
-        if (client !== 'all') throw new Error(`${name} 没有统一安装器的还原记录`);
-        changes.push({ client: name, status: 'unchanged', rc });
+      if (action === 'restore' && (!previous || (name === 'pi' && !canRestore))) {
+        if (client !== 'all' && client !== 'pi') throw new Error(`${name} 没有统一安装器的还原记录`);
+        changes.push({ client: name, status: 'unchanged', rc, shell });
         continue;
       }
       text = current.remaining;
@@ -351,7 +366,7 @@ function manageShell(action, client, options, env, source) {
         if (text && !text.endsWith('\n')) text += '\n';
         text += previous.legacy;
       }
-      changes.push({ client: name, status: action === 'restore' ? 'restored' : 'uninstalled', rc });
+      changes.push({ client: name, status: action === 'restore' ? 'restored' : 'uninstalled', rc, shell });
     }
   }
   if (['status', 'snippet'].includes(action) || options.dryRun) return changes.map(({ state, statePath, ...item }) => item);
@@ -378,7 +393,7 @@ function manageShell(action, client, options, env, source) {
 }
 async function main(argv) {
   if (['--help', '-h'].includes(argv[0]) || argv.length === 0) {
-    console.log('用法：node client-attribution.mjs install|status|uninstall|restore claude|grok|gemini|codex|pi|all [--shell bash|zsh] [--rc 文件] [--dry-run]\n临时运行：node client-attribution.mjs run claude|grok|gemini|codex|pi -- [原始参数]\n需要 Node.js 18+。pi 的 Sumpter provider 需设置 X-Sumpter-Client: pi；安装后执行 /reload，其他客户端新开终端；只在连接 Sumpter 的客户端上启用。');
+    console.log('用法：node client-attribution.mjs install|status|uninstall|restore claude|grok|gemini|codex|pi|all [--shell bash|zsh] [--rc 文件] [--dry-run]\n临时运行：node client-attribution.mjs run claude|grok|gemini|codex|pi -- [原始参数]\n需要 Node.js 18+。所有客户端使用 bash/zsh 启动包装器；安装或还原后新开终端并重新启动客户端，pi 的 /reload 不会加载 shell 配置；只在连接 Sumpter 的客户端上启用。');
     return;
   }
   let [action, client, ...rest] = argv;

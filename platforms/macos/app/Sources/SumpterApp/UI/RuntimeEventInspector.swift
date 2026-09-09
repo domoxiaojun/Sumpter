@@ -4,7 +4,6 @@ import SwiftUI
 struct RuntimeEventInspector: View {
     let event: RuntimeEvent
     let chain: [RuntimeEvent]
-    @Binding var selectedEventID: String?
     @Binding var expanded: Set<String>
 
     private let groups = [("routing", "路由与重试"), ("usage", "用量与缓存"), ("identity", "会话与代理"),
@@ -91,18 +90,6 @@ struct RuntimeEventInspector: View {
             rows([("客户端模型", event.clientModel), ("逻辑模型", event.effectiveModel), ("上游模型", event.upstreamModel),
                   ("入口", event.endpointName), ("模型组", event.modelGroupName ?? event.modelGroupID),
                   ("命中规则", event.featureRuleID), ("用途", RuntimeEventDisplay.purpose(event))])
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
-                    ForEach(chain) { item in
-                        Button { selectedEventID = item.id } label: {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("\(RuntimeEventDisplay.kind(item.kind)) · \(RuntimeEventDisplay.endpoint(item))").font(.callout)
-                                Text("\(RuntimeEventDisplay.httpStatus(item)) · \(RuntimeEventDisplay.outcome(item)) · \(item.cacheReadLabel)").font(.caption).foregroundStyle(.secondary)
-                            }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
-                        }.buttonStyle(.plain)
-                    }
-                }
-            }.frame(maxHeight: 280).accessibilityLabel("请求链事件列表")
         case "usage":
             rows([("缓存读占比", event.cacheReadTokenRatio.map { $0.formatted(.percent.precision(.fractionLength(1))) }), ("缓存读状态", event.cacheReadLabel), ("缓存证据", event.cacheRead?.reasonLabel),
                   ("缓存读计数", ["confirmed": "已确认", "provisional": "暂定，可能增加", "unknown": "未知"][event.cacheRead?.finality ?? "unknown"]),

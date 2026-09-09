@@ -6,6 +6,7 @@ struct UnifiedAttributionStatus: Decodable, Equatable, Sendable, Identifiable {
     let status: String
     let rc: String
     let shell: String
+    let `extension`: String?
     let canRestore: Bool
     var id: String { client }
     var title: String {

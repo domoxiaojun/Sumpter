@@ -1,6 +1,6 @@
 # Sumpter使用指南
 
-给第一次安装并接入客户端的用户。当前版本 **0.4.1**，配置 **schema v7**。
+给第一次安装并接入客户端的用户。当前版本 **0.4.2**，配置 **schema v7**。
 
 **范围**：从 GitHub 安装、填写 `config.json`、接入 Claude Code / Codex / Grok Build / Gemini CLI / pi、项目归因、常见错误。  
 **不包含**：改源码、编译、发版。
@@ -43,8 +43,8 @@ Codex 专用请求沿用现有入口和认证配置，本扩展不替代 pi 登�
 ### pi 项目与会话归因扩展
 
 在**运行 pi 的主机**安装 `pi-project-attribution.ts`。扩展要求当前 pi 支持
-`before_provider_headers`。推荐用统一 wrapper 安装 zsh/bash 启动入口；它只在该入口的进程中启用
-动态归因，不修改 provider 配置，也不会影响直连其他服务的 provider。
+`before_provider_headers`。推荐用统一 wrapper 安装 zsh/bash 启动入口；它在该入口的进程中启用
+动态归因，不修改 provider 配置。通过此入口启动的 pi 应连接 Sumpter。
 
 资源位置：Linux 包的 `scripts/pi-project-attribution.ts`；macOS App 的
 `Contents/Resources/pi-project-attribution.ts`；源码的 `scripts/clients/pi-project-attribution.ts`。
@@ -65,9 +65,9 @@ wrapper 与 `pi-project-attribution.ts` 需放在同一目录；可通过 `SUMPT
 无需手动导出项目或用户名环境变量；扩展在每次请求时读取当前目录、系统用户名和真实会话 ID。
 也可以只在 provider 中设置 `X-Sumpter-Client: pi` 作为显式 opt-in；未标记且未通过 wrapper 启动的直连 provider 不会添加归因信息。
 
-macOS：在「设置 → 安全」或「帮助」的归因面板选择 **pi**，点击「安装配置」。App 使用内置扩展，自动检查本机实际安装状态；「还原配置」恢复安装前文件，原先没有文件则移除扩展。需要 Node.js 18+。
+macOS：在「设置 → 安全」或「帮助」的归因面板选择 **pi**，点击「安装配置」。选择终端 Shell，App 使用内置安装器配置 wrapper 和扩展，合并显示本机安装状态；「还原配置」恢复安装前文件，原先没有文件则移除扩展。需要 Node.js 18+ 和 bash/zsh。
 
-Linux：使用下节的仓库脚本，在运行 pi 的主机管理扩展：
+Linux：使用下节的仓库脚本，在运行 pi 的主机管理 shell wrapper 与配套扩展：
 
 ```sh
 curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh \
@@ -77,7 +77,7 @@ bash setup-client-attribution.sh install pi
 bash setup-client-attribution.sh restore pi
 ```
 
-安装器写入 `~/.pi/agent/extensions/pi-project-attribution.ts`，首次安装前自动备份；重复安装或更新不会覆盖原始备份。使用 `client-attribution.mjs install pi --shell zsh`（或 `bash`）可同时安装 shell wrapper；还原只处理扩展和该 wrapper，不修改 provider 凭据。操作后重启 pi 或执行 `/reload`。
+pi 与其它客户端一样，默认按当前 bash/zsh 安装 shell wrapper，可用 `--shell zsh`（或 `bash`）指定。安装器同时写入 `~/.pi/agent/extensions/pi-project-attribution.ts` 和包装器使用的配套资源；首次安装前自动备份，更新保留首次备份。还原仅处理扩展和该 wrapper，不修改 provider 凭据。安装或还原后新开终端并重新启动 pi；`/reload` 不会加载 shell 配置。
 
 扩展按当前会话获取 ID、项目目录及本地用户名；Git 项目使用仓库根目录，普通目录使用当前目录。
 恢复、分叉或切换会话后自动更新。Git remote 去掉用户名、密码、query 和 fragment 后才发送。
@@ -91,7 +91,7 @@ bash setup-client-attribution.sh restore pi
 
 ## Linux/macOS 客户端归因脚本统一安装
 
-Claude Code、Grok Build、Gemini CLI、Codex CLI/TUI、pi 共用 `client-attribution.mjs` 安装器。前四者管理 shell 归因块，pi 管理原生扩展文件；客户端的原生启动参数与会话恢复参数保持不变。
+Claude Code、Grok Build、Gemini CLI、Codex CLI/TUI、pi 共用 `client-attribution.mjs` 安装器。五个客户端都管理 shell 启动包装器，pi 另外安装原生扩展文件；客户端的原生启动参数与会话恢复参数保持不变。
 
 必须在**启动客户端的主机**执行，不要装到只跑 Sumpter daemon 的 Linux 上。本机 macOS App 可在「设置 → 安全」或「帮助」选择客户端后点「安装配置」。其它机器从仓库下载，不要用 `sudo`：
 
@@ -105,9 +105,9 @@ bash setup-client-attribution.sh install all
 bash setup-client-attribution.sh restore all
 ```
 
-只需下载上述 setup 脚本，无需手动准备 mjs。脚本优先使用同目录资源；缺失时从 GitHub raw 自动获取所选客户端需要的安装器和扩展，下载失败时不执行安装。无法访问 GitHub 且代理已运行时，可改设 `SUMPTER_BASE_URL`（及入站 Token）从 `/__sumpter/` 下载。安装和还原后显示当前状态；`--shell bash|zsh` 与 `--rc 文件` 影响 shell 客户端（Claude/Grok/Gemini/Codex），pi 使用扩展文件。
+只需下载上述 setup 脚本，无需手动准备 mjs。脚本优先使用同目录资源；缺失时从 GitHub raw 自动获取所选客户端需要的安装器和扩展，下载失败时不执行安装。无法访问 GitHub 且代理已运行时，可改设 `SUMPTER_BASE_URL`（及入站 Token）从 `/__sumpter/` 下载。安装和还原后显示当前状态；`--shell bash|zsh` 与 `--rc 文件` 影响所有客户端，pi 同时安装 shell wrapper 和扩展文件。
 
-安装器会备份 shell rc，并只替换 Sumpter 管理的对应归因标记块；重复安装幂等，`uninstall` 删除所选块，`restore` 只恢复所选客户端安装前的旧块并保留其他改动。Shell 客户端安装、卸载、还原后新开终端，pi 操作后执行 `/reload`。
+安装器会备份 shell rc，并只替换 Sumpter 管理的对应归因标记块；重复安装幂等，`uninstall` 删除所选块，`restore` 只恢复所选客户端安装前的旧块并保留其他改动。所有客户端安装、卸载、还原后新开终端并重新启动；pi 的 `/reload` 不会加载 shell 配置。
 
 Claude 的 `settings.json` 中若写死 `env.ANTHROPIC_CUSTOM_HEADERS`，会覆盖启动时的动态值；
 安装器会提示先移除该冲突。Grok 的 `GROK_CONFIG_PATH` 同样会触发冲突提示。
@@ -582,7 +582,7 @@ Codex 部分请求自带 workspace metadata，但并非每条请求都有。缺�
 
 Claude、Grok、Gemini、Codex 的包装器按每次启动目录读取 Git 根目录（非 Git 目录使用当前目录）、
 项目名、用户和 remote；Codex 支持 -C / --cd。安装后新开终端，通过对应客户端命令启动。
-pi 扩展在请求时读取当前工作区和会话，安装后执行 /reload。
+pi 包装器加载扩展，在请求时读取当前工作区和会话；安装或还原后从新终端重新启动 pi。
 
 Codex Desktop 图形进程和已经运行的会话不会加载 shell 包装器；桌面的 system 等内部请求
 可能没有项目上下文。请在新请求的运行详情中核对项目、来源和会话，安装状态不代表已经观察到归因。

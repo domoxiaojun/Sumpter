@@ -453,7 +453,7 @@ struct RecentEventsPanel: View {
     }
 
     private var eventRowHeight: CGFloat {
-        dynamicTypeSize.isAccessibilitySize ? 104 : 76
+        dynamicTypeSize.isAccessibilitySize ? 72 : 48
     }
 
     var body: some View {
@@ -514,10 +514,34 @@ struct RecentEventsPanel: View {
                 }
                 if let event = selectedEvent {
                     Divider()
-                    RuntimeEventInspector(
-                        event: event, chain: selectedRequestChain,
-                        selectedEventID: $selectedEventID, expanded: $expandedEventGroups
-                    )
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .top, spacing: 16) {
+                            RuntimeRequestTraceView(
+                                chain: selectedRequestChain,
+                                selectedEventID: $selectedEventID
+                            )
+                            .frame(width: 310, alignment: .topLeading)
+                            Divider()
+                            RuntimeEventInspector(
+                                event: event, chain: selectedRequestChain,
+                                expanded: $expandedEventGroups
+                            )
+                            .frame(minWidth: 380, maxWidth: .infinity, alignment: .topLeading)
+                        }
+                        VStack(alignment: .leading, spacing: 16) {
+                            RuntimeRequestTraceView(
+                                chain: selectedRequestChain,
+                                selectedEventID: $selectedEventID,
+                                maxHeight: 280
+                            )
+                            Divider()
+                            RuntimeEventInspector(
+                                event: event, chain: selectedRequestChain,
+                                expanded: $expandedEventGroups
+                            )
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                        }
+                    }
                 }
             }
         }
@@ -754,7 +778,7 @@ struct RecentEventsPanel: View {
             Text(friendly.isEmpty ? "-" : friendly)
             .foregroundStyle(RuntimeEventDisplay.messageColor(event, friendly: friendly))
             .font(.callout)
-            .lineLimit(2)
+            .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
             .help(
                 event.failureDetail
                     ?? RuntimeEventPresentation.messageForDisplay(
@@ -938,7 +962,7 @@ struct RecentEventsPanel: View {
         if detailedEvent?.id == selectedEventID {
             return detailedEvent
         }
-        return (events + liveEvents).first { $0.id == selectedEventID }
+        return (events + liveEvents + (requestChainEvents ?? [])).first { $0.id == selectedEventID }
     }
 
     private var selectedRequestChain: [RuntimeEvent] {
@@ -973,7 +997,7 @@ struct RecentEventsPanel: View {
         }
         // 请求链允许在“仅客户端”筛选下点选隐藏的上游尝试。SSE 新事件到达会改变
         // visibleEventIDs；只要当前详情事件仍存在，就不能把选择重置回客户端行。
-        if let selectedEventID, (events + liveEvents).contains(where: { $0.id == selectedEventID }) {
+        if selectedEvent != nil {
             return
         }
         // 首次进入运行页不自动打开第一条详情；详情只在用户明确点选

@@ -89,11 +89,7 @@ fi
 node "$installer" "$action" "$client" "${options[@]}" > "$task_tmp/result.json"
 if [[ $action != status ]]; then
   if [[ $action == install ]]; then echo '归因配置已安装。'; else echo '归因配置已还原；没有还原记录的客户端保持原样。'; fi
-  case $client in
-    pi) echo '请在 pi 中执行 /reload；provider 需要设置 X-Sumpter-Client: pi。';;
-    all) echo '其他客户端请新开终端；pi 请执行 /reload，并设置 provider 的 X-Sumpter-Client: pi。';;
-    *) echo '请新开终端。';;
-  esac
+  echo '请新开终端并重新启动客户端；pi 的 /reload 不会加载 shell 配置。'
   node "$installer" status "$client" "${options[@]}" > "$task_tmp/result.json"
 fi
 node - "$task_tmp/result.json" <<'NODE'

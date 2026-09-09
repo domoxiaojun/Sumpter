@@ -141,7 +141,7 @@ export function HelpPage() {
         <div className="panel-title"><Icon name="terminal" size={18} /><span>pi 客户端与项目归因</span></div>
         <p>在 pi 所在主机编辑 <code>~/.pi/agent/models.json</code>，为 Sumpter provider 配置 API、Base URL、入站 Token 与已启用的客户端模型名，并添加 <code>{'"headers": { "X-Sumpter-Client": "pi" }'}</code>。</p>
         <p>OpenAI Responses / Chat 使用 <code>/v1</code>；Anthropic 使用根地址；Gemini 使用 <code>/v1beta</code>。Token 可通过 <code>"apiKey": "$SUMPTER_API_KEY"</code> 引用环境变量。</p>
-        <p>归因扩展的安装、状态检查和还原请在“安全”页完成；操作后在 pi 中执行 <code>/reload</code>。运行中的 listener 仍提供 <code>/__sumpter/pi-project-attribution.ts</code>。</p>
+        <p>归因包装器的安装、状态检查和还原请前往“安全”页；操作后新开终端并重新启动 pi，<code>/reload</code> 不会加载 shell 配置。运行中的 listener 仍提供 <code>/__sumpter/pi-project-attribution.ts</code>。</p>
         <p>扩展随当前项目和会话更新归因。发送请求后，在“运行”查看客户端 pi、项目和会话，再按 pi 筛选统计；暂无数据不能说明扩展未安装。</p>
         <div className="help-links">
           <button type="button" className="btn btn-secondary" onClick={() => navigate('security')}><Icon name="shield" size={16} />前往安全页安装归因</button>

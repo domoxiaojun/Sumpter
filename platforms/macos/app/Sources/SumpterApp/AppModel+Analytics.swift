@@ -1089,12 +1089,15 @@ extension AppModel {
         runtimeRequestChainTask = nil
         runtimeRequestChainRequestGeneration &+= 1
         let generation = runtimeRequestChainRequestGeneration
-        runtimeRequestChain = nil
+        let selectedChainEvent = runtimeRequestChain?.events.first { $0.id == eventID }
+        // 在同一请求链内切换详情时保留左栏，避免上游不在客户端分页中时详情消失。
+        if selectedChainEvent == nil { runtimeRequestChain = nil }
+        runtimeRequestChainLoading = false
         runtimeRequestChainError = nil
         guard let eventID, !eventID.isEmpty else { return }
         let item = runHistoryPage?.events.first(where: { $0.id == eventID })
             ?? runtimeHistoryPage?.events.first(where: { $0.id == eventID })
-        let requestID = item?.requestID
+        let requestID = selectedChainEvent?.requestID ?? item?.requestID
             ?? runtime.recentEvents.first(where: { $0.id == eventID })?.requestID
             ?? runtimeEventDetail?.event.requestID
         guard let requestID, !requestID.isEmpty, let admin else { return }
