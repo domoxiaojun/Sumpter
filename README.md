@@ -2,7 +2,7 @@
 
 本机 AI 请求代理。客户端只连一个地址，由 Sumpter 做入口选择、模型映射、会话粘性、重试和运行记录。
 
-Linux 与 macOS 共用一份 Rust 引擎和 **schema v7** `config.json`。当前版本以根 [Cargo.toml](Cargo.toml) 为准（现为 **0.4.4**），许可证 [MIT](LICENSE)。源码仓库：[domoxiaojun/sumpter](https://github.com/domoxiaojun/sumpter)。
+Linux 与 macOS 共用一份 Rust 引擎和 **schema v7** `config.json`。当前版本以根 [Cargo.toml](Cargo.toml) 为准（现为 **0.4.5**），许可证 [MIT](LICENSE)。源码仓库：[domoxiaojun/sumpter](https://github.com/domoxiaojun/sumpter)。
 
 | | 默认 |
 | --- | --- |
@@ -30,7 +30,7 @@ bash /tmp/sumpter-install.sh --repo domoxiaojun/sumpter
 
 `--repo` 只选下载来源。可同时加 `--admin-host`、`--admin-port`、`--admin-password-file`、`--version vX.Y.Z`。`sudo` 安装为 system 服务，daemon 仍以低权限 `sumpter` 用户运行。已有 `config.json` 与 `admin-password` 不会被覆盖。
 
-容器镜像为 `ghcr.io/domoxiaojun/sumpter`，Compose 默认拉 `:latest`。完整 systemd / Docker / 反代见 [Linux 指南](platforms/linux/README.md)。
+容器镜像为 `ghcr.io/domoxiaojun/sumpter`（amd64 / arm64）。既可用 systemd 安装，也可用 Compose 在独立目录部署；后者见 [Docker 部署说明](platforms/linux/DOCKER.md)，其余 systemd / 反代见 [Linux 指南](platforms/linux/README.md)。
 
 ## 接入客户端
 

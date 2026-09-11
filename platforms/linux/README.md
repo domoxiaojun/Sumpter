@@ -5,7 +5,7 @@
 1. **源码 monorepo**：本文件位于 `platforms/linux/README.md`。Rust 真源是仓库根 workspace 的 `sumpter-core` / `sumpter-runtime` / `sumpter-engine` 与 `sumpterd-linux`。
 2. **独立发布包**：发布阶段把 `platforms/linux/` 提升为包根。包内二进制名为 `sumpterd`，配置目录 `~/.config/sumpter` 或 `/var/lib/sumpter`，systemd 单元 `sumpter.service`，环境变量 `SUMPTER_*`。
 
-Linux 版以 standalone daemon 提供多协议代理、入口库、多个模型组、分流规则、failover、统计，以及与桌面 UI 信息架构对齐的本机 Web 管理界面。版本与 schema 与仓库根一致（现为 0.4.4 / schema v7）。用户安装看下文「自动安装、升级与卸载」。
+Linux 版以 standalone daemon 提供多协议代理、入口库、多个模型组、分流规则、failover、统计，以及与桌面 UI 信息架构对齐的本机 Web 管理界面。版本与 schema 与仓库根一致（现为 0.4.5 / schema v7）。用户安装看下文「自动安装、升级与卸载」。
 
 Linux 专属边界：
 
@@ -31,7 +31,11 @@ Linux 专属边界：
 sumpter-linux-<arch>/
 ├── sumpterd
 ├── config.example.json
+├── compose.yaml                         # 可选：独立目录 Docker 部署
+├── .env.example
+├── DOCKER.md
 ├── USAGE.md
+├── CHANGELOG.md                         # 发布工作流写入的版本说明节选
 ├── web/
 ├── scripts/
 │   ├── start.sh
@@ -41,6 +45,7 @@ sumpter-linux-<arch>/
 │   ├── bootstrap-install.sh
 │   ├── bootstrap-uninstall.sh
 │   ├── uninstall.sh
+│   ├── migrate-kekulv.sh                # 旧 Kekulv 安装迁移，仅兼容已有部署
 │   ├── setup-client-attribution.sh      # 统一归因安装器（推荐）
 │   ├── client-attribution.mjs
 │   ├── pi-project-attribution.ts
@@ -48,6 +53,7 @@ sumpter-linux-<arch>/
 │   ├── cc-project-attribution.sh        # 旧 Claude 配置器，仅兼容已有安装
 │   └── grok-project-attribution.sh      # 旧 Grok 配置器，仅兼容已有安装
 ├── specs/admin-api.md
+├── deploy/nginx-sumpter-admin.conf.example
 ├── sumpter.service
 ├── sumpter-system.service
 ├── LICENSE
@@ -146,14 +152,14 @@ unit 或数据目录不在范围内。
 curl --proto '=https' --tlsv1.2 -fLo /tmp/sumpter-migrate-kekulv.sh \
   https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/migrate-kekulv.sh
 sudo bash /tmp/sumpter-migrate-kekulv.sh --check
-# 省略 --version 即下载 latest；钉死版本再加 --version v0.4.4
+# 省略 --version 即下载 latest；钉死版本再加 --version v0.4.5
 sudo bash /tmp/sumpter-migrate-kekulv.sh --admin-host 0.0.0.0
 ```
 
 | 参数 | 作用 |
 | --- | --- |
 | （默认） | 下载 `https://github.com/domoxiaojun/sumpter/releases/latest/download/` 下当前架构包 |
-| `--version vX.Y.Z` | 改为该 tag 的 Release 资产，例如 `.../download/v0.4.4/` |
+| `--version vX.Y.Z` | 改为该 tag 的 Release 资产，例如 `.../download/v0.4.5/` |
 | `--admin-host` / `--admin-port` | 写入新服务的 Admin 监听，与下载无关；省略则沿用旧 drop-in |
 | `--check` | 只检查布局和参数，**不下载、不停服、不改文件** |
 
@@ -503,120 +509,19 @@ root 管理且禁用。
    `sudo firewall-cmd --add-port=57878/tcp --permanent && sudo firewall-cmd --reload`。
 5. **二进制**：发布包为静态 musl ELF，不依赖 Fedora glibc 版本。
 
-## Docker 安装（仅 Linux 主机）
+## Docker 安装（独立目录）
 
-**默认：拉 GHCR 已构建镜像，不在本机编译；数据在当前目录 `./config`。**
+推荐创建一个独立 `sumpter/`，其中放 `compose.yaml`、`.env` 和 `config/`。配置、密码、SQLite、会话/资源绑定和诊断捕获统一挂载在 `./config:/config`；停机后复制整个目录即可迁移，不依赖源码仓库路径。
 
-| 文件 | 说明 |
-| --- | --- |
-| `docker-compose.yml` | 同 `compose.yaml`（符号链接） |
-| `compose.yaml` | 默认：GHCR 镜像 + host 网络 + `./config` 绑定 |
-| `compose.bridge.example.yaml` | bridge + ports（Admin=`0.0.0.0`） |
-| `compose.build.example.yaml` | 可选：叠加后本机 `docker build`（开发用） |
-| `config/` | 宿主机数据目录 → 容器 `/config` |
+完整步骤、环境变量、权限、升级和迁移见 [Docker 部署说明](DOCKER.md)。要求 Linux 与 Docker Compose 2.24+。
 
-仅 Linux host network；不面向 Docker Desktop。容器不会生成凭据，启动前必须在绑定目录创建
-`admin-password`；首次打开 `/admin/` 后使用内置登录页。
-
-### 首次启动（推荐）
-
-```bash
-git clone https://github.com/domoxiaojun/sumpter.git
-cd sumpter/platforms/linux   # 发布包解压后则已经在包根，不必再 cd
-
-mkdir -p config          # 运行数据，无需 chown
-umask 077
-openssl rand -base64 32 > config/admin-password
-docker compose pull      # 默认 ghcr.io/domoxiaojun/sumpter:latest
-docker compose up -d
-
-# 面板 http://127.0.0.1:57879/admin/
-docker compose ps
-docker compose logs -f sumpter
-```
-
-目录布局：
-
-```text
-.
-├── docker-compose.yml   # → compose.yaml
-├── compose.yaml
-└── config/              # 绑定到 /config
-    ├── config.json      # 首次启动自动 bootstrap
-    ├── admin-password   # 启动前为单行初始密码；修改后为哈希 JSON，始终 0600
-    ├── runtime.sqlite3  # 运行统计（首次启动后创建，WAL）
-    ├── stats.json       # 旧版运行统计只读归档，新版本不读取或写入
-```
-
-### 升级（pull + up，配置不丢）
-
-```bash
-docker compose pull
-docker compose up -d
-```
-
-默认 `latest`，**不用改版本号**。`./config` 在宿主机上，升级只换镜像。
-
-`latest` 是 **最近一次成功的稳定版本 tag Container 构建**；普通 `main` push 不会构建镜像，
-因此它不会因为文档或未发布的分支变化而刷新。要严格对齐发行版请钉 `v*` tag。
-
-若要钉死某一版（可选）：
-
-```bash
-export SUMPTER_VERSION='<version>'
-export SUMPTER_IMAGE="ghcr.io/domoxiaojun/sumpter:${SUMPTER_VERSION}"
-docker compose pull && docker compose up -d
-```
-
-### 镜像名
-
-```text
-ghcr.io/domoxiaojun/sumpter:latest    # 默认，最近成功的稳定版本 tag
-ghcr.io/domoxiaojun/sumpter:<version> # 可选：钉死版本
-```
-
-仓库或 GHCR 为私有时必须先登录，否则 `pull` 会 401/denied：
-
-```bash
-echo "$GITHUB_TOKEN" | docker login ghcr.io -u YOUR_GITHUB_USER --password-stdin
-```
-
-### 自定义 Admin / bridge
-
-`compose.yaml` 已把 `SUMPTER_ADMIN_HOST` / `SUMPTER_ADMIN_PORT` 传入容器（默认 127.0.0.1:57879）。
-daemon 会按 `--config-dir /config` 自动读取 `./config/admin-password`，无需额外环境变量：
-
-```bash
-umask 077
-openssl rand -base64 32 > config/admin-password
-# 正常改凭据使用 WebUI 安全页；忘记凭据时才覆盖此文件并重启容器
-```
-
-bridge + 端口：
-
-```bash
-mkdir -p config
-docker compose -f compose.bridge.example.yaml pull
-docker compose -f compose.bridge.example.yaml up -d
-```
-
-### 可选：本机编译镜像
-
-```bash
-docker compose -f compose.yaml -f compose.build.example.yaml up -d --build
-```
-
-### 运维
-
-```bash
-docker compose restart sumpter
-docker compose logs --tail=200 sumpter
-docker compose down          # 保留 ./config
-```
-
-容器内无 systemd。为避免 bind mount 的 UID 处理，镜像和 Compose 均不显式指定用户，
-容器默认以 root 运行，权限弱于 systemd 的 `sumpter` 系统用户。Proxy 绑 `0.0.0.0` 须配 Token/CIDR；Admin 已强制密码，
-但非 loopback 公网仍必须置于 HTTPS 之后。
+- 默认拉 GHCR 镜像，使用 **bridge 网络**，宿主机端口默认只绑定 `127.0.0.1`。
+- 不指定容器用户，使用镜像默认用户（root）运行，不需要配置 UID/GID；Compose 同时限制为只读根文件系统、`cap_drop: ALL` 与 `no-new-privileges`，仅 `config/` 与 `/tmp` 可写。
+- `.env` **可选**：不创建时默认值即可启动；需要时用 `platforms/linux/.env.example` 覆盖镜像、宿主机监听地址/端口、数据目录、日志等级/轮转等，附加支持的环境变量通过 `env_file` 透传。
+- `init` 服务只创建缺失的初始配置和随机密码，不覆盖旧文件。
+- 新 Linux 发布包携带 `compose.yaml`、`.env.example`、`DOCKER.md`；旧包缺少时需单独下载。
+- 旧 host 网络部署升级模板前，必须按 [切换说明](DOCKER.md#从旧-host-网络-compose-切换) 核对代理内部监听；数据目录由容器创建，非 root 用户备份时需用 `sudo`。
+- 容器日志由 Docker 管理，不在 `config/` 中；需要迁移日志时先导出。密码和备份不要入库。
 
 ## 配置中的重试语义
 

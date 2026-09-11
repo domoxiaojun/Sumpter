@@ -6,6 +6,38 @@
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-09-11
+
+### 新增
+
+- Linux 新增独立目录的 Compose 部署：把 `compose.yaml` 与可选的 `.env` 放进任意 `sumpter/` 目录，镜像只从 GHCR 拉取，配置、密码、SQLite、会话/资源绑定与诊断捕获统一持久化在 `./config`，停机后复制整个目录即可迁移；完整步骤见 `platforms/linux/DOCKER.md`。
+- 部署模板带 `init` 服务：用同一镜像初始化缺失的 `config.json`（容器内监听 `0.0.0.0:57878`）与随机 `admin-password`，已有文件不覆盖。
+- 新增 `./scripts/check.sh docker`：用 Moby 官方匹配器与 Compose 官方解析器验证 `.dockerignore` 隔离、部署模板、初始化脚本行为与环境变量清单；CI 与发布前均执行。
+- Linux 发布包新增 `compose.yaml`、`.env.example`、`DOCKER.md`（带 Docker 安装的包不再需要另外下载模板）。
+- 双端运行页事件列表第一列显示本次调用的工具名；分页列表投影直接携带 `toolCalls`，不必点开详情。
+- Linux WebUI 自托管 Inter、Noto Sans SC、JetBrains Mono 可变字体（均为 SIL OFL，按 unicode-range 分片按需加载），统一行高、字距与 OpenType 特性；此前声明的字体从未实际加载。
+
+### 变更
+
+- Docker 部署默认改为 bridge 网络，宿主机端口默认只绑定 `127.0.0.1`；端口、数据目录、日志轮转等通过 `.env` 覆盖，容器内端口固定为 `57878` / `57879`。
+- 容器不再要求配置 UID/GID，使用镜像默认用户运行；Compose 以只读根文件系统、`cap_drop: ALL` 与 `no-new-privileges` 限制可写范围。
+- 本机源码镜像构建改用独立的 `SUMPTER_LOCAL_IMAGE`（默认 `sumpter:local`），不再复用 `SUMPTER_IMAGE`，避免把自建镜像打成 GHCR 正式 tag。
+- 升级注意：从旧 host 网络模板切换到新模板前，需先把 `config.json` 的 `listener.host` 改为 `0.0.0.0`（bridge 下容器内必须监听非回环地址），切换步骤见 `platforms/linux/DOCKER.md`。
+- 双端进行中事件区块的标题与「上游暂计」并入列头行；macOS 移除整块 24fps Canvas 流光，改为状态 pill 单点呼吸（macOS 26 使用蓝 tint 玻璃，更早系统为实色底），历史表格行不再使用玻璃与阴影。
+- 双端模型组入口的「组内启用」开关移到折叠头部，无需展开即可切换。
+- Linux 入口库的模型映射改为整表就地编辑：勾选多行批量删除、批量设置 Thinking / 上下文 / 上游同名，一次保存；行内校验空模型、重复客户端模型与非法首响超时。
+- Linux Claude Code 分流规则编辑器拆为独立组件：选择入口后后台获取模型列表并缓存 5 分钟，超时或失败时保留已有候选与手动输入。
+
+### 修复
+
+- 修复源码镜像构建上下文的 `.dockerignore` 放行范围过大：`platforms/` 下的运行数据、WebUI 依赖与 `dist/`、macOS 构建产物会被收进构建上下文。
+- 修复 bridge 示例在自定义 `SUMPTER_ADMIN_PORT` 时宿主机映射与容器内监听端口不一致、以及代理在容器内仅监听回环地址导致端口映射无效的问题。
+
+### 兼容性
+
+- 配置继续使用 schema v7；runtime 数据库格式不变。事件分页列表新增 `toolCalls` 字段，旧客户端忽略即可。
+- Compose 真机验收（镜像构建、`docker compose up`、登录、代理流量、停机迁移）尚未在本次发布前执行，模板契约由 `./scripts/check.sh docker` 与 CI 校验。
+
 ## [0.4.4] - 2026-09-11
 
 ### 修复
