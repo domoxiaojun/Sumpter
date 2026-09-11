@@ -54,6 +54,38 @@ fn group_priority_then_binding_priority_and_model_scope() {
 }
 
 #[test]
+fn scheduling_strategy_defaults_and_projects_into_candidates() {
+    let c = config();
+    assert_eq!(
+        c.model_groups.as_ref().unwrap()[0].scheduling_strategy,
+        sumpter_core::ModelGroupSchedulingStrategy::Priority
+    );
+    let mut random = c.clone();
+    random.model_groups.as_mut().unwrap()[0].scheduling_strategy =
+        sumpter_core::ModelGroupSchedulingStrategy::RandomSticky;
+    let endpoints = route(&random, "gpt-x");
+    assert!(endpoints.iter().take(2).all(|endpoint| {
+        endpoint.scheduling_strategy == sumpter_core::ModelGroupSchedulingStrategy::RandomSticky
+    }));
+    assert_eq!(
+        endpoints[2].scheduling_strategy,
+        sumpter_core::ModelGroupSchedulingStrategy::Priority
+    );
+    let value: serde_json::Value = serde_json::from_str(&random.to_json_pretty().unwrap()).unwrap();
+    assert_eq!(
+        value["modelGroups"][0]["schedulingStrategy"],
+        "randomSticky"
+    );
+    random.model_groups.as_mut().unwrap()[0].scheduling_strategy =
+        sumpter_core::ModelGroupSchedulingStrategy::RoundRobinSticky;
+    let value: serde_json::Value = serde_json::from_str(&random.to_json_pretty().unwrap()).unwrap();
+    assert_eq!(
+        value["modelGroups"][0]["schedulingStrategy"],
+        "roundRobinSticky"
+    );
+}
+
+#[test]
 fn ties_preserve_group_order_before_binding_priority() {
     let mut c = config();
     c.model_groups.as_mut().unwrap()[1].priority = 1;
@@ -114,6 +146,7 @@ fn per_model_overrides_are_local_to_binding_and_keep_parameters() {
 fn duplicate_calls_merge_candidates_but_different_mappings_do_not() {
     let mut c = config();
     let group = &mut c.model_groups.as_mut().unwrap()[1];
+    group.scheduling_strategy = sumpter_core::ModelGroupSchedulingStrategy::RandomSticky;
     group.bindings[0].endpoint_id = "a".into();
     assert_eq!(route(&c, "gpt-x").len(), 2);
     group_rewrite(

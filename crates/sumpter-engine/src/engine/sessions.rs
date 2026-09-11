@@ -12,7 +12,7 @@ use sumpter_core::scheduler;
 
 use super::Engine;
 use super::protocol::{json_timestamp, live_call_id_from_target, video_id_from_path};
-use super::state::now_unix;
+use super::state::{EngineState, now_unix};
 pub(super) const SESSION_STICKY_MAX_ENTRIES: usize = 2000;
 pub(super) const SESSION_STICKY_PRUNE_INTERVAL_SECS: f64 = 60.0;
 #[derive(Clone)]
@@ -648,10 +648,33 @@ impl Engine {
         eligible_groups: &[String],
         now: f64,
     ) {
-        if !session_key.persistent || initial_group.is_empty() {
-            return;
-        }
         let mut state = self.inner.state.lock().unwrap();
+        let claimed = self.claim_session_assignment(
+            &mut state,
+            session_key,
+            initial_group,
+            eligible_groups,
+            now,
+        );
+        drop(state);
+        if claimed && let Err(error) = self.flush_session_affinity() {
+            tracing::warn!("session_affinity.json 首次归属落盘失败: {error}");
+        }
+    }
+
+    /// The caller can claim a new session in the same critical section as
+    /// advancing a round-robin cursor. Flush only after releasing this lock.
+    pub(super) fn claim_session_assignment(
+        &self,
+        state: &mut EngineState,
+        session_key: &sticky::SessionKey,
+        initial_group: &str,
+        eligible_groups: &[String],
+        now: f64,
+    ) -> bool {
+        if !session_key.persistent || initial_group.is_empty() {
+            return false;
+        }
         let replace = scheduler::should_replace_sticky_assignment(
             state
                 .session_sticky
@@ -662,7 +685,7 @@ impl Engine {
             eligible_groups,
         );
         if !replace {
-            return;
+            return false;
         }
         state.session_sticky.insert(
             session_key.value.clone(),
@@ -675,10 +698,7 @@ impl Engine {
         self.inner
             .session_affinity_dirty
             .store(true, Ordering::Release);
-        drop(state);
-        if let Err(error) = self.flush_session_affinity() {
-            tracing::warn!("session_affinity.json 首次归属落盘失败: {error}");
-        }
+        true
     }
 
     /// 按粘性键清除会话归属（运维出口：项目维度的「清除会话粘性」）。

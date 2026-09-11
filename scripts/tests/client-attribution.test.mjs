@@ -43,6 +43,35 @@ test('pi launcher loads the request hook and preserves arguments, environment an
   assert.deepEqual(child.stdout.trimEnd().split('\n'), launch.args);
 });
 
+test('pi package, config, auth and informational commands bypass attribution injection', (t) => {
+  const f = fixture(t);
+  for (const args of [
+    ['install', 'npm:@czottmann/pi-automode'], ['remove', 'npm:@czottmann/pi-automode'],
+    ['uninstall', 'npm:@czottmann/pi-automode'], ['update', '--extensions'], ['list'],
+    ['config'], ['auth', 'print-api-key'], ['--help'], ['--version'],
+  ]) {
+    const launch = prepareLaunch('pi', args, { ...f.env, SUMPTER_PI_ATTRIBUTION: '1' }, f.nested);
+    assert.equal(launch.command, 'pi');
+    assert.deepEqual(launch.args, args);
+    assert.equal(launch.env.SUMPTER_PI_ATTRIBUTION, undefined);
+  }
+});
+
+for (const shell of ['bash', 'zsh']) {
+test(`pi ${shell} wrapper forwards package commands without splitting them into prompts`, { skip: !existsSync(`/bin/${shell}`) }, (t) => {
+  const f = fixture(t);
+  const rc = join(f.home, `.${shell}rc`);
+  manage('install', 'pi', { shell, rc }, f.env);
+  const shim = join(f.root, 'pi-shim');
+  writeFileSync(shim, '#!/bin/sh\nprintf "%s\\n" "$@"\n', { mode: 0o755 });
+  const child = spawnSync(`/bin/${shell}`, ['-c', 'source "$1"; pi install "npm:@czottmann/pi-automode"', 'test', rc], {
+    env: { ...f.env, SUMPTER_PI_BIN: shim }, encoding: 'utf8',
+  });
+  assert.equal(child.status, 0, child.stderr);
+  assert.deepEqual(child.stdout.trimEnd().split('\n'), ['install', 'npm:@czottmann/pi-automode']);
+});
+}
+
 test('pi install can add the same dynamic wrapper pattern as the other clients', (t) => {
   const f = fixture(t);
   const rc = join(f.home, '.zshrc');
@@ -225,6 +254,7 @@ test('remote Linux setup downloads authenticated installer and preserves failure
   const script = join(f.root, 'setup-client-attribution.sh');
   writeFileSync(script, readFileSync(new URL('../../platforms/linux/scripts/setup-client-attribution.sh', import.meta.url)));
   let extensionMissing = false;
+  let extensionMismatch = false;
   const resources = {
     '/__sumpter/client-attribution.mjs': source,
     '/__sumpter/pi-project-attribution.ts': fileURLToPath(new URL('../clients/pi-project-attribution.ts', import.meta.url)),
@@ -234,7 +264,9 @@ test('remote Linux setup downloads authenticated installer and preserves failure
       res.writeHead(401).end(); return;
     }
     if (extensionMissing && req.url.endsWith('.ts')) { res.writeHead(404).end(); return; }
-    res.end(readFileSync(resources[req.url]));
+    let body = readFileSync(resources[req.url]);
+    if (extensionMismatch && req.url.endsWith('.ts')) body = Buffer.from(body.toString().replace('SUMPTER_ATTRIBUTION_BUNDLE_VERSION: 0.4.3', 'SUMPTER_ATTRIBUTION_BUNDLE_VERSION: 0.0.0'));
+    res.end(body);
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => server.close());
@@ -250,6 +282,10 @@ test('remote Linux setup downloads authenticated installer and preserves failure
   });
   assert.notEqual((await run('incorrect')).code, 0);
   assert.equal(existsSync(join(f.home, '.bashrc')), false);
+  extensionMismatch = true;
+  assert.notEqual((await run('synthetic-token')).code, 0);
+  assert.equal(existsSync(join(f.home, '.bashrc')), false);
+  extensionMismatch = false;
   extensionMissing = true;
   assert.notEqual((await run('synthetic-token')).code, 0);
   assert.equal(existsSync(join(f.home, '.bashrc')), false);
@@ -263,6 +299,9 @@ test('remote Linux setup downloads authenticated installer and preserves failure
   assert.equal(restored.code, 0, restored.output);
   assert.match(restored.output, /pi：未安装/);
   assert.equal(existsSync(join(f.home, '.pi/agent/extensions/pi-project-attribution.ts')), false);
+  const uninstalled = await run('synthetic-token', 'uninstall');
+  assert.equal(uninstalled.code, 0, uninstalled.output);
+  assert.match(uninstalled.output, /pi：未安装/);
 });
 
 test('remote Linux setup downloads from SUMPTER_RESOURCE_BASE without listener auth', async (t) => {

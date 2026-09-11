@@ -1,26 +1,50 @@
 import Foundation
 
+public enum ModelGroupSchedulingStrategy: String, Codable, Sendable, CaseIterable {
+    case priority
+    case randomSticky
+    case roundRobinSticky
+
+    public var displayName: String {
+        switch self {
+        case .priority: "优先级顺序"
+        case .randomSticky: "同优先级随机并保持会话粘性"
+        case .roundRobinSticky: "同优先级按顺序轮询并保持会话粘性"
+        }
+    }
+}
+
 public struct ModelGroup: Codable, Equatable, Sendable, Identifiable {
     public var id: String
     public var name: String
     public var enabled: Bool
     public var priority: Int
+    public var schedulingStrategy: ModelGroupSchedulingStrategy
     public var models: [String]
     public var bindings: [ModelGroupBinding]
     public init(id: String = UUID().uuidString, name: String = "新模型组", enabled: Bool = true,
-                priority: Int = 0, models: [String] = [], bindings: [ModelGroupBinding] = []) {
+                priority: Int = 0, schedulingStrategy: ModelGroupSchedulingStrategy = .priority,
+                models: [String] = [], bindings: [ModelGroupBinding] = []) {
         self.id = id; self.name = name; self.enabled = enabled; self.priority = priority
-        self.models = models; self.bindings = bindings
+        self.schedulingStrategy = schedulingStrategy; self.models = models; self.bindings = bindings
     }
-    enum CodingKeys: String, CodingKey { case id, name, enabled, priority, models, bindings }
+    enum CodingKeys: String, CodingKey { case id, name, enabled, priority, schedulingStrategy, models, bindings }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
         name = try c.decodeIfPresent(String.self, forKey: .name) ?? id
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         priority = try c.decodeIfPresent(Int.self, forKey: .priority) ?? 0
+        schedulingStrategy = try c.decodeIfPresent(ModelGroupSchedulingStrategy.self, forKey: .schedulingStrategy) ?? .priority
         models = try c.decodeIfPresent([String].self, forKey: .models) ?? []
         bindings = try c.decodeIfPresent([ModelGroupBinding].self, forKey: .bindings) ?? []
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id); try c.encode(name, forKey: .name)
+        try c.encode(enabled, forKey: .enabled); try c.encode(priority, forKey: .priority)
+        if schedulingStrategy != .priority { try c.encode(schedulingStrategy, forKey: .schedulingStrategy) }
+        try c.encode(models, forKey: .models); try c.encode(bindings, forKey: .bindings)
     }
 }
 
@@ -198,6 +222,7 @@ public extension AppConfig {
                 let patterns = b.models.map { selected in g.models.flatMap { g in selected.compactMap { intersect(g, $0) } } } ?? g.models
                 var e = source
                 e.modelGroupID = g.id; e.modelGroupRank = rank
+                e.modelGroupSchedulingStrategy = g.schedulingStrategy
                 e.priority = b.overrides.first { ModelName.clean($0.model) == ModelName.clean(model) }?.priority ?? b.priority
                 if g.id != "default" { e.stickyGroup = "model-group:\(g.id.utf8.count):\(g.id):\(source.stickyGroup ?? source.id)" }
                 e.mappings = []

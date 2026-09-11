@@ -92,6 +92,7 @@ SourceFormat 只由路径决定：`/v1/messages` 是 `anthropic`，`/v1/chat/com
   "name": "主用模型",
   "enabled": true,
   "priority": 0,
+  "schedulingStrategy": "priority",
   "models": ["claude-opus-*", "gpt-5.4"],
   "bindings": [{
     "endpointID": "openai-main",
@@ -104,6 +105,14 @@ SourceFormat 只由路径决定：`/v1/messages` 是 `anthropic`，`/v1/chat/com
 ```
 
 基础候选顺序为：组 `priority` → 组在数组中的顺序 → 绑定入口 `priority` → 绑定在组中的顺序。
+`schedulingStrategy` 缺省为 `priority`，也可设为 `randomSticky`：新会话在当前最低优先级入口
+调度组中随机选择首选，成功后沿用现有会话粘性；故障仍按原有重试和优先级链路切换。同一
+`stickyGroup` 的入口仍属于同一调度组，组内保持配置顺序。
+也可设为 `roundRobinSticky`：没有有效会话归属时在当前最低优先级入口调度组中按顺序选择，
+游标按模型组、有效模型名和入口优先级隔离，仅在进程内维护；选中后立即写入会话粘性，
+后续请求和同一次请求的重试不推进游标。五个不同新会话按准入先后分配到五个同级调度组，
+用完后循环；同一会话并发首请求只占一个位置。没有稳定会话 ID 时，每个请求推进一次游标。
+服务重启或重新加载配置后游标从首位开始，已有有效会话归属继续保留。
 实际请求仍优先遵循会话粘性与冷却状态；允许故障切换时继续尝试后续组中的同一个模型。入口的原有
 HTTP 500 重试、跨轮重试、冷却、退避、`Retry-After`、会话粘性、超时、raw 透传和 Live/Realtime/Video
 资源绑定仍由全局调度器执行。

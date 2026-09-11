@@ -100,11 +100,14 @@ curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh \
 bash setup-client-attribution.sh status all
 bash setup-client-attribution.sh install all
 bash setup-client-attribution.sh restore all
+bash setup-client-attribution.sh uninstall all
 ```
 
 只需下载上述 setup 脚本，无需手动准备 mjs。脚本优先使用同目录资源；缺失时从 GitHub raw 自动获取所选客户端需要的安装器和扩展，下载失败时不执行安装。无法访问 GitHub 且代理已运行时，可改设 `SUMPTER_BASE_URL`（及入站 Token）从 `/__sumpter/` 下载。安装和还原后显示当前状态；`--shell bash|zsh` 与 `--rc 文件` 影响所有客户端，pi 自动安装 shell wrapper 和私有配套资源，无需另行安装全局扩展。
 
 安装器会备份 shell rc，并只替换 Sumpter 管理的对应归因标记块；重复安装幂等，`uninstall` 删除所选块，`restore` 只恢复所选客户端安装前的旧块并保留其他改动。所有客户端安装、卸载、还原后新开终端并重新启动；pi 的 `/reload` 不会加载 shell 配置。
+
+`pi install`、`remove`、`uninstall`、`update`、`list`、`config` 和 `auth` 是 Pi 自己的顶层命令。Sumpter 的 pi 包装器会原样透传这些命令，不会在前面插入扩展参数；例如 `pi install npm:@czottmann/pi-automode` 会进入 Pi 包管理器。`pi list` 查看 Pi 包，`status pi` 查看 Sumpter 归因配置，两者不是同一状态。
 
 Claude 的 `settings.json` 中若写死 `env.ANTHROPIC_CUSTOM_HEADERS`，会覆盖启动时的动态值；
 安装器会提示先移除该冲突。Grok 的 `GROK_CONFIG_PATH` 同样会触发冲突提示。
@@ -161,6 +164,9 @@ pi 扩展由统一安装器从同目录资源、GitHub 仓库 raw 或 listener �
 组内模型名必须和客户端实际使用的模型名一致；不确定时先用精确名称。模型名相同的多个入口可绑定到同一组，也可按用途放到不同组；客户端地址不变。
 
 配置多个入口后，同一会话默认粘在上次成功的入口组，时长由顶层 `sessionStickyTtlHours` 控制（单位小时，默认 72；`0` 表示永不过期）。想立即改走新顺序，在统计页对应项目行点「清除粘性归属」，或在入口库把粘性时长改为更短的值——默认组的入口顺序与优先级始终跟随入口库的列表顺序和 Priority。
+
+需要同优先级入口按顺序分配新会话时，将模型组的 `schedulingStrategy` 设为 `roundRobinSticky`；
+分配后的会话仍保持粘性，故障时继续按现有重试和故障转移规则处理。
 
 ### 3. 接入客户端
 

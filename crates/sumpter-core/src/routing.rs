@@ -7,6 +7,7 @@ use crate::config::{
     AppConfig, ContextMode, Endpoint, EndpointProtocolMode, FeatureRule, ModelMapping,
     ProviderProtocol, RequestKind, ThinkingMode,
 };
+use crate::model_groups::ModelGroupSchedulingStrategy;
 use crate::model_name;
 
 // ---------------------------------------------------------------------------
@@ -813,6 +814,7 @@ pub struct PlannedEndpoint {
     pub model_group_id: Option<String>,
     pub model_group_name: Option<String>,
     pub model_group_rank: usize,
+    pub scheduling_strategy: ModelGroupSchedulingStrategy,
     pub base_url: String,
     /// 配置中声明的四态入口模式。
     pub configured_protocol: EndpointProtocolMode,
@@ -1330,6 +1332,7 @@ impl RoutePlanner {
                     model_group_id: scoped.group_id.clone(),
                     model_group_name: scoped.group_name.clone(),
                     model_group_rank: scoped.group_rank,
+                    scheduling_strategy: scoped.scheduling_strategy,
                     base_url: endpoint.base_url.clone(),
                     configured_protocol,
                     source_format,
@@ -1393,6 +1396,7 @@ impl RoutePlanner {
                     comparable.model_group_id = prior.model_group_id.clone();
                     comparable.model_group_name = prior.model_group_name.clone();
                     comparable.model_group_rank = prior.model_group_rank;
+                    comparable.scheduling_strategy = prior.scheduling_strategy;
                     comparable.priority = prior.priority;
                     comparable.sticky_group = prior.sticky_group.clone();
                     &comparable == prior

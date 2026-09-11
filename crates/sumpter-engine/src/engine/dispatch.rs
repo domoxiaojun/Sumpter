@@ -7,7 +7,9 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 use axum::http::StatusCode;
 use axum::response::Response;
 use bytes::Bytes;
+use rand::Rng;
 use serde_json::Value;
+use sumpter_core::ModelGroupSchedulingStrategy;
 use sumpter_core::bridge;
 use sumpter_core::config::{AppConfig, ProviderProtocol, RetryPolicy};
 use sumpter_core::events::{
@@ -40,7 +42,7 @@ use super::protocol::{
     realtime_client_secret_models_match, required_native_protocol, translation_supported,
 };
 use super::sessions::realtime_ephemeral_token;
-use super::state::now_unix;
+use super::state::{RoundRobinKey, now_unix};
 
 /// 跨轮重试退避：沿用旧 Python 版验证过的节奏，防止 0/0 无限重试在全故障时
 /// 形成 busy loop。sleep future 被 drop 即取消，客户端断开不会留下后台重试。
@@ -62,6 +64,501 @@ const PROVIDER_MODEL_COOLDOWN_FACTOR: f64 = 2.0;
 const PROVIDER_MODEL_COOLDOWN_MAX_SECS: f64 = 60.0;
 const MAX_PROVIDER_MODEL_HEALTH: usize = 4096;
 pub(super) const MAX_RETRY_AFTER_SECS: f64 = 30.0;
+
+type EndpointGroupOrder = (String, usize, i64, usize);
+
+fn rotate_random_sticky_bucket(
+    groups: &mut [EndpointGroupOrder],
+    endpoints: &[PlannedEndpoint],
+    sticky_preferred: Option<&str>,
+    choose: impl FnOnce(usize) -> usize,
+) {
+    if sticky_preferred.is_some() {
+        return;
+    }
+    let Some((first_group, rank, priority, _)) = groups.first() else {
+        return;
+    };
+    let random_sticky = endpoints
+        .iter()
+        .find(|endpoint| endpoint.scheduling_group() == first_group)
+        .is_some_and(|endpoint| {
+            endpoint.scheduling_strategy == ModelGroupSchedulingStrategy::RandomSticky
+        });
+    if !random_sticky {
+        return;
+    }
+    let bucket_len = groups
+        .iter()
+        .take_while(|(_, group_rank, group_priority, _)| {
+            group_rank == rank && group_priority == priority
+        })
+        .count();
+    if bucket_len > 1 {
+        let offset = choose(bucket_len);
+        groups[..bucket_len].rotate_left(offset % bucket_len);
+    }
+}
+
+#[cfg(test)]
+mod random_sticky_tests {
+    use super::*;
+    use sumpter_core::config::{ContextMode, EndpointProtocolMode, ThinkingMode};
+
+    fn endpoint(
+        id: &str,
+        priority: i64,
+        strategy: ModelGroupSchedulingStrategy,
+    ) -> PlannedEndpoint {
+        PlannedEndpoint {
+            endpoint_id: id.into(),
+            endpoint_name: id.into(),
+            model_group_id: Some("main".into()),
+            model_group_name: Some("main".into()),
+            model_group_rank: 0,
+            scheduling_strategy: strategy,
+            base_url: "https://example.invalid".into(),
+            configured_protocol: EndpointProtocolMode::OpenAI,
+            source_format: ProviderProtocol::OpenAI,
+            protocol: ProviderProtocol::OpenAI,
+            route_mode: RouteMode::Native,
+            routed_model: "gpt-x".into(),
+            upstream_model: "gpt-x".into(),
+            priority,
+            sticky_group: None,
+            thinking: ThinkingMode::Adaptive,
+            context: ContextMode::Standard,
+            effort_override: None,
+            failover_timeout_seconds: None,
+            keep_alive: false,
+        }
+    }
+
+    #[test]
+    fn rotates_only_the_lowest_priority_random_sticky_bucket() {
+        let endpoints = vec![
+            endpoint("a", 0, ModelGroupSchedulingStrategy::RandomSticky),
+            endpoint("b", 0, ModelGroupSchedulingStrategy::RandomSticky),
+            endpoint("c", 10, ModelGroupSchedulingStrategy::RandomSticky),
+        ];
+        let mut groups = vec![
+            ("a".into(), 0, 0, 0),
+            ("b".into(), 0, 0, 1),
+            ("c".into(), 0, 10, 2),
+        ];
+        rotate_random_sticky_bucket(&mut groups, &endpoints, None, |_| 1);
+        assert_eq!(
+            groups
+                .iter()
+                .map(|group| group.0.as_str())
+                .collect::<Vec<_>>(),
+            ["b", "a", "c"]
+        );
+    }
+
+    #[test]
+    fn existing_sticky_assignment_disables_random_rotation() {
+        let endpoints = vec![
+            endpoint("a", 0, ModelGroupSchedulingStrategy::RandomSticky),
+            endpoint("b", 0, ModelGroupSchedulingStrategy::RandomSticky),
+        ];
+        let mut groups = vec![("a".into(), 0, 0, 0), ("b".into(), 0, 0, 1)];
+        rotate_random_sticky_bucket(&mut groups, &endpoints, Some("a"), |_| {
+            panic!("must not draw")
+        });
+        assert_eq!(
+            groups
+                .iter()
+                .map(|group| group.0.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+    }
+
+    fn engine(dir: Option<sumpter_core::config_store::ConfigDir>) -> Engine {
+        Engine::new(
+            AppConfig::bootstrap(),
+            dir,
+            Arc::new(crate::outbound::ReqwestTransport::new()),
+        )
+    }
+
+    #[test]
+    fn temporary_sessions_keep_the_admitted_order_without_reusing_old_affinity() {
+        let engine = engine(None);
+        let key = sticky::SessionKey {
+            value: "temporary".into(),
+            persistent: false,
+        };
+        let candidates = vec![
+            endpoint("b", 0, ModelGroupSchedulingStrategy::RandomSticky),
+            endpoint("a", 0, ModelGroupSchedulingStrategy::RandomSticky),
+        ];
+        engine.touch_session_success("a", &key, "a", &["a".into(), "b".into()], true, now_unix());
+        for _ in 0..3 {
+            let ordered = engine.ordered_endpoint_candidates(&candidates, &key, false, false);
+            assert_eq!(ordered[0].endpoint_id, "b");
+        }
+    }
+
+    #[test]
+    fn persistent_claim_and_failover_survive_restart_and_clear() {
+        let root = std::env::temp_dir().join(format!("sumpter-random-sticky-{}", new_event_id()));
+        let dir = sumpter_core::config_store::ConfigDir::new(root.clone());
+        let key = sticky::SessionKey {
+            value: "a".repeat(64),
+            persistent: true,
+        };
+        let candidates = vec![
+            endpoint("a", 0, ModelGroupSchedulingStrategy::RandomSticky),
+            endpoint("b", 0, ModelGroupSchedulingStrategy::RandomSticky),
+        ];
+        let eligible = vec!["a".into(), "b".into()];
+        let first = engine(Some(dir.clone()));
+        first.ensure_session_assignment(&key, "b", &eligible, now_unix());
+        // A competing first request must use the winner's assignment.
+        first.ensure_session_assignment(&key, "a", &eligible, now_unix());
+        assert_eq!(
+            first.ordered_endpoint_candidates(&candidates, &key, false, false)[0].endpoint_id,
+            "b"
+        );
+        first.touch_session_success("a", &key, "b", &eligible, true, now_unix());
+        drop(first);
+        let restored = engine(Some(dir.clone()));
+        assert_eq!(
+            restored.ordered_endpoint_candidates(&candidates, &key, false, true)[0].endpoint_id,
+            "a"
+        );
+        assert_eq!(
+            restored.clear_session_sticky(&[key.value.clone()]).unwrap(),
+            1
+        );
+        assert!(dir.load_session_affinity().unwrap().is_empty());
+        drop(restored);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn shared_groups_stay_contiguous_and_missing_assignments_can_reselect() {
+        let engine = engine(None);
+        let key = sticky::SessionKey {
+            value: "b".repeat(64),
+            persistent: true,
+        };
+        let mut a = endpoint("a", 0, ModelGroupSchedulingStrategy::RandomSticky);
+        let mut b = endpoint("b", 0, ModelGroupSchedulingStrategy::RandomSticky);
+        a.sticky_group = Some("shared".into());
+        b.sticky_group = Some("shared".into());
+        engine.ensure_session_assignment(&key, "deleted", &["deleted".into()], now_unix());
+        let ordered = engine.ordered_endpoint_candidates(&[a, b], &key, false, true);
+        assert_eq!(
+            ordered
+                .iter()
+                .map(|e| e.endpoint_id.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+        engine.ensure_session_assignment(&key, "shared", &["shared".into()], now_unix());
+        assert_eq!(
+            engine.inner.state.lock().unwrap().session_sticky[&key.value].label,
+            "shared"
+        );
+    }
+
+    #[test]
+    fn round_robin_assigns_five_new_sessions_in_order_then_wraps() {
+        let engine = engine(None);
+        let candidates = ["a", "b", "c", "d", "e"]
+            .into_iter()
+            .map(|id| endpoint(id, 0, ModelGroupSchedulingStrategy::RoundRobinSticky))
+            .collect::<Vec<_>>();
+        let eligible = ["a", "b", "c", "d", "e"]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>();
+        let mut assigned = Vec::new();
+        for index in 0..5 {
+            let key = sticky::SessionKey {
+                value: format!("session-{index}"),
+                persistent: true,
+            };
+            let ordered = engine.ordered_endpoint_candidates(&candidates, &key, false, true);
+            let selected = ordered[0].endpoint_id.clone();
+            engine.ensure_session_assignment(&key, &selected, &eligible, now_unix());
+            assigned.push(selected);
+        }
+        assert_eq!(assigned, ["a", "b", "c", "d", "e"]);
+        let wrapped = sticky::SessionKey {
+            value: "session-wrap".into(),
+            persistent: true,
+        };
+        assert_eq!(
+            engine.ordered_endpoint_candidates(&candidates, &wrapped, false, true)[0].endpoint_id,
+            "a"
+        );
+    }
+
+    #[test]
+    fn round_robin_reuses_sticky_assignment_without_advancing_cursor() {
+        let engine = engine(None);
+        let candidates = vec![
+            endpoint("a", 0, ModelGroupSchedulingStrategy::RoundRobinSticky),
+            endpoint("b", 0, ModelGroupSchedulingStrategy::RoundRobinSticky),
+        ];
+        let key = sticky::SessionKey {
+            value: "sticky-round-robin".into(),
+            persistent: true,
+        };
+        let first = engine.ordered_endpoint_candidates(&candidates, &key, false, true);
+        let first_group = first[0].scheduling_group().to_string();
+        engine.ensure_session_assignment(&key, &first_group, &["a".into(), "b".into()], now_unix());
+        assert_eq!(
+            engine.ordered_endpoint_candidates(&candidates, &key, false, true)[0].endpoint_id,
+            first[0].endpoint_id
+        );
+        assert!(
+            !engine
+                .inner
+                .state
+                .lock()
+                .unwrap()
+                .round_robin_cursors
+                .is_empty()
+        );
+        engine.replace_config(AppConfig::bootstrap());
+        assert!(
+            engine
+                .inner
+                .state
+                .lock()
+                .unwrap()
+                .round_robin_cursors
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn concurrent_new_sessions_get_distinct_round_robin_slots() {
+        let engine = Arc::new(engine(None));
+        let candidates = Arc::new(
+            ["a", "b", "c", "d", "e"]
+                .into_iter()
+                .map(|id| endpoint(id, 0, ModelGroupSchedulingStrategy::RoundRobinSticky))
+                .collect::<Vec<_>>(),
+        );
+        let barrier = Arc::new(std::sync::Barrier::new(5));
+        let handles = (0..5)
+            .map(|index| {
+                let engine = Arc::clone(&engine);
+                let candidates = Arc::clone(&candidates);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    let key = sticky::SessionKey {
+                        value: format!("concurrent-session-{index}"),
+                        persistent: true,
+                    };
+                    engine.ordered_endpoint_candidates(&candidates, &key, false, true)[0]
+                        .endpoint_id
+                        .clone()
+                })
+            })
+            .collect::<Vec<_>>();
+        let selected = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("round-robin worker panicked"))
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(
+            selected,
+            ["a", "b", "c", "d", "e"]
+                .into_iter()
+                .map(String::from)
+                .collect()
+        );
+    }
+
+    #[test]
+    fn round_robin_cursors_are_isolated_by_model_and_priority() {
+        let engine = engine(None);
+        let base = ["a", "b"]
+            .into_iter()
+            .map(|id| endpoint(id, 0, ModelGroupSchedulingStrategy::RoundRobinSticky))
+            .collect::<Vec<_>>();
+        let key = |suffix: &str| sticky::SessionKey {
+            value: format!("isolated-{suffix}"),
+            persistent: true,
+        };
+        assert_eq!(
+            engine.ordered_endpoint_candidates(&base, &key("gpt-1"), false, true)[0].endpoint_id,
+            "a"
+        );
+        assert_eq!(
+            engine.ordered_endpoint_candidates(&base, &key("gpt-2"), false, true)[0].endpoint_id,
+            "b"
+        );
+
+        let mut other_model = base.clone();
+        for endpoint in &mut other_model {
+            endpoint.routed_model = "claude-x".into();
+        }
+        assert_eq!(
+            engine.ordered_endpoint_candidates(&other_model, &key("claude"), false, true)[0]
+                .endpoint_id,
+            "a"
+        );
+
+        let other_priority = base
+            .iter()
+            .cloned()
+            .map(|mut endpoint| {
+                endpoint.priority = 10;
+                endpoint
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            engine.ordered_endpoint_candidates(&other_priority, &key("priority"), false, true)[0]
+                .endpoint_id,
+            "a"
+        );
+        let mut other_group = base.clone();
+        for endpoint in &mut other_group {
+            endpoint.model_group_id = Some("other".into());
+        }
+        assert_eq!(
+            engine.ordered_endpoint_candidates(&other_group, &key("group"), false, true)[0]
+                .endpoint_id,
+            "a"
+        );
+        assert_eq!(
+            engine.inner.state.lock().unwrap().round_robin_cursors.len(),
+            4
+        );
+    }
+
+    #[test]
+    fn concurrent_requests_for_one_session_consume_only_one_slot() {
+        let engine = engine(None);
+        let candidates = ["a", "b", "c", "d", "e"]
+            .map(|id| endpoint(id, 0, ModelGroupSchedulingStrategy::RoundRobinSticky));
+        let key = sticky::SessionKey {
+            value: "same-conversation".into(),
+            persistent: true,
+        };
+        let barrier = std::sync::Barrier::new(5);
+        std::thread::scope(|scope| {
+            let workers = (0..5)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        engine.ordered_endpoint_candidates(&candidates, &key, false, true)[0]
+                            .endpoint_id
+                            .clone()
+                    })
+                })
+                .collect::<Vec<_>>();
+            for worker in workers {
+                assert_eq!(worker.join().unwrap(), "a");
+            }
+        });
+        let next = sticky::SessionKey {
+            value: "next-conversation".into(),
+            persistent: true,
+        };
+        assert_eq!(
+            engine.ordered_endpoint_candidates(&candidates, &next, false, true)[0].endpoint_id,
+            "b"
+        );
+    }
+
+    #[test]
+    fn round_robin_retry_order_and_health_filter_do_not_advance_cursor() {
+        let engine = engine(None);
+        let mut candidates = ["a", "b", "c", "d"]
+            .map(|id| endpoint(id, 0, ModelGroupSchedulingStrategy::RoundRobinSticky));
+        candidates[3].priority = 10;
+        let key = sticky::SessionKey {
+            value: "no-session-id".into(),
+            persistent: false,
+        };
+        engine.ordered_endpoint_candidates(&candidates, &key, false, true);
+        engine.ordered_endpoint_candidates(&candidates, &key, false, true);
+        let admitted = engine.ordered_endpoint_candidates(&candidates, &key, false, true);
+        assert_eq!(
+            admitted
+                .iter()
+                .map(|e| e.endpoint_id.as_str())
+                .collect::<Vec<_>>(),
+            ["c", "a", "b", "d"]
+        );
+        assert_eq!(
+            engine.ordered_endpoint_candidates(&admitted, &key, false, false),
+            admitted
+        );
+        assert_eq!(
+            engine.ordered_endpoint_candidates(&candidates, &key, false, true)[0].endpoint_id,
+            "a"
+        );
+        engine.note_provider_model_failure(&candidates[1], Some(429), None, now_unix());
+        let filtered = engine.ordered_endpoint_candidates(&candidates, &key, true, true);
+        assert_eq!(
+            filtered
+                .iter()
+                .map(|e| e.endpoint_id.as_str())
+                .collect::<Vec<_>>(),
+            ["c", "a", "d"]
+        );
+        assert!(engine.inner.state.lock().unwrap().session_sticky.is_empty());
+    }
+
+    #[test]
+    fn round_robin_restart_restores_affinity_but_starts_fresh_cursor() {
+        let root = std::env::temp_dir().join(format!("sumpter-round-robin-{}", new_event_id()));
+        let dir = sumpter_core::config_store::ConfigDir::new(root.clone());
+        let candidates = ["a", "b", "c"]
+            .map(|id| endpoint(id, 0, ModelGroupSchedulingStrategy::RoundRobinSticky));
+        let key = |index| sticky::SessionKey {
+            value: format!("{index:064x}"),
+            persistent: true,
+        };
+        let first = engine(Some(dir.clone()));
+        assert_eq!(
+            first.ordered_endpoint_candidates(&candidates, &key(1), false, true)[0].endpoint_id,
+            "a"
+        );
+        assert_eq!(
+            first.ordered_endpoint_candidates(&candidates, &key(2), false, true)[0].endpoint_id,
+            "b"
+        );
+        let wire: Value =
+            serde_json::from_slice(&std::fs::read(root.join("session_affinity.json")).unwrap())
+                .unwrap();
+        assert_eq!(wire.as_object().unwrap().len(), 2);
+        assert_eq!(
+            wire["sessions"][&key(2).value].as_object().unwrap().len(),
+            2
+        );
+        drop(first);
+        let restored = engine(Some(dir));
+        assert_eq!(
+            restored.ordered_endpoint_candidates(&candidates, &key(2), false, true)[0].endpoint_id,
+            "b"
+        );
+        assert_eq!(
+            restored.ordered_endpoint_candidates(&candidates, &key(3), false, true)[0].endpoint_id,
+            "a"
+        );
+        restored.clear_session_sticky(&[key(2).value]).unwrap();
+        assert_eq!(
+            restored.ordered_endpoint_candidates(&candidates, &key(2), false, true)[0].endpoint_id,
+            "b"
+        );
+        let remaining = [candidates[0].clone(), candidates[2].clone()];
+        let reselected = restored.ordered_endpoint_candidates(&remaining, &key(2), false, true);
+        assert_eq!(reselected[0].endpoint_id, "a");
+        drop(restored);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(super) struct ProviderModelHealth {
@@ -864,7 +1361,8 @@ impl Engine {
         // compatible candidate dispatchable so a request can reach the
         // provider and return its actual response status/body. The proxy must
         // not synthesize a 503 merely because its local health map is warm.
-        let initial_ordered = self.ordered_endpoint_candidates(&candidates, &session_key, false);
+        let initial_ordered =
+            self.ordered_endpoint_candidates(&candidates, &session_key, false, true);
         // 路由计划定型且粘性排序已完成：此时首选入口已经确定，虽然尚未真正
         // 发起网络尝试。先写入候选协议，accepted/failover 后仍由 guard 用实际
         // 胜出入口覆盖，避免长时间等待首响应时三元组一直为空。
@@ -975,7 +1473,7 @@ impl Engine {
         self.forward(
             config,
             &request,
-            candidates,
+            initial_ordered,
             session_key,
             guard,
             method,
@@ -995,10 +1493,13 @@ impl Engine {
         candidates: &[PlannedEndpoint],
         session_key: &sticky::SessionKey,
         respect_cooldown: bool,
+        select_initial: bool,
     ) -> Vec<PlannedEndpoint> {
         let now = now_unix();
+        // Admission, cursor advancement and the initial session claim must
+        // share a lock: concurrent requests for one session consume one slot.
+        let mut state = self.inner.state.lock().unwrap();
         let (eligible_endpoints, sticky_preferred) = {
-            let mut state = self.inner.state.lock().unwrap();
             state.provider_model_health.retain(|_, health| {
                 health
                     .cooling_until
@@ -1017,11 +1518,22 @@ impl Engine {
             // every candidate is cooling, the caller returns a bounded
             // 503/Retry-After instead of defeating the health gate by probing
             // the earliest recovering endpoint immediately.
-            let eligible = available;
             let preferred = state
                 .session_sticky
                 .get(&session_key.value)
-                .map(|entry| entry.label.clone());
+                .map(|entry| entry.label.clone())
+                .filter(|group| {
+                    available.iter().any(|endpoint| {
+                        endpoint.scheduling_group() == group
+                            && (session_key.persistent
+                                || !matches!(
+                                    endpoint.scheduling_strategy,
+                                    ModelGroupSchedulingStrategy::RandomSticky
+                                        | ModelGroupSchedulingStrategy::RoundRobinSticky
+                                ))
+                    })
+                });
+            let eligible = available;
             (eligible, preferred)
         };
         if eligible_endpoints.is_empty() {
@@ -1031,7 +1543,7 @@ impl Engine {
             // immediately probe the very provider we just quarantined.
             return Vec::new();
         }
-        let mut groups: Vec<(String, usize, i64, usize)> = Vec::new();
+        let mut groups: Vec<EndpointGroupOrder> = Vec::new();
         for (index, endpoint) in eligible_endpoints.iter().enumerate() {
             let group = endpoint.scheduling_group().to_string();
             if let Some(existing) = groups.iter_mut().find(|item| item.0 == group) {
@@ -1049,6 +1561,70 @@ impl Engine {
                 .then_with(|| a.2.cmp(&b.2))
                 .then_with(|| a.3.cmp(&b.3))
         });
+
+        let mut claimed = false;
+        // Select only on admission, never while reordering retries.
+        if select_initial {
+            let first_strategy = groups.first().and_then(|(group, _, _, _)| {
+                eligible_endpoints
+                    .iter()
+                    .find(|endpoint| endpoint.scheduling_group() == group)
+                    .map(|endpoint| endpoint.scheduling_strategy)
+            });
+            match first_strategy {
+                Some(ModelGroupSchedulingStrategy::RandomSticky) => {
+                    rotate_random_sticky_bucket(
+                        &mut groups,
+                        &eligible_endpoints,
+                        sticky_preferred.as_deref(),
+                        |length| rand::rng().random_range(0..length),
+                    );
+                }
+                Some(ModelGroupSchedulingStrategy::RoundRobinSticky)
+                    if sticky_preferred.is_none() =>
+                {
+                    if let Some((first_group, rank, priority, _)) = groups.first() {
+                        let bucket_len = groups
+                            .iter()
+                            .take_while(|(_, group_rank, group_priority, _)| {
+                                group_rank == rank && group_priority == priority
+                            })
+                            .count();
+                        let first = eligible_endpoints
+                            .iter()
+                            .find(|endpoint| endpoint.scheduling_group() == first_group)
+                            .expect("each scheduling group has an endpoint");
+                        let key = RoundRobinKey {
+                            model_group_id: first.model_group_id.clone(),
+                            model: first.routed_model.clone(),
+                            priority: *priority,
+                        };
+                        let cursor = state.round_robin_cursors.entry(key).or_default();
+                        let offset = *cursor % bucket_len;
+                        *cursor = (offset + 1) % bucket_len;
+                        // Promote only the selected group; all remaining
+                        // groups retain their configuration order for failover.
+                        groups[..=offset].rotate_right(1);
+                        let eligible = groups
+                            .iter()
+                            .map(|group| group.0.clone())
+                            .collect::<Vec<_>>();
+                        claimed = self.claim_session_assignment(
+                            &mut state,
+                            session_key,
+                            &groups[0].0,
+                            &eligible,
+                            now,
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+        drop(state);
+        if claimed && let Err(error) = self.flush_session_affinity() {
+            tracing::warn!("session_affinity.json 首次归属落盘失败: {error}");
+        }
 
         let mut output: Vec<PlannedEndpoint> = Vec::with_capacity(candidates.len());
         for (group, _, _, _) in &groups {
@@ -1113,7 +1689,7 @@ impl Engine {
         // Keep the full, translation-compatible candidate set. A local
         // cooldown must never turn an otherwise routable request into a
         // locally generated 503; the upstream response is authoritative.
-        let ordered = self.ordered_endpoint_candidates(&candidates, &session_key, false);
+        let ordered = self.ordered_endpoint_candidates(&candidates, &session_key, false, false);
         let initial_group = ordered
             .first()
             .map(|endpoint| endpoint.scheduling_group().to_string())
@@ -1135,6 +1711,13 @@ impl Engine {
                 now_unix(),
             );
         }
+        // A concurrent first request may have established another assignment.
+        // Re-read it before calculating this request's retry-group boundary.
+        let ordered = self.ordered_endpoint_candidates(&candidates, &session_key, false, false);
+        let initial_group = ordered
+            .first()
+            .map(|endpoint| endpoint.scheduling_group().to_string())
+            .unwrap_or_default();
         // `ordered_endpoints` 保证调度组连续。粘性组的每一轮先完整尝试，再按
         // sessionStickyRetries 重新执行整个组；HTTP 500 由独立次数控制，不触发整组重试。
         let sticky_endpoint_count = if sticky_enabled {
@@ -1181,7 +1764,8 @@ impl Engine {
             // must be able to probe the provider again and recover from a
             // transient 429/5xx. The cooldown remains active for the next
             // request admission.
-            let round_ordered = self.ordered_endpoint_candidates(&candidates, &session_key, false);
+            let round_ordered =
+                self.ordered_endpoint_candidates(&candidates, &session_key, false, false);
             let round_sticky_endpoint_count = if sticky_enabled {
                 round_ordered
                     .iter()

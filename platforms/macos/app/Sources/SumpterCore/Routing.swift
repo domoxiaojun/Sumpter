@@ -56,6 +56,7 @@ public struct PlannedEndpoint: Equatable, Sendable, Identifiable {
     public var priority: Int
     public var modelGroupID: String? = nil
     public var modelGroupRank: Int = 0
+    public var schedulingStrategy: ModelGroupSchedulingStrategy = .priority
 
     public var routeMode: RouteMode {
         sourceFormat == providerProtocol ? .native : .translated
@@ -654,6 +655,7 @@ public struct RoutePlanner {
                 )
                 planned.modelGroupID = endpoint.modelGroupID
                 planned.modelGroupRank = endpoint.modelGroupRank
+                planned.schedulingStrategy = endpoint.modelGroupSchedulingStrategy
                 return planned
             }
         let native = candidates.filter { $0.routeMode == .native }

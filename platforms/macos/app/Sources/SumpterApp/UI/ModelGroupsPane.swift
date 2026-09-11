@@ -148,6 +148,13 @@ private struct ModelGroupSettings: View {
                 TextField("组优先级", value: $group.priority, format: .number)
                     .textFieldStyle(.roundedBorder).frame(width: 64).help("数字越小越优先；同级按顶部排列顺序。")
             }
+            Picker("调度策略", selection: $group.schedulingStrategy) {
+                ForEach(ModelGroupSchedulingStrategy.allCases, id: \.self) { strategy in
+                    Text(strategy.displayName).tag(strategy)
+                }
+            }
+            .pickerStyle(.menu)
+            .help("随机或轮询只分配新会话的同优先级入口，后续请求保持会话粘性")
             Toggle("启用该组", isOn: $group.enabled).toggleStyle(.checkbox).fixedSize()
             Spacer(minLength: 0)
             Menu("组操作") {

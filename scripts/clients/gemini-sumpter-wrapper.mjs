@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// SUMPTER_ATTRIBUTION_BUNDLE_VERSION: 0.4.3
 // Canonical standalone launcher/installer. Ship copies via sync-client-attribution.mjs.
 import { spawn, execFileSync } from 'node:child_process';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -8,6 +9,10 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, realpat
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const clients = ['claude', 'grok', 'gemini', 'codex', 'pi'];
+// Keep the launcher and its companion Pi extension from being mixed across releases.
+export const ATTRIBUTION_BUNDLE_VERSION = '0.4.3';
+const PI_PASSTHROUGH_COMMANDS = new Set(['install', 'remove', 'uninstall', 'update', 'list', 'config', 'auth']);
+const PI_PASSTHROUGH_FLAGS = new Set(['--help', '-h', '--version', '-v']);
 const ownedHeaders = new Set(['x-sumpter-client', 'x-sumpter-project', 'x-sumpter-workspace',
   'x-sumpter-git-remote', 'x-sumpter-user', 'x-sumpter-session-id', 'x-sumpter-attribution-encoding']);
 const safe = (value, max = 4096) => typeof value === 'string' && value.trim()
@@ -123,6 +128,14 @@ function codexLaunchContext(args, env, cwd) {
 }
 export function prepareLaunch(client, args, env = process.env, cwd = process.cwd()) {
   if (client === 'pi') {
+    // Pi package/config/auth commands must remain at argv[0]. Loading an extension
+    // before them makes Pi treat the command words as initial prompt messages.
+    const passthrough = PI_PASSTHROUGH_COMMANDS.has(args[0]) || PI_PASSTHROUGH_FLAGS.has(args[0]);
+    if (passthrough) {
+      const next = { ...env };
+      delete next.SUMPTER_PI_ATTRIBUTION;
+      return { command: env.SUMPTER_PI_BIN || 'pi', args: [...args], env: next };
+    }
     const extension = fileURLToPath(new URL('./pi-project-attribution.ts', import.meta.url));
     if (!existsSync(extension)) throw new Error('缺少配套 pi-project-attribution.ts，请使用完整安装包');
     // Use Pi's request hook so resumed/forked sessions and workspace changes

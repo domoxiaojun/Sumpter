@@ -5,7 +5,7 @@ umask 077
 
 usage() {
   cat <<'HELP'
-用法：bash setup-client-attribution.sh [status|install|restore] [claude|grok|gemini|codex|pi|all] [--shell bash|zsh] [--rc 文件]
+用法：bash setup-client-attribution.sh [status|install|restore|uninstall] [claude|grok|gemini|codex|pi|all] [--shell bash|zsh] [--rc 文件]
 不带参数进入交互菜单；操作后自动检查当前状态。
 优先使用同目录 client-attribution.mjs 与 pi-project-attribution.ts。
 缺失时默认从 GitHub 仓库 raw 下载：
@@ -28,14 +28,14 @@ if [[ -z $action ]]; then
   printf '客户端：1) Claude Code  2) Grok Build  3) Gemini CLI  4) Codex  5) pi  6) 全部\n'
   read -r -p '请选择 [1-6，默认 6]：' choice
   case ${choice:-6} in 1) client=claude;; 2) client=grok;; 3) client=gemini;; 4) client=codex;; 5) client=pi;; 6) client=all;; *) exit 2;; esac
-  printf '操作：1) 检查状态  2) 安装配置  3) 还原配置\n'
-  read -r -p '请选择 [1-3，默认 1]：' choice
-  case ${choice:-1} in 1) action=status;; 2) action=install;; 3) action=restore;; *) exit 2;; esac
+  printf '操作：1) 检查状态  2) 安装配置  3) 还原配置  4) 卸载配置\n'
+  read -r -p '请选择 [1-4，默认 1]：' choice
+  case ${choice:-1} in 1) action=status;; 2) action=install;; 3) action=restore;; 4) action=uninstall;; *) exit 2;; esac
 else
   shift
   if [[ $# -gt 0 ]]; then shift; fi
 fi
-case $action in status|install|restore) ;; *) usage >&2; exit 2;; esac
+case $action in status|install|restore|uninstall) ;; *) usage >&2; exit 2;; esac
 case $client in claude|grok|gemini|codex|pi|all) ;; *) usage >&2; exit 2;; esac
 options=("$@")
 # Validate before attempting a download or changing configuration.
@@ -85,10 +85,25 @@ if [[ $client == pi || $client == all ]]; then
   else
     download_resource pi-project-attribution.ts "$task_tmp/pi-project-attribution.ts"
   fi
+  bundle_version() {
+    sed -n 's#.*SUMPTER_ATTRIBUTION_BUNDLE_VERSION:[[:space:]]*\([^ */]*\).*#\1#p' "$1" | head -n 1
+  }
+  installer_version=$(bundle_version "$installer")
+  extension_version=$(bundle_version "$task_tmp/pi-project-attribution.ts")
+  if [[ -z $installer_version || -z $extension_version || $installer_version != "$extension_version" ]]; then
+    echo "Pi 归因资源版本不匹配，请重新下载同一版本的 setup、安装器和扩展。" >&2
+    exit 1
+  fi
 fi
 node "$installer" "$action" "$client" "${options[@]}" > "$task_tmp/result.json"
 if [[ $action != status ]]; then
-  if [[ $action == install ]]; then echo '归因配置已安装。'; else echo '归因配置已还原；没有还原记录的客户端保持原样。'; fi
+  if [[ $action == install ]]; then
+    echo '归因配置已安装。'
+  elif [[ $action == restore ]]; then
+    echo '归因配置已还原；没有还原记录的客户端保持原样。'
+  else
+    echo '归因配置已卸载；没有归因配置的客户端保持原样。'
+  fi
   echo '请新开终端并重新启动客户端；pi 的 /reload 不会加载 shell 配置。'
   node "$installer" status "$client" "${options[@]}" > "$task_tmp/result.json"
 fi

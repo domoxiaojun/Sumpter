@@ -991,6 +991,7 @@ mod tests {
             model_group_id: None,
             model_group_name: None,
             model_group_rank: 0,
+            scheduling_strategy: sumpter_core::ModelGroupSchedulingStrategy::Priority,
             base_url: "https://up.example.com".into(),
             configured_protocol: match protocol {
                 ProviderProtocol::Anthropic => EndpointProtocolMode::Anthropic,

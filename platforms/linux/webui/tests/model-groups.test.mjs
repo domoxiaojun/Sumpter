@@ -66,6 +66,19 @@ test('compact group defaults and decorated model names match the engine', () => 
   assert.equal(groupRoutePreview(c, groups, ' gpt-x ( ultra )[1m] ')[0].endpointID, 'a');
 });
 
+test('model group scheduling strategy defaults and roundtrips', () => {
+  const c = config();
+  assert.equal(groupModels(c)[0].schedulingStrategy, 'priority');
+  c.modelGroups = [{ id: 'main', models: ['gpt-x'], schedulingStrategy: 'randomSticky', bindings: [{ endpointID: 'a' }] }];
+  const groups = groupModels(c);
+  assert.equal(groups[0].schedulingStrategy, 'randomSticky');
+  const saved = toWireConfig(fromWireConfig({ config: { ...c, modelGroups: groups } }).config);
+  assert.equal(saved.modelGroups[0].schedulingStrategy, 'randomSticky');
+  c.modelGroups[0].schedulingStrategy = 'roundRobinSticky';
+  const roundTrip = groupModels(c);
+  assert.equal(roundTrip[0].schedulingStrategy, 'roundRobinSticky');
+});
+
 test('model categories are derived only from endpoint mappings', () => {
   const categories = modelCatalogCategories([
     { catalog: { models: [' GPT-5.6-sol ', 'claude_opus_5', 'plain'] }, mappings: [{ clientPattern: 'vendor:model' }] },

@@ -87,7 +87,7 @@ export function ModelGroupsPage() {
     <div className="page-header">
       <div className="page-title-group">
         <h1 className="page-title"><Icon name="route" size={24} style={{ color: 'var(--primary)' }} /><span>模型组</span></h1>
-        <p className="page-subtitle">按组优先级 → 入口优先级调度；数字越小越优先，同级按排列顺序。</p>
+        <p className="page-subtitle">按组优先级 → 入口优先级调度；同级入口可按顺序、随机方式选择并保持会话粘性。</p>
       </div>
       <div className="page-actions">
         <button type="button" className="btn btn-secondary" disabled={saving} onClick={() => {
@@ -123,6 +123,7 @@ export function ModelGroupsPage() {
         <fieldset disabled={saving} className="model-group-card-settings" aria-label="当前模型组设置">
           <label className="group-name-field">组名称<input className="form-input" value={current.name} onChange={(e) => updateGroup(current.id, (draft) => { draft.name = e.target.value; })} /></label>
           <label className="group-priority-field">优先级<input type="number" min="0" step="1" aria-label="组优先级" title="数字越小越优先；同级按顶部排列顺序。" className="form-input" value={current.priority} onChange={(e) => updateGroup(current.id, (draft) => { draft.priority = Number(e.target.value); })} /></label>
+          <label className="group-strategy-field">调度策略<select className="form-select" aria-label="模型组调度策略" title="只影响当前模型组内同优先级入口" value={current.schedulingStrategy || 'priority'} onChange={(e) => updateGroup(current.id, (draft) => { draft.schedulingStrategy = e.target.value; })}><option value="priority">优先级顺序</option><option value="randomSticky">同优先级随机并保持会话粘性</option><option value="roundRobinSticky">同优先级按顺序轮询并保持会话粘性</option></select></label>
           <label className="model-group-card-enabled"><input type="checkbox" checked={current.enabled} onChange={(e) => updateGroup(current.id, (draft) => { draft.enabled = e.target.checked; })} /> 启用该组</label>
           <details className="group-actions-menu" key={current.id} onKeyDown={(event) => { if (event.key === 'Escape') { event.currentTarget.open = false; event.currentTarget.querySelector('summary').focus(); } }}>
             <summary>组操作 <Icon name="chevron" size={14} /></summary>

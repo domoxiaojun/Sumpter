@@ -6,6 +6,9 @@ mod gemini;
 #[path = "../../../../tests/contracts/model_scope.rs"]
 mod model_scope;
 
+#[path = "../../../../tests/contracts/round_robin.rs"]
+mod round_robin;
+
 #[path = "../../../../tests/contracts/pi.rs"]
 mod pi;
 

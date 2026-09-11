@@ -45,6 +45,24 @@ final class ModelGroupsTests: XCTestCase {
         XCTAssertEqual(c.modelGroups?[0].bindings.map(\.endpointID), ["a"])
     }
 
+    func testSchedulingStrategyDefaultsAndRoundTrips() throws {
+        var c = config()
+        c.migrateModelGroups()
+        XCTAssertEqual(c.modelGroups?.first?.schedulingStrategy, .priority)
+        c.modelGroups?[0].schedulingStrategy = .randomSticky
+        let data = try JSONEncoder().encode(c)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let groups = try XCTUnwrap(object["modelGroups"] as? [[String: Any]])
+        XCTAssertEqual(groups.first?["schedulingStrategy"] as? String, "randomSticky")
+        let restored = try JSONDecoder().decode(AppConfig.self, from: data)
+        XCTAssertEqual(restored.modelGroups?.first?.schedulingStrategy, .randomSticky)
+        let projected = restored.routingEndpoints(for: "gpt-x")
+        XCTAssertTrue(projected.allSatisfy { $0.modelGroupSchedulingStrategy == .randomSticky })
+        c.modelGroups?[0].schedulingStrategy = .roundRobinSticky
+        let roundTrip = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(c))
+        XCTAssertEqual(roundTrip.modelGroups?.first?.schedulingStrategy, .roundRobinSticky)
+    }
+
     func testV6StoreMigrationCreatesGroupsWithoutChangingRetry() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

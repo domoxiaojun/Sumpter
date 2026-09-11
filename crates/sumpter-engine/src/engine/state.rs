@@ -24,6 +24,13 @@ use super::sessions::{
 };
 use crate::boundary::{EngineServices, PlatformBoundary};
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(super) struct RoundRobinKey {
+    pub(super) model_group_id: Option<String>,
+    pub(super) model: String,
+    pub(super) priority: i64,
+}
+
 pub(super) struct EngineState {
     pub(super) runtime: RuntimeSnapshot,
     pub(super) last_error: Option<String>,
@@ -33,6 +40,10 @@ pub(super) struct EngineState {
     pub(super) provider_model_health: HashMap<(String, String), ProviderModelHealth>,
     /// affinityID → 调度组；稳定会话不超时并持久化，内容指纹仅进程内兼容。
     pub(super) session_sticky: HashMap<String, SessionStickyEntry>,
+    /// In-memory round-robin cursors keyed by model group, model and priority.
+    /// These are deliberately not persisted; session affinity remains the only
+    /// durable routing state.
+    pub(super) round_robin_cursors: HashMap<RoundRobinKey, usize>,
     pub(super) last_session_prune_at: f64,
     /// 会话粘性归属的 TTL 秒数（来自 `sessionStickyTtlHours`）；0 = 永不过期。
     /// 跟随配置替换更新，`touch_session_success` 的周期清理读取它。
@@ -227,6 +238,7 @@ impl Engine {
                     stats_durability_warning: None,
                     provider_model_health: HashMap::new(),
                     session_sticky,
+                    round_robin_cursors: HashMap::new(),
                     last_session_prune_at: now,
                     session_sticky_ttl_secs,
                 }),

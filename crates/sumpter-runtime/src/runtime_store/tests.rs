@@ -686,7 +686,7 @@ fn sticky_keys_for_project_aggregates_affinity_hashes_per_project() {
 #[test]
 fn sticky_keys_for_session_isolates_conversations_and_collects_all_models() {
     let dir = test_dir("session-sticky-keys");
-    let (store, _) = RuntimeStore::new(&dir.join("runtime.sqlite3")).unwrap();
+    let (store, _) = RuntimeStore::new(dir.join("runtime.sqlite3")).unwrap();
     let push = |id: &str, session: &str, key: Option<&str>, model: &str| {
         let mut value = event(
             id,

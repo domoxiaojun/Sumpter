@@ -86,7 +86,11 @@ impl Engine {
         // 只影响后续的周期淘汰。
         let session_sticky_ttl_secs = config.session_sticky_ttl_secs();
         *self.inner.config.write().unwrap() = Arc::new(config);
-        self.inner.state.lock().unwrap().session_sticky_ttl_secs = session_sticky_ttl_secs;
+        {
+            let mut state = self.inner.state.lock().unwrap();
+            state.session_sticky_ttl_secs = session_sticky_ttl_secs;
+            state.round_robin_cursors.clear();
+        }
         *self.inner.generation.write().unwrap() = generation.clone();
         let _ = self.inner.notices.send(EngineNotice::ConfigReloaded {
             generation: generation.clone(),

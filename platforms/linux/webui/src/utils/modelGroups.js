@@ -59,6 +59,7 @@ export function newModelGroup() {
     name: '新模型组',
     enabled: true,
     priority: 0,
+    schedulingStrategy: 'priority',
     models: [],
     bindings: [],
   };
@@ -67,6 +68,7 @@ export function newModelGroup() {
 export function groupModels(config) {
   if (Array.isArray(config?.modelGroups)) return structuredClone(config.modelGroups).map((g) => ({
     ...g, name: g.name?.trim() || g.id, enabled: g.enabled ?? true, priority: g.priority ?? 0,
+    schedulingStrategy: g.schedulingStrategy || 'priority',
     models: (g.models || []).map(cleanGroupModel),
     bindings: (g.bindings || []).map((b) => ({
       ...b, enabled: b.enabled ?? true, priority: b.priority ?? 0,
@@ -77,7 +79,7 @@ export function groupModels(config) {
   if (!endpoints.length) return [];
   const patterns = (e) => [...new Set((e.modelMappings || e.mappings || [])
     .map((m) => cleanGroupModel(m.from ?? m.clientPattern)).filter(Boolean))];
-  return [{ id: 'default', name: '默认模型组', enabled: true, priority: 0,
+  return [{ id: 'default', name: '默认模型组', enabled: true, priority: 0, schedulingStrategy: 'priority',
     models: [...new Set(endpoints.flatMap(patterns))],
     bindings: endpoints.map((e) => ({ endpointID: e.id, enabled: true,
       priority: e.priority || 0, models: patterns(e), overrides: [] })) }];

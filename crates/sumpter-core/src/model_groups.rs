@@ -12,6 +12,19 @@ fn enabled() -> bool {
     true
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum ModelGroupSchedulingStrategy {
+    #[default]
+    Priority,
+    RandomSticky,
+    RoundRobinSticky,
+}
+
+fn is_priority(strategy: &ModelGroupSchedulingStrategy) -> bool {
+    *strategy == ModelGroupSchedulingStrategy::Priority
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelGroup {
@@ -22,6 +35,8 @@ pub struct ModelGroup {
     pub enabled: bool,
     #[serde(default)]
     pub priority: i64,
+    #[serde(default, skip_serializing_if = "is_priority")]
+    pub scheduling_strategy: ModelGroupSchedulingStrategy,
     #[serde(default)]
     pub models: Vec<String>,
     #[serde(default)]
@@ -62,6 +77,7 @@ pub struct RoutingEndpoint {
     pub group_name: Option<String>,
     /// Rank after stable sorting by group priority and configuration position.
     pub group_rank: usize,
+    pub scheduling_strategy: ModelGroupSchedulingStrategy,
     pub model_priorities: BTreeMap<String, i64>,
 }
 
@@ -72,6 +88,7 @@ impl RoutingEndpoint {
             group_id: None,
             group_name: None,
             group_rank: 0,
+            scheduling_strategy: ModelGroupSchedulingStrategy::Priority,
             model_priorities: BTreeMap::new(),
         }
     }
@@ -197,6 +214,7 @@ impl AppConfig {
                     group_id: Some(group.id.clone()),
                     group_name: Some(group.name.clone()),
                     group_rank,
+                    scheduling_strategy: group.scheduling_strategy,
                     model_priorities,
                 });
             }
@@ -242,6 +260,7 @@ impl AppConfig {
                 name: "默认模型组".into(),
                 enabled: true,
                 priority: 0,
+                scheduling_strategy: ModelGroupSchedulingStrategy::Priority,
                 models,
                 bindings,
             }]

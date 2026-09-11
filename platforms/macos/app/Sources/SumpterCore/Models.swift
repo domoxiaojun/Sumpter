@@ -430,6 +430,7 @@ public struct ModelMapping: Codable, Equatable, Sendable, Identifiable {
 public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
     public var modelGroupID: String? = nil
     public var modelGroupRank: Int = 0
+    public var modelGroupSchedulingStrategy: ModelGroupSchedulingStrategy = .priority
     public var id: String
     public var name: String
     public var baseURL: URL
