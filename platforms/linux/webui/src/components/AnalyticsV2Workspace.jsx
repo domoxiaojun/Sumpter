@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DataTable } from './DataTable.jsx';
+import { HorizontalScroll } from './HorizontalScroll.jsx';
 import { PaginationBar } from './PaginationBar.jsx';
 import { StatusBadge } from './StatusBadge.jsx';
 import { Icon } from '../utils/icons.jsx';
@@ -443,7 +444,7 @@ function TrendChart({ points, metric = 'clientRequests' }) {
       </svg>
       <details className="runtime-v2-chart-table">
         <summary>显示趋势数据表（键盘和读屏备用）</summary>
-        <div className="table-container">
+        <HorizontalScroll className="table-container" ariaLabel="趋势数据表">
           <table className="data-table" aria-label={`${trendMetricLabel(metric)}趋势数据表`}>
             <thead><tr><th>时间</th><th className="data-table-column-number">{trendMetricLabel(metric)}</th><th className="data-table-column-number">终态请求</th></tr></thead>
             <tbody>
@@ -456,7 +457,7 @@ function TrendChart({ points, metric = 'clientRequests' }) {
               ))}
             </tbody>
           </table>
-        </div>
+        </HorizontalScroll>
       </details>
     </div>
   );
@@ -649,7 +650,7 @@ function ProjectOverviewTable({ page, loading, onPageChange, onPageSizeChange, o
   );
 }
 
-function DimensionTable({ page, loading, onPageChange, onPageSizeChange, onSearchSubmit, onSortChange, kind, clientKindFacets, addToast, onSessionExport, onSessionDelete, sessionActionID, onProjectStickyClear, stickyActionKey, mode = 'usage', activeRowKey, onRowClick }) {
+function DimensionTable({ page, loading, onPageChange, onPageSizeChange, onSearchSubmit, onSortChange, kind, clientKindFacets, addToast, onSessionExport, onSessionDelete, sessionActionID, onProjectStickyClear, onSessionStickyClear, stickyActionKey, mode = 'usage', activeRowKey, onRowClick }) {
   const [searchDraft, setSearchDraft] = useState(page?.search || '');
   useEffect(() => setSearchDraft(page?.search || ''), [page?.search, kind]);
   if (!page) return null;
@@ -694,28 +695,30 @@ function DimensionTable({ page, loading, onPageChange, onPageSizeChange, onSearc
       type: 'action',
       width: '130px',
       render: (row) => {
-        const busy = stickyActionKey === row.key;
+        const busy = stickyActionKey === `project:${row.key}`;
         return <div className="runtime-v2-sample-actions">
           <button
             type="button"
             className="btn btn-ghost btn-sm"
-            disabled={busy}
+            disabled={Boolean(stickyActionKey)}
             onClick={(event) => { event.stopPropagation(); onProjectStickyClear(row); }}
             aria-label={`清除项目 ${row.name} 的粘性归属`}
-            title="清除后新请求按入口库顺序重新选择入口"
+            title="清除后新请求按当前路由规则重新选择入口"
           >{busy ? '清除中…' : '清除粘性'}</button>
         </div>;
       },
     });
   }
-  if (mode === 'usage' && kind === 'session' && (onSessionExport || onSessionDelete)) {
+  if (mode === 'usage' && kind === 'session' && (onSessionExport || onSessionDelete || onSessionStickyClear)) {
     columns.push({
       title: '操作',
       type: 'action',
-      width: '150px',
+      width: '250px',
       render: (row) => {
-        const busy = sessionActionID === row.name;
+        const stickyBusy = stickyActionKey === `session:${row.key}`;
+        const busy = sessionActionID === row.name || stickyBusy;
         return <div className="runtime-v2-sample-actions">
+          {onSessionStickyClear && <button type="button" className="btn btn-ghost btn-sm" disabled={busy || Boolean(stickyActionKey) || row.key === 'unidentified_session'} onClick={(event) => { event.stopPropagation(); onSessionStickyClear(row); }} aria-label={`清除会话 ${row.name} 的粘性归属`} title={row.key === 'unidentified_session' ? '未识别会话包含多个对话，不能单独清除' : '只解除此对话的入口绑定，保留统计与事件'}>{stickyBusy ? '清除中…' : '清除粘性'}</button>}
           <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={(event) => { event.stopPropagation(); onSessionExport?.(row.name); }} aria-label={`导出会话 ${row.name}`}>导出</button>
           <button type="button" className="btn btn-danger btn-sm" disabled={busy} onClick={(event) => { event.stopPropagation(); onSessionDelete?.(row.name); }} aria-label={`删除会话 ${row.name}`}>{busy ? '处理中…' : '删除'}</button>
         </div>;
@@ -791,6 +794,7 @@ function DimensionBlock({
   onSessionDelete,
   sessionActionID,
   onProjectStickyClear,
+  onSessionStickyClear,
   stickyActionKey,
   activeRowKey,
   onRowClick,
@@ -831,6 +835,7 @@ function DimensionBlock({
           onSessionExport={onSessionExport}
           onSessionDelete={onSessionDelete}
           onProjectStickyClear={onProjectStickyClear}
+          onSessionStickyClear={onSessionStickyClear}
           stickyActionKey={stickyActionKey}
           activeRowKey={activeRowKey}
           onRowClick={onRowClick}
@@ -1045,6 +1050,7 @@ function OverviewPanel({
   onSessionDelete,
   sessionActionID,
   onProjectStickyClear,
+  onSessionStickyClear,
   stickyActionKey,
   selectedProject,
   selectedSession,
@@ -1152,6 +1158,7 @@ function OverviewPanel({
               onSessionDelete={onSessionDelete}
               sessionActionID={sessionActionID}
               onProjectStickyClear={onProjectStickyClear}
+              onSessionStickyClear={onSessionStickyClear}
               stickyActionKey={stickyActionKey}
               activeRowKey={kind === 'project' ? selectedProject?.key : kind === 'session' ? selectedSession?.key : undefined}
               onRowClick={kind === 'project' ? onProjectSelect : kind === 'session' ? onSessionSelect : undefined}
@@ -1495,7 +1502,7 @@ export function PricingPanel({ pricing, config, endpointID = '', loading, error,
             const exists = prices.some((row) => row.endpointID === model.endpointID && row.modelKey === model.modelKey);
             return <button key={model.endpointID + '/' + model.modelKey} type="button" className="runtime-v2-pricing-model-chip" disabled={exists} onClick={() => addConfiguredModel(model)}><span>{model.endpointName}</span><strong>{model.modelKey}</strong><em>{exists ? '已添加' : '添加价格'}</em></button>;
           })}</div></div>}
-          <div className="table-container runtime-v2-pricing-table-wrap"><table className="data-table runtime-v2-pricing-table"><thead><tr><th>入口</th><th>模型键</th><th>生效起点</th><th>生效终点</th><th>输入 / 1M</th><th>输出 / 1M</th><th>缓存读 / 1M</th><th>缓存写 / 1M</th><th>操作</th></tr></thead><tbody>{visiblePrices.map(({ row, index }) => <tr key={row.id || `price-${index}`}>
+          <HorizontalScroll className="table-container runtime-v2-pricing-table-wrap" ariaLabel="模型价格表"><table className="data-table runtime-v2-pricing-table"><thead><tr><th>入口</th><th>模型键</th><th>生效起点</th><th>生效终点</th><th>输入 / 1M</th><th>输出 / 1M</th><th>缓存读 / 1M</th><th>缓存写 / 1M</th><th>操作</th></tr></thead><tbody>{visiblePrices.map(({ row, index }) => <tr key={row.id || `price-${index}`}>
             <td>{endpointID && row.endpointID === endpointID ? <span className="runtime-v2-pricing-endpoint-label" title={endpointName}>{endpointName}</span> : <select className="form-select" value={row.endpointID || ''} onChange={(event) => update(index, 'endpointID', event.target.value)} aria-label={`第 ${index + 1} 行入口`}><option value="">全局回退</option>{(config?.endpoints || []).map((endpoint) => <option key={endpoint.id} value={endpoint.id}>{endpoint.name || endpoint.id}</option>)}</select>}</td>
             <td><input className="form-input" list="runtime-pricing-models" value={row.modelKey} onChange={(event) => update(index, 'modelKey', event.target.value)} placeholder="exact-model" /></td>
             <td><input className="form-input" type="datetime-local" value={row.effectiveFrom} onChange={(event) => update(index, 'effectiveFrom', event.target.value)} /></td>
@@ -1505,7 +1512,7 @@ export function PricingPanel({ pricing, config, endpointID = '', loading, error,
             <td><input className="form-input" inputMode="decimal" value={row.cacheRead} onChange={(event) => update(index, 'cacheRead', event.target.value)} placeholder="可空" /></td>
             <td><input className="form-input" inputMode="decimal" value={row.cacheCreation} onChange={(event) => update(index, 'cacheCreation', event.target.value)} placeholder="可空" /></td>
             <td><button type="button" className="btn btn-danger btn-sm" onClick={() => remove(index)}>移除</button></td>
-          </tr>)}</tbody></table></div>
+          </tr>)}</tbody></table></HorizontalScroll>
           <datalist id="runtime-pricing-models">{[...new Set(configuredModels.map((model) => model.modelKey))].map((modelKey) => <option key={modelKey} value={modelKey} />)}</datalist>
           <div className="runtime-v2-form-actions"><span>金额按每百万 Token 填写。</span><div className="page-actions"><button type="button" className="btn btn-secondary" onClick={add}>添加价格</button><button type="button" className="btn btn-primary" onClick={submit}>替换价格表</button></div></div>
         </>
@@ -1821,6 +1828,20 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     return Promise.allSettled(kinds.map((kind) => loadDimension(kind)));
   }, [loadDimension]);
 
+  // Automatic refresh must re-anchor every usage table on a fresh SQLite
+  // snapshot. `loadDimension` defaults to the previously loaded page's
+  // snapshotSeq/historyGeneration so paging and sorting stay consistent, but
+  // reusing that anchor on a timer tick pins the tables to the first snapshot
+  // forever while the un-anchored trend totals keep moving. Keep the visible
+  // page, page size, search and sort; drop only the snapshot anchor.
+  const refreshDimensions = useCallback((kinds = ['endpoint', 'project', 'session', 'model']) => {
+    return Promise.allSettled(kinds.map((kind) => {
+      const current = dimensions[kind];
+      const sortOnly = current ? { sort: current.sort, order: current.order } : null;
+      return loadDimension(kind, current?.page || 1, current?.pageSize || pageSize, dimensionSearch[kind] || '', sortOnly);
+    }));
+  }, [dimensionSearch, dimensions, loadDimension, pageSize]);
+
   const loadStorage = useCallback(async ({ includeStorage = true, includeRetention = false, includePricing = false } = {}) => {
     const request = beginLatestRequest(storageRequestRef);
     setStorageLoading(true); setStorageError(null);
@@ -1956,9 +1977,9 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     lastAnalyticsRefreshSignal.current = analyticsRefreshSignal;
     if (firstSignal) return;
     if (section === 'overview' || section === 'trends' || section === 'tokens') loadTrends(range);
-    if (section === 'overview') loadDimensions(['endpoint', 'project', 'session', 'model']);
+    if (section === 'overview') refreshDimensions(['endpoint', 'project', 'session', 'model']);
     if (section === 'errors') { loadErrors(1, errors?.pageSize || pageSize, null); loadDiagnostics(); }
-    if (section === 'tokens') loadDimensions(['endpoint', 'project', 'session', 'model']);
+    if (section === 'tokens') refreshDimensions(['endpoint', 'project', 'session', 'model']);
     if (section === 'overview' && showStorageSettings) loadStorage({ includeRetention: true });
   }, [analyticsRefreshSignal]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -2100,12 +2121,29 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     const projectID = String(row?.key || '').trim();
     const label = row?.name || projectID;
     if (!projectID) return;
-    if (!window.confirm(`清除“${label}”的会话粘性归属？清除后该项目的新请求会按入口库顺序重新选择入口。`)) return;
-    setStickyActionKey(projectID);
+    if (!window.confirm(`清除“${label}”的会话粘性归属？清除后该项目的新请求会按当前路由规则重新选择入口。统计与事件不会被删除。`)) return;
+    setStickyActionKey(`project:${projectID}`);
     try {
       const result = await api.clearProjectSticky(projectID);
       const cleared = Number(result?.cleared ?? 0);
       addToast?.(cleared > 0 ? `已清除 ${cleared} 条粘性归属` : '该项目当前没有粘性归属', cleared > 0 ? 'success' : 'info');
+    } catch (error) {
+      addToast?.(`清除粘性归属失败：${error.message}`, 'error');
+    } finally {
+      setStickyActionKey('');
+    }
+  };
+
+  const clearSessionSticky = async (row) => {
+    const sessionID = String(row?.key || '').trim();
+    const label = row?.name || sessionID;
+    if (!sessionID || sessionID === 'unidentified_session') return;
+    if (!window.confirm(`清除“${label}”的会话粘性归属？清除后该会话的新请求会按当前路由规则重新选择入口。统计与事件不会被删除。`)) return;
+    setStickyActionKey(`session:${sessionID}`);
+    try {
+      const result = await api.clearSessionSticky(sessionID);
+      const cleared = Number(result?.cleared ?? 0);
+      addToast?.(cleared > 0 ? `已清除 ${cleared} 条粘性归属` : '该会话当前没有粘性归属', cleared > 0 ? 'success' : 'info');
     } catch (error) {
       addToast?.(`清除粘性归属失败：${error.message}`, 'error');
     } finally {
@@ -2162,7 +2200,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
   return (
     <section className="runtime-v2-workspace" aria-label="统计详情">
       <nav className="runtime-v2-board-picker" aria-label="统计看板">
-        <div className="runtime-v2-section-tabs" role="tablist" aria-label="数据库分析分面">
+        <HorizontalScroll className="runtime-v2-section-tabs" role="tablist" ariaLabel="数据库分析分面">
           {SECTIONS.map((item, index) => <button
             key={item.id}
             ref={(node) => { sectionTabRefs.current[index] = node; }}
@@ -2181,7 +2219,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
               if (event.key === 'End') { event.preventDefault(); moveSection(item.id, 'end'); }
             }}
           >{item.label}</button>)}
-        </div>
+        </HorizontalScroll>
       </nav>
       {section === 'overview' && <section id="analytics-panel-overview" className="runtime-v2-tab-panel" role="tabpanel" aria-labelledby="analytics-tab-overview">
         <OverviewPanel
@@ -2210,6 +2248,9 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
           addToast={addToast}
           onSessionExport={exportSession}
           onSessionDelete={deleteSession}
+          onProjectStickyClear={clearProjectSticky}
+          onSessionStickyClear={clearSessionSticky}
+          stickyActionKey={stickyActionKey}
           sessionActionID={sessionActionID}
           selectedProject={selectedProject}
           selectedSession={selectedSession}

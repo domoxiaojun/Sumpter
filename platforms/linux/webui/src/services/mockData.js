@@ -277,6 +277,7 @@ export const mockRuntime = {
       clientModel: 'claude-3-7-sonnet',
       effectiveModel: 'gpt-4o',
       upstreamModel: 'gpt-4o',
+      targetFormat: 'openai-responses',
       statusCode: 200,
       phase: 'completed',
       outcome: 'succeeded',
@@ -284,6 +285,7 @@ export const mockRuntime = {
       durationMS: 8400,
       failover: true,
       message: 'Anthropic 入口返回 429，已故障转移到 Azure OpenAI 通道并完成请求',
+      cacheRead: { state: 'hit', readTokens: 7200, finality: 'confirmed' },
       streamTrace: {
         chunkCount: 142,
         bytesReceived: 38920,

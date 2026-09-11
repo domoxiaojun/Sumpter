@@ -25,7 +25,14 @@ struct RuntimeEventInspector: View {
                     InfoRow(title: "最终结果", value: RuntimeEventDisplay.outcome(event))
                         .foregroundStyle(RuntimeEventDisplay.statusColor(event))
                     InfoRow(title: "TTFB / 总耗时", value: "\(event.ttfbMS.map { RuntimeEventPresentation.durationDisplay($0) } ?? "—") / \(RuntimeEventPresentation.durationDisplay(event.durationMS))")
-                    InfoRow(title: "缓存 / 用量", value: "\(event.cacheReadLabel) · \(event.usageSummaryLabel)")
+                    GridRow {
+                        Text("缓存 / 用量").font(.callout).foregroundStyle(.secondary)
+                            .frame(minWidth: 92, alignment: .trailing)
+                        Text("\(event.cacheReadLabel)  \(Text(event.cacheReadHitRateLabel).font(.caption2.monospacedDigit()).foregroundColor(.secondary)) · \(event.usageSummaryLabel)")
+                            .font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
             }
             let message = RuntimeEventDisplay.friendlyMessage(event)
@@ -91,7 +98,7 @@ struct RuntimeEventInspector: View {
                   ("入口", event.endpointName), ("模型组", event.modelGroupName ?? event.modelGroupID),
                   ("命中规则", event.featureRuleID), ("用途", RuntimeEventDisplay.purpose(event))])
         case "usage":
-            rows([("缓存读占比", event.cacheReadTokenRatio.map { $0.formatted(.percent.precision(.fractionLength(1))) }), ("缓存读状态", event.cacheReadLabel), ("缓存证据", event.cacheRead?.reasonLabel),
+            rows([("缓存读占比", event.cacheReadTokenRatio.map { $0.formatted(.percent.precision(.fractionLength(1))) }), ("缓存读状态", event.cacheRead?.statusLabel), ("缓存证据", event.cacheRead?.reasonLabel),
                   ("缓存读计数", ["confirmed": "已确认", "provisional": "暂定，可能增加", "unknown": "未知"][event.cacheRead?.finality ?? "unknown"]),
                   ("输入 token", usage?.inputTokens.map(String.init)), ("输出 token", usage?.outputTokens.map(String.init)),
                   ("缓存读 token", usage?.cacheReadInputTokens.map(String.init)), ("缓存写 token", usage?.cacheCreationInputTokens.map(String.init)),

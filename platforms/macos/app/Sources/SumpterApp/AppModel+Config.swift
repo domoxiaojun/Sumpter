@@ -203,18 +203,23 @@ extension AppModel {
         }
     }
 
-    /// 清除某项目的会话粘性归属。不删任何统计;只让该项目的粘性绑定失效,
-    /// 下一个请求按入口库顺序重新选择入口。
-    func clearProjectSticky(projectID: String) {
-        Task {
-            guard let admin else { return }
-            do {
-                let cleared = try await admin.clearProjectSticky(projectID: projectID)
-                flash(cleared > 0 ? "已清除 \(cleared) 条粘性归属" : "该项目当前没有粘性归属")
-            } catch {
-                lastError = "\(error)"
-                flash("清除粘性归属失败")
+    /// 解除项目或单个对话的入口绑定，保留统计与事件。
+    func clearRuntimeSticky(key: String, isSession: Bool) async {
+        guard let admin else {
+            flash("服务尚未连接，无法清除粘性归属")
+            return
+        }
+        do {
+            let cleared: Int
+            if isSession {
+                cleared = try await admin.clearSessionSticky(sessionID: key)
+            } else {
+                cleared = try await admin.clearProjectSticky(projectID: key)
             }
+            flash(cleared > 0 ? "已清除 \(cleared) 条粘性归属" : "当前没有可清除的粘性归属")
+        } catch {
+            lastError = "\(error)"
+            flash("清除粘性归属失败")
         }
     }
 

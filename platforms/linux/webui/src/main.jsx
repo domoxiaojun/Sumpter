@@ -6,6 +6,7 @@ import { AppContent } from './App.jsx';
 import './styles/variables.css';
 import './styles/base.css';
 import './styles/components.css';
+import './styles/workspace.css';
 import './styles/animations.css';
 
 const container = document.getElementById('root');

@@ -67,7 +67,7 @@ const ANTHROPIC_BETA_EFFORT: &str = "effort-2025-11-24";
 ///
 /// `x-sumpter-*` 是客户端声明项目归因用的入站专用 header(见 `ClientDeclaredMetadata`):
 /// 代理读完就必须剥掉,否则项目名与本机工作区路径会跟着请求外泄给上游中转站。
-const HEADER_BLOCKLIST: [&str; 22] = [
+const HEADER_BLOCKLIST: [&str; 24] = [
     "host",
     "x-sumpter-client",
     "x-sumpter-attribution-encoding",
@@ -76,6 +76,8 @@ const HEADER_BLOCKLIST: [&str; 22] = [
     "x-sumpter-git-remote",
     "x-sumpter-user",
     "x-sumpter-session-id",
+    "x-sumpter-agent-role",
+    "x-sumpter-agent-name",
     "authorization",
     "x-api-key",
     "x-goog-api-key",
@@ -1107,7 +1109,7 @@ mod tests {
 
     #[test]
     fn client_declared_project_headers_never_reach_the_upstream() {
-        // 这三个 header 是入站专用的项目归因通道(ClientDeclaredMetadata)。它们带着项目名和
+        // 这些 header 是入站专用的项目和任务归因通道(ClientDeclaredMetadata)。它们带着项目名和
         // 本机工作区路径,一旦跟着转发出去就等于把这些信息泄给上游中转站 —— 出站黑名单是
         // 唯一的拦截点,所以在这里钉死。
         let inbound = vec![
@@ -1124,6 +1126,11 @@ mod tests {
                 "https://github.com/domoxiaojun/sumpter.git".to_string(),
             ),
             ("X-Sumpter-User".to_string(), "kkl".to_string()),
+            ("X-Sumpter-Agent-Role".to_string(), "memory".to_string()),
+            (
+                "X-Sumpter-Agent-Name".to_string(),
+                "observational-memory/observer".to_string(),
+            ),
             ("anthropic-version".to_string(), "2023-06-01".to_string()),
         ];
         let build = build_outbound(
@@ -1143,6 +1150,8 @@ mod tests {
         // 直接钉死黑名单常量:从名单里摘掉任一项都会立刻红,等价于负向验证。
         for name in [
             "x-sumpter-project",
+            "x-sumpter-agent-role",
+            "x-sumpter-agent-name",
             "x-sumpter-workspace",
             "x-sumpter-git-remote",
             "x-sumpter-user",

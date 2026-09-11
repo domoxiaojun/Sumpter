@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{AppConfig, ContextMode, Endpoint, ModelMapping, ThinkingMode};
+use crate::config::{AppConfig, Endpoint, ModelMapping};
 use crate::model_name;
 
 fn enabled() -> bool {
@@ -37,7 +37,8 @@ pub struct ModelGroupBinding {
     pub enabled: bool,
     #[serde(default)]
     pub priority: i64,
-    /// null = all group models, [] = no models. Discovery never expands this list.
+    /// null = all group models supported by the endpoint, [] = no models.
+    /// Discovery never expands the endpoint's declared mappings.
     #[serde(default)]
     pub models: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -86,18 +87,6 @@ fn intersection(a: &str, b: &str) -> Option<String> {
         Some(a)
     } else {
         None
-    }
-}
-
-fn mapping(pattern: String) -> ModelMapping {
-    ModelMapping {
-        client_pattern: pattern,
-        upstream_model: String::new(),
-        thinking: ThinkingMode::Adaptive,
-        context: ContextMode::Standard,
-        effort: None,
-        failover_timeout_seconds: None,
-        capabilities: vec![],
     }
 }
 
@@ -175,15 +164,8 @@ impl AppConfig {
                     }
                 }
                 endpoint.mappings = inherited.into_iter().map(|(mapping, _)| mapping).collect();
-                for pattern in patterns {
-                    if !endpoint
-                        .mappings
-                        .iter()
-                        .any(|m| m.client_pattern == pattern)
-                    {
-                        endpoint.mappings.push(mapping(pattern));
-                    }
-                }
+                // Groups only narrow endpoint support. Never synthesize a
+                // mapping for an unsupported model or a stale binding choice.
                 let mut model_priorities = BTreeMap::new();
                 for override_ in &binding.overrides {
                     if let Some(priority) = override_.priority {

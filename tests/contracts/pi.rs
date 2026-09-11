@@ -28,6 +28,11 @@ fn headers() -> Vec<(String, String)> {
         ("x-sumpter-workspace".into(), "/work/pi-project".into()),
         ("x-sumpter-project".into(), "pi-project".into()),
         ("x-sumpter-session-id".into(), "pi-session".into()),
+        ("x-sumpter-agent-role".into(), "memory".into()),
+        (
+            "x-sumpter-agent-name".into(),
+            "observational-memory/observer".into(),
+        ),
         ("session_id".into(), "native-session".into()),
         ("originator".into(), "pi".into()),
     ]
@@ -44,6 +49,12 @@ fn assert_pi_events(engine: &Engine) {
         assert_eq!(event.client_kind, Some(ClientKind::Pi));
         assert_eq!(event.session_id.as_deref(), Some("pi-session"));
         assert!(event.codex_metadata.is_none());
+        assert_eq!(event.agent_role.as_deref(), Some("memory"));
+        assert_eq!(
+            event.agent_name.as_deref(),
+            Some("observational-memory/observer")
+        );
+        assert!(event.parent_thread_id.is_none());
         assert_eq!(
             event
                 .client_declared

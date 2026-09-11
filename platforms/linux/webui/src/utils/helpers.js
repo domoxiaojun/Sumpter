@@ -1016,6 +1016,10 @@ export function parseList(value) {
   return String(value).split(/[,\n]+/).map(cleanText).filter(Boolean);
 }
 
+export function eventLogicalModel(event) {
+  return cleanText(eventField(event, 'effectiveModel', 'effective_model')) || '—';
+}
+
 export function eventModel(event) {
   const client = cleanText(eventField(event, 'clientModel', 'client_model'));
   const effective = cleanText(eventField(event, 'effectiveModel', 'effective_model'));
@@ -1307,7 +1311,10 @@ export function friendlyEventMessage(event) {
   const failureKind = eventFailureKind(event);
   const message = eventMessage(event);
   const failureDetail = eventFailureDetail(event);
-  if (phase === 'inFlight' || eventIsInFlight(event)) return '流式输出中';
+  if (phase === 'inFlight' || eventIsInFlight(event)) {
+    if (!statusCode) return '等待响应';
+    return eventStreamTrace(event) ? '流式输出中' : '接收响应中';
+  }
   if (outcome === 'cancelled') {
     return '客户端主动断开连接 / 取消请求 (499)';
   }

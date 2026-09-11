@@ -228,82 +228,68 @@ function atomic(path, contents, mode = 0o600) {
   try { writeFileSync(temp, contents, { mode, flag: 'wx' }); renameSync(temp, path); }
   finally { if (existsSync(temp)) unlinkSync(temp); }
 }
-function managePi(action, options, env, source) {
-  if (!['install', 'status', 'uninstall', 'restore'].includes(action)) throw new Error('pi 支持 install、status、uninstall、restore；临时加载请使用 pi -e');
+// Only retire a global extension when the old installer recorded ownership and
+// its bytes still match a shipped copy. Never overwrite an untracked/user edit.
+function legacyPiMigration(env, source) {
   const home = env.HOME || homedir();
   const target = resolve(home, '.pi/agent/extensions/pi-project-attribution.ts');
   const dir = join(env.XDG_DATA_HOME || join(home, '.local/share'), 'sumpter', 'attribution');
   const key = createHash('sha256').update(target).digest('hex');
   const statePath = join(dir, `pi-${key}.json`);
+  const stateText = read(statePath);
+  if (!stateText) return { pending: false };
+  const previous = parseConfig(stateText, 'pi 还原记录');
+  if (previous.version !== 1 || previous.target !== target
+    || !(previous.original === null || (typeof previous.original?.bytes === 'string'
+      && Number.isInteger(previous.original.mode)))) {
+    throw new Error('pi 还原记录不完整，未修改扩展');
+  }
   const snapshot = () => {
     let info;
     try { info = lstatSync(target); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-    if (!info.isFile()) throw new Error('pi 扩展路径不是普通文件，请先检查该路径');
+    if (!info.isFile()) return { nonRegular: true };
     return { bytes: readFileSync(target).toString('base64'), mode: info.mode & 0o777 };
   };
-  const original = snapshot();
-  const stateText = read(statePath);
-  const previous = stateText ? parseConfig(stateText, 'pi 还原记录') : null;
-  if (previous && (previous.version !== 1 || previous.target !== target
-    || !(previous.original === null || (typeof previous.original?.bytes === 'string' && Number.isInteger(previous.original.mode))))) {
-    throw new Error('pi 还原记录不完整，未修改扩展');
-  }
-  const resource = join(dirname(source), 'pi-project-attribution.ts');
-  const expected = existsSync(resource) ? readFileSync(resource) : null;
-  if (['install', 'status'].includes(action) && !expected?.length) throw new Error('缺少配套 pi-project-attribution.ts，请使用完整安装包或重新下载');
+  const current = snapshot();
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-  const status = !original ? 'absent' : expected && original.bytes === expected.toString('base64') ? 'installed' : 'outdated';
-  const item = { client: 'pi', status, rc: target, shell: 'extension', canRestore: Boolean(previous && !same(original, previous.original)) };
-  if (action === 'status') return [item];
-  if (action === 'restore' && !previous) return [{ ...item, status: 'unchanged' }];
-  if (options.dryRun) return [{ ...item, status: action === 'install' ? 'installed' : action === 'restore' ? 'restored' : 'uninstalled' }];
-  mkdirSync(dir, { recursive: true });
-  const lock = join(dir, 'install.lock');
-  const descriptor = openSync(lock, 'wx', 0o600);
-  try {
-    if (!same(snapshot(), original) || read(statePath) !== stateText) throw new Error('pi 配置已被其他进程修改，请重试');
-    if (action === 'install') {
-      // Keep the first snapshot through updates and repeated installs, including an absent original.
-      if (!previous) atomic(statePath, JSON.stringify({ version: 1, target, original }));
-      if (status !== 'installed') atomic(target, expected, original?.mode ?? 0o600);
-    } else {
-      if (original && (action === 'uninstall' || !same(original, previous.original))) {
-        atomic(`${target}.sumpter-attribution-bak-${Date.now()}-${randomUUID()}`, Buffer.from(original.bytes, 'base64'), original.mode);
+  const known = [join(dirname(source), 'pi-project-attribution.ts'), join(dir, 'pi-project-attribution.ts')]
+    .filter(existsSync).map(path => readFileSync(path).toString('base64'));
+  const alreadyRestored = same(current, previous.original);
+  if (!alreadyRestored && (current === null || current.nonRegular || !known.includes(current.bytes))) {
+    return { pending: false, note: '旧版全局扩展已被修改或移除，已保留现状及原始备份；私有扩展由 wrapper 自动加载。' };
+  }
+  return {
+    pending: true,
+    commit() {
+      if (read(statePath) !== stateText || !same(snapshot(), current)) throw new Error('pi 配置已被其他进程修改，请重试');
+      if (!alreadyRestored) {
+        atomic(join(dir, `pi-global-backup-${Date.now()}-${randomUUID()}.bin`), Buffer.from(current.bytes, 'base64'), current.mode);
+        if (previous.original) atomic(target, Buffer.from(previous.original.bytes, 'base64'), previous.original.mode);
+        else unlinkSync(target);
       }
-      const restored = action === 'restore' ? previous.original : null;
-      if (restored) atomic(target, Buffer.from(restored.bytes, 'base64'), restored.mode);
-      else if (original) unlinkSync(target);
-      if (action === 'restore') unlinkSync(statePath);
-    }
-  } finally { closeSync(descriptor); unlinkSync(lock); }
-  return [{ ...item, status: action === 'install' ? 'installed' : action === 'restore' ? 'restored' : 'uninstalled' }];
+      unlinkSync(statePath);
+    },
+  };
 }
 
 export function manage(action, client, options = {}, env = process.env, source = fileURLToPath(import.meta.url)) {
   if (!['pi', 'all'].includes(client) || action === 'snippet') return manageShell(action, client, options, env, source);
-  // Preflight every destination before writing either the shell or extension.
-  const preview = { ...options, dryRun: true };
-  const shells = manageShell(action, client, preview, env, source);
-  const [extension] = managePi(action, preview, env, source);
-  const merge = (items, extra) => items.map(item => item.client === 'pi' ? combinePiStatus(extra, item) : item);
-  if (action === 'status' || options.dryRun) return merge(shells, extension);
-  return merge(manageShell(action, client, options, env, source), managePi(action, options, env, source)[0]);
+  const shells = manageShell(action, client, { ...options, dryRun: true }, env, source);
+  // Capture old private resource bytes before install updates them.
+  const migration = legacyPiMigration(env, source);
+  const results = action === 'status' || options.dryRun ? shells
+    : manageShell(action, client, options, env, source, migration.commit);
+  return results.map(item => {
+    if (item.client !== 'pi') return item;
+    return {
+      ...item,
+      ...(action === 'status' && migration.pending ? { status: 'legacy', canRestore: true } : {}),
+      ...(migration.note ? { note: migration.note } : {}),
+    };
+  });
 }
 
-function combinePiStatus(extensionItem, shellItem) {
-  const states = [extensionItem.status, shellItem.status];
-  const status = states[0] === states[1] ? states[0]
-    : states.includes('restored') ? 'restored'
-      : states.includes('broken') || states.includes('absent') ? 'broken' : 'outdated';
-  return {
-    ...shellItem,
-    status,
-    canRestore: Boolean(extensionItem.canRestore || shellItem.canRestore),
-    extension: extensionItem.rc,
-  };
-}
-
-function manageShell(action, client, options, env, source) {
+function manageShell(action, client, options, env, source, migrateLegacy) {
   if (!['install', 'status', 'uninstall', 'restore', 'snippet'].includes(action) || ![...clients, 'all'].includes(client)) throw new Error('用法：client-attribution.mjs install|status|uninstall|restore|snippet claude|grok|gemini|codex|pi|all [--shell bash|zsh] [--rc 文件] [--dry-run]');
   const shell = options.shell || basename(env.SHELL || '');
   if (!['bash', 'zsh'].includes(shell)) throw new Error('自动安装支持 bash/zsh；其他 shell 请使用 run 子命令');
@@ -375,6 +361,7 @@ function manageShell(action, client, options, env, source) {
   const descriptor = openSync(lock, 'wx', 0o600);
   try {
     if (read(rc) !== original) throw new Error('rc 已被其他进程修改，请重试');
+    migrateLegacy?.();
     if (action === 'install') {
       atomic(installed, readFileSync(source), 0o600);
       if (selected.includes('pi') && existsSync(piExtensionSource)) {

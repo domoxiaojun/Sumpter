@@ -249,7 +249,9 @@ struct ModelGroupEditor: View {
     }
     private var uncovered: Bool {
         group.models.contains { model in !group.bindings.contains { binding in
-            binding.enabled && endpoints.contains { $0.id == binding.endpointID && $0.enabled }
+            binding.enabled && endpoints.contains {
+                $0.id == binding.endpointID && $0.enabled && $0.preferredMapping(for: model) != nil
+            }
                 && (binding.models.map { $0.contains { ModelName.matches(model, pattern: $0) } } ?? true)
         } }
     }

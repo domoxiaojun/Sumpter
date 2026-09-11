@@ -218,7 +218,7 @@ test('routing tokens use recorded outcome and stream trace for the user-facing s
       kind: 'client', statusCode: 200, phase: 'inFlight', outcome: null,
       message: 'passthrough responses',
     }),
-    '流式输出中',
+    '接收响应中',
   );
   assert.equal(
     friendlyEventMessage({
@@ -1083,6 +1083,38 @@ test('runtime project sticky clear posts projectID and is idempotent', async () 
   await assert.rejects(
     () => api.clearProjectSticky('   '),
     (error) => error.status === 400 && error.code === 'project_id_required',
+  );
+});
+
+test('runtime session sticky clear posts sessionID and is idempotent', async () => {
+  // 线上形状:POST /runtime/sessions/sticky-clear,body 是 camelCase 的 sessionID。
+  let captured;
+  const original = api.request.bind(api);
+  api.request = async (path, options) => {
+    captured = { path, options };
+    return { cleared: 1, matched: 1 };
+  };
+  try {
+    await api.clearSessionSticky('sha256:abc123');
+  } finally {
+    api.request = original;
+  }
+  assert.equal(captured.path, '/runtime/sessions/sticky-clear');
+  assert.equal(captured.options.method, 'POST');
+  assert.deepEqual(JSON.parse(captured.options.body), { sessionID: 'sha256:abc123' });
+
+  // mock:首次清除返回计数,重复调用幂等返回 0;空 sessionID 在 400 被拒。
+  await assert.rejects(() => api.clearSessionSticky('unidentified_session'), (error) => error.status === 400);
+  const before = await api.getRuntimeAnalytics('24h');
+  const first = await api.clearSessionSticky('session-sticky-contract');
+  assert.equal(first.cleared, 1);
+  assert.equal(first.matched, 1);
+  const again = await api.clearSessionSticky('session-sticky-contract');
+  assert.equal(again.cleared, 0);
+  assert.deepEqual(await api.getRuntimeAnalytics('24h'), before);
+  await assert.rejects(
+    () => api.clearSessionSticky('   '),
+    (error) => error.status === 400 && error.code === 'session_id_required',
   );
 });
 

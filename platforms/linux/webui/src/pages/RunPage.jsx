@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useApp } from '../context/AppContext.jsx';
 import { MetricCard } from '../components/MetricCard.jsx';
+import { LiveSurfaceLight } from '../components/LiveSurfaceLight.jsx';
 import { StatusBadge } from '../components/StatusBadge.jsx';
 import { DataTable } from '../components/DataTable.jsx';
 import { PaginationBar } from '../components/PaginationBar.jsx';
@@ -8,11 +9,12 @@ import { useRuntimeEventPage } from '../hooks/useRuntimeEventPage.js';
 import { Icon } from '../utils/icons.jsx';
 import { orderRuntimeEvents, mergeRuntimeEvent } from '../utils/runtimeEvents.js';
 import { EventInspector } from '../components/EventInspector.jsx';
-import { eventAgentLabel, eventCacheLabel, eventUsageLabel, eventUsage, eventHttpTone } from '../utils/eventPresentation.js';
+import { CacheHitRate } from '../components/CacheHitRate.jsx';
+import { eventAgentLabel, eventCacheLabel, eventHasObservedUsage, eventUsageLabel, eventUsage } from '../utils/eventPresentation.js';
 import { copyWithToast } from '../utils/clipboard.js';
 import { api } from '../services/api.js';
 import {
-  eventEndpointName, formatNumber, formatTokenCount, formatDuration, formatTimestamp, eventModel, eventEndpoint, statusKind, eventDurationText, friendlyEventMessage, eventPurposeLabel, eventClientKindLabel, eventKindLabel, getRequestChain, eventOutcomeLabel, eventPhaseLabel, eventHttpStatusLabel, eventRequestID, eventTTFBMS, eventOutcome, eventFailover, eventField, eventIsInFlight, eventFailureSummaryLabel, eventResultKind, eventProjectContext
+  eventEndpointName, formatNumber, formatTokenCount, formatDuration, formatTimestamp, eventLogicalModel, eventEndpoint, statusKind, eventDurationText, friendlyEventMessage, eventPurposeLabel, eventClientKindLabel, eventKindLabel, getRequestChain, eventOutcomeLabel, eventPhaseLabel, eventHttpStatusLabel, eventHTTPStatusCode, eventRequestID, eventTTFBMS, eventOutcome, eventFailover, eventField, eventIsInFlight, eventFailureSummaryLabel, eventResultKind, eventProjectContext
 } from '../utils/helpers.js';
 
 function recentTokenTotals(events) {
@@ -47,9 +49,12 @@ function recentEventProjectSummary(event) {
   return context.label;
 }
 
+// 列表行只显示已记录的用途，让分流请求（如自动模式分类器）在列表里就能被认出来；
+// 未记录时返回 null 不占位，缺失原因留给详情面板解释。
 function recentEventPurposeLabel(event) {
   const raw = eventField(event, 'requestPurpose');
   const key = typeof raw === 'object' ? (raw?.kind || raw?.type || raw?.name) : raw;
+  if (!key) return null;
   // RuntimeEventDisplay on macOS uses these shorter labels for the recent
   // events table. Analytics keeps its own, more explanatory labels.
   if (key === 'standard') return '主请求';
@@ -62,7 +67,7 @@ function recentEventOutcomeLabel(event) {
   if (String(event?.kind || '').toLowerCase() === 'notify' && !eventOutcome(event)) {
     return '不适用（通知事件）';
   }
-  if (eventIsInFlight(event)) return '传输中';
+  if (eventIsInFlight(event)) return '进行中';
   const outcome = eventOutcome(event);
   if (outcome === 'succeeded') return '成功';
   if (outcome === 'failed') return '失败';
@@ -89,7 +94,8 @@ function recentEventStatusDetail(event) {
 
 function recentEventRequestSummary(event) {
   return [recentEventProjectSummary(event), eventKindLabel(event.kind), eventClientKindLabel(event),
-    eventAgentLabel(event) ? `代理: ${eventAgentLabel(event)}` : null].filter(Boolean).join(' · ');
+    eventAgentLabel(event) ? `代理: ${eventAgentLabel(event)}` : null,
+    recentEventPurposeLabel(event)].filter(Boolean).join(' · ');
 }
 
 function RecentEventOutcome({ event, compact = false }) {
@@ -102,13 +108,16 @@ function RecentEventOutcome({ event, compact = false }) {
 
 function RecentEventRequestCell({ event, live = false }) {
   const summary = recentEventRequestSummary(event);
+  const project = recentEventProjectSummary(event);
   return (
     <span className={live ? 'telemetry-live-request' : 'telemetry-primary-cell'}>
       <span className={`mono-cell${live ? ' telemetry-live-time' : ' telemetry-event-time'}`}>
         {formatTimestamp(event.timestamp)}
       </span>
+      {project && <span className="telemetry-event-meta" title={project}>{project}</span>}
       <span className={`telemetry-event-meta${live ? ' telemetry-live-request-summary' : ''}`} title={summary}>
-        {summary || '-'}
+        {[eventKindLabel(event.kind), eventClientKindLabel(event), eventAgentLabel(event), recentEventPurposeLabel(event)]
+          .filter(Boolean).join(' · ')}
       </span>
     </span>
   );
@@ -118,7 +127,7 @@ function RecentEventRouteCell({ event, live = false }) {
   if (event.kind === 'notify') return <span>{event.hookEvent || '通知'}</span>;
   return (
     <span className={live ? 'telemetry-live-route' : 'telemetry-cell-stack telemetry-route-cell'}>
-      <strong className="telemetry-event-model">{event.clientModel || eventModel(event)}</strong>
+      <strong className="telemetry-event-model">{eventLogicalModel(event)}</strong>
       <span className="telemetry-route-meta">{eventEndpointName(event)}</span>
     </span>
   );
@@ -126,16 +135,39 @@ function RecentEventRouteCell({ event, live = false }) {
 
 function RecentEventResultCell({ event, live = false }) {
   if (event.kind === 'notify') return <span className="telemetry-cell-stack">通知事件</span>;
-  const slowTTFB = eventTTFBMS(event) >= 5000;
   return (
     <span className={live ? 'telemetry-live-result' : 'telemetry-cell-stack telemetry-result-cell'}>
       <RecentEventOutcome event={event} />
-      <span className="telemetry-result-detail" style={{ color: eventHttpTone(event) }}>{recentEventStatusDetail(event)}</span>
-      <span
-        className={`mono-cell telemetry-result-duration${slowTTFB ? ' is-slow' : ''}`}
-        title={slowTTFB ? '首字节超过 5 秒，上游可能排队中' : undefined}
-      >
-        {eventDurationText(event)}
+      <span className="telemetry-result-detail" title={recentEventStatusDetail(event)}>
+        {eventHTTPStatusCode(event) ? eventHttpStatusLabel(event) : 'HTTP —'}
+      </span>
+    </span>
+  );
+}
+
+function RecentEventDurationCell({ event }) {
+  if (event.kind === 'notify') return <span className="telemetry-duration-cell">—</span>;
+  const slowTTFB = eventTTFBMS(event) >= 5000;
+  return (
+    <span className={`mono-cell telemetry-duration-cell${slowTTFB ? ' is-slow' : ''}`}
+      title={slowTTFB ? '首字节 → 总耗时；首字节超过 5 秒，上游可能排队中' : '首字节 → 总耗时'}>
+      {eventDurationText(event)}
+    </span>
+  );
+}
+
+function RecentEventUsageCell({ event }) {
+  if (event.kind === 'notify') return <span className="telemetry-usage-cell is-empty">—</span>;
+  const observed = eventHasObservedUsage(event);
+  const live = eventIsInFlight(event);
+  return (
+    <span className={`telemetry-usage-cell${observed ? '' : ' is-empty'}`}
+      title={live ? '仅显示上游已报告的用量，可能滞后；请求完成后以最终用量为准。' : '输入、输出和缓存读取均来自上游报告；— 表示未报告，不代表 0。'}>
+      <span className="telemetry-usage-tokens">{eventUsageLabel(event)}</span>
+      <span className="telemetry-usage-secondary">
+        <span>{live && !observed ? '上游尚未返回' : eventCacheLabel(event)}</span>
+        {(!live || observed) && <CacheHitRate event={event} />}
+        {live && observed && <small className="telemetry-usage-provisional">暂计</small>}
       </span>
     </span>
   );
@@ -148,7 +180,6 @@ function RecentEventMessageCell({ event, live = false }) {
       className={`${live ? 'telemetry-live-message' : 'telemetry-event-message'}${eventFailover(event) ? ' is-warning' : eventOutcome(event) === 'failed' ? ' is-error' : ''}`}
       title={friendly || undefined}
     >
-      {event.kind !== 'notify' && <span className="telemetry-cache-summary">{eventCacheLabel(event)}<small>{eventUsageLabel(event)}</small></span>}
       {eventFailover(event) && <strong>故障转移 · </strong>}
       {friendly || (live ? '请求进行中，等待最终结果' : '-')}
     </span>
@@ -159,11 +190,14 @@ function LiveEventList({ events, selectedEventID, onSelect }) {
   if (!events?.length) return null;
   return (
     <section className="telemetry-live-group" aria-label={`${formatNumber(events.length)} 个进行中请求`}>
-      <span className="ambient-deco telemetry-live-ambient" aria-hidden="true">
-        <span className="ambient-base" />
-        <span className="ambient-halo" />
-        <span className="ambient-flow" />
-      </span>
+      <LiveSurfaceLight />
+      <div className="telemetry-live-heading">
+        <span><i aria-hidden="true" />进行中 · {formatNumber(events.length)}</span>
+        <small>用量为上游暂计</small>
+      </div>
+      <div className="telemetry-live-columns" aria-hidden="true">
+        {['请求', '模型 / 路由', '结果', '首字节 → 总耗时', 'Token 用量', '事件状态'].map((label) => <span key={label}>{label}</span>)}
+      </div>
       <div className="telemetry-live-list" role="list" aria-label="进行中请求列表">
         {events.map((event) => {
           const selected = selectedEventID === event.id;
@@ -178,6 +212,8 @@ function LiveEventList({ events, selectedEventID, onSelect }) {
                 <RecentEventRequestCell event={event} live />
                 <RecentEventRouteCell event={event} live />
                 <RecentEventResultCell event={event} live />
+                <RecentEventDurationCell event={event} />
+                <RecentEventUsageCell event={event} />
                 <RecentEventMessageCell event={event} live />
               </button>
             </div>
@@ -188,8 +224,9 @@ function LiveEventList({ events, selectedEventID, onSelect }) {
   );
 }
 
-function MobileEventList({ events, selectedEventID, onSelect, loading }) {
+function MobileEventList({ events, selectedEventID, onSelect, loading, live = false }) {
   if (!events?.length) {
+    if (live) return null;
     return (
       <div className="responsive-data-card-list telemetry-mobile-list">
         <div className="responsive-card-empty">{loading ? '正在读取事件历史…' : '当前筛选条件下暂无请求事件'}</div>
@@ -198,7 +235,8 @@ function MobileEventList({ events, selectedEventID, onSelect, loading }) {
   }
 
   return (
-    <div className="responsive-data-card-list telemetry-mobile-list" role="list" aria-label="请求事件列表">
+    <div className="responsive-data-card-list telemetry-mobile-list" data-live={live} role="list" aria-label={live ? '进行中请求列表' : '请求事件列表'}>
+      {live && <LiveSurfaceLight />}
       {events.map((event) => {
         const projectContext = eventProjectContext(event);
         const outcome = eventOutcome(event);
@@ -226,29 +264,31 @@ function MobileEventList({ events, selectedEventID, onSelect, loading }) {
               <span
                 className="mono-cell telemetry-mobile-duration"
                 style={{ color: slowTTFB ? 'var(--status-warning)' : outcome === 'failed' ? 'var(--status-critical)' : undefined }}
-                title={recentEventStatusDetail(event)}
+                title="首字节 → 总耗时"
               >
                 {eventDurationText(event)}
               </span>
             </div>
             <div className="telemetry-mobile-route">
-              <strong className="mono-cell">{event.kind === 'notify' ? (event.hookEvent || '通知') : eventModel(event)}</strong>
+              <strong className="mono-cell">{event.kind === 'notify' ? (event.hookEvent || '通知') : eventLogicalModel(event)}</strong>
               {event.kind !== 'notify' && <small>{eventEndpointName(event)}</small>}
+            </div>
+            <div className="telemetry-mobile-usage">
+              <span className="telemetry-mobile-status">{recentEventStatusDetail(event)}</span>
+              {event.kind !== 'notify' && <RecentEventUsageCell event={event} />}
             </div>
             <div className="telemetry-mobile-context">
               <span className="telemetry-mobile-request-summary" title={recentEventRequestSummary(event)}>
                 {recentEventRequestSummary(event) || projectContext.label}
               </span>
-              <span className="telemetry-mobile-status">{recentEventStatusDetail(event)}</span>
               {friendly && (
                 <p className={`telemetry-mobile-message${outcome === 'failed' ? ' is-error' : eventFailover(event) ? ' is-warning' : ''}`}>
+                  <span className="telemetry-state-label">事件状态</span>
                   {eventFailover(event) && <strong>故障转移 · </strong>}
                   {friendly}
                 </p>
               )}
             </div>
-            {event.kind !== 'notify' && <div className="telemetry-cache-summary">{eventCacheLabel(event)}<small>{eventUsageLabel(event)}</small></div>}
-            <span className="responsive-data-card-drill-hint">点击查看请求链路与诊断详情</span>
             </div>
           </article>
         );
@@ -379,10 +419,8 @@ export function RunPage() {
       key: 'timestamp',
       title: '请求',
       type: 'time',
-      // Keep the request summary wide enough for the macOS-style project /
-      // client / agent context before it wraps or clamps.
-      width: '280px',
-      minWidth: '240px',
+      width: '220px',
+      minWidth: '220px',
       sortable: true,
       render: (row) => <RecentEventRequestCell event={row} />,
     },
@@ -390,30 +428,46 @@ export function RunPage() {
       key: 'model',
       title: '模型 / 路由',
       type: 'text',
-      width: '260px',
-      minWidth: '220px',
+      width: '180px',
+      minWidth: '180px',
       render: (row) => <RecentEventRouteCell event={row} />,
     },
     {
       key: 'outcome',
       title: '结果',
       type: 'status',
-      width: '220px',
-      minWidth: '190px',
+      width: '104px',
+      minWidth: '104px',
       render: (row) => <RecentEventResultCell event={row} />,
     },
     {
-      key: 'message',
-      title: '说明',
+      key: 'duration',
+      title: '首字节 → 总耗时',
       type: 'text',
-      width: '280px',
-      minWidth: '240px',
+      width: '156px',
+      minWidth: '156px',
+      render: (row) => <RecentEventDurationCell event={row} />,
+    },
+    {
+      key: 'usage',
+      title: 'Token 用量',
+      type: 'text',
+      width: '220px',
+      minWidth: '220px',
+      render: (row) => <RecentEventUsageCell event={row} />,
+    },
+    {
+      key: 'message',
+      title: '事件状态',
+      type: 'text',
+      width: '220px',
+      minWidth: '220px',
       render: (row) => <RecentEventMessageCell event={row} />,
     },
   ];
 
   return (
-      <div className="page-stack">
+      <div className="page-stack run-page">
       {/* Page Header */}
       <div className="page-header">
         <div className="page-title-group">
@@ -480,7 +534,7 @@ export function RunPage() {
           </p>
 
           {/* Detailed Info Matrix matching macOS */}
-          <div className="grid-2col run-detail-grid">
+          <div className="run-detail-grid">
             <div>
               <span>配置版本：</span>
               <strong>v{config?.schemaVersion || 7}</strong>
@@ -507,53 +561,46 @@ export function RunPage() {
       </div>
 
       {/* Primary cumulative and recent usage cards */}
-      <div className="grid-4col run-metric-grid">
+      <div className="run-metric-grid">
         <MetricCard
           label="输入 Token"
           value={tokenTotals.input == null ? '—' : formatTokenCount(tokenTotals.input)}
           detail={tokenTotals.observed ? `最近事件内累计 · ${formatNumber(tokenTotals.observed)} 个请求有用量` : '暂无可用用量'}
-          icon="chart"
-          accent="var(--accent-indigo)"
+          icon="file-down"
+          accent="var(--primary)"
         />
         <MetricCard
           label="输出 Token"
           value={tokenTotals.output == null ? '—' : formatTokenCount(tokenTotals.output)}
           detail={tokenTotals.observed ? `最近事件内累计 · ${formatNumber(tokenTotals.observed)} 个请求有用量` : '暂无可用用量'}
-          icon="sparkles"
-          accent="var(--accent-purple)"
+          icon="file-up"
+          accent="var(--status-warning)"
         />
         <MetricCard
-          label="Provider 候选"
-          value={formatNumber(status?.providers ?? config?.endpoints?.length ?? 0)}
-          detail="按优先级形成候选序列"
-          icon="route"
-          accent="var(--primary)"
-        />
-        <MetricCard
-          label="Endpoints 上游入口"
+          label="可调度入口"
           value={formatNumber(status?.endpoints ?? config?.endpoints?.length ?? 0)}
-          detail="可独立配置协议与模型映射"
-          icon="server"
-          accent="var(--accent-indigo)"
+          detail="按优先级形成 Provider 候选序列"
+          icon="git-fork"
+          accent="var(--primary)"
         />
         <MetricCard
           label="客户端请求"
           value={formatNumber(runtime?.clientRequests || 0)}
           detail={`端到端 · 成功 ${formatNumber(runtime?.clientSuccesses || 0)} / 失败 ${formatNumber(runtime?.clientFailures || 0)}`}
-          icon="activity"
-          accent="var(--status-good)"
+          icon="move-diagonal"
+          accent="var(--primary)"
         />
         <MetricCard
           label="上游尝试"
           value={formatNumber(runtime?.upstreamAttempts || 0)}
-          detail={`含重试 · 故障转移 ${formatNumber(runtime?.failovers || 0)} 次`}
-          icon="route"
-          accent="var(--accent-purple)"
+          detail={`含重试 · 故障转移 ${formatNumber(runtime?.failovers || 0)}`}
+          icon="network"
+          accent="var(--primary)"
         />
       </div>
 
       {/* Real-time Streaming Telemetry Event Log */}
-      <div className="glass-panel">
+      <div className="glass-panel run-events-panel">
         <div className="panel-header">
           <div className="panel-title-group">
             <div className="panel-title">
@@ -587,11 +634,9 @@ export function RunPage() {
                 </button>
               ))}
             </div>
-            <span className="mono-cell" style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-              {eventHistory.mode === 'page'
-                ? `第 ${formatNumber(eventHistory.page)} 页 · 每页 ${formatNumber(eventHistory.pageSize)} · 共 ${formatNumber(eventHistory.totalCount)} 条`
-                : `${formatNumber(visibleEvents.length)} 条持久事件${liveEvents.length ? ` · ${formatNumber(liveEvents.length)} 条进行中` : ''}`}
-            </span>
+            {eventHistory.mode !== 'page' && <span className="panel-hint">
+              {formatNumber(visibleEvents.length)} 条持久事件
+            </span>}
             <button
               type="button"
               className="btn btn-ghost telemetry-sort-button"
@@ -622,6 +667,7 @@ export function RunPage() {
           >
             {eventHistory.mode === 'page' ? (
               <PaginationBar
+                compact
                 page={eventHistory.page}
                 pageSize={eventHistory.pageSize}
                 totalCount={eventHistory.totalCount}
@@ -635,13 +681,24 @@ export function RunPage() {
               />
             ) : null}
             <div className="event-page-content">
-              <div className="telemetry-live-mobile">
-                <LiveEventList
+              {liveEvents.length > 0 && <div className="telemetry-live-section">
+                <div className="telemetry-live-desktop">
+                  <LiveEventList events={liveEvents} selectedEventID={selectedEvent?.id} onSelect={setSelectedEventID} />
+                </div>
+                <div className="telemetry-live-mobile">
+                  <div className="telemetry-live-heading">
+                    <span><i aria-hidden="true" />进行中 · {formatNumber(liveEvents.length)}</span>
+                    <small>用量为上游暂计</small>
+                  </div>
+                <MobileEventList
                   events={liveEvents}
                   selectedEventID={selectedEvent?.id}
                   onSelect={setSelectedEventID}
+                  live
                 />
-              </div>
+                </div>
+              </div>}
+              <section className="telemetry-history-group" aria-label="历史事件">
               <div className="telemetry-desktop-table">
                 <DataTable
                   className="telemetry-table"
@@ -649,19 +706,12 @@ export function RunPage() {
                   data={visibleEvents}
                   keyField="id"
                   ariaLabel={eventHistory.mode === 'page' ? 'SQLite 持久事件分页列表' : '最近请求事件列表'}
-                  tableMinWidth="1040px"
+                  tableMinWidth="1100px"
                   sortKey="timestamp"
                   sortDirection={eventSort}
                   onSortChange={(_key, direction) => setEventSort(direction)}
                   onRowClick={(row) => setSelectedEventID(row.id)}
                   activeRowKey={selectedEvent?.id}
-                  beforeTable={liveEvents?.length ? (
-                    <LiveEventList
-                      events={liveEvents}
-                      selectedEventID={selectedEvent?.id}
-                      onSelect={setSelectedEventID}
-                    />
-                  ) : null}
                   emptyText={eventHistory.loading ? '正在读取事件历史…' : '当前筛选条件下暂无请求事件'}
                 />
               </div>
@@ -671,6 +721,7 @@ export function RunPage() {
                 onSelect={setSelectedEventID}
                 loading={eventHistory.loading}
               />
+              </section>
               {!selectedEvent && (visibleEvents.length > 0 || liveEvents.length > 0) && (
                 <div className="telemetry-selection-hint" role="status">选择一条事件查看请求链路与诊断详情</div>
               )}
@@ -686,6 +737,7 @@ export function RunPage() {
 
         {selectedEvent && <EventInspector
           event={selectedEvent} chain={requestChain} onSelect={setSelectedEventID}
+          requestSummary={recentEventRequestSummary(selectedEvent)}
           expanded={expandedGroups} onToggle={toggleGroup} onCopy={copyText}
           loading={runtimeEventDetail?.event?.id !== selectedEvent.id && selectedEvent.detailsOmitted === true}
         />}

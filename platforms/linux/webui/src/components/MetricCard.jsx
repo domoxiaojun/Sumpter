@@ -8,7 +8,7 @@ export function MetricCard({ label, value, detail, icon, accent = 'var(--primary
         <span className="metric-label">{label}</span>
         {icon && (
           <div className="metric-icon-box">
-            <Icon name={icon} size={18} />
+            <Icon name={icon} size={18} aria-hidden="true" focusable="false" />
           </div>
         )}
       </div>

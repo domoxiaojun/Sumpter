@@ -10,7 +10,10 @@ struct OverviewPane: View {
     @State private var frozenHealth: ProxyHealthSummary?
 
     var body: some View {
-        SettingsPage(title: SettingsSection.run.title, subtitle: SettingsSection.run.subtitle) {
+        // The run dashboard is a wide, data-heavy view.  Let it use the
+        // available window width so event columns and KPI tiles can breathe;
+        // the event view still switches to its compact layout at narrow sizes.
+        SettingsPage(title: SettingsSection.run.title, subtitle: SettingsSection.run.subtitle, maxWidth: 1480) {
             statusPanel
             metrics
             RecentEventsPanel(
@@ -86,7 +89,7 @@ struct OverviewPane: View {
     /// 稳定历史页只包含已落盘事件；实时进行中的请求另行作为 overlay，
     /// 因此不会挤占服务端分页的名额，也不会让 totalCount 与行数失配。
     private var runPersistedEvents: [RuntimeEvent] {
-        let existing = Dictionary(uniqueKeysWithValues: displayRuntime.recentEvents.map { ($0.id, $0) })
+        let existing = RuntimeEvent.indexedByID(displayRuntime.recentEvents)
         if let page = model.runHistoryPage {
             return page.events.map { $0.mergedRuntimeEvent(with: existing[$0.id]) }
         }
@@ -96,17 +99,16 @@ struct OverviewPane: View {
     /// 运行页默认只拉「客户端」分页；上游尝试要通过 request-chain 端点补齐。
     private var runRequestChainEvents: [RuntimeEvent]? {
         guard let chain = model.runtimeRequestChain else { return nil }
-        let existing = Dictionary(
-            uniqueKeysWithValues: (runPersistedEvents + runLiveEvents).map { ($0.id, $0) }
-        )
+        let existing = RuntimeEvent.indexedByID(runPersistedEvents + runLiveEvents)
         return chain.events.map { $0.mergedRuntimeEvent(with: existing[$0.id]) }
     }
 
     private var runLiveEvents: [RuntimeEvent] {
-        let kind = model.runHistoryKindFilter
-        return displayRuntime.recentEvents.filter { event in
-            event.isInFlight && (kind == "all" || event.kind == kind)
-        }
+        RuntimeEvent.liveOverlay(
+            displayRuntime.recentEvents,
+            excluding: Set(model.runHistoryPage?.events.map(\.id) ?? []),
+            filter: RuntimeEventKindFilter(rawValue: model.runHistoryKindFilter) ?? .all
+        )
     }
 
     private var statusPanel: some View {
@@ -245,28 +247,40 @@ struct OverviewPane: View {
     }
 
     private var metrics: some View {
+        ViewThatFits(in: .horizontal) {
+            // Five metrics should share the full row. An adaptive grid can
+            // reserve a sixth, empty slot when the window becomes wider.
+            HStack(alignment: .top, spacing: 12) {
+                metricTiles
+            }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 12)], spacing: 12) {
+                metricTiles
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var metricTiles: some View {
         let tokenTotals = recentTokenTotals
-        return LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
             MetricTile(
                 title: "输入 Token",
                 value: RuntimeEventPresentation.tokenCountDisplay(tokenTotals.input),
                 detail: tokenTotals.observed > 0 ? "最近事件内累计 · \(tokenTotals.observed) 个请求有用量" : "暂无可用用量",
-                systemImage: "arrow.down.doc"
+                systemImage: "arrow.down.doc", minimumHeight: 112
             )
             MetricTile(
                 title: "输出 Token",
                 value: RuntimeEventPresentation.tokenCountDisplay(tokenTotals.output),
                 detail: tokenTotals.observed > 0 ? "最近事件内累计 · \(tokenTotals.observed) 个请求有用量" : "暂无可用用量",
-                systemImage: "arrow.up.doc"
+                systemImage: "arrow.up.doc", minimumHeight: 112
             )
             // `Provider 候选` and `Endpoints` are the same count in the flat
             // endpoint model.  Keep one metric and use its detail line to
             // preserve the routing meaning instead of presenting a duplicate
             // KPI with a different label.
-            MetricTile(title: "可调度入口", value: "\(model.endpointCount)", detail: "按优先级形成 Provider 候选序列", systemImage: "arrow.triangle.branch")
-            MetricTile(title: "客户端请求", value: "\(displayRuntime.clientRequests)", detail: "端到端 · 成功 \(displayRuntime.clientSuccesses) / 失败 \(displayRuntime.clientFailures)", systemImage: "arrow.down.left.and.arrow.up.right")
-            MetricTile(title: "上游尝试", value: "\(displayRuntime.upstreamAttempts)", detail: "含重试 · 故障转移 \(displayRuntime.failovers)", systemImage: "point.3.connected.trianglepath.dotted")
-        }
+            MetricTile(title: "可调度入口", value: "\(model.endpointCount)", detail: "按优先级形成 Provider 候选序列", systemImage: "arrow.triangle.branch", minimumHeight: 112)
+            MetricTile(title: "客户端请求", value: "\(displayRuntime.clientRequests)", detail: "端到端 · 成功 \(displayRuntime.clientSuccesses) / 失败 \(displayRuntime.clientFailures)", systemImage: "arrow.down.left.and.arrow.up.right", minimumHeight: 112)
+            MetricTile(title: "上游尝试", value: "\(displayRuntime.upstreamAttempts)", detail: "含重试 · 故障转移 \(displayRuntime.failovers)", systemImage: "point.3.connected.trianglepath.dotted", minimumHeight: 112)
     }
 
     /// 运行快照没有独立的 Token 累计计数；这里按客户端事件里的 usage 汇总，

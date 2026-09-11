@@ -1191,6 +1191,38 @@ pub(crate) async fn clear_project_sticky(
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct SessionStickyBody {
+    #[serde(rename = "sessionID", alias = "session_id")]
+    session_id: String,
+}
+
+pub(crate) async fn clear_runtime_session_sticky(
+    State(state): State<AdminState>,
+    payload: JsonPayload<SessionStickyBody>,
+) -> Response {
+    let body = match require_json(payload) {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
+    let session_id = body.session_id.trim().to_owned();
+    if session_id.is_empty() || session_id == "unidentified_session" {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "session_id_required",
+            "必须提供已识别会话的完整 sessionID/threadID",
+        );
+    }
+    match state.inner.engine.clear_runtime_session_sticky(&session_id) {
+        Ok(value) => json_ok(&value),
+        Err(message) => api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "sticky_clear_failed",
+            &message,
+        ),
+    }
+}
+
 pub(crate) async fn reset_runtime(State(state): State<AdminState>) -> Response {
     match state.inner.engine.reset_runtime() {
         Ok(_) => json_ok(

@@ -52,6 +52,12 @@ enum RuntimeEventDisplay {
         return event.requestPurpose?.displayName ?? "未记录（旧事件或早期拒绝）"
     }
 
+    /// 列表行只显示已记录的用途（主对话 / WebSearch / 自动模式分类器等），
+    /// 让分流请求在列表里就能被认出来；未记录时不占位，缺失原因留给详情面板解释。
+    static func rowPurpose(_ event: RuntimeEvent) -> String? {
+        event.requestPurpose?.displayName
+    }
+
     static func toolCalls(_ event: RuntimeEvent) -> String? {
         guard let calls = event.toolCalls, !calls.isEmpty else { return nil }
         return calls.joined(separator: "、")
@@ -132,7 +138,7 @@ enum RuntimeEventDisplay {
         [RuntimeEventPresentation.projectAttribution(
             eventKind: event.kind, metadata: event.codexMetadata, declared: event.clientDeclared,
             projectedName: event.projectName, projectedSource: event.projectSource, projectedLocalUser: event.localUser
-        ), kind(event.kind), clientKind(event), event.agentSummaryLabel].compactMap { $0 }.joined(separator: " · ")
+        ), kind(event.kind), clientKind(event), event.agentSummaryLabel, rowPurpose(event)].compactMap { $0 }.joined(separator: " · ")
     }
 
     static func streamTrace(_ event: RuntimeEvent) -> String? {
@@ -231,6 +237,10 @@ enum RuntimeEventDisplay {
         return cleaned
     }
 
+    static func logicalModel(_ event: RuntimeEvent) -> String {
+        displayedModelName(event.effectiveModel) ?? "—"
+    }
+
     static func model(_ event: RuntimeEvent) -> String {
         let candidates = [event.clientModel, event.effectiveModel]
             .compactMap(displayedModelName)
@@ -263,7 +273,8 @@ enum RuntimeEventDisplay {
 
     static func friendlyMessage(_ event: RuntimeEvent) -> String {
         if event.isInFlight {
-            return "流式输出中"
+            if event.effectiveHTTPStatusCode == 0 { return "等待响应" }
+            return event.streamTrace == nil ? "接收响应中" : "流式输出中"
         }
         return RuntimeEventPresentation.friendlyMessage(
             kind: event.kind,
@@ -341,42 +352,82 @@ enum RuntimeEventDisplay {
     }
 }
 
-/// 紧凑但不丢语义的结果摘要：HTTP、最终结果和生命周期阶段始终分行显示。
+/// 结果只强调最终成败；HTTP 响应头作为独立的次级信息。
 private struct RuntimeEventStatusSummary: View {
     let event: RuntimeEvent
     var compact = false
     var includeUsage = true
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(RuntimeEventDisplay.outcome(event))
-                .font((compact ? Font.caption : Font.callout).monospacedDigit().weight(.semibold))
+        VStack(alignment: .leading, spacing: 3) {
+            Text(event.isInFlight ? "进行中" : RuntimeEventDisplay.outcome(event))
+                .font((compact ? Font.caption : Font.subheadline).monospacedDigit().weight(.semibold))
                 .foregroundStyle(RuntimeEventDisplay.statusColor(event))
                 .lineLimit(1)
-            Text(RuntimeEventDisplay.statusDetail(event))
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(RuntimeEventDisplay.statusColor(event).opacity(0.08), in: RoundedRectangle(cornerRadius: 5))
+            Text(event.effectiveHTTPStatusCode == 0 ? "HTTP —" : RuntimeEventDisplay.httpStatus(event))
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(RuntimeEventDisplay.httpStatusColor(event))
-                .lineLimit(2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .help(RuntimeEventDisplay.statusDetail(event))
             if includeUsage && event.kind != "notify" {
-                Text(event.cacheReadLabel).font(.caption).foregroundStyle(.primary)
-                Text(event.usageSummaryLabel).font(.caption2).foregroundStyle(.secondary)
+                RuntimeEventUsageSummary(event: event)
             }
         }
     }
 }
 
-/// Four-column proportions for the run-page event rows. Live and history
+private struct RuntimeEventUsageSummary: View {
+    let event: RuntimeEvent
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if event.isInFlight && !event.hasObservedUsage {
+                // 进行中且上游还没报任何用量：只放一个占位，不用两行文字解释“还没有”。
+                Text("—")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            } else {
+                Text(event.usageSummaryLabel)
+                    .font(.subheadline.monospacedDigit().weight(.medium))
+                    .foregroundStyle(event.hasObservedUsage ? Color.primary : Color.secondary)
+                    .lineLimit(2)
+                HStack(spacing: 6) {
+                    Text("\(event.cacheReadLabel)  \(Text(event.cacheReadHitRateLabel).font(.caption2.monospacedDigit()))")
+                        .fixedSize(horizontal: false, vertical: true)
+                        .help("缓存读取 Token / 总输入 Token；Anthropic 总输入包含缓存读取和缓存写入。数据未确认或分母未知时显示 —。")
+                    if event.isInFlight {
+                        Text("暂计")
+                            .padding(.horizontal, 4)
+                            .background(.quaternary, in: RoundedRectangle(cornerRadius: 3))
+                    }
+                }
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+            }
+        }
+        .help(event.isInFlight
+            ? "仅显示上游已报告的用量，可能滞后；请求完成后以最终用量为准。"
+            : "输入、输出和缓存读取均来自上游报告；— 表示未报告，不代表 0。")
+    }
+}
+
+/// Column proportions for the run-page event rows. Live and history
 /// lists share this layout so in-flight overlay and paged history stay aligned
 /// without an NSTableView-backed `Table`.
 private struct RuntimeEventColumnWidths {
     let request: CGFloat
     let route: CGFloat
     let result: CGFloat
+    let duration: CGFloat
+    let usage: CGFloat
     let message: CGFloat
 
     static func resolve(availableWidth: CGFloat) -> RuntimeEventColumnWidths {
-        let minimums: [CGFloat] = [150, 180, 150, 160]
-        let ideals: [CGFloat] = [178, 230, 170, 260]
+        let minimums: [CGFloat] = [180, 154, 88, 132, 190, 180]
+        let ideals: [CGFloat] = [230, 190, 90, 140, 230, 250]
         let minimumTotal = minimums.reduce(0, +)
         let idealTotal = ideals.reduce(0, +)
         let available = max(1, availableWidth)
@@ -395,7 +446,9 @@ private struct RuntimeEventColumnWidths {
             request: widths[0],
             route: widths[1],
             result: widths[2],
-            message: widths[3]
+            duration: widths[3],
+            usage: widths[4],
+            message: widths[5]
         )
     }
 }
@@ -437,68 +490,17 @@ struct RecentEventsPanel: View {
     // 默认只看客户端:一次请求一行。排 failover 时切「全部」看完整上游尝试链。
     @State private var eventKindFilter: RuntimeEventKindFilter = .client
 
-    /// Light surfaces use a darker, cooler spectrum so the rounded progress
-    /// layer remains visible over the opaque panel. Opacity is controlled by
-    /// the shared Canvas, keeping both themes on the same visual scale.
-    private var liveAuraColors: [Color] {
-        if colorScheme == .light {
-            return [
-                Color(red: 0.20, green: 0.50, blue: 0.70),
-                Color(red: 0.47, green: 0.36, blue: 0.70),
-                Color(red: 0.18, green: 0.58, blue: 0.54),
-                Color(red: 0.76, green: 0.46, blue: 0.20),
-            ]
-        }
-        return [palette.brand, palette.info, .purple, palette.warning]
-    }
-
     private var eventRowHeight: CGFloat {
-        dynamicTypeSize.isAccessibilitySize ? 72 : 48
+        dynamicTypeSize.isAccessibilitySize ? 88 : 56
     }
 
     var body: some View {
         SectionPanel(title: "最近事件", hint: hint) {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 8) {
                 eventToolbar
-                eventPaginationFooter
+                eventListSummary
                 if !visibleLiveEvents.isEmpty {
-                    // Attach the aura as a background of the sized request
-                    // stack.  An unconstrained ZStack/NSViewRepresentable has
-                    // no intrinsic height in a SwiftUI VStack, so the old
-                    // version could be laid out at zero height even though
-                    // its Core Animation layers were running.
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(visibleLiveEvents.enumerated()), id: \.element.id) { index, event in
-                            Button {
-                                selectedEventID = event.id
-                            } label: {
-                                ViewThatFits(in: .horizontal) {
-                                    liveEventRow(event)
-                                        .frame(minWidth: 720)
-                                    compactEventRow(event)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .background(selectedEventID == event.id ? palette.brand.opacity(0.08) : .clear)
-                            .accessibilityLabel("进行中请求：\(RuntimeEventDisplay.requestSummary(event))")
-                            if index < visibleLiveEvents.count - 1 {
-                                Divider().opacity(0.28)
-                            }
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background {
-                        // Pass the live group's exact size to the Canvas.  Keeping
-                        // the sizing bridge at the container level avoids a
-                        // transient zero-height proposal during Table updates.
-                        GeometryReader { proxy in
-                            RuntimeLiveBreathingAura(colors: liveAuraColors)
-                                .frame(width: proxy.size.width, height: proxy.size.height)
-                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        }
-                    }
-                    .accessibilityElement(children: .contain)
-                    .accessibilityLabel("\(visibleLiveEvents.count) 个进行中请求")
+                    liveEventsSection
                 }
                 if visibleEvents.isEmpty && visibleLiveEvents.isEmpty {
                     if pageLoading {
@@ -563,6 +565,60 @@ struct RecentEventsPanel: View {
         }
     }
 
+    private var liveEventsSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 7) {
+                Circle().fill(palette.brand).frame(width: 6, height: 6)
+                Text("进行中 · \(visibleLiveEvents.count)")
+                    .font(.subheadline.weight(.semibold))
+                Spacer(minLength: 12)
+                Text("用量为上游暂计").font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 6)
+            Divider().opacity(0.35)
+            ViewThatFits(in: .horizontal) {
+                GeometryReader { proxy in
+                    eventColumnHeader(widths: RuntimeEventColumnWidths.resolve(availableWidth: proxy.size.width - 16))
+                }
+                .frame(minWidth: 940)
+                .frame(height: 28)
+                Color.clear.frame(width: 0, height: 0)
+            }
+            ForEach(Array(visibleLiveEvents.enumerated()), id: \.element.id) { index, event in
+                Button {
+                    selectedEventID = event.id
+                } label: {
+                    ViewThatFits(in: .horizontal) {
+                        liveEventRow(event).frame(minWidth: 940)
+                        compactEventRow(event)
+                    }
+                }
+                .buttonStyle(.plain)
+                .background(selectedEventID == event.id ? palette.brand.opacity(0.08) : .clear)
+                .accessibilityLabel("进行中请求：\(RuntimeEventDisplay.requestSummary(event))")
+                .accessibilityAddTraits(selectedEventID == event.id ? .isSelected : [])
+                if index < visibleLiveEvents.count - 1 { Divider().opacity(0.28) }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            // 流光挂在整个进行中区块的背景上，并把区块的实际尺寸交给 Canvas；
+            // 在容器层做尺寸桥接可避免 Table 更新时出现瞬时零高度。
+            GeometryReader { proxy in
+                RuntimeLiveSurfaceLight()
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(palette.borderSubtle, lineWidth: 0.8)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(visibleLiveEvents.count) 个进行中请求")
+    }
+
     private var eventsTableContainer: some View {
         ZStack(alignment: .topTrailing) {
             // Do not use SwiftUI `Table` here.  It is NSTableView-backed and
@@ -587,7 +643,7 @@ struct RecentEventsPanel: View {
                         .font(.caption)
                 }
                 .padding(.horizontal, 10)
-                .padding(.vertical, 7)
+                .padding(.vertical, 5)
                 .background(palette.raised.opacity(0.94), in: Capsule())
                 .overlay(Capsule().stroke(palette.borderSubtle, lineWidth: 0.8))
                 .padding(10)
@@ -608,15 +664,17 @@ struct RecentEventsPanel: View {
     @ViewBuilder
     private var eventToolbar: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 10) {
+            HStack(spacing: 16) {
                 eventKindPicker
-                    .frame(width: 240)
-                Spacer(minLength: 0)
+                    .frame(width: 210)
+                Spacer(minLength: 12)
+                eventPageControls(compact: false)
             }
 
             VStack(alignment: .leading, spacing: 8) {
                 eventKindPicker
-                    .frame(maxWidth: .infinity)
+                    .frame(width: 210)
+                eventPageControls(compact: true)
             }
         }
     }
@@ -629,51 +687,27 @@ struct RecentEventsPanel: View {
         }
         .pickerStyle(.segmented)
         .labelsHidden()
-        .frame(minHeight: 40)
+        .frame(minHeight: 30)
     }
 
     private var eventCountLabel: some View {
         Text(totalCount.map { "本页 \(visibleEvents.count) 条 · 共 \($0) 条" } ?? "本页 \(visibleEvents.count) 条 · 共 \(events.count) 条")
-            .font(.callout.monospacedDigit())
+            .font(.subheadline.monospacedDigit())
             .foregroundStyle(.secondary)
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
     }
 
-    @ViewBuilder
-    private var eventPaginationFooter: some View {
-        if currentPage != nil, totalPages != nil {
-            VStack(alignment: .leading, spacing: 8) {
-                Divider()
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .center, spacing: 14) {
-                        eventCountLabel
-                        if requestChainLoading {
-                            ProgressView().controlSize(.small)
-                            Text("正在读取请求链…")
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer(minLength: 8)
-                        eventPageControls(compact: false)
-                    }
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 12) {
-                            eventCountLabel
-                            if requestChainLoading {
-                                ProgressView().controlSize(.small)
-                                Text("正在读取请求链…")
-                                    .font(.callout)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        eventPageControls(compact: true)
-                    }
+    private var eventListSummary: some View {
+        SumpterWrappingLayout(horizontalSpacing: 16, verticalSpacing: 6) {
+            eventCountLabel
+            if requestChainLoading {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("正在读取请求链…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                Text("稳定历史快照；进行中事件单独显示，不占分页名额。")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
             }
         }
     }
@@ -724,25 +758,36 @@ struct RecentEventsPanel: View {
     private func eventRequestCell(_ event: RuntimeEvent) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(RuntimeEventDisplay.time(event.timestamp))
-                .font(.callout.monospacedDigit())
-            Text(RuntimeEventDisplay.requestSummary(event))
+                .font(.subheadline.monospacedDigit().weight(.medium))
+            if let project = RuntimeEventPresentation.projectAttribution(
+                eventKind: event.kind, metadata: event.codexMetadata, declared: event.clientDeclared,
+                projectedName: event.projectName, projectedSource: event.projectSource, projectedLocalUser: event.localUser
+            ) {
+                Text(project)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Text([RuntimeEventDisplay.kind(event.kind), RuntimeEventDisplay.clientKind(event), event.agentSummaryLabel,
+                  RuntimeEventDisplay.rowPurpose(event)]
+                .compactMap { $0 }.joined(separator: " · "))
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .lineLimit(2)
-                .help(RuntimeEventDisplay.requestSummary(event))
+                .lineLimit(1)
         }
+        .help(RuntimeEventDisplay.requestSummary(event))
         .frame(maxWidth: .infinity, minHeight: eventRowHeight - 6, alignment: .leading)
     }
 
     private func eventRouteCell(_ event: RuntimeEvent) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 3) {
             if event.kind == "notify" {
-                Text(event.hookEvent ?? "通知").font(.callout)
+                Text(event.hookEvent ?? "通知").font(.subheadline)
             } else {
-            Text(RuntimeEventDisplay.model(event))
-                .font(.callout)
+            Text(RuntimeEventDisplay.logicalModel(event))
+                .font(.subheadline)
                 .lineLimit(1)
-                .help(RuntimeEventDisplay.model(event))
+                .help(RuntimeEventDisplay.logicalModel(event))
             Text(RuntimeEventDisplay.endpoint(event))
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -756,13 +801,23 @@ struct RecentEventsPanel: View {
     private func eventResultCell(_ event: RuntimeEvent) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             if event.kind == "notify" {
-                Text("通知事件").font(.callout)
+                Text("通知事件").font(.subheadline)
             } else {
             RuntimeEventStatusSummary(event: event, includeUsage: false)
-            RuntimeEventDurationText(event: event)
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(RuntimeEventDisplay.durationColor(event))
-                .help(RuntimeEventDisplay.durationHelp(event))
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: eventRowHeight - 6, alignment: .leading)
+    }
+
+    private func eventDurationCell(_ event: RuntimeEvent) -> some View {
+        Group {
+            if event.kind == "notify" {
+                Text("—").foregroundStyle(.secondary)
+            } else {
+                RuntimeEventDurationText(event: event)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(RuntimeEventDisplay.durationColor(event))
+                    .help(RuntimeEventDisplay.durationHelp(event))
             }
         }
         .frame(maxWidth: .infinity, minHeight: eventRowHeight - 6, alignment: .leading)
@@ -771,14 +826,10 @@ struct RecentEventsPanel: View {
     private func eventMessageCell(_ event: RuntimeEvent) -> some View {
         let friendly = RuntimeEventDisplay.friendlyMessage(event)
         return VStack(alignment: .leading, spacing: 2) {
-            if event.kind != "notify" {
-                Text(event.cacheReadLabel).font(.caption)
-                Text(event.usageSummaryLabel).font(.caption2).foregroundStyle(.secondary)
-            }
             Text(friendly.isEmpty ? "-" : friendly)
             .foregroundStyle(RuntimeEventDisplay.messageColor(event, friendly: friendly))
-            .font(.callout)
-            .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+            .font(.subheadline)
+            .lineLimit(2)
             .help(
                 event.failureDetail
                     ?? RuntimeEventPresentation.messageForDisplay(
@@ -787,6 +838,17 @@ struct RecentEventsPanel: View {
                     )
                     ?? friendly
             )
+        }
+        .frame(maxWidth: .infinity, minHeight: eventRowHeight - 6, alignment: .leading)
+    }
+
+    private func eventUsageCell(_ event: RuntimeEvent) -> some View {
+        Group {
+            if event.kind == "notify" {
+                Text("—").foregroundStyle(.secondary)
+            } else {
+                RuntimeEventUsageSummary(event: event)
+            }
         }
         .frame(maxWidth: .infinity, minHeight: eventRowHeight - 6, alignment: .leading)
     }
@@ -816,6 +878,12 @@ struct RecentEventsPanel: View {
             eventResultCell(event)
                 .padding(.horizontal, 12)
                 .frame(width: widths.result, alignment: .leading)
+            eventDurationCell(event)
+                .padding(.horizontal, 12)
+                .frame(width: widths.duration, alignment: .leading)
+            eventUsageCell(event)
+                .padding(.horizontal, 12)
+                .frame(width: widths.usage, alignment: .leading)
             eventMessageCell(event)
                 .padding(.horizontal, 12)
                 .frame(width: widths.message, alignment: .leading)
@@ -830,10 +898,12 @@ struct RecentEventsPanel: View {
             columnHeaderLabel("请求", width: widths.request)
             columnHeaderLabel("模型 / 路由", width: widths.route)
             columnHeaderLabel("结果", width: widths.result)
-            columnHeaderLabel("说明", width: widths.message)
+            columnHeaderLabel("首字节 → 总耗时", width: widths.duration)
+            columnHeaderLabel("Token 用量", width: widths.usage)
+            columnHeaderLabel("事件状态", width: widths.message)
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 7)
+        .padding(.vertical, 5)
         .foregroundStyle(.secondary)
     }
 
@@ -845,26 +915,34 @@ struct RecentEventsPanel: View {
     }
 
     /// Narrow windows use a readable vertical summary instead of forcing the
-    /// four desktop columns into a horizontal scroll region.  The same row
+    /// desktop columns into a horizontal scroll region.  The same row
     /// remains selectable and opens the full detail view, so no capability is
     /// lost at the compact breakpoint.
     private func compactEventRow(_ event: RuntimeEvent) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(RuntimeEventDisplay.time(event.timestamp))
-                    .font(.callout.monospacedDigit())
-                RuntimeEventStatusSummary(event: event, compact: true)
+                    .font(.subheadline.monospacedDigit())
+                RuntimeEventStatusSummary(event: event, compact: true, includeUsage: false)
                 Spacer(minLength: 4)
                 RuntimeEventDurationText(event: event)
                     .font(.caption.monospacedDigit())
             }
-            Text("\(RuntimeEventDisplay.model(event)) · \(RuntimeEventDisplay.endpoint(event))")
-                .font(.callout)
+            Text("\(RuntimeEventDisplay.logicalModel(event)) · \(RuntimeEventDisplay.endpoint(event))")
+                .font(.subheadline)
                 .lineLimit(2)
                 .foregroundStyle(palette.textPrimary)
+            Text(RuntimeEventDisplay.requestSummary(event))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .help(RuntimeEventDisplay.requestSummary(event))
+            if event.kind != "notify" {
+                RuntimeEventUsageSummary(event: event)
+            }
             let friendly = RuntimeEventDisplay.friendlyMessage(event)
             if !friendly.isEmpty {
-                Text(friendly)
+                Text("事件状态 · \(friendly)")
                     .font(.caption)
                     .foregroundStyle(RuntimeEventDisplay.messageColor(event, friendly: friendly))
                     .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 2)
@@ -935,7 +1013,7 @@ struct RecentEventsPanel: View {
                 }
             }
         }
-        .frame(minWidth: 720)
+        .frame(minWidth: 940)
         .frame(maxWidth: .infinity)
         .frame(height: eventTableHeight)
         .background(palette.inset)
@@ -987,7 +1065,7 @@ struct RecentEventsPanel: View {
         // in place until the replacement arrives.
         let visibleCount = visibleEvents.count
         let reservedCount = min(8, max(visibleCount, pageSize ?? visibleCount))
-        return Swift.min(420, Swift.max(180, 34 + CGFloat(reservedCount) * eventRowHeight))
+        return Swift.min(560, Swift.max(180, 34 + CGFloat(reservedCount) * eventRowHeight))
     }
 
     private func ensureSelection() {

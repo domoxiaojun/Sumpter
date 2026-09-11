@@ -120,7 +120,7 @@ test('event table keeps pagination outside horizontal scrolling and exposes sort
   assert.match(tableSource, /tabIndex=\{0\}/);
   assert.match(runPageSource, /<PaginationBar[\s\S]*?onPageSizeChange/);
   assert.match(runPageSource, /title: '结果'/);
-  assert.match(runPageSource, /title: '说明'/);
+  assert.match(runPageSource, /title: '事件状态'/);
   assert.match(runPageSource, /recentEventRequestSummary/);
   assert.match(runPageSource, /eventAgentLabel\(event\)/);
   assert.match(runPageSource, /eventCacheLabel\(event\)/);
@@ -138,7 +138,12 @@ test('event table keeps pagination outside horizontal scrolling and exposes sort
   assert.match(tableSource, /beforeTable = null/);
   assert.match(tableSource, /\{beforeTable\}/);
   assert.match(runPageSource, /className="telemetry-live-mobile"/);
-  assert.match(runPageSource, /beforeTable=\{liveEvents\?\.length \? \(/);
+  assert.doesNotMatch(runPageSource, /beforeTable=/, 'live events must not share the history scrolling container');
+  const liveSection = runPageSource.indexOf('className="telemetry-live-section"');
+  const historySection = runPageSource.indexOf('className="telemetry-history-group"');
+  assert.ok(liveSection > 0 && historySection > liveSection);
+  assert.match(runPageSource.slice(liveSection, historySection), /<LiveEventList/);
+  assert.doesNotMatch(runPageSource.slice(historySection), /<LiveEventList/);
 });
 
 test('analytics facet tabs stay inside the board on phone widths', async () => {
@@ -165,8 +170,12 @@ test('Run page places input/output Token cards before the routing counters', asy
   const runPageSource = await readFile(new URL('../src/pages/RunPage.jsx', import.meta.url), 'utf8');
   const input = runPageSource.indexOf('label="输入 Token"');
   const output = runPageSource.indexOf('label="输出 Token"');
-  const provider = runPageSource.indexOf('label="Provider 候选"');
+  const provider = runPageSource.indexOf('label="可调度入口"');
   assert.ok(input >= 0 && output > input && provider > output);
+  const metrics = runPageSource.slice(runPageSource.indexOf('className="run-metric-grid"'), runPageSource.indexOf('{/* Real-time'));
+  assert.equal((metrics.match(/<MetricCard/g) || []).length, 5, 'match the five native overview metrics');
+  assert.doesNotMatch(metrics, /Endpoints 上游入口|label="Provider 候选"/);
+  assert.doesNotMatch(runPageSource, /grid-4col run-metric-grid/, 'avoid the generic mobile single-column override');
   assert.match(runPageSource, /function recentTokenTotals\(events\)/);
   assert.match(runPageSource, /暂无可用用量/);
   for (const label of ['近 5 次成功率', '当前进行中', '近 5 次首响应', '近 5 次平均耗时']) {
@@ -194,44 +203,26 @@ test('runtime page motion is directional, compositor-friendly, and reduced-motio
   assert.match(animationStyles, /prefers-reduced-motion[\s\S]*?event-page-stage-loading\[data-page-direction\]/);
 });
 
-test('live events share one visible ambient layer for the in-flight group', async () => {
-  const [runPageSource, componentStyles, animationStyles] = await Promise.all([
+test('live surface uses the official Paper Mesh Gradient in both layouts', async () => {
+  const [source, lightSource, packageJson] = await Promise.all([
     readFile(new URL('../src/pages/RunPage.jsx', import.meta.url), 'utf8'),
-    readFile(new URL('../src/styles/components.css', import.meta.url), 'utf8'),
-    readFile(new URL('../src/styles/animations.css', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/LiveSurfaceLight.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../package.json', import.meta.url), 'utf8'),
   ]);
-  assert.match(runPageSource, /<section className="telemetry-live-group"/);
-  assert.match(runPageSource, /aria-label=\{`\$\{formatNumber\(events\.length\)\} 个进行中请求`\}/);
-  assert.match(runPageSource, /ambient-deco telemetry-live-ambient/);
-  const ambientIndex = runPageSource.indexOf('<span className="ambient-deco telemetry-live-ambient"');
-  const eventIndex = runPageSource.indexOf('className={`telemetry-live-event');
-  assert.ok(ambientIndex >= 0 && ambientIndex < eventIndex, 'ambient layer must be outside the event rows');
-  assert.match(runPageSource, /className="ambient-base"/);
-  assert.match(runPageSource, /className="ambient-halo"/);
-  assert.match(runPageSource, /className="ambient-flow"/);
-  assert.match(runPageSource, /function RecentEventRequestCell/);
-  assert.match(runPageSource, /function RecentEventRouteCell/);
-  assert.match(runPageSource, /function RecentEventResultCell/);
-  assert.match(runPageSource, /function RecentEventMessageCell/);
-  assert.match(runPageSource, /telemetry-outcome-text/);
-  for (const column of ['telemetry-live-request', 'telemetry-live-route', 'telemetry-live-result', 'telemetry-live-message']) {
-    assert.match(runPageSource, new RegExp(column));
+  const desktop = source.slice(source.indexOf('function LiveEventList('), source.indexOf('function MobileEventList('));
+  const compact = source.slice(source.indexOf('function MobileEventList('), source.indexOf('export function RunPage'));
+  for (const layout of [desktop, compact]) {
+    assert.equal((layout.match(/<LiveSurfaceLight \/>/g) || []).length, 1);
+    assert.ok(layout.indexOf('<LiveSurfaceLight />') < layout.indexOf('events.map('), 'concurrent events must share one shader');
   }
-  assert.doesNotMatch(runPageSource, /telemetry-live-group-heading|telemetry-live-group-status|telemetry-live-group-dot/);
-  assert.doesNotMatch(runPageSource, /<svg[\s\S]*?telemetry-live-event-glow|linearGradient|telemetry-live-event-glow-wave/);
-  assert.match(componentStyles, /\.telemetry-live-group[\s\S]*?border: 0[\s\S]*?background: transparent/);
-  assert.match(componentStyles, /\.telemetry-live-ambient[\s\S]*?pointer-events: none[\s\S]*?mix-blend-mode: normal/);
-  assert.match(componentStyles, /\.telemetry-live-ambient \.ambient-base[\s\S]*?border-radius: 42% 58% 52% 48%[\s\S]*?filter: blur\(20px\)[\s\S]*?opacity: 0\.22/);
-  assert.match(componentStyles, /\.telemetry-live-ambient \.ambient-halo[\s\S]*?border-radius: 56% 44% 48% 52%[\s\S]*?filter: blur\(26px\)[\s\S]*?opacity: 0\.13/);
-  assert.match(componentStyles, /\.telemetry-live-ambient \.ambient-flow[\s\S]*?width: 64%[\s\S]*?filter: blur\(18px\)[\s\S]*?opacity: 0\.26/);
-  assert.match(componentStyles, /\.telemetry-live-ambient \.ambient-flow[\s\S]*?linear-gradient\(90deg/);
-  assert.match(animationStyles, /@keyframes telemetry-ambient-base[\s\S]*?translate3d\(1%, -0\.4%, 0\) scale\(1\.018\)/);
-  assert.match(animationStyles, /@keyframes telemetry-ambient-halo[\s\S]*?translate3d\(-0\.8%, -0\.5%, 0\) scale\(1\.014\)/);
-  assert.match(animationStyles, /@keyframes telemetry-ambient-flow[\s\S]*?translate3d\(140%, 0\.5%, 0\) scale\(1\.004\)/);
-  assert.match(animationStyles, /@keyframes telemetry-live-status-pulse[\s\S]*?transform: scale\(0\.86\)/);
-  assert.match(animationStyles, /prefers-reduced-motion[\s\S]*?ambient-deco\.telemetry-live-ambient/);
-  assert.doesNotMatch(componentStyles, /telemetry-live-event-glow|conic-gradient/);
-  assert.doesNotMatch(animationStyles, /runtime-live-glow|runtime-spectrum-spin/);
-  assert.doesNotMatch(runPageSource, /telemetry-live-strip/);
-  assert.doesNotMatch(runPageSource, /流式输出中/);
+  assert.match(lightSource, /@paper-design\/shaders-react/);
+  assert.match(lightSource, /<MeshGradient/);
+  assert.match(lightSource, /distortion=\{0\.42\}/);
+  assert.match(lightSource, /swirl=\{0\.12\}/);
+  assert.match(lightSource, /speed=\{reduced \? 0 : 0\.075\}/);
+  assert.match(lightSource, /maxPixelCount=\{1500000\}/);
+  assert.match(lightSource, /prefers-reduced-motion/);
+  assert.match(packageJson, /"@paper-design\/shaders-react"/);
+  assert.match(lightSource, /className="telemetry-live-light"/);
+  assert.match(await readFile(new URL('../src/styles/components.css', import.meta.url), 'utf8'), /pointer-events: none/);
 });

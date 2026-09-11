@@ -3,6 +3,9 @@
 #[path = "../../../../tests/contracts/gemini.rs"]
 mod gemini;
 
+#[path = "../../../../tests/contracts/model_scope.rs"]
+mod model_scope;
+
 #[path = "../../../../tests/contracts/pi.rs"]
 mod pi;
 
@@ -6036,4 +6039,106 @@ async fn model_groups_preserve_deferred_rounds_and_same_model() {
         .map(|r| serde_json::from_slice::<Value>(&r.body).unwrap()["model"].clone())
         .collect();
     assert!(models.windows(2).all(|p| p[0] == p[1]));
+}
+
+#[tokio::test]
+async fn clear_runtime_session_sticky_preserves_other_conversations_and_reroutes() {
+    let dir = temp_config_dir("session-sticky-clear");
+    let fake = FakeTransport::new();
+    let mut config = two_endpoint_config();
+    config.endpoints[0].sticky_group = Some("ga".into());
+    config.endpoints[1].sticky_group = Some("gb".into());
+    let engine = engine_with_dir(config.clone().normalized(), dir.clone(), fake.clone());
+    for session in ["selected-conversation", "other-conversation"] {
+        fake.push("a.example.com", sse_ok(&["data: {}\n\n"]));
+        assert_eq!(
+            call(
+                &engine,
+                loopback(),
+                "/v1/messages",
+                session_header(session),
+                body()
+            )
+            .await
+            .0,
+            200
+        );
+    }
+    engine.flush_session_affinity().unwrap();
+    assert_eq!(dir.load_session_affinity().unwrap().len(), 2);
+    let before = engine
+        .export_runtime_session("selected-conversation")
+        .unwrap();
+    config.endpoints.swap(0, 1);
+    engine.replace_config(config.clone().normalized());
+    let cleared = engine
+        .clear_runtime_session_sticky("selected-conversation")
+        .unwrap();
+    assert_eq!(cleared["matched"], 1);
+    assert_eq!(cleared["cleared"], 1);
+    assert_eq!(dir.load_session_affinity().unwrap().len(), 1);
+    let after = engine
+        .export_runtime_session("selected-conversation")
+        .unwrap();
+    // 导出时间会变化；事件和统计内容必须完全保留。
+    assert_eq!(after["events"], before["events"]);
+    assert_eq!(after["analytics"], before["analytics"]);
+    assert_eq!(after["eventCount"], before["eventCount"]);
+    assert_eq!(after["sessionID"], "selected-conversation");
+    assert!(after["events"].as_array().is_some());
+    let again = engine
+        .clear_runtime_session_sticky("selected-conversation")
+        .unwrap();
+    assert_eq!(again["cleared"], 0);
+    assert_eq!(again["matched"], 1);
+    assert!(
+        engine
+            .clear_runtime_session_sticky("unidentified_session")
+            .is_err()
+    );
+    // 重启后的磁盘状态同样只保留另一对话；选中会话重新按当前入口顺序路由。
+    drop(engine);
+    let engine = engine_with_dir(config.normalized(), dir.clone(), fake.clone());
+    for (session, host) in [
+        ("selected-conversation", "b.example.com"),
+        ("other-conversation", "a.example.com"),
+    ] {
+        fake.push(host, sse_ok(&["data: {}\n\n"]));
+        assert_eq!(
+            call(
+                &engine,
+                loopback(),
+                "/v1/messages",
+                session_header(session),
+                body()
+            )
+            .await
+            .0,
+            200
+        );
+        assert_eq!(fake.requests().last().unwrap().host, host);
+    }
+    // 落盘失败必须报告错误，重试直到磁盘恢复才成功。
+    let path = dir.session_affinity_path();
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    assert!(
+        engine
+            .clear_runtime_session_sticky("selected-conversation")
+            .is_err()
+    );
+    assert!(
+        engine
+            .clear_runtime_session_sticky("selected-conversation")
+            .is_err()
+    );
+    std::fs::remove_dir(&path).unwrap();
+    assert!(
+        engine
+            .clear_runtime_session_sticky("selected-conversation")
+            .is_ok()
+    );
+    assert_eq!(dir.load_session_affinity().unwrap().len(), 1);
+    drop(engine);
+    let _ = std::fs::remove_dir_all(dir.root);
 }

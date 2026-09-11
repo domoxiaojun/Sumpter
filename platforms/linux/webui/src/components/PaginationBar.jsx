@@ -21,6 +21,7 @@ export function PaginationBar({
   itemNoun = '条持久事件',
   emptySummary,
   liveItemNoun = '条进行中',
+  compact = false,
 }) {
   const pageInputID = `pagination-page-${useId().replace(/:/g, '')}`;
   const normalizedPageSize = normalizeRuntimeEventPageSize(pageSize);
@@ -62,7 +63,7 @@ export function PaginationBar({
 
   return (
     <nav
-      className={`pagination-bar${loading ? ' is-loading' : ''}`}
+      className={`pagination-bar${compact ? ' pagination-compact' : ''}${loading ? ' is-loading' : ''}`}
       aria-label={ariaLabel}
       aria-busy={loading}
       data-page={currentPage}
@@ -72,7 +73,7 @@ export function PaginationBar({
         <strong>{formatNumber(normalizedTotalCount)} {itemNoun}</strong>
         <span>
           {normalizedTotalCount
-            ? `第 ${formatNumber(range.from)}–${formatNumber(range.to)} 条 · 第 ${formatNumber(currentPage)} / ${formatNumber(normalizedTotalPages)} 页`
+            ? `第 ${formatNumber(range.from)}–${formatNumber(range.to)} 条${compact ? '' : ` · 第 ${formatNumber(currentPage)} / ${formatNumber(normalizedTotalPages)} 页`}`
             : (emptySummary || `当前筛选没有记录`)}
         </span>
         {liveItemCount > 0 && <span className="pagination-live-count">另有 {formatNumber(liveItemCount)} {liveItemNoun}</span>}
@@ -97,7 +98,9 @@ export function PaginationBar({
         </label>
 
         <form className="pagination-page-jump" onSubmit={submitPage}>
-          <label htmlFor={pageInputID}>跳转到</label>
+          {compact && <button type="button" className="btn btn-secondary" aria-label="上一页"
+            disabled={currentPage <= 1} onClick={() => onPageChange?.(currentPage - 1)}><span className="pagination-direction-arrow" aria-hidden="true">‹</span><span className="pagination-direction-label">上一页</span></button>}
+          <label htmlFor={pageInputID}>{compact ? '第' : '跳转到'}</label>
           <input
             id={pageInputID}
             className="form-input pagination-page-input"
@@ -112,9 +115,12 @@ export function PaginationBar({
           />
           <span aria-hidden="true">/ {formatNumber(pageCount)}</span>
           <button type="submit" className="btn btn-secondary pagination-jump-button" disabled={normalizedTotalPages === 0}>跳转</button>
+          {compact && <button type="button" className="btn btn-secondary" aria-label="下一页"
+            disabled={normalizedTotalPages === 0 || currentPage >= normalizedTotalPages}
+            onClick={() => onPageChange?.(currentPage + 1)}><span className="pagination-direction-label">下一页</span><span className="pagination-direction-arrow" aria-hidden="true">›</span></button>}
         </form>
 
-        <div className="pagination-pages" role="group" aria-label="选择页码">
+        {!compact && <div className="pagination-pages" role="group" aria-label="选择页码">
           <button
             type="button"
             className="btn btn-secondary pagination-edge"
@@ -166,7 +172,7 @@ export function PaginationBar({
           >
             末页
           </button>
-        </div>
+        </div>}
       </div>
     </nav>
   );

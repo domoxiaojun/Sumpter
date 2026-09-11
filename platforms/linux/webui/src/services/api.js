@@ -1318,6 +1318,18 @@ class ApiService {
       this.mockState.clearedProjectSticky.add(projectID);
       return { cleared, matched: cleared };
     }
+    if (path === '/runtime/sessions/sticky-clear' && method === 'POST') {
+      const body = JSON.parse(options.body || '{}');
+      const sessionID = String(body.sessionID ?? body.session_id ?? '').trim();
+      if (!sessionID || sessionID === 'unidentified_session') {
+        const error = new Error('必须提供 sessionID'); error.status = 400; error.code = 'session_id_required'; throw error;
+      }
+      // Mock 把每个会话记为一条粘性归属,首次清除返回 1,之后幂等返回 0。
+      if (!this.mockState.clearedSessionSticky) this.mockState.clearedSessionSticky = new Set();
+      const cleared = this.mockState.clearedSessionSticky.has(sessionID) ? 0 : 1;
+      this.mockState.clearedSessionSticky.add(sessionID);
+      return { cleared, matched: cleared };
+    }
     if (path.startsWith('/runtime/session') && method === 'DELETE') {
       const query = new URLSearchParams(path.split('?')[1] || '');
       const sessionID = String(query.get('sessionID') || '').trim();
@@ -1706,6 +1718,13 @@ class ApiService {
       ...options,
       method: 'POST',
       body: JSON.stringify({ projectID: String(projectID || '') }),
+    });
+  }
+  clearSessionSticky(sessionID, options = {}) {
+    return this.request('/runtime/sessions/sticky-clear', {
+      ...options,
+      method: 'POST',
+      body: JSON.stringify({ sessionID: String(sessionID || '') }),
     });
   }
   getConfig(options = {}) { return this.request('/config', options).then(fromWireConfig); }

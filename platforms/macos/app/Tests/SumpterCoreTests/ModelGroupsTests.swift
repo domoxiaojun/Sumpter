@@ -202,3 +202,33 @@ final class ModelGroupsTests: XCTestCase {
         XCTAssertEqual(c.modelGroups?.last?.bindings.first?.priority, 0)
     }
 }
+
+extension ModelGroupsTests {
+    func testGroupScopeNeverExpandsEndpointSupport() throws {
+        for selection: [String]? in [nil, ["gpt-6-astra"], ["*"], []] {
+            var c = config()
+            c.endpoints[0].mappings = [ModelMapping(clientPattern: "claude-*")]
+            c.endpoints[1].mappings = [ModelMapping(clientPattern: "gpt-6-astra")]
+            c.modelGroups = [ModelGroup(id: "main", models: ["*"], bindings: [
+                ModelGroupBinding(endpointID: "a", models: selection, overrides: selection == [] ? [] : [
+                    ModelGroupModelOverride(model: "gpt-6-astra", upstreamModel: "private-astra")
+                ]),
+                ModelGroupBinding(endpointID: "b", models: nil)
+            ])]
+            try c.validateModelGroups()
+            func candidates(_ config: AppConfig, _ model: String) -> [String] {
+                config.routingEndpoints(for: model).filter { $0.preferredMapping(for: model) != nil }.map(\.id)
+            }
+            XCTAssertEqual(candidates(c, "gpt-6-astra"), ["b"])
+            c.endpoints[1].mappings = []
+            c.endpoints[1].catalog = ModelCatalog(models: ["gpt-6-astra"])
+            XCTAssertEqual(candidates(c, "gpt-6-astra"), [])
+            c.endpoints[0].mappings = []
+            XCTAssertFalse(c.hasRoutableModel)
+            c.endpoints[1].mappings = [ModelMapping(clientPattern: "gpt-5.*")]
+            XCTAssertTrue(c.hasRoutableModel)
+            XCTAssertEqual(candidates(c, "gpt-6-astra"), [])
+            XCTAssertEqual(candidates(c, "gpt-5.5"), ["b"])
+        }
+    }
+}

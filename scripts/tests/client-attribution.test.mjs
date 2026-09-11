@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, realpathSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, realpathSync, symlinkSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
@@ -49,9 +49,9 @@ test('pi install can add the same dynamic wrapper pattern as the other clients',
   const result = manage('install', 'pi', { shell: 'zsh', rc }, f.env);
   assert.deepEqual(result.map((item) => item.client), ['pi']);
   assert.equal(result[0].shell, 'zsh');
-  assert.equal(result[0].extension, join(f.home, '.pi/agent/extensions/pi-project-attribution.ts'));
+  assert.equal(result[0].extension, undefined);
   assert.match(readFileSync(rc, 'utf8'), /pi\(\) \{ command node .* run pi --/u);
-  assert.match(readFileSync(join(f.home, '.pi/agent/extensions/pi-project-attribution.ts'), 'utf8'), /before_provider_headers/u);
+  assert.equal(existsSync(join(f.home, '.pi')), false);
   assert.match(readFileSync(join(f.home, '.local/share/sumpter/attribution/pi-project-attribution.ts'), 'utf8'), /before_provider_headers/u);
 });
 
@@ -296,66 +296,111 @@ test('remote Linux setup downloads from SUMPTER_RESOURCE_BASE without listener a
   assert.match(result.output, /pi：已安装/);
 });
 
-test('pi install/update preserves first backup and restores exact extension bytes and shell block without touching provider', (t) => {
+function legacyPiFixture(t, original = null) {
   const f = fixture(t);
   const target = join(f.home, '.pi/agent/extensions/pi-project-attribution.ts');
+  const dir = join(f.env.XDG_DATA_HOME, 'sumpter/attribution');
   mkdirSync(join(f.home, '.pi/agent/extensions'), { recursive: true });
-  const original = Buffer.from([0, 255, 10, 65]);
-  writeFileSync(target, original);
-  const provider = join(f.home, '.pi/agent/models.json');
-  writeFileSync(provider, '{"synthetic":"unchanged"}');
-  const opts = { shell: 'bash' };
-  assert.equal(manage('status', 'pi', opts, f.env)[0].status, 'broken');
-  manage('install', 'pi', { ...opts, dryRun: true }, f.env);
-  assert.deepEqual(readFileSync(target), original);
-  assert.equal(existsSync(f.env.XDG_DATA_HOME), false);
-  manage('install', 'pi', opts, f.env);
-  assert.equal(manage('status', 'pi', opts, f.env)[0].status, 'installed');
-  writeFileSync(target, '// later edit');
-  manage('install', 'pi', opts, f.env);
-  manage('install', 'pi', opts, f.env);
-  assert.equal(manage('status', 'pi', opts, f.env)[0].canRestore, true);
-  manage('restore', 'pi', opts, f.env);
-  assert.deepEqual(readFileSync(target), original);
-  assert.equal(manage('status', 'pi', opts, f.env)[0].canRestore, false);
-  assert.equal(readFileSync(provider, 'utf8'), '{"synthetic":"unchanged"}');
-  assert.equal(readFileSync(join(f.home, '.bashrc'), 'utf8'), '');
+  mkdirSync(dir, { recursive: true });
+  const shipped = readFileSync(new URL('../clients/pi-project-attribution.ts', import.meta.url));
+  writeFileSync(target, shipped);
+  const key = createHash('sha256').update(target).digest('hex');
+  const state = join(dir, `pi-${key}.json`);
+  writeFileSync(state, JSON.stringify({ version: 1, target, original }));
+  return { ...f, target, state, shipped, dir };
+}
+
+for (const original of [null, { bytes: Buffer.from([0, 255, 10, 65]).toString('base64'), mode: 0o640 }]) {
+  for (const client of ['pi', 'all']) {
+    test(`migrate owned global extension to private wrapper (${client}, original=${Boolean(original)})`, (t) => {
+      const f = legacyPiFixture(t, original);
+      const opts = { shell: 'zsh' };
+      const provider = join(f.home, '.pi/agent/models.json');
+      writeFileSync(provider, '{"keep":true}');
+      assert.equal(manage('status', client, opts, f.env).find(x => x.client === 'pi').status, 'legacy');
+      manage('install', client, { ...opts, dryRun: true }, f.env);
+      assert.deepEqual(readFileSync(f.target), f.shipped);
+      assert.equal(existsSync(join(f.home, '.zshrc')), false);
+      manage('install', client, opts, f.env);
+      if (original) {
+        assert.deepEqual(readFileSync(f.target), Buffer.from(original.bytes, 'base64'));
+        assert.equal(statSync(f.target).mode & 0o777, original.mode);
+      } else assert.equal(existsSync(f.target), false);
+      assert.equal(existsSync(f.state), false);
+      assert.equal(manage('status', 'pi', opts, f.env)[0].status, 'installed');
+      manage('install', 'pi', opts, f.env);
+      manage('restore', 'pi', opts, f.env);
+      assert.equal(manage('status', 'pi', opts, f.env)[0].status, 'absent');
+      assert.equal(readFileSync(provider, 'utf8'), '{"keep":true}');
+      if (original) assert.deepEqual(readFileSync(f.target), Buffer.from(original.bytes, 'base64'));
+      else assert.equal(existsSync(f.target), false);
+    });
+  }
+}
+
+test('migration recognizes previous private version before replacing it', (t) => {
+  const f = legacyPiFixture(t);
+  writeFileSync(f.target, '// previous shipped version');
+  writeFileSync(join(f.dir, 'pi-project-attribution.ts'), '// previous shipped version');
+  manage('install', 'pi', {}, f.env);
+  assert.equal(existsSync(f.target), false);
+  assert.deepEqual(readFileSync(join(f.dir, 'pi-project-attribution.ts')), f.shipped);
 });
 
-test('pi first install restores absence; missing resource fails all before shell mutation', (t) => {
+for (const kind of ['modified', 'symlink', 'removed', 'untracked']) {
+  test(`private install preserves ${kind} global extension`, (t) => {
+    const f = legacyPiFixture(t, kind === 'removed' ? { bytes: Buffer.from('// original').toString('base64'), mode: 0o600 } : null);
+    if (kind === 'modified') writeFileSync(f.target, '// user edit');
+    if (kind === 'symlink') {
+      rmSync(f.target);
+      writeFileSync(join(f.root, 'user.ts'), '// user symlink');
+      symlinkSync(join(f.root, 'user.ts'), f.target);
+    }
+    if (kind === 'removed') rmSync(f.target);
+    if (kind === 'untracked') rmSync(f.state);
+    const before = existsSync(f.target) ? readFileSync(f.target) : null;
+    manage('install', 'pi', {}, f.env);
+    const status = manage('status', 'pi', {}, f.env)[0];
+    assert.equal(status.status, 'installed');
+    if (kind !== 'untracked') assert.match(status.note, /保留/);
+    manage('restore', 'pi', {}, f.env);
+    if (before) assert.deepEqual(readFileSync(f.target), before);
+    else assert.equal(existsSync(f.target), false);
+    assert.equal(existsSync(f.state), kind !== 'untracked');
+  });
+}
+
+test('pi first install never creates global directory and missing resource fails before shell mutation', (t) => {
   const f = fixture(t);
-  const target = join(f.home, '.pi/agent/extensions/pi-project-attribution.ts');
   manage('install', 'pi', {}, f.env);
   manage('install', 'pi', {}, f.env);
+  assert.equal(existsSync(join(f.home, '.pi')), false);
   manage('restore', 'pi', {}, f.env);
-  assert.equal(existsSync(target), false);
-  assert.equal(existsSync(join(f.home, '.bashrc')), true);
+  assert.equal(readFileSync(join(f.home, '.bashrc'), 'utf8'), '');
   assert.equal(manage('restore', 'pi', {}, f.env)[0].status, 'unchanged');
   const standalone = join(f.root, 'client-attribution.mjs');
   writeFileSync(standalone, readFileSync(source));
-  const before = readFileSync(join(f.home, '.bashrc'), 'utf8');
   assert.throws(() => manage('install', 'all', { shell: 'bash' }, f.env, standalone), /缺少配套/);
-  assert.equal(readFileSync(join(f.home, '.bashrc'), 'utf8'), before);
-  assert.equal(existsSync(target), false);
+  assert.equal(readFileSync(join(f.home, '.bashrc'), 'utf8'), '');
+  assert.equal(existsSync(join(f.home, '.pi')), false);
 });
 
-test('pi refuses symlink destinations and corrupt backup records before replacing data', (t) => {
-  const f = fixture(t);
-  const target = join(f.home, '.pi/agent/extensions/pi-project-attribution.ts');
-  mkdirSync(join(f.home, '.pi/agent/extensions'), { recursive: true });
-  const original = join(f.root, 'user-extension.ts');
-  writeFileSync(original, '// unchanged');
-  symlinkSync(original, target);
-  assert.throws(() => manage('install', 'pi', {}, f.env), /不是普通文件/);
-  assert.equal(readFileSync(original, 'utf8'), '// unchanged');
-  rmSync(target);
-  manage('install', 'pi', {}, f.env);
-  const key = createHash('sha256').update(target).digest('hex');
-  writeFileSync(join(f.env.XDG_DATA_HOME, 'sumpter/attribution', `pi-${key}.json`), '{broken');
-  const installed = readFileSync(target);
-  assert.throws(() => manage('restore', 'pi', {}, f.env), /不是有效 JSON/);
-  assert.deepEqual(readFileSync(target), installed);
+test('corrupt old backup blocks migration before shell or global writes', (t) => {
+  const f = legacyPiFixture(t);
+  writeFileSync(f.state, '{broken');
+  assert.throws(() => manage('install', 'pi', {}, f.env), /不是有效 JSON/);
+  assert.equal(existsSync(join(f.home, '.bashrc')), false);
+  assert.deepEqual(readFileSync(f.target), f.shipped);
 });
+
+for (const action of ['restore', 'uninstall']) {
+  test(`${action} also retires recorded global-only legacy install`, (t) => {
+    const f = legacyPiFixture(t);
+    manage(action, 'pi', {}, f.env);
+    assert.equal(existsSync(f.target), false);
+    assert.equal(existsSync(f.state), false);
+  });
+}
 
 for (const platform of ['linux', 'macos']) {
   for (const client of ['cc', 'grok']) {

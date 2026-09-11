@@ -376,6 +376,11 @@ pub struct CodexCompactionMetadata {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientDeclaredMetadata {
+    /// Explicit client-declared task identity; never inferred from prompt text.
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub agent_role: Option<String>,
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub agent_name: Option<String>,
     /// 项目名。裸名字或路径皆可，归因时按路径末段取。
     #[serde(default, skip_serializing_if = "is_none")]
     pub project: Option<String>,
@@ -413,6 +418,10 @@ impl ClientDeclaredMetadata {
         let project_raw = Self::clean_header(headers, "x-sumpter-project", &mut state);
         let workspace_raw = Self::clean_header(headers, "x-sumpter-workspace", &mut state);
         let user_raw = Self::clean_header(headers, "x-sumpter-user", &mut state);
+        let agent_role = Self::clean_header(headers, "x-sumpter-agent-role", &mut state)
+            .filter(|value| matches!(value.as_str(), "root" | "subagent" | "memory"));
+        let agent_name = Self::clean_header(headers, "x-sumpter-agent-name", &mut state)
+            .filter(|value| value.len() <= 128);
         let project = project_raw
             .as_deref()
             .and_then(|raw| bounded_nonempty(raw, CODEX_METADATA_MAX_LABEL_BYTES, &mut state));
@@ -436,6 +445,8 @@ impl ClientDeclaredMetadata {
         });
 
         if project.is_none()
+            && agent_role.is_none()
+            && agent_name.is_none()
             && workspace.is_none()
             && git_remote.is_none()
             && user.is_none()
@@ -447,6 +458,8 @@ impl ClientDeclaredMetadata {
         }
         Some(Self {
             project,
+            agent_role,
+            agent_name,
             workspace,
             git_remote,
             user,
@@ -2737,7 +2750,16 @@ impl RuntimeEvent {
 
     /// Return a normalized root/subagent/internal role.
     pub fn derived_agent_role(&self) -> &'static str {
-        if let Some(value) = self.agent_role.as_deref() {
+        if let Some(value) = self.agent_role.as_deref().or_else(|| {
+            self.codex_metadata
+                .is_none()
+                .then(|| {
+                    self.client_declared
+                        .as_ref()
+                        .and_then(|m| m.agent_role.as_deref())
+                })
+                .flatten()
+        }) {
             return match value {
                 "root" => "root",
                 "subagent" => "subagent",
@@ -3422,6 +3444,37 @@ mod tests {
     }
 
     #[test]
+    fn explicit_pi_task_identity_is_bounded_and_does_not_invent_parent_links() {
+        let headers = vec![
+            ("x-sumpter-agent-role".into(), "memory".into()),
+            (
+                "x-sumpter-agent-name".into(),
+                "observational-memory%2Fobserver".into(),
+            ),
+            ("x-sumpter-attribution-encoding".into(), "uri-v1".into()),
+        ];
+        let mut value = event("pi-task", KIND_CLIENT, 1.0);
+        value.client_kind = Some(ClientKind::Pi);
+        value.client_declared = ClientDeclaredMetadata::from_headers(&headers);
+        value.refresh_cache_read();
+        assert_eq!(value.agent_role.as_deref(), Some("memory"));
+        assert_eq!(
+            value.agent_name.as_deref(),
+            Some("observational-memory/observer")
+        );
+        assert!(value.parent_thread_id.is_none());
+        assert!(value.parent_turn_id.is_none());
+        assert!(value.codex_metadata.is_none());
+        assert!(
+            ClientDeclaredMetadata::from_headers(&[
+                ("x-sumpter-agent-role".into(), "made-up".into()),
+                ("x-sumpter-agent-name".into(), "x".repeat(129)),
+            ])
+            .is_none()
+        );
+    }
+
+    #[test]
     fn client_declared_metadata_sanitizes_paths_and_rejects_unusable_values() {
         let headers = vec![
             ("X-Sumpter-Project".into(), "  automode-proxy  ".into()),
@@ -3524,6 +3577,8 @@ mod tests {
         );
 
         event.client_declared = Some(ClientDeclaredMetadata {
+            agent_role: None,
+            agent_name: None,
             project: Some("demo".into()),
             workspace: None,
             git_remote: None,

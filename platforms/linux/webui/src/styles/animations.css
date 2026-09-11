@@ -104,6 +104,11 @@
   50% { opacity: 1; transform: scale(1); }
 }
 
+@keyframes telemetry-live-edge-breathe {
+  0%, 100% { opacity: 0.22; }
+  50% { opacity: 0.30; }
+}
+
 @keyframes telemetry-live-status-pulse {
   0%, 100% {
     opacity: 0.62;
@@ -112,53 +117,6 @@
   50% {
     opacity: 1;
     transform: scale(1);
-  }
-}
-
-/* Each in-flight row breathes slowly. The gradients remain fixed while only
-   compositor-friendly opacity and transform values are animated. */
-@keyframes telemetry-ambient-base {
-  0%, 100% {
-    opacity: 0.16;
-    transform: translate3d(-1%, 0.4%, 0) scale(0.985);
-  }
-  52% {
-    opacity: 0.24;
-    transform: translate3d(1%, -0.4%, 0) scale(1.018);
-  }
-}
-
-@keyframes telemetry-ambient-halo {
-  0%, 100% {
-    opacity: 0.08;
-    transform: translate3d(0.5%, 0, 0) scale(0.99);
-  }
-  44% {
-    opacity: 0.13;
-    transform: translate3d(-0.8%, -0.5%, 0) scale(1.014);
-  }
-  76% {
-    opacity: 0.10;
-    transform: translate3d(0.4%, 0.5%, 0) scale(1.004);
-  }
-}
-
-@keyframes telemetry-ambient-flow {
-  0% {
-    opacity: 0.14;
-    transform: translate3d(-140%, 1%, 0) scale(0.98);
-  }
-  36% {
-    opacity: 0.28;
-    transform: translate3d(-10%, -0.4%, 0) scale(1.012);
-  }
-  72% {
-    opacity: 0.22;
-    transform: translate3d(140%, 0.5%, 0) scale(1.004);
-  }
-  100% {
-    opacity: 0.14;
-    transform: translate3d(240%, 0, 0) scale(0.99);
   }
 }
 
@@ -223,11 +181,12 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .telemetry-live-light,
+  .telemetry-live-status-dot,
   .runtime-row-enter,
   .runtime-stream-indicator,
   .loading-dot,
   .skeleton,
-  .ambient-deco.telemetry-live-ambient > span,
   .event-page-content,
   .event-page-loading {
     animation: none !important;
@@ -237,21 +196,6 @@
   .event-page-stage-loading[data-page-direction] .event-page-content {
     opacity: 1;
     transform: none;
-  }
-
-  .ambient-deco.telemetry-live-ambient .ambient-base {
-    opacity: 0.09;
-    transform: scale(1);
-  }
-
-  .ambient-deco.telemetry-live-ambient .ambient-halo {
-    opacity: 0.055;
-    transform: none;
-  }
-
-  .ambient-deco.telemetry-live-ambient .ambient-flow {
-    opacity: 0.10;
-    transform: translate3d(0, 0, 0) scale(1);
   }
 
   .runtime-progress-value {

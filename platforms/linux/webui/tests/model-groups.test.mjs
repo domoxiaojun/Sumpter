@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createLocalID } from '../src/utils/helpers.js';
-import { endpointGroupModels, groupModels, groupRoutePreview, modelCatalogCategories, modelGroupPrefix, newModelGroup, pruneGroupReferences } from '../src/utils/modelGroups.js';
+import { hasRoutableModel, endpointGroupModels, groupModels, groupRoutePreview, modelCatalogCategories, modelGroupPrefix, newModelGroup, pruneGroupReferences } from '../src/utils/modelGroups.js';
 
 globalThis.window = { location: { search: '?mock=1' } };
 const { fromWireConfig, toWireConfig } = await import('../src/services/api.js');
@@ -32,7 +32,7 @@ test('group priorities dominate entry priorities; selected/all and local overrid
     ] },
   ];
   assert.deepEqual(groupRoutePreview(c, groups, 'gpt-x').map((r) => `${r.groupID}/${r.endpointID}`), ['one/b', 'one/a', 'two/a']);
-  assert.deepEqual(groupRoutePreview(c, groups, 'claude-x').map((r) => r.endpointID), ['a']);
+  assert.deepEqual(groupRoutePreview(c, groups, 'claude-x').map((r) => r.endpointID), []);
   assert.deepEqual(groupRoutePreview(c, groups, 'missing'), []);
 });
 
@@ -133,5 +133,26 @@ test('new model groups get an id without crypto.randomUUID', () => {
     assert.notEqual(createLocalID('group'), createLocalID('group'));
   } finally {
     Object.defineProperty(cryptoObj, 'randomUUID', { configurable: true, writable: true, value: original });
+  }
+});
+
+test('all and stale bindings cannot restore removed endpoint mappings', () => {
+  for (const models of [null, ['gpt-6-astra'], ['*'], []]) {
+    const c = config();
+    c.endpoints[0].mappings = [{ clientPattern: 'claude-*' }];
+    c.endpoints[1].mappings = [{ clientPattern: 'gpt-6-astra' }];
+    c.modelGroups = [{ id: 'main', models: ['*'], bindings: [
+      { endpointID: 'a', models }, { endpointID: 'b', models: null },
+    ] }];
+    assert.deepEqual(groupRoutePreview(c, c.modelGroups, 'gpt-6-astra').map((e) => e.endpointID), ['b']);
+    c.endpoints[1].mappings = [];
+    c.endpoints[1].catalog = { models: ['gpt-6-astra'] };
+    assert.deepEqual(groupRoutePreview(c, c.modelGroups, 'gpt-6-astra'), []);
+    c.endpoints[0].mappings = [];
+    assert.equal(hasRoutableModel(c), false);
+    c.endpoints[1].mappings = [{ clientPattern: 'gpt-5.*' }];
+    assert.equal(hasRoutableModel(c), true);
+    assert.deepEqual(groupRoutePreview(c, c.modelGroups, 'gpt-6-astra'), []);
+    assert.deepEqual(groupRoutePreview(c, c.modelGroups, 'gpt-5.5').map((e) => e.endpointID), ['b']);
   }
 });

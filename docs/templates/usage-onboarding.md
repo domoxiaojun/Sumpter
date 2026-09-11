@@ -32,9 +32,9 @@ Codex 专用请求沿用现有入口和认证配置，本扩展不替代 pi 登�
 
 ### pi 项目与会话归因扩展
 
-在**运行 pi 的主机**安装 `pi-project-attribution.ts`。扩展要求当前 pi 支持
-`before_provider_headers`。推荐用统一 wrapper 安装 zsh/bash 启动入口；它在该入口的进程中启用
-动态归因，不修改 provider 配置。通过此入口启动的 pi 应连接 Sumpter。
+在**运行 pi 的主机**通过统一安装器配置 zsh/bash wrapper，私有扩展自动安装和加载，
+无需手动安装到 pi 全局目录。扩展要求当前 pi 支持 `before_provider_headers`。wrapper 负责加载扩展，
+不修改 provider 配置。每个连接 Sumpter 的 provider 必须设置 `headers: { "X-Sumpter-Client": "pi" }`。
 
 资源位置：Linux 包的 `scripts/pi-project-attribution.ts`；macOS App 的
 `Contents/Resources/pi-project-attribution.ts`；源码的 `scripts/clients/pi-project-attribution.ts`。
@@ -53,9 +53,9 @@ node /path/to/client-attribution.mjs run pi -- --provider sumpter --model your-e
 
 wrapper 与 `pi-project-attribution.ts` 需放在同一目录；可通过 `SUMPTER_PI_BIN` 指定 Pi 可执行文件。
 无需手动导出项目或用户名环境变量；扩展在每次请求时读取当前目录、系统用户名和真实会话 ID。
-也可以只在 provider 中设置 `X-Sumpter-Client: pi` 作为显式 opt-in；未标记且未通过 wrapper 启动的直连 provider 不会添加归因信息。
+扩展仅对显式标记 `X-Sumpter-Client: pi` 的 provider 添加归因；通过 wrapper 启动也不会给未标记的直连 provider 添加项目、用户或会话信息。
 
-macOS：在「设置 → 安全」或「帮助」的归因面板选择 **pi**，点击「安装配置」。选择终端 Shell，App 使用内置安装器配置 wrapper 和扩展，合并显示本机安装状态；「还原配置」恢复安装前文件，原先没有文件则移除扩展。需要 Node.js 18+ 和 bash/zsh。
+macOS：在「设置 → 安全」或「帮助」的归因面板选择 **pi**，点击「安装配置」。选择终端 Shell，App 使用内置安装器配置 wrapper 和私有扩展，显示 shell 配置路径；「还原配置」恢复该客户端的终端归因块。需要 Node.js 18+ 和 bash/zsh。
 
 Linux：使用下节的仓库脚本，在运行 pi 的主机管理 shell wrapper 与配套扩展：
 
@@ -67,7 +67,9 @@ bash setup-client-attribution.sh install pi
 bash setup-client-attribution.sh restore pi
 ```
 
-pi 与其它客户端一样，默认按当前 bash/zsh 安装 shell wrapper，可用 `--shell zsh`（或 `bash`）指定。安装器同时写入 `~/.pi/agent/extensions/pi-project-attribution.ts` 和包装器使用的配套资源；首次安装前自动备份，更新保留首次备份。还原仅处理扩展和该 wrapper，不修改 provider 凭据。安装或还原后新开终端并重新启动 pi；`/reload` 不会加载 shell 配置。
+pi 与其它客户端一样，默认按当前 bash/zsh 安装 shell wrapper，可用 `--shell zsh`（或 `bash`）指定。配套扩展保存在 `${XDG_DATA_HOME:-~/.local/share}/sumpter/attribution/pi-project-attribution.ts`，由 wrapper 通过 `pi -e` 加载，不再写入 `~/.pi/agent/extensions/`。首次安装前备份终端配置；还原仅处理该 wrapper，不修改 provider 凭据。私有资源作为共享缓存保留，避免影响另一种 shell 中仍在使用的 wrapper。安装或还原后新开终端并重新启动 pi；`/reload` 不会加载 shell 配置。
+
+升级时，安装器仅迁移有旧版还原记录且内容仍匹配分发资源的全局扩展：恢复原始文件，或在原先没有文件时移除。用户修改过的文件、符号链接及无还原记录的文件保持原样；原始备份保留，界面提示已修改的旧版文件。
 
 扩展按当前会话获取 ID、项目目录及本地用户名；Git 项目使用仓库根目录，普通目录使用当前目录。
 恢复、分叉或切换会话后自动更新。Git remote 去掉用户名、密码、query 和 fragment 后才发送。
@@ -75,13 +77,18 @@ pi 与其它客户端一样，默认按当前 bash/zsh 安装 shell wrapper，�
 中文路径通过带 `uri-v1` 标记的编码传输，Sumpter 解码后沿用现有归因清洗与本地存储规则。
 所有 `X-Sumpter-*` 归因头在出站前剥离，原生请求体、认证与协议会话头不由扩展改写。
 
+后台插件需通过 pi 的会话请求入口调用模型，才能继承归因钩子。当前本地配套修复为 pi 新增
+`ctx.streamSimple`，并让 pi-observational-memory 的 Observer、Reflector、Dropper 使用此入口。
+两份修复必须配套使用；原版 pi 0.85.1 尚无此入口，仅更新 Sumpter 扩展不能补齐插件后台请求。
+配套插件上报 `memory` 角色与阶段名称；路由/缓存使用阶段独立 ID，归因仍使用所属 pi 会话 ID，不虚构父子会话关系。
+
 验证时发一条请求，在“运行”检查客户端为 **pi**、项目及会话 ID 正确，再按 pi 筛选统计并查看会话导出。
 统计中的提示基于当前视图：**已观察到归因 / 存在未归因请求 / 暂无可判定数据**；无流量不等于未安装。
 未安装扩展时仍可根据 pi 原生身份头识别客户端；未上送的项目或会话保留“未识别”，不根据消息内容猜测。
 
 ## Linux/macOS 客户端归因脚本统一安装
 
-Claude Code、Grok Build、Gemini CLI、Codex CLI/TUI、pi 共用 `client-attribution.mjs` 安装器。五个客户端都管理 shell 启动包装器，pi 另外安装原生扩展文件；客户端的原生启动参数与会话恢复参数保持不变。
+Claude Code、Grok Build、Gemini CLI、Codex CLI/TUI、pi 共用 `client-attribution.mjs` 安装器。五个客户端都管理 shell 启动包装器，pi 的私有配套扩展随包装器自动安装和加载；客户端的原生启动参数与会话恢复参数保持不变。
 
 必须在**启动客户端的主机**执行，不要装到只跑 Sumpter daemon 的 Linux 上。本机 macOS App 可在「设置 → 安全」或「帮助」选择客户端后点「安装配置」。其它机器从仓库下载，不要用 `sudo`：
 
@@ -95,7 +102,7 @@ bash setup-client-attribution.sh install all
 bash setup-client-attribution.sh restore all
 ```
 
-只需下载上述 setup 脚本，无需手动准备 mjs。脚本优先使用同目录资源；缺失时从 GitHub raw 自动获取所选客户端需要的安装器和扩展，下载失败时不执行安装。无法访问 GitHub 且代理已运行时，可改设 `SUMPTER_BASE_URL`（及入站 Token）从 `/__sumpter/` 下载。安装和还原后显示当前状态；`--shell bash|zsh` 与 `--rc 文件` 影响所有客户端，pi 同时安装 shell wrapper 和扩展文件。
+只需下载上述 setup 脚本，无需手动准备 mjs。脚本优先使用同目录资源；缺失时从 GitHub raw 自动获取所选客户端需要的安装器和扩展，下载失败时不执行安装。无法访问 GitHub 且代理已运行时，可改设 `SUMPTER_BASE_URL`（及入站 Token）从 `/__sumpter/` 下载。安装和还原后显示当前状态；`--shell bash|zsh` 与 `--rc 文件` 影响所有客户端，pi 自动安装 shell wrapper 和私有配套资源，无需另行安装全局扩展。
 
 安装器会备份 shell rc，并只替换 Sumpter 管理的对应归因标记块；重复安装幂等，`uninstall` 删除所选块，`restore` 只恢复所选客户端安装前的旧块并保留其他改动。所有客户端安装、卸载、还原后新开终端并重新启动；pi 的 `/reload` 不会加载 shell 配置。
 
@@ -117,7 +124,7 @@ Gemini 运行前还需设置 `SUMPTER_GEMINI_BASE_URL` 和 `SUMPTER_AUTH_TOKEN`�
 
 仅在已经连接 Sumpter 的客户端上启用；包装器随该客户端请求附加归因头，Sumpter 在上游转发前剥离。统计投影使用脱敏路径，Codex 源元数据和诊断捕获可能包含原始路径。Git remote 会删除凭据、query 和 fragment。
 
-pi 扩展由统一安装器从同目录资源、GitHub 仓库 raw 或 listener 的 `/__sumpter/pi-project-attribution.ts` 获取；shell wrapper 会在进程环境中启用归因并由扩展写入 `X-Sumpter-Client: pi`，安装器不会修改 provider 凭据。
+pi 扩展由统一安装器从同目录资源、GitHub 仓库 raw 或 listener 的 `/__sumpter/pi-project-attribution.ts` 获取；shell wrapper 加载私有扩展，扩展按 provider 的 `X-Sumpter-Client: pi` 标记决定是否添加归因，安装器不会修改 provider 凭据。
 
 ## 开箱路径（固定顺序）
 
@@ -143,7 +150,7 @@ pi 扩展由统一安装器从同目录资源、GitHub 仓库 raw 或 listener �
 { "clientPattern": "gpt-5.4", "upstreamModel": "gpt-5.4" }
 ```
 
-然后在“模型组”启用默认组（或新建组），添加客户端使用的模型名，从入口库添加刚才的入口，选择“全部组内模型”或勾选指定模型后保存。示例文件的入口和默认组均停用，须分别启用。
+然后在“模型组”启用默认组（或新建组），添加客户端使用的模型名，从入口库添加刚才的入口，选择“全部可用模型”或勾选指定模型后保存。示例文件的入口和默认组均停用，须分别启用。
 
 手工配置对应 `modelGroups[].models` 与 `bindings`；`endpointID` 必须引用已有入口 ID：
 

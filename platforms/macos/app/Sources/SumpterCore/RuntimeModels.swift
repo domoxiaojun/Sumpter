@@ -235,6 +235,8 @@ public struct CodexCompactionMetadata: Codable, Equatable, Sendable {
 /// `CodexMetadata`：值是客户端自称的，daemon 侧归因时排在 Codex workspace 之后。
 /// 路径已由 daemon 脱敏到尾两段，不含完整绝对路径。
 public struct ClientDeclaredMetadata: Codable, Equatable, Sendable {
+    public var agentRole: String?
+    public var agentName: String?
     public var project: String?
     public var workspace: String?
     public var gitRemote: String?
@@ -252,7 +254,9 @@ public struct ClientDeclaredMetadata: Codable, Equatable, Sendable {
         user: String? = nil,
         sourceProject: String? = nil,
         sourceWorkspace: String? = nil,
-        sourceUser: String? = nil
+        sourceUser: String? = nil,
+        agentRole: String? = nil,
+        agentName: String? = nil
     ) {
         self.project = project
         self.workspace = workspace
@@ -261,11 +265,14 @@ public struct ClientDeclaredMetadata: Codable, Equatable, Sendable {
         self.sourceProject = sourceProject
         self.sourceWorkspace = sourceWorkspace
         self.sourceUser = sourceUser
+        self.agentRole = agentRole
+        self.agentName = agentName
     }
 
     public var isEmpty: Bool {
         project == nil && workspace == nil && gitRemote == nil && user == nil
             && sourceProject == nil && sourceWorkspace == nil && sourceUser == nil
+            && agentRole == nil && agentName == nil
     }
 }
 

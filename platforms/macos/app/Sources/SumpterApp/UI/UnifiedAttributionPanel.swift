@@ -39,8 +39,8 @@ struct UnifiedAttributionPanel: View {
                         VStack(alignment: .leading, spacing: 3) {
                             Text("\(clientTitle(item.client))：\(item.title)").font(.callout.weight(.semibold))
                             Text("\(item.shell) · \(item.rc)").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                            if let path = item.extension {
-                                Text("配套扩展 · \(path)").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                            if let note = item.note {
+                                Text(note).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                             }
                         }
                     }
@@ -53,14 +53,14 @@ struct UnifiedAttributionPanel: View {
                     Text(feedback).font(.caption).foregroundStyle(failed ? Color.red : Color.green)
                         .textSelection(.enabled)
                 }
-                Text("安装前自动备份。还原仅恢复所选客户端的归因块或 pi 扩展；pi 原先未安装时会移除扩展。安装或还原后请新开终端并重新启动客户端。")
+                Text("安装前自动备份。还原仅恢复所选客户端的终端归因块，保留其他配置。安装或还原后请新开终端并重新启动客户端。")
                     .font(.caption).foregroundStyle(.secondary)
                 DisclosureGroup("归因说明与前提") {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("按启动时的 Git 根目录（非 Git 目录使用当前目录）发送项目、工作区、用户和已脱敏的 Git remote。中文目录使用 URI 编码。")
                         Text("Codex 支持 -C / --cd，自动使用已有连接，无需指定 provider。新开终端后通过 codex 命令启动才生效；桌面 App 和已运行会话不会加载终端包装器。")
                         Text("请先将客户端连接到 Sumpter。Gemini 还需设置 SUMPTER_GEMINI_BASE_URL 和 SUMPTER_AUTH_TOKEN；密钥不写入归因配置。")
-                        Text("pi 同样通过终端包装器启动，并加载配套扩展，在每次请求时读取当前项目和真实会话。不修改 provider 配置；/reload 不会加载 shell 配置，请从新终端启动 pi。")
+                        Text("pi 的私有配套扩展由包装器自动加载，无需另行安装，不写入 pi 全局扩展目录；每次请求读取当前项目和真实会话。不修改 provider 配置；/reload 不会加载 shell 配置，请从新终端启动 pi。")
                         Text("这里检查归因配置是否已安装。实际归因请在发送请求后查看统计；专用 header 不发往上游。")
                     }.font(.caption).foregroundStyle(.secondary)
                 }

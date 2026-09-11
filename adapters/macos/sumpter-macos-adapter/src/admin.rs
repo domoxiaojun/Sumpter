@@ -93,6 +93,10 @@ pub fn admin_router(engine: Engine) -> Router {
             post(clear_project_sticky),
         )
         .route(
+            "/admin/runtime/sessions/sticky-clear",
+            post(clear_runtime_session_sticky),
+        )
+        .route(
             "/admin/runtime/cleanup/preview",
             post(runtime_cleanup_preview),
         )
@@ -1536,6 +1540,44 @@ async fn clear_project_sticky(
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct SessionStickyBody {
+    #[serde(rename = "sessionID", alias = "session_id")]
+    session_id: String,
+}
+
+async fn clear_runtime_session_sticky(
+    State(engine): State<Engine>,
+    payload: Result<Json<SessionStickyBody>, JsonRejection>,
+) -> Response {
+    let Json(body) = match payload {
+        Ok(value) => value,
+        Err(rejection) => {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "invalid_json",
+                &rejection.to_string(),
+            );
+        }
+    };
+    let session_id = body.session_id.trim().to_owned();
+    if session_id.is_empty() || session_id == "unidentified_session" {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "session_id_required",
+            "必须提供已识别会话的完整 sessionID/threadID",
+        );
+    }
+    match engine.clear_runtime_session_sticky(&session_id) {
+        Ok(value) => json_ok(&value),
+        Err(message) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "sticky_clear_failed",
+            &message,
+        ),
+    }
+}
+
 async fn export_runtime_session(
     State(engine): State<Engine>,
     Query(query): Query<RuntimeSessionQuery>,
@@ -2243,6 +2285,84 @@ mod tests {
             .header("x-control-token", "sticky-control-token")
             .header("content-type", "application/json")
             .body(r#"{"projectID":"sha256:synthetic"}"#)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(ok.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(&ok.bytes().await.unwrap()).unwrap();
+        assert_eq!(body["cleared"], 0);
+        assert_eq!(body["matched"], 0);
+
+        server.abort();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn session_sticky_clear_rejects_bad_token_and_empty_session_id() {
+        let root = std::env::temp_dir().join(format!(
+            "sumpter-macos-admin-sticky-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let engine = Engine::new(
+            AppConfig::bootstrap().normalized(),
+            Some(ConfigDir::new(root.clone())),
+            Arc::new(crate::outbound::ReqwestTransport::new()),
+            "sticky-control-token".into(),
+        );
+        let (address, server) = crate::server::serve_router(
+            admin_router(engine),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        )
+        .await
+        .unwrap();
+        let client = reqwest::Client::new();
+        let url = format!("http://{address}/admin/runtime/sessions/sticky-clear");
+
+        let bad_token = client
+            .post(&url)
+            .header("x-control-token", "wrong-token")
+            .header("content-type", "application/json")
+            .body(r#"{"sessionID":"sha256:abc"}"#)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(bad_token.status(), StatusCode::FORBIDDEN);
+
+        let empty_id = client
+            .post(&url)
+            .header("x-control-token", "sticky-control-token")
+            .header("content-type", "application/json")
+            .body(r#"{"sessionID":"  "}"#)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(empty_id.status(), StatusCode::BAD_REQUEST);
+        let body: serde_json::Value =
+            serde_json::from_slice(&empty_id.bytes().await.unwrap()).unwrap();
+        assert_eq!(body["error"], "session_id_required");
+
+        for body in [
+            r#"{}"#,
+            r#"{"sessionID":"unidentified_session"}"#,
+            "invalid-json",
+        ] {
+            let response = client
+                .post(&url)
+                .header("content-type", "application/json")
+                .header("x-control-token", "sticky-control-token")
+                .body(body)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+
+        let ok = client
+            .post(&url)
+            .header("x-control-token", "sticky-control-token")
+            .header("content-type", "application/json")
+            .body(r#"{"sessionID":"sha256:synthetic"}"#)
             .send()
             .await
             .unwrap();

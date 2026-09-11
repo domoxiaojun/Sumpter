@@ -251,7 +251,7 @@ extension AppModel {
                 runHistoryError = nil
             }
             let counters = summary.counters
-            let existing = Dictionary(uniqueKeysWithValues: runtime.recentEvents.map { ($0.id, $0) })
+            let existing = RuntimeEvent.indexedByID(runtime.recentEvents)
             let mergedEvents = page?.events.map { $0.mergedRuntimeEvent(with: existing[$0.id]) } ?? runtime.recentEvents
             let snapshot = RuntimeSnapshot(
                 clientRequests: counters.clientRequests,

@@ -108,8 +108,9 @@ SourceFormat 只由路径决定：`/v1/messages` 是 `anthropic`，`/v1/chat/com
 HTTP 500 重试、跨轮重试、冷却、退避、`Retry-After`、会话粘性、超时、raw 透传和 Live/Realtime/Video
 资源绑定仍由全局调度器执行。
 
-`bindings[].models` 省略或为 `null` 表示该绑定跟随组内全部模型，`[]` 表示不承接模型；填写数组则只承接
-列出的组内模型。顶层 `modelGroups` 省略表示旧扁平路由、`[]` 表示关闭自动模型路由，显式 `null` 被拒绝。组内声明授权入口承接该模型；存在原始映射则继承 thinking/context/effort/timeout/capabilities，没有映射时合成同名映射。
+`bindings[].models` 省略或为 `null` 表示承接本入口已添加的全部组内模型，`[]` 表示不承接模型；填写数组则进一步限定承接范围。
+实际范围始终是入口映射、组内模型和绑定选择的交集，支持已有的尾部通配符。删除入口映射后，绑定中残留的选择不会继续授权该模型。
+顶层 `modelGroups` 省略表示旧扁平路由、`[]` 表示关闭自动模型路由，显式 `null` 被拒绝。组内路由继承原始映射的 thinking/context/effort/timeout/capabilities，不为未添加的模型创建映射。
 
 `overrides` 只对当前绑定和当前模型生效，可覆盖上游模型名或入口优先级，不会改变
 入口库中的原始映射和重试参数。删除入口或组内模型时，保存流程会自动清理悬空绑定和覆盖。

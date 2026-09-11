@@ -1,11 +1,12 @@
-import { eventField, eventStreamTrace, formatTokenCount } from './helpers.js';
+import { eventField, eventIsInFlight, eventStreamTrace, formatTokenCount } from './helpers.js';
 
 export const eventDetailGroups = [
   ['routing', '路由与重试'], ['usage', '用量与缓存'], ['identity', '会话与代理'],
   ['response', '请求与响应'], ['tools', '工具与通知'], ['advanced', '高级诊断'],
 ];
 
-const cacheLabels = { hit: '已命中', miss: '未命中', pending: '等待上游数据', unknown: '未知', not_applicable: '不适用' };
+const cacheLabels = { hit: '已读取', miss: '未读取', pending: '等待上报', unknown: '未知', not_applicable: '不适用' };
+const isObservedCount = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 const cacheReasons = {
   unreported: '上游未报告', not_observed: '未观测到用量', unsupported_transport: '此传输未采集用量',
   unknown_applicability: '适用性未确定', observation_truncated: '观测不完整', invalid_value: '无效数值',
@@ -19,7 +20,12 @@ export function eventCacheRead(event) {
 export function eventCacheLabel(event) {
   const cache = eventCacheRead(event);
   const count = cache.readTokens;
-  return `缓存${cacheLabels[cache.state] ?? '未知'}${count != null && count > 0 ? ` ${formatTokenCount(count)}` : ''}`;
+  if (['hit', 'miss'].includes(cache.state) && isObservedCount(count)) return `缓存读取 ${formatTokenCount(count)}`;
+  return cache.state === 'not_applicable' ? '缓存读取 不适用' : '缓存读取 —';
+}
+
+export function eventCacheStatusLabel(event) {
+  return cacheLabels[eventCacheRead(event).state] ?? '未知';
 }
 
 export function eventCacheReason(event) {
@@ -31,9 +37,17 @@ export function eventUsage(event) {
   return event?.usageSummary ?? eventStreamTrace(event)?.usage ?? null;
 }
 
-export function eventUsageLabel(event) {
+export function eventHasObservedUsage(event) {
   const usage = eventUsage(event);
-  const count = (value) => value == null ? '—' : formatTokenCount(value);
+  return [usage?.inputTokens, usage?.outputTokens, usage?.cacheReadInputTokens,
+    usage?.cacheCreationInputTokens, usage?.reasoningTokens, eventCacheRead(event).readTokens].some(isObservedCount);
+}
+
+export function eventUsageLabel(event) {
+  if (event?.kind === 'notify') return '不适用';
+  if (!eventHasObservedUsage(event)) return eventIsInFlight(event) ? '等待用量' : '未报告用量';
+  const usage = eventUsage(event);
+  const count = (value) => isObservedCount(value) ? formatTokenCount(value) : '—';
   return `输入 ${count(usage?.inputTokens)} · 输出 ${count(usage?.outputTokens)}`;
 }
 
@@ -57,6 +71,11 @@ export function eventHttpTone(event) {
   if (status >= 300 && status < 400) return 'var(--status-warning)';
   if (status >= 400) return 'var(--status-critical)';
   return 'var(--text-secondary)';
+}
+
+export function eventCacheHitRateLabel(event) {
+  const ratio = eventCacheTokenRatio(event);
+  return `命中率 ${ratio == null ? '—' : new Intl.NumberFormat('zh-CN', { style: 'percent', maximumFractionDigits: 1 }).format(ratio)}`;
 }
 
 export function eventAgentLabel(event) {

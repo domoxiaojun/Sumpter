@@ -42,6 +42,11 @@ fn pi_persistence_filters_and_session_export_preserve_attribution() {
         ("x-sumpter-project".into(), "pi-project".into()),
         ("x-sumpter-workspace".into(), "/work/pi-project".into()),
         ("x-sumpter-user".into(), "local-user".into()),
+        ("x-sumpter-agent-role".into(), "memory".into()),
+        (
+            "x-sumpter-agent-name".into(),
+            "observational-memory/observer".into(),
+        ),
     ]);
     store.enqueue(value, RuntimeCounters::default()).unwrap();
     store.flush().unwrap();
@@ -54,6 +59,8 @@ fn pi_persistence_filters_and_session_export_preserve_attribution() {
                 client_kind: Some("pi".into()),
                 session_id: Some("pi-session".into()),
                 project: Some("pi-project".into()),
+                agent_role: Some("memory".into()),
+                agent_name: Some("observational-memory/observer".into()),
                 ..AnalyticsFilter::default()
             },
         )
@@ -67,6 +74,25 @@ fn pi_persistence_filters_and_session_export_preserve_attribution() {
     let exported = &export["events"][0]["event"];
     assert_eq!(exported["clientKind"], "pi");
     assert!(exported["codexMetadata"].is_null());
+    assert_eq!(exported["agentRole"], "memory");
+    assert_eq!(exported["agentName"], "observational-memory/observer");
+    assert!(exported["parentThreadID"].is_null());
+    let page =
+        crate::runtime_query::events_page(&path, &crate::runtime_query::EventPageQuery::default())
+            .unwrap();
+    let row = page
+        .events
+        .iter()
+        .find(|row| row.id == "pi-client")
+        .unwrap();
+    assert!(row.details_omitted);
+    assert!(row.client_declared.is_none());
+    assert_eq!(row.agent_role.as_deref(), Some("memory"));
+    assert_eq!(
+        row.agent_name.as_deref(),
+        Some("observational-memory/observer")
+    );
+    assert_eq!(row.session_id.as_deref(), Some("pi-session"));
     let connection = Connection::open(&path).unwrap();
     let projection: (String, String, Option<String>, Option<String>) = connection.query_row(
         "SELECT client_kind,session_key,codex_thread_class,attribution_scope FROM runtime_events WHERE event_id='pi-client'", crate::database::params![], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
@@ -653,6 +679,78 @@ fn sticky_keys_for_project_aggregates_affinity_hashes_per_project() {
             .unwrap_err()
             .contains("共享")
     );
+    drop(store);
+    remove_test_dir(&dir);
+}
+
+#[test]
+fn sticky_keys_for_session_isolates_conversations_and_collects_all_models() {
+    let dir = test_dir("session-sticky-keys");
+    let (store, _) = RuntimeStore::new(&dir.join("runtime.sqlite3")).unwrap();
+    let push = |id: &str, session: &str, key: Option<&str>, model: &str| {
+        let mut value = event(
+            id,
+            KIND_CLIENT,
+            200,
+            RuntimeEventPhase::Completed,
+            Some(RuntimeEventOutcome::Succeeded),
+            event_now(),
+        );
+        value.session_id = Some(session.into());
+        value.client_model = Some(model.into());
+        value.sticky_key = key.map(str::to_owned);
+        store.enqueue(value, RuntimeCounters::default()).unwrap();
+    };
+    push("a1", "session-a", Some("a-model-1"), "model-1");
+    push("a2", "session-a", Some("a-model-1"), "model-1");
+    push("a3", "session-a", Some("a-model-2"), "model-2");
+    push("a4", "session-a", None, "model-3");
+    push("a5", "session-a", Some(""), "model-3");
+    push("b1", "session-b", Some("b-model-1"), "model-1");
+    let mut keys = store.sticky_keys_for_session(" session-a ").unwrap();
+    keys.sort();
+    assert_eq!(keys, vec!["a-model-1", "a-model-2"]);
+    assert_eq!(
+        store.sticky_keys_for_session("session-b").unwrap(),
+        vec!["b-model-1"]
+    );
+    assert!(store.sticky_keys_for_session("absent").unwrap().is_empty());
+    assert!(store.sticky_keys_for_session("  ").is_err());
+    assert!(
+        store
+            .sticky_keys_for_session("unidentified_session")
+            .is_err()
+    );
+    // Codex 只提供 threadID 时，复用统计页同一会话键。
+    let mut thread = event(
+        "thread",
+        KIND_CLIENT,
+        200,
+        RuntimeEventPhase::Completed,
+        Some(RuntimeEventOutcome::Succeeded),
+        event_now(),
+    );
+    thread.codex_metadata = Some(serde_json::from_value(json!({"threadID": "thread-a"})).unwrap());
+    thread.sticky_key = Some("thread-key".into());
+    store.enqueue(thread, RuntimeCounters::default()).unwrap();
+    assert_eq!(
+        store.sticky_keys_for_session("thread-a").unwrap(),
+        vec!["thread-key"]
+    );
+    push("shared", "session-b", Some("a-model-1"), "model-1");
+    assert!(
+        store
+            .sticky_keys_for_session("session-a")
+            .unwrap_err()
+            .contains("共享")
+    );
+    assert!(
+        store
+            .sticky_keys_for_session("session-b")
+            .unwrap_err()
+            .contains("共享")
+    );
+    assert!(store.event("a1").unwrap().is_some());
     drop(store);
     remove_test_dir(&dir);
 }

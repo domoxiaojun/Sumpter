@@ -22,7 +22,7 @@ export function ModelGroupBindingEditor({ binding, models, endpoint, edit, follo
     if (value === '') delete item[field]; else item[field] = field === 'priority' ? Number(value) : value;
     draft.overrides = draft.overrides.filter((o) => o.priority != null || o.upstreamModel != null);
   });
-  const summary = all ? `全部组内模型 · 可选 ${available.length}` : `已选 ${available.filter(selected).length} · 可选 ${available.length}`;
+  const summary = all ? `全部可用模型 · 可选 ${available.length}` : `已选 ${available.filter(selected).length} · 可选 ${available.length}`;
 
   return <div className="binding-editor">
     <div className="binding-settings">
@@ -30,10 +30,10 @@ export function ModelGroupBindingEditor({ binding, models, endpoint, edit, follo
       <label className="binding-setting"><span>默认优先级</span>{followsLibrary
         ? <span className="form-hint" title="默认组的顺序与优先级保存时自动跟随入口库">跟随入口库</span>
         : <input className="form-input binding-priority" type="number" min="0" step="1" aria-label="入口优先级" title="数字越小越优先" value={binding.priority} onChange={(e) => edit((value) => { value.priority = Number(e.target.value); })} />}</label>
-      <label className="binding-setting"><span>承接范围</span><select className="form-select" value={all ? 'all' : 'selected'} onChange={(e) => edit((value) => { value.models = e.target.value === 'all' ? null : available; prune(value); })}><option value="selected">指定模型</option><option value="all">全部组内模型</option></select></label>
+      <label className="binding-setting"><span>承接范围</span><select className="form-select" value={all ? 'all' : 'selected'} onChange={(e) => edit((value) => { value.models = e.target.value === 'all' ? null : available; prune(value); })}><option value="selected">指定模型</option><option value="all">全部可用模型</option></select></label>
     </div>
     {endpoint?.enabled === false && <p className="binding-notice is-warning">入口库已停用，此处设置保留，启用入口后才会参与调度。</p>}
-    {all && <p className="binding-notice">当前承接全部组内模型；此列表仅显示本入口已添加的组内模型。点击“全选可用”可将承接范围限定为列表中的模型。</p>}
+    {all && <p className="binding-notice">仅承接本入口已添加的组内模型；新增可用模型会自动纳入，移除入口模型后立即停止承接新请求。</p>}
     <section className="binding-model-section" aria-label="模型与覆盖">
       <div className="binding-model-toolbar">
         <div><div className="binding-model-title"><strong>模型与覆盖</strong><span>{summary}</span></div><p className="form-hint">覆盖留空时继承入口设置。</p></div>

@@ -28,7 +28,7 @@ struct ModelGroupBindingEditor: View {
         return binding.enabled ? "组内启用" : "组内停用"
     }
     private var scopeSummary: String {
-        binding.models == nil ? "全部组内模型 · 可选 \(available.count)" : "已选 \(selectedModels.count) · 可选 \(available.count)"
+        binding.models == nil ? "全部可用模型 · 可选 \(available.count)" : "已选 \(selectedModels.count) · 可选 \(available.count)"
     }
 
     var body: some View {
@@ -91,7 +91,7 @@ struct ModelGroupBindingEditor: View {
                     Picker("承接范围", selection: Binding(
                         get: { binding.models == nil },
                         set: { binding.models = $0 ? nil : available; pruneOverrides() }
-                    )) { Text("指定模型").tag(false); Text("全部组内模型").tag(true) }
+                    )) { Text("指定模型").tag(false); Text("全部可用模型").tag(true) }
                         .labelsHidden().frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -101,7 +101,7 @@ struct ModelGroupBindingEditor: View {
                     .font(.caption).foregroundStyle(palette.warning)
             }
             if binding.models == nil {
-                Label("当前承接全部组内模型；此列表仅显示本入口已添加的组内模型。点击“全选可用”可将承接范围限定为列表中的模型。", systemImage: "info.circle")
+                Label("仅承接本入口已添加的组内模型；新增可用模型会自动纳入，移除入口模型后立即停止承接新请求。", systemImage: "info.circle")
                     .font(.caption).foregroundStyle(palette.textSecondary)
             }
 

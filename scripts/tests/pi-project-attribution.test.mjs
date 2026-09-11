@@ -56,6 +56,32 @@ test('remote sanitizer rejects unsupported paths and removes credentials', () =>
   for (const value of [undefined, '/local/path', 'file:///secret', 'https://example.invalid/\nsecret']) assert.equal(sanitizeRemote(value), undefined);
 });
 
+test('wrapper opt-in never tags unmarked destinations and explicit task identity survives', async () => {
+  const previous = process.env.SUMPTER_PI_ATTRIBUTION;
+  process.env.SUMPTER_PI_ATTRIBUTION = '1';
+  try {
+    let handler;
+    extension({ on: (_event, callback) => { handler = callback; } });
+    const ctx = { cwd: tmpdir(), sessionManager: { getSessionId: () => 'parent-session' } };
+    const direct = { Authorization: 'synthetic', 'x-sumpter-project': 'stale' };
+    await handler({ headers: direct }, ctx);
+    assert.equal(direct['x-sumpter-session-id'], undefined);
+    assert.equal(direct['x-sumpter-project'], null);
+    assert.equal(direct.Authorization, 'synthetic');
+    const headers = { 'X-Sumpter-Client': 'pi' };
+    await handler({ headers, requestSource: { agentRole: 'memory', agentName: 'observational-memory/observer' } }, ctx);
+    assert.equal(headers['x-sumpter-session-id'], 'parent-session');
+    assert.equal(headers['x-sumpter-agent-role'], 'memory');
+    assert.equal(decodeURIComponent(headers['x-sumpter-agent-name']), 'observational-memory/observer');
+    await handler({ headers }, ctx);
+    assert.equal(headers['x-sumpter-agent-name'], null);
+    assert.equal(headers['x-sumpter-agent-role'], null);
+  } finally {
+    if (previous === undefined) delete process.env.SUMPTER_PI_ATTRIBUTION;
+    else process.env.SUMPTER_PI_ATTRIBUTION = previous;
+  }
+});
+
 test('Linux and macOS package resources match the canonical pi extension', async () => {
   const source = await readFile(new URL('../clients/pi-project-attribution.ts', import.meta.url), 'utf8');
   for (const path of ['platforms/linux/scripts/pi-project-attribution.ts', 'platforms/macos/scripts/pi-project-attribution.ts', 'platforms/macos/app/Sources/SumpterApp/Resources/pi-project-attribution.ts']) {

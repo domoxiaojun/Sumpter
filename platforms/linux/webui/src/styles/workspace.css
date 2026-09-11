@@ -1,0 +1,391 @@
+/* Workspace density: shared gutters, readable controls and data-first widths. */
+.content-body:is([data-route="run"], [data-route="providers"], [data-route="providers-primary"],
+  [data-route="model-groups"], [data-route="statistics"], [data-route="diagnostics"], [data-route="routing"]) {
+  max-width: calc(1680px + 2 * var(--page-gutter));
+}
+
+.form-input, .form-textarea { min-width: 0; line-height: 1.5; }
+.form-select { padding-inline: 12px 36px; line-height: 1.5; text-overflow: ellipsis; }
+.panel-hint { line-height: 1.5; }
+.panel-title-group { gap: 6px; }
+.panel-header { padding: 20px 24px; gap: 16px 24px; }
+.panel-toolbar { gap: 12px 20px; }
+.topbar-refresh-control { gap: 8px; }
+.topbar-refresh-select { padding-inline: 8px 26px; }
+/* Keep real checkbox inputs for keyboard, labels and form semantics. Only
+   their appearance changes; switches retain their dedicated track/thumb. */
+input[type="checkbox"]:not(.switch-input) {
+  appearance: none;
+  display: inline-grid;
+  place-content: center;
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  vertical-align: middle;
+  border: 1.5px solid var(--border-strong);
+  border-radius: var(--radius-xs);
+  background: var(--bg-surface-glass);
+  color: var(--text-inverse);
+  cursor: pointer;
+}
+input[type="checkbox"]:not(.switch-input)::before {
+  content: "";
+  width: 10px;
+  height: 6px;
+  margin-top: -2px;
+  border: solid currentColor;
+  border-width: 0 0 2px 2px;
+  transform: rotate(-45deg);
+  visibility: hidden;
+}
+input[type="checkbox"]:not(.switch-input):is(:checked, :indeterminate) { background: var(--primary); border-color: var(--primary); }
+input[type="checkbox"]:not(.switch-input):checked::before { visibility: visible; }
+input[type="checkbox"]:not(.switch-input):indeterminate::before { visibility: visible; height: 0; margin: 0; border-width: 0 0 2px; transform: none; }
+input[type="checkbox"]:not(.switch-input):focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+.model-group-models label input[type="checkbox"]:focus-visible,
+.binding-model-choice input[type="checkbox"]:focus-visible { outline: none; }
+input[type="checkbox"]:not(.switch-input):disabled { opacity: 0.45; cursor: not-allowed; }
+@media (forced-colors: active) {
+  input[type="checkbox"]:not(.switch-input) { appearance: auto; }
+  input[type="checkbox"]:not(.switch-input)::before { display: none; }
+}
+.runtime-v2-metric, .runtime-v2-token-card { padding: 16px; }
+.runtime-v2-storage-management-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+/* The pager owns a full row. Its count is never squeezed to make room for
+   every page button; navigation wraps as a group when space runs out. */
+.pagination-bar { flex-wrap: wrap; align-items: center; gap: 12px 24px; padding: 16px 24px; }
+.pagination-summary { flex: 1 1 200px; gap: 6px 12px; line-height: 1.5; }
+.pagination-controls { flex: 0 1 auto; gap: 12px 20px; }
+.pagination-pages { gap: 6px; }
+.pagination-page-size, .pagination-page-jump { gap: 8px; }
+
+/* Input/output counts lead; cache reads and HTTP remain secondary. */
+.run-events-panel .telemetry-table .data-table td { padding: 6px 12px; }
+.run-events-panel .telemetry-table .data-table tbody tr { height: 62px; }
+.run-events-panel .telemetry-table .data-table th { padding: 9px 12px; font-size: 12px; }
+.telemetry-primary-cell, .telemetry-cell-stack, .telemetry-live-request,
+.telemetry-live-route, .telemetry-live-result { gap: 2px; }
+.telemetry-live-message { white-space: normal; line-height: 1.5; }
+.run-events-panel .telemetry-event-time,
+.run-events-panel .telemetry-live-time,
+.run-events-panel .telemetry-event-model,
+.run-events-panel .telemetry-live-route strong { font-size: 13px; font-weight: 500; }
+.run-events-panel .telemetry-event-meta,
+.run-events-panel .telemetry-route-meta,
+.run-events-panel .telemetry-result-detail { font-size: 12px; color: var(--text-secondary); }
+.run-events-panel .telemetry-event-message,
+.run-events-panel .telemetry-live-message { font-size: 12px; line-height: 1.35; }
+.run-events-panel .telemetry-primary-cell .telemetry-event-meta { -webkit-line-clamp: 1; }
+.run-events-panel .telemetry-usage-cell { gap: 2px; }
+.run-events-panel .telemetry-usage-tokens { font-size: 13px; line-height: 1.35; font-weight: 500; }
+.run-events-panel .telemetry-usage-secondary { font-size: 12px; line-height: 1.3; }
+.run-events-panel .telemetry-duration-cell { font-size: 12px; }
+.run-events-panel .telemetry-outcome-text { padding: 2px 6px; font-size: 11px; font-weight: 600; }
+.run-events-panel .telemetry-live-event { min-height: 62px; }
+.run-events-panel .telemetry-live-event > * { padding: 6px 12px; }
+.run-events-panel .telemetry-live-heading { padding: 6px 12px; font-size: 12px; }
+.run-events-panel .telemetry-live-heading small { font-size: 12px; }
+.run-events-panel .telemetry-live-columns { font-size: 12px; }
+.run-events-panel .telemetry-live-columns > span { padding: 7px 12px; }
+.run-events-panel .telemetry-live-group { margin-block: 6px; }
+.run-events-panel .telemetry-filter-group { padding: 3px; }
+.run-events-panel .telemetry-filter-button { min-height: 30px; padding-inline: 12px; font-size: 12px; }
+.run-events-panel .telemetry-sort-button { min-height: 32px; font-size: 12px; }
+
+.telemetry-filter-group { flex-wrap: wrap; gap: 4px; }
+.telemetry-filter-button { padding-inline: 16px; }
+.run-page { container-type: inline-size; gap: 16px; }
+.run-events-panel > .panel-header { align-items: center; padding: 12px 16px; gap: 10px 16px; }
+.run-events-panel .panel-title { font-size: 14px; }
+.run-events-panel .panel-hint { font-size: 12px; line-height: 1.4; }
+.run-events-panel .panel-title-group { gap: 4px; }
+.run-events-panel .panel-title-group { flex: 1 1 440px; }
+.run-events-panel .telemetry-toolbar { flex: 0 1 auto; gap: 12px; }
+/* Native metric geometry: five cards, left icon/title, value, then detail.
+   Dedicated grids avoid the generic mobile single-column !important rule. */
+.run-page .run-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: 1fr;
+  gap: 12px;
+}
+.run-page .metric-card {
+  min-height: 112px;
+  padding: 16px;
+  gap: 8px;
+  border-radius: 14px;
+  background: var(--bg-surface-elevated);
+  transition: none;
+  isolation: isolate;
+}
+.run-page .metric-card::after {
+  content: "";
+  position: absolute;
+  width: 104px;
+  height: 104px;
+  right: -38px;
+  bottom: -48px;
+  border-radius: 50%;
+  background: var(--card-accent);
+  opacity: 0.10;
+  pointer-events: none;
+  z-index: 0;
+}
+.run-page .metric-head { justify-content: flex-start; gap: 8px; }
+.run-page .metric-label { font-size: 12px; line-height: 18px; font-weight: 400; }
+.run-page .metric-icon-box { order: -1; width: 18px; height: 18px; background: none; border-radius: 0; flex-shrink: 0; }
+.run-page .metric-icon-box svg { width: 18px; height: 18px; }
+.run-page .metric-value { font-size: 20px; line-height: 24px; letter-spacing: 0; }
+.run-page .metric-detail { display: block; font-size: 12px; line-height: 16px; color: var(--text-secondary); }
+.run-page .run-hero-panel { padding: 14px 16px; gap: 10px; }
+.run-page .run-hero-panel > .panel-toolbar { gap: 8px; }
+.run-page .run-hero-kicker, .run-page .run-hero-version { font-size: 11px; font-weight: 500; }
+.run-page .run-hero-version { color: var(--text-secondary); overflow-wrap: anywhere; }
+.run-page .run-listener-row { align-items: center; gap: 10px; }
+.run-page .run-listener-address { font-size: 18px; line-height: 24px; padding: 2px 0; background: none; border: none; }
+.run-page .run-hero-description { font-size: 12px; line-height: 1.4; }
+.run-page .run-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); padding-top: 10px; gap: 6px 16px; font-size: 12px; }
+.run-page .page-header { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 12px; }
+.run-page .page-title { font-size: 24px; }
+.run-page .page-subtitle { font-size: 12px; }
+.run-page .page-actions { width: auto; }
+@container (min-width: 620px) {
+  .run-page .run-metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@container (min-width: 1000px) {
+  .run-page .run-metric-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+@container (max-width: 360px) {
+  .run-page .metric-card { padding: 12px; }
+  .run-page .metric-value { font-size: 18px; }
+  .run-page .run-detail-grid { grid-template-columns: minmax(0, 1fr); }
+}
+/* Event records should fit the panel before reaching for horizontal scroll.
+   The breakpoint follows the available content width, including the sidebar. */
+.run-events-panel .event-page-content { padding: 12px; }
+.run-events-panel .telemetry-live-section { margin-bottom: 12px; }
+.run-events-panel .telemetry-live-group { min-width: 0; margin: 0; }
+.run-events-panel .telemetry-live-event { min-width: 0; }
+.run-events-panel .telemetry-live-list { max-height: min(40dvh, 360px); overflow-y: auto; }
+.run-events-panel .telemetry-history-group {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+}
+.run-events-panel .telemetry-live-mobile {
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+}
+.run-events-panel .telemetry-live-mobile .telemetry-mobile-list[data-live="true"] { max-height: min(40dvh, 360px); }
+.run-events-panel .telemetry-mobile-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  gap: 6px 16px;
+  padding: 10px 12px;
+  border-radius: 0;
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  background: transparent;
+}
+.run-events-panel .telemetry-mobile-heading,
+.run-events-panel .telemetry-mobile-context { grid-column: 1 / -1; }
+.run-events-panel .telemetry-mobile-list[data-live="true"] {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+.run-events-panel .telemetry-mobile-list[data-live="true"] > article {
+  position: relative;
+  z-index: 1;
+}
+.run-events-panel .telemetry-mobile-heading { padding-bottom: 0; }
+.run-events-panel .telemetry-mobile-route { align-content: start; gap: 3px; }
+.run-events-panel .telemetry-mobile-usage { display: grid; align-content: start; gap: 3px; min-width: 0; }
+.run-events-panel .telemetry-mobile-context { gap: 3px; }
+.run-events-panel .telemetry-mobile-card.is-selected { background: var(--bg-active); box-shadow: inset 3px 0 var(--primary); }
+.run-events-panel .telemetry-mobile-route strong,
+.run-events-panel .telemetry-mobile-request-summary { display: block; white-space: normal; overflow: visible; overflow-wrap: anywhere; -webkit-line-clamp: unset; line-height: 1.35; }
+.run-events-panel .telemetry-mobile-message { font-size: 12px; line-height: 1.35; }
+.run-events-panel .telemetry-mobile-route strong { font-size: 13px; font-weight: 500; }
+.run-events-panel .telemetry-mobile-route small,
+.run-events-panel .telemetry-mobile-request-summary,
+.run-events-panel .telemetry-mobile-status { font-size: 12px; }
+.run-events-panel .telemetry-mobile-card { cursor: pointer; }
+.run-events-panel .telemetry-mobile-card:focus-visible { outline-offset: -2px; }
+.run-events-panel .telemetry-mobile-list[data-live="true"] { background: transparent; border-bottom: 1px solid var(--border-subtle); }
+@container (max-width: 1099px) {
+  .run-events-panel .telemetry-live-desktop { display: none; }
+  .run-events-panel .telemetry-desktop-table { display: none; }
+  .run-events-panel .telemetry-live-mobile { display: block; }
+  .run-events-panel .responsive-data-card-list.telemetry-mobile-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    padding: 0;
+    width: 100%;
+    max-height: min(70dvh, 700px);
+    overflow-y: auto;
+  }
+}
+@container (max-width: 440px) {
+  .run-events-panel .telemetry-mobile-card { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .run-events-panel .telemetry-mobile-heading { grid-template-columns: auto minmax(0, 1fr); }
+  .run-events-panel .telemetry-mobile-duration { grid-column: 1 / -1; justify-self: start; font-weight: 500; }
+}
+.run-events-panel .pagination-compact {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 8px 12px;
+}
+.run-events-panel .pagination-compact .pagination-summary { font-size: 12px; }
+.run-events-panel .pagination-compact .pagination-controls { display: contents; }
+.run-events-panel .pagination-compact .pagination-page-size { width: auto; justify-self: end; }
+.run-events-panel .pagination-compact .pagination-page-jump { grid-column: 1 / -1; justify-content: flex-end; gap: 8px; width: auto; }
+.run-events-panel .pagination-compact .pagination-page-input { width: 52px; flex: 0 0 52px; }
+.pagination-direction-arrow { display: none; }
+.run-events-panel .pagination-compact .btn,
+.run-events-panel .pagination-compact .form-input,
+.run-events-panel .pagination-compact .form-select { min-height: 30px; padding: 4px 8px; font-size: 12px; }
+@container (min-width: 1200px) {
+  .run-events-panel .pagination-compact { grid-template-columns: minmax(0, 1fr) auto auto; gap: 24px; }
+  .run-events-panel .pagination-compact .pagination-page-jump { grid-column: auto; }
+}
+@container (max-width: 440px) {
+  .pagination-compact .pagination-direction-arrow { display: inline; font-size: 20px; }
+  .pagination-compact .pagination-direction-label { display: none; }
+  .run-events-panel .pagination-compact .pagination-page-jump { justify-content: space-between; gap: 6px; }
+  .run-events-panel .pagination-compact .pagination-page-jump > .btn { min-width: 40px; padding-inline: 8px; }
+}
+/* A thin persistent track is enough; focus stays on the track itself. */
+.table-scroll-controls { min-height: 28px; padding: 2px 8px; gap: 8px; }
+.table-scroll-step { flex-basis: 24px; min-height: 24px; font-size: 18px; border: 0; background: transparent; }
+.table-scrollbar { height: 20px; }
+.table-scrollbar:focus-visible { outline-offset: -4px; outline-width: 1px; }
+@container (min-width: 1080px) {
+  .run-page .run-hero-panel {
+    display: grid;
+    grid-template-columns: minmax(260px, 0.8fr) minmax(0, 1.2fr);
+    grid-template-areas: "toolbar toolbar" "listener details" "description details";
+    column-gap: 32px;
+  }
+  .run-hero-panel > .panel-toolbar { grid-area: toolbar; }
+  .run-listener-row { grid-area: listener; }
+  .run-hero-description { grid-area: description; }
+  .run-page .run-detail-grid { grid-area: details; padding: 4px 0 4px 20px; border-top: 0; border-left: 1px solid var(--border-subtle); gap: 8px 20px; }
+}
+
+.analytics-v3-filter-grid { grid-template-columns: minmax(240px, 1.2fr) repeat(3, minmax(0, 1fr)); gap: 16px 20px; }
+.analytics-v3-segmented { gap: 6px; padding: 4px; }
+.analytics-v3-range legend { margin-bottom: 8px; }
+.analytics-v3-advanced-filters > summary { padding: 8px 0; line-height: 1.5; }
+
+/* Model editing uses the same control height and arrow clearance as the
+   rest of the workbench. Inner lists have their own comfortable gutters. */
+.model-groups-page { gap: 24px; }
+.model-groups-page .page-title { font-size: 1.85rem; }
+.model-groups-page .page-subtitle { font-size: 0.95rem; }
+.model-group-layout { gap: 20px; }
+.model-group-overview, .model-group-workspace { padding: 20px; }
+.model-group-overview, .model-group-workspace { border-radius: var(--panel-radius); }
+.model-group-overview { container-type: inline-size; }
+.model-group-nav, .model-group-select, .model-group-tab, .model-family-card,
+.model-group-binding, .model-group-binding-summary, .model-group-models label,
+.model-search, .group-actions-menu > summary, .model-groups-page .form-input,
+.model-groups-page .form-select, .model-groups-page .btn { border-radius: var(--radius-md); }
+.model-groups-page .btn { min-height: 40px; padding: 8px 14px; }
+.model-groups-page .form-input, .model-groups-page .form-select { min-height: 40px; padding: 8px 12px; }
+.model-groups-page .form-select { padding-right: 36px; }
+.model-group-card-settings { padding-top: 16px; margin-top: 16px; gap: 16px 24px; }
+.group-name-field { flex: 1 1 320px; max-width: 560px; }
+.model-group-select { padding: 12px 14px; min-height: 64px; }
+.model-group-tabbar { gap: 8px; padding-bottom: 16px; flex-wrap: wrap; }
+.model-group-tab, .group-actions-menu > summary { min-height: 40px; padding: 8px 14px; }
+.model-group-fieldset, .model-category-picker { gap: 16px; }
+.model-group-models { grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 10px; }
+.model-group-models label { min-height: 44px; padding: 10px 12px; line-height: 1.5; }
+.model-family-grid { gap: 8px; }
+.model-family-card { min-height: 40px; padding: 8px 14px; }
+.model-group-bindings-panel { gap: 12px; }
+.model-group-binding-toolbar { gap: 12px 20px; padding-bottom: 8px; }
+.model-group-binding-summary { min-height: 64px; padding: 12px 16px; gap: 12px; }
+.binding-editor { margin-inline: 16px; padding-block: 16px; gap: 16px; }
+.binding-setting { gap: 8px; }
+.binding-settings { gap: 16px 24px; }
+.binding-settings .binding-enabled { min-height: 40px; }
+.binding-model-columns, .binding-model-row { padding: 10px 12px; gap: 20px; }
+.binding-model-columns > div, .binding-row-fields { grid-template-columns: minmax(0, 1fr) 88px 40px; gap: 10px; }
+.model-groups-page .binding-reset { min-width: 40px; padding: 8px; }
+
+/* Price fields must fit inside each cell, including padding. Fixed equal
+   columns used to clip date fields and the custom select arrow. */
+.runtime-v2-pricing-table { table-layout: auto; min-width: 1540px; }
+.runtime-v2-pricing-table .form-input { min-width: 104px; }
+.runtime-v2-pricing-table input[type="datetime-local"] { min-width: 220px; }
+.runtime-v2-pricing-table .form-select { min-width: 180px; }
+
+.attribution-panel { gap: 20px; }
+.attribution-panel > p { line-height: 1.65; color: var(--text-secondary); }
+.attribution-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.attribution-options label { display: grid; gap: 8px; }
+.attribution-code { border: 1px solid var(--border-medium); border-radius: var(--radius-md); background: var(--bg-page); }
+.attribution-code pre { min-width: 0; padding: 16px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; font-size: 0.86rem; }
+.panel-description, .form-hint, .attribution-panel p { overflow-wrap: anywhere; }
+.runtime-v2-hint-command code, .cc-guide-checks code, .cc-guide-command code, .diagnostics-journal-command {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.attribution-command { display: flex; align-items: center; gap: 16px 24px; padding: 16px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-surface-glass); }
+.attribution-command > div { flex: 1; min-width: 0; }
+.attribution-command strong { display: block; margin-bottom: 8px; }
+.attribution-command pre { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; font-size: 0.86rem; }
+.attribution-command > button { flex: none; }
+
+@container (max-width: 760px) {
+  .model-group-card-settings { display: grid; grid-template-columns: 1fr auto auto; }
+  .group-name-field { grid-column: 1 / -1; max-width: none; }
+  .group-actions-menu { margin-left: 0; }
+}
+
+@media (max-width: 1100px) {
+  .analytics-v3-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .analytics-v3-range { grid-column: 1 / -1; }
+  .runtime-v2-storage-management-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 700px) {
+  .model-group-binding-summary { flex-wrap: wrap; }
+  .model-group-binding-summary .model-group-actions { margin-left: auto; }
+  .binding-model-columns > div, .binding-row-fields { grid-template-columns: minmax(0, 1fr) 88px 44px; }
+}
+@media (max-width: 600px) {
+  .topbar-refresh-select { flex-basis: 72px; width: 72px; min-width: 72px; }
+  .panel-header, .pagination-bar, .model-group-overview, .model-group-workspace { padding: 16px; }
+  .attribution-options, .analytics-v3-filter-grid { grid-template-columns: minmax(0, 1fr); }
+  .pagination-summary { flex: 0 1 auto; }
+  .pagination-controls { gap: 12px; }
+  .model-groups-page .page-title { font-size: 1.6rem; }
+  .model-group-binding-toolbar label { flex-basis: 100%; }
+  .model-group-binding-toolbar select { width: auto; }
+  .attribution-command { align-items: flex-start; flex-direction: column; }
+  .attribution-command > div { flex: none; width: 100%; }
+  .attribution-command > button { align-self: flex-end; }
+}
+@media (pointer: coarse), (max-width: 600px) {
+  .table-scroll-step { flex-basis: 44px; min-height: 44px; }
+  .table-scrollbar { height: 44px; }
+  .run-events-panel .pagination-compact .btn,
+  .run-events-panel .pagination-compact .form-input,
+  .run-events-panel .pagination-compact .form-select { min-height: 44px; }
+  .model-groups-page .btn, .model-groups-page .form-input, .model-groups-page .form-select,
+  .model-group-tab, .model-family-card, .group-actions-menu > summary { min-height: 44px; }
+}
+
+/* Compact desktop controls retain larger targets on touch devices. */
+@media (pointer: coarse) {
+  .run-events-panel .btn, .run-events-panel .form-input,
+  .run-events-panel .form-select, .run-events-panel .telemetry-filter-button { min-height: 44px; }
+}

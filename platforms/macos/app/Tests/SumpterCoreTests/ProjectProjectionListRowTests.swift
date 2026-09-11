@@ -9,6 +9,17 @@ import Testing
 /// 而 SSE 推送的同一批事件是好的(那条路径带完整字段),表现为「详情识别到项目,
 /// 列表仍显示未识别」。
 @Suite struct ProjectProjectionListRowTests {
+    @Test func piMemoryTaskDeclarationDecodesWithoutProjectOrCodexMetadata() throws {
+        let declaration = try JSONDecoder().decode(
+            ClientDeclaredMetadata.self,
+            from: Data(#"{"agentRole":"memory","agentName":"observational-memory/observer"}"#.utf8)
+        )
+        #expect(declaration.agentRole == "memory")
+        #expect(declaration.agentName == "observational-memory/observer")
+        #expect(!declaration.isEmpty)
+        #expect(declaration.project == nil)
+    }
+
     @Test func projectedRowIsAttributedWithoutCodexOrDeclared() {
         let context = RuntimeEventPresentation.projectContext(
             eventKind: "client",

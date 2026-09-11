@@ -526,7 +526,7 @@ struct UsagePane: View {
     @State private var confirmDeleteSessionID: String?
     @State private var confirmUnidentifiedSessionID: String?
     @State private var unidentifiedConfirmationPhrase = ""
-    @State private var confirmStickyClearProject: (key: String, name: String)?
+    @State private var confirmStickyClearTarget: (key: String, name: String, isSession: Bool)?
     @State private var stickyClearingKey: String?
     @State private var locatingProjectName: String?
     @State private var confirmStoredExport = false
@@ -575,7 +575,7 @@ struct UsagePane: View {
 
     private var historyEvents: [RuntimeEvent] {
         guard let page = model.runtimeHistoryPage else { return displayRuntime.recentEvents }
-        let existing = Dictionary(uniqueKeysWithValues: displayRuntime.recentEvents.map { ($0.id, $0) })
+        let existing = RuntimeEvent.indexedByID(displayRuntime.recentEvents)
         let pageIDs = Set(page.events.map(\.id))
         let pageEvents = page.events.map { $0.mergedRuntimeEvent(with: existing[$0.id]) }
 
@@ -601,7 +601,7 @@ struct UsagePane: View {
 
     private var v2RequestChainEvents: [RuntimeEvent]? {
         guard let chain = model.runtimeRequestChain else { return nil }
-        let existing = Dictionary(uniqueKeysWithValues: historyEvents.map { ($0.id, $0) })
+        let existing = RuntimeEvent.indexedByID(historyEvents)
         return chain.events.map { $0.mergedRuntimeEvent(with: existing[$0.id]) }
     }
 
@@ -714,27 +714,26 @@ struct UsagePane: View {
         .confirmationDialog(
             "清除会话粘性归属？",
             isPresented: Binding(
-                get: { confirmStickyClearProject != nil },
-                set: { if !$0 { confirmStickyClearProject = nil } }
+                get: { confirmStickyClearTarget != nil },
+                set: { if !$0 { confirmStickyClearTarget = nil } }
             ),
             titleVisibility: .visible
         ) {
             Button("清除粘性归属", role: .destructive) {
-                if let project = confirmStickyClearProject {
-                    stickyClearingKey = project.key
-                    model.clearProjectSticky(projectID: project.key)
-                    // flash 反馈由 AppModel 给出;这里只短暂保留行内忙态。
+                if let target = confirmStickyClearTarget {
+                    stickyClearingKey = target.key
                     Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: 800_000_000)
-                        stickyClearingKey = nil
+                        defer { stickyClearingKey = nil }
+                        await model.clearRuntimeSticky(key: target.key, isSession: target.isSession)
                     }
                 }
-                confirmStickyClearProject = nil
+                confirmStickyClearTarget = nil
             }
             Button("取消", role: .cancel) {}
         } message: {
-            let name = confirmStickyClearProject?.name ?? ""
-            Text("清除项目「\(name)」的会话粘性归属后，该项目的新请求会按入口库顺序重新选择入口。统计与事件不会被删除。")
+            let name = confirmStickyClearTarget?.name ?? ""
+            let scope = confirmStickyClearTarget?.isSession == true ? "会话" : "项目"
+            Text("清除\(scope)「\(name)」的粘性归属后，后续新请求会按当前路由规则重新选择入口。统计与事件不会被删除。")
         }
         .confirmationDialog(
             "估算源运行字段？",
@@ -1308,21 +1307,33 @@ struct UsagePane: View {
                     .help("仅筛选下方会话：\(row.key)")
                     .accessibilityLabel("仅查看项目 \(runtimeDimensionDisplayName(row.name, kind: kind)) 的会话和模型用量")
                 Button {
-                    confirmStickyClearProject = (key: row.key, name: runtimeDimensionDisplayName(row.name, kind: kind))
+                    confirmStickyClearTarget = (key: row.key, name: runtimeDimensionDisplayName(row.name, kind: kind), isSession: false)
                 } label: {
                     Image(systemName: stickyClearingKey == row.key ? "hourglass" : "arrow.triangle.2.circlepath")
                         .font(.caption)
                 }
                 .buttonStyle(.borderless)
                 .disabled(stickyClearingKey != nil)
-                .help("清除该项目的会话粘性归属：新请求按入口库顺序重新选择入口")
+                .help("清除该项目的会话粘性归属：新请求按当前路由规则重新选择入口")
                 .accessibilityLabel("清除项目 \(runtimeDimensionDisplayName(row.name, kind: kind)) 的粘性归属")
             }
         } else if kind == "session" {
-            Button { model.setRuntimeLocalSession(row.key, sessionName: row.name) } label: { content }
-                .buttonStyle(.link)
-                .help("仅查看会话：\(row.key) 的模型用量")
-                .accessibilityLabel("仅查看会话 \(runtimeDimensionDisplayName(row.name, kind: kind)) 的模型用量")
+            HStack(spacing: 6) {
+                Button { model.setRuntimeLocalSession(row.key, sessionName: row.name) } label: { content }
+                    .buttonStyle(.link)
+                    .help("仅查看会话：\(row.key) 的模型用量")
+                    .accessibilityLabel("仅查看会话 \(runtimeDimensionDisplayName(row.name, kind: kind)) 的模型用量")
+                Button {
+                    confirmStickyClearTarget = (key: row.key, name: runtimeDimensionDisplayName(row.name, kind: kind), isSession: true)
+                } label: {
+                    Image(systemName: stickyClearingKey == row.key ? "hourglass" : "arrow.triangle.2.circlepath")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .disabled(stickyClearingKey != nil || row.key == "unidentified_session")
+                .help(row.key == "unidentified_session" ? "未识别会话包含多个对话，不能单独清除" : "只解除此对话的入口绑定，保留统计与事件")
+                .accessibilityLabel("清除会话 \(runtimeDimensionDisplayName(row.name, kind: kind)) 的粘性归属")
+            }
         } else { content }
     }
 

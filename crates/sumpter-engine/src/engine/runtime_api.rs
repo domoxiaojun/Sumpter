@@ -302,6 +302,17 @@ impl Engine {
         Ok(json!({"cleared": removed, "matched": keys.len()}))
     }
 
+    /// 解除选中对话的全部模型绑定，保留运行事件与统计。
+    pub fn clear_runtime_session_sticky(&self, session_id: &str) -> Result<Value, String> {
+        let store = self.inner.runtime_store.get().ok_or_else(|| {
+            self.last_error()
+                .unwrap_or_else(|| "runtime.sqlite3 不可用，无法清除会话粘性归属".into())
+        })?;
+        let keys = store.sticky_keys_for_session(session_id)?;
+        let removed = self.clear_session_sticky(&keys)?;
+        Ok(json!({"cleared": removed, "matched": keys.len()}))
+    }
+
     pub fn runtime_analytics(&self, range: &str) -> Result<Value, String> {
         self.runtime_analytics_filtered(range, &AnalyticsFilter::default())
     }

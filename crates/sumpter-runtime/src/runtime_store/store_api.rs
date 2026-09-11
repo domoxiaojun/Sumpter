@@ -680,6 +680,38 @@ impl RuntimeStore {
         Ok(keys.into_iter().map(|(key, _)| key).collect())
     }
 
+    /// 按统计页的完整会话键聚合所有模型的粘性归属，不受页面筛选限制。
+    /// 未识别会话是多个对话的合计，不能作为单个对话清除。
+    pub fn sticky_keys_for_session(&self, session_id: &str) -> Result<Vec<String>, String> {
+        let session_id = session_id.trim();
+        if session_id.is_empty() || session_id == "unidentified_session" {
+            return Err("必须提供已识别会话的完整 sessionID/threadID".into());
+        }
+        self.flush()?;
+        let connection = read_connection(&self.inner.path)?;
+        let mut statement = connection
+            .prepare(
+                "SELECT DISTINCT e.sticky_key, EXISTS (
+                     SELECT 1 FROM runtime_events other
+                     WHERE other.sticky_key=e.sticky_key
+                       AND other.session_key IS NOT ?1
+                   ) FROM runtime_events e
+                 WHERE e.session_key=?1 AND e.sticky_key IS NOT NULL AND e.sticky_key!=''",
+            )
+            .map_err(|error| error.to_string())?;
+        let keys = statement
+            .query_map(params![session_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?))
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        if keys.iter().any(|(_, shared)| *shared) {
+            return Err("该会话存在与其他会话共享的粘性归属，未执行清除".into());
+        }
+        Ok(keys.into_iter().map(|(key, _)| key).collect())
+    }
+
     pub fn summary(&self) -> RuntimeSummary {
         let (
             reset_generation,

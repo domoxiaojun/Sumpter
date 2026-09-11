@@ -102,6 +102,12 @@ impl RuntimeEvent {
         // Preserve raw metadata separately; these existing top-level fields are
         // the common projection used by pagination, detail and SSE consumers.
         self.agent_role = Some(self.derived_agent_role().to_owned());
+        if self.agent_name.is_none() && self.codex_metadata.is_none() {
+            self.agent_name = self
+                .client_declared
+                .as_ref()
+                .and_then(|m| m.agent_name.clone());
+        }
         if let Some(metadata) = &self.codex_metadata {
             if self.session_id.is_none() && metadata.session_id.is_some() {
                 self.session_id = metadata.session_id.clone();

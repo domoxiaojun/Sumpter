@@ -1,4 +1,4 @@
-/** Opt in from the Sumpter shell wrapper or a provider header marker. */
+/** The wrapper loads this extension; each Sumpter provider must opt in explicitly. */
 import { execFile } from "node:child_process";
 import { basename } from "node:path";
 import { userInfo } from "node:os";
@@ -10,6 +10,7 @@ const attributionHeaders = [
   "x-sumpter-client",
   "x-sumpter-project", "x-sumpter-workspace", "x-sumpter-user",
   "x-sumpter-git-remote", "x-sumpter-session-id", "x-sumpter-attribution-encoding",
+  "x-sumpter-agent-role", "x-sumpter-agent-name",
 ];
 
 async function git(cwd: string, args: string[]): Promise<string | undefined> {
@@ -46,13 +47,19 @@ export default function (pi: ExtensionAPI) {
       .filter(([name, value]) => name.toLowerCase() === "x-sumpter-client" && value != null);
     const providerOptIn = markers.length > 0
       && markers.every(([, value]) => value?.trim().toLowerCase() === "pi");
-    const shellOptIn = process.env.SUMPTER_PI_ATTRIBUTION === "1";
-    if (!providerOptIn && !shellOptIn) return;
 
     // Clear previous values including alternate casing; failures must not
     // leave another session's metadata on reused headers.
     for (const name of Object.keys(event.headers)) {
       if (attributionHeaders.includes(name.toLowerCase())) event.headers[name] = null;
+    }
+    if (!providerOptIn) return;
+    const source = (event as typeof event & { requestSource?: { agentRole?: string; agentName?: string } }).requestSource;
+    const role = source?.agentRole;
+    const name = source?.agentName;
+    if (role && ["root", "subagent", "memory"].includes(role)) event.headers["x-sumpter-agent-role"] = role;
+    if (name && Buffer.byteLength(name, "utf8") <= 128 && !/[\u0000-\u001f\u007f]/u.test(name)) {
+      event.headers["x-sumpter-agent-name"] = encodeURIComponent(name);
     }
     const session = ctx.sessionManager.getSessionId();
     if (session && session.length <= 256 && /^[\x21-\x7e]+$/u.test(session)) {

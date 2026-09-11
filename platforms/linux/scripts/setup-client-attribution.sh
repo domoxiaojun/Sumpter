@@ -96,6 +96,7 @@ node - "$task_tmp/result.json" <<'NODE'
 const fs = require('node:fs');
 const labels = { installed: '已安装', absent: '未安装', legacy: '旧版配置，建议更新', broken: '配置不完整，需要修复', outdated: '已安装，需要更新' };
 for (const item of JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))) {
+  if (item.note) console.log(item.note);
   console.log(`${item.client}：${labels[item.status] || item.status} · ${item.shell} · ${item.rc} · ${item.canRestore ? '可还原' : '无待还原配置'}`);
 }
 NODE

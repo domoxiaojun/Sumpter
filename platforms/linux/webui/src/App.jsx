@@ -70,7 +70,7 @@ export function AppContent() {
       <Sidebar />
       <div className="main-wrapper">
         <Topbar />
-        <main className="content-body" id="page" tabIndex="-1">
+        <main className="content-body" data-route={currentRoute} id="page" tabIndex="-1">
           {renderPage()}
         </main>
       </div>

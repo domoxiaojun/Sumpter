@@ -65,13 +65,13 @@ pub(crate) use diagnostics_routes::{
 use runtime_routes::RuntimeEventsQuery;
 
 pub(crate) use runtime_routes::{
-    JsonPayload, clear_project_sticky, delete_runtime_session, export_runtime_session, proxy_start,
-    proxy_stop, recreate_runtime, require_json, reset_runtime, runtime_analytics, runtime_cleanup,
-    runtime_cleanup_preview, runtime_dimensions, runtime_errors, runtime_event_detail,
-    runtime_events, runtime_export, runtime_export_estimate, runtime_facets, runtime_pricing,
-    runtime_pricing_update, runtime_projects, runtime_request_chain, runtime_retention,
-    runtime_retention_update, runtime_sessions, runtime_storage, runtime_summary, runtime_trends,
-    status,
+    JsonPayload, clear_project_sticky, clear_runtime_session_sticky, delete_runtime_session,
+    export_runtime_session, proxy_start, proxy_stop, recreate_runtime, require_json, reset_runtime,
+    runtime_analytics, runtime_cleanup, runtime_cleanup_preview, runtime_dimensions,
+    runtime_errors, runtime_event_detail, runtime_events, runtime_export, runtime_export_estimate,
+    runtime_facets, runtime_pricing, runtime_pricing_update, runtime_projects,
+    runtime_request_chain, runtime_retention, runtime_retention_update, runtime_sessions,
+    runtime_storage, runtime_summary, runtime_trends, status,
 };
 
 pub const DEFAULT_ADMIN_HOST: &str = "127.0.0.1";
@@ -619,6 +619,10 @@ pub fn admin_router(state: AdminState) -> Router {
         )
         .route("/runtime/session/export", get(export_runtime_session))
         .route("/runtime/projects/sticky-clear", post(clear_project_sticky))
+        .route(
+            "/runtime/sessions/sticky-clear",
+            post(clear_runtime_session_sticky),
+        )
         .route("/runtime/cleanup/preview", post(runtime_cleanup_preview))
         .route("/runtime/cleanup", post(runtime_cleanup))
         .route("/runtime/reset", post(reset_runtime))
@@ -1200,6 +1204,94 @@ mod tests {
             .header(header::COOKIE, &cookie)
             .header("x-sumpter-csrf", &csrf)
             .body(r#"{"projectID":"sha256:synthetic"}"#)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(ok.status(), StatusCode::OK);
+        let body: Value = serde_json::from_slice(&ok.bytes().await.unwrap()).unwrap();
+        assert_eq!(body["cleared"], 0);
+        assert_eq!(body["matched"], 0);
+
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn session_sticky_clear_requires_auth_body_and_session_id() {
+        let config = AppConfig::bootstrap().normalized();
+        let dir = ConfigDir::new(std::env::temp_dir().join(format!(
+            "sumpter-admin-sticky-clear-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        )));
+        let engine = Engine::new(
+            config,
+            Some(dir.clone()),
+            Arc::new(crate::outbound::ReqwestTransport::new()),
+        );
+        let state = AdminState::new(
+            engine.clone(),
+            ProxySupervisor::new(engine),
+            dir,
+            None,
+            AdminListen::default(),
+            AdminAuth::password(b"synthetic-admin-password").unwrap(),
+        );
+        let (address, server) = crate::server::serve_router(
+            admin_router(state),
+            SocketAddr::new(IpAddr::from([127, 0, 0, 1]), 0),
+        )
+        .await
+        .unwrap();
+        let client = reqwest::Client::new();
+        let url = format!("http://{address}/admin/api/runtime/sessions/sticky-clear");
+
+        let unauthorized = client
+            .post(&url)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(r#"{"sessionID":"sha256:abc"}"#)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let (cookie, csrf) = login_test_session(&client, address, "synthetic-admin-password").await;
+        let empty_id = client
+            .post(&url)
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::COOKIE, &cookie)
+            .header("x-sumpter-csrf", &csrf)
+            .body(r#"{"sessionID":"   "}"#)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(empty_id.status(), StatusCode::BAD_REQUEST);
+        let body: Value = serde_json::from_slice(&empty_id.bytes().await.unwrap()).unwrap();
+        assert_eq!(body["error"], "session_id_required");
+
+        for body in [
+            r#"{}"#,
+            r#"{"sessionID":"unidentified_session"}"#,
+            "invalid-json",
+        ] {
+            let response = client
+                .post(&url)
+                .header("content-type", "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-sumpter-csrf", &csrf)
+                .body(body)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+
+        // 空库:项目无事件 → 匹配 0、清除 0,仍是成功路径。
+        let ok = client
+            .post(&url)
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::COOKIE, &cookie)
+            .header("x-sumpter-csrf", &csrf)
+            .body(r#"{"sessionID":"sha256:synthetic"}"#)
             .send()
             .await
             .unwrap();

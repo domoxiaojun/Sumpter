@@ -29,7 +29,7 @@ public struct ModelGroupBinding: Codable, Equatable, Sendable, Identifiable {
     public var endpointID: String
     public var enabled: Bool
     public var priority: Int
-    /// nil = all group models (including future additions); [] = none.
+    /// nil = all group models supported by the endpoint; [] = none.
     public var models: [String]?
     public var overrides: [ModelGroupModelOverride]
     public init(endpointID: String, enabled: Bool = true, priority: Int = 0, models: [String]? = [],
@@ -73,19 +73,10 @@ public extension AppConfig {
     }
 
     var hasRoutableModel: Bool {
-        guard let groups = modelGroups else {
+        guard modelGroups != nil else {
             return endpoints.contains { $0.enabled && !$0.mappings.isEmpty }
         }
-        return groups.contains { group in
-            group.enabled && group.bindings.contains { binding in
-                binding.enabled && endpoint(id: binding.endpointID)?.enabled == true
-                    && group.models.contains { pattern in
-                        !ModelName.clean(pattern).isEmpty && (binding.models.map { selected in
-                            selected.contains { ModelName.matches($0, pattern: pattern) || ModelName.matches(pattern, pattern: $0) }
-                        } ?? true)
-                    }
-            }
-        }
+        return routingEndpoints(for: "").contains { !$0.mappings.isEmpty }
     }
 
     mutating func migrateModelGroups() {
@@ -228,9 +219,7 @@ public extension AppConfig {
                     }
                 }
                 e.mappings = inherited.map(\.0)
-                for p in patterns where !e.mappings.contains(where: { $0.clientPattern.rawValue == p }) {
-                    e.mappings.append(ModelMapping(clientPattern: ModelPattern(p), upstreamModel: "", thinking: .adaptive, context: .standard))
-                }
+                // Groups only narrow endpoint support, including stale selections.
                 for o in b.overrides {
                     if let upstream = o.upstreamModel {
                         var exact = e.mappings.filter { ModelName.matches(o.model, pattern: $0.clientPattern.rawValue) }

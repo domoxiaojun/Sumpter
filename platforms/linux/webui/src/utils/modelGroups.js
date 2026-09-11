@@ -95,10 +95,11 @@ export function hasRoutableModel(config) {
     return (config?.endpoints || []).some((e) => e.enabled !== false
       && (e.modelMappings || e.mappings || []).length > 0);
   }
-  return config.modelGroups.some((g) => g.enabled !== false && (g.bindings || []).some((b) =>
-    b.enabled !== false && (config.endpoints || []).some((e) => e.id === b.endpointID && e.enabled !== false)
-    && (g.models || []).some((pattern) => cleanGroupModel(pattern)
-      && (b.models == null || b.models.some((selected) => modelMatches(pattern, selected) || modelMatches(selected, pattern))))));
+  return config.modelGroups.some((g) => g.enabled !== false && (g.bindings || []).some((b) => {
+    const endpoint = (config.endpoints || []).find((e) => e.id === b.endpointID && e.enabled !== false);
+    return b.enabled !== false && endpointGroupModels(endpoint, g.models || []).some((pattern) =>
+      b.models == null || b.models.some((selected) => modelMatches(pattern, selected) || modelMatches(selected, pattern)));
+  }));
 }
 
 export function pruneGroupReferences(config) {
@@ -124,7 +125,9 @@ export function groupRoutePreview(config, groups, model) {
   for (const group of groups.filter((g) => g.enabled !== false && (g.models || []).some((p) => modelMatches(p, model)))
     .toSorted((a, b) => (a.priority ?? 0) - (b.priority ?? 0))) {
     const bindings = (group.bindings || []).filter((b) => b.enabled !== false && endpoints.get(b.endpointID)?.enabled !== false
-      && endpoints.has(b.endpointID) && (b.models == null || b.models.some((p) => modelMatches(p, model))));
+      && endpoints.has(b.endpointID) && (b.models == null || b.models.some((p) => modelMatches(p, model)))
+      && (endpoints.get(b.endpointID).modelMappings || endpoints.get(b.endpointID).mappings || [])
+        .some((mapping) => modelMatches(mapping.from ?? mapping.clientPattern, model)));
     const priority = (b) => b.overrides?.find((o) => cleanGroupModel(o.model) === model)?.priority ?? b.priority ?? 0;
     for (const b of bindings.toSorted((a, b) => priority(a) - priority(b))) {
       result.push({ groupID: group.id, group: group.name || group.id, endpointID: b.endpointID,

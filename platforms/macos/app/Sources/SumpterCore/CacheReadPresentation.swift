@@ -26,9 +26,14 @@ public struct CacheReadSummary: Codable, Equatable, Sendable {
     public var reason: String?
 
     public var label: String {
-        let labels = ["hit": "已命中", "miss": "未命中", "pending": "等待上游数据", "unknown": "未知", "not_applicable": "不适用"]
-        let count = readTokens.flatMap { $0 > 0 ? " \($0.formatted())" : nil } ?? ""
-        return "缓存\(labels[state] ?? "未知")\(count)"
+        if ["hit", "miss"].contains(state), let readTokens, readTokens >= 0 {
+            return "缓存读取 \(readTokens.formatted())"
+        }
+        return state == "not_applicable" ? "缓存读取 不适用" : "缓存读取 —"
+    }
+
+    public var statusLabel: String {
+        ["hit": "已读取", "miss": "未读取", "pending": "等待上报", "unknown": "未知", "not_applicable": "不适用"][state] ?? "未知"
     }
 
     public var reasonLabel: String {
@@ -40,8 +45,14 @@ public struct CacheReadSummary: Codable, Equatable, Sendable {
 }
 
 public extension RuntimeEvent {
-    var cacheReadLabel: String { cacheRead?.label ?? (kind == "notify" ? "缓存不适用" : "缓存未知") }
+    var cacheReadLabel: String { cacheRead?.label ?? (kind == "notify" ? "缓存读取 不适用" : "缓存读取 —") }
     var observedUsage: ResponseUsage? { usageSummary ?? streamTrace?.usage }
+    var hasObservedUsage: Bool {
+        let usage = observedUsage
+        return [usage?.inputTokens, usage?.outputTokens, usage?.cacheReadInputTokens,
+                usage?.cacheCreationInputTokens, usage?.reasoningTokens, cacheRead?.readTokens]
+            .contains { $0.map { $0 >= 0 } ?? false }
+    }
     var cacheReadTokenRatio: Double? {
         guard let cacheRead, ["hit", "miss"].contains(cacheRead.state), cacheRead.finality == "confirmed",
               let read = cacheRead.readTokens, let usage = observedUsage, let input = usage.inputTokens else { return nil }
@@ -57,9 +68,16 @@ public extension RuntimeEvent {
         return Double(read) / denominator
     }
     var usageSummaryLabel: String {
-        let input = observedUsage?.inputTokens.map { $0.formatted() } ?? "—"
-        let output = observedUsage?.outputTokens.map { $0.formatted() } ?? "—"
+        guard kind != "notify" else { return "不适用" }
+        guard hasObservedUsage else { return isInFlight ? "等待用量" : "未报告用量" }
+        let input = observedUsage?.inputTokens.flatMap { $0 >= 0 ? $0.formatted() : nil } ?? "—"
+        let output = observedUsage?.outputTokens.flatMap { $0 >= 0 ? $0.formatted() : nil } ?? "—"
         return "输入 \(input) · 输出 \(output)"
+    }
+    var cacheReadHitRateLabel: String {
+        guard let ratio = cacheReadTokenRatio else { return "命中率 —" }
+        let value = (ratio * 100).formatted(.number.precision(.fractionLength(0...1)).locale(Locale(identifier: "zh_CN")))
+        return "命中率 \(value)%"
     }
     var agentSummaryLabel: String? {
         let labels = ["root": "主代理", "subagent": "子代理", "guardian": "Guardian", "review": "审查", "memory": "记忆任务",

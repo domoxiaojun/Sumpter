@@ -887,144 +887,93 @@ private final class LiveGlowBorderNSView: NSView {
     }
 }
 
-/// Shared activity atmosphere for the in-flight request group. The aura is one
-/// broad, shallow rounded progress layer that drifts from left to right. It
-/// deliberately avoids discrete colour blobs, perimeter strokes and rotating
-/// backgrounds. A small SwiftUI `Canvas` keeps the effect in the native view
-/// tree and gives it the exact size of the request group.
-struct RuntimeLiveBreathingAura: View {
-    var colors: [Color]
+/// 原生 Canvas 近似 Web 的 Paper Mesh Gradient 色彩运动，
+/// 两端共用配色、14 点边缘范围和 10 秒呼吸周期。
+struct RuntimeLiveSurfaceLight: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.sumpterWindowVisible) private var windowVisible
     @Environment(\.colorScheme) private var colorScheme
-
-    private var isAnimating: Bool {
-        !reduceMotion && windowVisible
-    }
-
-    private var sourceColors: [Color] {
-        colors.isEmpty ? [.accentColor, .blue, .purple, .orange] : colors
-    }
+    @State private var appeared = false
 
     var body: some View {
         GeometryReader { proxy in
-            if isAnimating {
-                // Twenty-four updates per second are enough for a soft ambient
-                // motion while keeping the scrolling view's main-thread work
-                // bounded. Canvas does the interpolation between these points.
-                TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: false)) { timeline in
-                    auraCanvas(size: proxy.size, time: timeline.date.timeIntervalSinceReferenceDate)
+            if !reduceMotion && windowVisible && appeared {
+                TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { timeline in
+                    aurora(size: proxy.size, time: timeline.date.timeIntervalSinceReferenceDate)
                 }
             } else {
-                auraCanvas(size: proxy.size, time: 0)
+                aurora(size: proxy.size, time: 0)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+        .onAppear { appeared = true }
+        .onDisappear { appeared = false }
     }
 
-    private func auraCanvas(size: CGSize, time: TimeInterval) -> some View {
-        Canvas { context, canvasSize in
-            // Keep the activity cue as one shared wave packet. Multiple
-            // independent colour pools read as decorative blobs and become
-            // especially distracting when two requests are in flight.
-            if isAnimating {
-                drawAuraWave(context: &context, canvasSize: canvasSize, time: time)
-            } else {
-                // Reduced Motion still gets a quiet, static state cue.  Do not
-                // freeze the moving packet at an arbitrary edge position.
-                let staticColor = sourceColors.first ?? .accentColor
-                let path = Path(
-                    roundedRect: CGRect(origin: .zero, size: canvasSize),
-                    cornerRadius: min(10, max(6, canvasSize.height * 0.28)),
-                    style: .continuous
-                )
-                context.fill(path, with: .color(staticColor.opacity(colorScheme == .light ? 0.055 : 0.075)))
-            }
+    private func aurora(size: CGSize, time: TimeInterval) -> some View {
+        let height = max(1, size.height)
+        let edge = min(14 / height, 0.5)
+        let shoulder = min(4 / height, edge)
+        return Canvas { context, canvasSize in
+            RuntimeLiveAurora.draw(context: context, size: canvasSize, time: time, light: colorScheme == .light)
         }
         .frame(width: max(1, size.width), height: max(1, size.height))
-        .contentShape(Rectangle())
-    }
-
-    private func drawAuraWave(
-        context: inout GraphicsContext,
-        canvasSize: CGSize,
-        time: TimeInterval
-    ) {
-        let width = max(1, canvasSize.width)
-        let height = max(1, canvasSize.height)
-        // A long cycle keeps the colour transition calm while the packet
-        // continuously travels left → right and wraps outside the card.
-        let cycleLength = 24.0
-        let cycle = time.truncatingRemainder(dividingBy: cycleLength)
-        let movementPhase = cycle / cycleLength
-        // A linear sweep keeps the layer moving at a constant, calm speed.
-        // The packet is fully outside the container at both ends, so wrapping
-        // back to the left is invisible and never produces an edge pause.
-        // The layer spans the complete live-request stack. Its height follows
-        // the measured container, so one, two, or many request rows all share
-        // the same continuous background. Its top and bottom stay the same
-        // width and its R corners match the row surface; it is not an ellipse
-        // or pill.
-        let waveWidth = min(560, max(220, width * 0.64))
-        let waveHeight = max(44, height)
-        let x = -waveWidth * 0.5 + movementPhase * (width + waveWidth)
-        let y = height * 0.5
-        // One slow, low-amplitude scale/opacity cycle supplies the breathing
-        // quality while keeping all animation in this single Canvas layer.
-        let breathPhase = cycle / 5.8 * .pi * 2
-        let breath = CGFloat(0.86 + 0.14 * (0.5 + 0.5 * sin(breathPhase)))
-        // Keep the geometry fixed so every row remains covered throughout the
-        // breath cycle; only opacity breathes to avoid exposing top/bottom
-        // seams or causing a layout-like size change.
-        let scale: CGFloat = 1
-        let rect = CGRect(
-            x: x - waveWidth * scale / 2,
-            y: y - waveHeight * scale / 2,
-            width: waveWidth * scale,
-            height: waveHeight * scale
-        )
-        let cornerRadius = min(10, max(6, rect.height * 0.28))
-        let path = Path(
-            roundedRect: rect,
-            cornerRadius: cornerRadius,
-            style: .continuous
-        )
-
-        // The previous values were too faint once composited over the opaque
-        // panel. Raise the colour density moderately, with a softer light
-        // theme value so the effect remains legible without looking neon.
-        let baseAlpha: CGFloat = colorScheme == .light ? 0.16 : 0.14
-        let palette = sourceColors
-        let first = palette[0 % palette.count]
-        let second = palette[1 % palette.count]
-        let third = palette[2 % palette.count]
-        let fourth = palette[3 % palette.count]
-        // Transparent ends make the packet fade into the surface. Colour
-        // changes happen inside the wave body, so it reads as a soft aura and
-        // never as two bright strips or a solid coloured card.
-        let gradient = Gradient(stops: [
-            .init(color: .clear, location: 0),
-            .init(color: first.opacity(baseAlpha * 0.42 * breath), location: 0.14),
-            .init(color: second.opacity(baseAlpha * 0.88 * breath), location: 0.34),
-            .init(color: third.opacity(baseAlpha * 0.72 * breath), location: 0.56),
-            .init(color: fourth.opacity(baseAlpha * 0.48 * breath), location: 0.78),
-            .init(color: .clear, location: 1),
-        ])
-        let shading = GraphicsContext.Shading.linearGradient(
-            gradient,
-            startPoint: CGPoint(x: rect.minX, y: rect.midY),
-            endPoint: CGPoint(x: rect.maxX, y: rect.midY)
-        )
-        // A small blur softens the rounded edge into a halo. It is one bounded
-        // filter on one path, rather than several animated blobs.
-        context.drawLayer { layer in
-            layer.addFilter(.blur(radius: min(7, max(3, height * 0.055))))
-            layer.fill(path, with: shading)
+        .mask {
+            LinearGradient(
+                stops: [
+                    .init(color: .black, location: 0),
+                    .init(color: .black.opacity(0.35), location: shoulder),
+                    .init(color: .clear, location: edge),
+                    .init(color: .clear, location: 1 - edge),
+                    .init(color: .black.opacity(0.35), location: 1 - shoulder),
+                    .init(color: .black, location: 1),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
         }
     }
+}
 
+/// 通过移动径向色点近似 Mesh 的混色；并非 Paper 的 WebGL 着色器。
+enum RuntimeLiveAurora {
+    static func draw(context: GraphicsContext, size: CGSize, time: TimeInterval, light: Bool) {
+        guard size.width > 0, size.height > 0 else { return }
+        let breath = 0.26 - 0.04 * cos(time * .pi * 2 / 10)
+        let rgb: [(Double, Double, Double)] = light
+            ? [(104, 188, 201), (139, 150, 220), (200, 152, 194), (121, 185, 195)]
+            : [(120, 197, 210), (156, 168, 232), (210, 166, 206), (137, 201, 207)]
+        let colors = rgb.map { Color(red: $0.0 / 255, green: $0.1 / 255, blue: $0.2 / 255) }
+        let width = size.width
+        let height = size.height
+        let phase = (time * 0.075 + 41.5) * 0.5
+        // Same independent trajectories as Paper's getPosition(): the points
+        // never form a straight sweep or a repeating edge strip.
+        for i in 0..<4 {
+            let a = Double(i) * 0.37
+            let b = 0.6 + (Double(i).truncatingRemainder(dividingBy: 3) / 3) * 0.9
+            let c = 0.8 + (Double(i + 1).truncatingRemainder(dividingBy: 4)) / 4
+            let x = 0.5 + 0.5 * sin(phase * b + a)
+            let y = 0.5 + 0.5 * cos(phase * c + a * 1.5)
+            let center = CGPoint(x: x * width, y: y * height)
+            let radius = CGSize(width: width * 0.65, height: height * 1.8)
+            var layer = context
+            layer.translateBy(x: center.x, y: center.y)
+            layer.scaleBy(x: radius.width, y: radius.height)
+            layer.opacity = breath
+            let path = Path(ellipseIn: CGRect(x: -1, y: -1, width: 2, height: 2))
+            layer.fill(path, with: .radialGradient(
+                Gradient(stops: [
+                    .init(color: colors[i].opacity(1), location: 0),
+                    .init(color: colors[i].opacity(0.72), location: 0.35),
+                    .init(color: .clear, location: 0.86),
+                ]),
+                center: .zero, startRadius: 0, endRadius: 1
+            ))
+        }
+    }
 }
 
 struct RuntimeProgressBar: View {

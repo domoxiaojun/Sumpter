@@ -381,3 +381,57 @@ fn session_sticky_ttl_hours_default_clamp_and_conversion() {
     .unwrap();
     assert_eq!(fractional.session_sticky_ttl_secs(), 5400.0);
 }
+
+#[test]
+fn group_scope_never_expands_endpoint_support() {
+    for selection in [json!(null), json!(["gpt-6-astra"]), json!(["*"]), json!([])] {
+        let mut c = config();
+        c.endpoints.truncate(2);
+        c.endpoints[0].mappings[0].client_pattern = "claude-*".into();
+        c.endpoints[1].mappings[0].client_pattern = "gpt-6-astra".into();
+        c.model_groups = serde_json::from_value(json!([{
+            "id":"main", "models":["*"], "bindings":[
+                {"endpointID":"a", "models":selection,
+                 "overrides":[{"model":"gpt-6-astra", "upstreamModel":"private-astra"}]},
+                {"endpointID":"b", "models":null}
+            ]
+        }]))
+        .unwrap();
+        // Empty scopes cannot contain overrides; the other cases also prove
+        // an override cannot synthesize an unsupported mapping.
+        if selection == json!([]) {
+            c.model_groups.as_mut().unwrap()[0].bindings[0]
+                .overrides
+                .clear();
+        }
+        c.validate_model_groups().unwrap();
+        let mut c = c.normalized();
+        assert_eq!(
+            route(&c, "gpt-6-astra")
+                .iter()
+                .map(|e| e.endpoint_id.as_str())
+                .collect::<Vec<_>>(),
+            ["b"]
+        );
+        assert!(route(&c, "gpt-6-astra")[0].upstream_model == "gpt-6-astra");
+        // Removing the last declared mapping revokes routing despite retained
+        // group selections. Catalog discovery cannot restore it either.
+        c.endpoints[1].mappings.clear();
+        c.endpoints[1].catalog = serde_json::from_value(json!({"models":["gpt-6-astra"]})).ok();
+        assert!(!c.matches_model("gpt-6-astra"));
+    }
+}
+
+#[test]
+fn broad_group_and_binding_preserve_narrow_endpoint_wildcard() {
+    let mut c = config();
+    c.endpoints.truncate(1);
+    c.endpoints[0].mappings[0].client_pattern = "gpt-5.*".into();
+    c.model_groups = serde_json::from_value(json!([{
+        "id":"main", "models":["*"], "bindings":[{"endpointID":"a", "models":["gpt-*"]}]
+    }]))
+    .unwrap();
+    assert_eq!(route(&c, "gpt-5.5")[0].endpoint_id, "a");
+    assert!(!c.matches_model("gpt-6-astra"));
+    assert!(!c.matches_model("claude-x"));
+}

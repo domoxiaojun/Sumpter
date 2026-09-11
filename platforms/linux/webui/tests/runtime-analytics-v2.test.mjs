@@ -306,3 +306,22 @@ test('统计维度排序接受语义字段并保留正反方向', async () => {
   assert.equal(asc.rows.length, 10);
   assert.equal(desc.rows.length, 10);
 });
+
+test('统计页自动刷新会重新锚定使用明细快照，而不是沿用首个快照', async () => {
+  const workspace = await readFile(new URL('../src/components/AnalyticsV2Workspace.jsx', import.meta.url), 'utf8');
+  // The dimension loader defaults to the previous page's snapshotSeq so
+  // paging/sorting stay consistent. A timer tick must not reuse that anchor,
+  // otherwise the usage tables stay pinned while the trend totals move.
+  assert.match(workspace, /const refreshDimensions = useCallback/);
+  const refreshStart = workspace.indexOf('const refreshDimensions = useCallback');
+  const refreshEnd = workspace.indexOf('}, [', refreshStart);
+  const refreshBody = workspace.slice(refreshStart, refreshEnd);
+  assert.match(refreshBody, /sort: current\.sort, order: current\.order/);
+  assert.doesNotMatch(refreshBody, /snapshotSeq/);
+  const signalStart = workspace.indexOf('if (!analyticsRefreshSignal || analyticsRefreshSignal === lastAnalyticsRefreshSignal.current) return;');
+  const signalEnd = workspace.indexOf('[analyticsRefreshSignal]', signalStart);
+  const signalEffect = workspace.slice(signalStart, signalEnd);
+  assert.match(signalEffect, /section === 'overview'\) refreshDimensions\(/);
+  assert.match(signalEffect, /section === 'tokens'\) refreshDimensions\(/);
+  assert.doesNotMatch(signalEffect, /loadDimensions\(/);
+});

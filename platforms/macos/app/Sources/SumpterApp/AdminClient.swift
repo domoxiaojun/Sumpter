@@ -238,6 +238,22 @@ public struct AdminClient: Sendable {
         return ack.cleared
     }
 
+    /// 清除某会话的会话粘性归属(affinity 键来自该会话的历史事件)。
+    /// 返回清除的归属条数;0 = 该会话当前没有粘性归属。
+    @discardableResult
+    public func clearSessionSticky(sessionID: String) async throws -> Int {
+        struct StickyClearAck: Decodable {
+            let cleared: Int
+            let matched: Int
+        }
+        let body: [String: Any] = ["sessionID": sessionID]
+        let ack = try await send(
+            jsonRequest("/admin/runtime/sessions/sticky-clear", method: "POST", body: body),
+            as: StickyClearAck.self
+        )
+        return ack.cleared
+    }
+
     public func diagnostics() async throws -> AdminWire.Diagnostics {
         try await send(request("/admin/diagnostics"), as: AdminWire.Diagnostics.self)
     }

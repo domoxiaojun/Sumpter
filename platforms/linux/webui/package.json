@@ -18,6 +18,8 @@
     "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
+    "@paper-design/shaders": "^0.0.78",
+    "@paper-design/shaders-react": "^0.0.78",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
