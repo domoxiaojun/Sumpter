@@ -90,49 +90,6 @@ function LocalToggle({ initial, label, title, ariaLabel, onChange }) {
 // surface.  The modal itself stores draft values in a closure for the save
 // action, but the input disabled state must still react immediately when the
 // user flips the switch.
-// 映射编辑器里的 Thinking/effort 联动控件。modal 的 content 是打开时创建的静态
-// JSX，闭包变量改写不会触发重渲染；切到「自适应」时必须靠组件内 state 才能让
-// effort 覆盖选择器动态出现。
-function MappingThinkingControls({ thinking: initialThinking, effort: initialEffort, onThinking, onEffort }) {
-  const [thinking, setThinking] = useState(initialThinking || 'disable');
-  const [effort, setEffort] = useState(initialEffort || 'auto');
-  return (
-    <div className="form-group">
-      <label className="form-label">思考模式 (Thinking)</label>
-      <select
-        className="form-select"
-        value={thinking}
-        onChange={(e) => {
-          setThinking(e.target.value);
-          if (onThinking) onThinking(e.target.value);
-        }}
-      >
-        <option value="adaptive">自适应 (Adaptive)</option>
-        <option value="passThrough">透传 (PassThrough)</option>
-        <option value="disable">禁用 (Disable)</option>
-      </select>
-      {thinking === 'adaptive' && (
-        <>
-          <label className="form-label" style={{ marginTop: 8 }}>思考级别覆盖</label>
-          <select
-            className="form-select"
-            value={effort}
-            onChange={(e) => {
-              setEffort(e.target.value);
-              if (onEffort) onEffort(e.target.value);
-            }}
-          >
-            <option value="auto">自动（跟随客户端）</option>
-            <option value="low">Low</option><option value="medium">Medium</option>
-            <option value="high">High</option><option value="xhigh">Xhigh</option>
-            <option value="max">Max</option><option value="ultra">Ultra</option>
-          </select>
-        </>
-      )}
-    </div>
-  );
-}
-
 function RetryDelayControls({ initialSeconds, initialEnabled, onChange }) {
   const [seconds, setSeconds] = useState(initialSeconds ?? '');
   const [enabled, setEnabled] = useState(Boolean(initialEnabled));
@@ -264,6 +221,186 @@ function CatalogModelPicker({ models, onChange }) {
       </div>
       <span className="form-hint">将按入口协议和模型映射生成客户端模型名与上游模型名。</span>
     </div>
+  );
+}
+
+const MAPPING_THINKING_OPTIONS = [['adaptive', '自适应'], ['passThrough', '透传'], ['disable', '禁用']];
+const MAPPING_EFFORT_OPTIONS = ['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+const MAPPING_CONTEXT_OPTIONS = [['passThrough', '标准/透传'], ['oneMillion', '1M 上下文'], ['strip', '剥离 1M']];
+const MAPPING_EDITABLE_FIELDS = ['from', 'to', 'clientPattern', 'upstreamModel', 'thinking', 'effort', 'context', 'failoverTimeoutSeconds'];
+
+function mappingDraftRow(mapping, key) {
+  return {
+    _key: key,
+    from: mappingClient(mapping),
+    to: mappingUpstream(mapping),
+    thinking: mapping?.thinking || 'passThrough',
+    effort: mapping?.effort || 'auto',
+    context: mapping?.context || 'passThrough',
+    failoverTimeoutSeconds: mapping?.failoverTimeoutSeconds == null ? '' : String(mapping.failoverTimeoutSeconds),
+    // 未来字段(如 capabilities)原样带回,避免就地编辑把它们丢掉。
+    _extra: Object.fromEntries(Object.entries(mapping || {}).filter(([field]) => !MAPPING_EDITABLE_FIELDS.includes(field))),
+  };
+}
+
+function mappingFromDraftRow(row) {
+  const timeout = row.failoverTimeoutSeconds === '' ? null : Number(row.failoverTimeoutSeconds);
+  return {
+    ...row._extra,
+    from: row.from.trim(),
+    to: row.to.trim(),
+    thinking: row.thinking,
+    ...(row.thinking === 'adaptive' && row.effort !== 'auto' ? { effort: row.effort } : {}),
+    context: row.context,
+    ...(timeout == null ? {} : { failoverTimeoutSeconds: timeout }),
+  };
+}
+
+// 入口的模型映射表:所有单元格就地编辑,勾选多行批量删除 / 批量改策略,改完一次保存。
+// 此前每条映射都要点“编辑”进弹窗、再点“删除”确认;几十个模型一条条点太慢。
+function EndpointMappingTable({ endpoint, saveConfig, addToast }) {
+  const baseline = JSON.stringify(endpointMappings(endpoint).map((mapping) => mappingFromDraftRow(mappingDraftRow(mapping, ''))));
+  const keyRef = useRef(0);
+  const nextKey = () => `m${keyRef.current += 1}`;
+  const buildDraft = () => endpointMappings(endpoint).map((mapping) => mappingDraftRow(mapping, nextKey()));
+  const [draft, setDraft] = useState(buildDraft);
+  const [selected, setSelected] = useState(() => new Set());
+  const [query, setQuery] = useState('');
+  const [saving, setSaving] = useState(false);
+  const focusKeyRef = useRef(null);
+
+  // 切换入口或服务端配置变了就以服务端为准重置草稿;未保存改动会被覆盖,所以 dirty 时有明显提示。
+  useEffect(() => {
+    setDraft(buildDraft());
+    setSelected(new Set());
+  }, [endpoint?.id, baseline]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!focusKeyRef.current) return;
+    document.querySelector(`[data-mapping-key="${focusKeyRef.current}"] input[type="text"]`)?.focus();
+    focusKeyRef.current = null;
+  }, [draft.length]);
+
+  const dirty = JSON.stringify(draft.map(mappingFromDraftRow)) !== baseline;
+  const normalizedQuery = query.trim().toLowerCase();
+  const visible = normalizedQuery
+    ? draft.filter((row) => `${row.from} ${row.to}`.toLowerCase().includes(normalizedQuery))
+    : draft;
+  const duplicateKeys = new Set();
+  const seen = new Map();
+  for (const row of draft) {
+    const key = modelKey(row.from);
+    if (!key) continue;
+    if (seen.has(key)) { duplicateKeys.add(row._key); duplicateKeys.add(seen.get(key)); } else seen.set(key, row._key);
+  }
+  const rowError = (row) => {
+    if (!row.from.trim()) return '客户端模型不能为空';
+    if (duplicateKeys.has(row._key)) return '与另一行的客户端模型重复';
+    if (row.failoverTimeoutSeconds !== '' && !(Number(row.failoverTimeoutSeconds) > 0)) return '首响超时须留空或大于 0';
+    return '';
+  };
+  const invalidCount = draft.filter((row) => rowError(row)).length;
+
+  const update = (key, patch) => setDraft((rows) => rows.map((row) => (row._key === key ? { ...row, ...patch } : row)));
+  const remove = (keys) => {
+    setDraft((rows) => rows.filter((row) => !keys.has(row._key)));
+    setSelected((prev) => { const next = new Set(prev); for (const key of keys) next.delete(key); return next; });
+  };
+  const addRow = () => {
+    const key = nextKey();
+    focusKeyRef.current = key;
+    setDraft((rows) => [...rows, mappingDraftRow({ thinking: 'passThrough', context: 'passThrough' }, key)]);
+  };
+  const toggle = (key, checked) => setSelected((prev) => { const next = new Set(prev); if (checked) next.add(key); else next.delete(key); return next; });
+  const allVisibleSelected = visible.length > 0 && visible.every((row) => selected.has(row._key));
+  const toggleAll = (checked) => setSelected((prev) => {
+    const next = new Set(prev);
+    for (const row of visible) { if (checked) next.add(row._key); else next.delete(row._key); }
+    return next;
+  });
+  const applyBulk = (patch) => {
+    if (!selected.size) return;
+    setDraft((rows) => rows.map((row) => (selected.has(row._key) ? { ...row, ...patch } : row)));
+  };
+
+  const discard = () => { setDraft(buildDraft()); setSelected(new Set()); };
+  const save = async () => {
+    if (invalidCount) { addToast(`还有 ${invalidCount} 行映射不完整，请先修正`, 'warning'); return; }
+    setSaving(true);
+    try {
+      const mappings = draft.map(mappingFromDraftRow);
+      await saveConfig((latestConfig) => {
+        const target = latestConfig.endpoints?.find((item) => item.id === endpoint.id);
+        if (!target) throw new Error('入口已不存在，请刷新页面');
+        target.modelMappings = mappings;
+        delete target.mappings;
+        return latestConfig;
+      });
+      addToast(`已保存 ${mappings.length} 条模型映射`, 'success');
+    } catch (error) {
+      addToast(`保存映射失败：${error.message}`, 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section className="mapping-table" aria-label={`模型映射 · ${endpoint.name}`}>
+      <div className="mapping-table-toolbar">
+        <div className="mapping-table-title">
+          <strong>模型映射 · {draft.length}</strong>
+          {dirty && <span className="mapping-dirty-badge" role="status">未保存</span>}
+          {invalidCount > 0 && <span className="mapping-invalid-badge" role="status">{invalidCount} 行待修正</span>}
+        </div>
+        <div className="mapping-table-actions">
+          {(draft.length > 6 || query) && <input className="form-input mapping-search" placeholder="筛选模型" aria-label="筛选模型映射" value={query} onChange={(e) => setQuery(e.target.value)} />}
+          <button type="button" className="btn btn-secondary btn-compact" onClick={addRow}><Icon name="plus" size={13} /><span>添加一行</span></button>
+          {dirty && <button type="button" className="btn btn-ghost btn-compact" disabled={saving} onClick={discard}>放弃改动</button>}
+          <button type="button" className="btn btn-primary btn-compact" disabled={!dirty || saving || invalidCount > 0} onClick={save}>{saving ? '保存中…' : '保存映射'}</button>
+        </div>
+      </div>
+
+      {selected.size > 0 && (
+        <div className="mapping-bulk-bar" role="toolbar" aria-label="批量操作">
+          <span>已选 {selected.size} 行</span>
+          <label>Thinking<select className="form-select" value="" aria-label="批量设置 Thinking" onChange={(e) => { if (e.target.value) applyBulk({ thinking: e.target.value }); }}><option value="">批量设置…</option>{MAPPING_THINKING_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          <label>上下文<select className="form-select" value="" aria-label="批量设置上下文" onChange={(e) => { if (e.target.value) applyBulk({ context: e.target.value }); }}><option value="">批量设置…</option>{MAPPING_CONTEXT_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          <button type="button" className="btn btn-ghost btn-compact" onClick={() => applyBulk({ to: '' })} title="上游模型名留空即与客户端同名">上游同名</button>
+          <button type="button" className="btn btn-ghost btn-compact mapping-bulk-delete" onClick={() => remove(new Set(selected))}><Icon name="trash" size={13} /><span>删除选中</span></button>
+          <button type="button" className="btn btn-ghost btn-compact" onClick={() => setSelected(new Set())}>取消选择</button>
+        </div>
+      )}
+
+      {draft.length === 0 ? (
+        <div className="mapping-empty">当前入口未配置任何模型映射；所有请求原样使用客户端模型名转发。点击「添加一行」或「从已知模型添加」开始。</div>
+      ) : (
+        <div className="mapping-grid" role="table" aria-label="模型映射列表">
+          <div className="mapping-grid-head" role="row">
+            <span><input type="checkbox" aria-label="全选当前可见映射" checked={allVisibleSelected} onChange={(e) => toggleAll(e.target.checked)} /></span>
+            <span>客户端模型</span><span>上游模型</span><span>Thinking</span><span>上下文</span><span>首响超时(s)</span><span />
+          </div>
+          {visible.map((row) => {
+            const error = rowError(row);
+            return (
+              <div key={row._key} data-mapping-key={row._key} role="row" className={`mapping-grid-row${selected.has(row._key) ? ' is-selected' : ''}${error ? ' is-invalid' : ''}`} title={error || undefined}>
+                <span><input type="checkbox" aria-label={`选择映射 ${row.from || '(空)'}`} checked={selected.has(row._key)} onChange={(e) => toggle(row._key, e.target.checked)} /></span>
+                <span><input type="text" className="form-input mono-cell" aria-label="客户端模型" placeholder="claude-opus-5 或 gpt-*" value={row.from} onChange={(e) => update(row._key, { from: e.target.value })} /></span>
+                <span><input type="text" className="form-input mono-cell" aria-label="上游模型" placeholder="留空同名" value={row.to} onChange={(e) => update(row._key, { to: e.target.value })} /></span>
+                <span className="mapping-thinking-cell">
+                  <select className="form-select" aria-label="Thinking" value={row.thinking} onChange={(e) => update(row._key, { thinking: e.target.value })}>{MAPPING_THINKING_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+                  {row.thinking === 'adaptive' && <select className="form-select" aria-label="思考级别" value={row.effort} onChange={(e) => update(row._key, { effort: e.target.value })}>{MAPPING_EFFORT_OPTIONS.map((value) => <option key={value} value={value}>{value === 'auto' ? '自动' : value}</option>)}</select>}
+                </span>
+                <span><select className="form-select" aria-label="上下文" value={row.context} onChange={(e) => update(row._key, { context: e.target.value })}>{MAPPING_CONTEXT_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></span>
+                <span><input className="form-input mono-cell" type="number" min="0.1" step="0.1" aria-label="映射级首响应超时(秒)" placeholder="全局" value={row.failoverTimeoutSeconds} onChange={(e) => update(row._key, { failoverTimeoutSeconds: e.target.value })} /></span>
+                <span><button type="button" className="btn-icon btn-compact-icon mapping-row-delete" title="删除此行" aria-label={`删除映射 ${row.from || '(空)'}`} onClick={() => remove(new Set([row._key]))}><Icon name="trash" size={13} /></button></span>
+              </div>
+            );
+          })}
+          {visible.length === 0 && <div className="mapping-empty">没有匹配「{query}」的映射。</div>}
+        </div>
+      )}
+      <p className="form-hint">改动只在点击「保存映射」后写入配置；精确模型名优先于 <code>prefix-*</code> 通配。首响超时留空时使用全局单次响应超时。</p>
+    </section>
   );
 }
 
@@ -1085,138 +1222,6 @@ export function PrimaryProvidersPage() {
     });
   };
 
-  // Open Model Mapping Editor Modal
-  const openMappingEditor = (mapping = null, mappingIdx = -1) => {
-    let fromModel = mappingClient(mapping);
-    let toModel = mappingUpstream(mapping);
-    let thinking = mapping?.thinking || 'passThrough';
-    let effort = mapping?.effort || 'auto';
-    let context = mapping?.context || 'passThrough';
-    let failoverTimeout = mapping?.failoverTimeoutSeconds ?? '';
-
-    openModal({
-      title: mapping ? '编辑模型映射' : `为「${selectedEndpoint?.name}」添加模型映射`,
-      content: (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <div className="form-group">
-            <label className="form-label">客户端请求模型 (From) *</label>
-            <input
-              type="text"
-              className="form-input"
-              defaultValue={fromModel}
-              placeholder="如：claude-3-5-sonnet-20241022"
-              onChange={(e) => { fromModel = e.target.value; }}
-            />
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">转发生效模型 (To)</label>
-            <input
-              type="text"
-              className="form-input"
-              defaultValue={toModel}
-              placeholder="如：gpt-4o 或 claude-3-7-sonnet"
-              onChange={(e) => { toModel = e.target.value; }}
-            />
-            <span className="form-hint">留空表示与客户端模型同名；需要改名时填写上游实际模型名。</span>
-          </div>
-
-          <div className="grid-2col">
-            <MappingThinkingControls
-              thinking={thinking}
-              effort={effort}
-              onThinking={(value) => { thinking = value; }}
-              onEffort={(value) => { effort = value; }}
-            />
-            <div className="form-group">
-              <label className="form-label">上下文 (Context)</label>
-              <select className="form-select" defaultValue={context} onChange={(e) => { context = e.target.value; }}>
-                <option value="oneMillion">1M 上下文</option>
-                <option value="passThrough">标准/透传</option>
-                <option value="strip">剥离 1M 标记</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">映射级首响应超时（秒）</label>
-            <input
-              type="number"
-              min="0.1"
-              step="0.1"
-              className="form-input"
-              defaultValue={failoverTimeout}
-              placeholder="留空只使用全局单次响应超时"
-              onChange={(e) => { failoverTimeout = e.target.value; }}
-            />
-            <span className="form-hint">填写后与全局单次响应超时取较小值；到期且尚未收到响应时尝试下一个 Provider 入口。</span>
-          </div>
-        </div>
-      ),
-      actions: [
-        { label: '取消', kind: 'ghost' },
-        {
-          label: '保存映射',
-          kind: 'primary',
-          onClick: async () => {
-            if (!fromModel.trim()) {
-              addToast('客户端来源模型不能为空', 'warning');
-              return true;
-            }
-            const failoverTimeoutNumber = failoverTimeout === '' ? null : Number(failoverTimeout);
-            if (failoverTimeoutNumber != null && (!Number.isFinite(failoverTimeoutNumber) || failoverTimeoutNumber <= 0)) {
-              addToast('映射级首响应超时必须留空或填写大于 0 的数字', 'warning');
-              return true;
-            }
-            const nextConfig = clone(config);
-            const targetEp = nextConfig.endpoints.find((e) => e.id === selectedEndpoint.id);
-            targetEp.modelMappings = clone(endpointMappings(targetEp));
-            const duplicate = targetEp.modelMappings.some((candidate, index) => (
-              index !== mappingIdx && modelKey(mappingClient(candidate)) === modelKey(fromModel)
-            ));
-            if (duplicate) {
-              addToast(`该入口已存在客户端模型映射: ${fromModel.trim()}`, 'warning');
-              return true;
-            }
-
-            const nextMapping = {
-              from: fromModel.trim(),
-              to: toModel.trim(),
-              thinking,
-              ...(thinking === 'adaptive' && effort !== 'auto' ? { effort } : {}),
-              context,
-              ...(failoverTimeoutNumber == null ? {} : { failoverTimeoutSeconds: failoverTimeoutNumber }),
-            };
-            if (mappingIdx >= 0) {
-              // Preserve any future fields from the existing mapping while replacing editable values.
-              targetEp.modelMappings[mappingIdx] = { ...targetEp.modelMappings[mappingIdx], ...nextMapping };
-              if (failoverTimeoutNumber == null) delete targetEp.modelMappings[mappingIdx].failoverTimeoutSeconds;
-              if (thinking !== 'adaptive' || effort === 'auto') delete targetEp.modelMappings[mappingIdx].effort;
-            } else {
-              targetEp.modelMappings.push(nextMapping);
-            }
-
-            await saveConfig(nextConfig);
-            return false;
-          },
-        },
-      ],
-    });
-  };
-
-  // Delete Mapping
-  const handleDeleteMapping = async (mappingIdx) => {
-    try {
-      const nextConfig = clone(config);
-      const targetEp = nextConfig.endpoints.find((e) => e.id === selectedEndpoint.id);
-      targetEp.modelMappings.splice(mappingIdx, 1);
-      await saveConfig(nextConfig);
-      addToast('模型映射已删除', 'success');
-    } catch (err) {
-      addToast(`删除失败: ${err.message}`, 'error');
-    }
-  };
-
   const endpointColumns = [
     {
       title: '状态',
@@ -1621,14 +1626,6 @@ export function PrimaryProvidersPage() {
               <button
                 type="button"
                 className="btn btn-secondary btn-compact"
-                onClick={() => openMappingEditor(null)}
-              >
-                <Icon name="plus" size={13} />
-                <span>添加模型映射</span>
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary btn-compact"
                 onClick={() => openEndpointEditor(selectedEndpoint)}
               >
                 <Icon name="edit" size={13} />
@@ -1675,66 +1672,7 @@ export function PrimaryProvidersPage() {
             </div>
           </div>
 
-          {/* Model Mappings Table */}
-          <div>
-            <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '10px' }}>
-              模型映射 · {selectedEndpoint.name} ({endpointMappings(selectedEndpoint).length})
-            </div>
-
-            {endpointMappings(selectedEndpoint).length > 0 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {endpointMappings(selectedEndpoint).map((map, idx) => (
-                  <div
-                    key={idx}
-                    className="mono-cell"
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '10px 14px',
-                      borderRadius: 'var(--radius-md)',
-                      background: 'var(--bg-surface-glass)',
-                      border: '1px solid var(--border-subtle)',
-                      fontSize: '0.85rem',
-                    }}
-                  >
-                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px 14px', minWidth: 0 }}>
-                      <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{mappingClient(map)}</span>
-                      <span style={{ color: 'var(--primary)' }}>➔</span>
-                      <span style={{ color: 'var(--status-good)', fontWeight: 600 }}>{mappingUpstream(map) || '(同名)'}</span>
-                      <span className="form-hint" style={{ fontSize: '0.68rem' }}>{map.thinking || 'disable'} · {map.context || 'passThrough'}{map.failoverTimeoutSeconds != null ? ` · ${map.failoverTimeoutSeconds}s` : ''}</span>
-                    </div>
-
-                    <div style={{ display: 'flex', gap: '6px' }}>
-                      <button
-                        type="button"
-                        className="btn-icon btn-compact-icon"
-                        onClick={() => openMappingEditor(map, idx)}
-                        title="编辑映射"
-                        aria-label={`编辑模型映射「${mappingClient(map)}」`}
-                      >
-                        <Icon name="edit" size={13} />
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-icon btn-compact-icon"
-                        style={{ color: 'var(--status-critical)' }}
-                        onClick={() => handleDeleteMapping(idx)}
-                        title="删除映射"
-                        aria-label={`删除模型映射「${mappingClient(map)}」`}
-                      >
-                        <Icon name="trash" size={13} />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div style={{ padding: '16px', borderRadius: 'var(--radius-md)', background: 'var(--bg-surface-glass)', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                当前通道未配置任何模型重命名映射；所有请求原样使用客户端模型名称进行上游转发。
-              </div>
-            )}
-          </div>
+          <EndpointMappingTable endpoint={selectedEndpoint} saveConfig={saveConfig} addToast={addToast} />
         </div>
       )}
     </div>

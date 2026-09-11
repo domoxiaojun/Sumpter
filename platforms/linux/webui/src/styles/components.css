@@ -7297,3 +7297,50 @@ button.responsive-data-card {
   .event-inspector-field dt { text-align: left; }
   .event-inspector-content { padding-left: 0; }
 }
+
+/* ==========================================================================
+   入口模型映射表:就地编辑 + 批量操作
+   ========================================================================== */
+.mapping-table { display: grid; gap: 10px; min-width: 0; }
+.mapping-table-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
+.mapping-table-title { display: inline-flex; align-items: center; gap: 8px; font-size: 0.85rem; color: var(--text-primary); }
+.mapping-table-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.mapping-search { width: 180px; min-height: 34px; padding-block: 4px; }
+.mapping-dirty-badge, .mapping-invalid-badge { padding: 2px 8px; border-radius: var(--radius-full); font-size: 0.72rem; font-weight: 600; }
+.mapping-dirty-badge { background: var(--status-warning-bg); color: var(--status-warning); border: 1px solid var(--status-warning-border); }
+.mapping-invalid-badge { background: var(--status-critical-bg); color: var(--status-critical); border: 1px solid var(--status-critical-border); }
+
+.mapping-bulk-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 12px; border-radius: var(--radius-md); background: var(--bg-active); border: 1px solid var(--border-glow); font-size: 0.8rem; color: var(--text-primary); }
+.mapping-bulk-bar label { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); }
+.mapping-bulk-bar .form-select { width: auto; min-width: 120px; min-height: 32px; padding-block: 3px; font-size: 0.8rem; }
+.mapping-bulk-delete { color: var(--status-critical); }
+
+.mapping-grid { display: grid; min-width: 0; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-surface-glass); overflow: hidden; }
+.mapping-grid-head, .mapping-grid-row { display: grid; grid-template-columns: 32px minmax(160px, 1.4fr) minmax(140px, 1.2fr) minmax(150px, 1fr) minmax(120px, 0.9fr) 92px 36px; align-items: center; gap: 8px; padding: 6px 10px; min-width: 0; }
+.mapping-grid-head { position: sticky; top: 0; z-index: 1; background: var(--bg-surface-elevated); color: var(--text-secondary); font-size: 0.74rem; font-weight: 600; border-bottom: 1px solid var(--border-subtle); }
+.mapping-grid-row { border-bottom: 1px solid var(--border-subtle); transition: background-color var(--ease-fast); }
+.mapping-grid-row:last-child { border-bottom: 0; }
+.mapping-grid-row:hover { background: var(--bg-hover); }
+.mapping-grid-row.is-selected { background: color-mix(in srgb, var(--primary) 8%, transparent); }
+.mapping-grid-row.is-invalid { box-shadow: inset 3px 0 0 var(--status-critical); }
+.mapping-grid-row > span { min-width: 0; display: flex; align-items: center; }
+.mapping-grid-row .form-input, .mapping-grid-row .form-select { min-height: 32px; padding: 3px 8px; font-size: 0.8rem; }
+.mapping-grid-row .form-input.mono-cell { font-size: 0.78rem; }
+.mapping-grid-row input[type="checkbox"], .mapping-grid-head input[type="checkbox"] { margin: 0; cursor: pointer; }
+.mapping-thinking-cell { display: grid !important; gap: 4px; }
+.mapping-row-delete { color: var(--text-muted); }
+.mapping-row-delete:hover { color: var(--status-critical); }
+.mapping-empty { padding: 16px; border-radius: var(--radius-md); background: var(--bg-surface-glass); color: var(--text-muted); font-size: 0.85rem; }
+
+@media (max-width: 900px) {
+  .mapping-grid-head { display: none; }
+  .mapping-grid-row { grid-template-columns: 32px minmax(0, 1fr) 36px; grid-template-areas: "check from del" ". to ." ". thinking ." ". context ." ". timeout ."; row-gap: 6px; padding: 10px; }
+  .mapping-grid-row > span:nth-child(1) { grid-area: check; align-self: start; }
+  .mapping-grid-row > span:nth-child(2) { grid-area: from; }
+  .mapping-grid-row > span:nth-child(3) { grid-area: to; }
+  .mapping-grid-row > span:nth-child(4) { grid-area: thinking; }
+  .mapping-grid-row > span:nth-child(5) { grid-area: context; }
+  .mapping-grid-row > span:nth-child(6) { grid-area: timeout; }
+  .mapping-grid-row > span:nth-child(7) { grid-area: del; align-self: start; }
+  .mapping-search { width: 100%; }
+}
