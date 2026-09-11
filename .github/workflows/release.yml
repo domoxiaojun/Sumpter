@@ -105,6 +105,14 @@ jobs:
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - name: Check repository contracts
         run: ./scripts/check.sh docs
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # 部署模板会进入 Linux 发布包，发布前同样运行 Docker/Compose 契约测试。
+          go-version-file: scripts/tests/docker/go.mod
+          cache-dependency-path: scripts/tests/docker/go.sum
+      - name: Check Docker and Compose deployment inputs
+        run: ./scripts/check.sh docker
       - name: Install WebUI dependencies
         run: npm ci --prefix platforms/linux/webui
       - name: Test and verify committed WebUI

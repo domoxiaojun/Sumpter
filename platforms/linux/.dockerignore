@@ -1,11 +1,6 @@
 **
-# Full source build (local docker compose build)
-!Dockerfile
-!Cargo.toml
-!Cargo.lock
-!crates/
-!crates/**
-# Thin runtime image (CI Dockerfile.runtime)
+# Thin runtime image; the context is this directory
+# (release.yml container / publish jobs build it)
 !Dockerfile.runtime
 !docker-bin/
 !docker-bin/**

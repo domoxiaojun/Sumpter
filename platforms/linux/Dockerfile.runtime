@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1.7
 # Fast runtime image: copies a prebuilt static sumpterd (no cargo in Docker).
-# Used by .github/workflows/container.yml after cargo-zigbuild.
+# Built by .github/workflows/release.yml from the cargo-zigbuild binaries: the
+# container job validates both architectures, the publish job pushes to GHCR.
 # Local full rebuild from source still uses ./Dockerfile.
 
 FROM alpine:3.22 AS runtime
@@ -16,8 +17,9 @@ COPY --chmod=0755 docker-bin/sumpterd-${TARGETARCH} /usr/local/bin/sumpterd
 COPY web/ /opt/sumpter/web/
 COPY config.example.json /opt/sumpter/config.example.json
 
-# CMD sets `--config-dir /config`, so the mounted volume must contain
-# `/config/admin-password` before startup. Public access requires HTTPS.
+# Compose's init service creates missing files in the bind mount first.
+# Direct docker run users must prepare /config/admin-password themselves.
+# Public access requires HTTPS; CMD fixes the daemon config directory to /config.
 
 ENV RUST_LOG=info \
     SUMPTER_ADMIN_HOST=127.0.0.1 \

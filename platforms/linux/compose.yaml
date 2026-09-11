@@ -1,89 +1,91 @@
-# sumpter Docker Compose（Linux 主机）
-# 同名：docker-compose.yml → 本文件
-#
-# 设计：
-#   - 默认使用 GHCR :latest，不在本机 cargo/docker build
-#   - 配置与运行数据 bind 到当前目录 ./config
-#   - SUMPTER_ADMIN_* / RUST_LOG 从宿主机环境透传进容器
-#
-# 首次：
-#   mkdir -p config
-#   docker compose pull && docker compose up -d
-#   打开 http://127.0.0.1:57879/admin/
-#
-# 升级：
-#   docker compose pull && docker compose up -d
-#
-# :latest 由统一 Release 工作流更新。
-# 私有 GHCR 需先 docker login。钉死版本：export SUMPTER_IMAGE=ghcr.io/domoxiaojun/sumpter:0.3.4
-#
-# 仅 Linux host network。镜像与 Compose 都不指定运行用户，默认由 root 写 ./config。
-# Admin 默认读取 ./config/admin-password 并提供 WebUI 内置登录；公网反代仍必须使用 HTTPS。
+# 独立部署：把本文件放进任意 sumpter/ 目录即可；.env 可选，只用于覆盖下面这些参数。
+# 运行镜像固定来自 GHCR 官方发布（由 Release 工作流构建的双架构 manifest），本文件不含 build。
+x-runtime: &runtime
+  image: ${SUMPTER_IMAGE:-ghcr.io/domoxiaojun/sumpter:latest}
+  read_only: true
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  volumes:
+    # SELinux 主机（Fedora/RHEL）在结尾追加 :z，例如 ./config:/config:z
+    - ${SUMPTER_CONFIG_DIR:-./config}:/config
 
 services:
+  # 使用同一镜像的 shell 完成首次初始化，不需要宿主机 Python、jq 或新版 daemon。
+  # 只创建缺失文件；绝不以模板覆盖已有配置、密码或数据库。
+  init:
+    <<: *runtime
+    restart: "no"
+    network_mode: none
+    working_dir: /config
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        umask 077
+        # 新文件已由 umask 限定为 0600；chmod 只作为加固，
+        # NFS/CIFS 等挂载可能拒绝 chmod，不应因此阻止 daemon 启动。
+        chmod 700 . 2>/dev/null || echo "警告：无法把 /config 权限设为 0700，请自行确认目录权限" >&2
+        for file in config.json admin-password; do
+          if [ -L "$$file" ] || { [ -e "$$file" ] && [ ! -f "$$file" ]; }; then
+            echo "拒绝使用非普通文件: $$file" >&2
+            exit 1
+          fi
+        done
+        if [ ! -e config.json ] && [ -e keys.json ]; then
+          echo "检测到旧 keys.json；请先手工迁移，不自动创建新配置" >&2
+          exit 1
+        fi
+        stage=$$(mktemp -d .sumpter-init.XXXXXX)
+        trap 'rm -rf "$$stage"' EXIT
+        if [ ! -e admin-password ]; then
+          od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > "$$stage/admin-password"
+          test "$$(wc -c < "$$stage/admin-password")" -eq 64
+          printf '\n' >> "$$stage/admin-password"
+          ln "$$stage/admin-password" admin-password
+        fi
+        if [ ! -e config.json ]; then
+          printf '%s\n' '{"schemaVersion":7,"endpoints":[],"listener":{"host":"0.0.0.0","port":57878,"authToken":"","allowedCIDRs":[]}}' > "$$stage/config.json"
+          ln "$$stage/config.json" config.json
+        fi
+        chmod 600 config.json admin-password 2>/dev/null \
+          || echo "警告：无法把 config.json / admin-password 权限设为 0600，请自行确认" >&2
+
   sumpter:
-    image: ${SUMPTER_IMAGE:-ghcr.io/domoxiaojun/sumpter:latest}
-    # 本机编镜像见 compose.build.example.yaml
-
-    network_mode: host
-    # bridge 见 compose.bridge.example.yaml（须 Admin 听 0.0.0.0）
-
+    <<: *runtime
+    depends_on:
+      init:
+        condition: service_completed_successfully
     init: true
-    restart: unless-stopped
+    restart: ${SUMPTER_RESTART_POLICY:-unless-stopped}
     stop_signal: SIGTERM
-    stop_grace_period: 30s
-
+    stop_grace_period: ${SUMPTER_STOP_GRACE_PERIOD:-30s}
+    # .env 可选；Compose 2.24+ 会把它作为附加环境变量透传给 daemon。
+    env_file:
+      - path: ./.env
+        required: false
     environment:
       RUST_LOG: ${RUST_LOG:-info}
-      # 必须列出才会传入容器；宿主机 export / 命令前缀 / .env 均可覆盖
-      SUMPTER_ADMIN_HOST: ${SUMPTER_ADMIN_HOST:-127.0.0.1}
-      SUMPTER_ADMIN_PORT: ${SUMPTER_ADMIN_PORT:-57879}
-      # 启动前必须创建 ./config/admin-password；daemon 会按 --config-dir 自动读取。
-      # 高级自定义路径才需要 SUMPTER_ADMIN_PASSWORD_FILE。
-      # SUMPTER_WEB_ROOT: /opt/sumpter/web
-
-    # CLI 优先于环境变量；取消注释须写全
-    # command:
-    #   - --config-dir
-    #   - /config
-    #   - --web-root
-    #   - /opt/sumpter/web
-    #   - --admin-host
-    #   - "0.0.0.0"
-    #   - --admin-port
-    #   - "57879"
-
-    volumes:
-      - ./config:/config
-      # - ./web:/opt/sumpter/web:ro
-
+      TZ: ${TZ:-UTC}
+      # bridge 容器内固定监听；.env 的 SUMPTER_ADMIN_PORT 只控制宿主机映射。
+      SUMPTER_ADMIN_HOST: "0.0.0.0"
+      SUMPTER_ADMIN_PORT: "57879"
+      SUMPTER_ADMIN_PASSWORD_FILE: /config/admin-password
+      # 不要在这里加 HTTP_PROXY/HTTPS_PROXY/ALL_PROXY：引擎的数据面与模型探测都显式
+      # `.no_proxy()`，这些变量不会让上游流量走代理（见 DOCKER.md 的环境变量一节）。
+    ports:
+      - "${SUMPTER_PROXY_BIND_HOST:-127.0.0.1}:${SUMPTER_PROXY_PORT:-57878}:57878"
+      - "${SUMPTER_ADMIN_BIND_HOST:-127.0.0.1}:${SUMPTER_ADMIN_PORT:-57879}:57879"
     healthcheck:
-      test:
-        [
-          "CMD",
-          "wget",
-          "-q",
-          "-T",
-          "3",
-          "-O",
-          "/dev/null",
-          "http://127.0.0.1:${SUMPTER_ADMIN_PORT:-57879}/healthz",
-        ]
+      test: ["CMD", "wget", "-q", "-T", "3", "-O", "/dev/null", "http://127.0.0.1:57879/healthz"]
       interval: 15s
       timeout: 4s
       retries: 4
       start_period: 10s
-
-    read_only: true
     tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
-    # Fedora SELinux 挂载异常时可改成同时带 label=disable
+      - "/tmp:rw,noexec,nosuid,nodev,size=${SUMPTER_TMPFS_SIZE:-64m},mode=1777"
     logging:
       driver: json-file
       options:
-        max-size: "10m"
-        max-file: "3"
+        max-size: ${SUMPTER_LOG_MAX_SIZE:-10m}
+        max-file: "${SUMPTER_LOG_MAX_FILES:-3}"

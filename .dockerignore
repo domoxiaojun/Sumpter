@@ -8,7 +8,9 @@
 !apps/
 !apps/**
 !platforms/
+platforms/*
 !platforms/linux/
+platforms/linux/*
 !platforms/linux/Dockerfile
 !platforms/linux/scripts/
 !platforms/linux/scripts/**
@@ -16,3 +18,10 @@
 !platforms/linux/web/**
 !platforms/linux/config.example.json
 **/target/
+**/node_modules/
+**/.build/
+**/dist/
+**/.git/
+**/.env
+**/.env.*
+**/admin-password

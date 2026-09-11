@@ -23,7 +23,7 @@
 
 ## 验证与生成文件
 
-- 优先使用 `./scripts/check.sh docs|rust|web|macos|all` 和受影响模块的定向测试。
+- 优先使用 `./scripts/check.sh docs|rust|web|macos|docker|all` 和受影响模块的定向测试。`docker` 只解析 `platforms/linux/` 的部署模板与 `.dockerignore`，需要 Go 工具链，不在本机启动容器。
 - 共享行为改变须覆盖两个 adapter；不要用 `--all-features` 替代平台测试。
 - Python 全部通过 uv 运行；大型 Python 项目使用 venv。本机不安装外部数据库，不安装或运行 Docker；容器验证在 Linux CI 完成。
 - TOML 用 taplo，Shell 用 shellcheck，GitHub Actions 用 actionlint，文档链接用 lychee。验证默认只读，不做全仓自动修复。

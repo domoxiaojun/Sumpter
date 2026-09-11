@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 mode="${1:-docs}"
 if [[ "$#" -gt 1 ]]; then
-    echo "用法: $0 [docs|rust|web|macos|all]" >&2
+    echo "用法: $0 [docs|rust|web|macos|docker|all]" >&2
     exit 2
 fi
 check_docs() {
@@ -37,11 +37,22 @@ check_macos() {
     swift build --package-path platforms/macos/app --product SumpterApp
     swift test --package-path platforms/macos/app
 }
+# Docker/Compose 部署模板契约。需要 Go 工具链，所以不并入 all；CI 单独运行。
+check_docker() {
+    if ! command -v go >/dev/null 2>&1; then
+        echo "docker 检查需要 Go 工具链（用于 Moby 匹配器与 Compose 解析器）" >&2
+        return 1
+    fi
+    test -z "$(gofmt -l .)" || { echo "scripts/tests/docker 存在未格式化的 Go 文件" >&2; return 1; }
+    go vet ./...
+    go test ./...
+}
 case "$mode" in
     docs) check_docs ;;
     rust) check_rust ;;
     web) check_web ;;
     macos) check_macos ;;
+    docker) (cd scripts/tests/docker && check_docker) ;;
     all)
         check_docs
         check_rust
@@ -49,5 +60,5 @@ case "$mode" in
         if [[ "$(uname -s)" == Darwin ]]; then check_macos
         else echo "跳过 macOS App：请由 macOS CI 验证"; fi
         ;;
-    *) echo "用法: $0 [docs|rust|web|macos|all]" >&2; exit 2 ;;
+    *) echo "用法: $0 [docs|rust|web|macos|docker|all]" >&2; exit 2 ;;
 esac

@@ -1,12 +1,20 @@
-# 可选：本机从源码 docker build（开发用）。生产请用 compose.yaml 拉 GHCR 镜像。
-#
+# 仅完整源码树可用；独立部署目录与 Linux 二进制发布包都不含 Rust 源码。
+#   cd platforms/linux
 #   docker compose -f compose.yaml -f compose.build.example.yaml up -d --build
+#
+# 本机构建使用独立的本地 tag，绝不继承 .env 里的 SUMPTER_IMAGE，
+# 避免把源码构建的镜像打成 ghcr.io/... 正式名称、覆盖官方镜像的本地引用。
+# 只有显式设置 SUMPTER_LOCAL_IMAGE 才会改这个 tag。
+x-source: &source
+  image: ${SUMPTER_LOCAL_IMAGE:-sumpter:local}
+  build:
+    context: ../..
+    dockerfile: platforms/linux/Dockerfile
+    args:
+      RUST_IMAGE: ${RUST_IMAGE:-rust:1.88-alpine}
 
 services:
+  init:
+    <<: *source
   sumpter:
-    image: ${SUMPTER_IMAGE:-sumpter:local}
-    build:
-      context: ../..
-      dockerfile: platforms/linux/Dockerfile
-      args:
-        RUST_IMAGE: ${RUST_IMAGE:-rust:1.88-alpine}
+    <<: *source

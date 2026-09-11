@@ -11,6 +11,7 @@
 | Rust / Cargo | 1.88+，CI 使用 1.88.0 | 共享引擎与两个 adapter |
 | Node.js / npm | Node 22，CI 使用 22.18.0 | WebUI、资源同步与脚本测试 |
 | uv | 可用的稳定版，Python 3.11+ | 文档生成脚本 |
+| Go | 1.23+ | `./scripts/check.sh docker` 的 Moby / Compose 部署契约测试 |
 | Xcode / Swift | Xcode 26.6 (17F113)，Swift 6.3.3，macOS SDK 26.5 | macOS 14+ App，仅 macOS 主机 |
 | actionlint / shellcheck / taplo / lychee | 本机或 CI 可用 | 对应文件静态检查；链接检查按需手动执行 |
 
@@ -38,6 +39,7 @@ npm ci --prefix platforms/linux/webui
 | WebUI | `./scripts/check.sh web`，必要的浏览器交互验收 |
 | SwiftUI / macOS wire | `./scripts/check.sh macos`，必要的 App 界面验收 |
 | Shell / workflow / TOML | shellcheck / actionlint / taplo；运行受影响脚本自测 |
+| Docker / Compose 部署模板 | `./scripts/check.sh docker`，覆盖 `.dockerignore` 隔离与 Compose 解析 |
 | 发布配置 | 以上受影响检查，再按发布指南检查最终包 |
 
 Rust gate 是 fmt、check、test、clippy，均不自动修复；构建与测试使用 `--locked`。先运行能证明改动正确的定向测试，变更范围需要时再跑整组：
@@ -88,6 +90,7 @@ cargo run --locked -p sumpterd-macos -- --config-dir /tmp/sumpter-dev --foregrou
 | `docs/templates/usage-onboarding.md`、`docs/templates/usage-path-matrix.json` | `uv run scripts/maintenance/sync-usage-docs.py --write` | 根 `USAGE.md` 与 `platforms/linux/USAGE.md` 的 BEGIN/END 标记块 |
 | `scripts/clients/client-attribution.mjs`、`scripts/clients/pi-project-attribution.ts` | `node scripts/maintenance/sync-client-attribution.mjs` | 两个平台的 `scripts/`、Swift App `Resources/` 及各处 Gemini 兼容入口 |
 | `platforms/linux/webui/` | `npm run build --prefix platforms/linux/webui` | `platforms/linux/web/` |
+| `platforms/linux/compose.yaml`、`.env.example` | 同步 `compose.bridge.example.yaml` 兼容链接，运行 `./scripts/check.sh docker` | 独立部署目录与 Linux 发布包 |
 
 USAGE 标记块以外的正文仍需直接维护。`scripts/check.sh docs` 只检查同步，不写副本，同时运行版本/示例/导出工具契约测试。Node 脚本无需额外依赖。
 

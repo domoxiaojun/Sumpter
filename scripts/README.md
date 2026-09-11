@@ -4,11 +4,12 @@
 
 | 位置 | 职责 |
 | --- | --- |
-| `check.sh` | 统一检查入口：`docs`、`rust`、`web`、`macos`、`all` |
+| `check.sh` | 统一检查入口：`docs`、`rust`、`web`、`macos`、`docker`、`all` |
 | `build-macos-dmg.sh` | 本机 macOS DMG 构建入口，调用平台打包脚本 |
 | `clients/` | 客户端归因程序的维护源，以及自动生成的 Gemini 兼容入口 |
 | `maintenance/` | 文档、元数据、客户端副本同步，以及源码快照导出 |
 | `tests/` | Node 测试，由检查入口和 CI 调用 |
+| `tests/docker/` | Docker / Compose 部署契约（Go）：官方匹配器与解析器验证 `.dockerignore`、部署模板、初始化脚本 |
 
 ## 常用命令
 
@@ -17,10 +18,11 @@
 ./scripts/check.sh rust
 ./scripts/check.sh web
 ./scripts/check.sh macos
+./scripts/check.sh docker   # 需要 Go 工具链
 ./scripts/build-macos-dmg.sh --help
 ```
 
-`web` 检查会重建受版本控制的 WebUI 产物。DMG 脚本当前默认跳过测试；需要打包前测试时设置 `RUN_TESTS=1`。本机打包不代表签名公证、安装或发布完成。
+`web` 检查会重建受版本控制的 WebUI 产物。`docker` 需要在 `platforms/linux/` 的部署模板上跑 Go 契约测试（本机不启动 Docker，真实镜像与启动验收在 Linux CI）；不并入 `all`。DMG 脚本当前默认跳过测试；需要打包前测试时设置 `RUN_TESTS=1`。本机打包不代表签名公证、安装或发布完成。
 
 ## 维护工具
 

@@ -38,8 +38,9 @@ COPY platforms/linux/web/ /opt/sumpter/web/
 COPY platforms/linux/config.example.json /opt/sumpter/config.example.json
 
 # Admin defaults (daemon reads these; CLI flags still win if provided in command:).
-# `/config/admin-password` is mandatory because CMD sets `--config-dir /config`;
-# mount it before starting. The WebUI login and API session still belong behind HTTPS publicly.
+# Compose's init service prepares /config/admin-password before the daemon starts.
+# Direct docker run users must prepare it themselves because CMD fixes /config.
+# The WebUI login and API session still belong behind HTTPS publicly.
 ENV RUST_LOG=info \
     SUMPTER_ADMIN_HOST=127.0.0.1 \
     SUMPTER_ADMIN_PORT=57879 \

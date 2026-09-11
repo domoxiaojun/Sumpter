@@ -40,6 +40,18 @@ test('exports current bytes, new files and executable mode without history or ig
   assert.equal(realpathSync(join(parent, 'export.manifest.json')), result.manifestPath);
   assert.throws(() => exportSource(source, target), /已存在/);
 });
+test('exports a deployment env example but still rejects private env files', t => {
+  const { source, target } = fixture(t);
+  writeFileSync(join(source, '.env.example'), 'SUMPTER_UID=1000\n');
+  exportSource(source, target);
+  assert.equal(readFileSync(join(target, '.env.example'), 'utf8'), 'SUMPTER_UID=1000\n');
+  for (const name of ['.env', '.env.production']) {
+    writeFileSync(join(source, name), 'PRIVATE=synthetic-test\n');
+    assert.throws(() => exportSource(source, `${target}-${name}`), /拒绝运行数据/);
+    rmSync(join(source, name));
+  }
+});
+
 test('rejects tracked runtime data before creating output', t => {
   const { source, target } = fixture(t);
   writeFileSync(join(source, 'config.json'), 'private');

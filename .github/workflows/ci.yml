@@ -134,3 +134,23 @@ jobs:
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - name: Check documentation and source export contracts
         run: ./scripts/check.sh docs
+
+  docker:
+    name: Docker deployment contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # 版本以测试模块的 go.mod 为准，避免另建一份工具链清单。
+          go-version-file: scripts/tests/docker/go.mod
+          cache-dependency-path: scripts/tests/docker/go.sum
+
+      - name: Check Docker and Compose deployment inputs
+        run: ./scripts/check.sh docker

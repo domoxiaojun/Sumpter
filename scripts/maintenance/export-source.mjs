@@ -33,7 +33,8 @@ export function exportSource(source, destination) {
       if (lstatSync(ancestor).isSymbolicLink()) throw new Error(`拒绝符号链接目录: ${name}`);
     }
     if (!stat.isFile() && !stat.isSymbolicLink()) throw new Error(`只允许普通文件或内部链接: ${name}`);
-    if (/(^|\/)(\.git|\.env(?:\..*)?|\.venv|\.audit|node_modules|target|dist|\.build|__pycache__|config\.json|keys\.json|admin-password|\.control_token)(\/|$)/i.test(name)
+    const privateEnv = name.split('/').some(part => /^\.env(?:\..*)?$/i.test(part) && part !== '.env.example');
+    if (privateEnv || /(^|\/)(\.git|\.venv|\.audit|node_modules|target|dist|\.build|__pycache__|config\.json|keys\.json|admin-password|\.control_token)(\/|$)/i.test(name)
       || /\.(db|sqlite|sqlite3)(?:-(?:wal|shm))?$|\.(dmg|zip|log|pem|p12|pfx|key)$|\.bak(?:-|$)/i.test(name)) {
       throw new Error(`拒绝运行数据、凭据或缓存: ${name}`);
     }
