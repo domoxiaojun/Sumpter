@@ -528,7 +528,8 @@ struct RecentEventsPanel: View {
     @State private var eventKindFilter: RuntimeEventKindFilter = .client
 
     private var eventRowHeight: CGFloat {
-        dynamicTypeSize.isAccessibilitySize ? 88 : 56
+        // 第一列最多四行(时间 / 项目 / 请求摘要 / 工具),56 会把工具行挤掉。
+        dynamicTypeSize.isAccessibilitySize ? 100 : 66
     }
 
     var body: some View {
@@ -821,6 +822,19 @@ struct RecentEventsPanel: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+            // 本次调用的工具直接列在第一列,不用点开详情;分页列表已带 toolCalls 投影。
+            if event.kind != "notify", let tools = RuntimeEventDisplay.toolCalls(event) {
+                HStack(spacing: 4) {
+                    Image(systemName: "wrench.and.screwdriver")
+                        .font(.system(size: 9))
+                        .foregroundStyle(palette.brand.opacity(0.8))
+                    Text(tools)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+                .help("调用工具：\(tools)")
+            }
         }
         .help(RuntimeEventDisplay.requestSummary(event))
         .frame(maxWidth: .infinity, minHeight: eventRowHeight - 6, alignment: .leading)

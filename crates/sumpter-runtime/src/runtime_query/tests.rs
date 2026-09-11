@@ -189,6 +189,37 @@ fn insert_100k(connection: &Connection) {
 }
 
 #[test]
+fn event_page_projects_tool_calls_without_payload() {
+    let mut connection = test_connection();
+    insert_100k(&connection);
+    // 列表快路径不解 payload_json;工具名必须来自投影列,空/损坏时保持 None。
+    connection
+        .execute_batch(
+            "UPDATE runtime_events SET tool_calls_json='[\"Read\",\"Bash\"]' WHERE seq=100000;
+             UPDATE runtime_events SET tool_calls_json='[]' WHERE seq=99999;
+             UPDATE runtime_events SET tool_calls_json='{broken' WHERE seq=99998;",
+        )
+        .expect("set tool_calls_json");
+
+    let events = events_page_on(
+        &mut connection,
+        &EventPageRequest {
+            page: 1,
+            page_size: 10,
+            ..EventPageRequest::default()
+        },
+    )
+    .expect("query event page");
+    assert!(events.events[0].details_omitted);
+    assert_eq!(
+        events.events[0].tool_calls.as_deref(),
+        Some(&["Read".to_owned(), "Bash".to_owned()][..])
+    );
+    assert_eq!(events.events[1].tool_calls, None);
+    assert_eq!(events.events[2].tool_calls, None);
+}
+
+#[test]
 fn projected_queries_are_bounded_on_100k_rows() {
     let mut connection = test_connection();
     insert_100k(&connection);

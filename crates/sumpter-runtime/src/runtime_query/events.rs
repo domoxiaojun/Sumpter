@@ -77,7 +77,7 @@ pub fn events_page_on(
                 codex_thread_class,attribution_scope \
                 ,request_method,request_path,route_intent,model_group_id,model_group_name, \
                 cache_read_state,cache_read_finality,cache_read_reason,hook_event,input_tokens,output_tokens, \
-                cache_read_input_tokens,cache_creation_input_tokens,reasoning_tokens \
+                cache_read_input_tokens,cache_creation_input_tokens,reasoning_tokens,tool_calls_json \
          FROM runtime_events{where_sql} ORDER BY seq DESC LIMIT ? OFFSET ?"
     );
     let events = {

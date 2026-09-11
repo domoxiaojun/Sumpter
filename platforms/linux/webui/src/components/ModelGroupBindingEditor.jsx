@@ -26,7 +26,7 @@ export function ModelGroupBindingEditor({ binding, models, endpoint, edit, follo
 
   return <div className="binding-editor">
     <div className="binding-settings">
-      <label className="binding-setting"><span>组内状态</span><span className="binding-enabled"><input type="checkbox" checked={binding.enabled} onChange={(e) => edit((value) => { value.enabled = e.target.checked; })} /> 在此组中启用</span></label>
+      {/* 组内启用开关在折叠头部,不折叠也能切;这里只留展开后才需要的设置。 */}
       <label className="binding-setting"><span>默认优先级</span>{followsLibrary
         ? <span className="form-hint" title="默认组的顺序与优先级保存时自动跟随入口库">跟随入口库</span>
         : <input className="form-input binding-priority" type="number" min="0" step="1" aria-label="入口优先级" title="数字越小越优先" value={binding.priority} onChange={(e) => edit((value) => { value.priority = Number(e.target.value); })} />}</label>

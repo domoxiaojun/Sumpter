@@ -14,7 +14,7 @@ import { eventAgentLabel, eventCacheLabel, eventHasObservedUsage, eventUsageLabe
 import { copyWithToast } from '../utils/clipboard.js';
 import { api } from '../services/api.js';
 import {
-  eventEndpointName, formatNumber, formatTokenCount, formatDuration, formatTimestamp, eventLogicalModel, eventEndpoint, statusKind, eventDurationText, friendlyEventMessage, eventPurposeLabel, eventClientKindLabel, eventKindLabel, getRequestChain, eventOutcomeLabel, eventPhaseLabel, eventHttpStatusLabel, eventHTTPStatusCode, eventRequestID, eventTTFBMS, eventOutcome, eventFailover, eventField, eventIsInFlight, eventFailureSummaryLabel, eventResultKind, eventProjectContext
+  eventEndpointName, formatNumber, formatTokenCount, formatDuration, formatTimestamp, eventLogicalModel, eventEndpoint, statusKind, eventDurationText, friendlyEventMessage, eventPurposeLabel, eventClientKindLabel, eventKindLabel, getRequestChain, eventOutcomeLabel, eventPhaseLabel, eventHttpStatusLabel, eventHTTPStatusCode, eventRequestID, eventTTFBMS, eventOutcome, eventFailover, eventField, eventIsInFlight, eventFailureSummaryLabel, eventResultKind, eventProjectContext, eventToolCalls
 } from '../utils/helpers.js';
 
 function recentTokenTotals(events) {
@@ -109,6 +109,7 @@ function RecentEventOutcome({ event, compact = false }) {
 function RecentEventRequestCell({ event, live = false }) {
   const summary = recentEventRequestSummary(event);
   const project = recentEventProjectSummary(event);
+  const tools = event.kind === 'notify' ? [] : eventToolCalls(event);
   return (
     <span className={live ? 'telemetry-live-request' : 'telemetry-primary-cell'}>
       <span className={`mono-cell${live ? ' telemetry-live-time' : ' telemetry-event-time'}`}>
@@ -119,6 +120,12 @@ function RecentEventRequestCell({ event, live = false }) {
         {[eventKindLabel(event.kind), eventClientKindLabel(event), eventAgentLabel(event), recentEventPurposeLabel(event)]
           .filter(Boolean).join(' · ')}
       </span>
+      {tools.length > 0 && (
+        <span className="telemetry-event-meta telemetry-event-tools" title={`调用工具：${tools.join('、')}`}>
+          <Icon name="wrench" size={11} aria-hidden="true" />
+          {tools.join('、')}
+        </span>
+      )}
     </span>
   );
 }

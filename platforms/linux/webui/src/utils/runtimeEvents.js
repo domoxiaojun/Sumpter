@@ -2,7 +2,8 @@ import { normalizeTimestampMS } from './helpers.js';
 
 const DEFAULT_PER_KIND_LIMIT = 200;
 
-const omittedDetailFields = ['codexMetadata', 'clientDeclared', 'grokMetadata', 'failureDetail', 'message', 'streamTrace', 'toolCalls', 'timeoutMS', 'upstreamHost', 'upstreamRequestID'];
+// 分页列表现在直接带 toolCalls(第一列要显示工具),不再算作省略字段。
+const omittedDetailFields = ['codexMetadata', 'clientDeclared', 'grokMetadata', 'failureDetail', 'message', 'streamTrace', 'timeoutMS', 'upstreamHost', 'upstreamRequestID'];
 
 export function mergeRuntimeEvent(previous, incoming) {
   if (!previous || previous.id !== incoming?.id) return incoming;

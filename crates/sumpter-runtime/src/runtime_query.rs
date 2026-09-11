@@ -1346,6 +1346,9 @@ struct EventListProjection {
     request_method: Option<String>,
     request_path: Option<String>,
     route_intent: Option<String>,
+    /// 列表行直接带工具名:运行页第一列要显示本次调用了哪些工具,
+    /// 不能等选中后再拉详情。投影写入时已做数量/长度/控制字符裁剪。
+    tool_calls_json: Option<String>,
 }
 
 fn decode_projection_enum<T: DeserializeOwned>(value: Option<String>) -> Option<T> {
@@ -1446,7 +1449,11 @@ fn event_list_item_from_projection(row: EventListProjection) -> RuntimeEventList
         failure_detail: None,
         message: None,
         stream_trace: None,
-        tool_calls: None,
+        tool_calls: row
+            .tool_calls_json
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<Vec<String>>(raw).ok())
+            .filter(|calls| !calls.is_empty()),
         timeout_ms: None,
         upstream_host: None,
         upstream_status_code: row.upstream_status_code,

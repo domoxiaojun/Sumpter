@@ -43,8 +43,6 @@ struct ModelGroupBindingEditor: View {
                                 .font(.caption).foregroundStyle(palette.textSecondary)
                         }
                         Spacer(minLength: 0)
-                        Label(enabledText, systemImage: endpoint?.enabled == false ? "pause.circle" : binding.enabled ? "checkmark.circle" : "pause.circle")
-                            .font(.caption).foregroundStyle(endpoint?.enabled == false ? palette.warning : palette.textSecondary)
                         Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption)
                     }
                     .padding(.horizontal, 10).padding(.vertical, 7)
@@ -53,6 +51,17 @@ struct ModelGroupBindingEditor: View {
                 .buttonStyle(ModelGroupTileStyle(borderless: true))
                 .accessibilityLabel("编辑入口 \(endpoint?.name ?? binding.endpointID)")
                 .accessibilityValue(expanded ? "已展开" : "已收起")
+                // 组内启用开关常驻头部:不用展开就能切,和 Linux 端一致。
+                Toggle(isOn: $binding.enabled) {
+                    Text(enabledText)
+                        .font(.caption)
+                        .foregroundStyle(endpoint?.enabled == false ? palette.warning : palette.textSecondary)
+                }
+                .toggleStyle(.switch).controlSize(.mini)
+                .disabled(endpoint?.enabled == false)
+                .help(endpoint?.enabled == false ? "入口库已停用，启用入口后才会参与调度" : "在此组中启用或停用该入口")
+                .accessibilityLabel("在此组中启用 \(endpoint?.name ?? binding.endpointID)")
+                .padding(.trailing, followsLibrary ? 10 : 4)
                 if !followsLibrary {
                     HStack(spacing: 4) {
                         Button(action: up) { Image(systemName: "arrow.up").frame(minWidth: 20, minHeight: 24) }
@@ -75,7 +84,6 @@ struct ModelGroupBindingEditor: View {
     private var editor: some View {
         VStack(alignment: .leading, spacing: 10) {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 160, maximum: 260), spacing: 16)], alignment: .leading, spacing: 8) {
-                setting("组内状态") { Toggle("在此组中启用", isOn: $binding.enabled).toggleStyle(.checkbox) }
                 setting("默认优先级") {
                     if followsLibrary {
                         Text("跟随入口库")
