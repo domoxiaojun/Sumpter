@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SUMPTER_ATTRIBUTION_BUNDLE_VERSION: 0.4.3
+// SUMPTER_ATTRIBUTION_BUNDLE_VERSION: 0.4.4
 // Canonical standalone launcher/installer. Ship copies via sync-client-attribution.mjs.
 import { spawn, execFileSync } from 'node:child_process';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const clients = ['claude', 'grok', 'gemini', 'codex', 'pi'];
 // Keep the launcher and its companion Pi extension from being mixed across releases.
-export const ATTRIBUTION_BUNDLE_VERSION = '0.4.3';
+export const ATTRIBUTION_BUNDLE_VERSION = '0.4.4';
 const PI_PASSTHROUGH_COMMANDS = new Set(['install', 'remove', 'uninstall', 'update', 'list', 'config', 'auth']);
 const PI_PASSTHROUGH_FLAGS = new Set(['--help', '-h', '--version', '-v']);
 const ownedHeaders = new Set(['x-sumpter-client', 'x-sumpter-project', 'x-sumpter-workspace',

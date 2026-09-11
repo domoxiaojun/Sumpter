@@ -6,6 +6,11 @@ import XCTest
 
 final class EventLayoutPreviewTests: XCTestCase {
     @MainActor func testRenderEventLayouts() throws {
+        let outputDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sumpter-event-layout-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: outputDirectory) }
+
         func event(_ id: String, _ changes: [String: Any]) throws -> RuntimeEvent {
             let base: [String: Any] = [
                 "id": id, "kind": "client", "timestamp": Date().timeIntervalSinceReferenceDate - 60,
@@ -68,7 +73,7 @@ final class EventLayoutPreviewTests: XCTestCase {
             let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
             host.cacheDisplay(in: host.bounds, to: bitmap)
             let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
-            try png.write(to: URL(fileURLWithPath: "/Users/kkl/Documents/claude/sumpter/.audit/event-ui-20260910/\(name).png"))
+            try png.write(to: outputDirectory.appendingPathComponent("\(name).png"))
         }
     }
 }
