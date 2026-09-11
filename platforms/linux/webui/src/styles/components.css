@@ -48,10 +48,10 @@
 }
 
 .brand-title {
-  font-family: 'Plus Jakarta Sans', var(--font-sans);
+  font-family: var(--font-sans);
   font-size: 1.15rem;
-  font-weight: 800;
-  letter-spacing: -0.01em;
+  font-weight: 750;
+  letter-spacing: var(--tracking-tight);
   background: linear-gradient(135deg, #ffffff 0%, #cbd5e1 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -83,9 +83,10 @@ html[data-theme="light"] .brand-title {
 
 .nav-group-title {
   font-size: 0.72rem;
-  font-weight: 700;
+  font-weight: 650;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  /* 中文分组名不吃 uppercase,字距也只留一点,免得汉字被拉散。 */
+  letter-spacing: 0.03em;
   color: var(--text-muted);
   padding: var(--space-3) var(--space-3) var(--space-1);
 }
@@ -98,7 +99,7 @@ html[data-theme="light"] .brand-title {
   min-height: var(--control-height);
   border-radius: var(--radius-md);
   color: var(--text-secondary);
-  font-size: 0.92rem;
+  font-size: 0.9rem;
   font-weight: 500;
   text-decoration: none;
   background: transparent;
@@ -889,8 +890,10 @@ html[data-theme="light"] .brand-title {
 }
 
 .panel-title {
-  font-size: 1.05rem;
-  font-weight: 600;
+  font-size: 1rem;
+  font-weight: 620;
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-snug);
   color: var(--text-primary);
   display: flex;
   align-items: center;
@@ -899,6 +902,7 @@ html[data-theme="light"] .brand-title {
 
 .panel-hint {
   font-size: 0.82rem;
+  line-height: var(--leading-normal);
   color: var(--text-muted);
   overflow-wrap: anywhere;
 }
@@ -1024,11 +1028,12 @@ html[data-theme="light"] .brand-title {
 .metric-value {
   font-family: var(--font-sans);
   font-variant-numeric: tabular-nums;
+  font-feature-settings: var(--font-features-numeric);
   font-size: 2rem;
-  font-weight: 600;
-  letter-spacing: -0.03em;
+  font-weight: 620;
+  letter-spacing: var(--tracking-display);
   color: var(--text-primary);
-  line-height: 1.2;
+  line-height: var(--leading-tight);
 }
 
 .metric-detail {
@@ -1113,8 +1118,8 @@ html[data-theme="light"] .brand-title {
   min-height: var(--control-height);
   border-radius: var(--radius-md);
   font-family: var(--font-sans);
-  font-size: 0.88rem;
-  font-weight: 600;
+  font-size: 0.86rem;
+  font-weight: 560;
   cursor: pointer;
   text-decoration: none;
   border: 1px solid transparent;
@@ -1340,6 +1345,22 @@ html[data-theme="light"] .brand-title {
   font-weight: 500;
   line-height: 1.35;
 }
+
+/* 第一列的工具行:等宽名 + 单行截断,进行中与历史行共用。 */
+.telemetry-event-tools {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 5px;
+  max-height: none !important;
+  -webkit-line-clamp: unset !important;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 500;
+}
+
+.telemetry-event-tools svg { flex: none; color: var(--primary); opacity: 0.8; }
 
 .telemetry-event-time {
   color: var(--text-primary);
@@ -4307,9 +4328,9 @@ html[data-theme="light"] .brand-title {
   background: var(--bg-surface-elevated);
   color: var(--text-secondary);
   font-weight: 600;
-  font-size: 0.78rem;
+  font-size: 0.76rem;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
   border-bottom: 1px solid var(--border-subtle);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4879,7 +4900,10 @@ html[data-theme="light"] .brand-title {
 
 .mono-cell {
   font-family: var(--font-mono);
-  font-size: 0.85rem;
+  /* JetBrains Mono 比 Inter 宽,同字号会显得偏大;略缩一点并让数字等宽对齐。 */
+  font-size: 0.84rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
 }
 
 /* ==========================================================================
@@ -4894,7 +4918,7 @@ html[data-theme="light"] .brand-title {
 
 .form-label {
   font-size: 0.85rem;
-  font-weight: 600;
+  font-weight: 580;
   color: var(--text-primary);
   display: flex;
   align-items: center;
@@ -4916,6 +4940,7 @@ html[data-theme="light"] .brand-title {
   color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: 0.9rem;
+  font-feature-settings: var(--font-features-ui);
   transition: background-color var(--ease-fast), border-color var(--ease-fast), color var(--ease-fast), box-shadow var(--ease-fast), transform var(--ease-fast);
   touch-action: manipulation;
 }
@@ -7111,6 +7136,10 @@ button.responsive-data-card {
 .binding-header-text strong { color:var(--text-primary); font-size:13px; }
 .binding-header-text small, .binding-state { color:var(--text-secondary); font-size:12px; }
 .binding-state { flex:none; }
+/* 开关放在 summary 里:点击只切换 checkbox,不展开/收起 details。 */
+.binding-state-toggle { display:inline-flex; align-items:center; gap:6px; cursor:pointer; color:inherit; }
+.binding-state-toggle input { margin:0; cursor:pointer; }
+.binding-state-toggle input:disabled { cursor:not-allowed; }
 .model-binding-edit { display:flex; color:var(--text-secondary); flex:none; }
 .model-binding-edit svg { transform:rotate(90deg); }
 .model-group-binding[open] .model-binding-edit svg { transform:rotate(-90deg); }

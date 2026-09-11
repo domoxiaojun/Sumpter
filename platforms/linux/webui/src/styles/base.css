@@ -26,7 +26,10 @@ body {
   background-attachment: initial;
   color: var(--text-primary);
   font-family: var(--font-sans);
-  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  font-feature-settings: var(--font-features-ui);
+  font-optical-sizing: auto;
+  line-height: var(--leading-normal);
+  text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   /* Wide tables own their local scroll surface. Keep accidental fixed-width
@@ -169,9 +172,10 @@ body {
 
 .page-title {
   font-family: var(--font-sans);
-  font-size: 1.85rem;
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  font-size: 1.7rem;
+  font-weight: 650;
+  letter-spacing: var(--tracking-display);
+  line-height: var(--leading-tight);
   color: var(--text-primary);
   display: flex;
   align-items: center;
@@ -180,8 +184,8 @@ body {
 
 .page-subtitle {
   max-width: var(--readable-measure);
-  line-height: 1.65;
-  font-size: 0.95rem;
+  line-height: var(--leading-relaxed);
+  font-size: 0.92rem;
   color: var(--text-secondary);
 }
 

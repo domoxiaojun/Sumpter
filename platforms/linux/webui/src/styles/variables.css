@@ -3,9 +3,20 @@
 :root {
   color-scheme: dark light;
 
-  /* Typography */
-  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  /* Typography. Inter 的 @font-face 不覆盖 CJK 码位,中文自然落到 Noto Sans SC;
+     两者都由 main.jsx 自托管,后面的系统字体只是字体文件尚未到达时的回退。 */
+  --font-cjk: 'Noto Sans SC Variable', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Source Han Sans SC', 'Microsoft YaHei', sans-serif;
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, var(--font-cjk);
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, var(--font-cjk);
+  /* Inter: cv11 单层 a、ss03 圆 r 更接近 UI 字体;tnum 让数字列对齐。 */
+  --font-features-ui: 'cv02', 'cv03', 'cv04', 'cv11', 'ss03';
+  --font-features-numeric: 'tnum', 'cv11';
+  --leading-tight: 1.25;
+  --leading-snug: 1.4;
+  --leading-normal: 1.55;
+  --leading-relaxed: 1.65;
+  --tracking-tight: -0.018em;
+  --tracking-display: -0.024em;
 
   /* Spacing Scale */
   --space-1: 4px;
