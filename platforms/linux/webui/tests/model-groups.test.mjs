@@ -2,9 +2,35 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createLocalID } from '../src/utils/helpers.js';
 import { hasRoutableModel, endpointGroupModels, groupModels, groupRoutePreview, modelCatalogCategories, modelGroupPrefix, newModelGroup, pruneGroupReferences } from '../src/utils/modelGroups.js';
+import { createRouteCatalogLoader, routeModelChoices, routeCatalogKey } from '../src/utils/featureRoutes.js';
 
 globalThis.window = { location: { search: '?mock=1' } };
 const { fromWireConfig, toWireConfig } = await import('../src/services/api.js');
+
+test('route model choices use the selected endpoint catalog and mappings', () => {
+  const endpoints = [{ id: 'a', enabled: true, modelMappings: [{ from: 'claude-sonnet' }, { from: 'wild-*' }], catalog: { models: ['claude-3-5-sonnet'] } }, { id: 'b', enabled: true, modelMappings: [{ from: 'other' }] }];
+  assert.deepEqual(routeModelChoices(endpoints, 'a', endpoints[0].catalog), ['claude-3-5-sonnet', 'claude-sonnet']);
+  assert.deepEqual(routeModelChoices(endpoints, '', null), ['claude-sonnet', 'other']);
+});
+
+test('route catalog loader caches successful probes and never caches aborts', async () => {
+  let calls = 0; let now = 1000;
+  const loader = createRouteCatalogLoader(async (id, { signal }) => {
+    calls += 1; await new Promise((resolve, reject) => { const timer = setTimeout(resolve, 2); signal?.addEventListener('abort', () => { clearTimeout(timer); reject(new DOMException('aborted', 'AbortError')); }, { once: true }); });
+    return { endpointID: id, models: ['m'], source: 'test' };
+  }, { now: () => now });
+  const endpoint = { id: 'a', baseURL: 'https://a.invalid', protocol: 'auto' };
+  assert.deepEqual((await loader.load(endpoint)).models, ['m']);
+  assert.deepEqual((await loader.load(endpoint)).models, ['m']);
+  assert.equal(calls, 1);
+  now += 301_000;
+  assert.deepEqual((await loader.load(endpoint)).models, ['m']);
+  assert.equal(calls, 2);
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(loader.load({ ...endpoint, id: 'b' }, { signal: controller.signal }), { name: 'AbortError' });
+  assert.equal(loader.peek({ ...endpoint, id: 'b' }), null);
+  assert.equal(typeof routeCatalogKey(endpoint), 'string');
+});
 
 const config = () => ({ schemaVersion: 7, endpoints: ['a', 'b'].map((id) => ({
   id, name: id, enabled: true, protocol: 'auto', baseURL: `https://${id}.invalid`,

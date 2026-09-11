@@ -7344,3 +7344,16 @@ button.responsive-data-card {
   .mapping-grid-row > span:nth-child(7) { grid-area: del; align-self: start; }
   .mapping-search { width: 100%; }
 }
+
+/* Claude Code routing editor: keep slow catalog probes out of the editing path. */
+.route-editor { gap: 14px; }
+.route-editor-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+.route-match-details { border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 10px 12px; background: var(--bg-surface-glass); }
+.route-match-details summary { cursor: pointer; color: var(--text-primary); font-weight: 600; }
+.route-model-toolbar, .route-editor-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.route-editor-actions { justify-content: flex-end; border-top: 1px solid var(--border-subtle); padding-top: 12px; }
+.route-editor-error { color: var(--status-critical); }
+@media (max-width: 600px) {
+  .route-model-toolbar { align-items: flex-start; flex-direction: column; }
+  .route-editor-actions { position: sticky; bottom: 0; background: var(--bg-surface); }
+}
