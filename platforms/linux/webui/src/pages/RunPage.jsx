@@ -191,12 +191,14 @@ function LiveEventList({ events, selectedEventID, onSelect }) {
   return (
     <section className="telemetry-live-group" aria-label={`${formatNumber(events.length)} 个进行中请求`}>
       <LiveSurfaceLight />
-      <div className="telemetry-live-heading">
-        <span><i aria-hidden="true" />进行中 · {formatNumber(events.length)}</span>
-        <small>用量为上游暂计</small>
-      </div>
-      <div className="telemetry-live-columns" aria-hidden="true">
-        {['请求', '模型 / 路由', '结果', '首字节 → 总耗时', 'Token 用量', '事件状态'].map((label) => <span key={label}>{label}</span>)}
+      {/* 标题与「上游暂计」并进列头行:计数落在「请求」列,暂计提示落在「Token 用量」列。 */}
+      <div className="telemetry-live-columns">
+        <span className="telemetry-live-heading-cell"><i aria-hidden="true" />进行中 · {formatNumber(events.length)}</span>
+        <span aria-hidden="true">模型 / 路由</span>
+        <span aria-hidden="true">结果</span>
+        <span aria-hidden="true">首字节 → 总耗时</span>
+        <span aria-hidden="true">Token 用量 <small title="仅显示上游已报告的用量，可能滞后；请求完成后以最终用量为准。">上游暂计</small></span>
+        <span aria-hidden="true">事件状态</span>
       </div>
       <div className="telemetry-live-list" role="list" aria-label="进行中请求列表">
         {events.map((event) => {
@@ -688,7 +690,7 @@ export function RunPage() {
                 <div className="telemetry-live-mobile">
                   <div className="telemetry-live-heading">
                     <span><i aria-hidden="true" />进行中 · {formatNumber(liveEvents.length)}</span>
-                    <small>用量为上游暂计</small>
+                    <small>上游暂计</small>
                   </div>
                 <MobileEventList
                   events={liveEvents}

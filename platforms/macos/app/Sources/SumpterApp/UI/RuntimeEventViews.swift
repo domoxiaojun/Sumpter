@@ -352,6 +352,44 @@ enum RuntimeEventDisplay {
     }
 }
 
+/// 结果 pill。进行中的那一枚是整行唯一的活动提示:macOS 26 上用蓝 tint 的 interactive 玻璃,
+/// 加一个点做 phase 呼吸;更早系统退回实色底。历史行永远是实色底,滚动时不走玻璃折射。
+private struct RuntimeEventStatusPill: View {
+    let text: String
+    let color: Color
+    var live = false
+    var compact = false
+
+    var body: some View {
+        HStack(spacing: 5) {
+            if live {
+                RuntimeLiveBreathingDot(color: color)
+            }
+            Text(text)
+                .font((compact ? Font.caption : Font.subheadline).monospacedDigit().weight(.semibold))
+                .lineLimit(1)
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .modifier(RuntimeEventStatusPillSurface(color: color, live: live))
+    }
+}
+
+private struct RuntimeEventStatusPillSurface: ViewModifier {
+    let color: Color
+    let live: Bool
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 5, style: .continuous)
+        if live, #available(macOS 26.0, *) {
+            content.glassEffect(.regular.tint(color.opacity(0.22)).interactive(), in: shape)
+        } else {
+            content.background(color.opacity(live ? 0.12 : 0.08), in: shape)
+        }
+    }
+}
+
 /// 结果只强调最终成败；HTTP 响应头作为独立的次级信息。
 private struct RuntimeEventStatusSummary: View {
     let event: RuntimeEvent
@@ -360,13 +398,12 @@ private struct RuntimeEventStatusSummary: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(event.isInFlight ? "进行中" : RuntimeEventDisplay.outcome(event))
-                .font((compact ? Font.caption : Font.subheadline).monospacedDigit().weight(.semibold))
-                .foregroundStyle(RuntimeEventDisplay.statusColor(event))
-                .lineLimit(1)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 3)
-                .background(RuntimeEventDisplay.statusColor(event).opacity(0.08), in: RoundedRectangle(cornerRadius: 5))
+            RuntimeEventStatusPill(
+                text: event.isInFlight ? "进行中" : RuntimeEventDisplay.outcome(event),
+                color: RuntimeEventDisplay.statusColor(event),
+                live: event.isInFlight,
+                compact: compact
+            )
             Text(event.effectiveHTTPStatusCode == 0 ? "HTTP —" : RuntimeEventDisplay.httpStatus(event))
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
@@ -567,24 +604,20 @@ struct RecentEventsPanel: View {
 
     private var liveEventsSection: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 7) {
-                Circle().fill(palette.brand).frame(width: 6, height: 6)
-                Text("进行中 · \(visibleLiveEvents.count)")
-                    .font(.subheadline.weight(.semibold))
-                Spacer(minLength: 12)
-                Text("用量为上游暂计").font(.caption).foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 6)
-            Divider().opacity(0.35)
+            // 标题与「上游暂计」说明并进列头行:计数落在「请求」列,暂计提示落在「Token 用量」列,
+            // 少一行占位,进行中区块和历史表的列头也保持同一节奏。
             ViewThatFits(in: .horizontal) {
                 GeometryReader { proxy in
-                    eventColumnHeader(widths: RuntimeEventColumnWidths.resolve(availableWidth: proxy.size.width - 16))
+                    eventColumnHeader(
+                        widths: RuntimeEventColumnWidths.resolve(availableWidth: proxy.size.width - 16),
+                        liveCount: visibleLiveEvents.count
+                    )
                 }
                 .frame(minWidth: 940)
                 .frame(height: 28)
-                Color.clear.frame(width: 0, height: 0)
+                compactLiveHeading
             }
+            Divider().opacity(0.35)
             ForEach(Array(visibleLiveEvents.enumerated()), id: \.element.id) { index, event in
                 Button {
                     selectedEventID = event.id
@@ -596,20 +629,20 @@ struct RecentEventsPanel: View {
                 }
                 .buttonStyle(.plain)
                 .background(selectedEventID == event.id ? palette.brand.opacity(0.08) : .clear)
+                .overlay(alignment: .leading) {
+                    // 进行中行的左侧色条保持实色:滚动/刷新时不做玻璃与阴影,活动感交给状态 pill。
+                    Rectangle()
+                        .fill(RuntimeEventDisplay.statusColor(event))
+                        .frame(width: 3)
+                        .accessibilityHidden(true)
+                }
                 .accessibilityLabel("进行中请求：\(RuntimeEventDisplay.requestSummary(event))")
                 .accessibilityAddTraits(selectedEventID == event.id ? .isSelected : [])
                 if index < visibleLiveEvents.count - 1 { Divider().opacity(0.28) }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            // 流光挂在整个进行中区块的背景上，并把区块的实际尺寸交给 Canvas；
-            // 在容器层做尺寸桥接可避免 Table 更新时出现瞬时零高度。
-            GeometryReader { proxy in
-                RuntimeLiveSurfaceLight()
-                    .frame(width: proxy.size.width, height: proxy.size.height)
-            }
-        }
+        .background(palette.inset.opacity(colorScheme == .dark ? 0.55 : 0.6))
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -617,6 +650,20 @@ struct RecentEventsPanel: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(visibleLiveEvents.count) 个进行中请求")
+    }
+
+    /// 窄窗口没有列头,进行中区块退回一行标题。
+    private var compactLiveHeading: some View {
+        HStack(spacing: 7) {
+            RuntimeLiveBreathingDot(color: palette.brand)
+            Text("进行中 · \(visibleLiveEvents.count)")
+                .font(.caption.weight(.semibold))
+            Spacer(minLength: 12)
+            Text("上游暂计").font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var eventsTableContainer: some View {
@@ -893,13 +940,36 @@ struct RecentEventsPanel: View {
         .contentShape(Rectangle())
     }
 
-    private func eventColumnHeader(widths: RuntimeEventColumnWidths) -> some View {
+    /// `liveCount` 非空时是进行中区块的列头:「请求」列改成计数标题,「Token 用量」列带上暂计提示。
+    private func eventColumnHeader(widths: RuntimeEventColumnWidths, liveCount: Int? = nil) -> some View {
         HStack(alignment: .center, spacing: 0) {
-            columnHeaderLabel("请求", width: widths.request)
+            if let liveCount {
+                HStack(spacing: 7) {
+                    RuntimeLiveBreathingDot(color: palette.brand)
+                    Text("进行中 · \(liveCount)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(palette.textPrimary)
+                }
+                .padding(.horizontal, 12)
+                .frame(width: widths.request, alignment: .leading)
+            } else {
+                columnHeaderLabel("请求", width: widths.request)
+            }
             columnHeaderLabel("模型 / 路由", width: widths.route)
             columnHeaderLabel("结果", width: widths.result)
             columnHeaderLabel("首字节 → 总耗时", width: widths.duration)
-            columnHeaderLabel("Token 用量", width: widths.usage)
+            if liveCount != nil {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("Token 用量").font(.caption.weight(.semibold))
+                    Text("上游暂计").font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .help("仅显示上游已报告的用量，可能滞后；请求完成后以最终用量为准。")
+                }
+                .padding(.horizontal, 12)
+                .frame(width: widths.usage, alignment: .leading)
+            } else {
+                columnHeaderLabel("Token 用量", width: widths.usage)
+            }
             columnHeaderLabel("事件状态", width: widths.message)
         }
         .padding(.horizontal, 8)

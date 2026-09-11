@@ -887,92 +887,28 @@ private final class LiveGlowBorderNSView: NSView {
     }
 }
 
-/// 原生 Canvas 近似 Web 的 Paper Mesh Gradient 色彩运动，
-/// 两端共用配色、14 点边缘范围和 10 秒呼吸周期。
-struct RuntimeLiveSurfaceLight: View {
+/// 进行中的呼吸点:单个 Circle 上跑一段 phase 动画,只改 opacity / scale,
+/// 不再在整块背景上跑 24fps Canvas 流光——那一层随行数线性放大,滚动时会掉帧。
+struct RuntimeLiveBreathingDot: View {
+    var color: Color = .accentColor
+    var size: CGFloat = 6
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.sumpterWindowVisible) private var windowVisible
-    @Environment(\.colorScheme) private var colorScheme
-    @State private var appeared = false
+
+    private var animates: Bool { !reduceMotion && windowVisible }
 
     var body: some View {
-        GeometryReader { proxy in
-            if !reduceMotion && windowVisible && appeared {
-                TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { timeline in
-                    aurora(size: proxy.size, time: timeline.date.timeIntervalSinceReferenceDate)
-                }
-            } else {
-                aurora(size: proxy.size, time: 0)
+        Circle()
+            .fill(color)
+            .frame(width: size, height: size)
+            .phaseAnimator([false, true], trigger: animates) { dot, breathing in
+                dot
+                    .opacity(animates ? (breathing ? 1 : 0.55) : 0.85)
+                    .scaleEffect(animates ? (breathing ? 1 : 0.82) : 1)
+            } animation: { _ in
+                animates ? .easeInOut(duration: 1.7) : nil
             }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-        .onAppear { appeared = true }
-        .onDisappear { appeared = false }
-    }
-
-    private func aurora(size: CGSize, time: TimeInterval) -> some View {
-        let height = max(1, size.height)
-        let edge = min(14 / height, 0.5)
-        let shoulder = min(4 / height, edge)
-        return Canvas { context, canvasSize in
-            RuntimeLiveAurora.draw(context: context, size: canvasSize, time: time, light: colorScheme == .light)
-        }
-        .frame(width: max(1, size.width), height: max(1, size.height))
-        .mask {
-            LinearGradient(
-                stops: [
-                    .init(color: .black, location: 0),
-                    .init(color: .black.opacity(0.35), location: shoulder),
-                    .init(color: .clear, location: edge),
-                    .init(color: .clear, location: 1 - edge),
-                    .init(color: .black.opacity(0.35), location: 1 - shoulder),
-                    .init(color: .black, location: 1),
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        }
-    }
-}
-
-/// 通过移动径向色点近似 Mesh 的混色；并非 Paper 的 WebGL 着色器。
-enum RuntimeLiveAurora {
-    static func draw(context: GraphicsContext, size: CGSize, time: TimeInterval, light: Bool) {
-        guard size.width > 0, size.height > 0 else { return }
-        let breath = 0.26 - 0.04 * cos(time * .pi * 2 / 10)
-        let rgb: [(Double, Double, Double)] = light
-            ? [(104, 188, 201), (139, 150, 220), (200, 152, 194), (121, 185, 195)]
-            : [(120, 197, 210), (156, 168, 232), (210, 166, 206), (137, 201, 207)]
-        let colors = rgb.map { Color(red: $0.0 / 255, green: $0.1 / 255, blue: $0.2 / 255) }
-        let width = size.width
-        let height = size.height
-        let phase = (time * 0.075 + 41.5) * 0.5
-        // Same independent trajectories as Paper's getPosition(): the points
-        // never form a straight sweep or a repeating edge strip.
-        for i in 0..<4 {
-            let a = Double(i) * 0.37
-            let b = 0.6 + (Double(i).truncatingRemainder(dividingBy: 3) / 3) * 0.9
-            let c = 0.8 + (Double(i + 1).truncatingRemainder(dividingBy: 4)) / 4
-            let x = 0.5 + 0.5 * sin(phase * b + a)
-            let y = 0.5 + 0.5 * cos(phase * c + a * 1.5)
-            let center = CGPoint(x: x * width, y: y * height)
-            let radius = CGSize(width: width * 0.65, height: height * 1.8)
-            var layer = context
-            layer.translateBy(x: center.x, y: center.y)
-            layer.scaleBy(x: radius.width, y: radius.height)
-            layer.opacity = breath
-            let path = Path(ellipseIn: CGRect(x: -1, y: -1, width: 2, height: 2))
-            layer.fill(path, with: .radialGradient(
-                Gradient(stops: [
-                    .init(color: colors[i].opacity(1), location: 0),
-                    .init(color: colors[i].opacity(0.72), location: 0.35),
-                    .init(color: .clear, location: 0.86),
-                ]),
-                center: .zero, startRadius: 0, endRadius: 1
-            ))
-        }
+            .accessibilityHidden(true)
     }
 }
 
