@@ -110,8 +110,8 @@ export function HelpPage() {
         <section className="glass-panel help-panel">
           <div className="panel-title"><Icon name="sparkles" size={18} style={{ color: 'var(--primary)' }} /><span>快速开始</span></div>
           <div className="help-step-list">
-            <HelpStep number="1" title="准备上游服务入口">在“入口库”添加地址和密钥，再到“模型组”选择模型并绑定入口；启用组和入口后保存。</HelpStep>
-            <HelpStep number="2" title="确认代理监听">在“运行”页确认 daemon 正在运行。当前监听地址为 <code>{listener}</code>。</HelpStep>
+            <HelpStep number="1" title="准备上游服务入口">在“入口库”添加地址、密钥和客户端模型映射，再到“模型组”选择已添加的模型并绑定入口；启用组和入口后保存。</HelpStep>
+            <HelpStep number="2" title="确认代理监听">在“运行”页确认 daemon 正在运行。容器或进程内监听地址为 <code>{listener}</code>。远程客户端应使用服务器可达地址；Docker 使用 Compose 发布的宿主机端口，不能把 0.0.0.0 当作客户端地址。</HelpStep>
             <HelpStep number="3" title="连接客户端">Claude Code 使用 <code>ANTHROPIC_BASE_URL</code>；Codex 或其它 OpenAI 客户端使用带 <code>/v1</code> 的 API Base（默认 <code>http://127.0.0.1:57878/v1</code>）。完整协议矩阵见仓库的 USAGE.md。</HelpStep>
           </div>
         </section>
@@ -119,7 +119,7 @@ export function HelpPage() {
         <section className="glass-panel help-panel">
           <div className="panel-title"><Icon name="server" size={18} style={{ color: 'var(--accent-cyan)' }} /><span>配置与接入</span></div>
           <div className="help-fact-list">
-            <div><span>配置文件</span><code>$XDG_CONFIG_HOME/sumpter/config.json</code><small>未设置时使用 ~/.config/sumpter/config.json</small></div>
+            <div><span>配置文件</span><code>$XDG_CONFIG_HOME/sumpter/config.json</code><small>普通用户未设 XDG 时用 ~/.config/sumpter/config.json；system 安装用 /var/lib/sumpter/config.json；Docker 用挂载的 /config/config.json。</small></div>
             <div><span>代理端口</span><code>http://{listener}</code></div>
             <div><span>配置版本</span><strong>schema v{schemaVersion}</strong></div>
           </div>
@@ -131,7 +131,7 @@ export function HelpPage() {
         <div className="panel-title"><Icon name="search" size={18} style={{ color: 'var(--status-warning)' }} /><span>常见问题</span></div>
         <div className="help-faq-grid">
           <HelpQuestion question="Claude Code 连不上？">确认 Base URL 指向当前监听地址；若启用了入站认证，客户端 Token 必须与配置完全一致。</HelpQuestion>
-          <HelpQuestion question="请求返回模型未找到？">检查启用模型组是否声明客户端模型名，组内是否绑定了启用入口；旧配置也可检查入口 mappings。</HelpQuestion>
+          <HelpQuestion question="请求返回模型未找到？">先检查入口的模型映射是否包含客户端模型；配置了模型组时，还要启用组和入口绑定，并确保模型在两者范围内。模型目录仅供发现，不自动授权路由。</HelpQuestion>
           <HelpQuestion question="Realtime、Files 或 Videos 失败？">这些能力由代理直接 relay 给上游：先检查 Provider 的 baseURL、API key、模型 mapping，以及上游是否开放对应 HTTP/WebSocket 能力。代理不会在本地重建协议。</HelpQuestion>
           <HelpQuestion question="仍然无法判断故障在哪？">先看“运行”和“诊断”页，再带上脱敏后的请求 ID、时间和错误阶段提交 Issue；不要上传 raw 捕获。</HelpQuestion>
         </div>

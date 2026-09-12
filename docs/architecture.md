@@ -70,10 +70,10 @@ runtime 的数据库访问统一使用 SeaORM 1.1（支持 workspace 的 Rust 1.
 只读事务保持查询快照；流式查询通过有界通道传递结果，中途取消会释放游标，
 失败事务在退出时回滚。最后一个存储句柄释放时等待写入线程与数据库连接关闭，
 避免退出后的 WAL 合并与下一次打开交错。ORM 实体不进入平台或 Admin 的序列化协议。
-本次接入保留事件字段及 schema/projection 版本；字段精简须单独核对查询、投影与协议。
+事件字段变更须同时核对查询、投影与协议，不能只更新 ORM 实体。
 
 配置文件与 runtime 数据库各自维护版本。`config.json` 当前是 schema v7；runtime 的
-`SCHEMA_VERSION` / `PROJECTION_VERSION` 当前分别为 4 / 9，由 `runtime_store.rs` 定义。
+`SCHEMA_VERSION` / `PROJECTION_VERSION` 当前分别为 5 / 10，由 `runtime_store.rs` 定义。
 现行 `schema.rs` 只允许全新数据库进入初始化；检测到旧 schema、缺少归因列或旧 projection 时返回结构化 `runtime_recreate_required`，代理保持停止，确认后通过 `runtime/recreate` 清空重建且不回填历史。高于支持版本仍返回 `runtime_schema_newer` 并拒绝启动。
 
 并发和持久化约束：runtime 写操作保持 `runtime_write → state` 锁顺序；
@@ -142,4 +142,4 @@ HTTP header、环境变量、服务单元名、导出格式标识和 sticky doma
 - 导出格式 `sumpter-session-export-v1`
 - 粘性域 `sumpter-sticky-v3`
 
-旧的 `kekulv` 路径、单元、header 和环境变量不再识别。已有安装需要卸载后重装，不要做原地双读迁移。
+运行中的 Sumpter 不双读旧 `kekulv` 路径、header 或环境变量。标准 Linux root 安装可使用 `platforms/linux/scripts/migrate-kekulv.sh` 离线迁移；先运行 `--check`，适用范围和回滚流程见 [Linux 指南](../platforms/linux/README.md)。其他布局需单独备份并按当前路径安装。

@@ -74,9 +74,14 @@ swift test --package-path platforms/macos/app --filter RuntimeV2WireContractTest
 
 ## 运行开发实例
 
-复制根 `config.example.json` 到仓库外的专用目录，保留文件权限 `0600`。避免与已安装服务的端口冲突。以下使用 `/tmp/sumpter-dev` 作为专用测试目录：
+复制根 `config.example.json` 到仓库外的专用目录，保留文件权限 `0600`。Linux 手动运行还必须准备非空 `admin-password`；不会由 daemon 自动生成。避免与已安装服务的端口冲突。以下使用 `/tmp/sumpter-dev` 作为专用测试目录：
 
 ```bash
+install -d -m 700 /tmp/sumpter-dev
+# 仅用于全新的开发目录；已有配置时不要覆盖。
+install -m 600 config.example.json /tmp/sumpter-dev/config.json
+# 仅在密码文件缺失时生成，保持已有凭据。
+(umask 077; set -C; od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > /tmp/sumpter-dev/admin-password)
 cargo run --locked -p sumpterd-linux -- --config-dir /tmp/sumpter-dev --no-web
 # macOS sidecar 手工运行时关闭 stdin EOF 监视
 cargo run --locked -p sumpterd-macos -- --config-dir /tmp/sumpter-dev --foreground
@@ -92,7 +97,7 @@ cargo run --locked -p sumpterd-macos -- --config-dir /tmp/sumpter-dev --foregrou
 | `docs/templates/usage-onboarding.md`、`docs/templates/usage-path-matrix.json` | `uv run scripts/maintenance/sync-usage-docs.py --write` | 根 `USAGE.md` 与 `platforms/linux/USAGE.md` 的 BEGIN/END 标记块 |
 | `scripts/clients/client-attribution.mjs`、`scripts/clients/pi-project-attribution.ts` | `node scripts/maintenance/sync-client-attribution.mjs` | 两个平台的 `scripts/`、Swift App `Resources/` 及各处 Gemini 兼容入口 |
 | `platforms/linux/webui/` | `npm run build --prefix platforms/linux/webui` | `platforms/linux/web/` |
-| `platforms/linux/compose.yaml`、`.env.example` | 同步 `compose.bridge.example.yaml` 兼容链接，运行 `./scripts/check.sh docker` | 独立部署目录与 Linux 发布包 |
+| `platforms/linux/compose.yaml` | 同步 `compose.bridge.example.yaml` 兼容链接，运行 `./scripts/check.sh docker` | 独立部署目录与 Linux 发布包 |
 
 USAGE 标记块以外的正文仍需直接维护。`scripts/check.sh docs` 只检查同步，不写副本，同时运行版本/示例/导出工具契约测试。Node 脚本无需额外依赖。
 

@@ -112,7 +112,7 @@ struct HelpPane: View {
             }
             SectionPanel(title: "快速开始", hint: "Sumpter是本机协议代理；先启动代理，再把客户端 API Base 指向监听地址。") {
                 VStack(alignment: .leading, spacing: 10) {
-                    HelpStep(number: 1, title: "准备上游服务入口", bodyText: "在“入口库”添加地址和密钥，再到“模型组”选择模型并绑定入口；启用组和入口后保存。")
+                    HelpStep(number: 1, title: "准备上游服务入口", bodyText: "在“入口库”添加地址、密钥和客户端模型映射，再到“模型组”选择已添加的模型并绑定入口；启用组和入口后保存。")
                     HelpStep(number: 2, title: "启动并确认监听", bodyText: "回到“运行”页确认 sidecar 正在运行。默认代理地址是 http://127.0.0.1:57878；实际地址以运行页显示为准。")
                     HelpStep(number: 3, title: "连接客户端", bodyText: "Claude Code 使用 ANTHROPIC_BASE_URL；Codex 或其它 OpenAI 客户端必须使用带 /v1 的 API Base（默认 http://127.0.0.1:57878/v1）。具体变量和协议矩阵见 USAGE.md。")
                 }
@@ -137,7 +137,7 @@ struct HelpPane: View {
             SectionPanel(title: "常见问题", hint: "先看运行页和诊断页的状态，再判断是客户端、代理还是上游问题。") {
                 VStack(alignment: .leading, spacing: 10) {
                     HelpFAQ(question: "Claude Code 连不上？", answer: "确认 Base URL 指向当前监听地址；若启用了入站认证，客户端 Token 必须与配置完全一致。")
-                    HelpFAQ(question: "请求返回模型未找到？", answer: "检查启用模型组是否声明客户端模型名，组内是否绑定了启用入口；旧配置也可检查入口 mappings。")
+                    HelpFAQ(question: "请求返回模型未找到？", answer: "先检查入口的模型映射是否包含客户端模型；配置了模型组时，还要启用组和入口绑定，并确保模型在两者范围内。模型目录仅供发现，不自动授权路由。")
                     HelpFAQ(question: "Realtime、Files 或 Videos 失败？", answer: "这些能力由代理直接 relay 给上游：先检查 Provider 的 baseURL、API key、模型 mapping，以及上游是否开放对应 HTTP/WebSocket 能力。代理不会在本地重建协议。")
                 }
             }

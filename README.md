@@ -2,7 +2,7 @@
 
 本机 AI 请求代理。客户端只连一个地址，由 Sumpter 做入口选择、模型映射、会话粘性、重试和运行记录。
 
-Linux 与 macOS 共用一份 Rust 引擎和 **schema v7** `config.json`。当前版本以根 [Cargo.toml](Cargo.toml) 为准（现为 **0.4.6**），许可证 [MIT](LICENSE)。源码仓库：[domoxiaojun/sumpter](https://github.com/domoxiaojun/sumpter)。
+Linux 与 macOS 共用一份 Rust 引擎和 **schema v7** `config.json`。当前版本以根 [Cargo.toml](Cargo.toml) 为准（现为 **0.4.7**），许可证 [MIT](LICENSE)。源码仓库：[domoxiaojun/sumpter](https://github.com/domoxiaojun/sumpter)。
 
 | | 默认 |
 | --- | --- |
@@ -79,4 +79,4 @@ npm ci --prefix platforms/linux/webui
 | `scripts/`、`.github/` | 检查、资源同步、CI 与 Release |
 | `docs/` | 现行指南；`templates/` 为 USAGE 生成输入 |
 
-CI（`ci.yml`）只验证。推送 `vX.Y.Z` tag 才会跑 Release：Linux 包、GHCR、macOS 包与 GitHub Release。构建通过不等于已发布或已安装。
+CI（`ci.yml`）只验证。推送 `vX.Y.Z` tag，或手动指定已有 tag，都会运行 Release：Linux 包、GHCR、macOS 包与 GitHub Release。构建通过不等于已发布或已安装。

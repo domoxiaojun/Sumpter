@@ -25,7 +25,7 @@ Linux 与 macOS 使用同一个 `vX.Y.Z` 版本和根 `.github/workflows/release
 
 ## 产物与平台范围
 
-- Linux：`sumpter-linux-x86_64.tar.gz`、`sumpter-linux-aarch64.tar.gz`、`SHA256SUMS`；包内二进制为 `sumpterd`，并携带独立部署输入 `compose.yaml`、`.env.example`、`DOCKER.md`（不含源码构建 override）。
+- Linux：`sumpter-linux-x86_64.tar.gz`、`sumpter-linux-aarch64.tar.gz`、`SHA256SUMS`；包内二进制为 `sumpterd`，并携带独立部署输入 `compose.yaml`、`DOCKER.md`（不含源码构建 override）。
 - macOS：`sumpter-macos-X.Y.Z.dmg`、`sumpter-macos-X.Y.Z.zip`、`appcast.xml`、`macOS-SHA256SUMS`。
 - 容器：当前仓库对应 GHCR image 的 `linux/amd64` 与 `linux/arm64` manifest。
 
@@ -45,7 +45,7 @@ App 更新 feed 使用 `macos-updates` 分支。新仓库的 `github.run_number`
 - Release 公开状态、两个 Linux 包、DMG、zip、appcast、两个 checksum 文件均完整且校验匹配。
 - GHCR manifest 确实包含两架构，appcast 下载 URL 可达且签名与 App 公钥匹配。
 - 在目标 Linux 上验证 systemd 启动、Admin 登录与实际代理请求；在 macOS 上验证安装启动、sidecar 与更新检查。
-- 若本次改动涉及容器部署：先用 `./scripts/check.sh docker` 校验模板，发布后核对 Linux 包内的 `compose.yaml` / `.env.example` / `DOCKER.md` 与仓库一致，并在真机跑一次 `docker compose up -d`、登录和停机迁移。
+- 若本次改动涉及容器部署：先用 `./scripts/check.sh docker` 校验模板，发布后核对 Linux 包内的 `compose.yaml` / `DOCKER.md` 与仓库一致，并在真机跑一次 `docker compose up -d`、登录和停机迁移。
 - 用户安装入口是 GitHub Release 与仓库 raw 脚本。若仍维护 `sf.domob.org` 静态镜像，须单独同步并核对；GitHub 发布成功不会自动更新该镜像。
 
 记录执行过的验证与未执行的安装/流量验收。不要把历史测试数、编译退出码或上传成功当作完整交付证明。

@@ -6,7 +6,9 @@
 
 ## [Unreleased]
 
-### 变更
+## [0.4.7] - 2026-09-13
+
+### 新增
 
 - 容器首次启动时，`init` 会在日志里直接打印初始 Admin 密码与凭据路径，方便首次登录（只打印一次，改密后即失效）；不希望明文进容器日志时，先按 DOCKER.md 的「自备 `config.json` 与初始密码」自己生成凭据即可。原生 Linux 安装器与 macOS App 仍只显示密码文件路径、不回显密码值。
 - Compose 部署模板精简：`stop_signal` 与 `restart` 不再重复声明，`healthcheck` 也不再重复声明，存活探针改由镜像的 `HEALTHCHECK` 提供（`docker compose up --wait` 仍按容器健康状态等待）；部署文档重整阅读顺序并压缩篇幅。

@@ -73,7 +73,7 @@ SourceFormat 只由路径决定：`/v1/messages` 是 `anthropic`，`/v1/chat/com
 | `keepAlive` | 入口级出站连接复用；省略或 `false` 不落盘（关闭）。界面新建入口默认打开 |
 | `userAgent` | 按协议设置上游 UA：`anthropic`、`openai`（Chat / Responses）、`gemini`；每项为 `{ "mode": "auto" 或 "override", "value": "..." }`。自动模式优先透传客户端 UA，缺失时使用配置值；强覆盖始终使用配置值。值为空时沿用内置默认指纹；模型探测固定协议使用对应 UA，`auto` 会按协议身份依次尝试 |
 | `catalog` | 「获取模型」拉回的目录与状态，纯展示，不参与路由；空目录不落盘 |
-| `mappings` | 入口原始映射及参数；未配置模型组时，空数组不承接模型；模型组显式授权可合成同名映射 |
+| `mappings` | 入口原始映射及参数；空数组不承接普通模型；模型组只收紧已有映射范围，不会为未添加的模型生成映射 |
 
 `mappings[]` 每条：`clientPattern` / `upstreamModel`（留空 = 同名）/ `thinking` / `context` / `effort`（可选，adaptive 模式下覆盖推理级别；省略则跟随客户端）/
 `failoverTimeoutSeconds`（可选；映射级首响应截止，与全局 `responseTimeoutSeconds` 取较小值）。
@@ -163,4 +163,4 @@ Swift 壳为了旧 UI 代码仍可能有计算属性 `pools` / `primaryPool`，�
 `main_accounts` / `main_domains` / `main_providers` / `backup_accounts` / `cooldown` /
 `feature_routes` / `secretRef` / `pythonKind` / `1m` / `m1` / `ip_timeout` / `backup_id` /
 `has_tool_type` / `searchDialect` / `pools` / `globalModels` / `target.poolID` /
-`listener.inboundDialectPassthrough` —— 这些旧字段连同对应兼容分支一起删除了。
+`listener.inboundDialectPassthrough` —— 这些字段不属于当前配置。`pools`、`globalModels`、`target.poolID`、`searchDialect` 和旧透传字段仍可能由上面的旧配置迁移代码读取并移除，不应写回 v7。

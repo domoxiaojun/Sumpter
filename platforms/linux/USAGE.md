@@ -1,6 +1,6 @@
 # Sumpter使用指南
 
-给第一次安装并接入客户端的用户。当前版本 **0.4.6**，配置 **schema v7**。
+给第一次安装并接入客户端的用户。当前版本 **0.4.7**，配置 **schema v7**。
 
 **范围**：从 GitHub 安装、填写 `config.json`、接入 Claude Code / Codex / Grok Build / Gemini CLI / pi、项目归因、常见错误。  
 **不包含**：改源码、编译、发版。
@@ -253,7 +253,7 @@ Agent：只改**本机配置目录**里的 `config.json`，不要把填好 key �
 - **推荐抄** `config.example.json`（源码 monorepo 对应 `platforms/linux/config.example.json`）：域名是 `.invalid`，入口全部 `enabled: false`，secret 是合成的 `sk-test-…`。
 - `platforms/macos/config.example.json` 与 Linux 使用同一份安全模板：入口全部禁用、地址使用 `.invalid`，可直接作为结构参考；启用前务必替换为你的地址和 key。
 
-Linux 首次 Admin 用户名是 `kkl`，密码在同目录 `admin-password`（不要在终端 `cat` 出去）。改密后该文件会变成 Argon2 哈希 JSON，不能再回读明文。
+Linux 首次 Admin 用户名是 `kkl`，初始密码在同目录 `admin-password`，只在可信本地终端读取；Docker 首次密码见 `docker compose logs init`。改密后该文件会变成 Argon2 哈希 JSON，不能再回读明文。
 
 ---
 
@@ -261,7 +261,7 @@ Linux 首次 Admin 用户名是 `kkl`，密码在同目录 `admin-password`（�
 
 ### 2.1 macOS
 
-从 [GitHub Releases](https://github.com/domoxiaojun/sumpter/releases/latest) 下载 `sumpter-macos-*.dmg`。打开 DMG，双击「安装Sumpter.command」，按提示确认。安装器只处理旁边的 `Sumpter.app`，只去掉这个 App 的 quarantine 标记，不会关闭全局 Gatekeeper。
+从 [GitHub Releases](https://github.com/domoxiaojun/sumpter/releases/latest) 下载 `sumpter-macos-*.dmg`。打开 DMG，双击「安装 Sumpter.command」，按提示确认。安装器只处理旁边的 `Sumpter.app`，只去掉这个 App 的 quarantine 标记，不会关闭全局 Gatekeeper。
 
 不想用安装器时，把 App 拖到「应用程序」，再在 Finder 里右键 → 打开。不要用 `spctl --master-disable`，也不要对整个磁盘执行 `xattr -dr`。macOS 安装器的完整说明在源码树 `platforms/macos/app/INSTALL.txt`；Linux 发布包不包含该安装器。
 
@@ -341,37 +341,26 @@ sudo install -d -m 700 /var/lib/sumpter
 sudo install -m 600 ./config.example.json /var/lib/sumpter/config.json
 ```
 
-源码开发实例（在仓库根执行，配置放仓库外）：
-
-```bash
-install -d -m 700 /tmp/sumpter-dev
-install -m 600 config.example.json /tmp/sumpter-dev/config.json
-cargo run --locked -p sumpterd-linux -- --config-dir /tmp/sumpter-dev
-```
+源码开发只适用于完整 monorepo，步骤见仓库的开发指南；Linux 发布包没有 Rust workspace。手动运行 daemon 时必须先准备非空 `admin-password`。
 
 上面三个命令引用的 `config.example.json` 是同一份内容：发布包根目录与仓库根的模板一致。
 
-容器路线（Docker）多一步挂载：`compose.yaml` 已经把 **宿主机的 `./config` 目录**挂到容器 `/config`，
-所以配置文件要 `cp` 进那个目录，而不是用 `docker cp` 塞进容器：
+Docker 新部署不需要复制配置模板或准备密码。下载一份 Compose，启动时会在 `./config` 生成缺失的配置与初始密码：
 
 ```bash
 mkdir -p sumpter/config && cd sumpter
 curl --proto '=https' --tlsv1.2 -fLo compose.yaml \
   https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/compose.yaml
-cp 你的/config.json config/config.json        # 也可以先 curl 模板再改
-chmod 600 config/config.json
 docker compose up -d
+docker compose logs init
 ```
 
-容器里有两项额外要求，漏了不会自愈：`config.json` 的 `listener.host` 必须是 `0.0.0.0`，
-否则发布到宿主机的端口会转发到没人监听的容器回环；`config/admin-password` 必须存在且非空，
-否则 daemon 在启动前就退出。模板里的 `init` 服务会补齐缺失的这两个文件、绝不覆盖已有内容；
-若连 `init` 也省掉，密码要自己生成。完整步骤与差异见 [`DOCKER.md`](DOCKER.md)。
+管理页为部署主机的 `http://127.0.0.1:57879/admin/`，用户名 `kkl`，密码看 init 日志。默认只允许本机访问；远程管理可用 SSH 隧道。登录后配置入口映射和模型组。镜像、宿主机端口、数据目录与日志均直接编辑 Compose；容器内代理保持 `0.0.0.0:57878`。已有配置不会被覆盖，迁入配置时必须核对监听地址。详细步骤见 [Docker 部署说明](DOCKER.md)。
 
-复制出来之后，改这几处就能启动：
+非 Docker 安装复制模板后，按下面顺序配置：
 
 1. 留一个真实 Provider 入口，填它的 `baseURL`、`apiKey`，把 `enabled` 改成 `true`。
-2. 在该入口的 `mappings[]` 里写下客户端实际会发的模型名；`clientPattern` 支持 `prefix-*` 通配。
+2. 在该入口的 `mappings[]` 里添加客户端模型名；若保留模板的 `modelGroups`，还必须启用对应组和绑定，并将同一模型加入组内范围。只启用入口不会自动启用模型组。
 3. 本机自用保持 `listener.host: "127.0.0.1"`、`authToken: ""`、`allowedCIDRs: []`；要限定来源再动这三项。
 4. `schemaVersion` 保持 `7`；新入口的 `protocol` 用 `auto`。
 5. 启动服务：用户安装用 `systemctl --user start sumpter`，system 安装用 `sudo systemctl start sumpter`。
@@ -389,7 +378,7 @@ docker compose up -d
 `admin-password`，daemon 会自行创建一份空的 schema v7 bootstrap 配置；先用模板装一份的好处是
 能直接看到字段结构和那些停用的合成入口。
 
-**模型必须写在入口的 `mappings` 里。** 某个模型只会发给声明了它的入口；空 `mappings` 的入口不承接任何模型，代理也不会拿未声明的原名去碰上游。旧 schema v5 的池级 `globalModels` 只在迁移时复制到当时还没有显式映射的入口，现行配置里已经没有这个字段。
+**模型必须写在入口的 `mappings` 里。** 普通模型路由只使用声明了该模型的入口；配置模型组时还要满足组和绑定范围。显式固定入口的分流规则与已有资源绑定另有规则，见下文。旧 schema v5 的池级 `globalModels` 只在迁移时复制到当时还没有显式映射的入口，现行配置里已经没有这个字段。
 
 ### 3.2 接 Claude Code
 
@@ -399,7 +388,7 @@ export ANTHROPIC_BASE_URL=http://127.0.0.1:57878
 export ANTHROPIC_AUTH_TOKEN='填 config 里的 authToken'
 ```
 
-模型名必须能被某个已启用入口的 `mappings.clientPattern` 接住（精确名或 `prefix-*` 通配）。没有任何入口声明该模型时返回 **400**。
+模型名必须能被已启用入口的 `mappings.clientPattern` 接住（精确名或 `prefix-*` 通配），并在已配置模型组的启用范围内。没有任何入口声明该模型时返回 **400**。
 
 ### 3.3 接 Codex / 其它 OpenAI 客户端
 
@@ -428,72 +417,43 @@ export OPENAI_BASE_URL=http://127.0.0.1:57878/v1
 
 若 `listener.authToken` 非空，把它填入 `experimental_bearer_token`；其它 OpenAI SDK 再按各自的 API key 配置。
 
-`endpoints[].protocol` 是入口的能力/统计元数据，保留四个配置值：
-
-| `protocol` | 含义 |
-|---|---|
-| `auto` | 默认值；不限制原始 HTTP 请求的路径或 body |
-| `anthropic` | 入口标签为 Anthropic |
-| `openai` | 入口标签为 OpenAI Chat |
-| `openai-responses` | 入口标签为 OpenAI Responses |
-| `gemini` | Gemini Developer API / Google AI Studio 原生 REST |
-
-这些值不会作为出站协议发送给上游，也不会让 Sumpter 对 HTTP 请求做协议转换或拒绝。
+`endpoints[].protocol` 参与协议候选选择与转换，五种取值和路径说明如下。
 
 ---
 
 ## 4. 协议与路径
 
-Gemini CLI 接入使用 Gemini Developer API 原生 REST：`POST /v1beta/models/{model}:generateContent`
-和流式 `POST /v1beta/models/{model}:streamGenerateContent?alt=sse`。入口协议写为 `gemini`（或使用
-`auto`），Sumpter 只负责入站鉴权、模型映射、Provider failover 和原生 relay。Provider 的
-`apiKey` 默认发送为 `x-goog-api-key`；若值以 `Bearer ` 开头则发送 `Authorization: Bearer`。
-Gemini CLI 的 `User-Agent`（`GeminiCLI-...`）会记录为 `gemini_cli` 客户端。CLI 的本地
-`sessionId`、`cwd`、`targetDir` 不会被猜测成项目归因；需要项目统计时由 wrapper 显式设置
-`X-Sumpter-Project` / `X-Sumpter-Workspace`，这些 header 只在本地事件中使用并会从上游请求剥离。
+入口协议为 `auto`、`anthropic`、`openai`、`openai-responses`、`gemini` 五态。`auto` 根据入站协议选择原生转发；固定协议参与候选选择。SourceFormat 与 TargetFormat 相同时使用 Native Adapter，异协议时只有已注册的 Translator 才能转换；不能无损表达的请求会被拒绝，不能假设任意请求都能转换。
 
-数据面通常不识别、重建或转换协议，也不维护路径别名白名单。除 `/__*` 本地控制接口外，任意
-HTTP 方法和任意路径都会进入同一条转发链：入站鉴权 → Provider 选择 → failover/retry →
-上游 relay。客户端的原始 path/query、可转发请求头、请求体，以及上游返回的状态、响应头和
-响应体都交给上游；仅移除 Host、连接级 hop-by-hop/传输 framing 头和入站鉴权头，再注入
-Provider 鉴权。
-Codex Live/Realtime 是选路例外，不是报文例外：`POST /v1/live`、`POST /v1/realtime` 和
-`POST /v1/realtime/calls` 会忽略当前文本会话泄漏的模型名，按 Live 意图选择
-`gpt-live-1-codex` 的精确 mapping；原始 path/query、SDP 或 multipart body 和媒体类型仍原样
-交给 Provider。Sumpter 不把 `/v1/realtime` 改成 `/v1/realtime/calls`，也不二次封装
-Quicksilver JSON；CPA 一类 Provider 自己负责对应协议。无 `call_id` 的 `GET /v1/realtime`
-仍归类为公开 Realtime WebSocket，带 call id 的后续请求则钉回创建会话的入口。
-另一个例外是 `GET /v1/models`（以及 `/models`、`/openai/v1/models` 和带模型 id 的子路径）：
-按当前启用入口的 `mappings` 生成本地目录，不转发到上游。普通 OpenAI 客户端拿到
-`{object:"list",data:[...]}`；Codex Desktop/CLI 带 `client_version` 时拿到 `{models:[...]}`：官方 slug 用嵌入的 Codex catalog 原件，其余模型 clone `gpt-5.5` 模板只改身份字段。
-这样 Codex 的目录探测不会打到排序最前的任意 OpenAI 入口。
+| 路径族 | 用途与范围 |
+| --- | --- |
+| `/v1/messages` | Anthropic Messages |
+| `/v1/chat/completions` | OpenAI Chat Completions |
+| `/v1/responses` | OpenAI Responses，含流式响应和 WebSocket |
+| `/v1/responses/compact` | 原生 Responses Compact |
+| `/v1/completions` | 原生 Legacy Completions |
+| `/v1/messages/count_tokens` | Claude Token 计数，不纳入生成用量汇总 |
+| `/v1/images/generations`、`/v1/images/edits` | 图片生成与编辑，支持的能力由上游决定 |
+| `/v1/alpha/search` | 原生 Alpha Search |
+| `/v1beta/models/{model}:generateContent`、`:streamGenerateContent?alt=sse` | Gemini Developer API 原生 REST |
+| `/v1/files`、`/v1/videos` 及资源子路径 | 文件、视频与后续资源访问 |
+| `/v1/live`、`/v1/realtime`、`/v1/realtime/calls` | 按方法、模型和资源标识识别 Live / Realtime 意图 |
 
-普通模型候选由模型组及其入口绑定生成；未配置模型组时沿用入口 `mappings`。JSON 只用于读取路由所需的模型元数据：请求已有
-顶层 `model` 或 `session.model` 且对应 mapping 配置了不同的 `upstreamModel` 时，才替换这一
-个模型值；不会主动新增 `model`，不会删除或重排其它字段。无论路径是否带 `/v1`、`/openai/v1`
-或其它前缀，原始路径都会按客户端写法交给 Provider，不做别名归一化。
+普通模型候选是入口映射、启用模型组和绑定模型范围的交集；未配置模型组时使用入口映射。原生转发保留所支持路径的请求、响应和流，按配置完成鉴权与必要的上游模型替换。Host、连接级 Header、入站凭据和 Sumpter 私有归因 Header 不原样转发。异协议转换会构造目标协议的请求和响应，因此不能将原生透传的字节保留承诺套用于 Translator。
 
-因此以下请求都只是普通透传示例，不代表 Sumpter 内置了对应协议实现（Codex `/v1/live` 的
-bootstrap 封装除外）：
+`GET /v1/models`（及支持的模型目录别名）按当前可路由模型生成本地目录，不等于入口“获取模型”拉回的上游 catalog。普通客户端收到 `{object:"list",data:[...]}`；Codex 带 `client_version` 时收到 `{models:[...]}`。上游 catalog 仅辅助配置，获取成功不等于该模型已经启用。
 
-- `POST /v1/responses`、`GET /v1/responses` WebSocket
-- `GET/POST /v1/realtime` 及其任意子路径
-- `GET/POST/DELETE /v1/files`、`/v1/videos` 及资源查询或内容下载
-- 未知的厂商路径、二进制请求和非 JSON 请求
+Gemini 入口使用 `gemini` 或 `auto`。Provider 的 key 默认发送为 `x-goog-api-key`；以 `Bearer ` 开头时使用 Authorization。Gemini CLI 包装器通过 `X-Sumpter-*` 显式声明项目和会话，Vertex、OAuth、Service Account 和 Code Assist 不在当前接入范围内。
 
-WebSocket 只按 Upgrade 请求建立统一的双向 relay；文本、二进制、ping/pong 和关闭帧不解析、不
-改写。对 `/v1/realtime`、`/v1/live` 及其 sideband，Sumpter 会先完成候选 Provider 的上游
-握手，再向客户端返回 `101`；上游握手的 `401/404/429/5xx` 会保留为下游 HTTP 状态，不会先
-返回一个误导性的 `101`。Realtime 的短期 `ek_…` 凭证仍可用于后续 HTTP/SDP/WebSocket 请求；
-其返回的 `session` 配置会在 WebSocket 建连后以 `session.update` 发送给上游，HTTP calls 也会
-复用 voice、instructions 等字段。这是鉴权/会话绑定能力，不是本地协议实现。上游具体模型、
-权限和媒体/Realtime 能力由 Provider 决定，需用目标 Provider 实测确认。
+Codex Live bootstrap 会按 Live 意图选择 `gpt-live-1-codex` 精确映射，普通文本模型不会被当成语音模型。Sumpter 不把 `/v1/realtime` 改为 `/v1/realtime/calls`，也不代替 CPA 封装 Quicksilver；会话模型映射和短期凭据绑定仍可能修改模型、会话字段。无 `call_id` 的 `GET /v1/realtime` 属于公开 Realtime WebSocket；带资源标识的后续请求按已记录的入口归属转发。
+
+WebSocket 先完成上游握手，再向客户端返回 `101`；握手失败保留相应 HTTP 错误。短期 `ek_…` 凭据的会话配置可在建连后通过 `session.update` 发给上游，不能描述为所有帧均无条件不解析。模型权限、媒体、Live/Realtime 能力及端到端响应仍须使用真实 Provider 验证。
 
 ---
 
 ## 5. 配置文件怎么填
 
-顶层只有：`schemaVersion`、`listener`、`retry`、`endpoints`、`featureRules`。  
+顶层包括 `schemaVersion`、`listener`、`retry`、`endpoints`、可选 `modelGroups`、`sessionStickyTtlHours` 和 `featureRules`。
 磁盘上**没有** `pools`、`globalModels` 或 `target.poolID`。旧文件会在迁移时展平。
 
 ### 5.1 listener — 谁可以连进来
@@ -513,7 +473,7 @@ WebSocket 只按 Upgrade 请求建立统一的双向 relay；文本、二进制�
 | `authToken` | 空 = 不校验。非空则客户端必须带相同值 |
 | `allowedCIDRs` | 空数组通常即可。环回始终放行 |
 
-Linux 的 Web Admin 地址 **不是** 这个字段，默认永远是 `127.0.0.1:57879`。
+Linux Web Admin 独立于此字段，默认 `127.0.0.1:57879`，可由启动参数覆盖；Docker 宿主机地址由 Compose 的端口发布配置决定。
 
 ### 5.2 retry — 先用默认即可
 
@@ -531,7 +491,7 @@ Linux 的 Web Admin 地址 **不是** 这个字段，默认永远是 `127.0.0.1:
 
 ### 5.3 endpoints — Provider 入口
 
-所有入口都按 `priority` 从小到大调度，同级保持数组顺序；同一 `stickyGroup` 内的线路连续尝试。已有稳定会话优先复用原分组，发生可重试故障后再 failover 到其它分组。
+未配置模型组时，入口按 `priority` 从小到大调度；配置模型组后使用组与绑定的优先级，同级默认保持数组顺序；同一 `stickyGroup` 内的线路连续尝试。已有稳定会话优先复用原分组，发生可重试故障后再 failover 到其它分组。
 
 模型组可将 `schedulingStrategy` 设为 `randomSticky`，让新会话在同优先级入口调度组中随机
 选择首选并保持后续请求粘性；省略或设为 `priority` 时保持按顺序调度。随机策略不改变更高
@@ -578,10 +538,9 @@ Live mapping 时返回 `no_live_provider`，避免语音请求误发到普通模
 
 - `websearch` / `webfetch` / `classifier`：只识别 Claude Code 那种独立子请求的完整形状，不会扫主会话全文。
 
-启用规则后只影响模型/Provider 的选择；Sumpter 不会把请求改造成另一种协议，也不会注入、删除
-或重排 WebSearch、Grok、工具等字段。具体能力由上游 Provider 自己处理。
+分流规则先选择目标模型和入口；实际协议处理遵循第 4 节。`target.effort` 可覆盖出站推理等级，`target.protocol` 参与目标协议选择，不是纯展示字段。
 
-要启用：设 `enabled: true`，`target.model` 必须能被某个入口的映射承接。`endpointID` 可选，钉住后只走该入口；入口失效时退回整列候选。`target.effort`、`target.protocol` 仅作为兼容配置/统计元数据，不触发数据面协议转换。
+启用时设置 `enabled: true` 和 `target.model`。`endpointID` 显式固定入口时会绕过普通映射筛选；被停用或删除时才退回候选入口序列，未固定时目标模型需可路由。前端会清理删除入口后的悬空引用。
 
 开箱可以全部保持关闭，先保证主对话能通。`featureRules` 也可以写成 `[]`（进程会补三条内建规则，默认停用）。
 
@@ -589,7 +548,7 @@ Live mapping 时返回 `no_live_provider`，避免语音请求误发到普通模
 
 ## 6. 一份可抄的骨架
 
-把 URL、key、模型名换成你的。不要用示例里的 `.invalid` 域名去打真实流量。
+此骨架省略 `modelGroups`，使用入口映射路由。把 URL、key、模型名换成你的；`.invalid` 域名不能用于真实流量。若改用完整模板，需额外启用模型组与绑定。
 
 ```json
 {
@@ -707,7 +666,7 @@ X-Sumpter-User。带工作区时显示“本地项目”，只有项目名时显
 | Claude Code 连不上 | `ANTHROPIC_BASE_URL` 是否指向当前 `host:port` |
 | 401 | `authToken` 开了但客户端没带，或带错 |
 | 400 `route_planning` | 启用的模型组未声明该客户端模型，或组内没有启用入口；旧配置则看入口 `mappings`。空 mappings / 空模型组都不接模型 |
-| Codex 连不上 | `base_url` 是否指向当前 `host:port`（常见带 `/v1`）；模型名是否写在 `mappings`；`authToken` 开了但没配成 API key |
+| Codex 连不上 | `base_url` 是否指向当前 `host:port`（常见带 `/v1`）；模型名是否同时满足入口映射和已配置模型组的范围；`authToken` 开了但没配成 API key |
 | 用量统计突然断了 | 改过 `endpoints[].id` |
 | Linux 管理页 Failed to fetch | 没登录，或 Admin 不在 `57879`，或 daemon 没起来 |
 | 上游 401/403 探测 | 部分中转要完整客户端指纹；菜单栏/WebUI 的「获取模型」和真实对话不是一回事 |
@@ -721,7 +680,7 @@ X-Sumpter-User。带工作区时显示“本地项目”，只有项目名时显
 1. 问清平台（macOS / Linux）和客户端（Claude Code、Codex、Grok Build、Gemini CLI、pi）。
 2. 安装走 GitHub：macOS 下 Releases 的 DMG；Linux 用 `install.sh --repo domoxiaojun/sumpter`，需要时加 `--admin-host`。
 3. 定位配置文件路径；没有就从 example 复制，不要在仓库 example 里填真实 key。
-4. 写入 `config.json`，确认 `schemaVersion: 7`、顶层是 `endpoints` 与可选 `modelGroups`（没有 `pools`），至少一条入口 `enabled: true`，客户端模型被模型组或 `mappings` 接住。
+4. 写入 `config.json`，确认 `schemaVersion: 7`、顶层是 `endpoints` 与可选 `modelGroups`（没有 `pools`），至少一条入口 `enabled: true`，客户端模型有入口映射；配置了模型组时还要启用对应组、模型和入口绑定。
 5. 告诉用户对应客户端的 Base URL：Claude Code 用根地址；Codex 必须带 `/v1`；pi 要设 `X-Sumpter-Client: pi`。
 6. 需要项目统计时，在**启动客户端的主机**处理，不要装到只跑 daemon 的 Linux。下载 setup 脚本后执行 `bash setup-client-attribution.sh install all`。
 7. **不要**把 key 写进回复；**不要** `git add` 配置；**不要**改源码。

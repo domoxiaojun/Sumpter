@@ -1015,6 +1015,25 @@ fn retention_and_pricing_mutations_are_serialized_by_the_worker() {
             .unwrap(),
         "gpt-test"
     );
+    let overlap = store.replace_pricing(RuntimePricingUpdate {
+        expected_revision: 2,
+        currency: "USD".into(),
+        prices: vec![
+            RuntimeModelPriceInput {
+                endpoint_id: Some("endpoint-a".into()), model_key: "gpt-test".into(),
+                effective_from: 0.0, effective_to: Some(100.0),
+                input_per_million_micros: Some(1), output_per_million_micros: Some(1),
+                cache_read_per_million_micros: None, cache_creation_per_million_micros: None,
+            },
+            RuntimeModelPriceInput {
+                endpoint_id: Some("endpoint-a".into()), model_key: "gpt-test".into(),
+                effective_from: 50.0, effective_to: None,
+                input_per_million_micros: Some(1), output_per_million_micros: Some(1),
+                cache_read_per_million_micros: None, cache_creation_per_million_micros: None,
+            },
+        ],
+    }).unwrap_err();
+    assert!(overlap.contains("区间不能重叠"));
     drop(connection);
     drop(store);
     remove_test_dir(&dir);

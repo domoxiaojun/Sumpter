@@ -5,7 +5,7 @@
 1. **源码 monorepo**：本文件位于 `platforms/linux/README.md`。Rust 真源是仓库根 workspace 的 `sumpter-core` / `sumpter-runtime` / `sumpter-engine` 与 `sumpterd-linux`。
 2. **独立发布包**：发布阶段把 `platforms/linux/` 提升为包根。包内二进制名为 `sumpterd`，配置目录 `~/.config/sumpter` 或 `/var/lib/sumpter`，systemd 单元 `sumpter.service`，环境变量 `SUMPTER_*`。
 
-Linux 版以 standalone daemon 提供多协议代理、入口库、多个模型组、分流规则、failover、统计，以及与桌面 UI 信息架构对齐的本机 Web 管理界面。版本与 schema 与仓库根一致（现为 0.4.6 / schema v7）。用户安装看下文「自动安装、升级与卸载」。
+Linux 版以 standalone daemon 提供多协议代理、入口库、多个模型组、分流规则、failover、统计，以及与桌面 UI 信息架构对齐的本机 Web 管理界面。版本与 schema 与仓库根一致（现为 0.4.7 / schema v7）。用户安装看下文「自动安装、升级与卸载」。
 
 Linux 专属边界：
 
@@ -32,7 +32,6 @@ sumpter-linux-<arch>/
 ├── sumpterd
 ├── config.example.json
 ├── compose.yaml                         # 可选：独立目录 Docker 部署
-├── .env.example
 ├── DOCKER.md
 ├── USAGE.md
 ├── CHANGELOG.md                         # 发布工作流写入的版本说明节选
@@ -152,14 +151,14 @@ unit 或数据目录不在范围内。
 curl --proto '=https' --tlsv1.2 -fLo /tmp/sumpter-migrate-kekulv.sh \
   https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/migrate-kekulv.sh
 sudo bash /tmp/sumpter-migrate-kekulv.sh --check
-# 省略 --version 即下载 latest；钉死版本再加 --version v0.4.6
+# 省略 --version 即下载 latest；钉死版本再加 --version v0.4.7
 sudo bash /tmp/sumpter-migrate-kekulv.sh --admin-host 0.0.0.0
 ```
 
 | 参数 | 作用 |
 | --- | --- |
 | （默认） | 下载 `https://github.com/domoxiaojun/sumpter/releases/latest/download/` 下当前架构包 |
-| `--version vX.Y.Z` | 改为该 tag 的 Release 资产，例如 `.../download/v0.4.6/` |
+| `--version vX.Y.Z` | 改为该 tag 的 Release 资产，例如 `.../download/v0.4.7/` |
 | `--admin-host` / `--admin-port` | 写入新服务的 Admin 监听，与下载无关；省略则沿用旧 drop-in |
 | `--check` | 只检查布局和参数，**不下载、不停服、不改文件** |
 
@@ -511,15 +510,15 @@ root 管理且禁用。
 
 ## Docker 安装（独立目录）
 
-推荐创建一个独立 `sumpter/`，其中放 `compose.yaml`、`.env` 和 `config/`。配置、密码、SQLite、会话/资源绑定和诊断捕获统一挂载在 `./config:/config`；停机后复制整个目录即可迁移，不依赖源码仓库路径。
+推荐创建一个独立 `sumpter/`，其中放 `compose.yaml` 和 `config/`。配置、密码、SQLite、会话/资源绑定和诊断捕获统一挂载在 `./config:/config`；停机后复制整个目录即可迁移，不依赖源码仓库路径。
 
 完整步骤、环境变量、权限、升级和迁移见 [Docker 部署说明](DOCKER.md)。要求 Linux 与 Docker Compose 2.24+。
 
 - 默认拉 GHCR 镜像，使用 **bridge 网络**，宿主机端口默认只绑定 `127.0.0.1`。
 - 不指定容器用户，使用镜像默认用户（root）运行，不需要配置 UID/GID；Compose 同时限制为只读根文件系统、`cap_drop: ALL` 与 `no-new-privileges`，仅 `config/` 与 `/tmp` 可写。
-- `.env` **可选**：不创建时默认值即可启动；需要时用 `platforms/linux/.env.example` 覆盖镜像、宿主机监听地址/端口、数据目录、日志等级/轮转等，附加支持的环境变量通过 `env_file` 透传。
+- 默认值已经写入 `compose.yaml`，需要改镜像、端口、数据目录或日志参数时直接编辑该文件。
 - `init` 服务只创建缺失的初始配置和随机密码，不覆盖旧文件；首次生成时会把初始密码直接打印到 init 日志（只打印一次），方便首次登录，登录后请立即在 WebUI 改密。不想让明文进容器日志时，先按 [Docker 部署说明](DOCKER.md) 的「自备 `config.json` 与初始密码」自己生成凭据即可，init 不会重复打印。
-- 新 Linux 发布包携带 `compose.yaml`、`.env.example`、`DOCKER.md`；旧包缺少时需单独下载。
+- 新 Linux 发布包携带 `compose.yaml`、`DOCKER.md`；旧包缺少时需单独下载。
 - 旧 host 网络部署升级模板前，必须按 [切换说明](DOCKER.md#从旧-host-网络-compose-切换) 核对代理内部监听；数据目录由容器创建，非 root 用户备份时需用 `sudo`。
 - 容器日志由 Docker 管理，不在 `config/` 中；需要迁移日志时先导出。首次生成的初始密码会出现在 init 日志里，改密后即失效，但导出日志前仍需确认。密码和备份不要入库。
 
@@ -582,13 +581,13 @@ bash setup-client-attribution.sh install all
 ```
 
 setup 自动获取所选客户端需要的安装器和扩展。重复 install 可更新；status 检查本机配置，
-restore 恢复所选客户端安装前状态。Shell 客户端新开终端，pi 执行 /reload。
+restore 恢复所选客户端安装前状态。所有客户端均需新开终端并重新启动；pi 的 `/reload` 不会加载 shell 包装器配置。
 无法访问 GitHub 时，可设置 SUMPTER_BASE_URL 从已运行的代理下载资源。
 客户端连接和 Codex Desktop 的适用边界见[归因安装](USAGE.md#linuxmacos-客户端归因脚本统一安装)。
 
 ## 原生构建与打包
 
-`cross-build.sh` 已同时支持当前 monorepo 和独立 Linux 发布树。在当前 monorepo 根目录运行
+`cross-build.sh` 需要包含 Rust workspace 的源码树；仅有二进制的独立 Linux 发布包不能重新编译。在当前 monorepo 根目录运行
 `./platforms/linux/scripts/cross-build.sh` 会构建根 workspace 的 `sumpterd-linux`，并把发布包放到
 `platforms/linux/dist/`；其它安装/卸载脚本仍以打包后的 Linux 发布树为运行根目录。
 

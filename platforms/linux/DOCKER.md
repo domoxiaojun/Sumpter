@@ -8,8 +8,8 @@
 
 运行镜像只有 GHCR 一处来源，**不在部署主机构建**。发布工作流推送 `linux/amd64,linux/arm64` 双架构 manifest，不会出现只有一种架构可用的情况。
 
-- tag 形式：`0.4.6`、`0.4`、`0`、`latest`、`sha-<full>`；**不带 `v` 前缀**。`latest` 只在发布成功后推进，普通 main push 不会刷新镜像。
-- 钉死版本：`.env` 里写 `SUMPTER_IMAGE=ghcr.io/domoxiaojun/sumpter:0.4.6`，或直接写 digest。
+- tag 形式：`0.4.7`、`0.4`、`0`、`latest`、`sha-<full>`；**不带 `v` 前缀**。`latest` 只在发布成功后推进，普通 main push 不会刷新镜像。
+- 钉死版本：直接编辑 `compose.yaml` 的 `image` 行钉住版本，例如 `ghcr.io/domoxiaojun/sumpter:0.4.7`，或写 digest。
 - 仓库或 GHCR 为私有时先 `docker login ghcr.io`。
 - `compose.yaml` 不含 `build:`；源码构建见文末「维护者：源码构建」。
 
@@ -24,7 +24,7 @@ curl --proto '=https' --tlsv1.2 -fLo compose.yaml \
 
 docker compose up -d          # 首次会拉取镜像
 docker compose ps -a
-docker compose logs -f sumpter
+docker compose logs init
 ```
 
 `init` 服务用同一镜像的 shell 在 `/config` 内生成缺失的 `config.json`（监听 `0.0.0.0:57878`、入口为空）与随机 `admin-password`，成功后显示 `Exited (0)`，这是正常状态。它不会覆盖已有配置、密码或数据库，也不会迁移只剩 `keys.json` 的历史目录；初始化失败会阻止 daemon 启动，原因看 `docker compose logs init`。
@@ -38,30 +38,17 @@ docker compose logs -f sumpter
 
 两个端口默认只发布到 `127.0.0.1`。要给局域网客户端或远程管理使用就改宿主机发布地址，但 `0.0.0.0` 只是监听所有接口，本身不是认证：代理对外开放前先在 WebUI 设置入站 Token/CIDR，Admin 走 SSH 隧道或 HTTPS 反向代理。
 
-初始配置没有上游入口，需要在 WebUI 里补。
+登录后先添加 Provider 入口，填写 Base URL、API Key 和模型映射，再把客户端连接到代理地址。
 
-只有要改端口、目录、日志或镜像 tag 时才需要 `.env`：
+镜像、端口、目录与日志都直接在 `compose.yaml` 中修改，见「常用配置」。
 
-```bash
-cat > .env <<'EOF'
-SUMPTER_IMAGE=ghcr.io/domoxiaojun/sumpter:0.4.6   # 钉版本，latest 也可以
-SUMPTER_PROXY_BIND_HOST=0.0.0.0                    # 局域网客户端要连代理时
-TZ=Asia/Shanghai
-COMPOSE_PROJECT_NAME=sumpter
-EOF
-docker compose up -d          # 改完 .env 必须重建容器，restart 不重载环境
-```
-
-全部可调参数见下文「`.env` 参数」；发布包内另带一份带注释的 `.env.example` 供对照。
-
-Linux 二进制发布包也带 `compose.yaml`、`.env.example` 与本文。若直接在解压目录里 `docker compose up -d`，数据会落在包内的 `config/`，**升级或删除解压目录前先备份整个目录**；更稳妥的做法是复制到一个独立的 `sumpter/` 目录再启动。
+Linux 二进制发布包也带 `compose.yaml` 与本文。若直接在解压目录里 `docker compose up -d`，数据会落在包内的 `config/`，**升级或删除解压目录前先备份整个目录**；更稳妥的做法是复制到一个独立的 `sumpter/` 目录再启动。
 
 ## 目录与持久化边界
 
 ```text
 sumpter/
 ├── compose.yaml
-├── .env                      # 可选：本机部署参数，不入库
 ├── config/                   # 整目录 → 容器 /config
 │   ├── config.json
 │   ├── admin-password
@@ -85,71 +72,54 @@ mkdir -p logs
 docker compose logs --no-color > "logs/compose-$(date +%Y%m%d-%H%M%S).log"
 ```
 
-## `.env` 参数
+## 常用配置
 
-`.env` 会被 Compose 用来展开部署参数，同时通过 `env_file` 原样透传给 daemon。它不执行 Shell 代码，也不要 `source .env`。
+默认配置已经写入 `compose.yaml`，复制文件后即可启动。需要修改时直接编辑对应字段，再执行 `docker compose up -d`：
 
-| 参数 | 默认 / 作用 |
-| --- | --- |
-| `COMPOSE_PROJECT_NAME` | `sumpter`；同一主机运行多个实例时必须使用不同项目名、目录与端口 |
-| `SUMPTER_IMAGE` | `ghcr.io/domoxiaojun/sumpter:latest`；官方 GHCR 双架构镜像，可钉版本或 digest |
-| `SUMPTER_CONFIG_DIR` | `./config`；相对于 Compose 项目目录（即 `compose.yaml` 所在目录） |
-| `SUMPTER_PROXY_BIND_HOST` / `SUMPTER_ADMIN_BIND_HOST` | `127.0.0.1`；宿主机发布地址 |
-| `SUMPTER_PROXY_PORT` / `SUMPTER_ADMIN_PORT` | `57878` / `57879`；宿主机端口 |
-| `RUST_LOG` | `info`；日志等级或过滤器（daemon 读取） |
-| `TZ` | `UTC`；容器时区，镜像已装 tzdata（v0.4.5 及更早的发布镜像没有）。程序自身的统计与时间戳仍按 Unix 时间（UTC）存储，日志时间戳也为 UTC，WebUI 按浏览器时区展示 |
-| `SUMPTER_RESTART_POLICY` | `unless-stopped`；只作用于 daemon，init 不会循环重启 |
-| `SUMPTER_STOP_GRACE_PERIOD` | `30s`；迁移前等待正常关停 |
-| `SUMPTER_TMPFS_SIZE` | `64m`；容器 `/tmp` 容量，不持久化 |
-| `SUMPTER_LOG_MAX_SIZE` / `SUMPTER_LOG_MAX_FILES` | `10m` / `3`；Docker 日志轮转 |
-| `RUST_BACKTRACE` | 不设；设为 `1` 时 panic 输出会附上回溯，便于提交问题时排查 |
+| 需求 | 修改位置 | 默认值 |
+| --- | --- | --- |
+| 镜像版本 | `x-runtime.image` | `ghcr.io/domoxiaojun/sumpter:latest` |
+| 宿主机代理端口 | `services.sumpter.ports` 第一行 | `127.0.0.1:57878` |
+| 宿主机 Admin 端口 | `services.sumpter.ports` 第二行 | `127.0.0.1:57879` |
+| 数据目录 | `x-runtime.volumes` | `./config:/config` |
+| 日志等级 | `services.sumpter.environment.RUST_LOG` | `info` |
 
-改成宿主机 18080 / 18081 只需要这两个变量：
+例如把 Admin 改为宿主机 `18081`：
 
-```dotenv
-SUMPTER_PROXY_PORT=18080
-SUMPTER_ADMIN_PORT=18081
+```yaml
+- "127.0.0.1:18081:57879"
 ```
 
-容器内端口仍固定为 **57878 / 57879**，健康检查与端口映射都按容器内端口工作，所以换宿主机端口不会错位。改完 `.env` 要 `docker compose up -d` 才会重建容器，`restart` 不会重新加载环境；宿主机 shell 里已 `export` 的同名变量优先于 `.env`，排错先确认这一点。不要把 `docker compose config` 的完整输出贴出去，它可能包含你填的凭据。
+容器内端口固定为 `57878` 和 `57879`，不要修改映射右侧端口。修改后运行 `docker compose up -d`，`restart` 不会应用配置变化。
 
-daemon 真正读取的环境变量只有 `RUST_LOG`、`RUST_BACKTRACE`、`SUMPTER_ADMIN_HOST`、`SUMPTER_ADMIN_PORT`、`SUMPTER_ADMIN_PASSWORD_FILE`、`SUMPTER_WEB_ROOT`（外加默认配置目录推导用的 `HOME` / `XDG_CONFIG_HOME`）。其余变量会被透传但不生效，尤其是 `config.json` 里的入口、模型组、Token/CIDR 只通过 WebUI 或配置文件管理，`.env` 里写同名字段不会覆盖。
+其他参数也在 `services.sumpter` 下：`environment.TZ` 为容器时区（默认 UTC，WebUI 按浏览器时区显示），`restart` 为重启策略，`logging.options` 为日志大小和保留份数。查看服务日志用 `docker compose logs --tail=100 sumpter`。
 
-### 不要设置的变量
+旧部署的自定义镜像、端口、目录和日志值需要先从 `.env` 手工转写到 Compose 对应字段，再启用新模板；尤其要保留原来的数据目录，避免误用一个空目录。Compose CLI 自身仍可能读取 `.env` 中的项目名等内置选项，转写后将旧文件移出部署目录；多实例使用不同目录和端口，必要时在文件顶层设置 `name` 保持原项目名。
 
-| 变量 | 为什么无效 |
-| --- | --- |
-| `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY`（含小写） | **上游转发不走环境代理**：数据面与模型目录探测都显式 `.no_proxy()`，设了只会在目录探测失败时提示“不走代理”，不会让请求真的能出去。确需代理出网时请在容器外做网络层转发，或让 `baseURL` 直接指向容器内可达的地址。 |
-| `SUMPTER_WEB_ROOT` | CMD 的 `--web-root /opt/sumpter/web` 优先，环境变量被忽略；WebUI 已内置在镜像里。 |
-| `SUMPTER_ADMIN_HOST` / `SUMPTER_ADMIN_PORT` | 模板已固定为容器内 `0.0.0.0` / `57879`，健康检查与端口映射都依赖这两个值；宿主机地址与端口用 `*_BIND_HOST` / `*_PORT`。 |
-| `SUMPTER_ADMIN_PASSWORD_FILE` | 固定为 `/config/admin-password`，改路径会让登录凭据与数据目录脱节。 |
-| `HOME` / `XDG_CONFIG_HOME` | CMD 已用 `--config-dir /config` 固定配置目录，不再参与推导。 |
+上游入口、模型和入站认证仍在 WebUI 管理。不要用 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` 配置上游出网：引擎显式禁用了环境代理，请使用容器内可达的上游地址。
 
 ### 宿主机侧 vs 容器内
 
-模板里的 proxy 与 admin 两组变量**不是重复配置**：daemon 有两个独立监听项。
+代理服务和管理页面使用两个端口：
 
-| 监听项 | 作用 | 容器内地址 / 端口 | 宿主机侧（`.env`） |
+| 监听项 | 作用 | 容器内地址 / 端口 | 宿主机侧（Compose `ports`） |
 | --- | --- | --- | --- |
-| 代理（数据面） | 客户端 API 流量，OpenAI / Anthropic / Codex 等都指向这里 | `config.json` 的 `listener.host` / `listener.port`，init 写为 `0.0.0.0:57878` | `SUMPTER_PROXY_BIND_HOST` / `SUMPTER_PROXY_PORT` |
-| Admin（控制面） | WebUI 与 `/admin/api`，登录会话 | Compose 的 `environment` 固定为 `0.0.0.0:57879` | `SUMPTER_ADMIN_BIND_HOST` / `SUMPTER_ADMIN_PORT` |
+| 代理（数据面） | 客户端 API 流量，OpenAI / Anthropic / Codex 等都指向这里 | `config.json` 的 `listener.host` / `listener.port`，init 写为 `0.0.0.0:57878` | `127.0.0.1:57878:57878` |
+| Admin（控制面） | WebUI 与 `/admin/api`，登录会话 | Compose 的 `environment` 固定为 `0.0.0.0:57879` | `127.0.0.1:57879:57879` |
 
-两个需要留意的耦合：
-
-- **代理的容器内端口来自 `config.json`**，不是环境变量。不要在 WebUI 的“监听配置”里改代理端口，否则端口映射会指向无人监听的端口；确需修改时同时改 `config.json` 与 `compose.yaml` 的容器侧端口。宿主机换端口只用 `SUMPTER_PROXY_PORT`。
-- `SUMPTER_ADMIN_PORT` 在 `.env` 里表示**宿主机端口**，而 Compose 的 `environment` 又把容器内的同名变量钉成 `57879`（显式 `environment` 优先于 `env_file`）。这是有意保留的：从旧 bridge 示例来的 `.env` 值继续表示宿主机端口，同时容器内的 Admin 契约不会被误改。
+- **代理的容器内端口来自 `config.json`**，不是环境变量。不要在 WebUI 的“监听配置”里改代理端口，否则端口映射会指向无人监听的端口；确需修改时同时改 `config.json` 与 `compose.yaml` 的容器侧端口。
 
 ### 远程访问与主机加固
 
-- 远程管理优先用 SSH 隧道或 HTTPS 反向代理；确需直接发布到局域网时改 `*_BIND_HOST`。公网 Admin 必须置于 HTTPS 之后，代理对外开放前先设置入站 Token/CIDR。
+- 远程管理优先用 SSH 隧道或 HTTPS 反向代理；确需直接发布到局域网时修改 `ports` 中最左边的绑定地址。公网 Admin 必须置于 HTTPS 之后，代理对外开放前先设置入站 Token/CIDR。
 - 容器以 root 运行只是为了让 bind mount 的读写不依赖宿主机 UID 映射；Compose 已设置 `read_only: true`、`cap_drop: ALL`、`no-new-privileges`，可写路径只有 `config/` 与 `/tmp`，`config/` 内文件为 `0700` / `0600`。
-- 因此 `config/` 通常由 root 所有：非 root 用户需要读取或打包备份时用 `sudo tar` / `sudo cp -a`，或先 `docker compose stop`。不要用 `chmod 777` 放宽权限。
+- 因此 `config/` 通常由 root 所有：非 root 用户需要读取或打包备份时用 `sudo tar` / `sudo cp -a`。不要用 `chmod 777` 放宽权限。
 - SELinux 主机（Fedora/RHEL）挂载报错时，在 `compose.yaml` 的 volumes 行末追加 `:z`；不要用私有 `Z`，init 与 daemon 共用同一目录。
-- 容器内没有 systemd，WebUI 安全页的“systemd 自启动”显示不可用属预期；容器级别的开机自启用 `.env` 的 `SUMPTER_RESTART_POLICY` 控制。
+- 容器内没有 systemd，WebUI 安全页的“systemd 自启动”显示不可用属预期；容器级别的开机自启用 Compose 中的 `restart` 字段控制。
 
 ## 升级与迁移
 
-升级只替换镜像，`.env` 与整个 `config/` 都保留：
+升级只替换镜像，`compose.yaml` 与整个 `config/` 都保留：
 
 ```bash
 docker compose pull
@@ -159,8 +129,8 @@ docker compose up -d
 跨机器迁移：
 
 1. 旧机先 `docker compose stop` 等正常退出，需要日志就按上文导出，再 `docker compose down`。不要在 daemon 仍在写库时只拷贝单个 SQLite 文件。
-2. 复制整个 `sumpter/`（包括隐藏的 `.env` 与完整 `config/`），例如在父目录运行 `sudo tar -czf sumpter-backup.tar.gz sumpter/`。备份包含凭据，应限制读取权限并安全传输。
-3. 新机解压后检查端口占用、`SUMPTER_CONFIG_DIR` 相对路径与镜像架构；旧机若钉了单架构 digest，换架构时改用同版本的多架构引用。
+2. 复制整个 `sumpter/`（包括 `compose.yaml` 与完整 `config/`），例如在父目录运行 `sudo tar -czf sumpter-backup.tar.gz sumpter/`。备份包含凭据，应限制读取权限并安全传输。
+3. 新机解压后检查端口占用、Compose 中的 `./config` 路径与镜像架构；旧机若钉了单架构 digest，换架构时改用同版本的多架构引用。
 4. 在新目录执行 `docker compose pull && docker compose up -d`，确认能登录 Admin、代理请求正常。初始化不会覆盖迁入的文件；验证通过前不要删除旧备份，也不要同时运行两个实例访问同一目录。
 
 `config/` 备份涵盖凭据、SQLite 与各类绑定文件；浏览器登录会话、进行中的请求、临时 Live 连接属于内存状态，不承诺跨进程迁移。
@@ -169,9 +139,9 @@ docker compose up -d
 
 旧模板使用 `network_mode: host`，且由 `SUMPTER_ADMIN_HOST/PORT` 直接决定监听地址。按顺序切换：
 
-1. 备份旧 `compose.yaml`、`.env` 与配置，把 `config.json` 的 `listener.host` 改为 `0.0.0.0`、`listener.port` 保持 `57878`（bridge 下容器内不能监听回环）。旧容器仍是 host 网络，改动前先设置入站认证或停机离线修改，避免短暂的对外暴露。
+1. 备份旧 `compose.yaml` 与配置，把 `config.json` 的 `listener.host` 改为 `0.0.0.0`、`listener.port` 保持 `57878`（bridge 下容器内不能监听回环）。旧容器仍是 host 网络，改动前先设置入站认证或停机离线修改，避免短暂的对外暴露。
 2. 停旧服务，换用新模板，按「首次部署」启动。
-3. `.env` 的 `SUMPTER_ADMIN_PORT` / `SUMPTER_PROXY_PORT` 现在只表示宿主机端口，宿主机绑定地址改用 `*_BIND_HOST`；旧的 `SUMPTER_ADMIN_HOST` 不再决定对外暴露范围（已被 Compose 覆盖为容器内 `0.0.0.0`）。
+3. 当前模板直接固定宿主机绑定到 127.0.0.1 和端口 57878/57879；需要对外提供服务时直接编辑 `ports` 行，并先配置认证。
 4. 启动后同时验证两个端口与管理页登录：`config.json` 若仍是 `127.0.0.1`，容器内代理从宿主机访问不到。
 
 `compose.bridge.example.yaml` 与 `docker-compose.yml` 在**源码树**中是指向 `compose.yaml` 的兼容链接（旧命令仍可用）；发布包与独立部署目录只保留一份 `compose.yaml`。
@@ -215,6 +185,6 @@ SUMPTER_LOCAL_IMAGE=sumpter:local docker compose -f compose.yaml -f compose.buil
 
 两个服务共用同一个构建镜像。`Dockerfile` 以仓库根为构建上下文；本机没有双架构构建器时，构建结果是**当前架构**的镜像，不能当作双架构验证。
 
-本机构建使用独立的 `SUMPTER_LOCAL_IMAGE`（默认 `sumpter:local`），**不读 `.env` 里的 `SUMPTER_IMAGE`**——否则源码构建结果会被打进 `ghcr.io/...` 正式 tag，覆盖本地缓存的官方镜像。构建成功不代表权限、登录、真实流量或迁移已经验收，容器验证在 Linux CI 执行。
+本机构建使用独立的 `SUMPTER_LOCAL_IMAGE`（默认 `sumpter:local`），不会覆盖 Compose 中的官方镜像配置。构建成功不代表权限、登录、真实流量或迁移已经验收，容器验证在 Linux CI 执行。
 
 发布用的 `Dockerfile.runtime` 同样以 `platforms/linux/` 为上下文，但要求目录内已有 CI 生成的 `docker-bin/sumpterd-amd64`、`docker-bin/sumpterd-arm64`，**不适合本机直接使用**；本机验证请用上面的源码构建路径。

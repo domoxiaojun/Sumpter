@@ -209,27 +209,40 @@ func TestHealthcheckLivesInImageMetadata(t *testing.T) {
 	}
 }
 
-func TestEnvOverridesAndPassthrough(t *testing.T) {
+func TestLegacyEnvDoesNotChangeDeployment(t *testing.T) {
 	dir := deployment(t)
-	put(t, filepath.Join(dir, ".env"), []byte("EXTRA_SYNTHETIC_SETTING=retained\nSUMPTER_ADMIN_HOST=127.0.0.1\nSUMPTER_ADMIN_PORT=18081\nRUST_LOG=warn\n"))
-	svc := project(t, dir).Services["sumpter"]
-	if *svc.Environment["EXTRA_SYNTHETIC_SETTING"] != "retained" {
-		t.Fatal("additional env_file variable lost")
+	put(t, filepath.Join(dir, ".env"), []byte("EXTRA_SYNTHETIC_SETTING=retained\nSUMPTER_ADMIN_HOST=127.0.0.1\nSUMPTER_ADMIN_PORT=18081\nRUST_LOG=warn\nSUMPTER_IMAGE=wrong:legacy\nSUMPTER_CONFIG_DIR=./old\nSUMPTER_PROXY_BIND_HOST=0.0.0.0\n"))
+	p := project(t, dir)
+	svc := p.Services["sumpter"]
+	if _, present := svc.Environment["EXTRA_SYNTHETIC_SETTING"]; present || len(svc.EnvFiles) != 0 {
+		t.Fatal("deployment must not import .env into the daemon")
 	}
-	if *svc.Environment["RUST_LOG"] != "warn" {
-		t.Fatal("RUST_LOG override lost")
+	if *svc.Environment["RUST_LOG"] != "info" || *svc.Environment["SUMPTER_ADMIN_HOST"] != "0.0.0.0" || *svc.Environment["SUMPTER_ADMIN_PORT"] != "57879" {
+		t.Fatal("legacy .env changed fixed daemon defaults")
 	}
-	// 内部监听契约不能被 .env 改写，否则容器健康检查与端口映射会错位。
-	if *svc.Environment["SUMPTER_ADMIN_HOST"] != "0.0.0.0" || *svc.Environment["SUMPTER_ADMIN_PORT"] != "57879" {
-		t.Fatal(".env must not override the in-container listener contract")
+	for _, name := range []string{"init", "sumpter"} {
+		if p.Services[name].Image != "ghcr.io/domoxiaojun/sumpter:latest" || p.Services[name].Volumes[0].Source != filepath.Join(dir, "config") {
+			t.Fatal("legacy .env changed image or data directory")
+		}
+	}
+	for _, port := range svc.Ports {
+		if port.HostIP != "127.0.0.1" || port.Published != fmt.Sprint(port.Target) {
+			t.Fatalf("legacy .env changed published port: %+v", port)
+		}
 	}
 }
 
 func TestCustomPortsAndDataDirectory(t *testing.T) {
 	dir := deployment(t)
-	p := project(t, dir,
-		"SUMPTER_PROXY_PORT=18080", "SUMPTER_ADMIN_PORT=18081", "SUMPTER_CONFIG_DIR=./state",
-		"SUMPTER_PROXY_BIND_HOST=0.0.0.0", "SUMPTER_LOG_MAX_FILES=5")
+	file := filepath.Join(dir, "compose.yaml")
+	edited := strings.NewReplacer(
+		"127.0.0.1:57878:57878", "0.0.0.0:18080:57878",
+		"127.0.0.1:57879:57879", "127.0.0.1:18081:57879",
+		"./config:/config", "./state:/config",
+		`max-file: "3"`, `max-file: "5"`,
+	).Replace(string(read(t, file)))
+	put(t, file, []byte(edited))
+	p := project(t, dir)
 	svc := p.Services["sumpter"]
 	expected := map[uint32]string{57878: "18080", 57879: "18081"}
 	for _, port := range svc.Ports {
@@ -261,13 +274,18 @@ func TestCustomPortsAndDataDirectory(t *testing.T) {
 func TestPullsGhcrImageAndBuildOverlayIsIsolated(t *testing.T) {
 	dir := deployment(t)
 
-	// 默认（无 .env）与带 .env 两种情况都必须引用官方 GHCR 镜像。
+	// 镜像默认值与直接编辑后的版本同时应用于 init 和 daemon。
 	if got := project(t, dir).Services["sumpter"].Image; got != "ghcr.io/domoxiaojun/sumpter:latest" {
 		t.Fatalf("unexpected default image: %s", got)
 	}
-	if got := project(t, dir, "SUMPTER_IMAGE=ghcr.io/domoxiaojun/sumpter:0.4.6").Services["sumpter"].Image; got != "ghcr.io/domoxiaojun/sumpter:0.4.6" {
-		t.Fatalf("image pinning lost: %s", got)
+	original := read(t, filepath.Join(dir, "compose.yaml"))
+	put(t, filepath.Join(dir, "compose.yaml"), []byte(strings.ReplaceAll(string(original), "sumpter:latest", "sumpter:0.4.6")))
+	for name, svc := range project(t, dir).Services {
+		if svc.Image != "ghcr.io/domoxiaojun/sumpter:0.4.6" {
+			t.Fatalf("%s image pinning lost: %s", name, svc.Image)
+		}
 	}
+	put(t, filepath.Join(dir, "compose.yaml"), original)
 
 	// 源码构建 override 使用独立本地 tag，绝不继承 SUMPTER_IMAGE，
 	// 否则会把本机构建结果打成正式 GHCR 名称。
@@ -474,38 +492,24 @@ func TestInitScriptShellcheck(t *testing.T) {
 	}
 }
 
-// 环境变量示例必须覆盖模板引用的每一个变量，且不能把不生效的变量当可用参数提供。
-func TestEnvInventoryStaysComplete(t *testing.T) {
+// 独立部署模板不依赖 .env；默认值必须直接写在 Compose 中。
+func TestDeploymentHasNoEnvDependency(t *testing.T) {
 	compose := string(read(t, filepath.Join(root(), "platforms/linux/compose.yaml")))
-	sample := string(read(t, filepath.Join(root(), "platforms/linux/.env.example")))
 	doc := string(read(t, filepath.Join(root(), "platforms/linux/DOCKER.md")))
 
 	re := regexp.MustCompile(`\$\{([A-Z_][A-Z0-9_]*)`)
 	seen := map[string]bool{}
 	for _, match := range re.FindAllStringSubmatch(compose, -1) {
-		name := match[1]
-		if seen[name] {
-			continue
-		}
-		seen[name] = true
-		if !strings.Contains(sample, name) {
-			t.Errorf(".env.example 缺少 %s：模板引用但示例未说明", name)
-		}
-		if !strings.Contains(doc, "`"+name+"`") {
-			t.Errorf("DOCKER.md 参数表缺少 %s", name)
-		}
+		seen[match[1]] = true
 	}
-	if len(seen) < 10 {
-		t.Fatalf("只解析到 %d 个变量，正则或模板结构可能已变", len(seen))
+	if strings.Contains(compose, "env_file:") || len(seen) != 0 {
+		t.Fatalf("compose.yaml 不应依赖 .env 插值，发现 %v", seen)
 	}
 
 	// 引擎显式 no_proxy()，这些变量不能作为可用参数出现在示例或模板插值里。
 	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"} {
 		if strings.Contains(compose, "${"+name) {
 			t.Errorf("compose.yaml 不应当把 %s 当作可用参数", name)
-		}
-		if regexp.MustCompile(`(?m)^` + name + `=`).MatchString(sample) {
-			t.Errorf(".env.example 不应当把 %s 当作可用参数", name)
 		}
 		if !strings.Contains(doc, name) {
 			t.Errorf("DOCKER.md 应说明 %s 为什么不生效", name)
@@ -549,7 +553,7 @@ func TestRuntimeImageAndVersionExamples(t *testing.T) {
 	}
 
 	// 文档仍声称“未安装 tzdata”就说明镜像与文档已经不一致。
-	for _, name := range []string{"platforms/linux/DOCKER.md", "platforms/linux/.env.example"} {
+	for _, name := range []string{"platforms/linux/DOCKER.md"} {
 		if strings.Contains(string(read(t, filepath.Join(root(), name))), "未安装 tzdata") {
 			t.Errorf("%s 仍写着未安装 tzdata", name)
 		}
@@ -562,7 +566,7 @@ func TestRuntimeImageAndVersionExamples(t *testing.T) {
 		t.Fatal("无法从 Cargo.toml 读取 workspace 版本")
 	}
 	imageTag := regexp.MustCompile(`domoxiaojun/sumpter:(\d+\.\d+\.\d+)`)
-	for _, name := range []string{"platforms/linux/DOCKER.md", "platforms/linux/.env.example"} {
+	for _, name := range []string{"platforms/linux/DOCKER.md"} {
 		for _, match := range imageTag.FindAllStringSubmatch(string(read(t, filepath.Join(root(), name))), -1) {
 			if match[1] != version[2] {
 				t.Errorf("%s 的镜像示例 %s 与 workspace 版本 %s 不一致", name, match[1], version[2])
@@ -573,7 +577,7 @@ func TestRuntimeImageAndVersionExamples(t *testing.T) {
 
 func TestDeploymentPackagingInputs(t *testing.T) {
 	script := string(read(t, filepath.Join(root(), "platforms/linux/scripts/cross-build.sh")))
-	list := "compose.yaml .env.example DOCKER.md"
+	list := "compose.yaml DOCKER.md"
 	if strings.Count(script, "for docker_file in "+list+"; do") != 2 {
 		t.Fatal("packaging must both preflight and copy every deployment input")
 	}

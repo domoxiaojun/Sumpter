@@ -51,9 +51,7 @@ struct RuntimePricingEditor: View {
             var models = Set(endpoint.catalog.uniqueModels.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) })
             endpoint.mappings.forEach { mapping in
                 let client = mapping.clientPattern.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                let upstream = mapping.upstreamModel.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !client.isEmpty { models.insert(client) }
-                if !upstream.isEmpty { models.insert(upstream) }
             }
             for modelKey in models where !modelKey.isEmpty {
                 result.append(ConfiguredModel(endpointID: endpoint.id, endpointName: endpoint.name.isEmpty ? endpoint.id : endpoint.name, modelKey: modelKey))
@@ -136,7 +134,7 @@ struct RuntimePricingEditor: View {
 
             HStack {
                 if model.runtimePricing != nil {
-                    Text("单位：每百万 Token")
+                    Text("单位：每百万 Token（货币金额）")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
@@ -243,7 +241,7 @@ struct RuntimePricingEditor: View {
             Text(title)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            TextField("微货币", text: priceBinding(id: id, field: field))
+            TextField("例如 5.00", text: priceBinding(id: id, field: field))
                 .textFieldStyle(.roundedBorder)
                 .font(.body.monospacedDigit())
         }
@@ -357,14 +355,18 @@ struct RuntimePricingEditor: View {
                 case .cacheRead: value = row.cacheReadPerMillionMicros
                 case .cacheCreation: value = row.cacheCreationPerMillionMicros
                 }
-                return value.map(String.init) ?? ""
+                guard let value else { return "" }
+                var text = String(format: "%.6f", Double(value) / 1_000_000)
+                while text.last == "0" { text.removeLast() }
+                if text.last == "." { text.removeLast() }
+                return text
             },
             set: { text in
                 guard let index = rows.firstIndex(where: { $0.id == id }) else { return }
                 let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard normalized.isEmpty || Int(normalized) != nil else { return }
+                guard normalized.isEmpty || Self.priceMicros(normalized) != nil else { return }
                 dirty = true
-                let value = normalized.isEmpty ? nil : Int(normalized)
+                let value = normalized.isEmpty ? nil : Self.priceMicros(normalized)
                 switch field {
                 case .input: rows[index].inputPerMillionMicros = value
                 case .output: rows[index].outputPerMillionMicros = value
@@ -373,5 +375,12 @@ struct RuntimePricingEditor: View {
                 }
             }
         )
+    }
+
+    private static func priceMicros(_ text: String) -> Int? {
+        guard let amount = Double(text), amount.isFinite, amount >= 0 else { return nil }
+        let micros = (amount * 1_000_000).rounded()
+        guard micros <= Double(Int.max) else { return nil }
+        return Int(micros)
     }
 }

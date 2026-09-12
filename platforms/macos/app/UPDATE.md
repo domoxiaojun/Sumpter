@@ -17,7 +17,7 @@ Sparkle 更新包必须是完整 `.app` 的 zip，而不是只替换 `sumpterd`�
 
 ## 打包配置
 
-正式包需要同时提供：
+下面的手动打包命令在 `platforms/macos/app/` 目录执行。启用自动更新时需要同时提供 feed 与公钥：
 
 ```bash
 : "${VERSION:?请先设置 VERSION，例如 X.Y.Z}"
@@ -33,7 +33,7 @@ export CODESIGN_IDENTITY='Developer ID Application: Example (TEAMID)'
 
 `SPARKLE_FEED_URL` 和 `SPARKLE_PUBLIC_ED_KEY` 未设置时，开发包仍可构建，但菜单栏中的“检查更新…”会禁用；只设置其中一个会直接拒绝打包。
 
-正式分发还必须使用 Apple Developer ID 签名和 notarization。`CODESIGN_IDENTITY` 设置为证书名称后，脚本会使用 hardened runtime 和 timestamp 签名；省略时的 Ad-hoc 签名仅适合本机测试，不能作为面向普通用户的信任链。notarization 仍需在 CI/发布环节完成。
+当前 GitHub 发布默认使用 ad-hoc 签名，未配置 Apple 公证。若需要 Apple 的开发者信任链，另外配置 Developer ID 签名和 notarization。`CODESIGN_IDENTITY` 设置为证书名称后，脚本会使用 hardened runtime 和 timestamp 签名；省略时使用 ad-hoc 签名；这可用于当前发布方式，但不提供 Apple 开发者身份背书。notarization 仍需在 CI/发布环节完成。
 
 ## 没有 Apple Developer 账号
 
@@ -66,7 +66,7 @@ export SPARKLE_DOWNLOAD_URL_PREFIX="https://github.com/domoxiaojun/sumpter/relea
 ```
 
 该脚本调用 `package-app.sh`，走根 `Cargo.toml` 构建 `sumpterd-macos`，默认 ad-hoc 签名，产物在
-`platforms/macos/app/dist/`。正式分发仍须 Developer ID、公证，以及下面的 Sparkle 密钥。
+`platforms/macos/app/dist/`。自动更新分发需要下面的 Sparkle 密钥；Developer ID 和公证是另一套可选的 Apple 分发配置，当前 CI 未实现公证。
 
 GitHub Actions 工作流已提升到仓库根 `.github/workflows/`，按当前根 workspace、
 `platforms/linux/` 和 `platforms/macos/` 路径运行。推送与 Cargo workspace 版本一致的 `vX.Y.Z` tag
@@ -76,9 +76,9 @@ GitHub Actions 工作流已提升到仓库根 `.github/workflows/`，按当前�
 
 - `SPARKLE_PUBLIC_ED_KEY`：`generate_keys` 输出的公钥。
 - `SPARKLE_PRIVATE_KEY`：Sparkle 私钥；只放本机钥匙串或 CI Secret，不提交仓库。
-- `CODESIGN_IDENTITY`：正式包用 Developer ID 证书名称；省略时仅 Ad-hoc。
+- `CODESIGN_IDENTITY`：可选 Developer ID 证书名称；省略时为 ad-hoc。CI 还必须实际导入相应证书和私钥。
 
-`SPARKLE_FEED_URL` 应指向稳定地址，不跟随版本号变化。历史 feed 曾放在
+`SPARKLE_FEED_URL` 应指向稳定地址，不跟随版本号变化。当前发布工作流写入的 feed 位于
 `https://raw.githubusercontent.com/domoxiaojun/sumpter/macos-updates/macos/appcast.xml`；
 发布工作流需要仓库 Actions 的 `SPARKLE_PRIVATE_KEY` 和 `SPARKLE_PUBLIC_ED_KEY`；没有这些 Secret，
 macOS Release 会在构建前失败。

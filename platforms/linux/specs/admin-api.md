@@ -3,14 +3,14 @@
 本文是 Linux WebUI 与 daemon 之间的唯一管理契约。
 运行时管理端点还包括：`GET/PUT /runtime/pricing`、`GET /runtime/export`、`GET /runtime/export/estimate`、`GET /runtime/request-chain`、`GET /runtime/facets`。历史诊断记录可能携带 `pinnedIP` 字段；新请求不再生成该字段。
 源码树可执行文件是 `sumpterd-linux`，
-发布包内二进制仍名为 `sumpterd`。配置格式为 `config.json` schema v7；自动迁移 schema v3/v4/v5，
+发布包内二进制仍名为 `sumpterd`。配置格式为 `config.json` schema v7；自动迁移 schema v3/v4/v5/v6，
 旧 Swift `keys.json` API 不再适用。
 
-## 当前运行统计契约（runtime API v1，2026-08-22）
+## 当前运行统计契约（Admin runtime API v1；查询模型 API v3）
 
 运行统计唯一持久化后端是 `<config-dir>/runtime.sqlite3`。SQLite 使用 Rust
-`rusqlite` bundled 构建、WAL 和 `synchronous=FULL`；请求热路径只更新内存快照并把事件放入
-有界后台批次，SQLite 连接只属于专用 worker 线程。数据库故障时内存快照和 SSE 继续可用，
+SeaORM 1.1 与内嵌 SQLite、WAL 和 `synchronous=FULL`；请求热路径只更新内存快照并把事件放入
+有界后台批次，数据库写入只属于专用 worker 线程。数据库故障时内存快照和 SSE 继续可用，
 状态通过 `storage.state=degraded|backpressure` 暴露；pending 达到硬上限后业务请求返回
 `503 runtime_storage_backpressure`，Admin 仍保持可用。
 

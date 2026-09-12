@@ -32,8 +32,8 @@ Sumpter 在一个仓库内维护共享 Rust 代理、Linux 服务与 macOS App�
 │   │   ├── Dockerfile              # 可选的本机源码构建（上下文为仓库根）
 │   │   ├── compose.yaml           # 独立目录部署：bridge + init + daemon
 │   │   ├── compose.bridge.example.yaml → compose.yaml  # 旧命令兼容链接（docker-compose.yml 同）
-│   │   ├── .env.example           # 可选的部署参数（端口、目录、日志等）
-│   │   ├── DOCKER.md              # 首次部署、升级与停机迁移│   │   ├── compose.build.example.yaml # 仅完整源码树的构建 override
+│   │   ├── DOCKER.md              # 首次部署、升级与停机迁移
+│   │   ├── compose.build.example.yaml # 仅完整源码树的构建 override
 │   │   ├── config/                 # Compose 绑定目录（宿主机运行数据，不入库）
 │   │   └── docker-bin/             # 发布工作流放入的预构建二进制（不入库）
 │   └── macos/
@@ -107,4 +107,4 @@ macOS 由 `platforms/macos/app/` 的 Swift Package 和根 workspace 的 Rust sid
 
 容器镜像有两条构建路径：发布镜像 `platforms/linux/Dockerfile.runtime` 以 `platforms/linux/` 为上下文，复制 `docker-bin/` 的预构建二进制、`web/` 和 `config.example.json`；本机自建 `platforms/linux/Dockerfile` 以仓库根为上下文。根 `.dockerignore` 逐层收窄 `platforms/` 白名单，避免把运行数据和 UI 缓存放行；`platforms/linux/scripts/` 必须保留，因为 Linux adapter 通过 `include_str!` 内嵌其中的客户端脚本。
 
-部署则与源码目录无关：把 `compose.yaml` 放进独立 `sumpter/` 目录，按需补一份 `.env` 覆盖端口、目录与日志参数，即可 pull 镜像启动。容器不指定运行用户，配置、密码、SQLite 与各类绑定文件都持久化在 `./config`，停机后复制整个目录即可迁移；Linux 发布包也携带部署输入，但不携带源码构建 override。见 [Docker 部署说明](../platforms/linux/DOCKER.md)。
+部署则与源码目录无关：把 `compose.yaml` 放进独立 `sumpter/` 目录，直接编辑 Compose 文件中的镜像、端口、目录与日志参数，即可 pull 镜像启动。容器不指定运行用户，配置、密码、SQLite 与各类绑定文件都持久化在 `./config`，停机后复制整个目录即可迁移；Linux 发布包也携带 Compose 部署文件，但不携带源码构建 override。见 [Docker 部署说明](../platforms/linux/DOCKER.md)。

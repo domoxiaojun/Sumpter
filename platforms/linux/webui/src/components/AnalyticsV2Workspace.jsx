@@ -1386,7 +1386,7 @@ function configuredEndpointModels(config) {
       if (value) models.add(value);
     });
     (endpoint?.modelMappings || endpoint?.mappings || []).forEach((mapping) => {
-      [mapping?.to, mapping?.upstreamModel, mapping?.from, mapping?.clientPattern]
+      [mapping?.from, mapping?.clientPattern]
         .map((value) => String(value || '').trim())
         .filter(Boolean)
         .forEach((value) => models.add(value));

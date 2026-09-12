@@ -1,7 +1,7 @@
-# 独立部署：把本文件放进任意 sumpter/ 目录即可；.env 可选，只用于覆盖下面这些参数。
+# 独立部署：把本文件放进任意 sumpter/ 目录即可；需要改端口或镜像时直接编辑本文件。
 # 运行镜像固定来自 GHCR 官方发布（由 Release 工作流构建的双架构 manifest），本文件不含 build。
 x-runtime: &runtime
-  image: ${SUMPTER_IMAGE:-ghcr.io/domoxiaojun/sumpter:latest}
+  image: ghcr.io/domoxiaojun/sumpter:latest
   read_only: true
   cap_drop:
     - ALL
@@ -9,7 +9,7 @@ x-runtime: &runtime
     - no-new-privileges:true
   volumes:
     # SELinux 主机（Fedora/RHEL）在结尾追加 :z，例如 ./config:/config:z
-    - ${SUMPTER_CONFIG_DIR:-./config}:/config
+    - ./config:/config
 
 services:
   # 使用同一镜像的 shell 完成首次初始化，不需要宿主机 Python、jq 或新版 daemon。
@@ -63,30 +63,26 @@ services:
       init:
         condition: service_completed_successfully
     init: true
-    restart: ${SUMPTER_RESTART_POLICY:-unless-stopped}
-    stop_grace_period: ${SUMPTER_STOP_GRACE_PERIOD:-30s}
-    # .env 可选；Compose 2.24+ 会把它作为附加环境变量透传给 daemon。
-    env_file:
-      - path: ./.env
-        required: false
+    restart: unless-stopped
+    stop_grace_period: 30s
     environment:
-      RUST_LOG: ${RUST_LOG:-info}
-      TZ: ${TZ:-UTC}
-      # bridge 容器内固定监听；.env 的 SUMPTER_ADMIN_PORT 只控制宿主机映射。
+      RUST_LOG: info
+      TZ: UTC
+      # bridge 容器内固定监听；宿主机端口直接在 ports 中修改。
       SUMPTER_ADMIN_HOST: "0.0.0.0"
       SUMPTER_ADMIN_PORT: "57879"
       SUMPTER_ADMIN_PASSWORD_FILE: /config/admin-password
       # 不要在这里加 HTTP_PROXY/HTTPS_PROXY/ALL_PROXY：引擎的数据面与模型探测都显式
       # `.no_proxy()`，这些变量不会让上游流量走代理（见 DOCKER.md 的环境变量一节）。
     ports:
-      - "${SUMPTER_PROXY_BIND_HOST:-127.0.0.1}:${SUMPTER_PROXY_PORT:-57878}:57878"
-      - "${SUMPTER_ADMIN_BIND_HOST:-127.0.0.1}:${SUMPTER_ADMIN_PORT:-57879}:57879"
+      - "127.0.0.1:57878:57878"
+      - "127.0.0.1:57879:57879"
     # 探针来自镜像元数据（Dockerfile 的 HEALTHCHECK，读 SUMPTER_ADMIN_PORT，只打容器内端口），
     # 这里不重复声明，避免与镜像漂移；`docker compose up --wait` 仍按容器健康状态等待。
     tmpfs:
-      - "/tmp:rw,noexec,nosuid,nodev,size=${SUMPTER_TMPFS_SIZE:-64m},mode=1777"
+      - "/tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777"
     logging:
       driver: json-file
       options:
-        max-size: ${SUMPTER_LOG_MAX_SIZE:-10m}
-        max-file: "${SUMPTER_LOG_MAX_FILES:-3}"
+        max-size: 10m
+        max-file: "3"

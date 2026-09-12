@@ -141,7 +141,7 @@ check_file "$ROOT/scripts/client-attribution.mjs"
 check_file "$ROOT/scripts/setup-client-attribution.sh"
 check_directory "$ROOT/web"
 check_file "$ROOT/web/index.html"
-for docker_file in compose.yaml .env.example DOCKER.md; do
+for docker_file in compose.yaml DOCKER.md; do
     check_file "$ROOT/$docker_file"
 done
 
@@ -222,7 +222,7 @@ for entry in "${TARGETS[@]}"; do
     cp "$ROOT/USAGE.md" "$stage/USAGE.md"
     # 独立 Docker 部署只需这三份输入；兼容链接与源码构建 override 不进发布包。
     # CHANGELOG.md 由发布工作流的“Package version changelog”步骤写入版本节选。
-    for docker_file in compose.yaml .env.example DOCKER.md; do
+    for docker_file in compose.yaml DOCKER.md; do
         cp "$ROOT/$docker_file" "$stage/$docker_file"
     done
     for legal_file in LICENSE NOTICE THIRD_PARTY_LICENSES; do

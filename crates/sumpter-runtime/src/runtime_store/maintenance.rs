@@ -185,6 +185,7 @@ pub(super) fn validate_pricing_update(update: &RuntimePricingUpdate) -> Result<(
         return Err("价格规则不能超过 2000 条".into());
     }
     let mut unique = HashSet::new();
+    let mut intervals = std::collections::HashMap::<String, Vec<(f64, Option<f64>)>>::new();
     for price in &update.prices {
         if price
             .endpoint_id
@@ -224,8 +225,21 @@ pub(super) fn validate_pricing_update(update: &RuntimePricingUpdate) -> Result<(
             .filter(|value| !value.trim().is_empty())
             .map(|endpoint| format!("{endpoint}\u{1f}{model}"))
             .unwrap_or_else(|| model.to_owned());
-        if !unique.insert((storage_key, price.effective_from.to_bits())) {
+        if !unique.insert((storage_key.clone(), price.effective_from.to_bits())) {
             return Err("同一 modelKey 与 effectiveFrom 不能重复".into());
+        }
+        intervals
+            .entry(storage_key)
+            .or_default()
+            .push((price.effective_from, price.effective_to));
+    }
+    for ranges in intervals.values_mut() {
+        ranges.sort_by(|left, right| left.0.total_cmp(&right.0));
+        for pair in ranges.windows(2) {
+            let previous_end = pair[0].1.unwrap_or(f64::INFINITY);
+            if pair[1].0 < previous_end {
+                return Err("同一入口与模型的价格生效时间区间不能重叠".into());
+            }
         }
     }
     Ok(())

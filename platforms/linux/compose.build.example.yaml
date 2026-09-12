@@ -2,7 +2,7 @@
 #   cd platforms/linux
 #   docker compose -f compose.yaml -f compose.build.example.yaml up -d --build
 #
-# 本机构建使用独立的本地 tag，绝不继承 .env 里的 SUMPTER_IMAGE，
+# 本机构建使用独立的本地 tag，绝不继承 部署模板里的官方镜像，
 # 避免把源码构建的镜像打成 ghcr.io/... 正式名称、覆盖官方镜像的本地引用。
 # 只有显式设置 SUMPTER_LOCAL_IMAGE 才会改这个 tag。
 x-source: &source
