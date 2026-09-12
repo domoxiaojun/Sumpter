@@ -404,6 +404,30 @@ func TestInitCreatesPrivateFilesAndPreservesState(t *testing.T) {
 	}
 }
 
+// 首次生成密码时的日志只能给出“在哪看”，绝不能回显密码值：容器日志会被 docker 驱动
+// 落盘、被采集、被粘贴进 issue（specs/admin-api.md、bootstrap-install.sh 同一惯例）。
+func TestInitLogsNeverLeakThePassword(t *testing.T) {
+	dir := t.TempDir()
+	script := initScript(t)
+	command := exec.Command("/bin/sh", "-ec", script)
+	command.Dir = dir
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("init: %v: %s", err, output)
+	}
+	password := strings.TrimSpace(string(read(t, filepath.Join(dir, "admin-password"))))
+	if len(password) != 64 {
+		t.Fatalf("expected 64 hex chars, got %d", len(password))
+	}
+	if strings.Contains(string(output), password) {
+		t.Fatal("init 把密码值写进了日志")
+	}
+	// 也不能只生成不提示：首次启动必须能看到“文件在哪、怎么看”。
+	if !strings.Contains(string(output), "admin-password") || !strings.Contains(string(output), "cat") {
+		t.Fatalf("init 首次生成时应在日志里给出路径与查看方式: %s", output)
+	}
+}
+
 func TestInitRejectsLinksDirectoriesAndLegacyOnly(t *testing.T) {
 	script := initScript(t)
 	for _, kind := range []string{"symlink", "directory", "legacy"} {

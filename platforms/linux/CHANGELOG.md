@@ -8,6 +8,7 @@
 
 ### 变更
 
+- 容器首次启动时，`init` 会在日志里给出 Admin 密码文件路径与宿主机查看命令；按既有惯例不打印密码值，新增契约测试锁住“不回显密码、但必须给出查看方式”。
 - Compose 部署模板精简：`stop_signal` 与 `restart` 不再重复声明，`healthcheck` 也不再重复声明，存活探针改由镜像的 `HEALTHCHECK` 提供（`docker compose up --wait` 仍按容器健康状态等待）。
 - 部署文档新增“精简部署：自备 `config.json`，不用 `init`”；配置教程写明容器路线的 `./config` 挂载、将 `config.json` 拷入挂载目录，以及 `listener.host` 与 `admin-password` 两项容器专属要求；使用文档补充卸载章节。
 
