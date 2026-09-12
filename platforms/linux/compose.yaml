@@ -42,11 +42,12 @@ services:
           test "$$(wc -c < "$$stage/admin-password")" -eq 64
           printf '\n' >> "$$stage/admin-password"
           ln "$$stage/admin-password" admin-password
-          # 只在首次生成时提示“在哪看”，不回显密码值：值一旦进日志，就会留存到
-          # docker 日志、日志采集和用户粘贴的排错输出里（对齐 specs/admin-api.md 与
-          # bootstrap-install.sh 的“只显示路径”惯例）。
+          # 首次生成时把初始密码直接打进日志：容器里没有安装器那样的交互终端，
+          # 让用户去宿主机 cat 文件是这条路线最大的首次使用摩擦点。只在创建时打印一次；
+          # 不想让明文进日志的用户走 DOCKER.md 的精简部署（自备密码，不跑 init）。
           echo "已生成 Admin 密码文件:/config/admin-password"
-          echo "首次登录前在宿主机查看（挂载到 /config 的目录，默认 ./config）:sudo cat ./config/admin-password"
+          echo "初始密码:$$(cat admin-password)"
+          echo "请登录后立即在 WebUI「安全」页修改；改密后初始密码立即失效"
         fi
         if [ ! -e config.json ]; then
           printf '%s\n' '{"schemaVersion":7,"endpoints":[],"listener":{"host":"0.0.0.0","port":57878,"authToken":"","allowedCIDRs":[]}}' > "$$stage/config.json"

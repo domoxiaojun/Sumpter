@@ -404,27 +404,34 @@ func TestInitCreatesPrivateFilesAndPreservesState(t *testing.T) {
 	}
 }
 
-// 首次生成密码时的日志只能给出“在哪看”，绝不能回显密码值：容器日志会被 docker 驱动
-// 落盘、被采集、被粘贴进 issue（specs/admin-api.md、bootstrap-install.sh 同一惯例）。
-func TestInitLogsNeverLeakThePassword(t *testing.T) {
+// 首次启动要直接把初始密码写进日志：容器里没有安装器那样的交互终端，让用户去宿主机
+// cat 文件是最大的首次使用摩擦点。约束是“只打印一次”：重启不得重复刷已有密码。
+func TestInitPrintsPasswordOnceOnFirstRun(t *testing.T) {
 	dir := t.TempDir()
 	script := initScript(t)
-	command := exec.Command("/bin/sh", "-ec", script)
-	command.Dir = dir
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("init: %v: %s", err, output)
+	run := func() string {
+		t.Helper()
+		command := exec.Command("/bin/sh", "-ec", script)
+		command.Dir = dir
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("init: %v: %s", err, output)
+		}
+		return string(output)
 	}
+	first := run()
 	password := strings.TrimSpace(string(read(t, filepath.Join(dir, "admin-password"))))
 	if len(password) != 64 {
 		t.Fatalf("expected 64 hex chars, got %d", len(password))
 	}
-	if strings.Contains(string(output), password) {
-		t.Fatal("init 把密码值写进了日志")
+	if !strings.Contains(first, password) {
+		t.Fatalf("首次启动必须在日志里给出初始密码: %s", first)
 	}
-	// 也不能只生成不提示：首次启动必须能看到“文件在哪、怎么看”。
-	if !strings.Contains(string(output), "admin-password") || !strings.Contains(string(output), "cat") {
-		t.Fatalf("init 首次生成时应在日志里给出路径与查看方式: %s", output)
+	if !strings.Contains(first, "admin-password") || !strings.Contains(first, "WebUI") {
+		t.Fatalf("日志必须给出凭据路径与改密提醒: %s", first)
+	}
+	if second := run(); strings.Contains(second, password) {
+		t.Fatalf("重启不得重复打印已有密码: %s", second)
 	}
 }
 
