@@ -8,8 +8,8 @@
 
 运行镜像只有 GHCR 一处来源，**不在部署主机构建**。发布工作流推送 `linux/amd64,linux/arm64` 双架构 manifest，不会出现只有一种架构可用的情况。
 
-- tag 形式：`0.4.8`、`0.4`、`0`、`latest`、`sha-<full>`；**不带 `v` 前缀**。`latest` 只在发布成功后推进，普通 main push 不会刷新镜像。
-- 钉死版本：直接编辑 `compose.yaml` 的 `image` 行钉住版本，例如 `ghcr.io/domoxiaojun/sumpter:0.4.8`，或写 digest。
+- tag 形式：`0.4.9`、`0.4`、`0`、`latest`、`sha-<full>`；**不带 `v` 前缀**。`latest` 只在发布成功后推进，普通 main push 不会刷新镜像。
+- 钉死版本：直接编辑 `compose.yaml` 的 `image` 行钉住版本，例如 `ghcr.io/domoxiaojun/sumpter:0.4.9`，或写 digest。
 - 仓库或 GHCR 为私有时先 `docker login ghcr.io`。
 - `compose.yaml` 不含 `build:`；源码构建见文末「维护者：源码构建」。
 

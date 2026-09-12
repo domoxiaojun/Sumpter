@@ -2,7 +2,7 @@
 
 本机 AI 请求代理。客户端只连一个地址，由 Sumpter 做入口选择、模型映射、会话粘性、重试和运行记录。
 
-Linux 与 macOS 共用一份 Rust 引擎和 **schema v7** `config.json`。当前版本以根 [Cargo.toml](Cargo.toml) 为准（现为 **0.4.8**），许可证 [MIT](LICENSE)。源码仓库：[domoxiaojun/sumpter](https://github.com/domoxiaojun/sumpter)。
+Linux 与 macOS 共用一份 Rust 引擎和 **schema v7** `config.json`。当前版本以根 [Cargo.toml](Cargo.toml) 为准（现为 **0.4.9**），许可证 [MIT](LICENSE)。源码仓库：[domoxiaojun/sumpter](https://github.com/domoxiaojun/sumpter)。
 
 | | 默认 |
 | --- | --- |
