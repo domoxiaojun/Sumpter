@@ -191,6 +191,24 @@ func TestStandaloneDeployment(t *testing.T) {
 	}
 }
 
+// 探针住在镜像里：compose 不再声明 healthcheck，容器健康状态由 Dockerfile 的
+// HEALTHCHECK 提供。这里守住这个性质的两个半边，避免“模板删了、镜像也没有”的真空。
+func TestHealthcheckLivesInImageMetadata(t *testing.T) {
+	for _, name := range []string{"platforms/linux/Dockerfile", "platforms/linux/Dockerfile.runtime"} {
+		text := string(read(t, filepath.Join(root(), name)))
+		if !strings.Contains(text, "HEALTHCHECK") {
+			t.Errorf("%s 必须自带 HEALTHCHECK，否则容器没有任何存活探针", name)
+		}
+		// 探针只能打容器内 Admin 端口，不能被宿主机端口映射影响。
+		if !strings.Contains(text, "${SUMPTER_ADMIN_PORT:-57879}/healthz") {
+			t.Errorf("%s 的探针必须按 SUMPTER_ADMIN_PORT 取容器内 Admin 端口", name)
+		}
+	}
+	if svc := project(t, deployment(t)).Services["sumpter"]; svc.HealthCheck != nil {
+		t.Error("compose.yaml 不应重复声明 healthcheck，探针以镜像元数据为准")
+	}
+}
+
 func TestEnvOverridesAndPassthrough(t *testing.T) {
 	dir := deployment(t)
 	put(t, filepath.Join(dir, ".env"), []byte("EXTRA_SYNTHETIC_SETTING=retained\nSUMPTER_ADMIN_HOST=127.0.0.1\nSUMPTER_ADMIN_PORT=18081\nRUST_LOG=warn\n"))
@@ -223,9 +241,9 @@ func TestCustomPortsAndDataDirectory(t *testing.T) {
 	if len(expected) != 0 {
 		t.Fatal("published port missing")
 	}
-	// 健康检查必须始终使用容器内端口，不能被宿主机端口映射影响。
-	if !strings.Contains(strings.Join(svc.HealthCheck.Test, " "), ":57879/healthz") {
-		t.Fatal("healthcheck must use the internal port")
+	// 探针已移入镜像元数据；模板不得重复声明，否则会与镜像漂移。
+	if svc.HealthCheck != nil {
+		t.Fatal("compose.yaml must not redeclare a healthcheck")
 	}
 	for _, name := range []string{"init", "sumpter"} {
 		if p.Services[name].Volumes[0].Source != filepath.Join(dir, "state") {
@@ -277,10 +295,10 @@ func TestPullsGhcrImageAndBuildOverlayIsIsolated(t *testing.T) {
 		if len(svc.Volumes) != 1 || svc.Volumes[0].Target != "/config" {
 			t.Fatalf("%s overlay lost the /config mount: %+v", name, svc.Volumes)
 		}
-		// init 是一次性任务：只能出现 daemon 的端口与健康检查。
+		// init 是一次性任务：只能出现 daemon 的端口；探针来自镜像，模板不声明。
 		if name == "sumpter" {
-			if len(svc.Ports) != 2 || svc.HealthCheck == nil {
-				t.Fatalf("%s overlay lost ports or healthcheck", name)
+			if len(svc.Ports) != 2 || svc.HealthCheck != nil {
+				t.Fatalf("%s overlay ports/healthcheck mismatch: ports=%v hc=%v", name, svc.Ports, svc.HealthCheck)
 			}
 		} else if len(svc.Ports) != 0 || svc.HealthCheck != nil || svc.NetworkMode != "none" {
 			t.Fatalf("init must stay network-less and port-less, got ports=%v hc=%v net=%s", svc.Ports, svc.HealthCheck, svc.NetworkMode)

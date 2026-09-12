@@ -16,7 +16,6 @@ services:
   # 只创建缺失文件；绝不以模板覆盖已有配置、密码或数据库。
   init:
     <<: *runtime
-    restart: "no"
     network_mode: none
     working_dir: /config
     entrypoint: ["/bin/sh", "-ec"]
@@ -58,7 +57,6 @@ services:
         condition: service_completed_successfully
     init: true
     restart: ${SUMPTER_RESTART_POLICY:-unless-stopped}
-    stop_signal: SIGTERM
     stop_grace_period: ${SUMPTER_STOP_GRACE_PERIOD:-30s}
     # .env 可选；Compose 2.24+ 会把它作为附加环境变量透传给 daemon。
     env_file:
@@ -76,12 +74,8 @@ services:
     ports:
       - "${SUMPTER_PROXY_BIND_HOST:-127.0.0.1}:${SUMPTER_PROXY_PORT:-57878}:57878"
       - "${SUMPTER_ADMIN_BIND_HOST:-127.0.0.1}:${SUMPTER_ADMIN_PORT:-57879}:57879"
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-T", "3", "-O", "/dev/null", "http://127.0.0.1:57879/healthz"]
-      interval: 15s
-      timeout: 4s
-      retries: 4
-      start_period: 10s
+    # 探针来自镜像元数据（Dockerfile 的 HEALTHCHECK，读 SUMPTER_ADMIN_PORT，只打容器内端口），
+    # 这里不重复声明，避免与镜像漂移；`docker compose up --wait` 仍按容器健康状态等待。
     tmpfs:
       - "/tmp:rw,noexec,nosuid,nodev,size=${SUMPTER_TMPFS_SIZE:-64m},mode=1777"
     logging:
