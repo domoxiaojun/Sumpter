@@ -265,7 +265,7 @@ test('remote Linux setup downloads authenticated installer and preserves failure
     }
     if (extensionMissing && req.url.endsWith('.ts')) { res.writeHead(404).end(); return; }
     let body = readFileSync(resources[req.url]);
-    if (extensionMismatch && req.url.endsWith('.ts')) body = Buffer.from(body.toString().replace('SUMPTER_ATTRIBUTION_BUNDLE_VERSION: 0.4.6', 'SUMPTER_ATTRIBUTION_BUNDLE_VERSION: 0.0.0'));
+    if (extensionMismatch && req.url.endsWith('.ts')) body = Buffer.from(body.toString().replace('SUMPTER_ATTRIBUTION_BUNDLE_VERSION: 0.4.8', 'SUMPTER_ATTRIBUTION_BUNDLE_VERSION: 0.0.0'));
     res.end(body);
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
