@@ -48,6 +48,98 @@ Linux 二进制发布包也带 `compose.yaml`、`.env.example` 与本文。若�
 
 初始配置没有上游入口，需要在 WebUI 中配置。代理在容器内监听 `0.0.0.0:57878`，但宿主机默认只发布到 `127.0.0.1`。这只影响容器部署，不改变原生 Linux/macOS 安装的安全默认配置。
 
+## 精简部署：自备 `config.json`，不用 `init`
+
+`init` 服务只做两件事：生成 `admin-password`，以及写入 `listener.host=0.0.0.0` 的 `config.json`。
+如果你在部署前就用 `curl` 把正式配置准备好，可以省掉这个服务：`compose.yaml` 只剩一个服务，
+也不需要 `.env`。代价是下面第 2、3 步必须你自己做完，做漏了不会自愈。
+
+**第 1 步：拿配置模板**。下载的是仓库里的安全模板：入口全部停用、域名是 `.invalid`、secret 是合成的。
+配置目录已挂载到宿主机 `./config`（`volumes: ./config:/config`），所以配置只要落在宿主机这个目录里，
+不需要 `docker cp`；已有填好的 `config.json` 时直接拷进去即可：
+
+```bash
+mkdir -p sumpter/config && cd sumpter
+cp 你的/config.json config/config.json          # 已有配置：直接拷到挂载目录
+# 或者拿模板：
+curl --proto '=https' --tlsv1.2 -fLo config/config.json \
+  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/config.example.json
+```
+
+**第 2 步：改两处**。把 `config/config.json` 的 `listener.host` 从 `127.0.0.1` 改成 `0.0.0.0`，
+否则容器内代理只监听回环，宿主机的 `57878` 映射会指向没人监听的端口；再启用一个真实入口
+（填 `baseURL`、`apiKey`，把 `enabled` 改成 `true`，并在 `mappings` 里写下客户端实际会发的模型名）。
+改完先验证 JSON 语法：
+
+```bash
+python3 -m json.tool config/config.json > /dev/null && echo OK
+```
+
+**第 3 步：生成 Admin 凭据**。这一步不能省：`admin-password` 缺失时 daemon 会在启动前退出，
+日志为 `读取 Admin 凭据文件 /config/admin-password 失败`。daemon 不会自己造这个文件。
+
+```bash
+od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > config/admin-password
+printf '\n' >> config/admin-password
+chmod 700 config
+chmod 600 config/config.json config/admin-password
+```
+
+**第 4 步：写 `compose.yaml` 并启动**。容器内监听、只读加固、日志轮转与官方模板一致；
+存活探针来自镜像的 `HEALTHCHECK`，这里与官方模板一样不重复声明。
+
+```yaml
+services:
+  sumpter:
+    image: ghcr.io/domoxiaojun/sumpter:latest   # 建议钉版本，例如 :0.4.6
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    volumes:
+      - ./config:/config
+    environment:
+      TZ: Asia/Shanghai
+      RUST_LOG: info
+      SUMPTER_ADMIN_HOST: "0.0.0.0"
+      SUMPTER_ADMIN_PORT: "57879"
+      SUMPTER_ADMIN_PASSWORD_FILE: /config/admin-password
+    ports:
+      - "0.0.0.0:57878:57878"
+      - "127.0.0.1:57879:57879"
+    tmpfs:
+      - "/tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777"
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+```
+
+```bash
+docker compose up -d && docker compose ps
+sudo cat config/admin-password      # 初始密码，只在可信终端本地查看
+```
+
+登录方式与默认部署相同：管理页 `http://127.0.0.1:57879/admin/`（远程用 SSH 隧道），代理是
+`http://<宿主机地址>:57878`。
+
+与官方模板的差别只有初始化这一层：
+
+| 情形 | 官方模板 | 精简版 |
+| --- | --- | --- |
+| 已有 `config.json` | 不动 | 不动 |
+| 缺 `config.json` | `init` 写入 `0.0.0.0` bootstrap | daemon 自建**回环**配置，宿主机映射打空 |
+| 缺 `admin-password` | `init` 生成随机密码 | daemon 拒启 |
+| 只有旧 `keys.json` | `init` 拒绝并阻止 daemon 启动 | daemon 自己报错 |
+
+也就是说，精简版把 `init` 的护栏换成了你的手工步骤；备份、升级与迁移仍照本文其余章节执行，
+升级镜像时不需要改这份 `compose.yaml`。
+
 ## 目录与持久化边界
 
 ```text

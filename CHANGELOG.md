@@ -6,6 +6,11 @@
 
 ## [Unreleased]
 
+### 变更
+
+- Compose 部署模板精简：`stop_signal` 与 `restart` 不再重复声明，`healthcheck` 也不再重复声明，存活探针改由镜像的 `HEALTHCHECK` 提供（`docker compose up --wait` 仍按容器健康状态等待）。
+- 部署文档新增“精简部署：自备 `config.json`，不用 `init`”；配置教程写明容器路线的 `./config` 挂载、将 `config.json` 拷入挂载目录，以及 `listener.host` 与 `admin-password` 两项容器专属要求；使用文档补充卸载章节。
+
 ## [0.4.6] - 2026-09-12
 
 ### 新增

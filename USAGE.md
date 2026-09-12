@@ -289,21 +289,112 @@ sudo bash /tmp/sumpter-install.sh --repo domoxiaojun/sumpter --admin-host 0.0.0.
 
 已解压发布包时，在包内运行 `./scripts/install.sh`。Docker、systemd、Admin HTTPS 反代、卸载见 [`platforms/linux/README.md`](platforms/linux/README.md)。
 
+### 2.3 卸载
+
+Linux 卸载默认停用服务并删除程序、上一版本和 unit，保留 `config.json`、登录凭据与统计数据。已安装包内直接运行：
+
+```bash
+~/.local/share/sumpter/scripts/uninstall.sh        # 普通用户安装
+sudo /opt/sumpter/scripts/uninstall.sh            # root / sudo 安装
+```
+
+包内脚本已不在时，用引导卸载器按当前身份调用同一个卸载器：
+
+```bash
+curl --proto '=https' --tlsv1.2 -fLo /tmp/sumpter-uninstall.sh \
+  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/bootstrap-uninstall.sh
+bash /tmp/sumpter-uninstall.sh        # system 安装改用 sudo bash /tmp/sumpter-uninstall.sh
+```
+
+只有明确要永久删除 `config.json`、`admin-password`、`runtime.sqlite3`、`stats.json` 和运行数据时，才在所选命令后加 `--purge`。macOS App 卸载即把 `Sumpter.app` 移到废纸篓，配置目录需自行清理。完整布局与参数见 [`platforms/linux/README.md`](platforms/linux/README.md)。
+
 ---
 
 ## 3. 最小开箱
 
 目标：Claude Code / Codex 的请求由本机代理按入口映射、优先级和粘性分组调度到多个上游。
 
-### 3.1 准备一份配置
+### 3.1 从 config.example.json 复制出 config.json
 
-1. 把上一节推荐的模板复制到配置路径。
-2. `chmod 600` 该文件。
-3. 至少改一个 `endpoints[]` 的 `baseURL`、`apiKey`、`enabled: true`，并在 `mappings` 里写下客户端实际会发的模型名。
-4. `schemaVersion` 保持 `7`；新入口的 `protocol` 默认使用 `auto`。
-5. 启动 App 或 Linux 服务。
+`config.example.json` 是**结构模板**，不是能直接跑的配置：域名全是 `.invalid`、入口全部
+`enabled: false`、secret 是合成的 `sk-test-…`。先复制它、再替换一处真实入口，比从零手写 JSON
+稳妥得多。三处模板内容完全一致：[`config.example.json`](config.example.json)、
+`platforms/linux/config.example.json`、`platforms/macos/config.example.json`。
 
-没有 `config.json`、只有旧 `keys.json` 时，进程会拒启，且不会改你的旧文件。
+配置目录由运行方式决定，先认准自己那一行：
+
+| 运行方式 | 配置目录 | 说明 |
+| --- | --- | --- |
+| macOS App | `~/Library/Application Support/Sumpter` | App 的“关于/帮助”里显示的也是这个路径 |
+| Linux 普通用户安装（XDG） | `$XDG_CONFIG_HOME/sumpter`；未设置时 `~/.config/sumpter` | 安装器与 WebUI 都用这个目录 |
+| Linux `sudo` 安装的 system 服务 | `/var/lib/sumpter` | 安装器显式指定，不要用 root 的 `$HOME` |
+| 源码开发实例 | 任意仓库外目录，下文用 `/tmp/sumpter-dev` | 避免与已安装服务的端口冲突 |
+| Linux Docker 独立部署 | 宿主机 `config/`（容器内 `/config`） | **不要抄模板**，见本节末尾 |
+
+macOS：
+
+```bash
+install -d -m 700 "$HOME/Library/Application Support/Sumpter"
+install -m 600 platforms/macos/config.example.json \
+  "$HOME/Library/Application Support/Sumpter/config.json"
+```
+
+Linux 普通用户安装：
+
+```bash
+config_base="${XDG_CONFIG_HOME:-$HOME/.config}"
+install -d -m 700 "$config_base/sumpter"
+install -m 600 platforms/linux/config.example.json "$config_base/sumpter/config.json"
+```
+
+Linux `sudo` 安装的 system 服务：
+
+```bash
+sudo install -d -m 700 /var/lib/sumpter
+sudo install -m 600 platforms/linux/config.example.json /var/lib/sumpter/config.json
+```
+
+源码开发实例见[开发指南](docs/development.md)：同样是先把模板复制到仓库外的专用目录再运行，
+不要直接用仓库里的示例填真实 key。
+
+容器路线（Docker）多一步挂载：`platforms/linux/compose.yaml` 已经把 **宿主机的 `./config` 目录**
+挂到容器 `/config`，所以配置文件要 `cp` 进那个目录，而不是用 `docker cp` 塞进容器：
+
+```bash
+mkdir -p sumpter/config && cd sumpter
+curl --proto '=https' --tlsv1.2 -fLo compose.yaml \
+  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/compose.yaml
+cp 你的/config.json config/config.json        # 也可以先 curl 模板再改
+chmod 600 config/config.json
+docker compose up -d
+```
+
+容器里有两项额外要求，漏了不会自愈：`config.json` 的 `listener.host` 必须是 `0.0.0.0`，
+否则发布到宿主机的端口会转发到没人监听的容器回环；`config/admin-password` 必须存在且非空，
+否则 daemon 在启动前就退出。模板里的 `init` 服务会补齐缺失的这两个文件、绝不覆盖已有内容；
+若连 `init` 也省掉，密码要自己生成。完整步骤与差异见
+[`platforms/linux/DOCKER.md`](platforms/linux/DOCKER.md)。
+
+复制出来之后，改这几处就能启动：
+
+1. 留一个真实 Provider 入口，填它的 `baseURL`、`apiKey`，把 `enabled` 改成 `true`。
+2. 在该入口的 `mappings[]` 里写下客户端实际会发的模型名；`clientPattern` 支持 `prefix-*` 通配。
+3. 本机自用保持 `listener.host: "127.0.0.1"`、`authToken: ""`、`allowedCIDRs: []`；要限定来源再动这三项。
+4. `schemaVersion` 保持 `7`；新入口的 `protocol` 用 `auto`。
+5. 启动 App，或按安装方式启动 Linux 服务（`systemctl --user start sumpter` / `sudo systemctl start sumpter`）。
+
+字段逐项含义见[配置说明](docs/configuration.md)；只想要最小骨架也可以直接抄本文第 6 节。
+
+**复制模板时别做这几件事：**
+
+- 不要把 Rust / 桌面版的 `config.toml` 改名成 `config.json`，daemon 只解析 schema v7 JSON，TOML 内容会让它在 Admin 端口启动前退出。
+- 不要把权限放宽：`config.json` 含明文 `apiKey`，必须 `0600`，所在目录必须 `0700`。
+- 不要在起服务之前指望 WebUI 报语法错：JSON 不合法时 daemon 直接退出，页面只会显示“Failed to fetch”。可以先自查 `python3 -m json.tool <配置路径>`。
+- 不要把填好的 `config.json` 或真实 key 提交进仓库；仓库里的模板只放停用的合成入口。
+
+没有 `config.json`、只有旧 `keys.json` 时，进程会拒启，且不会改你的旧文件。如果配置目录里只有
+`admin-password`，daemon 会自行创建一份空的 schema v7 bootstrap 配置；先用模板装一份的好处是
+能直接看到字段结构和那些停用的合成入口。
 
 **模型必须写在入口的 `mappings` 里。** 某个模型只会发给声明了它的入口；空 `mappings` 的入口不承接任何模型，代理也不会拿未声明的原名去碰上游。旧 schema v5 的池级 `globalModels` 只在迁移时复制到当时还没有显式映射的入口，现行配置里已经没有这个字段。
 
