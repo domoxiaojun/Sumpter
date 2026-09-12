@@ -1,4 +1,4 @@
-/** SUMPTER_ATTRIBUTION_BUNDLE_VERSION: 0.4.7 */
+/** SUMPTER_ATTRIBUTION_BUNDLE_VERSION: 0.4.8 */
 /** The wrapper loads this extension; each Sumpter provider must opt in explicitly. */
 import { execFile } from "node:child_process";
 import { basename } from "node:path";
