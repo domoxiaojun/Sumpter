@@ -313,52 +313,60 @@ async fn fetch_provider_models_inner(
     let deadline = std::time::Instant::now() + Duration::from_secs(12);
     'probes: for auth in provider_model_auth_sets(key) {
         for path in &paths {
-            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            if remaining.is_zero() {
-                errors.push("整体超时，已停止尝试".into());
-                break 'probes;
-            }
-            let mut url = base.clone();
-            url.set_path(path);
-            url.set_query(None);
-            url.set_fragment(None);
-            let mut request = client.get(url.clone());
-            for (header, value) in crate::request_build::provider_probe_headers("") {
-                request = request.header(header, value);
-            }
-            for (header, value) in &auth {
-                request = request.header(*header, value.as_str());
-            }
-            request = request.timeout(remaining.min(Duration::from_secs(3)));
-            match request.send().await {
-                Ok(response) if response.status() == StatusCode::OK => {
-                    if response
-                        .content_length()
-                        .is_some_and(|length| length > MAX_MODEL_CATALOG_BYTES as u64)
-                    {
-                        errors.push(format!(
-                            "{}: 响应过大(>{} KiB)",
-                            url.path(),
-                            MAX_MODEL_CATALOG_BYTES / 1024
-                        ));
-                        continue;
-                    }
-                    match read_model_catalog_body(response).await {
-                        Err(message) => errors.push(format!("{}: {message}", url.path())),
-                        Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
-                            Ok(value) => {
-                                let models = extract_models(&value);
-                                if !models.is_empty() {
-                                    return Ok((models, url.to_string()));
-                                }
-                                errors.push(format!("{}: 响应中没有模型", url.path()));
-                            }
-                            Err(error) => errors.push(format!("{}: JSON {error}", url.path())),
-                        },
-                    }
+            for user_agent in
+                crate::request_build::probe_user_agents(endpoint.protocol, &endpoint.user_agent)
+            {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    errors.push("整体超时，已停止尝试".into());
+                    break 'probes;
                 }
-                Ok(response) => errors.push(format!("{}: HTTP {}", url.path(), response.status())),
-                Err(error) => errors.push(format!("{}: {error}", url.path())),
+                let mut url = base.clone();
+                url.set_path(path);
+                url.set_query(None);
+                url.set_fragment(None);
+                let mut request = client.get(url.clone());
+                for (header, value) in
+                    crate::request_build::provider_probe_headers_with_user_agent("", &user_agent)
+                {
+                    request = request.header(header, value);
+                }
+                for (header, value) in &auth {
+                    request = request.header(*header, value.as_str());
+                }
+                request = request.timeout(remaining.min(Duration::from_secs(3)));
+                match request.send().await {
+                    Ok(response) if response.status() == StatusCode::OK => {
+                        if response
+                            .content_length()
+                            .is_some_and(|length| length > MAX_MODEL_CATALOG_BYTES as u64)
+                        {
+                            errors.push(format!(
+                                "{}: 响应过大(>{} KiB)",
+                                url.path(),
+                                MAX_MODEL_CATALOG_BYTES / 1024
+                            ));
+                            continue;
+                        }
+                        match read_model_catalog_body(response).await {
+                            Err(message) => errors.push(format!("{}: {message}", url.path())),
+                            Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
+                                Ok(value) => {
+                                    let models = extract_models(&value);
+                                    if !models.is_empty() {
+                                        return Ok((models, url.to_string()));
+                                    }
+                                    errors.push(format!("{}: 响应中没有模型", url.path()));
+                                }
+                                Err(error) => errors.push(format!("{}: JSON {error}", url.path())),
+                            },
+                        }
+                    }
+                    Ok(response) => {
+                        errors.push(format!("{}: HTTP {}", url.path(), response.status()))
+                    }
+                    Err(error) => errors.push(format!("{}: {error}", url.path())),
+                }
             }
         }
     }

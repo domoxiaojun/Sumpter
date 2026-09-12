@@ -71,6 +71,7 @@ SourceFormat 只由路径决定：`/v1/messages` 是 `anthropic`，`/v1/chat/com
 | `priority` | 旧路由和默认组迁移使用的优先级；模型组模式使用绑定优先级，非负整数，越小越先 |
 | `stickyGroup` | 留空时使用入口 ID 作为独立粘性组；填写相同组名的入口共享会话归属，组内线路按配置顺序尝试 |
 | `keepAlive` | 入口级出站连接复用；省略或 `false` 不落盘（关闭）。界面新建入口默认打开 |
+| `userAgent` | 按协议设置上游 UA：`anthropic`、`openai`（Chat / Responses）、`gemini`；每项为 `{ "mode": "auto" 或 "override", "value": "..." }`。自动模式优先透传客户端 UA，缺失时使用配置值；强覆盖始终使用配置值。值为空时沿用内置默认指纹；模型探测固定协议使用对应 UA，`auto` 会按协议身份依次尝试 |
 | `catalog` | 「获取模型」拉回的目录与状态，纯展示，不参与路由；空目录不落盘 |
 | `mappings` | 入口原始映射及参数；未配置模型组时，空数组不承接模型；模型组显式授权可合成同名映射 |
 

@@ -1,4 +1,5 @@
 import { configSaveMessage } from '../utils/configFeedback.js';
+import { normalizeUserAgentSettings } from '../utils/userAgent.js';
 import { pruneGroupReferences } from '../utils/modelGroups.js';
 import {
   mockConfig, mockSecretStatus, mockStatus, mockRuntime, mockRuntimeHistory,
@@ -261,6 +262,9 @@ export function fromWireConfig(document) {
       delete endpoint.searchDialect;
       endpoint.baseURL = endpoint.baseURL || '';
       endpoint.protocol = normalizeEndpointProtocol(endpoint.protocol, schemaVersion < 4 ? 'anthropic' : 'auto');
+      const normalizedUserAgent = normalizeUserAgentSettings(endpoint.userAgent);
+      if (Object.keys(normalizedUserAgent).length > 0) endpoint.userAgent = normalizedUserAgent;
+      else delete endpoint.userAgent;
   }
   wire.secretStatus = normalizeSecretStatus(wire.secretStatus);
   return wire;
@@ -284,6 +288,9 @@ export function toWireConfig(document) {
         throw new TypeError(`入口 ${endpoint.id || '(unknown)'} 的 protocol 非法: ${rawProtocol}`);
       }
       endpoint.protocol = rawProtocol || 'auto';
+      const normalizedUserAgent = normalizeUserAgentSettings(endpoint.userAgent);
+      if (Object.keys(normalizedUserAgent).length > 0) endpoint.userAgent = normalizedUserAgent;
+      else delete endpoint.userAgent;
       const mappings = endpoint.modelMappings || endpoint.mappings || [];
       endpoint.mappings = mappings.map((mapping) => ({
         // UI aliases are authoritative after fromWireConfig.  Fall back to
@@ -339,6 +346,8 @@ export function toWireConfig(document) {
   }
   return document?.config ? config : wire;
 }
+
+// Shared validation also runs in the editor before attempting a save.
 
 class ApiService {
   constructor() {

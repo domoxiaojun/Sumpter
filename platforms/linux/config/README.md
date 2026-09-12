@@ -7,7 +7,7 @@
 ```text
 ./config → /config
   admin-password          # 初始单行密码；改密后为 Argon2 哈希 JSON
-  config.json             # 当前 schema 配置；Docker 初始代理监听 0.0.0.0:57878
+  config.json             # 当前 schema 配置；Docker 初始代理监听 0.0.0.0:57878（端口由本文件决定，不要在 WebUI 改，否则 compose 端口映射会失效）
   runtime.sqlite3         # 持久化运行统计
   runtime.sqlite3-wal     # SQLite 工作文件，可能出现
   runtime.sqlite3-shm

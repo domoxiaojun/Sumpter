@@ -6,6 +6,8 @@ import { QuickToggle } from '../components/QuickToggle.jsx';
 import { StatusBadge } from '../components/StatusBadge.jsx';
 import { Icon } from '../utils/icons.jsx';
 import { api } from '../services/api.js';
+import { UserAgentEditor } from '../components/UserAgentEditor.jsx';
+import { normalizeUserAgentSettings, userAgentSummary } from '../utils/userAgent.js';
 import { addEndpointToLibrary } from '../utils/modelGroups.js';
 import { clone, formatTimestamp } from '../utils/helpers.js';
 import { ENDPOINT_PROTOCOL_MODES, endpointProtocolLabel, normalizeEndpointProtocol } from '../utils/protocols.js';
@@ -1008,6 +1010,11 @@ export function PrimaryProvidersPage() {
     let name = endpoint?.name || '';
     let baseURL = endpoint?.baseURL || '';
     let protocol = normalizeEndpointProtocol(endpoint?.protocol, 'auto');
+    let userAgent = {
+      anthropic: { mode: endpoint?.userAgent?.anthropic?.mode || 'auto', value: endpoint?.userAgent?.anthropic?.value || '' },
+      openai: { mode: endpoint?.userAgent?.openai?.mode || 'auto', value: endpoint?.userAgent?.openai?.value || '' },
+      gemini: { mode: endpoint?.userAgent?.gemini?.mode || 'auto', value: endpoint?.userAgent?.gemini?.value || '' },
+    };
     let apiKey = '';
     let priority = endpoint?.priority ?? 0;
     let enabled = endpoint?.enabled !== false;
@@ -1058,28 +1065,15 @@ export function PrimaryProvidersPage() {
             </div>
           </div>
 
-          <div className="grid-2col">
-            <div className="form-group">
-              <label className="form-label">入口名称 *</label>
-              <input
-                type="text"
-                className="form-input"
-                defaultValue={name}
-                placeholder="如：Anthropic 官方直连"
-                onChange={(e) => { name = e.target.value; }}
-              />
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">调度优先级 (Priority)</label>
-              <input
-                type="number"
-                className="form-input"
-                defaultValue={priority}
-                onChange={(e) => { priority = Number(e.target.value); }}
-              />
-              <span className="form-hint">数值越小越优先调度。</span>
-            </div>
+          <div className="form-group">
+            <label className="form-label">入口名称 *</label>
+            <input
+              type="text"
+              className="form-input"
+              defaultValue={name}
+              placeholder="如：Anthropic 官方直连"
+              onChange={(e) => { name = e.target.value; }}
+            />
           </div>
 
           <div className="form-group">
@@ -1117,6 +1111,14 @@ export function PrimaryProvidersPage() {
               ))}
             </select>
             <span className="form-hint">自动（四协议）会按入站路径选择对应的原生协议；固定协议用于强制指定上游格式。</span>
+          </div>
+
+          <UserAgentEditor initialValue={userAgent} onChange={(value) => { userAgent = value; }} />
+
+          <div className="form-group">
+            <label className="form-label">调度优先级 (Priority)</label>
+            <input type="number" className="form-input" defaultValue={priority} onChange={(e) => { priority = Number(e.target.value); }} />
+            <span className="form-hint">数值越小越优先调度。</span>
           </div>
 
           <div className="form-group">
@@ -1181,6 +1183,13 @@ export function PrimaryProvidersPage() {
             const nextConfig = clone(config);
             const secretUpdates = {};
 
+            try {
+              userAgent = normalizeUserAgentSettings(userAgent);
+            } catch (error) {
+              addToast(error.message, 'warning');
+              return true;
+            }
+
             if (isNew) {
               const newId = normalizedID;
               if (nextConfig.endpoints.some((item) => item.id === newId)) {
@@ -1192,6 +1201,7 @@ export function PrimaryProvidersPage() {
                 name: name.trim(),
                 baseURL: baseURL.trim(),
                 protocol: normalizeEndpointProtocol(protocol, 'auto'),
+                userAgent,
                 priority: Number(priority),
                 stickyGroup: stickyGroup.trim() || null,
                 keepAlive,
@@ -1205,6 +1215,7 @@ export function PrimaryProvidersPage() {
                 target.name = name.trim();
                 target.baseURL = baseURL.trim();
                 target.protocol = normalizeEndpointProtocol(protocol, 'auto');
+                target.userAgent = userAgent;
                 target.priority = Number(priority);
                 target.enabled = enabled;
                 target.keepAlive = keepAlive;
@@ -1245,6 +1256,7 @@ export function PrimaryProvidersPage() {
           <span className="provider-reorder-copy">
             <strong>{row.name}</strong>
             <small className="mono-cell">{row.id}</small>
+            <small className="ua-summary" title={userAgentSummary(row.userAgent)}>UA：{userAgentSummary(row.userAgent)}</small>
           </span>
         </span>
       ),
@@ -1520,6 +1532,7 @@ export function PrimaryProvidersPage() {
                       <dt>模型映射</dt>
                       <dd>{endpointMappings(endpoint).length} 条</dd>
                     </div>
+                    <div><dt>UA</dt><dd>{userAgentSummary(endpoint.userAgent)}</dd></div>
                     <div>
                       <dt>模型目录</dt>
                       <dd className={endpoint.catalog?.status === '获取失败' ? 'provider-secret-missing' : undefined}>
@@ -1641,6 +1654,7 @@ export function PrimaryProvidersPage() {
             <div><span style={{ color: 'var(--text-muted)' }}>入口协议：</span><span className="mono-cell">{endpointProtocolLabel(selectedEndpoint.protocol)}</span></div>
             <div><span style={{ color: 'var(--text-muted)' }}>粘性分组：</span><span className="mono-cell">{selectedEndpoint.stickyGroup || '独立分组'}</span></div>
             <div><span style={{ color: 'var(--text-muted)' }}>连接复用：</span><span className="mono-cell">{selectedEndpoint.keepAlive ? '开启' : '关闭'}</span></div>
+            <div><span style={{ color: 'var(--text-muted)' }}>UA：</span><span>{userAgentSummary(selectedEndpoint.userAgent)}</span></div>
           </div>
 
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', padding: '12px 14px', borderRadius: 'var(--radius-md)', background: 'var(--bg-surface-glass)', border: '1px solid var(--border-subtle)' }}>

@@ -19,7 +19,7 @@ pub use capability::ModelCapability;
 pub use config::{
     AppConfig, ContextMode, Endpoint, EndpointCatalog, EndpointProtocolMode, FeatureRule,
     FeatureRuleMatch, FeatureRuleTarget, ListenerConfig, ModelMapping, ProviderProtocol,
-    RequestKind, RetryPolicy, ThinkingMode,
+    RequestKind, RetryPolicy, ThinkingMode, UserAgentMode, UserAgentRule, UserAgentSettings,
 };
 pub use model_name::ReasoningEffort;
 pub use routing::{

@@ -46,6 +46,7 @@ public struct PlannedEndpoint: Equatable, Sendable, Identifiable {
     public var configuredProtocol: EndpointProtocolMode
     public var sourceFormat: ProviderProtocol
     public var providerProtocol: ProviderProtocol
+    public var userAgent: UserAgentSettings
     public var upstreamModel: String
     /// 同组入口共享会话粘性;nil = 使用入口 id 作为独立组并参与统一 Provider 分流。
     public var stickyGroup: String?
@@ -70,6 +71,7 @@ public struct PlannedEndpoint: Equatable, Sendable, Identifiable {
         sourceFormat: ProviderProtocol = .anthropic,
         providerProtocol: ProviderProtocol,
         upstreamModel: String,
+        userAgent: UserAgentSettings = UserAgentSettings(),
         stickyGroup: String? = nil,
         thinking: ThinkingMode,
         context: ContextMode,
@@ -83,6 +85,7 @@ public struct PlannedEndpoint: Equatable, Sendable, Identifiable {
         self.configuredProtocol = configuredProtocol
         self.sourceFormat = sourceFormat
         self.providerProtocol = providerProtocol
+        self.userAgent = userAgent
         self.upstreamModel = upstreamModel
         self.stickyGroup = stickyGroup
         self.thinking = thinking
@@ -646,6 +649,7 @@ public struct RoutePlanner {
                     sourceFormat: sourceFormat,
                     providerProtocol: providerProtocol,
                     upstreamModel: upstream,
+                    userAgent: endpoint.userAgent,
                     stickyGroup: endpoint.stickyGroup,
                     thinking: mapping?.thinking ?? .adaptive,
                     context: mapping?.context ?? .oneMillion,

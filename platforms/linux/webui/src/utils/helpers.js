@@ -1165,7 +1165,13 @@ export function eventDurationText(event) {
   const ttfb = eventTTFBMS(event);
   const duration = eventDurationMS(event);
   if (eventIsInFlight(event)) {
-    return ttfb != null ? `TTFB ${formatDuration(ttfb)}` : '等待首字节...';
+    if (ttfb != null) {
+      // Keep TTFB fixed while the locally calculated elapsed duration advances.
+      // Header-timestamped upstream rows can briefly have an elapsed time below TTFB.
+      const total = duration != null && duration >= ttfb ? formatDuration(duration) : '进行中...';
+      return `${formatDuration(ttfb)} → ${total}`;
+    }
+    return duration != null ? `${formatDuration(duration)} · 等待首字节...` : '等待首字节...';
   }
   if (ttfb != null && duration != null && duration >= ttfb) {
     return `${formatDuration(ttfb)} → ${formatDuration(duration)}`;

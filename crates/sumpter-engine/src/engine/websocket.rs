@@ -964,7 +964,14 @@ impl Engine {
                     continue;
                 }
             };
-            for (name, value) in websocket_upstream_headers(headers) {
+            let mut upstream_headers = websocket_upstream_headers(headers);
+            request_build::apply_user_agent(
+                &mut upstream_headers,
+                &endpoint.user_agent,
+                endpoint.protocol,
+                true,
+            );
+            for (name, value) in upstream_headers {
                 if route_intent == RealtimeRouteIntent::StandardRealtime
                     && name.eq_ignore_ascii_case("openai-alpha")
                 {

@@ -519,6 +519,7 @@ struct ProvidersPane: View {
                     EndpointDetailField(title: "API Key", value: row.keyStatusText)
                     EndpointDetailField(title: "粘性分组", value: row.stickyGroupText)
                     EndpointDetailField(title: "连接复用", value: row.keepAliveText)
+                    EndpointDetailField(title: "UA", value: row.userAgentText)
                     EndpointDetailField(title: "已知模型", value: row.modelCatalogText)
                     EndpointDetailField(title: "模型状态", value: row.modelCatalogStatusText)
                 }
@@ -1309,6 +1310,9 @@ private struct ProviderAccountCompactRow: View {
             }
             .font(.caption.monospacedDigit())
             .foregroundStyle(palette.textSecondary)
+            Text("UA：\(row.userAgentText)")
+                .font(.caption).foregroundStyle(palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 6) {
                 ProviderRowIconButton(
                     systemImage: "chevron.up",
@@ -1657,6 +1661,9 @@ private struct ProviderAccountListRow: View {
                         .truncationMode(.middle)
                         .textSelection(.enabled)
                         .help(row.id)
+                    Text("UA：\(row.userAgentText)")
+                        .font(.system(size: 10)).foregroundStyle(palette.textSecondary)
+                        .lineLimit(1).help(row.userAgentText)
                 }
                 .help("按住这一行任意位置拖动调整入口顺序")
                 Spacer(minLength: 0)

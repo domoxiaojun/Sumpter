@@ -7346,6 +7346,11 @@ button.responsive-data-card {
 }
 
 /* Claude Code routing editor: keep slow catalog probes out of the editing path. */
+.ua-editor { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 10px; }
+.ua-rule { display: grid; grid-template-columns: minmax(0, 1fr) 110px; gap: 6px 10px; align-items: center; min-width: 0; }
+.ua-rule .form-label { margin: 0; }
+.ua-value { grid-column: 1 / -1; min-width: 0; width: 100%; box-sizing: border-box; }
+.ua-summary { white-space: normal; overflow-wrap: anywhere; font-size: 10px; }
 .route-editor { gap: 14px; }
 .route-editor-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
 .route-match-details { border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 10px 12px; background: var(--bg-surface-glass); }

@@ -19,9 +19,7 @@ public enum ProviderModelCatalogError: Error, LocalizedError, Sendable {
 }
 
 public enum ProviderModelCatalog {
-    /// 与本机 Claude Code 对齐的出站 User-Agent。
-    /// 中转/DashScope Coding Plan 常按 claude-cli UA 放行;代理所有上游请求统一强制此值。
-    /// 版本随本机 `claude --version` 更新(当前 2.1.220)。
+    /// 未配置自定义值时的兼容默认 UA；实际探测优先使用入口配置。
     public static let userAgent = "claude-cli/2.1.220 (external, cli)"
     public static let candidatePaths = ["/v1/models", "/models", "/v1/model/list", "/api/v1/models"]
     public static let maxResponseBytes = 2 * 1024 * 1024
@@ -157,7 +155,9 @@ public enum ProviderModelCatalog {
         apiKey: String,
         timeout: TimeInterval = 3,
         overallDeadline: TimeInterval = 12,
-        session: URLSession = directSession
+        session: URLSession = directSession,
+        protocolMode: EndpointProtocolMode = .anthropic,
+        userAgentSettings: UserAgentSettings = UserAgentSettings()
     ) async throws -> [String] {
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let scheme = baseURL.scheme?.lowercased(),
@@ -174,12 +174,14 @@ public enum ProviderModelCatalog {
         // 鉴权。带 Key 时先复用 Rust 数据面同时发送的两种鉴权头，再尝试
         // 单头兼容组合；无 Key 时每个候选路径只发一次。
         let authHeaderSets = authenticationHeaderSets(for: key)
+        let userAgents = try userAgentSettings.validated().probeUserAgents(protocolMode: protocolMode)
         var errors: [String] = []
         let deadline = Date().addingTimeInterval(overallDeadline)
 
         for url in candidateURLs(baseURL: baseURL) {
             let path = url.path
             for headers in authHeaderSets {
+                for agent in userAgents {
                 // 死入口会让每个组合都超时;超过总时限就尽早失败,不再逐个耗满 8s。
                 if Date() >= deadline {
                     errors.append("整体超时,已停止尝试")
@@ -197,7 +199,7 @@ public enum ProviderModelCatalog {
                 request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
                 request.setValue("close", forHTTPHeaderField: "Connection")
                 request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-                request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+                request.setValue(agent, forHTTPHeaderField: "User-Agent")
 
                 do {
                     let (data, response) = try await session.data(
@@ -226,6 +228,7 @@ public enum ProviderModelCatalog {
                         let message = error.localizedDescription
                         errors.append("\(path) \(String(message.prefix(50)))")
                     }
+                }
                 }
             }
         }

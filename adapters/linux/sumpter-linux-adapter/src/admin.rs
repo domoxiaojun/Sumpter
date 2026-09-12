@@ -1059,6 +1059,7 @@ mod tests {
             name: "探针入口".into(),
             priority: 0,
             protocol: EndpointProtocolMode::Anthropic,
+            user_agent: Default::default(),
             sticky_group: None,
         });
         let engine = Engine::new(

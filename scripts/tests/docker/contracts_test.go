@@ -247,7 +247,7 @@ func TestPullsGhcrImageAndBuildOverlayIsIsolated(t *testing.T) {
 	if got := project(t, dir).Services["sumpter"].Image; got != "ghcr.io/domoxiaojun/sumpter:latest" {
 		t.Fatalf("unexpected default image: %s", got)
 	}
-	if got := project(t, dir, "SUMPTER_IMAGE=ghcr.io/domoxiaojun/sumpter:0.4.5").Services["sumpter"].Image; got != "ghcr.io/domoxiaojun/sumpter:0.4.5" {
+	if got := project(t, dir, "SUMPTER_IMAGE=ghcr.io/domoxiaojun/sumpter:0.4.6").Services["sumpter"].Image; got != "ghcr.io/domoxiaojun/sumpter:0.4.6" {
 		t.Fatalf("image pinning lost: %s", got)
 	}
 
@@ -488,6 +488,37 @@ func TestDeploymentDocsStructure(t *testing.T) {
 				t.Errorf("%s 代码围栏未成对（%d 个）", name, fences)
 			}
 		})
+	}
+}
+
+// 镜像必须能支撑文档承诺的时区行为，且版本示例不能漂移。
+func TestRuntimeImageAndVersionExamples(t *testing.T) {
+	for _, name := range []string{"platforms/linux/Dockerfile", "platforms/linux/Dockerfile.runtime"} {
+		if !strings.Contains(string(read(t, filepath.Join(root(), name))), "tzdata") {
+			t.Errorf("%s 必须安装 tzdata，否则 TZ 不生效", name)
+		}
+	}
+
+	// 文档仍声称“未安装 tzdata”就说明镜像与文档已经不一致。
+	for _, name := range []string{"platforms/linux/DOCKER.md", "platforms/linux/.env.example"} {
+		if strings.Contains(string(read(t, filepath.Join(root(), name))), "未安装 tzdata") {
+			t.Errorf("%s 仍写着未安装 tzdata", name)
+		}
+	}
+
+	// ghcr.io/domoxiaojun/sumpter:<x.y.z> 示例必须与 workspace 版本一致，避免发版后文档漂移。
+	cargo := string(read(t, filepath.Join(root(), "Cargo.toml")))
+	version := regexp.MustCompile(`(?s)\[workspace\.package\](.*?)version = "([^"]+)"`).FindStringSubmatch(cargo)
+	if version == nil {
+		t.Fatal("无法从 Cargo.toml 读取 workspace 版本")
+	}
+	imageTag := regexp.MustCompile(`domoxiaojun/sumpter:(\d+\.\d+\.\d+)`)
+	for _, name := range []string{"platforms/linux/DOCKER.md", "platforms/linux/.env.example"} {
+		for _, match := range imageTag.FindAllStringSubmatch(string(read(t, filepath.Join(root(), name))), -1) {
+			if match[1] != version[2] {
+				t.Errorf("%s 的镜像示例 %s 与 workspace 版本 %s 不一致", name, match[1], version[2])
+			}
+		}
 	}
 }
 

@@ -58,6 +58,119 @@ public enum EndpointProtocolMode: String, Codable, Sendable, CaseIterable {
     }
 }
 
+public enum UserAgentMode: String, Codable, Sendable, Hashable {
+    case auto
+    case forced = "override"
+}
+
+public struct UserAgentRule: Codable, Equatable, Sendable, Hashable {
+    public var mode: UserAgentMode
+    public var value: String
+
+    public init(mode: UserAgentMode = .auto, value: String = "") {
+        self.mode = mode
+        self.value = value
+    }
+
+    enum CodingKeys: String, CodingKey { case mode, value }
+
+    public init(from decoder: Decoder) throws {
+        let keyed = try decoder.container(keyedBy: CodingKeys.self)
+        mode = try keyed.decodeIfPresent(UserAgentMode.self, forKey: .mode) ?? .auto
+        value = try keyed.decodeIfPresent(String.self, forKey: .value) ?? ""
+        try validate()
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        try validate()
+        var keyed = encoder.container(keyedBy: CodingKeys.self)
+        try keyed.encode(mode, forKey: .mode)
+        if !value.isEmpty { try keyed.encode(value, forKey: .value) }
+    }
+
+    public func validate() throws {
+        guard value.utf8.count <= 512 else {
+            throw UserAgentValidationError.invalid("UA 不能超过 512 字节")
+        }
+        guard !value.utf8.contains(where: { $0 < 32 || $0 == 127 }) else {
+            throw UserAgentValidationError.invalid("UA 不能包含换行或控制字符")
+        }
+    }
+}
+
+public enum UserAgentValidationError: Error, LocalizedError {
+    case invalid(String)
+    public var errorDescription: String? {
+        if case .invalid(let message) = self { return message }
+        return nil
+    }
+}
+
+public struct UserAgentSettings: Codable, Equatable, Sendable, Hashable {
+    public var anthropic: UserAgentRule
+    public var openai: UserAgentRule
+    public var gemini: UserAgentRule
+
+    public init(anthropic: UserAgentRule = UserAgentRule(), openai: UserAgentRule = UserAgentRule(), gemini: UserAgentRule = UserAgentRule()) {
+        self.anthropic = anthropic
+        self.openai = openai
+        self.gemini = gemini
+    }
+
+    enum CodingKeys: String, CodingKey { case anthropic, openai, gemini }
+
+    public init(from decoder: Decoder) throws {
+        let keyed = try decoder.container(keyedBy: CodingKeys.self)
+        anthropic = try keyed.decodeIfPresent(UserAgentRule.self, forKey: .anthropic) ?? UserAgentRule()
+        openai = try keyed.decodeIfPresent(UserAgentRule.self, forKey: .openai) ?? UserAgentRule()
+        gemini = try keyed.decodeIfPresent(UserAgentRule.self, forKey: .gemini) ?? UserAgentRule()
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var keyed = encoder.container(keyedBy: CodingKeys.self)
+        if anthropic != UserAgentRule() { try keyed.encode(anthropic, forKey: .anthropic) }
+        if openai != UserAgentRule() { try keyed.encode(openai, forKey: .openai) }
+        if gemini != UserAgentRule() { try keyed.encode(gemini, forKey: .gemini) }
+    }
+
+    public func validated() throws -> Self {
+        for (name, rule) in [("Anthropic", anthropic), ("OpenAI", openai), ("Gemini", gemini)] {
+            do { try rule.validate() }
+            catch { throw UserAgentValidationError.invalid("\(name)：\(error.localizedDescription)") }
+        }
+        return Self(
+            anthropic: UserAgentRule(mode: anthropic.mode, value: anthropic.value.trimmingCharacters(in: .whitespacesAndNewlines)),
+            openai: UserAgentRule(mode: openai.mode, value: openai.value.trimmingCharacters(in: .whitespacesAndNewlines)),
+            gemini: UserAgentRule(mode: gemini.mode, value: gemini.value.trimmingCharacters(in: .whitespacesAndNewlines))
+        )
+    }
+
+    public var summary: String {
+        [("Anthropic", anthropic), ("OpenAI", openai), ("Gemini", gemini)].map { name, rule in
+            let state = rule.mode == .forced ? (rule.value.isEmpty ? "强覆盖（默认）" : "强覆盖") : (rule.value.isEmpty ? "默认" : "自动")
+            return "\(name) \(state)"
+        }.joined(separator: " · ")
+    }
+
+    public func probeUserAgents(protocolMode: EndpointProtocolMode) -> [String] {
+        let protocols = protocolMode.fixedProtocol.map { [$0] } ?? ProviderProtocol.allCases
+        var agents: [String] = []
+        for proto in protocols {
+            let rule: UserAgentRule
+            switch proto {
+            case .anthropic: rule = anthropic
+            case .openai, .openaiResponses: rule = openai
+            case .gemini: rule = gemini
+            }
+            let value = rule.value.trimmingCharacters(in: .whitespacesAndNewlines)
+            let fallback = proto == .openaiResponses ? "codex_cli_rs/0.5.0" : "claude-cli/2.1.220 (external, cli)"
+            let agent = value.isEmpty ? fallback : value
+            if !agents.contains(agent) { agents.append(agent) }
+        }
+        return agents
+    }
+}
+
 /// 仅用于读取 schema v3-v5 的 legacy migration；新配置不编码池角色。
 @available(*, deprecated, message: "Provider 池已由扁平 endpoints 取代，仅兼容迁移读取")
 public enum PoolRole: String, Codable, Sendable, CaseIterable {
@@ -435,6 +548,7 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
     public var name: String
     public var baseURL: URL
     public var protocolMode: EndpointProtocolMode
+    public var userAgent: UserAgentSettings
     public var enabled: Bool
     /// 明文 API Key(配置文件权限 0600);空 = 未配置。
     public var apiKey: String
@@ -453,6 +567,7 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         case name
         case baseURL
         case protocolMode = "protocol"
+        case userAgent
         case enabled
         case apiKey
         case priority
@@ -467,6 +582,7 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         name: String,
         baseURL: URL,
         protocolMode: EndpointProtocolMode = .auto,
+        userAgent: UserAgentSettings = UserAgentSettings(),
         enabled: Bool = true,
         apiKey: String = "",
         priority: Int = 0,
@@ -479,6 +595,7 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         self.name = name
         self.baseURL = baseURL
         self.protocolMode = protocolMode
+        self.userAgent = userAgent
         self.enabled = enabled
         self.apiKey = apiKey
         self.priority = max(0, priority)
@@ -494,6 +611,7 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         name = try keyed.decodeIfPresent(String.self, forKey: .name) ?? id
         baseURL = try keyed.decode(URL.self, forKey: .baseURL)
         protocolMode = try keyed.decodeIfPresent(EndpointProtocolMode.self, forKey: .protocolMode) ?? .auto
+        userAgent = try keyed.decodeIfPresent(UserAgentSettings.self, forKey: .userAgent) ?? UserAgentSettings()
         enabled = try keyed.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         apiKey = try keyed.decodeIfPresent(String.self, forKey: .apiKey) ?? ""
         priority = max(0, try keyed.decodeIfPresent(Int.self, forKey: .priority) ?? 0)
@@ -509,6 +627,9 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         try keyed.encode(name, forKey: .name)
         try keyed.encode(baseURL, forKey: .baseURL)
         try keyed.encode(protocolMode, forKey: .protocolMode)
+        if userAgent != UserAgentSettings() {
+            try keyed.encode(userAgent, forKey: .userAgent)
+        }
         try keyed.encode(enabled, forKey: .enabled)
         try keyed.encode(apiKey, forKey: .apiKey)
         if priority > 0 {

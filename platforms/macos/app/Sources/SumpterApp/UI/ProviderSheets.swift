@@ -16,6 +16,12 @@ struct ProviderAccountEditorSheet: View {
     @State private var priorityText: String
     @State private var stickyGroup: String
     @State private var keepAlive: Bool
+    @State private var anthropicUA: String
+    @State private var openaiUA: String
+    @State private var geminiUA: String
+    @State private var anthropicUAMode: UserAgentMode
+    @State private var openaiUAMode: UserAgentMode
+    @State private var geminiUAMode: UserAgentMode
     @State private var submission = SubmissionState.idle
     @State private var showPricingEditor = false
 
@@ -39,6 +45,12 @@ struct ProviderAccountEditorSheet: View {
         _stickyGroup = State(initialValue: row?.stickyGroup ?? "")
         // 新入口默认开启；编辑已有入口时保留磁盘中的显式值。
         _keepAlive = State(initialValue: row?.keepAlive ?? true)
+        _anthropicUA = State(initialValue: row?.userAgent.anthropic.value ?? "")
+        _openaiUA = State(initialValue: row?.userAgent.openai.value ?? "")
+        _geminiUA = State(initialValue: row?.userAgent.gemini.value ?? "")
+        _anthropicUAMode = State(initialValue: row?.userAgent.anthropic.mode ?? .auto)
+        _openaiUAMode = State(initialValue: row?.userAgent.openai.mode ?? .auto)
+        _geminiUAMode = State(initialValue: row?.userAgent.gemini.mode ?? .auto)
     }
 
     var body: some View {
@@ -71,6 +83,9 @@ struct ProviderAccountEditorSheet: View {
                 FormLine(title: "名称") {
                     TextField("名称", text: $name)
                 }
+                FormLine(title: "入口状态") {
+                    Toggle("启用", isOn: $enabled).labelsHidden()
+                }
                 FormLine(title: "API 地址") {
                     TextField("https://api.example.com", text: $baseURL)
                 }
@@ -93,15 +108,22 @@ struct ProviderAccountEditorSheet: View {
                         }
                         .labelsHidden()
                         .frame(width: 190, alignment: .leading)
-                        Text("自动会按请求入口选择 Anthropic、OpenAI Chat 或 Responses 原生协议；固定协议仅用于该上游只支持一种协议时。")
+                        Text("自动会按请求入口选择 Anthropic、OpenAI Chat、Responses 或 Gemini；固定协议用于指定上游格式。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                FormLine(title: "启用") {
-                    Toggle("启用", isOn: $enabled)
-                        .labelsHidden()
+                FormLine(title: "上游 User-Agent") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        userAgentLine("Anthropic", mode: $anthropicUAMode, value: $anthropicUA)
+                        userAgentLine("OpenAI（Chat / Responses）", mode: $openaiUAMode, value: $openaiUA)
+                        userAgentLine("Gemini", mode: $geminiUAMode, value: $geminiUA)
+                        Text("自动保留客户端非空 UA，缺失时补填写值；自动留空沿用现有行为，强覆盖留空使用默认 UA。最多 512 字节，不能包含换行或控制字符。")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text("获取模型：固定协议使用对应 UA；自动协议依次尝试不同 UA，总超时 12 秒。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 FormLine(title: "优先级") {
                     VStack(alignment: .leading, spacing: 2) {
@@ -175,7 +197,8 @@ struct ProviderAccountEditorSheet: View {
                         apiKey: apiKey,
                         priority: priority,
                         stickyGroup: stickyGroup,
-                        keepAlive: keepAlive
+                        keepAlive: keepAlive,
+                        userAgent: userAgentSettings
                     )
                 } else {
                     try await model.addProviderAccount(
@@ -187,7 +210,8 @@ struct ProviderAccountEditorSheet: View {
                         apiKey: apiKey,
                         priority: priority,
                         stickyGroup: stickyGroup,
-                        keepAlive: keepAlive
+                        keepAlive: keepAlive,
+                        userAgent: userAgentSettings
                     )
                 }
                 submission.succeed()
@@ -204,6 +228,30 @@ struct ProviderAccountEditorSheet: View {
             throw AppModelError.invalidInput("优先级必须是非负整数")
         }
         return value
+    }
+
+    private var userAgentSettings: UserAgentSettings {
+        UserAgentSettings(
+            anthropic: UserAgentRule(mode: anthropicUAMode, value: anthropicUA),
+            openai: UserAgentRule(mode: openaiUAMode, value: openaiUA),
+            gemini: UserAgentRule(mode: geminiUAMode, value: geminiUA)
+        )
+    }
+
+    @ViewBuilder
+    private func userAgentLine(_ label: String, mode: Binding<UserAgentMode>, value: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(label).font(.caption)
+                Spacer(minLength: 4)
+                Picker("\(label) UA 模式", selection: mode) {
+                    Text("自动").tag(UserAgentMode.auto)
+                    Text("强覆盖").tag(UserAgentMode.forced)
+                }.labelsHidden().frame(width: 90)
+            }
+            TextField("填写 UA，留空沿用默认行为", text: value)
+                .accessibilityLabel("\(label) User-Agent")
+        }
     }
 }
 

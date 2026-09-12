@@ -12,6 +12,7 @@ struct EndpointDisplayRow: Identifiable, Hashable {
     let priority: Int
     let stickyGroup: String?
     let keepAlive: Bool
+    let userAgent: UserAgentSettings
     let mappingCount: Int
     let catalog: ModelCatalog
 
@@ -25,6 +26,7 @@ struct EndpointDisplayRow: Identifiable, Hashable {
         priority = endpoint.priority
         stickyGroup = endpoint.stickyGroup
         keepAlive = endpoint.keepAlive
+        userAgent = endpoint.userAgent
         mappingCount = endpoint.mappings.count
         catalog = endpoint.catalog
     }
@@ -35,6 +37,7 @@ struct EndpointDisplayRow: Identifiable, Hashable {
     var priorityText: String { String(priority) }
     var stickyGroupText: String { stickyGroup ?? "入口 ID（独立组）" }
     var keepAliveText: String { keepAlive ? "启用" : "关闭" }
+    var userAgentText: String { userAgent.summary }
     var protocolDisplayName: String {
         EndpointProtocolMode(rawValue: protocolName)?.displayName ?? protocolName
     }

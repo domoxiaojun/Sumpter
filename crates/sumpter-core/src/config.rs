@@ -35,6 +35,74 @@ fn is_zero_i64(v: &i64) -> bool {
     *v == 0
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum UserAgentMode {
+    #[default]
+    Auto,
+    Override,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct UserAgentRule {
+    #[serde(default)]
+    pub mode: UserAgentMode,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct UserAgentSettings {
+    #[serde(default, skip_serializing_if = "UserAgentRule::is_empty")]
+    pub anthropic: UserAgentRule,
+    #[serde(default, skip_serializing_if = "UserAgentRule::is_empty")]
+    pub openai: UserAgentRule,
+    #[serde(default, skip_serializing_if = "UserAgentRule::is_empty")]
+    pub gemini: UserAgentRule,
+}
+
+impl UserAgentRule {
+    pub fn is_empty(&self) -> bool {
+        self.value.is_empty() && self.mode == UserAgentMode::Auto
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.value.len() > 512 {
+            return Err("UA 不能超过 512 字节".into());
+        }
+        if self.value.bytes().any(|byte| byte < 32 || byte == 127) {
+            return Err("UA 不能包含换行或控制字符".into());
+        }
+        Ok(())
+    }
+}
+
+impl UserAgentSettings {
+    pub fn is_empty(&self) -> bool {
+        self.anthropic.is_empty() && self.openai.is_empty() && self.gemini.is_empty()
+    }
+
+    pub fn rule(&self, protocol: ProviderProtocol) -> &UserAgentRule {
+        match protocol {
+            ProviderProtocol::Anthropic => &self.anthropic,
+            ProviderProtocol::OpenAI | ProviderProtocol::OpenAIResponses => &self.openai,
+            ProviderProtocol::Gemini => &self.gemini,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        for (name, rule) in [
+            ("anthropic", &self.anthropic),
+            ("openai", &self.openai),
+            ("gemini", &self.gemini),
+        ] {
+            rule.validate()
+                .map_err(|message| format!("userAgent.{name}: {message}"))?;
+        }
+        Ok(())
+    }
+}
+
 /// 整值 f64 序列化为 JSON 整数(0 而非 0.0),对齐 Swift 输出。
 fn trim_f64<S: Serializer>(v: &f64, s: S) -> Result<S::Ok, S::Error> {
     if v.is_finite() && v.fract() == 0.0 && v.abs() < 9.0e15 {
@@ -100,6 +168,16 @@ fn default_schema_version() -> u32 {
 }
 
 impl AppConfig {
+    pub fn validate_user_agents(&self) -> Result<(), String> {
+        for (index, endpoint) in self.endpoints.iter().enumerate() {
+            endpoint
+                .user_agent
+                .validate()
+                .map_err(|message| format!("endpoints[{index}].{message}"))?;
+        }
+        Ok(())
+    }
+
     /// 磁盘保真解码,不做任何归一化(golden round-trip 用)。
     pub fn from_json(data: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(data)
@@ -139,6 +217,13 @@ impl AppConfig {
             }
             endpoint.priority = endpoint.priority.max(0);
             endpoint.sticky_group = normalized_group(endpoint.sticky_group.take());
+            for rule in [
+                &mut endpoint.user_agent.anthropic,
+                &mut endpoint.user_agent.openai,
+                &mut endpoint.user_agent.gemini,
+            ] {
+                rule.value = rule.value.trim().to_string();
+            }
             if endpoint
                 .catalog
                 .as_ref()
@@ -544,6 +629,13 @@ pub struct Endpoint {
     /// 同组入口共享会话粘性与冷却；None 使用自身 id 作为独立组并参与 Provider 分流。
     #[serde(rename = "stickyGroup", default, skip_serializing_if = "is_none")]
     pub sticky_group: Option<String>,
+    /// OpenAI Chat 与 Responses 共用 openai UA 规则。
+    #[serde(
+        rename = "userAgent",
+        default,
+        skip_serializing_if = "UserAgentSettings::is_empty"
+    )]
+    pub user_agent: UserAgentSettings,
 }
 
 impl Endpoint {
@@ -850,7 +942,7 @@ pub mod builtin_rules {
 
 #[cfg(test)]
 mod tests {
-    use super::{ContextMode, FeatureRuleTarget};
+    use super::{ContextMode, FeatureRuleTarget, UserAgentMode, UserAgentRule, UserAgentSettings};
     use crate::model_name::ReasoningEffort;
     use serde_json::json;
 
@@ -881,5 +973,30 @@ mod tests {
         .unwrap();
         assert_eq!(overridden.effort, Some(ReasoningEffort::Xhigh));
         assert_eq!(serde_json::to_value(overridden).unwrap()["effort"], "xhigh");
+    }
+
+    #[test]
+    fn user_agent_settings_round_trip_and_validate_header_safety() {
+        let settings = UserAgentSettings {
+            openai: UserAgentRule {
+                mode: UserAgentMode::Override,
+                value: "gateway/1".into(),
+            },
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&settings).unwrap();
+        assert_eq!(value["openai"]["mode"], "override");
+        assert_eq!(
+            serde_json::from_value::<UserAgentSettings>(value).unwrap(),
+            settings
+        );
+        assert!(
+            UserAgentRule {
+                value: "bad\nua".into(),
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
     }
 }

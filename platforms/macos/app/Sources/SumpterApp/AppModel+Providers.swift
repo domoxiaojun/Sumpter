@@ -16,7 +16,8 @@ extension AppModel {
         apiKey: String,
         priority: Int = 0,
         stickyGroup: String = "",
-        keepAlive: Bool = true
+        keepAlive: Bool = true,
+        userAgent: UserAgentSettings = UserAgentSettings()
     ) async throws {
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         // 空 Key 合法:= 无鉴权转发(不发鉴权头,本地/内网 llama.cpp 等上游用),
@@ -45,6 +46,7 @@ extension AppModel {
                 name: cleanName,
                 baseURL: baseURL,
                 protocolMode: try Self.endpointProtocolMode(protocolName),
+                userAgent: try userAgent.validated(),
                 enabled: enabled,
                 apiKey: cleanKey,
                 priority: priority,
@@ -64,7 +66,8 @@ extension AppModel {
         apiKey: String,
         priority: Int = 0,
         stickyGroup: String = "",
-        keepAlive: Bool = false
+        keepAlive: Bool = false,
+        userAgent: UserAgentSettings = UserAgentSettings()
     ) async throws {
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         // 空 Key 合法(无鉴权转发),同 addProviderAccount。
@@ -92,6 +95,7 @@ extension AppModel {
             config.endpoints[location.endpoint].priority = priority
             config.endpoints[location.endpoint].stickyGroup = group.isEmpty ? nil : group
             config.endpoints[location.endpoint].keepAlive = keepAlive
+            config.endpoints[location.endpoint].userAgent = try userAgent.validated()
         }
     }
 

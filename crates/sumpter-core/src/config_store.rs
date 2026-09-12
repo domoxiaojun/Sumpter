@@ -478,6 +478,9 @@ impl ConfigDir {
     }
 
     pub fn save_config(&self, config: &AppConfig) -> io::Result<PersistOutcome> {
+        config
+            .validate_user_agents()
+            .map_err(|message| io::Error::new(io::ErrorKind::InvalidInput, message))?;
         let mut data = config
             .to_json_pretty()
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
@@ -719,11 +722,18 @@ fn validate_current_wire(value: &Value) -> Result<(), String> {
             .ok_or_else(|| format!("endpoints[{endpoint_index}].protocol 必须显式存在"))?;
         if !matches!(
             protocol,
-            "auto" | "anthropic" | "openai" | "openai-responses"
+            "auto" | "anthropic" | "openai" | "openai-responses" | "gemini"
         ) {
             return Err(format!(
                 "endpoints[{endpoint_index}].protocol 无效: {protocol}"
             ));
+        }
+        if let Some(value) = endpoint.get("userAgent") {
+            let settings: crate::config::UserAgentSettings = serde_json::from_value(value.clone())
+                .map_err(|_| format!("endpoints[{endpoint_index}].userAgent 格式无效"))?;
+            settings
+                .validate()
+                .map_err(|message| format!("endpoints[{endpoint_index}].{message}"))?;
         }
     }
     if let Some(rules) = root.get("featureRules").and_then(Value::as_array) {

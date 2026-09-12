@@ -3,7 +3,10 @@
 
 use serde_json::{Value, json};
 use sumpter_core::bridge;
-use sumpter_core::config::{ContextMode, ProviderProtocol, ThinkingMode};
+use sumpter_core::config::{
+    ContextMode, EndpointProtocolMode, ProviderProtocol, ThinkingMode, UserAgentMode,
+    UserAgentSettings,
+};
 use sumpter_core::model_name::{self, ReasoningEffort};
 use sumpter_core::routing::{PlannedEndpoint, RequestPurpose, RoutingRequest};
 
@@ -23,6 +26,44 @@ pub const DEFAULT_CODEX_LIVE_MODEL: &str = "gpt-live-1-codex";
 /// mapping or the private quicksilver model.
 pub const DEFAULT_REALTIME_MODEL: &str = "gpt-realtime";
 const IDENTITY_ACCEPT_ENCODING: &str = "identity";
+
+pub fn default_user_agent(protocol: ProviderProtocol) -> &'static str {
+    if protocol == ProviderProtocol::OpenAIResponses {
+        CODEX_USER_AGENT
+    } else {
+        CLAUDE_CODE_USER_AGENT
+    }
+}
+
+/// Fixed protocols probe with their own identity. Auto probes distinct
+/// protocol identities at each path, under the caller's existing deadline.
+pub fn probe_user_agents(
+    protocol_mode: EndpointProtocolMode,
+    settings: &UserAgentSettings,
+) -> Vec<String> {
+    let protocols = protocol_mode.fixed_protocol().map_or_else(
+        || {
+            vec![
+                ProviderProtocol::Anthropic,
+                ProviderProtocol::OpenAI,
+                ProviderProtocol::OpenAIResponses,
+                ProviderProtocol::Gemini,
+            ]
+        },
+        |protocol| vec![protocol],
+    );
+    let mut agents = Vec::new();
+    for protocol in protocols {
+        let mut headers = Vec::new();
+        apply_user_agent(&mut headers, settings, protocol, true);
+        for (_, value) in headers {
+            if !agents.contains(&value) {
+                agents.push(value);
+            }
+        }
+    }
+    agents
+}
 
 /// Authentication headers forced by the real data plane and reused by
 /// daemon-originated Provider probes.
@@ -47,16 +88,23 @@ pub fn provider_auth_headers(api_key: &str) -> Vec<(&'static str, String)> {
 /// Common fingerprint/authentication headers for a daemon-originated
 /// Provider probe.  The first attempt must match the data plane's forced
 /// identity surface; compatibility retries can replace only the auth set.
-pub fn provider_probe_headers(api_key: &str) -> Vec<(&'static str, String)> {
+pub fn provider_probe_headers_with_user_agent(
+    api_key: &str,
+    user_agent: &str,
+) -> Vec<(&'static str, String)> {
     let mut headers = vec![
         ("accept", "application/json".into()),
         ("accept-encoding", IDENTITY_ACCEPT_ENCODING.into()),
         ("connection", "close".into()),
         ("anthropic-version", ANTHROPIC_VERSION.into()),
-        ("user-agent", CLAUDE_CODE_USER_AGENT.into()),
+        ("user-agent", user_agent.to_string()),
     ];
     headers.extend(provider_auth_headers(api_key));
     headers
+}
+
+pub fn provider_probe_headers(api_key: &str) -> Vec<(&'static str, String)> {
+    provider_probe_headers_with_user_agent(api_key, CLAUDE_CODE_USER_AGENT)
 }
 
 const ANTHROPIC_BETA_BASE: &str =
@@ -280,17 +328,6 @@ pub fn build_outbound(
     }
     set_header(&mut headers, "accept-encoding", IDENTITY_ACCEPT_ENCODING);
     set_header(&mut headers, "content-type", "application/json");
-    // Legacy bridged requests get a Claude-compatible fallback UA. Raw
-    // passthrough rebuilds its header list below without this synthetic value,
-    // so arbitrary vendor requests stay wire-faithful.
-    if !headers.iter().any(|(n, _)| n == "user-agent") {
-        let fallback_ua = if protocol == ProviderProtocol::OpenAIResponses {
-            CODEX_USER_AGENT
-        } else {
-            CLAUDE_CODE_USER_AGENT
-        };
-        set_header(&mut headers, "user-agent", fallback_ua);
-    }
 
     if raw_passthrough {
         // Rebuild the raw header list from the original pairs so duplicate
@@ -314,6 +351,13 @@ pub fn build_outbound(
             headers.push((name.to_string(), value));
         }
     }
+
+    apply_user_agent(
+        &mut headers,
+        &endpoint.user_agent,
+        protocol,
+        !raw_passthrough,
+    );
 
     let base_path = base_path_of(&endpoint.base_url);
 
@@ -498,6 +542,34 @@ pub fn build_outbound(
             keep_alive: endpoint.keep_alive,
         },
         effort,
+    }
+}
+
+pub fn apply_user_agent(
+    headers: &mut Vec<(String, String)>,
+    settings: &UserAgentSettings,
+    protocol: ProviderProtocol,
+    fallback_when_missing: bool,
+) {
+    let rule = settings.rule(protocol);
+    let value = rule.value.trim();
+    let has_ua = headers
+        .iter()
+        .any(|(name, value)| name.eq_ignore_ascii_case("user-agent") && !value.trim().is_empty());
+    if rule.mode == UserAgentMode::Override {
+        let fallback = default_user_agent(protocol);
+        set_header(
+            headers,
+            "user-agent",
+            if value.is_empty() { fallback } else { value },
+        );
+    } else if !has_ua {
+        headers.retain(|(name, _)| !name.eq_ignore_ascii_case("user-agent"));
+        if !value.is_empty() {
+            set_header(headers, "user-agent", value);
+        } else if fallback_when_missing {
+            set_header(headers, "user-agent", default_user_agent(protocol));
+        }
     }
 }
 
@@ -977,7 +1049,7 @@ fn remove_output_config_effort(body: &mut serde_json::Map<String, Value>) {
 mod tests {
     use super::*;
     use serde_json::json;
-    use sumpter_core::config::EndpointProtocolMode;
+    use sumpter_core::config::{EndpointProtocolMode, UserAgentMode, UserAgentRule};
     use sumpter_core::routing::{RouteMode, RoutePlanner};
 
     fn endpoint(
@@ -1001,6 +1073,7 @@ mod tests {
             },
             source_format: ProviderProtocol::Anthropic,
             protocol,
+            user_agent: Default::default(),
             route_mode: if protocol == ProviderProtocol::Anthropic {
                 RouteMode::Native
             } else {
@@ -1059,6 +1132,84 @@ mod tests {
             .filter(|(n, _)| n.eq_ignore_ascii_case(name))
             .map(|(_, v)| v.as_str())
             .collect()
+    }
+
+    #[test]
+    fn user_agent_auto_uses_client_value_and_fills_missing_value() {
+        let mut endpoint = endpoint(
+            ProviderProtocol::Anthropic,
+            ContextMode::Standard,
+            ThinkingMode::Adaptive,
+        );
+        endpoint.user_agent.anthropic = UserAgentRule {
+            mode: UserAgentMode::Auto,
+            value: "custom-anthropic/1".into(),
+        };
+        let req = request("claude-opus-5");
+        let with_client = build_outbound(
+            &endpoint,
+            &req,
+            &[("user-agent".into(), "client/1".into())],
+            "POST",
+            "/v1/messages",
+            "",
+            RequestPurpose::Standard,
+            None,
+        );
+        assert_eq!(header(&with_client, "user-agent"), vec!["client/1"]);
+        let without_client = build_outbound(
+            &endpoint,
+            &req,
+            &[],
+            "POST",
+            "/v1/messages",
+            "",
+            RequestPurpose::Standard,
+            None,
+        );
+        assert_eq!(
+            header(&without_client, "user-agent"),
+            vec!["custom-anthropic/1"]
+        );
+    }
+
+    #[test]
+    fn user_agent_override_replaces_client_value() {
+        let mut endpoint = endpoint(
+            ProviderProtocol::OpenAIResponses,
+            ContextMode::Standard,
+            ThinkingMode::Adaptive,
+        );
+        endpoint.user_agent.openai = UserAgentRule {
+            mode: UserAgentMode::Override,
+            value: "gateway/2".into(),
+        };
+        let build = build_outbound(
+            &endpoint,
+            &request("gpt-5"),
+            &[("User-Agent".into(), "client/1".into())],
+            "POST",
+            "/v1/responses",
+            "",
+            RequestPurpose::Standard,
+            None,
+        );
+        assert_eq!(header(&build, "user-agent"), vec!["gateway/2"]);
+    }
+
+    #[test]
+    fn probe_user_agents_follow_fixed_and_auto_protocols() {
+        let mut settings = UserAgentSettings::default();
+        settings.anthropic.value = "anthropic-probe".into();
+        settings.openai.value = "openai-probe".into();
+        assert_eq!(
+            probe_user_agents(EndpointProtocolMode::Anthropic, &settings),
+            vec!["anthropic-probe"]
+        );
+        assert_eq!(
+            probe_user_agents(EndpointProtocolMode::Auto, &settings),
+            vec!["anthropic-probe", "openai-probe", CLAUDE_CODE_USER_AGENT]
+        );
     }
 
     #[test]

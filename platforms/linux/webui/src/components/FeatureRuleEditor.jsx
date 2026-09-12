@@ -52,15 +52,18 @@ export function FeatureRuleEditor({ rule, catalogLoader }) {
     }).catch((error) => {
       if (controller.signal.aborted && !timedOut) return;
       setModelState({ key: endpointKey, catalog: cached, loading: false,
-        error: timedOut ? '获取模型超时，请重试；也可以手动输入模型。' : `获取模型失败：${String(error.message || error).slice(0, 300)}` });
+        error: timedOut ? '获取模型超时，请重试。' : `获取模型失败：${String(error.message || error).slice(0, 300)}` });
     }).finally(() => window.clearTimeout(timeout));
     return () => { window.clearTimeout(timeout); controller.abort(); };
   }, [endpointKey, refresh, catalogLoader]);
 
   const activeModels = modelState?.key === endpointKey ? modelState : null;
   const models = useMemo(() => routeModelChoices(endpoints, draft.endpointID, activeModels?.catalog), [endpoints, draft.endpointID, activeModels?.catalog]);
+  const selectedModel = models.includes(draft.model) ? draft.model : '';
+  const loadingModels = Boolean(endpoint && (!activeModels || activeModels.loading));
   const matchingModels = useMemo(() => models.filter((model) => model.toLowerCase().includes(query.trim().toLowerCase())), [models, query]);
   const visibleModels = matchingModels.slice(0, 80);
+  const selectionOutsideResults = selectedModel && !visibleModels.includes(selectedModel);
 
   const fetchAgain = () => {
     // Invalidate only this endpoint; changing selection keeps other caches useful.
@@ -121,7 +124,12 @@ export function FeatureRuleEditor({ rule, catalogLoader }) {
       </>}
 
       <label className="form-group"><span className="form-label">固定入口通道（可选）</span>
-        <select className="form-select" value={draft.endpointID} onChange={(event) => { edit('endpointID', event.target.value); setQuery(''); }}>
+        <select className="form-select" value={draft.endpointID} onChange={(event) => {
+          const endpointID = event.target.value;
+          setDraft((previous) => ({ ...previous, endpointID, model: '' }));
+          setQuery('');
+          setSaveError('');
+        }}>
           <option value="">按模型组与入口优先级自动选择</option>
           {draft.endpointID && !endpoint && <option value={draft.endpointID}>入口已不存在</option>}
           {endpoints.map((item) => <option key={item.id} value={item.id}>{item.name || item.id}{item.enabled === false ? '（已停用）' : ''}</option>)}
@@ -130,21 +138,22 @@ export function FeatureRuleEditor({ rule, catalogLoader }) {
       {endpoint?.enabled === false && <p className="form-hint">此入口已停用，启用后才能承接请求。</p>}
 
       <div className="form-group">
-        <label className="form-group"><span className="form-label">目标承接模型 *</span>
-          <input className="form-input" value={draft.model} placeholder="从下方选择，或手动输入模型名称" onChange={(event) => edit('model', event.target.value)} />
-        </label>
+        <label className="form-label" htmlFor="route-target-model">目标承接模型 *</label>
         <div className="route-model-toolbar">
-          <span className="form-hint" role="status">{activeModels?.loading ? '正在后台获取入口模型，可继续编辑…' : `${models.length} 个模型候选`}</span>
-          {endpoint && <button type="button" className="btn btn-ghost btn-compact" onClick={fetchAgain} disabled={activeModels?.loading}>{activeModels?.error ? '重试获取模型' : '刷新模型'}</button>}
+          <span className="form-hint" role="status">{loadingModels ? '正在获取入口模型…' : `${models.length} 个模型候选`}</span>
+          {endpoint && <button type="button" className="btn btn-ghost btn-compact" onClick={fetchAgain} disabled={loadingModels}>{activeModels?.error ? '重试获取模型' : '刷新模型'}</button>}
         </div>
-        {activeModels?.error && <p className="form-hint route-editor-error" role="alert">{activeModels.error} 已有候选与手动输入仍可使用。</p>}
+        {activeModels?.error && <p className="form-hint route-editor-error" role="alert">{activeModels.error} {models.length ? '仍可从已有模型中选择。' : '请重试或先在入口库配置模型。'}</p>}
         {(models.length > 80 || query) && <input className="form-input" aria-label="搜索入口模型" placeholder="输入关键词筛选模型" value={query} onChange={(event) => setQuery(event.target.value)} />}
-        <select className="form-select" aria-label="选择目标模型" value="" onChange={(event) => edit('model', event.target.value)} disabled={!visibleModels.length}>
-          <option value="">{visibleModels.length ? `从${endpoint ? '此入口' : '已配置'}模型中选择` : '暂无匹配模型，可手动输入'}</option>
+        <select id="route-target-model" className="form-select" value={selectedModel} required onChange={(event) => edit('model', event.target.value)} disabled={!models.length}>
+          <option value="">{visibleModels.length ? `从${endpoint ? '此入口' : '已配置'}模型中选择` : loadingModels ? '正在获取模型…' : models.length ? '没有匹配的模型' : '暂无可选模型'}</option>
+          {selectionOutsideResults && <option value={selectedModel}>{selectedModel}</option>}
           {visibleModels.map((model) => <option key={model} value={model}>{model}</option>)}
         </select>
+        {!loadingModels && draft.model && !selectedModel && <p className="form-hint route-editor-error" role="alert">原目标模型 {draft.model} 不在当前列表，请重新选择。</p>}
+        {!loadingModels && !models.length && <p className="form-hint">{endpoint ? '请刷新模型列表，或先在入口库为此入口配置模型。' : '请先在入口库配置模型，或指定入口获取模型列表。'}</p>}
         {matchingModels.length > visibleModels.length && <span className="form-hint">显示前 80 项，共 {matchingModels.length} 项；输入关键词可缩小范围。</span>}
-        <span className="form-hint">{endpoint ? '选择入口后自动获取模型；切换入口会保留当前目标模型，请按需重新选择。' : '自动选择使用已配置的模型映射；指定入口后可获取该入口的模型列表。'}</span>
+        <span className="form-hint">{endpoint ? '仅显示此入口的模型目录与已配置模型；切换入口后请重新选择。' : '显示已启用入口的已配置模型；指定入口后可获取该入口的模型列表。'}</span>
       </div>
       <div className="grid-2col">
         <label className="form-group"><span className="form-label">目标协议（可选）</span>
@@ -163,7 +172,7 @@ export function FeatureRuleEditor({ rule, catalogLoader }) {
     {saveError && <p className="route-editor-error" role="alert">{saveError}</p>}
     <div className="route-editor-actions">
       <button type="button" className="btn btn-ghost" disabled={saving} onClick={closeModal}>取消</button>
-      <button type="submit" className="btn btn-primary" disabled={saving} aria-busy={saving}>{saving ? '正在保存…' : '保存规则'}</button>
+      <button type="submit" className="btn btn-primary" disabled={saving || !draft.name.trim() || !selectedModel} aria-busy={saving}>{saving ? '正在保存…' : '保存规则'}</button>
     </div>
   </form>;
 }

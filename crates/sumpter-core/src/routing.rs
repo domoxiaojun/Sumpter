@@ -822,6 +822,7 @@ pub struct PlannedEndpoint {
     pub source_format: ProviderProtocol,
     /// 本次请求已解析出的真实 TargetFormat；绝不包含 Auto。
     pub protocol: ProviderProtocol,
+    pub user_agent: crate::config::UserAgentSettings,
     pub route_mode: RouteMode,
     /// 路由规则选中的逻辑模型名；用于按模型家族做协议兼容，不能从上游别名反推。
     pub routed_model: String,
@@ -1337,6 +1338,7 @@ impl RoutePlanner {
                     configured_protocol,
                     source_format,
                     protocol,
+                    user_agent: endpoint.user_agent.clone(),
                     route_mode: if passthrough || source_format == protocol {
                         RouteMode::Native
                     } else {

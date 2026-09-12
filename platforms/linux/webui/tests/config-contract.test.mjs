@@ -15,6 +15,7 @@ const {
   isEndpointProtocol,
   isSourceFormat,
 } = await import('../src/utils/protocols.js');
+const { normalizeUserAgentSettings, userAgentSummary } = await import('../src/utils/userAgent.js');
 const {
   clientKindLabel,
   eventClientKindLabel,
@@ -96,6 +97,14 @@ test('v7 endpoint protocol contract exposes five modes and defaults mock entries
   for (const value of ENDPOINT_PROTOCOL_MODES.map((item) => item.value)) assert.equal(isEndpointProtocol(value), true);
   assert.equal(isSourceFormat('auto'), false);
   assert.equal(endpointProtocolLabel('auto'), '自动（四协议）');
+});
+
+test('endpoint User-Agent settings normalize, summarize, and reject unsafe values', () => {
+  const settings = normalizeUserAgentSettings({ openai: { mode: 'override', value: ' gateway/1 ' } });
+  assert.deepEqual(settings, { openai: { mode: 'override', value: 'gateway/1' } });
+  assert.match(userAgentSummary(settings), /OpenAI 强覆盖/);
+  assert.throws(() => normalizeUserAgentSettings({ anthropic: { value: 'bad\nua' } }), /控制字符/);
+  assert.throws(() => normalizeUserAgentSettings({ gemini: { mode: 'invalid' } }), /模式无效/);
 });
 
 test('Provider 新入口默认启用连接复用，编辑旧入口保留原值', () => {
@@ -316,6 +325,40 @@ test('in-flight event duration is local and completed duration stays server-owne
   assert.equal(eventDurationMS({ phase: 'completed', timestamp: now - 2100, durationMS: 37 }), 37);
 });
 
+test('in-flight duration text advances without event updates and freezes on completion', (t) => {
+  const startedAt = Date.UTC(2026, 8, 11);
+  t.mock.timers.enable({ apis: ['Date'], now: startedAt + 12_400 });
+  const event = { phase: 'inFlight', timestamp: startedAt / 1000, ttfbMS: 1200, durationMS: 0 };
+  assert.equal(eventDurationText(event), '1.2s → 12.4s');
+  t.mock.timers.tick(1000);
+  assert.equal(eventDurationText(event), '1.2s → 13.4s');
+
+  for (const outcome of ['succeeded', 'failed', 'cancelled']) {
+    const completed = { ...event, phase: 'completed', outcome, durationMS: 14_500 };
+    assert.equal(eventDurationText(completed), '1.2s → 14.5s');
+    t.mock.timers.tick(5000);
+    assert.equal(eventDurationText(completed), '1.2s → 14.5s');
+  }
+});
+
+test('waiting for the first byte also shows the increasing elapsed duration', (t) => {
+  const startedAt = Date.UTC(2026, 8, 11);
+  t.mock.timers.enable({ apis: ['Date'], now: startedAt + 2100 });
+  const event = { phase: 'inFlight', timestamp: startedAt, durationMS: 0 };
+  assert.equal(eventDurationText(event), '2.1s · 等待首字节...');
+  t.mock.timers.tick(1000);
+  assert.equal(eventDurationText(event), '3.1s · 等待首字节...');
+  assert.equal(eventDurationText({ ...event, ttfbMS: 2800 }), '2.8s → 3.1s');
+});
+
+test('in-flight duration preserves TTFB when the elapsed time is unavailable or shorter', (t) => {
+  const startedAt = Date.UTC(2026, 8, 11);
+  t.mock.timers.enable({ apis: ['Date'], now: startedAt + 1000 });
+  assert.equal(eventDurationText({ phase: 'inFlight', ttfbMS: 8000 }), '8.0s → 进行中...');
+  assert.equal(eventDurationText({ phase: 'inFlight', timestamp: startedAt, ttfbMS: 8000 }), '8.0s → 进行中...');
+  assert.equal(eventDurationText({ phase: 'inFlight' }), '等待首字节...');
+});
+
 test('runtime reconnect follows every change page without skipping updates', async () => {
   const calls = [];
   const pages = new Map([
@@ -528,7 +571,7 @@ test('runtime event status separates pending outcome from the in-flight phase', 
   assert.equal(eventResultKind(event), null);
   assert.equal(eventOutcomeLabel(event), '待定 (Pending)');
   assert.equal(eventStatusDetailLabel(event), 'HTTP 200 · 进行中 (In Flight)');
-  assert.equal(eventDurationText({ ...event, ttfbMS: 412 }), 'TTFB 412ms');
+  assert.equal(eventDurationText({ ...event, ttfbMS: 412 }), '412ms → 进行中...');
 });
 
 test('in-flight client status is not replaced by the upstream HTTP status', () => {

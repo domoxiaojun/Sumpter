@@ -11,8 +11,8 @@
 运行镜像只有 GHCR 一处来源，**不在部署主机构建**：
 
 - 构建与推送由发布工作流完成：container job 先用 `linux/amd64,linux/arm64` 校验，再由 publish job 推送双架构 manifest，不存在单架构可用而另一架构缺失的情况。
-- tag 形式：`0.4.5`、`0.4`、`0`、`latest`、`sha-<full>`；**不带 `v` 前缀**。`latest` 只在发布成功后推进，普通 main push 不会刷新镜像。
-- 钉死版本：`.env` 里写 `SUMPTER_IMAGE=ghcr.io/domoxiaojun/sumpter:0.4.5`，或直接写 digest。
+- tag 形式：`0.4.6`、`0.4`、`0`、`latest`、`sha-<full>`；**不带 `v` 前缀**。`latest` 只在发布成功后推进，普通 main push 不会刷新镜像。
+- 钉死版本：`.env` 里写 `SUMPTER_IMAGE=ghcr.io/domoxiaojun/sumpter:0.4.6`，或直接写 digest。
 - 仓库或 GHCR 为私有时需先 `docker login ghcr.io`。
 - `compose.yaml` 不含 `build:`；源码构建只存在于单独的 override，且使用本地 tag `sumpter:local`（见文末）。
 
@@ -89,7 +89,7 @@ docker compose logs --no-color > "logs/compose-$(date +%Y%m%d-%H%M%S).log"
 | `SUMPTER_PROXY_BIND_HOST` / `SUMPTER_ADMIN_BIND_HOST` | `127.0.0.1`；宿主机发布地址 |
 | `SUMPTER_PROXY_PORT` / `SUMPTER_ADMIN_PORT` | `57878` / `57879`；宿主机端口 |
 | `RUST_LOG` | `info`；日志等级或过滤器（daemon 读取） |
-| `TZ` | `UTC`；透传时区变量。镜像未安装 tzdata，程序自身时间戳一律按 UTC 记录，设了也不会改变 |
+| `TZ` | `UTC`；容器时区，镜像已装 tzdata（v0.4.5 及更早的发布镜像没有）。程序自身的统计与时间戳仍按 Unix 时间（UTC）存储，日志时间戳也为 UTC，WebUI 按浏览器时区展示 |
 | `SUMPTER_RESTART_POLICY` | `unless-stopped`；只作用于 daemon，init 不会循环重启 |
 | `SUMPTER_STOP_GRACE_PERIOD` | `30s`；迁移前等待正常关停 |
 | `SUMPTER_TMPFS_SIZE` | `64m`；容器 `/tmp` 容量，不持久化 |
@@ -118,6 +118,22 @@ daemon 实际读取的环境变量只有这些：`RUST_LOG`、`RUST_BACKTRACE`�
 | `SUMPTER_ADMIN_HOST` / `SUMPTER_ADMIN_PORT` | 模板已固定为容器内 `0.0.0.0` / `57879`，健康检查与端口映射都依赖这两个值；宿主机地址与端口用 `*_BIND_HOST` / `*_PORT`。 |
 | `SUMPTER_ADMIN_PASSWORD_FILE` | 固定为 `/config/admin-password`，改路径会让登录凭据与数据目录脱节。 |
 | `HOME` / `XDG_CONFIG_HOME` | CMD 已用 `--config-dir /config` 固定配置目录，不再参与推导。 |
+
+### 宿主机侧 vs 容器内
+
+模板里出现 proxy 与 admin 两组变量，它们**不是重复配置**：daemon 有两个独立监听项。
+
+| 监听项 | 作用 | 容器内地址 / 端口 | 宿主机侧（`.env`） |
+| --- | --- | --- | --- |
+| 代理（数据面） | 客户端 API 流量，OpenAI / Anthropic / Codex 等都指向这里 | `config.json` 的 `listener.host` / `listener.port`，init 写为 `0.0.0.0:57878` | `SUMPTER_PROXY_BIND_HOST` / `SUMPTER_PROXY_PORT` |
+| Admin（控制面） | WebUI 与 `/admin/api`，登录会话 | Compose 的 `environment` 固定为 `0.0.0.0:57879` | `SUMPTER_ADMIN_BIND_HOST` / `SUMPTER_ADMIN_PORT` |
+
+宿主机侧变量只决定“发布到宿主机的哪个地址与端口”，改它们不会改变容器内监听；映射里的容器侧端口写死为 `57878` / `57879`，所以宿主机换到 18080/18081 也不会让健康检查或映射错位。
+
+两个需要留意的耦合：
+
+- **代理的容器内端口来自 `config.json`**，不是环境变量。不要在 WebUI 的“监听配置”里改代理端口，否则端口映射会指向无人监听的端口；确需修改时同时改 `config.json` 与 `compose.yaml` 的容器侧端口。宿主机换端口只用 `SUMPTER_PROXY_PORT`。
+- `SUMPTER_ADMIN_PORT` 在 `.env` 里表示**宿主机端口**，而 Compose 的 `environment` 又把容器内的同名变量钉成 `57879`（显式 `environment` 优先于 `env_file`）。这是有意保留的：从旧 bridge 示例来的 `.env` 值继续表示宿主机端口，同时容器内的 Admin 契约不会被误改。
 
 ### 远程访问与主机加固
 

@@ -24,6 +24,8 @@ npm ci --prefix platforms/linux/webui
 ./scripts/check.sh docs
 ./scripts/check.sh rust
 ./scripts/check.sh web
+# 需要 Go 工具链
+./scripts/check.sh docker
 # 仅 macOS
 ./scripts/check.sh macos
 ```

@@ -1,6 +1,6 @@
 # Sumpter使用指南
 
-给第一次安装并接入客户端的用户。当前版本 **0.4.5**，配置 **schema v7**。
+给第一次安装并接入客户端的用户。当前版本 **0.4.6**，配置 **schema v7**。
 
 **范围**：从 GitHub 安装、填写 `config.json`、接入 Claude Code / Codex / Grok Build / Gemini CLI / pi、项目归因、常见错误。  
 **不包含**：改源码、编译、发版。
@@ -357,11 +357,13 @@ export OPENAI_BASE_URL=http://127.0.0.1:57878/v1
 
 ## 4. 协议与路径
 
-Gemini CLI 使用 Gemini Developer API 原生 REST：`POST /v1beta/models/{model}:generateContent`
-与 `:streamGenerateContent?alt=sse`。将入口协议设为 `gemini`（或 `auto`）即可按模型映射
-透传；默认以 `x-goog-api-key` 认证，`apiKey` 以 `Bearer ` 开头时改用 Bearer。Vertex、
-OAuth 和 Service Account 不属于本适配范围。客户端归因识别 `GeminiCLI` User-Agent；项目
-归因需由 wrapper 显式发送 `X-Sumpter-Project` / `X-Sumpter-Workspace`，本地路径不会写入上游。
+Gemini CLI 接入使用 Gemini Developer API 原生 REST：`POST /v1beta/models/{model}:generateContent`
+和流式 `POST /v1beta/models/{model}:streamGenerateContent?alt=sse`。入口协议写为 `gemini`（或使用
+`auto`），Sumpter 只负责入站鉴权、模型映射、Provider failover 和原生 relay。Provider 的
+`apiKey` 默认发送为 `x-goog-api-key`；若值以 `Bearer ` 开头则发送 `Authorization: Bearer`。
+Gemini CLI 的 `User-Agent`（`GeminiCLI-...`）会记录为 `gemini_cli` 客户端。CLI 的本地
+`sessionId`、`cwd`、`targetDir` 不会被猜测成项目归因；需要项目统计时由 wrapper 显式设置
+`X-Sumpter-Project` / `X-Sumpter-Workspace`，这些 header 只在本地事件中使用并会从上游请求剥离。
 
 数据面通常不识别、重建或转换协议，也不维护路径别名白名单。除 `/__*` 本地控制接口外，任意
 HTTP 方法和任意路径都会进入同一条转发链：入站鉴权 → Provider 选择 → failover/retry →
@@ -378,8 +380,6 @@ Quicksilver JSON；CPA 一类 Provider 自己负责对应协议。无 `call_id` 
 按当前启用入口的 `mappings` 生成本地目录，不转发到上游。普通 OpenAI 客户端拿到
 `{object:"list",data:[...]}`；Codex Desktop/CLI 带 `client_version` 时拿到 `{models:[...]}`：官方 slug 用嵌入的 Codex catalog 原件，其余模型 clone `gpt-5.5` 模板只改身份字段。
 这样 Codex 的目录探测不会打到排序最前的任意 OpenAI 入口。
-Live/Realtime 只接受可用 Provider 上的精确 mapping，不使用 `*` 通配或 Anthropic 文本入口；
-缺少精确 Live mapping 时返回 `no_live_provider`，避免语音请求误发到普通模型。
 
 普通模型候选由模型组及其入口绑定生成；未配置模型组时沿用入口 `mappings`。JSON 只用于读取路由所需的模型元数据：请求已有
 顶层 `model` 或 `session.model` 且对应 mapping 配置了不同的 `upstreamModel` 时，才替换这一
@@ -446,8 +446,12 @@ Linux 的 Web Admin 地址 **不是** 这个字段，默认永远是 `127.0.0.1:
 
 所有入口都按 `priority` 从小到大调度，同级保持数组顺序；同一 `stickyGroup` 内的线路连续尝试。已有稳定会话优先复用原分组，发生可重试故障后再 failover 到其它分组。
 
-模型组可将 `schedulingStrategy` 设为 `roundRobinSticky`，让新会话按顺序取得同优先级入口调度组，
-分配后保持会话粘性；游标只存在于当前进程，重启或重新加载配置后从配置顺序重新开始。
+模型组可将 `schedulingStrategy` 设为 `randomSticky`，让新会话在同优先级入口调度组中随机
+选择首选并保持后续请求粘性；省略或设为 `priority` 时保持按顺序调度。随机策略不改变更高
+优先级入口、故障切换和重试规则。
+
+设为 `roundRobinSticky` 时，新会话按顺序取得同优先级入口调度组，分配后仍保持会话粘性；
+轮询游标只存在于当前进程，重启或重新加载配置后从配置顺序重新开始，已有有效会话归属保留。
 
 入口必填：
 
@@ -472,6 +476,14 @@ Linux 的 Web Admin 地址 **不是** 这个字段，默认永远是 `127.0.0.1:
 - `failoverTimeoutSeconds`：可选的映射级首响应截止；与全局 `responseTimeoutSeconds` 同时配置时取较小值，到期且尚未收到响应时尝试下一个入口
 
 同一入口同时命中精确模型名和 `prefix-*` 通配时，精确映射优先；同级按配置顺序。
+
+Codex Desktop 语音需要在可用 Provider（例如 CPA）额外声明
+`{"clientPattern":"gpt-live-1-codex","upstreamModel":"gpt-live-1-codex"}`。
+`/v1/live` 会固定按这个 Live 模型选入口，不会继承当前文本会话的模型。
+Live/Realtime 不使用 `*` 通配 mapping，也不会选择 Anthropic 文本入口；未声明精确
+Live mapping 时返回 `no_live_provider`，避免语音请求误发到普通模型（例如 `claude-fable-5`）。
+即使全局 `responseTimeoutSeconds` 保持 `null`，原生 Live/Realtime 启动仍有 15 秒响应头保护；
+当前入口候选耗尽后直接结束，不会按普通请求的无限跨轮策略继续挂起。
 
 ### 5.5 featureRules — 分流（可先全关）
 
@@ -626,3 +638,21 @@ X-Sumpter-User。带工作区时显示“本地项目”，只有项目名时显
 5. 告诉用户对应客户端的 Base URL：Claude Code 用根地址；Codex 必须带 `/v1`；pi 要设 `X-Sumpter-Client: pi`。
 6. 需要项目统计时，在**启动客户端的主机**处理，不要装到只跑 daemon 的 Linux。下载 setup 脚本后执行 `bash setup-client-attribution.sh install all`。
 7. **不要**把 key 写进回复；**不要** `git add` 配置；**不要**改源码。
+
+#### Gemini CLI 客户端 wrapper
+
+Gemini 已纳入统一安装器。本发布包内已有包装脚本，也可以从仓库取最新副本：
+
+```bash
+# 包内直接使用
+node scripts/gemini-sumpter-wrapper.mjs --model gemini-2.5-pro
+
+# 或从仓库下载
+curl --proto '=https' --tlsv1.2 -fLo gemini-sumpter-wrapper.mjs \
+  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/gemini-sumpter-wrapper.mjs
+export SUMPTER_GEMINI_BASE_URL='http://127.0.0.1:57878'
+export SUMPTER_AUTH_TOKEN='替换为 Sumpter 入站 Token'
+node gemini-sumpter-wrapper.mjs --model gemini-2.5-pro
+```
+
+wrapper 会让 Gemini CLI 使用 Developer API Gateway（`GOOGLE_GEMINI_BASE_URL` + `GEMINI_API_KEY`），把新会话 UUID 通过 CLI 的 `--session-id` 与 `X-Sumpter-Session-Id` 同时固定，并声明安全的 `X-Sumpter-Project`。使用 `--resume`、`--session-file` 或显式 `--session-id` 时，wrapper 不猜测会话。它会清除 Vertex/GCA/ADC 环境变量；本接入不支持 Vertex、OAuth、Service Account 或 Code Assist/Cloud Code 协议。

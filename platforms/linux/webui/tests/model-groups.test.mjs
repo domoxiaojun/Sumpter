@@ -2,15 +2,53 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createLocalID } from '../src/utils/helpers.js';
 import { hasRoutableModel, endpointGroupModels, groupModels, groupRoutePreview, modelCatalogCategories, modelGroupPrefix, newModelGroup, pruneGroupReferences } from '../src/utils/modelGroups.js';
-import { createRouteCatalogLoader, routeModelChoices, routeCatalogKey } from '../src/utils/featureRoutes.js';
+import { createRouteCatalogLoader, routeModelChoices, routeCatalogKey, saveFeatureRule } from '../src/utils/featureRoutes.js';
 
 globalThis.window = { location: { search: '?mock=1' } };
 const { fromWireConfig, toWireConfig } = await import('../src/services/api.js');
 
 test('route model choices use the selected endpoint catalog and mappings', () => {
-  const endpoints = [{ id: 'a', enabled: true, modelMappings: [{ from: 'claude-sonnet' }, { from: 'wild-*' }], catalog: { models: ['claude-3-5-sonnet'] } }, { id: 'b', enabled: true, modelMappings: [{ from: 'other' }] }];
+  const endpoints = [{ id: 'a', enabled: true, modelMappings: [{ from: 'claude-sonnet', to: 'provider-sonnet' }, { from: 'wild-*', to: 'provider-wild-*' }], catalog: { models: ['claude-3-5-sonnet'] } }, { id: 'b', enabled: true, modelMappings: [{ from: 'other', to: 'provider-other' }] }];
   assert.deepEqual(routeModelChoices(endpoints, 'a', endpoints[0].catalog), ['claude-3-5-sonnet', 'claude-sonnet']);
   assert.deepEqual(routeModelChoices(endpoints, '', null), ['claude-sonnet', 'other']);
+  assert.deepEqual(routeModelChoices(endpoints, 'missing'), []);
+});
+
+test('feature rule target model must come from the selected endpoint', () => {
+  const c = { endpoints: [{ id: 'a', enabled: true, baseURL: 'https://a.invalid', protocol: 'auto', modelMappings: [{ from: 'claude-sonnet', to: 'provider-sonnet' }] }], featureRules: [] };
+  const draft = { id: 'rule', name: 'rule', model: 'claude-sonnet', endpointID: 'a', protocol: '', effort: '', requestKind: '', toolTypePrefix: '', modelEquals: '', systemContains: '', messagesContain: '' };
+  saveFeatureRule(c, null, draft);
+  assert.equal(c.featureRules[0].target.model, 'claude-sonnet');
+  assert.throws(() => saveFeatureRule({ ...c, featureRules: [] }, null, { ...draft, model: 'unlisted' }), /请从当前入口/);
+});
+
+test('rule saves accept matching discoveries and reject stale, foreign and empty model selections', () => {
+  const endpoint = { id: 'a', baseURL: 'https://a.invalid', protocol: 'auto', mappings: [{ clientPattern: 'same-name' }] };
+  const c = { endpoints: [endpoint, { id: 'b', mappings: [{ clientPattern: 'other' }] }], featureRules: [] };
+  const draft = { id: 'rule', name: 'rule', endpointID: 'a', model: 'discovered' };
+  const discovered = { key: routeCatalogKey(endpoint), catalog: { models: ['discovered'] } };
+  const saved = saveFeatureRule(structuredClone(c), null, draft, discovered);
+  assert.equal(saved.featureRules[0].target.model, 'discovered');
+  assert.deepEqual(saved.endpoints[0].catalog.models, ['discovered']);
+  assert.equal(saveFeatureRule(structuredClone(c), null, { ...draft, model: 'same-name' }).featureRules[0].target.model, 'same-name');
+  for (const model of ['unlisted', 'other', 'discovered']) {
+    const untouched = structuredClone(c);
+    assert.throws(() => saveFeatureRule(untouched, null, { ...draft, model }, { ...discovered, key: 'stale' }), /请从当前入口/);
+    assert.deepEqual(untouched, c);
+  }
+  assert.throws(() => saveFeatureRule(structuredClone(c), null, { ...draft, model: '' }), /选择目标承接模型/);
+});
+
+test('automatic rule targets use enabled entry mappings and cannot save arbitrary model names', () => {
+  const c = { endpoints: [
+    { id: 'a', mappings: [{ clientPattern: 'logical', upstreamModel: 'provider-model' }], catalog: { models: ['catalog-only'] } },
+    { id: 'b', enabled: false, mappings: [{ clientPattern: 'disabled-model' }] },
+  ], featureRules: [] };
+  const draft = { id: 'rule', name: 'rule', endpointID: '', model: 'logical' };
+  assert.equal(saveFeatureRule(structuredClone(c), null, draft).featureRules[0].target.model, 'logical');
+  for (const model of ['provider-model', 'catalog-only', 'disabled-model', 'manual']) {
+    assert.throws(() => saveFeatureRule(structuredClone(c), null, { ...draft, model }), /请从当前入口/);
+  }
 });
 
 test('route catalog loader caches successful probes and never caches aborts', async () => {

@@ -35,6 +35,27 @@ test('shared crates do not depend on platform crates and obsolete workflows stay
     assert.equal(existsSync(new URL(`platforms/linux/.github/workflows/${name}.yml`, root)), false);
   }
 });
+test('product version mentions stay in sync across docs', () => {
+  // 这些文件的版本号在标记块之外，由人工维护；发版时逐一手改容易漏。
+  const version = text('Cargo.toml').match(/\[workspace\.package\][\s\S]*?\nversion = "([^"]+)"/)[1];
+  for (const path of ['README.md', 'USAGE.md', 'platforms/linux/USAGE.md', 'platforms/linux/README.md', 'docs/README.md']) {
+    assert.ok(text(path).includes(version), `${path} 未包含当前版本 ${version}`);
+  }
+});
+test('shared onboarding facts stay in both USAGE files', () => {
+  // 两份 USAGE 只在标记块内由工具同步，其余正文各自维护；这里按主题守住共同行为，
+  // 避免只更新一侧（历史上 randomSticky、Live 选路与 Gemini wrapper 就只写了一侧）。
+  const topics = [
+    'randomSticky', 'roundRobinSticky', 'failoverTimeoutSeconds', 'passThroughRetryDelay',
+    'no_live_provider', 'X-Sumpter-Workspace', 'gemini-sumpter-wrapper.mjs', 'overrides',
+  ];
+  for (const path of ['USAGE.md', 'platforms/linux/USAGE.md']) {
+    const document = text(path);
+    for (const topic of topics) {
+      assert.ok(document.includes(topic), `${path} 缺少共同主题: ${topic}`);
+    }
+  }
+});
 test('macOS build paths pin the same stable Xcode and SDK baseline', () => {
   const selector = text('platforms/macos/app/select-xcode.sh');
   assert.match(selector, /required_version=26\.6/);

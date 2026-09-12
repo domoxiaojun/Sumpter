@@ -1,6 +1,6 @@
 # 文档索引
 
-按任务选择入口。当前产品版本以根 `Cargo.toml` 为准（0.4.5），磁盘格式为 schema v7，安装入口为 [GitHub Releases](https://github.com/domoxiaojun/sumpter/releases/latest) 与仓库 raw 脚本。行为以源码、平台契约测试和现行文档共同核对。
+按任务选择入口。当前产品版本以根 `Cargo.toml` 为准（0.4.6），磁盘格式为 schema v7，安装入口为 [GitHub Releases](https://github.com/domoxiaojun/sumpter/releases/latest) 与仓库 raw 脚本。行为以源码、平台契约测试和现行文档共同核对。
 
 ## 使用与运维
 

@@ -1,6 +1,6 @@
 # Sumpter使用指南
 
-给第一次安装并接入客户端的用户。当前版本 **0.4.5**，配置 **schema v7**。
+给第一次安装并接入客户端的用户。当前版本 **0.4.6**，配置 **schema v7**。
 
 **范围**：从 GitHub 安装、填写 `config.json`、接入 Claude Code / Codex / Grok Build / Gemini CLI / pi、项目归因、常见错误。  
 **不包含**：改源码、编译、发版。
@@ -224,7 +224,7 @@ experimental_bearer_token = "填 listener.authToken（未启用鉴权时删除�
 
 需要多个 OpenAI、Claude、Gemini、Grok 等入口共用一个客户端地址时，在“模型组”中声明模型范围，再把入口库中的连接绑定到一个或多个组。客户端继续使用原模型名；基础候选依次按组优先级、组顺序、入口优先级和入口顺序排列。实际调度保留会话粘性与冷却规则；允许故障切换时继续尝试后续组中的同一模型，不自动更换模型。
 
-入口库负责地址、密钥和原始映射，模型组只负责模型范围与入口绑定。原有 HTTP 500 重试、跨轮重试、冷却、退避、`Retry-After`、会话粘性、超时、raw 透传和 Live/Realtime/Video 资源绑定继续由全局调度器处理。完整字段示例见 [`docs/configuration.md`](docs/configuration.md) 的 `modelGroups` 章节。
+入口库负责地址、密钥和原始映射，模型组只负责模型范围与入口绑定。原有 HTTP 500 重试、跨轮重试、冷却、退避、`Retry-After`、会话粘性、超时、raw 透传和 Live/Realtime/Video 资源绑定继续由全局调度器处理。绑定的 `models` 省略或为 `null` 表示全部组内模型，`[]` 表示不承接；`overrides` 可为某个精确模型设置 `upstreamModel` 与 `priority`。完整字段示例见 [`docs/configuration.md`](docs/configuration.md) 的 `modelGroups` 章节。
 
 ## 文档怎么读
 

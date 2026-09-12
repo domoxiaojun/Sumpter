@@ -250,6 +250,7 @@ mod tests {
             name: id.into(),
             priority: 0,
             protocol: EndpointProtocolMode::Anthropic,
+            user_agent: Default::default(),
             sticky_group: None,
         }
     }

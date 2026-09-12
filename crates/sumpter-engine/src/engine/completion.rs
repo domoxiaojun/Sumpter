@@ -661,6 +661,7 @@ mod tests {
                 configured_protocol: EndpointProtocolMode::Anthropic,
                 source_format: ProviderProtocol::Anthropic,
                 protocol: ProviderProtocol::Anthropic,
+                user_agent: Default::default(),
                 route_mode: RouteMode::Native,
                 routed_model: "test-model".into(),
                 upstream_model: "test-model".into(),

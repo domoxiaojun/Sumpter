@@ -6,13 +6,15 @@ export function routeModelChoices(endpoints, endpointID, catalog) {
   const scoped = endpointID ? endpoints.filter((endpoint) => endpoint.id === endpointID) : endpoints.filter((endpoint) => endpoint.enabled !== false);
   const names = scoped.flatMap((endpoint) => [
     ...(endpointID ? (catalog?.models ?? endpoint.catalog?.models ?? []) : []),
+    // Rule targets are logical models: the engine still applies endpoint
+    // mappings. A pinned endpoint also accepts concrete catalog models.
     ...(endpoint.modelMappings || endpoint.mappings || []).map((mapping) => mapping.from ?? mapping.clientPattern),
   ]);
   return [...new Set(names.map((name) => String(name ?? '').trim()).filter((name) => name && !name.includes('*')))].sort();
 }
 
 export function routeCatalogKey(endpoint) {
-  return JSON.stringify([endpoint.id, endpoint.baseURL, endpoint.protocol, endpoint.headers, endpoint.pinnedIP, endpoint.pinnedIPExclusive]);
+  return JSON.stringify([endpoint.id, endpoint.baseURL, endpoint.protocol, endpoint.headers, endpoint.pinnedIP, endpoint.pinnedIPExclusive, endpoint.userAgent]);
 }
 
 // Cache only successful discoveries. Aborted/outdated probes must never become
@@ -40,28 +42,34 @@ export function createRouteCatalogLoader(fetchModels, { maxAge = 300_000, now = 
 }
 
 export function saveFeatureRule(config, rule, draft, discovered = null) {
-  if (!draft.name.trim() || !draft.model.trim()) throw new Error('请完整填写规则名称与目标承接模型');
+  const name = String(draft.name ?? '').trim();
+  const model = String(draft.model ?? '').trim();
+  if (!name || !model) throw new Error('请填写规则名称并选择目标承接模型');
   if (draft.endpointID && !config.endpoints?.some((endpoint) => endpoint.id === draft.endpointID)) {
     throw new Error('所选入口已不存在，请重新选择');
+  }
+  const endpoint = config.endpoints?.find((item) => item.id === draft.endpointID);
+  const catalog = endpoint && discovered?.key === routeCatalogKey(endpoint) ? discovered.catalog : undefined;
+  if (!routeModelChoices(config.endpoints || [], draft.endpointID, catalog).includes(model)) {
+    throw new Error('请从当前入口的模型列表中选择目标承接模型');
   }
   const rules = config.featureRules ||= [];
   const existing = rule ? rules.find((item) => item.id === rule.id) : null;
   if (rule && !existing) throw new Error('规则已不存在，请关闭后重新编辑');
   const next = existing || { id: draft.id, enabled: true };
   if (!isBuiltinRule(rule)) {
-    next.name = draft.name.trim();
+    next.name = name;
     next.match = { ...(next.match || {}) };
     for (const field of ['requestKind', 'toolTypePrefix', 'modelEquals', 'systemContains', 'messagesContain']) {
-      const value = draft[field].trim();
+      const value = String(draft[field] ?? '').trim();
       if (value) next.match[field] = value; else delete next.match[field];
     }
   }
-  next.target = { ...(next.target || {}), model: draft.model.trim() };
+  next.target = { ...(next.target || {}), model };
   for (const field of ['endpointID', 'protocol', 'effort']) {
     if (draft[field]) next.target[field] = draft[field]; else delete next.target[field];
   }
   if (!existing) rules.push(next);
-  const endpoint = config.endpoints?.find((item) => item.id === draft.endpointID);
   if (endpoint && discovered?.key === routeCatalogKey(endpoint)) {
     endpoint.catalog = { ...(endpoint.catalog || {}), ...discovered.catalog };
   }

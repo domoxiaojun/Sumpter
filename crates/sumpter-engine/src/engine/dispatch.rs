@@ -121,6 +121,7 @@ mod random_sticky_tests {
             configured_protocol: EndpointProtocolMode::OpenAI,
             source_format: ProviderProtocol::OpenAI,
             protocol: ProviderProtocol::OpenAI,
+            user_agent: Default::default(),
             route_mode: RouteMode::Native,
             routed_model: "gpt-x".into(),
             upstream_model: "gpt-x".into(),

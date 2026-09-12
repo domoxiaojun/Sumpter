@@ -6,8 +6,9 @@
 
 FROM alpine:3.22 AS runtime
 
+# tzdata makes the TZ environment variable meaningful inside the container.
 # hadolint ignore=DL3018
-RUN apk add --no-cache ca-certificates \
+RUN apk add --no-cache ca-certificates tzdata \
     && mkdir -p /config /opt/sumpter/web \
     && chmod 0700 /config
 

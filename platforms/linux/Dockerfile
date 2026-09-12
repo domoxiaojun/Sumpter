@@ -28,8 +28,9 @@ RUN --mount=type=cache,id=sumpter-cargo-registry,target=/usr/local/cargo/registr
 FROM alpine:3.22 AS runtime
 
 # See the builder-stage note about pinning the verified base image digest.
+# tzdata makes the TZ environment variable meaningful inside the container.
 # hadolint ignore=DL3018
-RUN apk add --no-cache ca-certificates \
+RUN apk add --no-cache ca-certificates tzdata \
     && mkdir -p /config /opt/sumpter/web \
     && chmod 0700 /config
 
