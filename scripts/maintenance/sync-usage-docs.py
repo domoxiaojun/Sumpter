@@ -36,13 +36,16 @@ def with_block(document: str, block: str) -> str:
         if start < 0 or end < 0 or end < start:
             raise ValueError("USAGE 文档的 canonical onboarding 标记不完整")
         end += len(END)
-        return document[:start] + block + "\n\n" + document[end:].lstrip("\n")
+        suffix = document[end:].lstrip("\n")
+        separator = "\n\n" if suffix else "\n"
+        return document[:start] + block + separator + suffix
 
     anchor = "\n两端当前使用 **schema v7**"
     position = document.find(anchor)
     if position < 0:
         raise ValueError("找不到 USAGE 文档插入点")
-    return document[:position] + "\n\n" + block + "\n\n" + document[position:].lstrip("\n")
+    suffix = document[position:].lstrip("\n")
+    return document[:position] + "\n\n" + block + "\n\n" + suffix
 
 
 def main() -> int:

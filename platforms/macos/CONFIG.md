@@ -1,3 +1,5 @@
-# 配置说明
+# macOS 配置入口
 
-Linux 与 macOS 共用 schema v7。完整字段说明已统一到 [公共配置文档](../../docs/configuration.md)，安全模板见根 [config.example.json](../../config.example.json)。请复制模板到仓库外使用。
+macOS App 使用 `~/Library/Application Support/Sumpter/config.json`，格式与 Linux 的 schema v7 相同。优先在 App 的入口库、模型组和安全页面修改；手工编辑前退出 App 并备份整个目录。
+
+字段说明见仓库根 [配置参考](../../docs/configuration.md)，第一次配置见 [使用手册](../../USAGE.md)。不要把真实 API Key、入站 Token、运行数据库或诊断捕获提交到 Git。

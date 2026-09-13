@@ -1,27 +1,20 @@
-# Docker 运行数据目录
+# Compose 数据目录
 
-默认由 `compose.yaml` 挂载为 `/config`，完整步骤见 [DOCKER.md](../DOCKER.md)。需要更换目录时直接编辑 Compose 的 volume 配置。
+部署时先创建这个目录，再复制配置示例并准备管理密码。完整命令见 [Compose 教程](../DOCKER.md)。默认挂载关系为宿主机 `./config` → 容器 `/config`。
 
-容器不指定运行用户，按镜像默认用户（root）运行，因此不需要在部署机上配置 UID/GID；本目录及其中的文件由容器创建。首次启动时 `init` 服务只生成缺失的 `config.json` 与随机 `admin-password`，已有文件一律不覆盖，也不自动迁移仅剩 `keys.json` 的历史目录；直接 `docker run` 镜像则需自行准备密码文件。
+| 文件 | 用途 | 何时创建 |
+| --- | --- | --- |
+| `config.json` | 上游地址、密钥、模型组、监听与重试 | 首次部署从示例复制 |
+| `admin-password` | 初始单行密码；改密后为 Argon2 哈希 JSON | 首次部署生成 |
+| `runtime.sqlite3` | 运行统计数据库 | 服务自动创建 |
+| `runtime.sqlite3-wal` / `runtime.sqlite3-shm` | SQLite 工作文件 | 运行时按需产生 |
+| `session_affinity.json` | 会话粘性归属 | 按实际请求维护 |
+| `resource_bindings.json` | Live / Video 等资源所属入口 | 按实际请求维护 |
+| `diagnostic_capture.json` | 主动开启的原始诊断捕获 | 启用捕获后产生 |
+| `config.before-schema-v7-*.json` | 兼容配置迁移前备份 | 迁移时产生 |
 
-```text
-./config → /config
-  admin-password          # 初始单行密码；改密后为 Argon2 哈希 JSON
-  config.json             # 当前 schema 配置；Docker 初始代理监听 0.0.0.0:57878（端口由本文件决定，不要在 WebUI 改，否则 compose 端口映射会失效）
-  runtime.sqlite3         # 持久化运行统计
-  runtime.sqlite3-wal     # SQLite 工作文件，可能出现
-  runtime.sqlite3-shm
-  session_affinity.json   # 按实际使用维护的粘性会话归属
-  resource_bindings.json  # 按实际使用维护的 Live/Video 资源绑定
-  diagnostic_capture.json # 手工启用的诊断捕获快照
-  config.before-schema-v7-*.json # schema 迁移时的原始备份
-  sumpterd.pid            # 运行时创建，正常退出清理
-```
+不需要预先创建空数据库、日志目录或其它运行文件。容器日志由 Docker 管理；浏览器登录会话和 `/tmp` 不持久化。
 
-文件权限为目录 `0700`、配置与密码 `0600`；若宿主机用户需要直接读取，请用 `sudo` 而不要用 `chmod 777`。
+标准 Docker 下目录由 root 拥有，权限 0700，配置与密码 0600。容器代理监听应为 `0.0.0.0:57878`，宿主机端口在 Compose 中修改。SELinux 共享挂载使用 `:z`。
 
-首次用户名 `kkl`，初始密码由首次初始化的 `init` 日志提供，只在可信终端查看，不要复制到 Issue；登录改密后初始密码失效。停机后备份/迁移**整个目录**（含隐藏文件与可能存在的 SQLite WAL），不要只复制数据库主文件，也不要让多个实例共享同一目录。旧 `stats.json` 不由新版本读写。
-
-程序日志走容器标准输出/错误，由 Docker 的 `json-file` 驱动管理，不会写入本目录；需要留档时按 DOCKER.md 导出。`/tmp`、登录会话与进行中的请求不属于持久化数据。
-
-本目录除占位与说明文件外都被 Git 忽略。不要提交真实配置、密码、数据库或备份。
+一个目录只能供一个运行实例使用。备份时停止服务，复制整个目录并保留权限；配置与备份都含敏感信息。本目录运行数据已被 Git 忽略。

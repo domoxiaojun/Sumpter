@@ -1,145 +1,41 @@
-# Sumpter 当前架构
+# 架构说明
 
-Linux 和 macOS 共用同一套数据面、请求透传、模型映射、重试和运行时存储；平台能力由 adapter、app 和 `platforms/` 组合。
+Sumpter 的核心边界是“客户端请求进入一个地址，代理按配置选择上游并记录结果”。Linux 与 macOS 共享数据面，平台 adapter 只负责监听、Admin、生命周期和原生能力。
 
-本文说明依赖方向、请求处理和运行时约束。完整目录、源码定位与测试归属统一见 [项目结构](project-structure.md)，执行命令见 [开发指南](development.md)。
-
-## 依赖方向
+## 请求路径
 
 ```text
-apps/<platform>/sumpterd
-    └── adapters/<platform>
-            └── sumpter-engine
-                    ├── sumpter-runtime
-                    │       └── sumpter-core
-                    └── sumpter-core
+客户端
+  → listener 访问检查与请求识别
+  → 模型 / 能力 / featureRule 路由规划
+  → 会话粘性、优先级、随机或轮询调度
+  → Provider 上游认证与 raw relay
+  → 响应 / 流 / WebSocket 回传
+  → RuntimeEvent 与 usage 写入 SQLite
 ```
 
-约束：
+主请求采用 raw 透传：保留客户端方法、路径、查询、请求体和响应流；代理只做鉴权、映射、路由、重试、上游凭据注入及必要的模型路径更新。旧桥接能力仍用于明确的内部兼容调用，不能把“入口 protocol”理解成自动转换器。
 
-1. `sumpter-core` 不依赖网络客户端、SQLite、平台 adapter 或 UI；`config_store` 仍负责配置文件读写、权限和迁移，不是完全无文件 I/O 的纯函数库。
-2. `sumpter-runtime` 负责 bundled SQLite 存储与查询，依赖方向指向 core；不依赖 adapter 或 app。
-3. `sumpter-engine` 只通过 `PlatformBoundary`、`EngineServices` 接收平台能力和上游传输；不直接引用 Linux / macOS crate。
-4. adapter 可以依赖 shared crate，shared crate 不得反向依赖 adapter。
-5. app 只负责参数解析、配置目录、监听启动、信号 / EOF 生命周期和平台组合，不复制请求处理逻辑。
+HTTP、SSE 和 WebSocket 在上游响应或真实握手后才算成功。一个客户端请求可包含多次上游尝试，RuntimeEvent 用同一 request ID 关联它们，界面分别展示客户端最终结果和上游尝试链。
 
-## 请求处理与协议
+## 配置与调度
 
-HTTP 请求经平台服务组装进入共享引擎，依次完成访问检查、协议识别与路由准备、候选选择和上游转发，再由 relay 和完成记账记录结果。WebSocket 在完成上游握手后才向客户端返回升级响应。
+`AppConfig` 的 v7 JSON 是跨平台合同。入口保存地址、Key、协议标签和 mapping；模型组保存开放模型、绑定和调度策略；featureRules 负责独立子请求。配置保存使用 generation 检查，避免两个 Admin 页面互相覆盖。
 
-原始请求的透传、必要模型映射、本地模型目录和已配置协议转换均由共享实现负责。客户端路径与能力范围见 [使用指南](../USAGE.md#4-协议与路径)。
+会话粘性优先于新会话调度。`priority` 按数字和数组顺序排序；`randomSticky` 和 `roundRobinSticky` 只决定新会话首选，故障仍遵循重试与后备链。资源绑定文件保存 Live / Video 等后续请求的入口归属。
 
-Codex Live bootstrap（`POST /v1/live`、`POST /v1/realtime`、`POST /v1/realtime/calls`）按 Live 意图选择 `gpt-live-1-codex` 映射；协议封装由上游负责。Sumpter 不把 `/v1/realtime` 改为 `/v1/realtime/calls`，也不主动追加 `intent=quicksilver&architecture=avas`。现有模型映射和短期凭证的会话配置仍可影响请求中的模型与会话字段。无 `call_id` 的 `GET /v1/realtime` 是公开 Realtime WebSocket，HTTP 专用的 quicksilver query 在该路径剥离。
+## 运行时存储
 
-## 共享引擎内部
+`sumpter-runtime` 使用 bundled SQLite、WAL 和有界后台写入。内存快照让请求热路径不等待每次数据库写入；存储退化和 backpressure 通过 Admin 状态暴露。运行统计、会话删除、清理、重置和重建是不同操作，文档不得混用。
 
-`engine/mod.rs` 只定义可克隆的 `Engine` 句柄、模块声明和既有公开类型的重导出。
-实现仍属于同一个 crate，各职责使用明确的模块导入，内部类型最多在 `engine`
-范围可见。`Engine`、`EngineServices` 和 adapter 调用的公开方法保持原有合同。
-
-| 职责 | 实现模块 | 状态与交接 |
-| --- | --- | --- |
-| 构造和生命周期 | `state`、`lifecycle` | 组合共享状态、恢复持久化数据、替换配置并编排后台 flush |
-| HTTP 入站和协议提示 | `inbound`、`context`、`protocol`、`payload`、`catalog` | 先检查访问权限，再消费惰性 body；保留原始报文和既有 Live/模型转换规则 |
-| HTTP 调度和转发 | `dispatch`、`http_relay`、`http_response` | 保留入口排序、粘性、冷却和重试；响应被接纳后将完成保护对象交给 relay |
-| 完成和事件 | `completion`、`events`、`failure` | `CompletionGuard` 管理 HTTP 完成与 Drop 取消；统一失败描述和 client/upstream 计数 |
-| WebSocket | `websocket`、`websocket_relay` | 保留先完成上游握手再升级的入口；帧转发与关闭指标使用独立上下文 |
-| 会话、抓包和统计 | `sessions`、`capture`、`runtime_api` | 各自管理绑定、诊断和查询/存储 API；SQLite 实现继续属于 `sumpter-runtime` |
-
-`forward` 保留上游传输的兼容重导出。模块拆分不增加配置字段、crate 或平台专属引擎。
-
-Runtime 内部也按数据生命周期分层：`runtime_store.rs` 只保留共享类型、
-`RuntimeStore` 状态定义和模块声明；`runtime_store/store_api.rs` 实现公开存储方法，
-`runtime_store/schema.rs` 负责 schema、投影与
-rollup，`worker.rs` 负责写入 worker，`maintenance.rs` 负责保留策略/清理，
-`analytics.rs` 负责投影聚合，`export.rs` 负责会话导出，测试位于同目录
-`tests.rs`。只读查询以 `runtime_query.rs` 的公共模型和过滤器为边界，具体实现
-分布在 `runtime_query/events.rs`、`trends.rs`、`analytics.rs`、`facets.rs`、
-`errors.rs`、`dimensions.rs`、`export.rs` 与 `storage.rs`；这些模块共享过滤器、
-快照和 SQL 辅助函数，但不改变 crate 的公开查询函数合同。
-
-runtime 的数据库访问统一使用 SeaORM 1.1（支持 workspace 的 Rust 1.88 基线）与
-内嵌 SQLite。`entities/` 定义当前 8 张表，`entities.rs` 从实体创建完整新库并补充
-唯一约束、检查约束和索引；不通过补列或实体自动同步转换旧库。
-`runtime_store/models.rs` 管理按字段名映射的事件投影、计数、价格和保留设置，
-事件写入使用 ORM upsert 保留既有 `seq` 与创建时间；事件列表使用具名结果映射。
-统计聚合保留参数化 SQL，并经同一 SeaORM 连接和事务执行。
-
-`database.rs` 将 SeaORM 异步执行封装在专用 executor 中，对外保留同步存储 API。
-每个连接最多持有一个 SQLite 连接，写入仍由有界队列和单一 worker 批量提交。
-只读事务保持查询快照；流式查询通过有界通道传递结果，中途取消会释放游标，
-失败事务在退出时回滚。最后一个存储句柄释放时等待写入线程与数据库连接关闭，
-避免退出后的 WAL 合并与下一次打开交错。ORM 实体不进入平台或 Admin 的序列化协议。
-事件字段变更须同时核对查询、投影与协议，不能只更新 ORM 实体。
-
-配置文件与 runtime 数据库各自维护版本。`config.json` 当前是 schema v7；runtime 的
-`SCHEMA_VERSION` / `PROJECTION_VERSION` 当前分别为 5 / 10，由 `runtime_store.rs` 定义。
-现行 `schema.rs` 只允许全新数据库进入初始化；检测到旧 schema、缺少归因列或旧 projection 时返回结构化 `runtime_recreate_required`，代理保持停止，确认后通过 `runtime/recreate` 清空重建且不回填历史。高于支持版本仍返回 `runtime_schema_newer` 并拒绝启动。
-
-并发和持久化约束：runtime 写操作保持 `runtime_write → state` 锁顺序；
-抓包 flush/clear 保持 `capture_flush → capture → capture_index` 顺序；
-会话在释放内存锁后落盘。加载损坏的绑定或诊断文件时继续禁止隐式覆盖，过期资源绑定
-在启动时裁剪并写回。HTTP 的完成保护对象沿 `dispatch → http_relay` 唯一移交，
-WebSocket 继续使用自身的完成记账流程。
-
-## 模型组与统一地址
-
-schema v7 将配置分为入口库、模型组和组内绑定。`endpoints` 保存地址、凭据、协议和原始映射；`modelGroups` 声明模型范围、组优先级与 `schedulingStrategy`；`bindings` 引用入口 ID，并声明全部/指定模型、组内优先级与局部模型覆盖。客户端继续请求同一监听地址并发送原模型名。
-
-`core/model_groups.rs` 从配置生成临时路由投影，原入口配置不会被改写。投影继承原映射参数与能力，精确映射和最长前缀优先；多个组可以引用同一入口。普通模型、媒体能力路由与本地模型目录使用投影；已有固定入口功能规则和资源所有者绑定继续保留原语义。
-
-基础候选按组优先级、组数组顺序、绑定优先级、绑定数组顺序排列。`randomSticky` 只在当前最低优先级桶内随机首选调度组，`roundRobinSticky` 则按进程内游标依次选择首选调度组；两者都由会话粘性保持后续请求归属。已有调度器继续处理会话粘性、冷却、入口内 500 重试、非 500 粘性重试、跨轮重试、退避、Retry-After、超时和不限时语义。模型组不创建另一层重试预算；失败仍围绕同一有效模型切换。同一入口与相同实际调用跨组去重，不同上游映射保留。
-
-运行事件及 SQLite 列表投影增加 `modelGroupID/modelGroupName`，用于识别实际尝试来自哪个组。旧 schema v3/v4/v5/v6 文件先备份后迁移，默认组保留旧入口顺序、优先级、映射与粘性标识。顶层模型组缺省兼容旧路由，空数组关闭自动模型路由；删除入口后两端编辑事务清理组绑定及功能规则引用。
+统计只从客户端完成事件的上游 usage 聚合，pending 单独计数；缓存 Token 按协议口径保留原始值。诊断捕获独立于统计，默认关闭，可能包含未脱敏正文和凭据。
 
 ## 平台边界
 
-`crates/sumpter-engine/src/boundary.rs` 是唯一边界入口：
+Linux adapter 组合 Admin API、WebUI 静态服务、systemd 控制和 Linux 生命周期。macOS adapter 组合 sidecar、原生菜单栏 / 通知和 App 控制。两端页面保持字段、状态语义与主要交互一致，窗口、sheet、通知和系统服务可按平台适配。
 
-- `authorize_status`：控制面 `/__status` 的平台访问策略；
-- `platform_action`：声明平台专属动作（macOS 通知 / reload，Linux 保持 404）；
-- `handle_platform_action`：执行通知、reload 等副作用；
-- `validate_opened_capture`：由平台提供文件身份校验；
-- `EngineServices`：注入上游传输和 `PlatformBoundary`。
+Admin 监听与 proxy listener 分离。`/healthz` 只证明 Admin 存活；管理 API 由 HttpOnly Cookie 和 CSRF 保护。代理入站 Token、Admin 密码、上游 API Key 和 macOS control token 互不替代。
 
-共享引擎默认使用 `NoopPlatform`，因此 core / runtime / engine 可以在没有操作系统控制面时独立测试。实际二进制由对应 adapter 注入具体 `Platform`。
+## 安全原则
 
-对应页面优先保持同一信息层级、字段命名、状态语义和主要交互；只有原生控件、窗口形态或平台生命周期确有差异时才保留平台化表现。运行统计存储统一使用 `maxAgeDays` 与 `storageLimitBytes` 的 OR 轮换语义，进行中的请求组整体保护；低频技术字段进入详情，策略编辑使用 Linux 弹窗 / macOS sheet。
-
-Linux `admin.rs` 保留 listener / 配置事务状态、路由组装和 SSE 生命周期，
-路由处理按职责放在 `admin_auth_routes.rs`、`admin_config.rs`、`admin_runtime.rs`、
-`admin_diagnostics.rs` 与 `admin_autostart.rs`。既有 `admin_auth.rs` 继续管理
-登录会话与凭据；配置和模型探测属于平台 Admin，公开 `admin::validate_config`
-入口保持不变。
-
-macOS `main.swift` 保留应用入口、AppModel 状态/初始化和原生通知支持类型。
-AppModel 方法分布在 `AppModel+Lifecycle.swift`、`AppModel+RuntimeStatus.swift`、
-`AppModel+Analytics.swift`、`AppModel+Diagnostics.swift`、`AppModel+Config.swift`、
-`AppModel+Providers.swift` 与 `AppModel+Notifications.swift`。这些 extension
-继续共享同一个 `@MainActor` AppModel 和 `@Published` 状态；跨文件使用的内部成员
-为模块内可见，异步响应顺序保护、sidecar 生命周期和通知行为保持原有语义。
-
-## 变更归属
-
-按 [源码职责表](project-structure.md#按需求找源码) 定位实现。共享行为放在 core、runtime 或 engine，平台权限和生命周期放在 adapter / app，界面与安装打包输入放在 `platforms/`。保持上述依赖方向，避免在两个平台复制一套共享逻辑。
-
-HTTP header、环境变量、服务单元名、导出格式标识和 sticky domain 属于兼容协议或运行时数据字段。改工程包名或目录时不要机械替换这些字段。
-
-## 构建与验证
-
-从仓库根运行统一检查，具体命令及最小验证范围见 [开发指南](development.md#按变更选择验证)。共享行为覆盖两个 adapter；WebUI、SwiftUI、安装脚本和发布包分别验证。
-
-当前工作流统一位于根 `.github/workflows/`，版本发布入口为 `release.yml`。本机 DMG 构建见 [脚本目录](../scripts/README.md)，平台产物、签名和发布验收见 [发布指南](releasing.md)。
-
-## 品牌与运行时名字
-
-工程包、macOS App、Linux 配置目录、systemd 单元、发布包二进制、环境变量、入站 header 和导出格式统一为 `sumpter` / `Sumpter`：
-
-- 配置：`~/.config/sumpter`、`/var/lib/sumpter`、`/opt/sumpter`
-- 二进制与单元：`sumpterd`、`sumpter.service`
-- 环境变量 `SUMPTER_*` / `SUMPTERD_*`
-- 入站 header `X-Sumpter-*`
-- 导出格式 `sumpter-session-export-v1`
-- 粘性域 `sumpter-sticky-v3`
-
-运行中的 Sumpter 不双读旧 `kekulv` 路径、header 或环境变量。标准 Linux root 安装可使用 `platforms/linux/scripts/migrate-kekulv.sh` 离线迁移；先运行 `--check`，适用范围和回滚流程见 [Linux 指南](../platforms/linux/README.md)。其他布局需单独备份并按当前路径安装。
+默认监听 loopback；远程 Admin 通过 HTTPS 反代、VPN 或 SSH 隧道访问。`X-Sumpter-*` 归因头仅用于入站统计，转发上游前剥离。源码、示例、日志和测试不得包含真实凭据。

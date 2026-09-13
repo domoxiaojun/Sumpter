@@ -1,22 +1,12 @@
 {
   "root": {
-    "macos_config_path": "`~/Library/Application Support/Sumpter/config.json`",
-    "linux_config_path": "普通用户：`$XDG_CONFIG_HOME/sumpter/config.json`，否则 `~/.config/sumpter/config.json`；system 安装：`/var/lib/sumpter/config.json`",
-    "macos_admin_address": "sidecar 握手返回的本机动态端口（App 内部使用）",
-    "linux_admin_address": "`http://127.0.0.1:57879/admin/`（可由启动参数覆盖）",
-    "macos_config_reference": "[`docs/configuration.md`](docs/configuration.md)",
-    "linux_config_reference": "[`docs/configuration.md`](docs/configuration.md)",
-    "attribution_location": "macOS 用 App 安全页；Linux 源码/发布包为 `setup-client-attribution.sh`，也可从 GitHub raw 下载",
-    "topology_note": "本 monorepo 的 canonical 文档是 [`USAGE.md`](USAGE.md)；Linux 发布输入位于 `platforms/linux/`，发布包构建时会将其提升为包根。"
+    "installation_links": "[Compose](platforms/linux/DOCKER.md)、[Linux systemd](platforms/linux/README.md)、[macOS App](platforms/macos/README.md)",
+    "configuration_link": "[配置参考](docs/configuration.md)",
+    "troubleshooting_link": "[故障排查](docs/troubleshooting.md)"
   },
   "linux": {
-    "macos_config_path": "`~/Library/Application Support/Sumpter/config.json`（仅在 macOS 客户端使用）",
-    "linux_config_path": "普通用户：`$XDG_CONFIG_HOME/sumpter/config.json`，否则 `~/.config/sumpter/config.json`；system 安装：`/var/lib/sumpter/config.json`",
-    "macos_admin_address": "sidecar 握手返回的本机动态端口（仅 macOS 客户端）",
-    "linux_admin_address": "`http://127.0.0.1:57879/admin/`（可由启动参数覆盖）",
-    "macos_config_reference": "源码 monorepo 的 `docs/configuration.md`（Linux 发布包不包含 macOS 文档）",
-    "linux_config_reference": "本文第 5 节的 `listener`、入口与 mapping 说明",
-    "attribution_location": "发布包 `scripts/setup-client-attribution.sh`；或从 GitHub raw 下载。必须在跑客户端的机器执行",
-    "topology_note": "本文件位于 monorepo 的 `platforms/linux/`；独立 Linux 发布包会将该目录内容提升为发布根，且不携带 macOS 文档。"
+    "installation_links": "[Compose](DOCKER.md)、[Linux systemd](README.md)",
+    "configuration_link": "[本文的配置步骤](#2-配好第一个上游)",
+    "troubleshooting_link": "[Linux 安装与维护](README.md#故障排查) 或 [Compose 排障](DOCKER.md#故障排查)"
   }
 }

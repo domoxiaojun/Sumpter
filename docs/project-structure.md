@@ -1,110 +1,45 @@
 # 项目结构
 
-Sumpter 在一个仓库内维护共享 Rust 代理、Linux 服务与 macOS App。根 [Cargo.toml](../Cargo.toml) 管理 7 个 Rust package；WebUI 和 Swift App 分别使用自己的 npm 与 Swift Package 清单。
-
-本文负责目录、源码与测试的定位。依赖约束和请求处理见 [架构说明](architecture.md)，环境、命令和资源同步见 [开发指南](development.md)。
-
-## 目录地图
+Sumpter 是一个 Rust workspace，Linux、macOS 和 WebUI 共享协议与配置约定。
 
 ```text
-.
-├── Cargo.toml / Cargo.lock          # 唯一 Rust workspace 与依赖锁
-├── config.example.json             # 两端共用的安全配置模板
-├── crates/                         # 共享 Rust 实现
-│   ├── sumpter-core/               # 配置、路由、调度、协议与事件模型
-│   ├── sumpter-runtime/            # SQLite 存储、查询、聚合与导出
-│   └── sumpter-engine/             # HTTP / WebSocket 管线、重试与 relay
-├── adapters/                       # 平台能力、Admin API 与 HTTP 服务组装
-│   ├── linux/sumpter-linux-adapter/
-│   └── macos/sumpter-macos-adapter/
-├── apps/                           # Rust 可执行入口
-│   ├── linux/sumpterd/              # sumpterd-linux
-│   └── macos/sumpterd/              # sumpterd-macos
-├── platforms/                      # UI、平台资源、安装和打包输入
-│   ├── linux/
-│   │   ├── webui/                  # React / Vite 源码与前端测试
-│   │   ├── web/                    # 受版本控制的前端构建产物
-│   │   ├── scripts/                # 安装、运维、交叉构建与客户端资源
-│   │   ├── deploy/                 # systemd 与反向代理模板
-│   │   ├── specs/                  # Linux Admin API 文档
-│   │   ├── integrations/           # Scriptable / TSX 集成示例
-│   │   ├── Dockerfile.runtime      # 发布镜像输入（上下文为本目录）
-│   │   ├── Dockerfile              # 可选的本机源码构建（上下文为仓库根）
-│   │   ├── compose.yaml           # 独立目录部署：bridge + init + daemon
-│   │   ├── compose.bridge.example.yaml → compose.yaml  # 旧命令兼容链接（docker-compose.yml 同）
-│   │   ├── DOCKER.md              # 首次部署、升级与停机迁移
-│   │   ├── compose.build.example.yaml # 仅完整源码树的构建 override
-│   │   ├── config/                 # Compose 绑定目录（宿主机运行数据，不入库）
-│   │   └── docker-bin/             # 发布工作流放入的预构建二进制（不入库）
-│   └── macos/
-│       ├── app/                    # Swift Package、测试、App 打包与更新
-│       │   ├── Sources/SumpterApp/  # SwiftUI、AppModel、AdminClient 与资源
-│       │   ├── Sources/SumpterCore/ # Swift 配置模型、界面逻辑与客户端配置辅助
-│       │   └── Tests/              # Swift 测试
-│       └── scripts/                # macOS 客户端脚本与同步副本
-├── tests/contracts/                # 两个 adapter 复用的行为测试
-├── scripts/
-│   ├── check.sh                    # 统一检查入口
-│   ├── build-macos-dmg.sh          # 本机 DMG 构建入口
-│   ├── clients/                    # 共享客户端归因源码与生成的兼容入口
-│   ├── maintenance/                # 文档、资源同步与源码导出
-│   └── tests/                      # 仓库工具和客户端脚本测试
-├── .github/                        # CI、发布工作流、Issue / PR 模板
-└── docs/
-    ├── README.md                   # 文档索引
-    ├── *.md                        # 结构、架构、配置、开发与发布说明
-    └── templates/                  # 文档生成输入
+crates/
+  sumpter-core/       配置、模型名、路由规划、协议纯函数
+  sumpter-runtime/    SeaORM + bundled SQLite 运行时存储与查询
+  sumpter-engine/     HTTP/WebSocket 转发、重试、会话、事件与回放
+adapters/
+  linux/              Linux Admin、systemd 与平台服务组合
+  macos/              macOS sidecar 与平台服务组合
+apps/                 sumpterd-linux / sumpterd-macos 可执行入口
+platforms/linux/      WebUI 源码、生成静态文件、安装、systemd、Compose
+platforms/macos/      SwiftUI App、DMG、Sparkle、安装资源
+scripts/              检查、同步、归因、构建辅助
+ docs/                现行指南和共享模板
 ```
 
-根目录保留 README、USAGE、CHANGELOG、LICENSE、贡献/安全政策和工具规则，便于仓库与分发工具直接发现。任务草稿（`todos.md` / `plan.md`）已忽略，不入库。
+## 按需求找代码
 
-## 按需求找源码
-
-| 需要修改的内容 | 入口 |
+| 需求 | 先看 |
 | --- | --- |
-| 配置字段、迁移、模型组与路由 | [core/src](../crates/sumpter-core/src/) 的 `config.rs`、`config_store.rs`、`model_groups.rs`、`routing.rs` |
-| 共享事件字段与调度策略 | [core/src](../crates/sumpter-core/src/) 的 `events.rs`、`scheduler.rs` |
-| SQLite 写入、保留策略与统计查询 | [runtime/src](../crates/sumpter-runtime/src/) 的 `runtime_store/`、`runtime_query/` |
-| 入站协议、上游转发、重试与流式响应 | [engine/src/engine](../crates/sumpter-engine/src/engine/)；传输接口与请求构造在其上层 `outbound.rs`、`request_build.rs` |
-| Linux Admin、登录、系统服务与 HTTP 组装 | [Linux adapter](../adapters/linux/sumpter-linux-adapter/src/)；命令行启动参数在 [Linux app](../apps/linux/sumpterd/src/main.rs) |
-| macOS Admin、control token、通知与 sidecar 组装 | [macOS adapter](../adapters/macos/sumpter-macos-adapter/src/) 与 [macOS app 入口](../apps/macos/sumpterd/src/main.rs) |
-| Web 页面、组件、API 请求与样式 | [webui/src](../platforms/linux/webui/src/) 的 `pages/`、`components/`、`services/`、`styles/` |
-| SwiftUI 页面、App 状态、sidecar 管理与客户端配置 | [SumpterApp](../platforms/macos/app/Sources/SumpterApp/) 的 `UI/`、`AppModel+*.swift`、`SidecarController.swift`；Swift 模型及辅助逻辑在 [SumpterCore](../platforms/macos/app/Sources/SumpterCore/) |
-| 共享客户端归因与副本同步 | [scripts/clients](../scripts/clients/) 与 [脚本目录说明](../scripts/README.md) |
-| 安装、打包、版本发布 | 平台目录的 `scripts/`、macOS `app/package-app.sh` 和根 [.github/workflows](../.github/workflows/)；流程见 [发布指南](releasing.md) |
+| 配置字段、迁移、模型映射 | `crates/sumpter-core/src/config.rs`、`config_store.rs` |
+| 路由、优先级、粘性、重试 | `crates/sumpter-core/src/routing.rs`、`crates/sumpter-engine/src/engine/` |
+| 请求 raw 透传与协议路径 | `crates/sumpter-engine/src/engine/protocol.rs`、`request_build.rs` |
+| SQLite 事件和统计 | `crates/sumpter-runtime/src/` |
+| Linux Admin API | `adapters/linux/sumpter-linux-adapter/src/admin*.rs` |
+| macOS sidecar / UI | `platforms/macos/app/Sources/` |
+| Linux WebUI | `platforms/linux/webui/src/`；生成文件为 `platforms/linux/web/` |
+| 安装、升级、systemd | `platforms/linux/scripts/`、`platforms/linux/deploy/` |
+| Compose 镜像和模板 | `platforms/linux/compose.yaml`、`Dockerfile*` |
+| 客户端项目归因 | `scripts/clients/`，再同步到平台资源 |
 
-Swift 的 `SumpterCore` 是 App 使用的独立 Swift 模块。代理的共享 Rust 实现位于 `crates/`。配置或事件字段跨端变化时，还要检查 Swift 模型、WebUI 数据转换和两个 adapter 的接口契约。
+`tests/contracts/` 通过 `#[path]` 被两个 adapter 测试目标复用，不是独立 Cargo package。`platforms/linux/webui/` 是 WebUI 维护源，`platforms/linux/web/` 是需提交的构建产物；不要手工改生成文件。
 
-## 测试归属
+## 依赖方向
 
-| 测试范围 | 位置与执行关系 |
-| --- | --- |
-| 共享模块单元测试 | Rust 源码中的 `#[cfg(test)]`；engine/runtime 拆分后的测试也放在对应模块内 |
-| 配置、路由与回放集成测试 | [core/tests](../crates/sumpter-core/tests/)、[engine/tests](../crates/sumpter-engine/tests/) |
-| 平台 HTTP / WebSocket 行为 | [Linux adapter/tests](../adapters/linux/sumpter-linux-adapter/tests/) 与 [macOS adapter/tests](../adapters/macos/sumpter-macos-adapter/tests/) |
-| 跨平台公共行为 | [tests/contracts](../tests/contracts/) 通过 `#[path]` 引入两个 adapter 的测试目标，不是独立 Cargo package |
-| WebUI / Swift App | [webui/tests](../platforms/linux/webui/tests/) 与 [App Tests](../platforms/macos/app/Tests/) |
-| 仓库、同步与客户端工具 | [scripts/tests](../scripts/tests/)；Linux 安装和归因自测保留在 [平台 scripts](../platforms/linux/scripts/) |
+应用入口依赖平台 adapter；adapter 依赖 shared engine；engine 依赖 runtime 和 core。shared crate 不依赖 Linux、macOS、WebUI 或系统服务。平台差异通过 `PlatformBoundary`、`EngineServices` 注入。
 
-验证命令统一维护在 [开发指南](development.md#按变更选择验证)，按受影响模块选择；Rust workspace 测试不包含 npm、Swift 或安装包验收。
+## 文件边界
 
-## 维护源、生成副本与缓存
+真实配置、密码、数据库、日志、构建目录、诊断捕获和发布产物不入 Git。`docs/templates/usage-onboarding.md` 是两份使用手册的共享维护源；根 `config.example.json` 是两端配置模板源；运行 `./scripts/check.sh docs` 检查同步。
 
-- `platforms/linux/webui/` 是 WebUI 维护源，`platforms/linux/web/` 是必须随源码提交的生成资源。
-- 根 `LICENSE`、`CHANGELOG.md` 和 `config.example.json` 维护公共内容；平台内相应文件由元数据工具同步。
-- `docs/templates/` 生成根和 Linux 包内 USAGE 的标记块；标记块以外的内容在各自文档维护。
-- `scripts/clients/` 中的共享归因程序与 pi 扩展会同步到 Linux、macOS 和 Swift 资源目录；Gemini 兼容入口也由工具生成。平台安装器和 Shell 脚本按 [脚本目录说明](../scripts/README.md) 维护。
-- `platforms/linux/scripts/setup-client-attribution.sh` 是跨 Linux/macOS 的客户端命令行安装入口，按需获取上面的共享资源；macOS App 直接调用内置副本。改动下载流程时同时核对 listener 资源路由、Linux 打包清单及 Swift 资源清单，不另建一套归因实现。
-- `target/`、`node_modules/`、Swift `.build/` 和各平台 `dist/` 是本机依赖、缓存或打包产物，不进入源码版本管理。真实配置、日志和运行数据库也不放入源码。
-
-具体的源文件、目标文件与同步命令只维护在 [生成副本说明](development.md#单一维护源与生成副本)。
-
-## 源码目录与安装包
-
-开发从仓库根执行 Cargo 和统一检查命令。`platforms/linux/` 提供打包输入，构建脚本挑选二进制、静态资源、脚本和文档组成 Linux 发布包；包内 `scripts/`、`web/` 相对包根，二进制名是 `sumpterd`。
-
-macOS 由 `platforms/macos/app/` 的 Swift Package 和根 workspace 的 Rust sidecar 组成 App，客户端资源进入 `Sumpter.app/Contents/Resources/`。目录整理时保留安装路径、listener 下载路径与包内文件名；调整维护源位置时一并核对同步工具、打包脚本和测试引用。
-
-容器镜像有两条构建路径：发布镜像 `platforms/linux/Dockerfile.runtime` 以 `platforms/linux/` 为上下文，复制 `docker-bin/` 的预构建二进制、`web/` 和 `config.example.json`；本机自建 `platforms/linux/Dockerfile` 以仓库根为上下文。根 `.dockerignore` 逐层收窄 `platforms/` 白名单，避免把运行数据和 UI 缓存放行；`platforms/linux/scripts/` 必须保留，因为 Linux adapter 通过 `include_str!` 内嵌其中的客户端脚本。
-
-部署则与源码目录无关：把 `compose.yaml` 放进独立 `sumpter/` 目录，直接编辑 Compose 文件中的镜像、端口、目录与日志参数，即可 pull 镜像启动。容器不指定运行用户，配置、密码、SQLite 与各类绑定文件都持久化在 `./config`，停机后复制整个目录即可迁移；Linux 发布包也携带 Compose 部署文件，但不携带源码构建 override。见 [Docker 部署说明](../platforms/linux/DOCKER.md)。
+发布包把 `platforms/linux/` 提升为包根，因此包内路径和源码树路径不同；发布包二进制名为 `sumpterd`，源码构建目标名为 `sumpterd-linux`。源码、构建、安装、发布和生产部署是不同层次，验证其中一层不能替代另一层。

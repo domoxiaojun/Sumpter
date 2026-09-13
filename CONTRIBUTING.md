@@ -1,31 +1,22 @@
 # 贡献指南
 
-Sumpter 使用一个仓库维护 Linux 与 macOS。先按 [项目结构](docs/project-structure.md) 定位源码与测试，再阅读 [开发指南](docs/development.md) 和 [架构边界](docs/architecture.md)。
+先阅读 [项目结构](docs/project-structure.md)、[架构说明](docs/architecture.md) 和 [开发指南](docs/development.md)。Sumpter 的共享 Rust workspace 同时服务 Linux 与 macOS，平台页面和安装脚本位于 `platforms/`。
 
-## 从需求到合并
+## 提交改动
 
-1. Bug 提供版本、平台、预期与实际行为、最小复现；功能先写用户场景、范围和验收条件。
-2. 从最新 `main` 建立短期分支，例如 `fix/runtime-pagination` 或 `feat/model-groups`。
-3. 按最小完整范围实现。较长任务可在本地 `todos.md` 记录中文步骤；任务草稿不入库，完成后把行为写入产品文档。
-4. 使用 `scripts/check.sh` 运行受影响层的检查。共享行为覆盖 Linux/macOS 两个 adapter；UI 改动核对两端的字段、状态和主要交互。
-5. 更新配置、使用说明或 `CHANGELOG.md` 的 Unreleased 条目；同步生成副本。
-6. 提交 PR，说明问题、结果、影响平台、实际验证及限制。CI 成功并完成审阅后合并，删除临时分支。
+1. 描述用户场景、原行为、预期行为和验收条件。
+2. 从最新 `main` 建立短分支，保持一次提交一个可说明的改动。
+3. 共享行为同时核对两个 adapter；WebUI 改动同时更新 `platforms/linux/web/` 生成产物。
+4. 运行受影响层的最小检查：文档 `./scripts/check.sh docs`，Rust `rust`，WebUI `web`，Compose `docker`，macOS App `macos`。
+5. 只暂存本次文件，保留混合工作区中的其它改动；同步配置示例和现行手册。
+6. PR 说明触发条件、用户可见结果、影响平台、实际命令和剩余未验证层次。
 
-单人维护同样使用 PR 自查与自动门禁；不要强制一个不存在的第二审阅者。受保护分支、禁止 force push 和必需检查由仓库设置启用，提交配置文件不会自动启用这些保护。
+## 代码边界
 
-## 提交与作者
+`core`、`runtime`、`engine` 不依赖平台或 UI；平台差异通过 adapter 和 `PlatformBoundary` 注入。配置 schema、API wire、统计字段和安装资源变化要同步 Rust、Swift、WebUI、模板与定向测试。
 
-使用 Conventional Commits，例如 `fix(runtime): preserve request-chain ordering`、`docs(repo): clarify release checks`。一次提交完成一个可描述的改动。
+Python 通过 uv 执行；本机不安装数据库、不启动 Docker。Compose 契约测试可在无 Docker 的环境运行，真实镜像和容器行为由 Linux CI 验证。
 
-Git 作者使用实际贡献者身份。AI 辅助工具不写入 Author 或 `Co-Authored-By`，也不在提交正文追加自动工具署名；真实的人类共同贡献者按实际情况署名。AI 工具使用 [AGENTS.md](AGENTS.md) 的同一套规则。
+## 作者与安全
 
-## 变更规则
-
-- core/runtime/engine 保持平台中立；平台差异经 adapter 和 `PlatformBoundary` 注入。
-- 配置 schema 或 API wire 改动同步 Rust、Swift、WebUI、模板和必要迁移测试。
-- 只暂存本次文件，保留无关工作区改动；不提交缓存、真实配置、运行库和诊断捕获。
-- 修改 WebUI 源码后提交对应 `platforms/linux/web/` 构建产物；不手工编辑带同步标记的文档块。
-- Rust 使用项目 rustfmt；Python 通过 uv 执行；不自动做全仓格式化。
-- 完成目标并通过最小必要验证后停止。测试、安装、发布、部署分别报告，不能相互代替。
-
-安全问题按照 [SECURITY.md](SECURITY.md) 私下报告；正常问题使用 Issue 模板。
+使用真实贡献者 Git 身份，不添加 AI Author 或 `Co-Authored-By`。安全问题遵循 [安全政策](SECURITY.md) 私下报告；不要把凭据、运行数据库、诊断捕获或缓存提交到仓库。

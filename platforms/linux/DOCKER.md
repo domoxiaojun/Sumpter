@@ -1,190 +1,217 @@
-# Docker：独立目录部署与迁移
+# 使用 Docker Compose 部署 Sumpter
 
-目标是在任意位置创建一个 `sumpter/`，在其中运行 `docker compose`，不需要克隆源码、安装 Rust 或在部署主机编译。配置与数据库等持久化数据都留在该目录下，停机后复制整个目录即可迁移。
+本教程在 Linux 部署机上执行。完成后，你会得到一个 Sumpter 服务、一个 Web 管理页，以及独立的持久化数据目录。
 
-要求：Linux、Docker Engine 与 Docker Compose **2.24+**。默认 bridge 网络，镜像提供 amd64 / arm64 两种架构。容器**不指定运行用户**（用镜像默认的 root），所以不需要在部署机上推导 UID/GID，数据目录里的文件由容器自行创建。
+使用官方镜像 `ghcr.io/domoxiaojun/sumpter:latest`，支持 amd64 / arm64。需要 Docker Engine、Compose v2 插件（支持 `up --wait`）、curl、OpenSSL 和 sudo 权限。无需在部署机安装 Rust、Node.js 或数据库。
 
-## 镜像来源
+以下是首次部署流程。已有部署直接跳到“备份与升级”，不要重新复制示例覆盖实际配置。
 
-运行镜像只有 GHCR 一处来源，**不在部署主机构建**。发布工作流推送 `linux/amd64,linux/arm64` 双架构 manifest，不会出现只有一种架构可用的情况。
+## 1. 创建部署目录并复制示例
 
-- tag 形式：`0.4.9`、`0.4`、`0`、`latest`、`sha-<full>`；**不带 `v` 前缀**。`latest` 只在发布成功后推进，普通 main push 不会刷新镜像。
-- 钉死版本：直接编辑 `compose.yaml` 的 `image` 行钉住版本，例如 `ghcr.io/domoxiaojun/sumpter:0.4.9`，或写 digest。
-- 仓库或 GHCR 为私有时先 `docker login ghcr.io`。
-- `compose.yaml` 不含 `build:`；源码构建见文末「维护者：源码构建」。
-
-## 首次部署
-
-在新目录里放一份 `compose.yaml` 就能启动，不需要克隆源码：
+选择一个新的目录，例如当前用户的 `~/sumpter`：
 
 ```bash
-mkdir -p sumpter/config && cd sumpter
-curl --proto '=https' --tlsv1.2 -fLo compose.yaml \
-  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/compose.yaml
+mkdir -m 700 ~/sumpter
+cd ~/sumpter
 
-docker compose up -d          # 首次会拉取镜像
-docker compose ps -a
-docker compose logs init
+curl --proto '=https' --tlsv1.2 -fLo compose.example.yaml \
+  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/compose.yaml
+curl --proto '=https' --tlsv1.2 -fLo config.example.json \
+  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/config.example.json
+
+cp compose.example.yaml compose.yaml
+sudo install -d -m 700 config
+sudo install -m 600 config.example.json config/config.json
 ```
 
-`init` 服务用同一镜像的 shell 在 `/config` 内生成缺失的 `config.json`（监听 `0.0.0.0:57878`、入口为空）与随机 `admin-password`，成功后显示 `Exited (0)`，这是正常状态。它不会覆盖已有配置、密码或数据库，也不会迁移只剩 `keys.json` 的历史目录；初始化失败会阻止 daemon 启动，原因看 `docker compose logs init`。
+仓库中的 `compose.yaml` 就是部署模板，下载时另存为 `compose.example.yaml`，再复制成实际使用的文件，方便以后对照。手头已有源码或 Linux 发布包时，也可以直接复制其中的 `compose.yaml` 和 `config.example.json`，无需下载。
 
-**初始密码**：首次生成时，`docker compose logs init`（前台运行就是 `docker compose up` 的输出）会直接打印初始密码与凭据路径。明文只打印一次，重启不重复；登录后请立即在 WebUI「安全」页修改，改密后该文件变成 Argon2 哈希 JSON，日志里的初始密码随即失效。不想让明文进容器日志（例如日志会被采集或长期保留），就按下文「自备 `config.json` 与初始密码」先自己生成。原生 Linux/macOS 安装只显示密码文件路径、不回显密码值，也是这个原因。
+容器使用镜像默认 root 用户，且丢弃额外 capabilities。标准 Linux Docker 部署应让 `config/` 及其中的敏感文件由 root 拥有，上面的 `sudo install` 已完成这一点；宿主机查看或编辑时使用 sudo。自定义 rootless / user namespace 部署需按实际 UID 映射调整所有权。
 
-启动后的地址：
+## 2. 修改实际配置
 
-- 管理页：`http://127.0.0.1:57879/admin/`，首次用户名 `kkl`
-- 代理：`http://127.0.0.1:57878`（OpenAI / Codex 客户端通常使用 `/v1`）
+打开刚复制的配置：
 
-两个端口默认只发布到 `127.0.0.1`。要给局域网客户端或远程管理使用就改宿主机发布地址，但 `0.0.0.0` 只是监听所有接口，本身不是认证：代理对外开放前先在 WebUI 设置入站 Token/CIDR，Admin 走 SSH 隧道或 HTTPS 反向代理。
+```bash
+sudo vi config/config.json
+```
 
-登录后先添加 Provider 入口，填写 Base URL、API Key 和模型映射，再把客户端连接到代理地址。
+只编辑 `config/config.json`，保留下载的示例以备对照。首先把 `listener` 改为：
 
-镜像、端口、目录与日志都直接在 `compose.yaml` 中修改，见「常用配置」。
+```json
+"listener": {
+  "host": "0.0.0.0",
+  "port": 57878,
+  "allowedCIDRs": [],
+  "authToken": "替换为你生成的代理入站 Token"
+}
+```
 
-Linux 二进制发布包也带 `compose.yaml` 与本文。若直接在解压目录里 `docker compose up -d`，数据会落在包内的 `config/`，**升级或删除解压目录前先备份整个目录**；更稳妥的做法是复制到一个独立的 `sumpter/` 目录再启动。
+可以用 `openssl rand -hex 32` 生成随机 Token，粘贴到 `authToken`，并在之后的客户端配置中使用同一个值。
 
-## 目录与持久化边界
+这里的 `0.0.0.0` 是**容器内部**监听地址，必须能接收 Compose 转发的连接。配置示例默认的 `127.0.0.1` 适合本机直接运行，在 bridge 容器里必须修改。容器内部保持 `57878`，宿主机端口在 Compose 中设置。
+
+此时可以保留全部示例入口和模型组为停用，启动后通过 WebUI 填写真实上游。若手工填写，需同时替换入口地址、API Key、模型映射，并启用模型组和入口绑定。`.invalid` 示例域名无法发送真实请求。
+
+## 3. 创建管理密码文件
+
+管理页密码与上一节的代理入站 Token 分别使用。运行下面命令生成密码文件；`set -C` 会阻止覆盖已有文件：
+
+```bash
+sudo sh -c 'umask 077; set -C; openssl rand -hex 32 > config/admin-password'
+sudo chmod 600 config/config.json config/admin-password
+```
+
+首次管理用户名为 `kkl`。在自己的终端查看初始密码：
+
+```bash
+sudo cat config/admin-password
+```
+
+保管这条密码，下一步用于登录。登录后在「安全」修改用户名和密码，文件随后变为哈希 JSON，不能再通过 `cat` 找回明文密码。
+
+## 4. 检查 Compose 配置
+
+部署目录应为：
 
 ```text
 sumpter/
-├── compose.yaml
-├── config/                   # 整目录 → 容器 /config
-│   ├── config.json
-│   ├── admin-password
-│   ├── runtime.sqlite3
-│   ├── runtime.sqlite3-wal   # SQLite 工作文件，可能出现
-│   ├── runtime.sqlite3-shm
-│   ├── session_affinity.json # 按实际使用创建
-│   ├── resource_bindings.json
-│   ├── diagnostic_capture.json
-│   ├── config.before-schema-v7-*.json # 仅 schema 迁移时创建
-│   └── sumpterd.pid          # 运行时创建，正常退出时清理
-└── logs/                     # 可选：手工导出的日志
+├── compose.example.yaml       # 下载的模板，供对照
+├── compose.yaml               # 实际使用的 Compose 配置
+├── config.example.json        # 原始 JSON 示例
+└── config/                    # 唯一必须持久化的数据目录
+    ├── config.json            # 已修改容器监听地址
+    └── admin-password         # 已创建管理密码
 ```
 
-复制整个 `config/`，不要只复制 `runtime.sqlite3`：凭据更新、配置原子替换、SQLite WAL 都需要在同一目录内创建和替换文件，拆成多个单文件挂载或漏掉 WAL 都会出错。旧 `stats.json` 只作为历史文件保留，新版本不读写。
-
-镜像与 `/tmp` 无需备份。程序日志走标准错误/输出，由 Docker 的 `json-file` 驱动管理，**不在 `config/` 内，删除容器后无法靠复制 `config/` 恢复**；需要留档就在停机或删除容器前导出：
-
-```bash
-mkdir -p logs
-docker compose logs --no-color > "logs/compose-$(date +%Y%m%d-%H%M%S).log"
-```
-
-## 常用配置
-
-默认配置已经写入 `compose.yaml`，复制文件后即可启动。需要修改时直接编辑对应字段，再执行 `docker compose up -d`：
-
-| 需求 | 修改位置 | 默认值 |
-| --- | --- | --- |
-| 镜像版本 | `x-runtime.image` | `ghcr.io/domoxiaojun/sumpter:latest` |
-| 宿主机代理端口 | `services.sumpter.ports` 第一行 | `127.0.0.1:57878` |
-| 宿主机 Admin 端口 | `services.sumpter.ports` 第二行 | `127.0.0.1:57879` |
-| 数据目录 | `x-runtime.volumes` | `./config:/config` |
-| 日志等级 | `services.sumpter.environment.RUST_LOG` | `info` |
-
-例如把 Admin 改为宿主机 `18081`：
+默认端口映射是：
 
 ```yaml
-- "127.0.0.1:18081:57879"
+ports:
+  - "127.0.0.1:57878:57878"
+  - "127.0.0.1:57879:57879"
 ```
 
-容器内端口固定为 `57878` 和 `57879`，不要修改映射右侧端口。修改后运行 `docker compose up -d`，`restart` 不会应用配置变化。
+格式为 `宿主机地址:宿主机端口:容器端口`。默认只允许从宿主机访问；例如本机端口冲突时可把第一条改为 `127.0.0.1:17878:57878`，客户端改用 `17878`，容器配置保持原值。
 
-其他参数也在 `services.sumpter` 下：`environment.TZ` 为容器时区（默认 UTC，WebUI 按浏览器时区显示），`restart` 为重启策略，`logging.options` 为日志大小和保留份数。查看服务日志用 `docker compose logs --tail=100 sumpter`。
-
-旧部署的自定义镜像、端口、目录和日志值需要先从 `.env` 手工转写到 Compose 对应字段，再启用新模板；尤其要保留原来的数据目录，避免误用一个空目录。Compose CLI 自身仍可能读取 `.env` 中的项目名等内置选项，转写后将旧文件移出部署目录；多实例使用不同目录和端口，必要时在文件顶层设置 `name` 保持原项目名。
-
-上游入口、模型和入站认证仍在 WebUI 管理。不要用 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` 配置上游出网：引擎显式禁用了环境代理，请使用容器内可达的上游地址。
-
-### 宿主机侧 vs 容器内
-
-代理服务和管理页面使用两个端口：
-
-| 监听项 | 作用 | 容器内地址 / 端口 | 宿主机侧（Compose `ports`） |
-| --- | --- | --- | --- |
-| 代理（数据面） | 客户端 API 流量，OpenAI / Anthropic / Codex 等都指向这里 | `config.json` 的 `listener.host` / `listener.port`，init 写为 `0.0.0.0:57878` | `127.0.0.1:57878:57878` |
-| Admin（控制面） | WebUI 与 `/admin/api`，登录会话 | Compose 的 `environment` 固定为 `0.0.0.0:57879` | `127.0.0.1:57879:57879` |
-
-- **代理的容器内端口来自 `config.json`**，不是环境变量。不要在 WebUI 的“监听配置”里改代理端口，否则端口映射会指向无人监听的端口；确需修改时同时改 `config.json` 与 `compose.yaml` 的容器侧端口。
-
-### 远程访问与主机加固
-
-- 远程管理优先用 SSH 隧道或 HTTPS 反向代理；确需直接发布到局域网时修改 `ports` 中最左边的绑定地址。公网 Admin 必须置于 HTTPS 之后，代理对外开放前先设置入站 Token/CIDR。
-- 容器以 root 运行只是为了让 bind mount 的读写不依赖宿主机 UID 映射；Compose 已设置 `read_only: true`、`cap_drop: ALL`、`no-new-privileges`，可写路径只有 `config/` 与 `/tmp`，`config/` 内文件为 `0700` / `0600`。
-- 因此 `config/` 通常由 root 所有：非 root 用户需要读取或打包备份时用 `sudo tar` / `sudo cp -a`。不要用 `chmod 777` 放宽权限。
-- SELinux 主机（Fedora/RHEL）挂载报错时，在 `compose.yaml` 的 volumes 行末追加 `:z`；不要用私有 `Z`，init 与 daemon 共用同一目录。
-- 容器内没有 systemd，WebUI 安全页的“systemd 自启动”显示不可用属预期；容器级别的开机自启用 Compose 中的 `restart` 字段控制。
-
-## 升级与迁移
-
-升级只替换镜像，`compose.yaml` 与整个 `config/` 都保留：
+模板无需 `.env`。镜像、端口、时区和挂载路径直接编辑 `compose.yaml`。如需固定版本，把 `x-runtime.image` 改为 `ghcr.io/domoxiaojun/sumpter:0.4.9`，正式部署前确认该版本已经发布。
 
 ```bash
-docker compose pull
-docker compose up -d
+sudo docker compose config --quiet
 ```
 
-跨机器迁移：
+这一步只验证 Compose 配置，尚未验证 JSON 内容、上游或实际请求。
 
-1. 旧机先 `docker compose stop` 等正常退出，需要日志就按上文导出，再 `docker compose down`。不要在 daemon 仍在写库时只拷贝单个 SQLite 文件。
-2. 复制整个 `sumpter/`（包括 `compose.yaml` 与完整 `config/`），例如在父目录运行 `sudo tar -czf sumpter-backup.tar.gz sumpter/`。备份包含凭据，应限制读取权限并安全传输。
-3. 新机解压后检查端口占用、Compose 中的 `./config` 路径与镜像架构；旧机若钉了单架构 digest，换架构时改用同版本的多架构引用。
-4. 在新目录执行 `docker compose pull && docker compose up -d`，确认能登录 Admin、代理请求正常。初始化不会覆盖迁入的文件；验证通过前不要删除旧备份，也不要同时运行两个实例访问同一目录。
-
-`config/` 备份涵盖凭据、SQLite 与各类绑定文件；浏览器登录会话、进行中的请求、临时 Live 连接属于内存状态，不承诺跨进程迁移。
-
-### 从旧 host 网络 Compose 切换
-
-旧模板使用 `network_mode: host`，且由 `SUMPTER_ADMIN_HOST/PORT` 直接决定监听地址。按顺序切换：
-
-1. 备份旧 `compose.yaml` 与配置，把 `config.json` 的 `listener.host` 改为 `0.0.0.0`、`listener.port` 保持 `57878`（bridge 下容器内不能监听回环）。旧容器仍是 host 网络，改动前先设置入站认证或停机离线修改，避免短暂的对外暴露。
-2. 停旧服务，换用新模板，按「首次部署」启动。
-3. 当前模板直接固定宿主机绑定到 127.0.0.1 和端口 57878/57879；需要对外提供服务时直接编辑 `ports` 行，并先配置认证。
-4. 启动后同时验证两个端口与管理页登录：`config.json` 若仍是 `127.0.0.1`，容器内代理从宿主机访问不到。
-
-`compose.bridge.example.yaml` 与 `docker-compose.yml` 在**源码树**中是指向 `compose.yaml` 的兼容链接（旧命令仍可用）；发布包与独立部署目录只保留一份 `compose.yaml`。
-
-## 自备 `config.json` 与初始密码
-
-如果你希望自己控制初始密码（例如不想让明文出现在容器日志里），或者部署前就有现成配置，只要把两个文件先放进 `./config`，再执行跟「首次部署」一模一样的 `docker compose up -d`：`init` 只创建缺失文件，发现两者都在就静默跳过，不覆盖、也不打印密码。
+## 5. 启动并打开管理页
 
 ```bash
-mkdir -p sumpter/config && cd sumpter
-
-# 1) 配置：已有就拷进去，否则先拿模板再改（模板入口全停用、域名是 .invalid）
-cp 你的/config.json config/config.json
-# 或者：curl --proto '=https' --tlsv1.2 -fLo config/config.json \
-#   https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/config.example.json
-
-# 2) 初始密码：自己生成，daemon 缺这个文件会拒绝启动
-od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > config/admin-password
-printf '\n' >> config/admin-password
-chmod 700 config
-chmod 600 config/config.json config/admin-password
-
-docker compose up -d
+sudo docker compose pull
+sudo docker compose up -d --wait
+sudo docker compose ps -a
+curl --noproxy '*' -i http://127.0.0.1:57879/healthz
 ```
 
-两条容易踩的约束：
+正常情况下，`init` 完成后退出，状态为 `Exited (0)`；`sumpter` 持续运行并显示 healthy。`/healthz` 返回 `204 No Content` 表示管理监听存活，尚不代表上游配置可用。
 
-- **`listener.host` 必须是 `0.0.0.0`**。写成 `127.0.0.1`（模板默认值）时容器内代理只监听回环，宿主机的 `57878` 映射指向没人监听的端口，而且 daemon 不报错、健康检查照常通过，只是局域网连不上。
-- **`admin-password` 必须存在且非空**。缺失时 daemon 在启动前退出，日志为 `读取 Admin 凭据文件 /config/admin-password 失败`；它不会自己生成这个文件。
+在部署机打开 `http://127.0.0.1:57879/admin/`，用 `kkl` 和准备的管理密码登录。
 
-连那一次多余的 `init` 容器都不想要，就把 `compose.yaml` 里的 `init` 服务与 `sumpter` 的 `depends_on` 删掉，其余不用改；代价是上面两条约束失去兜底，漏了就直接起不来或映射打空。
-
-## 维护者：源码构建
-
-只有完整源码树支持本机源码构建；Linux 二进制发布包不包含 Rust workspace，也不打包这个 override：
+如果部署在远程服务器，在**自己的电脑**另开终端建立隧道，替换 SSH 用户和主机名：
 
 ```bash
-cd platforms/linux
-SUMPTER_LOCAL_IMAGE=sumpter:local docker compose -f compose.yaml -f compose.build.example.yaml up -d --build
+ssh -N \
+  -L 57879:127.0.0.1:57879 \
+  -L 57878:127.0.0.1:57878 \
+  your-user@your-server
 ```
 
-两个服务共用同一个构建镜像。`Dockerfile` 以仓库根为构建上下文；本机没有双架构构建器时，构建结果是**当前架构**的镜像，不能当作双架构验证。
+保持这个终端运行，然后在自己的电脑打开同一管理地址。客户端也可通过隧道使用 `127.0.0.1:57878`。若本地端口已被占用，改 `-L` 左侧端口，并相应调整浏览器或客户端地址。
 
-本机构建使用独立的 `SUMPTER_LOCAL_IMAGE`（默认 `sumpter:local`），不会覆盖 Compose 中的官方镜像配置。构建成功不代表权限、登录、真实流量或迁移已经验收，容器验证在 Linux CI 执行。
+## 6. 完成第一条真实请求
 
-发布用的 `Dockerfile.runtime` 同样以 `platforms/linux/` 为上下文，但要求目录内已有 CI 生成的 `docker-bin/sumpterd-amd64`、`docker-bin/sumpterd-arm64`，**不适合本机直接使用**；本机验证请用上面的源码构建路径。
+1. 在「安全」修改默认管理用户名和密码。
+2. 在「入口库」填写真实上游与模型，启用入口。
+3. 在「模型组」启用对应模型和入口绑定。
+4. 在客户端设置代理地址和第 2 步的入站 Token。
+5. 发送一句简单问候，在「运行」确认最终成功及实际使用的入口。
+
+详细客户端配置见 [使用手册](USAGE.md)。管理页能打开、容器 healthy、模型目录可获取，都不能单独证明一条模型请求已经成功。
+
+## 网络与常用设置
+
+| 需要调整的项目 | 修改位置 |
+| --- | --- |
+| 宿主机端口或绑定 IP | `compose.yaml` 的 `services.sumpter.ports` |
+| 容器代理监听 | `config/config.json` 的 `listener`，默认保持 `0.0.0.0:57878` |
+| 容器管理监听 | Compose 中 `SUMPTER_ADMIN_HOST=0.0.0.0`、`SUMPTER_ADMIN_PORT=57879` |
+| 时区 | Compose 的 `TZ`，例如 `Asia/Shanghai`；镜像包含 tzdata |
+| 日志级别 | Compose 的 `RUST_LOG`，默认 `info` |
+| 数据目录 | `x-runtime.volumes` 的宿主机路径，两个服务共用这个挂载 |
+| 镜像版本 | `x-runtime.image`，同时用于初始化和主服务 |
+
+修改 Compose 后运行 `sudo docker compose up -d --wait` 使容器配置生效。仅修改 JSON 后，可在 WebUI 重载配置，或执行 `sudo docker compose restart sumpter`；WebUI 保存会通过服务校验并应用配置。
+
+需要局域网或 VPN 访问时，可将端口映射的宿主机地址改成相应网卡 IP，并配置防火墙和入站 Token。公开管理页应通过 HTTPS 反向代理，通常保留宿主机管理端口为回环地址。仓库及 Linux 包提供 `deploy/nginx-sumpter-admin.conf.example`；只有两份模板的独立部署目录需另外下载该反代示例。
+
+反代要保留 Cookie，设置 `X-Forwarded-Proto`，对事件流关闭 buffering。另行反代代理端口时，还需支持长响应及 WebSocket Upgrade。
+
+在 SELinux 主机上，将共享挂载改为 `./config:/config:z`，为两个服务共享的数据目录设置容器标签。
+
+引擎的数据转发和模型探测显式使用 `no_proxy()`。向容器添加 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY` 不会让这些请求经过系统 HTTP 代理；应保证容器网络能直接访问上游。
+
+## 备份与升级
+
+以下命令在实际部署目录执行。备份整个 `config/`，包含数据库及可能存在的 WAL，不要在服务运行时只复制 `runtime.sqlite3`：
+
+```bash
+sudo docker compose stop sumpter
+sudo tar -czf "sumpter-backup-$(date +%Y%m%d-%H%M%S).tar.gz" compose.yaml config
+sudo docker compose start sumpter
+```
+
+备份含密钥和运行数据，存放到你控制的位置。需要恢复时，先停服务，把备份解到新的目录检查，再切换挂载路径或目录；不要直接覆盖仍在使用的数据。
+
+升级时先备份。使用固定版本的部署先修改 `x-runtime.image`，使用 `latest` 的部署可直接拉取：
+
+```bash
+sudo docker compose pull
+sudo docker compose up -d --wait
+sudo docker compose ps -a
+```
+
+再次登录，检查版本、原有配置、历史统计，并发送一条实际请求。回退旧镜像前核对配置和数据库兼容性；必要时配套恢复升级前备份。
+
+`sudo docker compose down` 停止并移除容器与网络，绑定挂载的 `config/` 仍保留。不要为了重启或升级删除数据目录。
+
+## 故障排查
+
+先查看状态和最近日志：
+
+```bash
+sudo docker compose ps -a
+sudo docker compose logs --tail 100 init sumpter
+```
+
+| 现象 | 检查 |
+| --- | --- |
+| `init` 为 `Exited (0)` | 正常，它是一次性初始化服务 |
+| `init` 非零退出 | 配置与密码应是普通文件，目录所有权正确；仅有旧 `keys.json` 的目录需先整理 |
+| 管理页可用，代理连不上 | `listener.host` 是否仍为示例的 `127.0.0.1`；容器代理端口与映射是否一致 |
+| healthy，但客户端报模型错误 | 示例仍停用，或入口映射、模型组、绑定范围不一致 |
+| 远程浏览器打不开 | 默认只发布到回环地址，先使用 SSH 隧道；浏览器地址不能写 `0.0.0.0` |
+| `permission denied` | 标准 Docker 下 `config/` 应由 root 拥有、目录 0700；SELinux 检查 `:z` |
+| 登录失败 | 代理 Token 不是管理密码；改密后的初始密码失效；重启后需要重新登录 |
+| 新端口不生效 | 修改的是宿主机映射还是容器监听；Compose 改动需重新 `up` |
+
+模板里的 `init` 只创建缺失文件，不覆盖已有配置或密码。按本教程准备好文件时，它不会生成新密码；若未准备密码而依赖它自动初始化，初始密码会输出到 init 日志，仅在可信终端查看日志。
+
+忘记管理密码时，先停止 `sumpter`，备份 `config/admin-password`，将它改为新的非空单行密码并保持 root 所有、0600 权限，再启动服务。用户名会恢复为 `kkl`；登录后重新设置凭据。
+
+## 维护者从源码构建
+
+需要完整源码树和部署机的构建环境，Linux 二进制发布包不包含 Rust 源码。在源码树 `platforms/linux/` 准备同样的 `config/` 后执行：
+
+```bash
+sudo docker compose -f compose.yaml -f compose.build.example.yaml up -d --build --wait
+```
+
+构建覆盖文件使用独立的 `sumpter:local` 镜像名，避免覆盖本地官方镜像标签。镜像构建、容器启动与真实请求应分别验证。

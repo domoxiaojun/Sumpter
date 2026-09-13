@@ -1,82 +1,54 @@
 # Sumpter
 
-本机 AI 请求代理。客户端只连一个地址，由 Sumpter 做入口选择、模型映射、会话粘性、重试和运行记录。
+Sumpter 把多个 AI 服务入口集中到一个代理地址。客户端连接 Sumpter，由它选择上游、映射模型、保持会话归属、处理故障切换，并记录请求和用量。
 
-Linux 与 macOS 共用一份 Rust 引擎和 **schema v7** `config.json`。当前版本以根 [Cargo.toml](Cargo.toml) 为准（现为 **0.4.9**），许可证 [MIT](LICENSE)。源码仓库：[domoxiaojun/sumpter](https://github.com/domoxiaojun/sumpter)。
+适合同时使用多个 Provider、希望统一管理客户端连接，或需要按项目查看 AI 用量的个人与小团队。你需要自行准备可用的上游服务和 API Key。
 
-| | 默认 |
+Linux 提供后台服务和 Web 管理界面；macOS 提供原生 App。两端共用 Rust 引擎和配置格式。本文对应 **0.4.9 / schema v7**，版本以 [Cargo.toml](Cargo.toml) 为准。
+
+## 可以做什么
+
+- **管理上游**：在入口库保存地址、密钥和模型映射，按模型组分配主用与后备入口。
+- **保持会话稳定**：支持优先级、随机粘性和轮询粘性调度；故障时按配置重试或切换入口。
+- **接入现有客户端**：通过 HTTP、流式响应和 WebSocket 转发 Claude Code、Codex、Grok Build、Gemini CLI、pi 等客户端请求。
+- **查看运行情况**：区分客户端请求与上游尝试，查看耗时、结果、Token、缓存、项目和会话统计。
+- **控制访问和存储**：设置入站 Token、管理页凭据、统计保留策略；需要排障时再开启诊断捕获。
+
+当前主请求流程采用 raw 透传：上游仍须支持客户端实际使用的 API。配置协议标签不会把任意上游变成兼容服务；Sumpter 也不提供模型账号或代办上游登录。
+
+## 选择安装方式
+
+| 使用场景 | 入口 |
 | --- | --- |
-| 代理 | `http://127.0.0.1:57878`（Codex / OpenAI 兼容客户端使用 `.../v1`） |
-| Linux 管理页 | `http://127.0.0.1:57879/admin/` |
-| 配置 | schema v7；旧 v3–v6 按兼容规则迁移 |
+| Linux 服务器，使用 Docker Compose | [Compose 部署教程](platforms/linux/DOCKER.md) |
+| Linux 服务器，直接使用 systemd | [Linux 安装与维护](platforms/linux/README.md) |
+| macOS 14+，使用原生界面 | [macOS 安装与使用](platforms/macos/README.md) |
 
-## 安装
+安装包从 [GitHub Releases](https://github.com/domoxiaojun/sumpter/releases/latest) 下载。Linux 包支持 x86_64 / aarch64，容器镜像支持 amd64 / arm64；当前自动发布的 macOS 包面向 Apple Silicon。
 
-产物在 [GitHub Releases](https://github.com/domoxiaojun/sumpter/releases/latest)。
+Compose 教程从新建部署目录开始，依次完成**复制 Compose 模板、复制配置示例、创建密码文件、启动、首次登录和请求验证**。数据保存在部署目录的 `config/` 中。
 
-**macOS 14+（当前自动发布 Apple Silicon）**
+## 第一次使用
 
-1. 下载 `sumpter-macos-*.dmg`。
-2. 打开后双击「安装 Sumpter.command」，或把 App 拖到「应用程序」后右键打开。
-3. 首次打开被拦截时见 [INSTALL.txt](platforms/macos/app/INSTALL.txt)。当前包是 ad-hoc 签名，没有 Apple 公证。
+1. 安装并打开 macOS App 或 Linux WebUI。
+2. 在「入口库」添加一个真实上游，填写地址、API Key 和可用模型。
+3. 在「模型组」启用该模型，并绑定刚添加的入口。
+4. 在「安全」设置代理入站 Token，再将客户端指向代理地址。
+5. 发出一条简单请求，在「运行」确认最终成功、实际入口和模型。
 
-**Linux（x86_64 / aarch64 静态 musl）**
+默认代理地址为 `http://127.0.0.1:57878`；Linux WebUI 为 `http://127.0.0.1:57879/admin/`。客户端的 Base URL 是否带 `/v1` 取决于客户端协议，具体配置见 [使用手册](USAGE.md)。
 
-```bash
-curl --proto '=https' --tlsv1.2 -fLo /tmp/sumpter-install.sh \
-  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/install.sh
-bash /tmp/sumpter-install.sh --repo domoxiaojun/sumpter
-```
+`config.example.json` 中的入口和模型组均为停用示例，域名不可连接。启动成功后仍须完成上游配置，才能转发真实请求。
 
-`--repo` 只选下载来源。可同时加 `--admin-host`、`--admin-port`、`--admin-password-file`、`--version vX.Y.Z`。`sudo` 安装为 system 服务，daemon 仍以低权限 `sumpter` 用户运行。已有 `config.json` 与 `admin-password` 不会被覆盖。
+## 继续阅读
 
-容器镜像为 `ghcr.io/domoxiaojun/sumpter`（amd64 / arm64）。既可用 systemd 安装，也可用 Compose 在独立目录部署；后者见 [Docker 部署说明](platforms/linux/DOCKER.md)，其余 systemd / 反代见 [Linux 指南](platforms/linux/README.md)。
-
-## 接入客户端
-
-先在入口库添加上游并绑定模型组，再让**跑客户端的机器**指向代理。本机 daemon 用 `127.0.0.1`；Linux 服务常被远程调用，此时改成该主机可达的 `host:port`，并设置入站 `authToken`。
-
-| 客户端 | 怎么接 |
+| 你要完成的事情 | 文档 |
 | --- | --- |
-| Claude Code | `ANTHROPIC_BASE_URL=http://<代理>:57878` |
-| Codex | Base URL 必须带 `/v1` |
-| Grok Build / Gemini CLI / OpenAI 兼容 | 按协议选根地址或 `/v1` |
-| pi | `~/.pi/agent/models.json` 增加 provider，并设 `X-Sumpter-Client: pi` |
+| 配置入口、模型组、客户端和归因，理解运行页面 | [使用手册](USAGE.md) |
+| 手工编辑 JSON，查询字段和默认行为 | [配置参考](docs/configuration.md) |
+| 排查连接、认证、模型与存储问题 | [故障排查](docs/troubleshooting.md) |
+| 找源码、运行检查、提交改动 | [开发指南](docs/development.md) · [贡献指南](CONTRIBUTING.md) |
+| 打包与发布新版本 | [发布指南](docs/releasing.md) |
+| 查找全部专题 | [文档目录](docs/README.md) |
 
-项目统计的归因装在**启动 Claude / Grok / Gemini / Codex / pi 的那台电脑**，不要装到只跑 daemon 的 Linux 上。客户端就在这台 Mac、且用本机 App 时，打开「设置 → 安全」安装。其它机器（包括连远程 Linux 代理的笔记本）在客户端主机执行：
-
-```bash
-curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh \
-  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/setup-client-attribution.sh
-bash setup-client-attribution.sh install all
-```
-
-开箱、排错和协议范围见 [使用指南](USAGE.md)。字段说明见 [配置说明](docs/configuration.md) 与 [config.example.json](config.example.json)。真实密钥放在仓库外。
-
-## 开发
-
-需要 Rust 1.88+、Node.js 22、uv；macOS App 另需完整 Xcode 与 Swift 6+。命令从仓库根执行：
-
-```bash
-npm ci --prefix platforms/linux/webui
-./scripts/check.sh docs
-./scripts/check.sh rust
-./scripts/check.sh web
-# macOS 主机另执行
-./scripts/check.sh macos
-```
-
-结构见 [项目结构](docs/project-structure.md)，命令见 [开发指南](docs/development.md)，PR 见 [贡献指南](CONTRIBUTING.md)。
-
-## 仓库地图
-
-| 目录 | 责任 |
-| --- | --- |
-| `crates/` | 共享配置、路由、运行存储和代理引擎 |
-| `adapters/`、`apps/` | 平台边界与可执行入口 |
-| `platforms/linux/` | WebUI、systemd、安装与打包 |
-| `platforms/macos/` | SwiftUI、通知、DMG / Sparkle |
-| `scripts/`、`.github/` | 检查、资源同步、CI 与 Release |
-| `docs/` | 现行指南；`templates/` 为 USAGE 生成输入 |
-
-CI（`ci.yml`）只验证。推送 `vX.Y.Z` tag，或手动指定已有 tag，都会运行 Release：Linux 包、GHCR、macOS 包与 GitHub Release。构建通过不等于已发布或已安装。
+项目采用 [MIT 许可证](LICENSE)。版本变化见 [更新记录](CHANGELOG.md)，安全问题按 [安全政策](SECURITY.md) 私下反馈。

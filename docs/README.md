@@ -1,44 +1,42 @@
-# 文档索引
+# 文档目录
 
-按任务选择入口。当前产品版本以根 `Cargo.toml` 为准（0.4.9），磁盘格式为 schema v7，安装入口为 [GitHub Releases](https://github.com/domoxiaojun/sumpter/releases/latest) 与仓库 raw 脚本。行为以源码、平台契约测试和现行文档共同核对。
+这套文档对应 Sumpter **0.4.9 / schema v7**。第一次接触项目先看 [项目介绍](../README.md)，安装后按 [使用手册](../USAGE.md) 完成第一条请求。
 
-## 使用与运维
+## 安装与部署
 
-| 用途 | 文档 |
+| 文档 | 内容 |
 | --- | --- |
-| 产品、版本、GitHub 安装 | [README](../README.md) |
-| 开箱、客户端接入、归因、排错 | [使用指南](../USAGE.md) |
-| 两端共用 schema v7 字段 | [配置说明](configuration.md) |
-| Linux 安装、服务管理与部署包 | [Linux 指南](../platforms/linux/README.md) |
-| macOS App、sidecar 与通知 | [macOS 指南](../platforms/macos/README.md) |
+| [Docker Compose](../platforms/linux/DOCKER.md) | 复制示例、准备目录与配置、首次登录、网络、备份与升级 |
+| [Linux](../platforms/linux/README.md) | systemd 安装、服务管理、密码恢复和卸载 |
+| [macOS](../platforms/macos/README.md) | App 安装、启动、退出、通知和更新 |
 
-## 开发与协作
+## 使用与配置
 
-| 用途 | 文档 |
+| 文档 | 内容 |
 | --- | --- |
-| 目录职责、源码定位、测试归属 | [项目结构](project-structure.md) |
-| 模块边界、请求处理与运行时约束 | [架构说明](architecture.md) |
-| 环境、构建、测试、生成资源 | [开发指南](development.md) |
-| 仓库脚本分类与维护入口 | [脚本目录](../scripts/README.md) |
-| Linux 前端开发与接口 | [WebUI](../platforms/linux/webui/README.md)、[Admin API](../platforms/linux/specs/admin-api.md) |
-| Issue、分支、提交、PR | [贡献指南](../CONTRIBUTING.md) |
-| AI 工具的仓库规则 | [AGENTS](../AGENTS.md) |
+| [使用手册](../USAGE.md) | 从添加上游到客户端接入，模型组、归因和日常管理 |
+| [配置参考](configuration.md) | 当前 JSON 字段、模型范围、重试与凭据边界 |
+| [故障排查](troubleshooting.md) | 按症状检查连接、认证、路由和存储 |
+| [Linux 包内手册](../platforms/linux/USAGE.md) | 随 Linux 发布包提供的独立使用说明 |
+| [容器数据目录](../platforms/linux/config/README.md) | 持久化文件的用途和备份范围 |
+| [Admin API](../platforms/linux/specs/admin-api.md) | Linux 管理接口、Cookie、CSRF 和配置并发控制 |
+| [Scriptable 小组件](../platforms/linux/integrations/scriptable/README.md) | 在 iPhone 查看进行中请求 |
+| [TSX 状态脚本](../platforms/linux/integrations/tsx/README.md) | 在终端读取状态与进行中请求 |
 
-## 版本与仓库维护
+## 开发与维护
 
-| 用途 | 文档 |
+| 文档 | 内容 |
 | --- | --- |
-| 两端版本变化 | [CHANGELOG](../CHANGELOG.md) |
-| 版本、CI、签名、发布验收 | [发布指南](releasing.md) |
-| 漏洞报告与密钥处理 | [安全政策](../SECURITY.md) |
+| [项目结构](project-structure.md) | 按需求查找源码、测试和生成文件 |
+| [架构](architecture.md) | 依赖方向、请求处理、平台边界与持久化 |
+| [开发指南](development.md) | 环境、开发实例、验证和资源同步 |
+| [WebUI 开发](../platforms/linux/webui/README.md) | 前端运行、模拟数据、构建和 Admin 连接 |
+| [脚本目录](../scripts/README.md) | 检查、同步、安装和打包入口 |
+| [文档生成](templates/README.md) | 两份使用手册的单一维护源 |
+| [部署契约测试](../scripts/tests/docker/README.md) | 无需运行 Docker 的模板验证 |
+| [发布指南](releasing.md) | 版本、CI、资产与发布验收 |
+| [macOS 更新机制](../platforms/macos/app/UPDATE.md) | Sparkle、签名和更新源 |
+| [贡献指南](../CONTRIBUTING.md) | 提交改动和 PR 要求 |
+| [安全政策](../SECURITY.md) | 凭据、诊断数据与漏洞报告 |
 
-## 平台补充
-
-- Linux：[包内使用指南](../platforms/linux/USAGE.md)、[Docker 独立部署与迁移](../platforms/linux/DOCKER.md)、[配置目录](../platforms/linux/config/README.md)、[Scriptable](../platforms/linux/integrations/scriptable/README.md)、[TSX 集成](../platforms/linux/integrations/tsx/README.md)。
-- macOS：[安装说明](../platforms/macos/app/INSTALL.txt)、[Sparkle 更新](../platforms/macos/app/UPDATE.md)。
-
-## 文档维护
-
-- 当前公共文档放在 `docs/`；平台安装、运维与接口细节保留在对应平台目录。
-- 配置字段维护在 `configuration.md`，目录地图维护在 `project-structure.md`，验证与同步命令维护在 `development.md`；其他文档通过链接引用。
-- [templates](templates/README.md) 保存生成输入；两份 USAGE 的标记块由工具同步。维护源与副本关系见 [开发指南](development.md#单一维护源与生成副本)。
+历史版本事实保存在 [CHANGELOG](../CHANGELOG.md)。安装、使用和开发操作以这些现行指南为准。
