@@ -869,17 +869,25 @@ impl Engine {
         // Native,翻译面永远走不到,客户端拿到的是上游原始 SSE 而不是自己协议的响应。
         //
         // 先按协议 gate 规划一次探真实 route_mode,只有首选入口确实是 Native 才透传。
-        // 多出来的是一次纯计算(无 IO),真正的规划在下面按同样的输入再做一次。
+        // 这份计划随后**原样复用**给下面的调度:重新用 `plan_for_passthrough` 规划会把
+        // 严格规划已排除的异协议入口重新放回候选并标成 Native,于是优先级或旧粘性可以
+        // 让请求原生发往一个不同协议的入口(客户端拿到看不懂的响应体)。
         let mut client_out = client_out;
+        let dialect_plan = client_out
+            .as_ref()
+            .filter(|client| client.dialect.is_some())
+            .map(|_| RoutePlanner::plan_for_source(&request, config, source_format));
         let passthrough_intent = client_out.as_ref().is_some_and(|client| {
             client.passthrough.is_some()
-                && (client.dialect.is_none()
-                    || RoutePlanner::plan_for_source(&request, config, source_format)
-                        .ok()
-                        .and_then(|plan| {
-                            plan.endpoints.first().map(|endpoint| endpoint.route_mode)
-                        })
-                        == Some(RouteMode::Native))
+                && match &dialect_plan {
+                    // 没有方言要转换(原生 Anthropic 入站):按字节转发是原语义。
+                    None => true,
+                    Some(Ok(plan)) => {
+                        plan.endpoints.first().map(|endpoint| endpoint.route_mode)
+                            == Some(RouteMode::Native)
+                    }
+                    Some(Err(_)) => false,
+                }
         });
         // 判定为翻译面时把 passthrough body 一并清掉:下游还有多处直接看
         // `client.passthrough`(最关键的是 `bridging`,它决定响应 content-type 与
@@ -948,6 +956,10 @@ impl Engine {
                 source_format,
                 sumpter_core::capability::ModelCapability::Live,
             )
+        } else if let Some(plan) = dialect_plan {
+            // dialect 入站复用上面那份严格计划:候选集合、协议判定与透传判断
+            // 必须来自同一次规划,否则两者会给出互相矛盾的结论。
+            plan
         } else if passthrough_intent {
             RoutePlanner::plan_for_passthrough(&request, config, source_format)
         } else {
@@ -1266,19 +1278,36 @@ impl Engine {
             .as_ref()
             .is_none_or(|client| client.dialect.is_some())
         {
+            // 候选被剔除时保留**第一条**具体原因。转换失败与「没有入口承接这个模型」
+            // 是两类问题:前者要告诉用户是哪个字段表达不了,否则客户端只看到
+            // 「no compatible Provider」,无法判断到底是配置问题还是能力缺口。
+            let mut capability_error: Option<bridge::TranslationError> = None;
             plan.endpoints.retain(|endpoint| {
-                endpoint.route_mode == RouteMode::Native
-                    || translation_supported(
-                        source_format,
-                        endpoint,
-                        &request,
-                        &inbound_body,
-                        purpose,
-                    )
-                    .is_ok()
+                if endpoint.route_mode == RouteMode::Native {
+                    return true;
+                }
+                match translation_supported(
+                    source_format,
+                    endpoint,
+                    &request,
+                    &inbound_body,
+                    purpose,
+                ) {
+                    Ok(()) => true,
+                    Err(error) => {
+                        capability_error.get_or_insert(error);
+                        false
+                    }
+                }
             });
             if plan.endpoints.is_empty() {
-                let message = format!("no compatible Provider for {}", source_format.token());
+                let (error_code, message) = match capability_error {
+                    Some(error) => ("unsupported_translation", error.to_string()),
+                    None => (
+                        "no_compatible_protocol",
+                        format!("no compatible Provider for {}", source_format.token()),
+                    ),
+                };
                 self.record_rejected_client_with_metadata(
                     400,
                     &message,
@@ -1291,7 +1320,7 @@ impl Engine {
                 );
                 return error_response(
                     StatusCode::BAD_REQUEST,
-                    &[("error", "no_compatible_protocol"), ("message", &message)],
+                    &[("error", error_code), ("message", &message)],
                 );
             }
         }
@@ -1878,12 +1907,21 @@ impl Engine {
                     .as_ref()
                     .is_some_and(|client| client.realtime_client_secret);
                 let passthrough = client_out.as_ref().and_then(|client| {
-                    client.passthrough.as_ref().map(|body| PassthroughRequest {
-                        kind: client.passthrough_kind,
-                        body: body.as_ref(),
-                        content_type: client.content_type.as_deref(),
-                        stream: client.stream,
-                    })
+                    // 只有原生候选能按字节转发客户端正文。严格规划器在有原生候选时
+                    // 本就会丢掉全部翻译候选,所以这条判断在当前实现下不会改变结果 ——
+                    // 它守的是「passthrough_intent 只保证首选原生」这个前提:一旦将来
+                    // 计划里出现混合候选,把客户端原始协议的正文发给异协议上游,等于
+                    // 让上游解析它不认识的结构。资源/媒体规划恒为 Native,不受影响。
+                    (endpoint.route_mode == RouteMode::Native)
+                        .then(|| {
+                            client.passthrough.as_ref().map(|body| PassthroughRequest {
+                                kind: client.passthrough_kind,
+                                body: body.as_ref(),
+                                content_type: client.content_type.as_deref(),
+                                stream: client.stream,
+                            })
+                        })
+                        .flatten()
                 });
                 let build = request_build::build_outbound(
                     endpoint,

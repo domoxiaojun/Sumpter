@@ -212,15 +212,10 @@ fn validate_anthropic_request(
     // `thinking` 不再拒绝:见 validate_anthropic_content 对 thinking 块的说明。
     // 这类「能用但有损」的降级属于 Translated 路由的可见性问题,不是拒绝面。
     //
-    // `output_config` 相反,它是结构化输出契约(json_schema)。丢掉它上游会回自由
-    // 文本,客户端按 schema 解析必然失败,而且这种失败在客户端侧无法诊断。
-    if request
-        .raw
-        .get("output_config")
-        .is_some_and(|value| !value.is_null())
-    {
-        return Err(TranslationError::UnsupportedField("output_config".into()));
-    }
+    // `output_config` 是复合对象,不能整块拒绝:`effort` 只是推理强度,Claude Code
+    // 默认就带它;整块拒绝会把「入口协议不同」误报成「没有可用 Provider」。逐键
+    // 判断见 `validate_output_config`。
+    validate_output_config(request)?;
     if target == ProviderProtocol::OpenAIResponses
         && request
             .raw
@@ -228,6 +223,102 @@ fn validate_anthropic_request(
             .is_some_and(|value| value.as_array().is_some_and(|items| !items.is_empty()))
     {
         return Err(TranslationError::UnsupportedField("stop_sequences".into()));
+    }
+    Ok(())
+}
+
+/// Anthropic `output_config.format` 的 JSON Schema(仅当显式给出时)。
+///
+/// 与 checker 共用 `json_schema_format`,所以「校验放行、构造丢字段」不可能发生。
+/// schema 原样前送,不裁剪关键字 —— 缺约束的 schema 会让客户端按更严的契约解析失败。
+pub(crate) fn output_config_schema(request: &RoutingRequest) -> Option<Value> {
+    request
+        .raw
+        .get("output_config")
+        .and_then(|value| value.get("format"))
+        .filter(|value| !value.is_null())
+        .and_then(|value| json_schema_format(value).ok())
+        .cloned()
+}
+
+/// OpenAI 结构化输出的 schema 名。Anthropic 侧没有等价字段,用固定名占位。
+const JSON_SCHEMA_NAME: &str = "response";
+
+/// `output_config.effort` → 规范化推理档位。
+///
+/// 与 `validate_output_config` 共用同一次解析结果,避免「校验放行、构造时丢字段」。
+/// 未知取值按缺失处理而不拒绝:effort 是推理强度提示,不是结构化契约,为一个新档位
+/// 值让整条请求失败(客户端只看到「没有可用 Provider」)比按上游默认强度执行更糟。
+/// 这与同函数中 `thinking` 块的处理一致。
+pub fn output_config_effort(request: &RoutingRequest) -> Option<ReasoningEffort> {
+    request
+        .raw
+        .get("output_config")
+        .and_then(|value| value.get("effort"))
+        .and_then(Value::as_str)
+        .and_then(ReasoningEffort::parse)
+}
+
+/// 结构化输出格式(Anthropic `output_config.format`)。
+///
+/// 只接受 `json_schema`;`schema` 必须是对象,且对象内不出现未处理的键 —— 静默丢弃
+/// 约束会让上游回自由文本,而客户端仍按 schema 解析,这种失败在客户端侧无法诊断。
+pub(crate) fn json_schema_format(value: &Value) -> Result<&Value, TranslationError> {
+    let object = value.as_object().ok_or_else(|| {
+        TranslationError::InvalidInput("output_config.format must be an object".into())
+    })?;
+    let format_type = object.get("type").and_then(Value::as_str).unwrap_or("");
+    if format_type != "json_schema" {
+        return Err(TranslationError::UnsupportedField(format!(
+            "output_config.format.type={format_type}"
+        )));
+    }
+    for key in object.keys() {
+        if !matches!(key.as_str(), "type" | "schema") {
+            return Err(TranslationError::UnsupportedField(format!(
+                "output_config.format.{key}"
+            )));
+        }
+    }
+    let schema = object
+        .get("schema")
+        .filter(|schema| !schema.is_null())
+        .ok_or_else(|| {
+            TranslationError::InvalidInput("output_config.format.schema is required".into())
+        })?;
+    if !schema.is_object() {
+        return Err(TranslationError::InvalidInput(
+            "output_config.format.schema must be an object".into(),
+        ));
+    }
+    Ok(schema)
+}
+
+/// 逐键校验 `output_config`,只拒绝真正无法表达的子字段。
+fn validate_output_config(request: &RoutingRequest) -> Result<(), TranslationError> {
+    let Some(output_config) = request
+        .raw
+        .get("output_config")
+        .filter(|value| !value.is_null())
+    else {
+        return Ok(());
+    };
+    let object = output_config
+        .as_object()
+        .ok_or_else(|| TranslationError::InvalidInput("output_config must be an object".into()))?;
+    for (key, value) in object {
+        match key.as_str() {
+            // 已由 `output_config_effort` 消费;非法类型按缺失处理,见该函数说明。
+            "effort" => {}
+            "format" if !value.is_null() => {
+                json_schema_format(value)?;
+            }
+            other => {
+                return Err(TranslationError::UnsupportedField(format!(
+                    "output_config.{other}"
+                )));
+            }
+        }
     }
     Ok(())
 }
@@ -425,9 +516,20 @@ pub fn make_openai_chat_body(
             body.insert("stop".into(), Value::Array(stops));
         }
     }
-    let effort = reasoning_effort.or_else(|| model_name::reasoning_effort(&request.model));
+    let effort = reasoning_effort
+        .or_else(|| model_name::reasoning_effort(&request.model))
+        .or_else(|| output_config_effort(request));
     if let Some(effort) = effort {
         body.insert("reasoning_effort".into(), json!(effort.as_str()));
+    }
+    if let Some(schema) = output_config_schema(request) {
+        body.insert(
+            "response_format".into(),
+            json!({
+                "type": "json_schema",
+                "json_schema": {"name": JSON_SCHEMA_NAME, "schema": schema},
+            }),
+        );
     }
     // 客户端工具声明必须透传:Claude Code 的主对话恒带工具,丢掉它们会让上游
     // 只能回纯文本,客户端表现为「模型不听话」且没有任何错误可查。服务端工具
@@ -478,9 +580,23 @@ pub fn make_responses_body(
     if let Some(top_p) = request.raw.get("top_p").and_then(Value::as_f64) {
         body.insert("top_p".into(), json!(top_p));
     }
-    let effort = reasoning_effort.or_else(|| model_name::reasoning_effort(&request.model));
+    let effort = reasoning_effort
+        .or_else(|| model_name::reasoning_effort(&request.model))
+        .or_else(|| output_config_effort(request));
     if let Some(effort) = effort {
         body.insert("reasoning".into(), json!({"effort": effort.as_str()}));
+    }
+    if let Some(schema) = output_config_schema(request) {
+        body.insert(
+            "text".into(),
+            json!({
+                "format": {
+                    "type": "json_schema",
+                    "name": JSON_SCHEMA_NAME,
+                    "schema": schema,
+                },
+            }),
+        );
     }
     // 客户端工具与内建搜索工具共存:两者都要出现在同一个 `tools` 数组里。
     let mut tools = responses_tools_from_anthropic(request);
@@ -2337,17 +2453,62 @@ mod tests {
         }));
         assert!(check_anthropic_to_openai_responses(&thinking, false).is_ok());
 
-        // output_config 是结构化输出契约,丢了客户端解析必然失败 → 仍然拒绝。
+        // output_config 是复合对象:`effort` 只是推理强度(Claude Code 默认就带),
+        // 整块拒绝会把「入口协议不同」误报成「没有可用 Provider」。
+        let effort_only = request(json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hello"}],
+            "output_config": {"effort": "high"},
+        }));
+        assert!(check_anthropic_to_openai_chat(&effort_only, false).is_ok());
+        assert!(check_anthropic_to_openai_responses(&effort_only, false).is_ok());
+        assert_eq!(
+            output_config_effort(&effort_only),
+            Some(ReasoningEffort::High)
+        );
+
+        // 结构化输出有目标协议表达 → 放行,并由构造器原样前送 schema。
         let structured = request(json!({
             "model": "m",
             "messages": [{"role": "user", "content": "hello"}],
             "output_config": {"format": {"type": "json_schema", "schema": {"type": "object"}}},
         }));
+        assert!(check_anthropic_to_openai_chat(&structured, false).is_ok());
+        let schema = json!({"type": "object"});
+        assert_eq!(
+            make_openai_chat_body(&structured, "up", None, false)["response_format"],
+            json!({"type": "json_schema",
+                   "json_schema": {"name": "response", "schema": schema}})
+        );
+        assert_eq!(
+            make_responses_body(&structured, "up", None, false)["text"],
+            json!({"format": {"type": "json_schema", "name": "response", "schema": schema}})
+        );
+
+        // 没有目标表达的子字段必须报出字段路径,不能被笼统的 output_config 吞掉。
+        let unknown = request(json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hello"}],
+            "output_config": {"verbosity": "low"},
+        }));
         assert!(
-            check_anthropic_to_openai_chat(&structured, false)
+            check_anthropic_to_openai_chat(&unknown, false)
                 .unwrap_err()
                 .to_string()
-                .contains("output_config")
+                .contains("output_config.verbosity")
+        );
+
+        // 未知格式类型不能悄悄退化成自由文本。
+        let bad_format = request(json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hello"}],
+            "output_config": {"format": {"type": "regex"}},
+        }));
+        assert!(
+            check_anthropic_to_openai_chat(&bad_format, false)
+                .unwrap_err()
+                .to_string()
+                .contains("output_config.format.type")
         );
 
         // 服务端工具在非 websearch 模式下无处承接 → 拒绝,不静默丢掉。

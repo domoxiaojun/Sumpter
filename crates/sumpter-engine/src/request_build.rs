@@ -302,6 +302,11 @@ pub fn build_outbound(
             PassthroughKind::Raw | PassthroughKind::GeminiGenerate
         )
     });
+    // 优先级:入口/规则注入的 effort → 模型名后缀。请求体的 `output_config.effort`
+    // 刻意**不**并进这里:下面的 Anthropic 原生正文改写用同一个 `effort` 决定是否
+    // 强制 `thinking: adaptive`,把客户端请求里的 effort 混进来会覆盖入口配置的
+    // `thinking: passthrough/disabled`。翻译面(Chat/Responses)由
+    // `bridge::make_*_body` 自己按 override → 后缀 → 请求体的顺序取 effort。
     let effort = endpoint
         .effort_override
         .or_else(|| model_name::reasoning_effort(&request.model));

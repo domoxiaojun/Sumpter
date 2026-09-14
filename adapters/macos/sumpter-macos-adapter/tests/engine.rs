@@ -3469,7 +3469,17 @@ async fn classifier_rule_rejects_responses_when_stop_sequences_cannot_translate(
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(body["error"], "no_compatible_protocol");
+    // 具体原因必须落到字段名上:只报「没有可用 Provider」会让客户端无法区分
+    // 「这个入口协议不对」和「这个字段表达不了」。
+    assert_eq!(body["error"], "unsupported_translation");
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("stop_sequences"),
+        "应指出具体字段: {}",
+        body["message"]
+    );
     assert!(fake.requests().is_empty());
 }
 
@@ -5821,6 +5831,78 @@ async fn fixed_anthropic_endpoint_translates_responses() {
         .await;
     assert_eq!(response.status(), 200);
     assert_eq!(fake.requests()[0].path, "/v1/messages");
+}
+
+/// Claude Code 的 `output_config.effort` 是推理强度,不是结构化输出契约。
+/// 入口固定 Responses 时它必须照常转译,不能被当成 `output_config.format` 拒绝。
+#[tokio::test]
+async fn anthropic_effort_only_output_config_translates_to_fixed_responses() {
+    let fake = FakeTransport::new();
+    fake.push(
+        "a.example.com",
+        sse_ok(&["data: {\"type\":\"response.completed\"}\n\n"]),
+    );
+    let mut config = two_endpoint_config();
+    config.endpoints[0].protocol = EndpointProtocolMode::OpenAIResponses;
+    config.endpoints[1].enabled = false;
+    let engine = engine_with(config.normalized(), fake.clone());
+    let (status, body) = call(
+        &engine,
+        loopback(),
+        "/v1/messages",
+        vec![("content-type".into(), "application/json".into())],
+        Bytes::from(
+            serde_json::to_vec(&json!({
+                "model": "claude-opus-5",
+                "max_tokens": 128,
+                "output_config": {"effort": "high"},
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": true,
+            }))
+            .unwrap(),
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        200,
+        "effort-only output_config 不应被拒绝: {}",
+        String::from_utf8_lossy(&body)
+    );
+    let recorded = fake.requests();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].path, "/v1/responses");
+}
+
+/// 混合入口下,Responses 入站必须只在**原生**候选里调度。
+/// 回归的是「先严格规划探原生、再用不做协议 gate 的透传规划重排候选」这个组合:
+/// 那样会把排在前面的 Anthropic 入口也标成 Native,于是客户端原始 Responses 正文
+/// 被原样发给一个 Anthropic 上游,响应也不再桥回 Responses 方言。
+#[tokio::test]
+async fn responses_inbound_never_reaches_higher_ordered_anthropic_endpoint() {
+    let fake = FakeTransport::new();
+    fake.push(
+        "b.example.com",
+        sse_ok(&["data: {\"type\":\"response.completed\"}\n\n"]),
+    );
+    let mut config = two_endpoint_config();
+    // a 在前(同优先级按配置顺序),但它是固定 Anthropic;b 才是原生 Responses。
+    config.endpoints[1].protocol = EndpointProtocolMode::OpenAIResponses;
+    let engine = engine_with(config.normalized(), fake.clone());
+    let response = engine
+        .handle_request(
+            loopback(),
+            "POST",
+            "/v1/responses",
+            vec![],
+            Bytes::from(r#"{"model":"claude-opus-5","input":"ls","stream":true}"#),
+        )
+        .await;
+    assert_eq!(response.status(), 200);
+    let recorded = fake.requests();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].host, "b.example.com");
+    assert_eq!(recorded[0].path, "/v1/responses");
 }
 
 #[tokio::test]
