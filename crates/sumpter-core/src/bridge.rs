@@ -1029,14 +1029,18 @@ fn input_json_delta_event(partial_json: &str, index: usize) -> SseEvent {
 
 /// 消息收尾,不含任何 `content_block_stop`:块的关闭由调用方按开启顺序自己负责
 /// (有工具块时不止一个块要关)。
-fn message_stop_events(stop_reason: &str, output_tokens: i64) -> Vec<SseEvent> {
+///
+/// `message_delta` 一并带上 `input_tokens`:上游的 prompt/input 用量只在流末尾
+/// 才确定,而 `message_start` 早已发出(那时只能是 0)。客户端方言桥(以及双桥的
+/// 第二跳)靠这里才能拿到真实输入量;只写 output 会让客户端看到 input=0。
+fn message_stop_events(stop_reason: &str, input_tokens: i64, output_tokens: i64) -> Vec<SseEvent> {
     vec![
         SseEvent {
             event: "message_delta".into(),
             data: json!({
                 "type": "message_delta",
                 "delta": {"stop_reason": stop_reason, "stop_sequence": null},
-                "usage": {"output_tokens": output_tokens},
+                "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
             }),
         },
         SseEvent {
@@ -1465,7 +1469,11 @@ impl OpenAiStreamBridge {
         }
         self.close_text_block(&mut events);
         self.close_tool_blocks(&mut events);
-        events.extend(message_stop_events(self.stop_reason, self.output_tokens));
+        events.extend(message_stop_events(
+            self.stop_reason,
+            self.input_tokens,
+            self.output_tokens,
+        ));
         events
     }
 
@@ -2088,7 +2096,11 @@ impl ResponsesStreamBridge {
                 if !self.finished {
                     self.close_text_block(&mut events);
                     self.close_tool_blocks(&mut events);
-                    events.extend(message_stop_events(self.stop_reason, self.output_tokens));
+                    events.extend(message_stop_events(
+                        self.stop_reason,
+                        self.input_tokens,
+                        self.output_tokens,
+                    ));
                     self.finished = true;
                     self.terminal = BridgeTerminal::Completed;
                 }
@@ -2579,6 +2591,36 @@ mod tests {
         assert_eq!(done[1].1["usage"]["output_tokens"], json!(42));
         assert_eq!(done[2].0, "message_stop");
         assert!(bridge.finish().is_empty());
+    }
+
+    /// 上游的输入用量只在流末尾才到,`message_start` 早已发出;收尾事件必须带上它,
+    /// 否则客户端方言桥(以及双桥的第二跳)只能读到 0。
+    #[test]
+    fn stream_bridge_reports_input_tokens_on_message_delta() {
+        let mut bridge = OpenAiStreamBridge::new("msg_u".into(), String::new(), false, false);
+        let tail = bridge.feed(
+            b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":37,\"completion_tokens\":5}}\n\ndata: [DONE]\n\n",
+        );
+        let done = parse_events(&tail);
+        assert_eq!(done.last().unwrap().0, "message_stop");
+        let delta = done
+            .iter()
+            .find(|(event, _)| event == "message_delta")
+            .expect("message_delta");
+        assert_eq!(delta.1["usage"]["input_tokens"], json!(37));
+        assert_eq!(delta.1["usage"]["output_tokens"], json!(5));
+
+        let mut responses = ResponsesStreamBridge::new("msg_r".into(), String::new(), false);
+        let tail = responses.feed(
+            b"data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":41,\"output_tokens\":9}}}\n\n",
+        );
+        let done = parse_events(&tail);
+        let delta = done
+            .iter()
+            .find(|(event, _)| event == "message_delta")
+            .expect("message_delta");
+        assert_eq!(delta.1["usage"]["input_tokens"], json!(41));
+        assert_eq!(delta.1["usage"]["output_tokens"], json!(9));
     }
 
     #[test]

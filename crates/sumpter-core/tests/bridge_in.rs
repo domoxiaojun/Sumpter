@@ -437,6 +437,47 @@ fn data_jsons(text: &str) -> Vec<Value> {
         .collect()
 }
 
+/// 出站桥发出的 `message_start` 只能写 input_tokens=0(那时上游还没报 usage),
+/// 真实输入量出现在 `message_delta` 的 usage 里。客户端方言桥必须两处都读,
+/// 否则双桥(Chat/Responses 客户端经另一个协议上游)会把 prompt_tokens 记成 0。
+fn anthropic_sse_with_late_input_usage() -> String {
+    [
+        r#"event: message_start
+data: {"type":"message_start","message":{"id":"msg_2","model":"claude-up","usage":{"input_tokens":0,"output_tokens":0}}}"#,
+        r#"event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+        r#"event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}"#,
+        r#"event: content_block_stop
+data: {"type":"content_block_stop","index":0}"#,
+        r#"event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":37,"output_tokens":5}}"#,
+        r#"event: message_stop
+data: {"type":"message_stop"}"#,
+    ]
+    .map(|block| format!("{block}\n\n"))
+    .join("")
+}
+
+#[test]
+fn chat_bridge_takes_input_tokens_from_message_delta() {
+    let mut bridge = ChatClientBridge::new("m1".into(), "fallback".into(), false);
+    let out = feed_in_pieces(&mut bridge, &anthropic_sse_with_late_input_usage(), 7);
+    let completion: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(completion["usage"]["prompt_tokens"], 37);
+    assert_eq!(completion["usage"]["completion_tokens"], 5);
+    assert_eq!(completion["usage"]["total_tokens"], 42);
+}
+
+#[test]
+fn responses_bridge_takes_input_tokens_from_message_delta() {
+    let mut bridge = ResponsesClientBridge::new("m1".into(), "fallback".into(), false);
+    let out = feed_in_pieces(&mut bridge, &anthropic_sse_with_late_input_usage(), 5);
+    let response: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(response["usage"]["input_tokens"], 37);
+    assert_eq!(response["usage"]["output_tokens"], 5);
+}
+
 // ---------------------------------------------------------------------------
 // chat 反向桥
 // ---------------------------------------------------------------------------

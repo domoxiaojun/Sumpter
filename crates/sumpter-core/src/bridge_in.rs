@@ -1187,6 +1187,16 @@ impl ChatClientBridge {
                 {
                     self.output_tokens = tokens;
                 }
+                // 输入量只有到流末尾才确定:`message_start` 发得太早,那时上游还没报
+                // usage,值仍是 0。只读 message_start 会让双桥(如 Chat 客户端经
+                // Responses 上游)把 input 记成 0。
+                if let Some(tokens) = event
+                    .get("usage")
+                    .and_then(|u| u.get("input_tokens"))
+                    .and_then(Value::as_i64)
+                {
+                    self.input_tokens = tokens;
+                }
             }
             "message_stop" => {
                 self.terminal = BridgeTerminal::Completed;
@@ -1636,6 +1646,16 @@ impl ResponsesClientBridge {
                     .and_then(Value::as_i64)
                 {
                     self.output_tokens = tokens;
+                }
+                // 输入量只有到流末尾才确定:`message_start` 发得太早,那时上游还没报
+                // usage,值仍是 0。只读 message_start 会让双桥(如 Chat 客户端经
+                // Responses 上游)把 input 记成 0。
+                if let Some(tokens) = event
+                    .get("usage")
+                    .and_then(|u| u.get("input_tokens"))
+                    .and_then(Value::as_i64)
+                {
+                    self.input_tokens = tokens;
                 }
             }
             "message_stop" => {
