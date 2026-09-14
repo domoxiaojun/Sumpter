@@ -1196,11 +1196,16 @@ pub struct OpenAiStreamBridge {
     citations: Vec<(String, String)>,
     /// 上游 `delta.tool_calls` 按 `index` 累积的调用状态。
     tool_calls: Vec<ChatToolCallState>,
-    /// 下一个工具块的 Anthropic 块索引:文本块恒占 0,工具块从 1 起。
-    next_tool_block_index: usize,
-    /// 文本块是否已关闭。开第一个工具块前必须先关它 —— Anthropic 的内容块不
-    /// 交错,客户端按开闭配对解析。
+    /// 下一个可用的内容块索引:首个文本块占 0,之后的文本块与工具块共用这一个
+    /// 计数器,保证索引单调递增(客户端按开启顺序配对块)。
+    next_block_index: usize,
+    /// 文本块是否已关闭。开工具块前必须先关它 —— Anthropic 的内容块不交错。
+    /// 关掉之后文本再来的话另开一个新块补发,而不是丢弃。
     text_block_closed: bool,
+    /// 当前文本块的索引(`text_block_closed` 为 false 时有效)。
+    text_block_index: usize,
+    /// `self.text` 中已作为增量发出的字节数;收尾时补发剩余尾巴。
+    streamed_len: usize,
 }
 
 impl OpenAiStreamBridge {
@@ -1232,8 +1237,10 @@ impl OpenAiStreamBridge {
             websearch,
             citations: Vec::new(),
             tool_calls: Vec::new(),
-            next_tool_block_index: 1,
+            next_block_index: 1,
             text_block_closed: false,
+            text_block_index: 0,
+            streamed_len: 0,
         }
     }
 
@@ -1347,8 +1354,8 @@ impl OpenAiStreamBridge {
         if self.tool_calls[slot].block_index.is_some() || self.tool_calls[slot].name.is_empty() {
             return;
         }
-        let index = self.next_tool_block_index;
-        self.next_tool_block_index += 1;
+        let index = self.next_block_index;
+        self.next_block_index += 1;
         self.tool_calls[slot].block_index = Some(index);
         // 上游偶尔省略 id;合成一个稳定占位,否则客户端无法把结果配回调用。
         if self.tool_calls[slot].id.is_empty() {
@@ -1390,14 +1397,43 @@ impl OpenAiStreamBridge {
         events.push(input_json_delta_event(&pending, index));
     }
 
+    /// 取得当前文本块索引;文本块已关闭(工具块开过)时另开一个新块。
+    ///
+    /// 直接丢弃工具之后的文字会让流式客户端看不到它们 —— 而这类交错在带旁白
+    /// 的并行工具调用里很常见。
+    fn open_text_block(&mut self, events: &mut Vec<SseEvent>) -> usize {
+        if !self.text_block_closed {
+            return self.text_block_index;
+        }
+        let index = self.next_block_index;
+        self.next_block_index += 1;
+        self.text_block_index = index;
+        self.text_block_closed = false;
+        events.push(text_block_start_event(index));
+        index
+    }
+
     fn close_text_block(&mut self, events: &mut Vec<SseEvent>) {
         if self.text_block_closed {
             return;
         }
         self.text_block_closed = true;
         if self.stream {
-            events.push(content_block_stop_event(0));
+            events.push(content_block_stop_event(self.text_block_index));
         }
+    }
+
+    /// 收尾补发:`self.text` 里还没作为增量发出去的部分。
+    ///
+    /// 调用点必须在工具块关闭**之后**,新开的文本块才不会与仍开着的工具块交错。
+    fn flush_unstreamed_text(&mut self, events: &mut Vec<SseEvent>) {
+        if self.streamed_len >= self.text.len() {
+            return;
+        }
+        let tail = self.text[self.streamed_len..].to_string();
+        self.streamed_len = self.text.len();
+        let index = self.open_text_block(events);
+        events.push(text_delta_event(&tail, index));
     }
 
     /// 按开启顺序关闭所有工具块。
@@ -1461,14 +1497,12 @@ impl OpenAiStreamBridge {
                 }
             }
             self.text.push_str(&lines);
-            // 文本块可能已因工具块提前关闭,那时不能再往 index 0 追加增量;
-            // 引用仍留在 self.text 里,非流式响应看得到。
-            if self.stream && !self.text_block_closed {
-                events.push(text_delta_event(&lines, 0));
-            }
         }
+        // 先关文本块再关工具块,最后才补发尾巴 —— 顺序反了会开出与工具块交错的块。
         self.close_text_block(&mut events);
         self.close_tool_blocks(&mut events);
+        self.flush_unstreamed_text(&mut events);
+        self.close_text_block(&mut events);
         events.extend(message_stop_events(
             self.stop_reason,
             self.input_tokens,
@@ -1531,11 +1565,11 @@ impl OpenAiStreamBridge {
         {
             self.output_tokens += 1;
             self.text.push_str(text);
-            // 工具块一开,文本块就关了;之后再来的文本仍计入非流式响应体,但不能
-            // 作为 index 0 的增量重新发出(客户端已经收到过该块的 stop)。
-            if !self.text_block_closed {
-                events.push(text_delta_event(text, 0));
-            }
+            // 工具块开过之后这里会另开一个新文本块,而不是把文字丢掉:客户端
+            // 已经收到过旧块的 stop,再往那里写增量是非法的。
+            let index = self.open_text_block(&mut events);
+            self.streamed_len = self.text.len();
+            events.push(text_delta_event(text, index));
         }
         self.handle_tool_call_deltas(choice, &mut events);
         if let Some(finish) = choice
@@ -1650,10 +1684,11 @@ pub struct ResponsesStreamBridge {
     /// text+引用为主 —— 对齐 ccc 实测形状);文本块索引随之后移。
     websearch: bool,
     next_block_index: usize,
+    /// 当前**开着**的文本块;为 None 表示已关闭(工具块开过)。之后再来的文本
+    /// 另开一个新块补发,而不是丢掉 —— 丢弃会让流式客户端看不到工具之后的文字。
     text_block_index: Option<usize>,
-    /// 文本块是否已发过 content_block_stop。开工具块前必须先关它 —— Anthropic 的
-    /// 内容块不交错。
-    text_block_closed: bool,
+    /// `self.text` 中已作为增量发出的字节数;收尾时补发剩余尾巴。
+    streamed_len: usize,
     /// 按 `item_id` 累积的 function_call 状态。
     tool_calls: Vec<ResponsesToolCallState>,
 }
@@ -1682,7 +1717,7 @@ impl ResponsesStreamBridge {
             websearch,
             next_block_index: 0,
             text_block_index: None,
-            text_block_closed: false,
+            streamed_len: 0,
             tool_calls: Vec::new(),
         }
     }
@@ -1757,13 +1792,23 @@ impl ResponsesStreamBridge {
         let Some(index) = self.text_block_index else {
             return;
         };
-        if self.text_block_closed {
-            return;
-        }
-        self.text_block_closed = true;
+        self.text_block_index = None;
         if self.stream {
             events.push(content_block_stop_event(index));
         }
+    }
+
+    /// 收尾补发:`self.text` 里还没作为增量发出去的部分。
+    ///
+    /// 调用点必须在工具块关闭**之后**,新开的文本块才不会与仍开着的工具块交错。
+    fn flush_unstreamed_text(&mut self, events: &mut Vec<SseEvent>) {
+        if self.streamed_len >= self.text.len() {
+            return;
+        }
+        let tail = self.text[self.streamed_len..].to_string();
+        self.streamed_len = self.text.len();
+        let index = self.open_text_block(events);
+        events.push(text_delta_event(&tail, index));
     }
 
     /// `response.output_item.added` / `.done`(function_call)→ 开 tool_use 块。
@@ -2021,12 +2066,11 @@ impl ResponsesStreamBridge {
                 self.ensure_message_started(&mut events);
                 self.output_tokens += 1;
                 self.text.push_str(delta);
-                // 文本块可能已因工具块关闭,那时不再发增量(客户端收过该块的 stop);
-                // 文本仍进 self.text,非流式响应看得到。
-                if !self.text_block_closed {
-                    let index = self.open_text_block(&mut events);
-                    events.push(text_delta_event(delta, index));
-                }
+                // 工具块开过之后这里会另开一个新文本块,而不是把文字丢掉:客户端
+                // 已经收到过旧块的 stop,再往那里写增量是非法的。
+                let index = self.open_text_block(&mut events);
+                self.streamed_len = self.text.len();
+                events.push(text_delta_event(delta, index));
             }
             "response.completed" => {
                 let response = object.get("response");
@@ -2094,8 +2138,12 @@ impl ResponsesStreamBridge {
                     self.open_text_block(&mut events);
                 }
                 if !self.finished {
+                    // 先关文本块再关工具块,最后才补发尾巴 —— 顺序反了会开出与
+                    // 工具块交错的块。
                     self.close_text_block(&mut events);
                     self.close_tool_blocks(&mut events);
+                    self.flush_unstreamed_text(&mut events);
+                    self.close_text_block(&mut events);
                     events.extend(message_stop_events(
                         self.stop_reason,
                         self.input_tokens,
@@ -2623,6 +2671,52 @@ mod tests {
         assert_eq!(delta.1["usage"]["output_tokens"], json!(9));
     }
 
+    /// 工具调用之后的文本必须照样发给客户端。旧行为是把它们只留在非流式响应体里,
+    /// 流式客户端看不到模型在工具之后写的任何话。
+    #[test]
+    fn chat_bridge_streams_text_after_tool_calls() {
+        let mut bridge = OpenAiStreamBridge::new("msg_ta".into(), "up".into(), false, false);
+        let mut chunk =
+            |body: &str| parse_events(&bridge.feed(format!("data: {body}\n\n").as_bytes()));
+
+        let opening = chunk(r#"{"choices":[{"delta":{"content":"先读"}}]}"#);
+        assert_eq!(opening[2].1["delta"]["text"], "先读");
+
+        let start = chunk(
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"Read","arguments":"{}"}}]}}]}"#,
+        );
+        assert_eq!(start[0].1["index"], json!(0)); // 关文本块(索引 0)
+        assert_eq!(start[1].1["index"], json!(1)); // 开工具块
+
+        // 工具之后的文本:必须另开一个新块(index 2),不能写回已关闭的 index 0。
+        let after = chunk(r#"{"choices":[{"delta":{"content":"再写"}}]}"#);
+        assert_eq!(after[0].0, "content_block_start");
+        assert_eq!(after[0].1["index"], json!(2));
+        assert_eq!(after[1].0, "content_block_delta");
+        assert_eq!(after[1].1["index"], json!(2));
+        assert_eq!(after[1].1["delta"]["text"], "再写");
+
+        let done = parse_events(&bridge.feed(b"data: [DONE]\n\n"));
+        // 收尾顺序:先关新文本块,再关工具块 —— 不能反过来,否则块会交错。
+        let stops: Vec<i64> = done
+            .iter()
+            .filter(|(event, _)| event == "content_block_stop")
+            .map(|(_, data)| data["index"].as_i64().unwrap())
+            .collect();
+        assert_eq!(stops, vec![2, 1]);
+
+        // 非流式聚合里两段文字都在,顺序与增量一致。
+        let mut aggregated =
+            OpenAiStreamBridge::new_with_stream("msg_agg".into(), "up".into(), false, false, false);
+        let out = aggregated.feed(
+            b"data: {\"choices\":[{\"delta\":{\"content\":\"A\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"Read\",\"arguments\":\"{}\"}}]}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"B\"},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n",
+        );
+        let body: Value = serde_json::from_slice(&out).unwrap();
+        let content = body["content"].as_array().unwrap();
+        assert_eq!(content[0]["text"], "AB");
+        assert_eq!(content[1]["type"], "tool_use");
+    }
+
     #[test]
     fn chat_bridge_maps_tool_calls_to_tool_use_blocks() {
         let mut bridge = OpenAiStreamBridge::new("msg_tc".into(), "up".into(), false, false);
@@ -2851,6 +2945,39 @@ mod tests {
         assert!(text.contains("Tokio 1.49 released."));
         assert!(text.contains("引用:"));
         assert!(text.contains("tokio releases — https://github.com/tokio-rs/tokio"));
+    }
+
+    /// 与 chat 桥同一约束:function_call 之后的文本必须另开新块发出去,不能只留在
+    /// 非流式响应体里。
+    #[test]
+    fn responses_bridge_streams_text_after_function_calls() {
+        let mut bridge = ResponsesStreamBridge::new("msg_ta".into(), "up".into(), false);
+        let mut chunk =
+            |body: &str| parse_events(&bridge.feed(format!("data: {body}\n\n").as_bytes()));
+
+        chunk(r#"{"type":"response.created","response":{"model":"codex-9"}}"#);
+        let text = chunk(r#"{"type":"response.output_text.delta","delta":"先读"}"#);
+        assert_eq!(text[0].1["delta"]["text"], "先读");
+        let added = chunk(
+            r#"{"type":"response.output_item.added","item":{"type":"function_call","id":"fc_1","call_id":"call_x","name":"Read","arguments":"{}"}}"#,
+        );
+        assert_eq!(added[0].1["index"], json!(0)); // 关文本块
+        assert_eq!(added[1].1["index"], json!(1)); // 开工具块
+
+        let after = chunk(r#"{"type":"response.output_text.delta","delta":"再写"}"#);
+        assert_eq!(after[0].0, "content_block_start");
+        assert_eq!(after[0].1["index"], json!(2));
+        assert_eq!(after[1].1["delta"]["text"], "再写");
+
+        let done = chunk(
+            r#"{"type":"response.completed","response":{"status":"completed","usage":{"output_tokens":7}}}"#,
+        );
+        let stops: Vec<i64> = done
+            .iter()
+            .filter(|(event, _)| event == "content_block_stop")
+            .map(|(_, data)| data["index"].as_i64().unwrap())
+            .collect();
+        assert_eq!(stops, vec![2, 1]);
     }
 
     #[test]
