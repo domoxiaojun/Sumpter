@@ -1,6 +1,6 @@
 # Sumpter 使用手册（Linux 发布包）
 
-适用版本：**0.4.12 / schema v7**。本文随发布包提供，可在解压目录阅读；安装入口见 [README](README.md)。
+适用版本：**0.4.14 / schema v7**。本文随发布包提供，可在解压目录阅读；安装入口见 [README](README.md)。
 
 <!-- BEGIN SUMPTER_CANONICAL_ONBOARDING -->
 
