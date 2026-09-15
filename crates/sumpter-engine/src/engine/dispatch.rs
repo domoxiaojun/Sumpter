@@ -1695,9 +1695,6 @@ impl Engine {
             },
             |client| client.stream,
         );
-        let passthrough_active = client_out
-            .as_ref()
-            .is_some_and(|client| client.passthrough.is_some());
         let realtime_request = client_out
             .as_ref()
             .is_some_and(|client| client.passthrough_kind == PassthroughKind::Realtime);
@@ -1837,28 +1834,13 @@ impl Engine {
                 // client 完成事件只有一个协议三元组：尚未 accepted 时记录最后一个
                 // 实际进入调度判断的入口；accepted 后 attach_upstream 会覆盖为胜出入口。
                 guard.note_endpoint(endpoint);
-                // openai 系入口 + 请求带 tools → 跳过(桥接会丢工具)。
-                // WebSearch 是唯一的安全例外：它由严格用途指纹和最终
-                // TargetFormat 决定服务端搜索构造，不依赖入口额外声明。
+                // 这里曾有「openai 系入口 + 请求带 tools → 跳过」的守卫,前提是桥接
+                // 会丢工具。四座会话桥现在都映射工具定义、调用与结果,而且桥表达不了
+                // 的内容(服务端工具、文件引用等)已经在 `translation_supported` 里按
+                // 具体字段拒绝过了 —— 守卫与它重复,却会把本可处理的目标入口整体排除
+                // (Claude Code 的请求恒带工具),最终报成「没有可用入口」。
                 let server_retrieval =
                     request_build::server_retrieval_enabled(endpoint, request, guard.meta.purpose);
-                if !passthrough_active
-                    && endpoint.protocol != ProviderProtocol::Anthropic
-                    && !request.tools.is_empty()
-                    && !server_retrieval
-                {
-                    self.complete_upstream(self.upstream_event(
-                        endpoint,
-                        400,
-                        0,
-                        false,
-                        Some(message_tokens::OPENAI_TOOLS_UNSUPPORTED.into()),
-                        guard.meta.purpose,
-                        guard.meta.client_kind,
-                        &request_id,
-                    ));
-                    continue;
-                }
                 // 【Rust 变更】空 key = 无鉴权上游(本地 LLM/内网中转):照常转发、
                 // 不发鉴权头(见 request_build)。Swift 老版是 401 missing_secret 终止;
                 // 配置疑似遗漏仍由 ConfigWarnings 提示,不再阻断请求。

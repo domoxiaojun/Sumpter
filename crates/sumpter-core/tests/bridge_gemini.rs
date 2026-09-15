@@ -326,8 +326,11 @@ fn gemini_stream_bridge_emits_anthropic_events() {
 
     let (input, output, reasoning) = bridge.usage();
     assert_eq!((input, output, reasoning), (15, 8, 3));
-    // 真实的 assistant parts 留给 engine 做工具回放。
-    assert_eq!(bridge.replay_parts().len(), 3);
+    // 真实的 assistant parts 留给 engine 做工具回放;上游是累计快照,所以这里存
+    // 的是最近一次的完整 parts,而不是把每个快照都堆起来。
+    let replayed = bridge.replay_parts().expect("replay parts");
+    assert_eq!(replayed.len(), 1);
+    assert_eq!(replayed[0]["functionCall"]["name"], "read_file");
 }
 
 #[test]

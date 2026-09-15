@@ -709,6 +709,13 @@ fn anthropic_tools_to_gemini(request: &RoutingRequest) -> Result<Vec<Value>, Tra
     let mut declarations = Vec::new();
     for (index, tool) in request.tools.iter().enumerate() {
         let path = format!("tools[{index}]");
+        // 服务端工具(web_search 等)由上游执行,不是 function。把它们伪装成
+        // functionDeclaration 会让模型以为自己有检索能力却永远拿不到结果 —— 与
+        // bridge.rs 对同一字段的口径一致:没有等价位置就拒绝。
+        let tool_type = tool.get("type").and_then(Value::as_str).unwrap_or("");
+        if !crate::routing::inspector::is_client_tool_type(tool_type) {
+            return Err(TranslationError::UnsupportedTool(tool_type.to_string()));
+        }
         let name = tool
             .get("name")
             .and_then(Value::as_str)
@@ -767,8 +774,11 @@ pub struct GeminiStreamBridge {
     next_block_index: usize,
     /// 已开出的工具块(按声明顺序)。
     tool_blocks: Vec<ToolBlock>,
-    /// 本轮真实收到的 assistant parts(含 thoughtSignature),供 engine 回放。
-    replay_parts: Vec<Value>,
+    /// 本轮上游真实返回的 assistant parts(含 `thoughtSignature`),供 engine 回放。
+    ///
+    /// 保存**最近一次的完整快照**而不是逐块累积:Gemini 的文本走累计快照语义,
+    /// 累积会把 "He" 和 "Hello" 两份都留下来,回放时被读成 "HeHello"。
+    replay_parts: Option<Vec<Value>>,
 }
 
 struct ToolBlock {
@@ -798,14 +808,14 @@ impl GeminiStreamBridge {
             text_block_index: None,
             next_block_index: 0,
             tool_blocks: Vec::new(),
-            replay_parts: Vec::new(),
+            replay_parts: None,
         }
     }
 
-    /// 本轮 Gemini assistant parts 的真实副本(含 thoughtSignature)。engine 用它作为
-    /// 下轮工具回放的依据;没有真实签名时这里就是上游给的原样内容。
-    pub fn replay_parts(&self) -> &[Value] {
-        &self.replay_parts
+    /// 本轮 Gemini assistant parts 的真实副本(含 `thoughtSignature`)。engine 用它
+    /// 作为下轮工具回放的依据;没有真实签名时这里就是上游给的原样内容。
+    pub fn replay_parts(&self) -> Option<&[Value]> {
+        self.replay_parts.as_deref()
     }
 
     fn ensure_started(&mut self, events: &mut Vec<SseEvent>) {
@@ -976,8 +986,11 @@ impl GeminiStreamBridge {
                         self.handle_part(part, &mut events);
                     }
                 }
-                // 保存真实的 parts 供下轮回放(签名只在这里出现)。
-                self.replay_parts.push(content.clone());
+                // 保存真实的 parts 供下轮回放(签名只在这里出现)。整份替换,
+                // 不做累积 —— 上游给的是累计快照。
+                if let Some(parts) = content.get("parts").and_then(Value::as_array) {
+                    self.replay_parts = Some(parts.clone());
+                }
             }
             if let Some(reason) = candidate.get("finishReason").and_then(Value::as_str) {
                 self.stop_reason = map_finish_reason(reason);
@@ -1142,7 +1155,7 @@ impl SseBridge for GeminiStreamBridge {
     }
 
     fn replay_parts(&self) -> Option<Vec<Value>> {
-        (!self.replay_parts.is_empty()).then(|| self.replay_parts.clone())
+        self.replay_parts.clone()
     }
 }
 

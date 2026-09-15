@@ -244,3 +244,102 @@ async fn gemini_native_truncated_or_blocked_body_is_not_success() {
         );
     }
 }
+
+/// 转换面上的两轮工具调用:第二轮必须把第一轮真实收到的 `thoughtSignature`
+/// 原样带回上游。客户端只看得到 Anthropic 方言,签名只有代理见过 —— 不回放就等于
+/// 丢掉它,带思考的 Gemini 模型会拒绝这条多轮请求。
+#[tokio::test]
+async fn translated_gemini_replays_thought_signature_across_turns() {
+    let fake = FakeTransport::new();
+    fake.push(
+        "a.example.com",
+        Outcome::Status {
+            status: 200,
+            headers: vec![("content-type".into(), "text/event-stream".into())],
+            chunks: vec![
+                concat!(
+                    "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[",
+                    "{\"functionCall\":{\"name\":\"read_file\",\"args\":{\"path\":\"a\"}},",
+                    "\"thoughtSignature\":\"sig-xyz\"}]},\"finishReason\":\"STOP\"}]}\n\n"
+                )
+                .as_bytes()
+                .to_vec(),
+            ],
+        },
+    );
+    // Claude 客户端 → 固定 Gemini 入口:走转换面。
+    let mut config = config();
+    config.endpoints[0].mappings[0].client_pattern = "claude-opus-5".into();
+    let engine = engine_with(config, fake.clone());
+
+    let session = vec![("session_id".to_string(), "gemini-replay-1".to_string())];
+    let mut first_headers = headers();
+    first_headers.extend(session.clone());
+    let (status, first_body) = call(
+        &engine,
+        loopback(),
+        "/v1/messages",
+        first_headers,
+        Bytes::from_static(
+            br#"{"model":"claude-opus-5","max_tokens":64,"stream":true,
+                 "messages":[{"role":"user","content":"read a"}],
+                 "tools":[{"name":"read_file","input_schema":{"type":"object"}}]}"#,
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        200,
+        "第一轮应成功: {} / requests={}",
+        String::from_utf8_lossy(&first_body),
+        fake.requests().len()
+    );
+
+    // 第二轮:同一个会话,回传工具结果。
+    fake.push(
+        "a.example.com",
+        Outcome::Status {
+            status: 200,
+            headers: vec![("content-type".into(), "text/event-stream".into())],
+            chunks: vec![
+                concat!(
+                    "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[",
+                    "{\"text\":\"done\"}]},\"finishReason\":\"STOP\"}]}\n\n"
+                )
+                .as_bytes()
+                .to_vec(),
+            ],
+        },
+    );
+    let mut second_headers = headers();
+    second_headers.extend(session);
+    let (status, _) = call(
+        &engine,
+        loopback(),
+        "/v1/messages",
+        second_headers,
+        Bytes::from_static(
+            br#"{"model":"claude-opus-5","max_tokens":64,"stream":true,
+                 "messages":[
+                   {"role":"user","content":"read a"},
+                   {"role":"assistant","content":[{"type":"tool_use","id":"gemini_call_1",
+                     "name":"read_file","input":{"path":"a"}}]},
+                   {"role":"user","content":[{"type":"tool_result",
+                     "tool_use_id":"gemini_call_1","content":"neirong"}]}],
+                 "tools":[{"name":"read_file","input_schema":{"type":"object"}}]}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, 200, "第二轮应成功");
+
+    let recorded = fake.requests();
+    assert_eq!(recorded.len(), 2);
+    let sent: Value = serde_json::from_slice(&recorded[1].body).unwrap();
+    let parts = sent["contents"][1]["parts"].as_array().unwrap();
+    assert_eq!(
+        parts[0]["thoughtSignature"], "sig-xyz",
+        "第二轮必须带回第一轮的签名: {sent}"
+    );
+    // 签名之外，历史轮次仍按真实 parts 回放。
+    assert_eq!(parts[0]["functionCall"]["name"], "read_file");
+}
