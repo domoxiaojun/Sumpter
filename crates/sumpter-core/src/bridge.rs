@@ -456,6 +456,11 @@ pub trait SseBridge: Send {
     fn terminal(&self) -> BridgeTerminal {
         BridgeTerminal::Pending
     }
+    /// 本轮上游真实返回的 assistant parts(Gemini 的 `thoughtSignature` 只能原样
+    /// 复用,不能生成)。只有需要会话回放的桥实现它,其余桥返回 None。
+    fn replay_parts(&self) -> Option<Vec<Value>> {
+        None
+    }
 }
 
 pub fn new_message_id() -> String {

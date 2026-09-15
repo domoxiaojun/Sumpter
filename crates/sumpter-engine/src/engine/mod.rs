@@ -11,6 +11,7 @@ mod dispatch;
 pub mod events;
 mod failure;
 pub mod forward;
+mod gemini_replay;
 mod http_relay;
 mod http_response;
 pub mod inbound;

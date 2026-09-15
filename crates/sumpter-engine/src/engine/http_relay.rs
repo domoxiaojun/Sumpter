@@ -450,170 +450,196 @@ impl Engine {
             guard,
             finished: false,
         };
-        let body_stream = futures_util::stream::unfold(state, |mut st| async move {
-            if st.finished {
-                // A protocol terminal may have been observed in the same
-                // chunk that was returned to the client.  In that case the
-                // next poll reaches this fast path instead of the EOF arm;
-                // finalize bounded response metadata here as an idempotent
-                // safety net so Live/Video bindings (and client secrets) are
-                // not lost.
-                st.finalize_response_metadata();
-                return None;
-            }
-            loop {
-                let next = read_next(&mut st).await;
-                match next {
-                    Ok(Some(chunk)) => {
-                        st.guard.record_stream_chunk(chunk.len());
-                        if let Some(secret_body) = &mut st.realtime_secret_body {
-                            const MAX_SECRET_RESPONSE_BYTES: usize = 64 * 1024;
-                            let remaining =
-                                MAX_SECRET_RESPONSE_BYTES.saturating_sub(secret_body.len());
-                            if remaining > 0 {
-                                secret_body.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+        // 流结束时要回写 Gemini 的签名回放状态;`guard.engine` 已经是引擎句柄,
+        // 直接用它,不用额外捕获。
+        let replay_endpoint = endpoint.endpoint_id.clone();
+        let replay_model = endpoint.upstream_model.clone();
+        let body_stream = futures_util::stream::unfold(state, move |mut st| {
+            let replay_endpoint = replay_endpoint.clone();
+            let replay_model = replay_model.clone();
+            async move {
+                if st.finished {
+                    // A protocol terminal may have been observed in the same
+                    // chunk that was returned to the client.  In that case the
+                    // next poll reaches this fast path instead of the EOF arm;
+                    // finalize bounded response metadata here as an idempotent
+                    // safety net so Live/Video bindings (and client secrets) are
+                    // not lost.
+                    st.finalize_response_metadata();
+                    return None;
+                }
+                loop {
+                    let next = read_next(&mut st).await;
+                    match next {
+                        Ok(Some(chunk)) => {
+                            st.guard.record_stream_chunk(chunk.len());
+                            if let Some(secret_body) = &mut st.realtime_secret_body {
+                                const MAX_SECRET_RESPONSE_BYTES: usize = 64 * 1024;
+                                let remaining =
+                                    MAX_SECRET_RESPONSE_BYTES.saturating_sub(secret_body.len());
+                                if remaining > 0 {
+                                    secret_body
+                                        .extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+                                }
                             }
-                        }
-                        if let Some(video_body) = &mut st.video_session_body {
-                            const MAX_VIDEO_RESPONSE_BYTES: usize = 64 * 1024;
-                            let remaining =
-                                MAX_VIDEO_RESPONSE_BYTES.saturating_sub(video_body.len());
-                            if remaining > 0 {
-                                video_body.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+                            if let Some(video_body) = &mut st.video_session_body {
+                                const MAX_VIDEO_RESPONSE_BYTES: usize = 64 * 1024;
+                                let remaining =
+                                    MAX_VIDEO_RESPONSE_BYTES.saturating_sub(video_body.len());
+                                if remaining > 0 {
+                                    video_body
+                                        .extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+                                }
                             }
-                        }
-                        if let Some(live_body) = &mut st.live_session_body {
-                            const MAX_LIVE_RESPONSE_BYTES: usize = 64 * 1024;
-                            let remaining = MAX_LIVE_RESPONSE_BYTES.saturating_sub(live_body.len());
-                            if remaining > 0 {
-                                live_body.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+                            if let Some(live_body) = &mut st.live_session_body {
+                                const MAX_LIVE_RESPONSE_BYTES: usize = 64 * 1024;
+                                let remaining =
+                                    MAX_LIVE_RESPONSE_BYTES.saturating_sub(live_body.len());
+                                if remaining > 0 {
+                                    live_body
+                                        .extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+                                }
                             }
-                        }
-                        // Register stateful resource bindings at first
-                        // observation rather than waiting for EOF.  A client
-                        // may disconnect immediately after receiving the
-                        // creation object; the binding must still be usable
-                        // for its subsequent lookup/sideband request.
-                        st.observe_resource_metadata();
-                        if let Some(attempt_id) = st.guard.capture_attempt_id() {
-                            st.guard.engine.capture_upstream_chunk(
-                                st.guard.request_id(),
-                                attempt_id,
-                                &chunk,
-                                st.guard.started.elapsed().as_millis() as i64,
-                            );
-                        }
-                        if let Some(tracker) = &mut st.upstream_summary_tracker {
-                            if st.upstream_observe_sse {
-                                let _ = tracker.push(&chunk);
-                            } else {
-                                tracker.observe_json(&chunk);
+                            // Register stateful resource bindings at first
+                            // observation rather than waiting for EOF.  A client
+                            // may disconnect immediately after receiving the
+                            // creation object; the binding must still be usable
+                            // for its subsequent lookup/sideband request.
+                            st.observe_resource_metadata();
+                            if let Some(attempt_id) = st.guard.capture_attempt_id() {
+                                st.guard.engine.capture_upstream_chunk(
+                                    st.guard.request_id(),
+                                    attempt_id,
+                                    &chunk,
+                                    st.guard.started.elapsed().as_millis() as i64,
+                                );
                             }
-                            st.guard.record_response_summary(tracker);
-                        }
-                        let mut out = match &mut st.bridge {
-                            Some(bridge) => bridge.feed(&chunk),
-                            None => chunk.to_vec(),
-                        };
-                        if let Some(client) = &mut st.client_bridge {
-                            out = client.feed(&out);
-                        }
-                        let terminal = st.terminal_tracker.as_mut().and_then(|tracker| {
-                            if st.observe_sse {
-                                tracker.push(&out)
-                            } else {
-                                tracker.observe_json(&out)
+                            if let Some(tracker) = &mut st.upstream_summary_tracker {
+                                if st.upstream_observe_sse {
+                                    let _ = tracker.push(&chunk);
+                                } else {
+                                    tracker.observe_json(&chunk);
+                                }
+                                st.guard.record_response_summary(tracker);
                             }
-                        });
-                        if let Some(tracker) = &st.terminal_tracker {
-                            st.guard.set_tool_calls(tracker.tool_calls());
+                            let mut out = match &mut st.bridge {
+                                Some(bridge) => bridge.feed(&chunk),
+                                None => chunk.to_vec(),
+                            };
+                            if let Some(client) = &mut st.client_bridge {
+                                out = client.feed(&out);
+                            }
+                            let terminal = st.terminal_tracker.as_mut().and_then(|tracker| {
+                                if st.observe_sse {
+                                    tracker.push(&out)
+                                } else {
+                                    tracker.observe_json(&out)
+                                }
+                            });
+                            if let Some(tracker) = &st.terminal_tracker {
+                                st.guard.set_tool_calls(tracker.tool_calls());
+                            }
+                            if let Some(terminal) = terminal {
+                                // 协议终止事件已经包含在本次返回给客户端的字节中。先完成
+                                // 记账，再让下一次 poll 结束 body；客户端此时释放流不再是 499。
+                                st.finished = true;
+                                st.guard.record_stream_terminal(&terminal);
+                                st.guard.complete_from_protocol_terminal(terminal);
+                                // `finished` is set before the chunk is yielded,
+                                // so the next poll would otherwise skip the EOF
+                                // finalizer.  Register IDs immediately while the
+                                // complete terminal chunk is still available.
+                                st.finalize_response_metadata();
+                            }
+                            if !out.is_empty() {
+                                st.guard.engine.capture_client_chunk(
+                                    st.guard.request_id(),
+                                    &out,
+                                    st.guard.started.elapsed().as_millis() as i64,
+                                );
+                            }
+                            if out.is_empty() {
+                                continue;
+                            }
+                            return Some((Ok(Bytes::from(out)), st));
                         }
-                        if let Some(terminal) = terminal {
-                            // 协议终止事件已经包含在本次返回给客户端的字节中。先完成
-                            // 记账，再让下一次 poll 结束 body；客户端此时释放流不再是 499。
+                        Ok(None) => {
                             st.finished = true;
-                            st.guard.record_stream_terminal(&terminal);
-                            st.guard.complete_from_protocol_terminal(terminal);
-                            // `finished` is set before the chunk is yielded,
-                            // so the next poll would otherwise skip the EOF
-                            // finalizer.  Register IDs immediately while the
-                            // complete terminal chunk is still available.
                             st.finalize_response_metadata();
-                        }
-                        if !out.is_empty() {
-                            st.guard.engine.capture_client_chunk(
-                                st.guard.request_id(),
-                                &out,
-                                st.guard.started.elapsed().as_millis() as i64,
-                            );
-                        }
-                        if out.is_empty() {
-                            continue;
-                        }
-                        return Some((Ok(Bytes::from(out)), st));
-                    }
-                    Ok(None) => {
-                        st.finished = true;
-                        st.finalize_response_metadata();
-                        if let Some(tracker) = &mut st.upstream_summary_tracker {
-                            let _ = tracker.finish();
-                            st.guard.record_response_summary(tracker);
-                        }
-                        let mut tail = st.bridge.as_mut().map(|b| b.finish()).unwrap_or_default();
-                        if let Some(client) = &mut st.client_bridge {
-                            let mut client_tail = client.feed(&tail);
-                            client_tail.extend(client.finish());
-                            tail = client_tail;
-                        }
-                        let terminal = st.terminal_tracker.as_mut().and_then(|tracker| {
-                            if st.observe_sse {
-                                tracker.push(&tail)
-                            } else {
-                                tracker.observe_json(&tail)
+                            if let Some(tracker) = &mut st.upstream_summary_tracker {
+                                let _ = tracker.finish();
+                                st.guard.record_response_summary(tracker);
                             }
-                        });
-                        let terminal = terminal.or_else(|| {
-                            st.terminal_tracker
-                                .as_mut()
-                                .and_then(SseTerminalTracker::finish)
-                        });
-                        if let Some(tracker) = &st.terminal_tracker {
-                            st.guard.set_tool_calls(tracker.tool_calls());
+                            // 只有流正常走到这里(上游 EOF)才回写签名:失败、取消与
+                            // failover 的尝试不会经过这条路径,不会污染下一轮的依据。
+                            if let Some(session) = st.guard.meta.session_id.clone()
+                                && let Some(parts) =
+                                    st.bridge.as_ref().and_then(|bridge| bridge.replay_parts())
+                            {
+                                st.guard.engine.record_gemini_replay(
+                                    &replay_endpoint,
+                                    &replay_model,
+                                    &session,
+                                    parts,
+                                );
+                            }
+                            let mut tail =
+                                st.bridge.as_mut().map(|b| b.finish()).unwrap_or_default();
+                            if let Some(client) = &mut st.client_bridge {
+                                let mut client_tail = client.feed(&tail);
+                                client_tail.extend(client.finish());
+                                tail = client_tail;
+                            }
+                            let terminal = st.terminal_tracker.as_mut().and_then(|tracker| {
+                                if st.observe_sse {
+                                    tracker.push(&tail)
+                                } else {
+                                    tracker.observe_json(&tail)
+                                }
+                            });
+                            let terminal = terminal.or_else(|| {
+                                st.terminal_tracker
+                                    .as_mut()
+                                    .and_then(SseTerminalTracker::finish)
+                            });
+                            if let Some(tracker) = &st.terminal_tracker {
+                                st.guard.set_tool_calls(tracker.tool_calls());
+                            }
+                            if let Some(terminal) = terminal {
+                                st.guard.record_stream_terminal(&terminal);
+                                st.guard.complete_from_protocol_terminal(terminal);
+                            } else if st.strict_terminal {
+                                st.guard
+                                    .complete_from_stream(Some(StreamReadError::MissingTerminal));
+                            } else {
+                                st.guard.complete_from_stream(None);
+                            }
+                            if !tail.is_empty() {
+                                st.guard.engine.capture_client_chunk(
+                                    st.guard.request_id(),
+                                    &tail,
+                                    st.guard.started.elapsed().as_millis() as i64,
+                                );
+                            }
+                            if tail.is_empty() {
+                                return None;
+                            }
+                            return Some((Ok(Bytes::from(tail)), st));
                         }
-                        if let Some(terminal) = terminal {
-                            st.guard.record_stream_terminal(&terminal);
-                            st.guard.complete_from_protocol_terminal(terminal);
-                        } else if st.strict_terminal {
-                            st.guard
-                                .complete_from_stream(Some(StreamReadError::MissingTerminal));
-                        } else {
-                            st.guard.complete_from_stream(None);
+                        Err(e) => {
+                            st.finished = true;
+                            // If a provider closed after sending a complete JSON
+                            // object but before a protocol terminal/EOF, the
+                            // bounded parsers can still recover a resource ID.
+                            // They are deliberately idempotent and only accept a
+                            // validated ID, so attempting finalization here is
+                            // safe and avoids losing a binding on a late stream
+                            // error.
+                            st.finalize_response_metadata();
+                            let display = e.to_string();
+                            st.guard.complete_from_stream(Some(e));
+                            return Some((Err(std::io::Error::other(display)), st));
                         }
-                        if !tail.is_empty() {
-                            st.guard.engine.capture_client_chunk(
-                                st.guard.request_id(),
-                                &tail,
-                                st.guard.started.elapsed().as_millis() as i64,
-                            );
-                        }
-                        if tail.is_empty() {
-                            return None;
-                        }
-                        return Some((Ok(Bytes::from(tail)), st));
-                    }
-                    Err(e) => {
-                        st.finished = true;
-                        // If a provider closed after sending a complete JSON
-                        // object but before a protocol terminal/EOF, the
-                        // bounded parsers can still recover a resource ID.
-                        // They are deliberately idempotent and only accept a
-                        // validated ID, so attempting finalization here is
-                        // safe and avoids losing a binding on a late stream
-                        // error.
-                        st.finalize_response_metadata();
-                        let display = e.to_string();
-                        st.guard.complete_from_stream(Some(e));
-                        return Some((Err(std::io::Error::other(display)), st));
                     }
                 }
             }

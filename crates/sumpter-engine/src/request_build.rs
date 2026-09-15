@@ -305,6 +305,9 @@ pub fn build_outbound(
     // active Raw mode only changes an existing model field when its mapping
     // names a different upstream model.
     passthrough: Option<PassthroughRequest<'_>>,
+    // 本会话上一轮真实收到的 Gemini assistant parts(含签名);只在目标是 Gemini
+    // 时用得上。
+    gemini_replay: Option<&bridge_gemini::GeminiReplay>,
 ) -> OutboundBuild {
     let raw_passthrough = passthrough.as_ref().is_some_and(|request| {
         matches!(
@@ -558,7 +561,7 @@ pub fn build_outbound(
                 &base_path,
                 &format!("/v1beta/models/{model}:streamGenerateContent?alt=sse"),
             );
-            let body = bridge_gemini::try_make_gemini_body(request, effort)
+            let body = bridge_gemini::try_make_gemini_body(request, effort, gemini_replay)
                 .map(|body| serde_json::to_vec(&body).unwrap_or_default())
                 // checker 已用同一份映射校验过这条请求,构建失败在正常路径上不可达。
                 .unwrap_or_default();
@@ -1207,6 +1210,7 @@ mod tests {
             "",
             RequestPurpose::Standard,
             None,
+            None,
         );
         assert_eq!(header(&with_client, "user-agent"), vec!["client/1"]);
         let without_client = build_outbound(
@@ -1217,6 +1221,7 @@ mod tests {
             "/v1/messages",
             "",
             RequestPurpose::Standard,
+            None,
             None,
         );
         assert_eq!(
@@ -1244,6 +1249,7 @@ mod tests {
             "/v1/responses",
             "",
             RequestPurpose::Standard,
+            None,
             None,
         );
         assert_eq!(header(&build, "user-agent"), vec!["gateway/2"]);
@@ -1306,6 +1312,7 @@ mod tests {
                 content_type: Some("application/sdp"),
                 stream: false,
             }),
+            None,
         );
         assert_eq!(header(&build, "authorization"), vec!["Bearer cpa-key"]);
         assert!(header(&build, "x-api-key").is_empty());
@@ -1349,6 +1356,7 @@ mod tests {
             "/v1/messages",
             "sk-key",
             RequestPurpose::Standard,
+            None,
             None,
         );
         // 直接钉死黑名单常量:从名单里摘掉任一项都会立刻红,等价于负向验证。
@@ -1406,6 +1414,7 @@ mod tests {
             "sk-key",
             RequestPurpose::Standard,
             None,
+            None,
         );
         assert_eq!(header(&build, "user-agent"), vec!["some-other-client/1.0"]); // 透传
         assert_eq!(header(&build, "content-type"), vec!["application/json"]); // 恰一份
@@ -1431,6 +1440,7 @@ mod tests {
             "k",
             RequestPurpose::Standard,
             None,
+            None,
         );
         assert_eq!(
             header(&build, "anthropic-beta"),
@@ -1450,6 +1460,7 @@ mod tests {
             "/v1/messages",
             "k",
             RequestPurpose::Standard,
+            None,
             None,
         );
         assert_eq!(
@@ -1478,6 +1489,7 @@ mod tests {
             "/v1/messages",
             "k",
             RequestPurpose::Standard,
+            None,
             None,
         );
         let sent = header(&build, "anthropic-beta");
@@ -1523,6 +1535,7 @@ mod tests {
             "k",
             RequestPurpose::Standard,
             None,
+            None,
         );
         let tokens: Vec<&str> = header(&build, "anthropic-beta")[0].split(',').collect();
         assert!(tokens.contains(&"context-1m-2025-08-07"));
@@ -1556,6 +1569,7 @@ mod tests {
             "k",
             RequestPurpose::Standard,
             None,
+            None,
         );
         let tokens: Vec<&str> = header(&build, "anthropic-beta")[0].split(',').collect();
         assert!(
@@ -1587,6 +1601,7 @@ mod tests {
             "k",
             RequestPurpose::Standard,
             None,
+            None,
         );
         let body: Value = serde_json::from_slice(&build.request.body).unwrap();
         assert_eq!(body["model"], "up-model");
@@ -1606,6 +1621,7 @@ mod tests {
             "k",
             RequestPurpose::Standard,
             None,
+            None,
         );
         let body: Value = serde_json::from_slice(&build.request.body).unwrap();
         assert!(body.get("thinking").is_none());
@@ -1623,6 +1639,7 @@ mod tests {
             "/v1/messages",
             "k",
             RequestPurpose::Standard,
+            None,
             None,
         );
         let body: Value = serde_json::from_slice(&build.request.body).unwrap();
@@ -1648,6 +1665,7 @@ mod tests {
             "k",
             RequestPurpose::WebSearch,
             None,
+            None,
         );
         let body: Value = serde_json::from_slice(&build.request.body).unwrap();
         assert_eq!(body["model"], "opaque-upstream-alias");
@@ -1662,6 +1680,7 @@ mod tests {
             "/v1/messages",
             "k",
             RequestPurpose::WebSearch,
+            None,
             None,
         );
         let body: Value = serde_json::from_slice(&build.request.body).unwrap();
@@ -1679,6 +1698,7 @@ mod tests {
             "/v1/messages",
             "k",
             RequestPurpose::Standard,
+            None,
             None,
         );
         let body: Value = serde_json::from_slice(&build.request.body).unwrap();
@@ -1712,6 +1732,7 @@ mod tests {
                     "/v1/messages",
                     "k",
                     purpose,
+                    None,
                     None,
                 );
                 let body: Value = serde_json::from_slice(&build.request.body).unwrap();
@@ -1760,6 +1781,7 @@ mod tests {
             "k",
             RequestPurpose::WebFetch,
             None,
+            None,
         );
         let body: Value = serde_json::from_slice(&build.request.body).unwrap();
         assert!(body.get("tools").is_none());
@@ -1801,6 +1823,7 @@ mod tests {
             "k",
             RequestPurpose::Standard,
             None,
+            None,
         );
         let body: Value = serde_json::from_slice(&build.request.body).unwrap();
         assert_eq!(body["thinking"], json!({"type": "adaptive"}));
@@ -1827,6 +1850,7 @@ mod tests {
             "k",
             RequestPurpose::Standard,
             None,
+            None,
         );
         let body: Value = serde_json::from_slice(&build.request.body).unwrap();
         assert!(body.get("thinking").is_none());
@@ -1847,6 +1871,7 @@ mod tests {
             "/v1/messages",
             "k",
             RequestPurpose::Standard,
+            None,
             None,
         );
         let body: Value = serde_json::from_slice(&build.request.body).unwrap();
@@ -1873,6 +1898,7 @@ mod tests {
                 "/v1/messages",
                 "k",
                 RequestPurpose::Classifier,
+                None,
                 None,
             );
             assert_eq!(build.effort, Some(ReasoningEffort::High));
@@ -1910,6 +1936,7 @@ mod tests {
             "k",
             RequestPurpose::Standard,
             None,
+            None,
         );
         assert_eq!(build.request.path_and_query, "/v1/chat/completions");
         assert_eq!(header(&build, "accept"), vec!["text/event-stream"]);
@@ -1928,6 +1955,7 @@ mod tests {
             "k",
             RequestPurpose::Standard,
             None,
+            None,
         );
         assert_eq!(build.request.path_and_query, "/v1/chat/completions");
 
@@ -1941,6 +1969,7 @@ mod tests {
             "/v1/messages",
             "k",
             RequestPurpose::Standard,
+            None,
             None,
         );
         assert_eq!(build.request.path_and_query, "/v1/responses");
@@ -1979,6 +2008,7 @@ mod tests {
                 content_type: Some("application/json"),
                 stream: true,
             }),
+            None,
         );
         assert_eq!(
             built.request.path_and_query,
@@ -2022,6 +2052,7 @@ mod tests {
                 content_type: None,
                 stream: false,
             }),
+            None,
         );
         assert_eq!(
             build.request.path_and_query,
@@ -2056,6 +2087,7 @@ mod tests {
                 content_type: Some("application/sdp"),
                 stream: false,
             }),
+            None,
         );
         assert_eq!(header(&build, "accept"), vec!["application/sdp"]);
         assert_eq!(header(&build, "content-type"), vec!["application/sdp"]);
@@ -2083,6 +2115,7 @@ mod tests {
                 content_type: Some("application/json"),
                 stream: false,
             }),
+            None,
         );
         assert_eq!(
             build.request.path_and_query,
@@ -2102,6 +2135,7 @@ mod tests {
                 content_type: Some("application/sdp"),
                 stream: false,
             }),
+            None,
         );
         assert_eq!(leaked.request.path_and_query, "/v1/realtime?model=up-model");
         let body: Value = serde_json::from_slice(&build.request.body).unwrap();
@@ -2170,6 +2204,7 @@ mod tests {
                 content_type: None,
                 stream: false,
             }),
+            None,
         );
         assert_eq!(build.request.body, raw);
         assert!(header(&build, "content-type").is_empty());
@@ -2202,6 +2237,7 @@ mod tests {
                 content_type: None,
                 stream: false,
             }),
+            None,
         );
         assert_eq!(
             header(&build, "accept"),
@@ -2227,6 +2263,7 @@ mod tests {
             "/v1/messages?beta=true",
             "k",
             RequestPurpose::Standard,
+            None,
             None,
         );
         assert_eq!(

@@ -579,6 +579,53 @@ impl Engine {
         }
     }
 
+    /// 记录本会话上一轮真实收到的 Gemini assistant parts。
+    ///
+    /// 只在流**正常结束**后调用:失败、取消与 failover 的未完成尝试写进去,下一轮
+    /// 就会拿一份并不存在的历史去回放签名。
+    pub(super) fn record_gemini_replay(
+        &self,
+        endpoint_id: &str,
+        upstream_model: &str,
+        session: &str,
+        parts: Vec<Value>,
+    ) {
+        if session.is_empty() {
+            return;
+        }
+        let mut state = self.inner.state.lock().unwrap();
+        state.gemini_replay.record(
+            super::gemini_replay::GeminiReplayKey {
+                endpoint_id: endpoint_id.to_string(),
+                upstream_model: upstream_model.to_string(),
+                session: session.to_string(),
+            },
+            parts,
+            now_unix(),
+        );
+    }
+
+    /// 取本会话可复用的签名回放状态。键含入口与真实上游模型,所以不会跨入口错配。
+    pub(super) fn gemini_replay(
+        &self,
+        endpoint_id: &str,
+        upstream_model: &str,
+        session: &str,
+    ) -> Option<sumpter_core::bridge_gemini::GeminiReplay> {
+        if session.is_empty() {
+            return None;
+        }
+        let mut state = self.inner.state.lock().unwrap();
+        state.gemini_replay.lookup(
+            &super::gemini_replay::GeminiReplayKey {
+                endpoint_id: endpoint_id.to_string(),
+                upstream_model: upstream_model.to_string(),
+                session: session.to_string(),
+            },
+            now_unix(),
+        )
+    }
+
     pub(super) fn touch_session_success(
         &self,
         group: &str,

@@ -1926,6 +1926,16 @@ impl Engine {
                         })
                         .flatten()
                 });
+                // Gemini 的 thoughtSignature 只能按会话复用:键里同时带入口与真实
+                // 上游模型,拿不到稳定会话标识时不回放(宁可少一个签名,也不能跨会话
+                // 或跨入口错配)。
+                let gemini_replay = if endpoint.protocol == ProviderProtocol::Gemini {
+                    guard.meta.session_id.as_deref().and_then(|session| {
+                        self.gemini_replay(&endpoint.endpoint_id, &endpoint.upstream_model, session)
+                    })
+                } else {
+                    None
+                };
                 let build = request_build::build_outbound(
                     endpoint,
                     request,
@@ -1935,6 +1945,7 @@ impl Engine {
                     &api_key,
                     guard.meta.purpose,
                     passthrough,
+                    gemini_replay.as_ref(),
                 );
                 let attempt_started = Instant::now();
                 let capture_attempt_id = self.capture_attempt_started(

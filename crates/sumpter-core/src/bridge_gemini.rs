@@ -390,6 +390,46 @@ pub fn check_gemini_to_anthropic(body: &Value, model: &str) -> Result<(), Transl
 // 请求:Anthropic → Gemini
 // ---------------------------------------------------------------------------
 
+/// 上一轮真实收到的 Gemini assistant parts(含 `thoughtSignature`)。
+///
+/// 签名只能**原样复用**:伪造的签名会被上游拒绝或静默改变行为,所以拿不到就不写这个
+/// 字段,而不是生成占位值。复用前必须确认这条历史轮次就是产出这些 parts 的那一轮 ——
+/// 把签名配到别的调用上比没有签名更糟。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct GeminiReplay {
+    pub parts: Vec<Value>,
+}
+
+impl GeminiReplay {
+    /// 这条 assistant 消息是否就是产出 [`Self::parts`] 的那一轮。
+    ///
+    /// 判据是 functionCall 的**名称与入参**按顺序一一对应:客户端回传的正是上一轮
+    /// 我们发出的内容,所以入参必须逐字相同。数量或内容对不上就不复用。
+    pub fn matches_tool_use(&self, content: &Value) -> bool {
+        let Some(blocks) = content.as_array() else {
+            return false;
+        };
+        let calls: Vec<(&str, &Value)> = self
+            .parts
+            .iter()
+            .filter_map(|part| part.get("functionCall").and_then(Value::as_object))
+            .filter_map(|call| {
+                let name = call.get("name").and_then(Value::as_str)?;
+                Some((name, call.get("args").unwrap_or(&Value::Null)))
+            })
+            .collect();
+        let uses: Vec<(&str, &Value)> = blocks
+            .iter()
+            .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
+            .filter_map(|block| {
+                let name = block.get("name").and_then(Value::as_str)?;
+                Some((name, block.get("input").unwrap_or(&Value::Null)))
+            })
+            .collect();
+        !uses.is_empty() && calls == uses
+    }
+}
+
 /// Anthropic 中间格式 → Gemini 请求体。
 ///
 /// `replay` 给出本次会话此前真实收到过的 Gemini assistant parts(含
@@ -400,7 +440,16 @@ pub fn check_gemini_to_anthropic(body: &Value, model: &str) -> Result<(), Transl
 pub fn try_make_gemini_body(
     request: &RoutingRequest,
     effort: Option<ReasoningEffort>,
+    replay: Option<&GeminiReplay>,
 ) -> Result<Value, TranslationError> {
+    // 只有**最后**一轮带工具调用的 assistant 消息才需要回放签名:那正是上一轮
+    // 上游刚签发、且客户端即将回传结果的那一轮。
+    let replay_turn = replay.and_then(|_| {
+        request
+            .messages
+            .iter()
+            .rposition(|message| message.role == "assistant" && has_tool_use(&message.content))
+    });
     let mut contents: Vec<Value> = Vec::new();
     for (index, message) in request.messages.iter().enumerate() {
         let path = format!("messages[{index}].content");
@@ -413,7 +462,14 @@ pub fn try_make_gemini_body(
                 )));
             }
         };
-        let parts = anthropic_blocks_to_parts(&message.content, &path)?;
+        // 命中回放:整轮用真实 parts(含签名)替换重建结果。
+        let replayed = replay.filter(|replay| {
+            Some(index) == replay_turn && replay.matches_tool_use(&message.content)
+        });
+        let parts = match replayed {
+            Some(replay) => replay.parts.clone(),
+            None => anthropic_blocks_to_parts(&message.content, &path)?,
+        };
         if parts.is_empty() {
             continue;
         }
@@ -610,6 +666,14 @@ fn anthropic_blocks_to_parts(content: &Value, path: &str) -> Result<Vec<Value>, 
     }
 }
 
+fn has_tool_use(content: &Value) -> bool {
+    content.as_array().is_some_and(|blocks| {
+        blocks
+            .iter()
+            .any(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
+    })
+}
+
 fn text_part(text: &str) -> Option<Value> {
     (!text.is_empty()).then(|| json!({"text": text}))
 }
@@ -672,7 +736,7 @@ fn anthropic_tools_to_gemini(request: &RoutingRequest) -> Result<Vec<Value>, Tra
 
 /// Anthropic → Gemini 的可转换能力检查。
 pub fn check_anthropic_to_gemini(request: &RoutingRequest) -> Result<(), TranslationError> {
-    try_make_gemini_body(request, None).map(|_| ())
+    try_make_gemini_body(request, None, None).map(|_| ())
 }
 
 // ---------------------------------------------------------------------------
@@ -1075,6 +1139,10 @@ impl SseBridge for GeminiStreamBridge {
 
     fn terminal(&self) -> BridgeTerminal {
         self.terminal.clone()
+    }
+
+    fn replay_parts(&self) -> Option<Vec<Value>> {
+        (!self.replay_parts.is_empty()).then(|| self.replay_parts.clone())
     }
 }
 

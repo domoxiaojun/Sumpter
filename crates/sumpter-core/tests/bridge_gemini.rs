@@ -3,8 +3,9 @@
 use serde_json::{Value, json};
 use sumpter_core::bridge::SseBridge;
 use sumpter_core::bridge_gemini::{
-    GeminiClientBridge, GeminiOperation, GeminiStreamBridge, check_anthropic_to_gemini,
-    check_gemini_to_anthropic, gemini_operation, gemini_to_anthropic, try_make_gemini_body,
+    GeminiClientBridge, GeminiOperation, GeminiReplay, GeminiStreamBridge,
+    check_anthropic_to_gemini, check_gemini_to_anthropic, gemini_operation, gemini_to_anthropic,
+    try_make_gemini_body,
 };
 use sumpter_core::model_name::ReasoningEffort;
 use sumpter_core::routing::RoutingRequest;
@@ -234,7 +235,7 @@ fn anthropic_request_maps_to_gemini_body() {
                    "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}}}],
         "output_config": {"format": {"type": "json_schema", "schema": {"type": "object"}}},
     }));
-    let body = try_make_gemini_body(&req, Some(ReasoningEffort::High)).unwrap();
+    let body = try_make_gemini_body(&req, Some(ReasoningEffort::High), None).unwrap();
     assert_eq!(body["systemInstruction"]["parts"][0]["text"], "sys");
     let contents = body["contents"].as_array().unwrap();
     assert_eq!(contents[0]["role"], "user");
@@ -451,4 +452,52 @@ fn gemini_client_bridge_reports_missing_terminal_as_failure() {
         bridge.terminal(),
         sumpter_core::bridge::BridgeTerminal::Failed(_)
     ));
+}
+
+#[test]
+fn anthropic_to_gemini_reuses_real_signatures_only_for_the_matching_turn() {
+    let replay = GeminiReplay {
+        parts: json!([
+            {"text": "先看一下"},
+            {"functionCall": {"name": "read_file", "args": {"path": "a"}},
+             "thoughtSignature": "sig-abc"},
+        ])
+        .as_array()
+        .unwrap()
+        .clone(),
+    };
+    let turn = |input: Value| {
+        request(json!({
+            "model": "gemini-2.5-pro",
+            "messages": [
+                {"role": "assistant", "content": [
+                    {"type": "tool_use", "id": "gemini_call_1", "name": "read_file",
+                     "input": input}
+                ]},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "gemini_call_1", "content": "内容"}
+                ]},
+            ],
+        }))
+    };
+
+    // 入参与上一轮逐字相同 → 整轮换成真实 parts,签名原样回传。
+    let body = try_make_gemini_body(&turn(json!({"path": "a"})), None, Some(&replay)).unwrap();
+    let parts = body["contents"][0]["parts"].as_array().unwrap();
+    assert_eq!(parts[0]["text"], "先看一下");
+    assert_eq!(parts[1]["thoughtSignature"], "sig-abc");
+
+    // 入参不同 → 不是同一轮。宁可没有签名,也不能把签名配到别的调用上。
+    let drifted = try_make_gemini_body(&turn(json!({"path": "OTHER"})), None, Some(&replay));
+    let parts = drifted.unwrap()["contents"][0]["parts"].clone();
+    assert!(parts[0].get("thoughtSignature").is_none());
+    assert!(parts[0].get("text").is_none());
+
+    // 没有回放状态时同样只发重建结果(不伪造签名)。
+    let plain = try_make_gemini_body(&turn(json!({"path": "a"})), None, None).unwrap();
+    assert!(
+        plain["contents"][0]["parts"][0]
+            .get("thoughtSignature")
+            .is_none()
+    );
 }

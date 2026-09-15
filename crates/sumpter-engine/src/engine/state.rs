@@ -48,6 +48,8 @@ pub(super) struct EngineState {
     /// 会话粘性归属的 TTL 秒数（来自 `sessionStickyTtlHours`）；0 = 永不过期。
     /// 跟随配置替换更新，`touch_session_success` 的周期清理读取它。
     pub(super) session_sticky_ttl_secs: f64,
+    /// Gemini `thoughtSignature` 的会话回放状态（仅进程内、有界、按会话隔离）。
+    pub(super) gemini_replay: super::gemini_replay::GeminiReplayStore,
 }
 
 pub struct EngineInner {
@@ -237,6 +239,7 @@ impl Engine {
                     last_error: stats_error,
                     stats_durability_warning: None,
                     provider_model_health: HashMap::new(),
+                    gemini_replay: Default::default(),
                     session_sticky,
                     round_robin_cursors: HashMap::new(),
                     last_session_prune_at: now,
