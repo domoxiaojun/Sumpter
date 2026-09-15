@@ -14,6 +14,77 @@ use sumpter_core::bridge_in::{
 // ---------------------------------------------------------------------------
 
 #[test]
+fn chat_parallel_tool_calls_maps_to_anthropic_flag() {
+    // 显式 false → Anthropic 的 disable_parallel_tool_use;没给 tool_choice 时补 auto,
+    // 否则这个约束没有挂载点。
+    let body = json!({
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": [{"type": "function", "function": {"name": "Read",
+                   "parameters": {"type": "object"}}}],
+        "parallel_tool_calls": false,
+    });
+    assert!(check_chat_to_anthropic(&body).is_ok());
+    assert_eq!(
+        chat_to_anthropic(&body).unwrap()["tool_choice"],
+        json!({"type": "auto", "disable_parallel_tool_use": true})
+    );
+
+    // 已有的 tool_choice 保留,只叠加开关。
+    let with_choice = json!({
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": [{"type": "function", "function": {"name": "Read",
+                   "parameters": {"type": "object"}}}],
+        "tool_choice": "required",
+        "parallel_tool_calls": false,
+    });
+    assert_eq!(
+        chat_to_anthropic(&with_choice).unwrap()["tool_choice"],
+        json!({"type": "any", "disable_parallel_tool_use": true})
+    );
+
+    // 缺省与 true 都不改写目标协议默认行为。
+    let defaulted = json!({
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": [{"type": "function", "function": {"name": "Read",
+                   "parameters": {"type": "object"}}}],
+        "tool_choice": "auto",
+    });
+    assert_eq!(
+        chat_to_anthropic(&defaulted).unwrap()["tool_choice"],
+        json!({"type": "auto"})
+    );
+
+    let bad = json!({
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "parallel_tool_calls": "no",
+    });
+    assert!(
+        check_chat_to_anthropic(&bad)
+            .unwrap_err()
+            .to_string()
+            .contains("parallel_tool_calls")
+    );
+}
+
+#[test]
+fn chat_accepts_strict_tools_as_visible_degradation() {
+    let body = json!({
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": [{"type": "function", "function": {"name": "Read", "strict": true,
+                   "parameters": {"type": "object"}}}],
+    });
+    assert!(check_chat_to_anthropic(&body).is_ok());
+    // schema 仍然照原样前送 —— 被降级的只有采样保证。
+    let tools = chat_to_anthropic(&body).unwrap()["tools"].clone();
+    assert_eq!(tools[0]["input_schema"], json!({"type": "object"}));
+}
+
+#[test]
 fn chat_basic_conversion() {
     let body = json!({
         "model": "claude-sonnet-5",
@@ -107,14 +178,48 @@ fn chat_rejects_bad_bodies() {
 
 #[test]
 fn chat_checker_rejects_lossy_content_and_tool_shapes() {
+    // 图片有等价映射 → 放行,并且转换器真的把它变成 Anthropic image 块
+    // (而不是像旧实现那样压平成文本)。
     let image = json!({
         "model": "m",
         "messages": [{"role": "user", "content": [
             {"type": "image_url", "image_url": {"url": "https://example.invalid/a.png"}}
         ]}],
     });
-    let error = check_chat_to_anthropic(&image).unwrap_err().to_string();
-    assert!(error.contains("unsupported content block `image_url`"));
+    assert!(check_chat_to_anthropic(&image).is_ok());
+    let converted = chat_to_anthropic(&image).unwrap();
+    assert_eq!(
+        converted["messages"][0]["content"][0],
+        json!({"type": "image", "source": {"type": "url", "url": "https://example.invalid/a.png"}})
+    );
+
+    // data URL → base64 源。
+    let data_image = json!({
+        "model": "m",
+        "messages": [{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+        ]}],
+    });
+    let converted = chat_to_anthropic(&data_image).unwrap();
+    assert_eq!(
+        converted["messages"][0]["content"][0],
+        json!({"type": "image",
+               "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"}})
+    );
+
+    // 目标协议里没有等价位置的来源必须拒绝,不能隐式取回或压平。
+    let file_id = json!({
+        "model": "m",
+        "messages": [{"role": "user", "content": [
+            {"type": "input_image", "image_url": "file-abc123"}
+        ]}],
+    });
+    assert!(
+        check_chat_to_anthropic(&file_id)
+            .unwrap_err()
+            .to_string()
+            .contains("source")
+    );
 
     let citations = json!({
         "model": "m",
@@ -334,6 +439,8 @@ fn translator_checker_handles_tool_choice_without_tools_and_include() {
             .contains("content is required")
     );
 
+    // strict 是采样保证,Anthropic 没有等价开关但 schema 照原样前送 →
+    // 按 thinking 块的同一口径放行;非布尔值仍然拒绝。
     let strict_tool = json!({
         "model": "m",
         "input": "hi",
@@ -344,8 +451,19 @@ fn translator_checker_handles_tool_choice_without_tools_and_include() {
             "strict": true
         }],
     });
+    assert!(check_responses_to_anthropic(&strict_tool).is_ok());
+    let bad_strict = json!({
+        "model": "m",
+        "input": "hi",
+        "tools": [{
+            "type": "function",
+            "name": "shell",
+            "parameters": {"type": "object"},
+            "strict": "yes"
+        }],
+    });
     assert!(
-        check_responses_to_anthropic(&strict_tool)
+        check_responses_to_anthropic(&bad_strict)
             .unwrap_err()
             .to_string()
             .contains("strict")

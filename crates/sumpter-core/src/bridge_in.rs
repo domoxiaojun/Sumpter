@@ -11,7 +11,6 @@ use serde_json::{Map, Value, json};
 
 use crate::bridge::{
     BridgeTerminal, SseBlockBuffer, SseBridge, TranslationError, canonical_json, data_payload,
-    validate_text_content,
 };
 use crate::model_name::{self, ReasoningEffort};
 
@@ -122,20 +121,17 @@ fn validate_tool_definition(
             "{function_path}.parameters must be an object"
         )));
     }
-    if let Some(strict) = function.get("strict").filter(|value| !value.is_null()) {
-        match strict.as_bool() {
-            Some(false) => {}
-            Some(true) => {
-                return Err(TranslationError::UnsupportedField(format!(
-                    "{function_path}.strict"
-                )));
-            }
-            None => {
-                return Err(TranslationError::InvalidInput(format!(
-                    "{function_path}.strict must be a boolean"
-                )));
-            }
-        }
+    // `strict: true` 是「参数一定符合 schema」的采样保证;Anthropic 侧没有等价开关,
+    // 但工具 schema 本身照原样前送,所以约束没有被丢掉,只是少了那层硬保证。
+    // 按同文件对 thinking 块的处理:能用但有损的降级属于 Translated 路由的可见性
+    // 问题,不是拒绝面 —— 为它拒绝整条请求会让带 strict 工具的客户端完全无法使用。
+    if let Some(strict) = function.get("strict")
+        && !strict.is_null()
+        && !strict.is_boolean()
+    {
+        return Err(TranslationError::InvalidInput(format!(
+            "{function_path}.strict must be a boolean"
+        )));
     }
     Ok(())
 }
@@ -185,10 +181,42 @@ fn validate_tool_choice(
     Ok(())
 }
 
-/// 检查 chat/completions → Anthropic 的首版可转换能力。
+/// 校验一段 content 能否无损映射。与转换器共用 [`content_blocks`],所以不会出现
+/// 「检查放行、转换时丢字段」。
+fn check_message_content(content: Option<&Value>, path: &str) -> Result<(), TranslationError> {
+    content_blocks(content, path).map(|_| ())
+}
+
+/// system 位置在 Anthropic 里只接受文本,图片没有等价位置。
+fn check_system_content(content: Option<&Value>, path: &str) -> Result<(), TranslationError> {
+    for block in content_blocks(content, path)? {
+        if block.get("type").and_then(Value::as_str) != Some("text") {
+            return Err(TranslationError::UnsupportedContentBlock(
+                "non-text block in system content".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// `parallel_tool_calls` 必须是布尔值。`false` 由转换器落到
+/// `tool_choice.disable_parallel_tool_use`,所以这里只校验类型。
+fn validate_parallel_tool_calls(value: Option<&Value>) -> Result<(), TranslationError> {
+    if let Some(value) = value.filter(|value| !value.is_null())
+        && !value.is_boolean()
+    {
+        return Err(TranslationError::InvalidInput(
+            "parallel_tool_calls must be a boolean".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// 检查 chat/completions → Anthropic 的可转换能力。
 ///
-/// 只接受纯文本、function 工具及其对象参数；任何会被旧实现过滤或压平的
-/// 内容块、工具类型、引用或历史 reasoning 都在请求进入转换器前拒绝。
+/// 判据是「映射会不会丢掉客户端依赖的语义」:文本、图片(data URL / http(s) URL)、
+/// function 工具及其对象参数都有映射,放行;其余内容块(音频、内联文件、带引用/
+/// 标注的文本)与专用工具类型没有等价位置,在进入转换器前显式拒绝。
 pub fn check_chat_to_anthropic(body: &Value) -> Result<(), TranslationError> {
     let object = body
         .as_object()
@@ -204,21 +232,18 @@ pub fn check_chat_to_anthropic(body: &Value) -> Result<(), TranslationError> {
         })?;
         let role = required_string(message, "role")?;
         match role {
-            "system" | "developer" | "user" => {
+            "system" | "developer" => {
                 let content = required_value(message, "content", &format!("messages[{index}]"))?;
-                validate_text_content(
-                    Some(content),
-                    &format!("messages[{index}].content"),
-                    &["text", "input_text", "output_text"],
-                    true,
-                )?;
+                check_system_content(Some(content), &format!("messages[{index}].content"))?;
+            }
+            "user" => {
+                let content = required_value(message, "content", &format!("messages[{index}]"))?;
+                check_message_content(Some(content), &format!("messages[{index}].content"))?;
             }
             "assistant" => {
-                validate_text_content(
+                check_message_content(
                     message.get("content"),
                     &format!("messages[{index}].content"),
-                    &["text", "input_text", "output_text"],
-                    true,
                 )?;
                 if let Some(refusal) = message.get("refusal")
                     && !refusal.is_null()
@@ -270,12 +295,7 @@ pub fn check_chat_to_anthropic(body: &Value) -> Result<(), TranslationError> {
             "tool" => {
                 required_string(message, "tool_call_id")?;
                 let content = required_value(message, "content", &format!("messages[{index}]"))?;
-                validate_text_content(
-                    Some(content),
-                    &format!("messages[{index}].content"),
-                    &["text", "input_text", "output_text"],
-                    true,
-                )?;
+                check_message_content(Some(content), &format!("messages[{index}].content"))?;
             }
             other => {
                 return Err(TranslationError::UnsupportedField(format!(
@@ -295,6 +315,7 @@ pub fn check_chat_to_anthropic(body: &Value) -> Result<(), TranslationError> {
         validate_tool_definition(tool, &format!("tools[{index}]"), true)?;
     }
     validate_tool_choice(object.get("tool_choice"), !tools.is_empty(), true)?;
+    validate_parallel_tool_calls(object.get("parallel_tool_calls"))?;
     if let Some(effort) = object.get("reasoning_effort")
         && !effort.is_null()
         && effort
@@ -309,7 +330,11 @@ pub fn check_chat_to_anthropic(body: &Value) -> Result<(), TranslationError> {
     Ok(())
 }
 
-/// 检查 Responses → Anthropic 的首版可转换能力。
+/// 检查 Responses → Anthropic 的可转换能力。
+///
+/// 与 chat checker 同一判据:文本、图片、function_call/function_call_output 与
+/// `parallel_tool_calls` 放行;带正文或签名的历史 reasoning、`include`、专用工具
+/// 类型等无法保真的项拒绝,不静默丢弃。
 pub fn check_responses_to_anthropic(body: &Value) -> Result<(), TranslationError> {
     let object = body
         .as_object()
@@ -341,14 +366,20 @@ pub fn check_responses_to_anthropic(body: &Value) -> Result<(), TranslationError
                     "message" => {
                         let role = required_string(item, "role")?;
                         match role {
-                            "system" | "developer" | "user" | "assistant" => {
+                            "system" | "developer" => {
                                 let content =
                                     required_value(item, "content", &format!("input[{index}]"))?;
-                                validate_text_content(
+                                check_system_content(
                                     Some(content),
                                     &format!("input[{index}].content"),
-                                    &["text", "input_text", "output_text"],
-                                    true,
+                                )?;
+                            }
+                            "user" | "assistant" => {
+                                let content =
+                                    required_value(item, "content", &format!("input[{index}]"))?;
+                                check_message_content(
+                                    Some(content),
+                                    &format!("input[{index}].content"),
                                 )?;
                             }
                             other => {
@@ -370,12 +401,7 @@ pub fn check_responses_to_anthropic(body: &Value) -> Result<(), TranslationError
                     "function_call_output" => {
                         required_string(item, "call_id")?;
                         let output = required_value(item, "output", &format!("input[{index}]"))?;
-                        validate_text_content(
-                            Some(output),
-                            &format!("input[{index}].output"),
-                            &["text", "input_text", "output_text"],
-                            true,
-                        )?;
+                        check_message_content(Some(output), &format!("input[{index}].output"))?;
                     }
                     "reasoning" => {
                         // 空 summary 且没有 encrypted_content 时没有可观察推理内容，
@@ -425,6 +451,7 @@ pub fn check_responses_to_anthropic(body: &Value) -> Result<(), TranslationError
         validate_tool_definition(tool, &format!("tools[{index}]"), false)?;
     }
     validate_tool_choice(object.get("tool_choice"), !tools.is_empty(), false)?;
+    validate_parallel_tool_calls(object.get("parallel_tool_calls"))?;
     if let Some(reasoning) = object.get("reasoning")
         && !reasoning.is_null()
     {
@@ -500,30 +527,30 @@ pub fn chat_to_anthropic(body: &Value) -> Result<Value, String> {
         .get("messages")
         .and_then(Value::as_array)
         .ok_or("missing messages")?;
-    for message in inbound {
+    for (index, message) in inbound.iter().enumerate() {
+        let path = format!("messages[{index}].content");
         let role = message.get("role").and_then(Value::as_str).unwrap_or("");
         match role {
             "system" | "developer" => {
-                let text = text_of_content(message.get("content"));
-                if !text.is_empty() {
-                    system_parts.push(text);
+                for block in normalize_blocks(message.get("content"), &path) {
+                    if let Some(text) = block.get("text").and_then(Value::as_str) {
+                        system_parts.push(text.to_string());
+                    }
                 }
             }
             "user" => {
-                let text = text_of_content(message.get("content"));
-                if !text.is_empty() {
-                    push_block(&mut messages, "user", json!({"type": "text", "text": text}));
-                }
+                push_blocks(
+                    &mut messages,
+                    "user",
+                    normalize_blocks(message.get("content"), &path),
+                );
             }
             "assistant" => {
-                let text = text_of_content(message.get("content"));
-                if !text.is_empty() {
-                    push_block(
-                        &mut messages,
-                        "assistant",
-                        json!({"type": "text", "text": text}),
-                    );
-                }
+                push_blocks(
+                    &mut messages,
+                    "assistant",
+                    normalize_blocks(message.get("content"), &path),
+                );
                 if let Some(calls) = message.get("tool_calls").and_then(Value::as_array) {
                     for (offset, call) in calls.iter().enumerate() {
                         if call
@@ -566,15 +593,16 @@ pub fn chat_to_anthropic(body: &Value) -> Result<Value, String> {
                     .get("tool_call_id")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
-                push_block(
-                    &mut messages,
-                    "user",
-                    json!({
-                        "type": "tool_result",
-                        "tool_use_id": tool_use_id,
-                        "content": text_of_content(message.get("content")),
-                    }),
-                );
+                let mut block = json!({
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                });
+                if let Some(content) =
+                    tool_result_content(normalize_blocks(message.get("content"), &path))
+                {
+                    block["content"] = content;
+                }
+                push_block(&mut messages, "user", block);
             }
             _ => {}
         }
@@ -606,7 +634,9 @@ pub fn chat_to_anthropic(body: &Value) -> Result<Value, String> {
     let tools = chat_tools(object.get("tools"));
     if !tools.is_empty() {
         out.insert("tools".into(), Value::Array(tools));
-        if let Some(choice) = map_tool_choice(object.get("tool_choice")) {
+        if let Some(choice) =
+            tool_choice_with_parallel(object.get("tool_choice"), object.get("parallel_tool_calls"))
+        {
             out.insert("tool_choice".into(), choice);
         }
     }
@@ -644,7 +674,7 @@ pub fn responses_to_anthropic(body: &Value) -> Result<Value, String> {
             }
         }
         Some(Value::Array(items)) => {
-            for item in items {
+            for (index, item) in items.iter().enumerate() {
                 let item_type = item
                     .get("type")
                     .and_then(Value::as_str)
@@ -659,17 +689,17 @@ pub fn responses_to_anthropic(body: &Value) -> Result<Value, String> {
                 match item_type {
                     "message" => {
                         let role = item.get("role").and_then(Value::as_str).unwrap_or("");
-                        let text = text_of_content(item.get("content"));
-                        if text.is_empty() {
-                            continue;
-                        }
+                        let path = format!("input[{index}].content");
+                        let blocks = normalize_blocks(item.get("content"), &path);
                         match role {
-                            "system" | "developer" => system_parts.push(text),
-                            "user" | "assistant" => push_block(
-                                &mut messages,
-                                role,
-                                json!({"type": "text", "text": text}),
-                            ),
+                            "system" | "developer" => {
+                                for block in blocks {
+                                    if let Some(text) = block.get("text").and_then(Value::as_str) {
+                                        system_parts.push(text.to_string());
+                                    }
+                                }
+                            }
+                            "user" | "assistant" => push_blocks(&mut messages, role, blocks),
                             _ => {}
                         }
                     }
@@ -699,15 +729,17 @@ pub fn responses_to_anthropic(body: &Value) -> Result<Value, String> {
                             .get("call_id")
                             .and_then(Value::as_str)
                             .unwrap_or_default();
-                        push_block(
-                            &mut messages,
-                            "user",
-                            json!({
-                                "type": "tool_result",
-                                "tool_use_id": tool_use_id,
-                                "content": text_of_content(item.get("output")),
-                            }),
-                        );
+                        let mut block = json!({
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_id,
+                        });
+                        if let Some(content) = tool_result_content(normalize_blocks(
+                            item.get("output"),
+                            &format!("input[{index}].output"),
+                        )) {
+                            block["content"] = content;
+                        }
+                        push_block(&mut messages, "user", block);
                     }
                     // reasoning 项没有可回签的 thinking 签名,丢弃。
                     _ => {}
@@ -740,7 +772,9 @@ pub fn responses_to_anthropic(body: &Value) -> Result<Value, String> {
     let tools = responses_tools(object.get("tools"));
     if !tools.is_empty() {
         out.insert("tools".into(), Value::Array(tools));
-        if let Some(choice) = map_tool_choice(object.get("tool_choice")) {
+        if let Some(choice) =
+            tool_choice_with_parallel(object.get("tool_choice"), object.get("parallel_tool_calls"))
+        {
             out.insert("tool_choice".into(), choice);
         }
     }
@@ -779,6 +813,140 @@ fn push_block(messages: &mut Vec<Value>, role: &str, block: Value) {
         return;
     }
     messages.push(json!({"role": role, "content": [block]}));
+}
+
+fn push_blocks(messages: &mut Vec<Value>, role: &str, blocks: Vec<Value>) {
+    for block in blocks {
+        push_block(messages, role, block);
+    }
+}
+
+/// OpenAI 图片部件的两种外形:chat 的 `image_url: {url}` 与 Responses 的
+/// `input_image: "<url>"`(对象形式也接受)。
+fn image_part_url(part: &Map<String, Value>) -> Option<&str> {
+    match part.get("image_url") {
+        Some(Value::String(url)) => Some(url.as_str()),
+        Some(Value::Object(object)) => object.get("url").and_then(Value::as_str),
+        _ => None,
+    }
+}
+
+/// image URL → Anthropic image 块。
+///
+/// 只接受能无损表达的两类来源:data URL(base64)与 http(s) URL。provider 侧的文件
+/// 引用(`file_id` 等)在目标协议里没有等价物,而且转换器不该替用户去下载内容 ——
+/// 明确拒绝,不隐式取回。
+fn anthropic_image_block(url: &str, path: &str) -> Result<Value, TranslationError> {
+    if let Some(rest) = url.strip_prefix("data:") {
+        let (meta, data) = rest.split_once(',').ok_or_else(|| {
+            TranslationError::InvalidInput(format!("{path} is not a valid data URL"))
+        })?;
+        let media_type = meta
+            .strip_suffix(";base64")
+            .filter(|meta| !meta.is_empty())
+            .ok_or_else(|| {
+                TranslationError::UnsupportedField(format!("{path} data URL is not base64"))
+            })?;
+        if data.is_empty() {
+            return Err(TranslationError::InvalidInput(format!(
+                "{path} data URL has an empty payload"
+            )));
+        }
+        return Ok(json!({
+            "type": "image",
+            "source": {"type": "base64", "media_type": media_type, "data": data},
+        }));
+    }
+    if url.starts_with("http://") || url.starts_with("https://") {
+        return Ok(json!({"type": "image", "source": {"type": "url", "url": url}}));
+    }
+    Err(TranslationError::UnsupportedField(format!("{path} source")))
+}
+
+/// 一段 content → Anthropic 内容块数组。
+///
+/// 文本与图片都能无损表达;其余部件(音频、内联文件等)没有等价位置,显式拒绝 ——
+/// 压平成文本会让模型在缺少上下文的情况下作答,而客户端完全看不到原因。
+fn content_blocks(content: Option<&Value>, path: &str) -> Result<Vec<Value>, TranslationError> {
+    match content {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::String(text)) => Ok(text_block(text).into_iter().collect()),
+        Some(Value::Array(parts)) => {
+            let mut blocks = Vec::new();
+            for (index, part) in parts.iter().enumerate() {
+                let part_path = format!("{path}[{index}]");
+                let object = part.as_object().ok_or_else(|| {
+                    TranslationError::InvalidInput(format!("{part_path} must be an object"))
+                })?;
+                match object.get("type").and_then(Value::as_str).unwrap_or("text") {
+                    "text" | "input_text" | "output_text" => {
+                        // 引用/标注在 Anthropic 的 text 块里没有对应位置。与
+                        // `bridge.rs::validate_text_content` 同一判定:丢掉它们不会
+                        // 改变正文,但客户端会以为看到的回答带引用,所以显式拒绝。
+                        for key in ["annotations", "citations"] {
+                            if object.get(key).is_some_and(|value| {
+                                !value.is_null()
+                                    && value.as_array().is_none_or(|items| !items.is_empty())
+                            }) {
+                                return Err(TranslationError::UnsupportedField(format!(
+                                    "{part_path}.{key}"
+                                )));
+                            }
+                        }
+                        let text = object.get("text").and_then(Value::as_str).ok_or_else(|| {
+                            TranslationError::InvalidInput(format!(
+                                "{part_path}.text must be a string"
+                            ))
+                        })?;
+                        blocks.extend(text_block(text));
+                    }
+                    "image_url" | "input_image" => {
+                        let url = image_part_url(object).ok_or_else(|| {
+                            TranslationError::InvalidInput(format!(
+                                "{part_path}.image_url is required"
+                            ))
+                        })?;
+                        blocks.push(anthropic_image_block(url, &part_path)?);
+                    }
+                    other => {
+                        return Err(TranslationError::UnsupportedContentBlock(other.to_string()));
+                    }
+                }
+            }
+            Ok(blocks)
+        }
+        Some(_) => Err(TranslationError::InvalidInput(format!(
+            "{path} must be a string or content-block array"
+        ))),
+    }
+}
+
+fn text_block(text: &str) -> Option<Value> {
+    (!text.is_empty()).then(|| json!({"type": "text", "text": text}))
+}
+
+/// 宽松转换用的内容块。
+///
+/// 优先走严格映射(图片这类能无损表达的部件全部保留),无法映射时才退回旧的纯文本
+/// 压平 —— 这条路径只用于路由归一化,真正发往异协议上游前会先过 checker,那里会用
+/// 同一份 [`content_blocks`] 拒绝掉表达不了的内容,所以不会出现「检查放行、转换丢字段」。
+fn normalize_blocks(content: Option<&Value>, path: &str) -> Vec<Value> {
+    match content_blocks(content, path) {
+        Ok(blocks) => blocks,
+        Err(_) => text_block(&text_of_content(content)).into_iter().collect(),
+    }
+}
+
+/// tool_result 的 content:纯文本保持字符串形状(与既有 wire 形状一致),
+/// 含图片等块时用块数组。
+fn tool_result_content(blocks: Vec<Value>) -> Option<Value> {
+    match blocks.len() {
+        0 => None,
+        1 if blocks[0].get("type").and_then(Value::as_str) == Some("text") => {
+            Some(blocks[0].get("text").cloned().unwrap_or(Value::Null))
+        }
+        _ => Some(Value::Array(blocks)),
+    }
 }
 
 /// 工具入参:JSON 字符串解析成对象;解析失败或非对象一律空对象
@@ -907,6 +1075,30 @@ fn map_tool_choice(choice: Option<&Value>) -> Option<Value> {
         }
         _ => None,
     }
+}
+
+/// OpenAI 的 `parallel_tool_calls: false` 与 Anthropic 的
+/// `tool_choice.disable_parallel_tool_use` 是同一个约束,直接落过去。
+///
+/// 只有显式 `false` 才写:缺省与 `true` 都保持目标协议的默认行为,不替客户端改语义。
+/// 客户端没给 tool_choice 时补一个 `auto` —— 否则这个开关没有挂载点,约束会丢失。
+fn tool_choice_with_parallel(
+    choice: Option<&Value>,
+    parallel_tool_calls: Option<&Value>,
+) -> Option<Value> {
+    let mut mapped = map_tool_choice(choice);
+    if parallel_tool_calls.and_then(Value::as_bool) != Some(false) {
+        return mapped;
+    }
+    let object = mapped.get_or_insert_with(|| json!({"type": "auto"}));
+    // `none` 没有并行语义,不接受这个字段。
+    if object.get("type").and_then(Value::as_str) == Some("none") {
+        return mapped;
+    }
+    if let Some(map) = object.as_object_mut() {
+        map.insert("disable_parallel_tool_use".into(), json!(true));
+    }
+    mapped
 }
 
 // ---------------------------------------------------------------------------
