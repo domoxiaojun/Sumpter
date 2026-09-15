@@ -1194,31 +1194,27 @@ impl GeminiClientBridge {
             }
             "content_block_start" => {
                 let block = event.get("content_block").cloned().unwrap_or(Value::Null);
-                match block.get("type").and_then(Value::as_str).unwrap_or("") {
-                    "tool_use" => {
-                        let index =
-                            event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
-                        self.tools.push((
+                // 文本块按 Anthropic 的形状开,正文由 delta 处理 —— 流式逐帧发出,
+                // 非流式累积到 parts(由 append_text 建 part),这里不需要动作。
+                if block.get("type").and_then(Value::as_str) == Some("tool_use") {
+                    let index = event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+                    self.tools.push((
+                        index,
+                        ToolBlock {
                             index,
-                            ToolBlock {
-                                index,
-                                id: block
-                                    .get("id")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or_default()
-                                    .to_string(),
-                                name: block
-                                    .get("name")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or_default()
-                                    .to_string(),
-                                args: String::new(),
-                            },
-                        ));
-                    }
-                    // 文本块按 Anthropic 的形状开;正文由 delta 处理 ——
-                    // 流式逐帧发出,非流式累积到 parts(由 append_text 建 part)。
-                    _ => {}
+                            id: block
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_string(),
+                            name: block
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_string(),
+                            args: String::new(),
+                        },
+                    ));
                 }
                 Vec::new()
             }
