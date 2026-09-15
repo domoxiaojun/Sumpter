@@ -117,7 +117,7 @@ function RecentEventRequestCell({ event, live = false }) {
       </span>
       {project && <span className="telemetry-event-meta" title={project}>{project}</span>}
       <span className={`telemetry-event-meta${live ? ' telemetry-live-request-summary' : ''}`} title={summary}>
-        {[eventKindLabel(event.kind), eventClientKindLabel(event), eventAgentLabel(event), recentEventPurposeLabel(event)]
+        {[eventKindLabel(event.kind), eventClientKindLabel(event), eventAgentLabel(event), recentEventPurposeLabel(event), event.sourceIP]
           .filter(Boolean).join(' · ')}
       </span>
       {tools.length > 0 && (
