@@ -63,7 +63,7 @@ async fn pi_websocket_preserves_frames_and_attributes_both_sides() {
         assert!(events.iter().any(|e| e.kind == "upstream"));
         for event in events.iter().filter(|e| matches!(e.kind.as_str(), "client" | "upstream")) {
             assert_eq!(event.client_kind, Some(ClientKind::Pi));
-            assert_eq!(event.session_id.as_deref(), Some("pi-session"));
+            assert_eq!(event.session_id.as_deref(), Some("native-session"));
             assert!(event.codex_metadata.is_none());
             assert_eq!(event.client_declared.as_ref().and_then(|m| m.project.as_deref()), Some("pi-project"));
         }

@@ -321,6 +321,11 @@ impl CompletionGuard {
             .map(|attempt| &attempt.endpoint)
             .or(self.attempted_endpoint.as_ref());
         RuntimeEvent {
+            source_ip: self
+                .meta
+                .request_context
+                .as_ref()
+                .and_then(|context| context.source_ip.clone()),
             session_source: self
                 .meta
                 .request_context
@@ -438,6 +443,7 @@ impl CompletionGuard {
         event.effective_model = Some(self.meta.effective_model.clone());
         event.feature_rule_id = self.meta.feature_rule_id.clone();
         if let Some(context) = &self.meta.request_context {
+            event.source_ip = context.source_ip.clone();
             event.request_method = Some(context.method.clone());
             event.request_path = Some(context.path.clone());
             event.route_intent = Some(context.route_intent.clone());

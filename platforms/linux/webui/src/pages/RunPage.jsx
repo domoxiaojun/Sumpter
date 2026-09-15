@@ -95,7 +95,7 @@ function recentEventStatusDetail(event) {
 function recentEventRequestSummary(event) {
   return [recentEventProjectSummary(event), eventKindLabel(event.kind), eventClientKindLabel(event),
     eventAgentLabel(event) ? `代理: ${eventAgentLabel(event)}` : null,
-    recentEventPurposeLabel(event)].filter(Boolean).join(' · ');
+    recentEventPurposeLabel(event), event.sourceIP].filter(Boolean).join(' · ');
 }
 
 function RecentEventOutcome({ event, compact = false }) {

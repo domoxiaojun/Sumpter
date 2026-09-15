@@ -1,6 +1,6 @@
 # Sumpter Linux
 
-Linux 版以后台进程运行，通过 WebUI 管理入口、模型组、请求与统计。本文对应 **0.4.9 / schema v7**，支持 x86_64 / aarch64 的静态 musl 发布包。
+Linux 版以后台进程运行，通过 WebUI 管理入口、模型组、请求与统计。本文对应 **0.4.10 / schema v7**，支持 x86_64 / aarch64 的静态 musl 发布包。
 
 容器用户直接阅读 [Docker Compose 部署教程](DOCKER.md)。下面介绍在 Linux 上直接安装 systemd 服务；两种方式共用 [使用手册](USAGE.md)。
 
@@ -25,7 +25,7 @@ bash /tmp/sumpter-install.sh --repo domoxiaojun/sumpter
 
 system 服务由专用低权限 `sumpter` 用户运行。无桌面会话的服务器通常更适合 system 服务；user 服务依赖该用户的 systemd session bus。
 
-需要固定版本时追加 `--version v0.4.9`。安装器也接受 `--admin-host`、`--admin-port`、`--admin-password-file`，将管理设置写入 systemd drop-in。升级时原有配置与密码会保留。
+需要固定版本时追加 `--version v0.4.10`。安装器也接受 `--admin-host`、`--admin-port`、`--admin-password-file`，将管理设置写入 systemd drop-in。升级时原有配置与密码会保留。
 
 如果已下载并解压官方 Linux 包，在包目录执行 `bash scripts/install.sh` 或 `sudo bash scripts/install.sh`，无需再次指定 `--repo`。
 

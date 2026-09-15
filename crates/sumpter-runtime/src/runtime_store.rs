@@ -408,6 +408,8 @@ pub struct RuntimeChange {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeEventListItem {
+    #[serde(rename = "sourceIP", skip_serializing_if = "Option::is_none")]
+    pub source_ip: Option<String>,
     pub session_source: Option<String>,
     pub hook_event: Option<String>,
     pub details_omitted: bool,
@@ -544,6 +546,7 @@ impl RuntimeEventListItem {
             is_codex_event.then(|| event_attribution_scope(&event).as_str().to_owned());
         Self {
             cache_read,
+            source_ip: event.source_ip,
             usage_summary,
             details_omitted: false,
             session_source: Some(session_source),

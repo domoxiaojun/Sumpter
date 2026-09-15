@@ -582,6 +582,8 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
     public var requestID: String?
     /// 原始入站 HTTP method/path 与稳定意图标签，用于被拒请求排障。
     public var requestMethod: String?
+    /// Sumpter 接收到的 TCP 对端 IP；反向代理部署时为代理地址。
+    public var sourceIP: String?
     public var requestPath: String?
     public var routeIntent: String?
     /// 客户端提供的稳定会话标识（例如 Claude Code session header）。
@@ -628,7 +630,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         case upstreamModel, effectiveModel, statusCode, durationMS, failover
         case message, toolCalls, streamTrace, outcome, phase, featureRuleID
         case failureDetail, failureKind, failurePhase, requestPurpose, requestID
-        case requestMethod, requestPath, routeIntent
+        case requestMethod, requestPath, routeIntent, sourceIP
         case sessionID, stickyKey, ttfbMS, timeoutMS, upstreamStatusCode, upstreamRequestID
         case codexMetadata, clientDeclared, grokMetadata, projectName, projectSource, localUser, codexThreadClass, attributionScope
     }
@@ -687,6 +689,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         requestPurpose = try c.decodeIfPresent(RequestPurpose.self, forKey: .requestPurpose)
         requestID = try c.decodeIfPresent(String.self, forKey: .requestID)
         requestMethod = try c.decodeIfPresent(String.self, forKey: .requestMethod)
+        sourceIP = try c.decodeIfPresent(String.self, forKey: .sourceIP)
         requestPath = try c.decodeIfPresent(String.self, forKey: .requestPath)
         routeIntent = try c.decodeIfPresent(String.self, forKey: .routeIntent)
         sessionID = try c.decodeIfPresent(String.self, forKey: .sessionID)
@@ -748,6 +751,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         try c.encodeIfPresent(requestPurpose, forKey: .requestPurpose)
         try c.encodeIfPresent(requestID, forKey: .requestID)
         try c.encodeIfPresent(requestMethod, forKey: .requestMethod)
+        try c.encodeIfPresent(sourceIP, forKey: .sourceIP)
         try c.encodeIfPresent(requestPath, forKey: .requestPath)
         try c.encodeIfPresent(routeIntent, forKey: .routeIntent)
         try c.encodeIfPresent(sessionID, forKey: .sessionID)
@@ -812,6 +816,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         requestPurpose: RequestPurpose? = nil,
         requestID: String? = nil,
         requestMethod: String? = nil,
+        sourceIP: String? = nil,
         requestPath: String? = nil,
         routeIntent: String? = nil,
         sessionID: String? = nil,
@@ -856,6 +861,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         self.requestPurpose = requestPurpose
         self.requestID = requestID
         self.requestMethod = requestMethod
+        self.sourceIP = sourceIP
         self.requestPath = requestPath
         self.routeIntent = routeIntent
         self.sessionID = sessionID

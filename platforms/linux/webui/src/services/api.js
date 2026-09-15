@@ -186,6 +186,7 @@ function runtimeEventListItem(event, sequence) {
     outcome: event.outcome,
     statusCode: event.statusCode,
     requestID: event.requestID,
+    sourceIP: event.sourceIP,
     sessionID: event.sessionID ?? event.codexMetadata?.sessionID,
     projectID: event.projectID,
     projectName: event.projectName ?? event.project,

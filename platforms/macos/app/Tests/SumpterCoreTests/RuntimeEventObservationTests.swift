@@ -3,6 +3,20 @@ import XCTest
 @testable import SumpterApp
 
 final class RuntimeEventObservationTests: XCTestCase {
+    func testSourceIPSurvivesListDetailAndJSONRoundTrip() throws {
+        for ip in ["192.0.2.25", "2001:db8::25"] {
+            let item = try JSONDecoder().decode(AdminWire.RuntimeEventListItem.self, from: data([
+                "seq": 1, "changeSeq": 2, "sourceIP": ip, "detailsOmitted": true
+            ]))
+            XCTAssertEqual(item.sourceIP, ip)
+            XCTAssertEqual(item.runtimeEvent.sourceIP, ip)
+            XCTAssertTrue(RuntimeEventDisplay.requestSummary(item.runtimeEvent).contains(ip))
+            let encoded = try JSONEncoder().encode(item.runtimeEvent)
+            XCTAssertEqual(try JSONDecoder().decode(RuntimeEvent.self, from: encoded).sourceIP, ip)
+        }
+        XCTAssertNil(try JSONDecoder().decode(RuntimeEvent.self, from: data()).sourceIP)
+    }
+
     func testEventListShowsLogicalModelInsteadOfClientOrUpstreamModel() throws {
         var event = try JSONDecoder().decode(RuntimeEvent.self, from: data([
             "clientModel": "claude-opus-5", "effectiveModel": "gpt-5.6-terra", "upstreamModel": "provider-alias"

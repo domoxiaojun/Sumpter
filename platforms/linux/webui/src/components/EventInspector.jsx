@@ -138,6 +138,7 @@ export function EventInspector({ event, chain = [], requestSummary, onSelect, ex
     <dl className="event-inspector-fields" data-event-detail-tier="primary">
       <Field label="时间 / 类型" value={`${formatTimestamp(event.timestamp, { date: true })} · ${eventKindLabel(event.kind)}`} />
       <Field label="客户端 / 项目" value={requestSummary || `${eventClientKindLabel(event)} · ${eventProjectContext(event).label}`} />
+      <Field label="请求源 IP" value={event.sourceIP} />
       {notify && <Field label="Hook 类型" value={event.hookEvent} />}
       {!notify && <>
         <Field label="客户端模型 / 入口" value={`${event.clientModel || eventModel(event)} · ${eventEndpointName(event)}`} />

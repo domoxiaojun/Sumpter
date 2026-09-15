@@ -215,6 +215,7 @@ export const mockRuntime = {
   recentEvents: [
     {
       id: 'ev-stream-live-1',
+      sourceIP: '192.0.2.25',
       requestID: 'req-live-001',
       timestamp: now - 3500,
       kind: 'client',

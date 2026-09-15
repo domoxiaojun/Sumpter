@@ -138,7 +138,7 @@ enum RuntimeEventDisplay {
         [RuntimeEventPresentation.projectAttribution(
             eventKind: event.kind, metadata: event.codexMetadata, declared: event.clientDeclared,
             projectedName: event.projectName, projectedSource: event.projectSource, projectedLocalUser: event.localUser
-        ), kind(event.kind), clientKind(event), event.agentSummaryLabel, rowPurpose(event)].compactMap { $0 }.joined(separator: " · ")
+        ), kind(event.kind), clientKind(event), event.agentSummaryLabel, rowPurpose(event), event.sourceIP].compactMap { $0 }.joined(separator: " · ")
     }
 
     static func streamTrace(_ event: RuntimeEvent) -> String? {

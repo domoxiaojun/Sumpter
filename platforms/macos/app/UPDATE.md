@@ -17,7 +17,7 @@ Sumpter macOS App 使用 Sparkle 2.9.6。DMG 用于首次安装，版本化 zip 
 正式更新需要稳定 HTTPS feed、Sparkle Ed25519 公钥和私钥。私钥只放钥匙串或 CI Secret：
 
 ```bash
-export SHORT_VERSION=0.4.9
+export SHORT_VERSION=0.4.10
 export BUILD_VERSION=1
 export SPARKLE_FEED_URL='https://updates.example.com/sumpter/appcast.xml'
 export SPARKLE_PUBLIC_ED_KEY='仅填公钥'
@@ -32,7 +32,7 @@ export CODESIGN_IDENTITY='Developer ID Application: Example (TEAMID)' # 可选
 将完整 App zip 放进归档目录，注入私钥并生成：
 
 ```bash
-export SPARKLE_DOWNLOAD_URL_PREFIX='https://github.com/domoxiaojun/sumpter/releases/download/v0.4.9/'
+export SPARKLE_DOWNLOAD_URL_PREFIX='https://github.com/domoxiaojun/sumpter/releases/download/v0.4.10/'
 ./platforms/macos/app/generate-appcast.sh /path/to/archives
 ```
 

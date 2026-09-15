@@ -1433,6 +1433,7 @@ impl Engine {
             &client_meta,
         );
         self.record_event(RuntimeEvent {
+            source_ip: None,
             session_source: None,
             hook_event: None,
             cache_read: None,

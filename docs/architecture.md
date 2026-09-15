@@ -32,6 +32,8 @@ HTTP、SSE 和 WebSocket 在上游响应或真实握手后才算成功。一个�
 
 统计只从客户端完成事件的上游 usage 聚合，pending 单独计数；缓存 Token 按协议口径保留原始值。诊断捕获独立于统计，默认关闭，可能包含未脱敏正文和凭据。
 
+请求事件的 `sourceIP` 记录入站 TCP 对端地址，支持 IPv4 / IPv6，并随客户端请求、上游尝试、拒绝和完成事件保存。两端事件列表与详情显示该字段；旧事件或缺少网络上下文时为空。经过反向代理时记录代理 IP，不采信 `Forwarded`、`X-Forwarded-For` 或 `X-Real-IP`。它复用事件 JSON 持久化，无需升级数据库 schema。
+
 ## 平台边界
 
 Linux adapter 组合 Admin API、WebUI 静态服务、systemd 控制和 Linux 生命周期。macOS adapter 组合 sidecar、原生菜单栏 / 通知和 App 控制。两端页面保持字段、状态语义与主要交互一致，窗口、sheet、通知和系统服务可按平台适配。

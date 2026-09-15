@@ -1,6 +1,9 @@
 #[path = "../../../../tests/contracts/pi_websocket.rs"]
 mod pi_websocket;
 
+#[path = "../../../../tests/contracts/source_ip_websocket.rs"]
+mod source_ip_websocket;
+
 use std::sync::Arc;
 
 use sumpter_core::config::AppConfig;

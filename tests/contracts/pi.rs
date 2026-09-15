@@ -47,7 +47,7 @@ fn assert_pi_events(engine: &Engine) {
     assert!(!events.is_empty());
     for event in events {
         assert_eq!(event.client_kind, Some(ClientKind::Pi));
-        assert_eq!(event.session_id.as_deref(), Some("pi-session"));
+        assert_eq!(event.session_id.as_deref(), Some("native-session"));
         assert!(event.codex_metadata.is_none());
         assert_eq!(event.agent_role.as_deref(), Some("memory"));
         assert_eq!(

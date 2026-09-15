@@ -46,6 +46,7 @@ use sumpter_core::routing::RequestPurpose;
 
 #[derive(Clone)]
 pub(super) struct WebSocketEventContext {
+    pub(super) source_ip: Option<String>,
     pub(super) request_id: String,
     pub(super) request_path: String,
     pub(super) route_intent: String,
@@ -422,6 +423,7 @@ pub(super) fn websocket_connect_retry_after(
 }
 
 pub(super) fn websocket_event_context(
+    remote: Option<std::net::IpAddr>,
     path_and_query: &str,
     headers: &[(String, String)],
     model: &str,
@@ -441,6 +443,7 @@ pub(super) fn websocket_event_context(
     };
     let client_kind = detect_client_kind(headers, true);
     WebSocketEventContext {
+        source_ip: remote.map(|ip| ip.to_string()),
         request_id: new_event_id(),
         request_path: bounded_request_path(path),
         route_intent: route_intent.into(),
@@ -545,6 +548,7 @@ pub(super) fn websocket_client_event(
     failure: Option<&FailureInfo>,
 ) -> RuntimeEvent {
     let mut event = RuntimeEvent {
+        source_ip: context.source_ip.clone(),
         session_source: None,
         hook_event: None,
         cache_read: None,

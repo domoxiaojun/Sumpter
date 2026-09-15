@@ -15,7 +15,7 @@ fn pi_explicit_identity_and_session_headers_have_stable_precedence() {
         ("X-Sumpter-Session-ID".into(), "explicit".into()),
     ];
     assert_eq!(detect_client_kind(&headers, false), ClientKind::Pi);
-    assert_eq!(observed_session_id(&headers).as_deref(), Some("explicit"));
+    assert_eq!(observed_session_id(&headers).as_deref(), Some("native"));
     assert!(
         retain_codex_metadata_for_client(
             ClientKind::Pi,

@@ -716,6 +716,7 @@ public enum AdminWire {
         public var outcome: RuntimeEventOutcome? { payload.outcome }
         public var statusCode: Int { payload.statusCode }
         public var requestID: String? { payload.requestID }
+        public var sourceIP: String? { payload.sourceIP }
         public var requestMethod: String? { payload.requestMethod }
         public var requestPath: String? { payload.requestPath }
         public var routeIntent: String? { payload.routeIntent }

@@ -227,6 +227,7 @@ impl Engine {
                 event.request_method = event.request_method.or(client.request_method);
                 event.request_path = event.request_path.or(client.request_path);
                 event.route_intent = event.route_intent.or(client.route_intent);
+                event.source_ip = event.source_ip.or(client.source_ip);
                 event.codex_metadata = event.codex_metadata.or(client.codex_metadata);
                 event.client_declared = event.client_declared.or(client.client_declared);
                 event.grok_metadata = event.grok_metadata.or(client.grok_metadata);
@@ -291,18 +292,25 @@ impl Engine {
         request_context: Option<InboundRequestContext>,
     ) {
         let event_id = new_event_id();
-        let (request_method, request_path, route_intent, context_session_id, grok_metadata) =
-            request_context
-                .map(|context| {
-                    (
-                        Some(context.method),
-                        Some(context.path),
-                        Some(context.route_intent),
-                        context.session_id,
-                        context.grok_metadata,
-                    )
-                })
-                .unwrap_or((None, None, None, None, None));
+        let (
+            request_method,
+            request_path,
+            route_intent,
+            source_ip,
+            context_session_id,
+            grok_metadata,
+        ) = request_context
+            .map(|context| {
+                (
+                    Some(context.method),
+                    Some(context.path),
+                    Some(context.route_intent),
+                    context.source_ip,
+                    context.session_id,
+                    context.grok_metadata,
+                )
+            })
+            .unwrap_or((None, None, None, None, None, None));
         // A body/header Codex metadata projection is safe to use for
         // attribution even when the caller passed a stale header-only kind.
         // Never let it override a positively identified Claude/Grok client.
@@ -370,6 +378,7 @@ impl Engine {
             request_method,
             request_path,
             route_intent,
+            source_ip,
             session_id,
             // 请求在规划/鉴权阶段就被拒,尚未建立粘性归属。
             sticky_key: None,
@@ -392,12 +401,14 @@ impl Engine {
     /// stores query values, frame bodies, SDP, or credentials.
     pub fn record_rejected_websocket(
         &self,
+        remote: Option<std::net::IpAddr>,
         path_and_query: &str,
         headers: &[(String, String)],
         status: u16,
         message: &str,
     ) {
         self.record_rejected_websocket_with_metadata(
+            remote,
             path_and_query,
             headers,
             status,
@@ -411,8 +422,10 @@ impl Engine {
     /// Codex Desktop may put the only `originator`/`session_id` marker in that
     /// frame; preserving the bounded metadata keeps an early model/path
     /// rejection attributable without storing the frame body.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn record_rejected_websocket_with_metadata(
         &self,
+        remote: Option<std::net::IpAddr>,
         path_and_query: &str,
         headers: &[(String, String)],
         status: u16,
@@ -420,7 +433,7 @@ impl Engine {
         frame_metadata: Option<CodexMetadata>,
         frame_model: Option<String>,
     ) {
-        let context = self.inbound_request_context("GET", path_and_query, headers);
+        let context = self.inbound_request_context(remote, "GET", path_and_query, headers);
         let header_metadata = CodexMetadata::from_request(headers, None);
         let codex_metadata = merge_codex_metadata(frame_metadata, header_metadata);
         let detected_client = detect_client_kind(headers, true);
@@ -509,6 +522,7 @@ impl Engine {
             request_method: None,
             request_path: None,
             route_intent: None,
+            source_ip: None,
             session_id: None,
             // upstream 尝试的粘性键由 complete_upstream 从对应 client 事件恢复。
             sticky_key: None,

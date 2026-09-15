@@ -1288,11 +1288,14 @@ struct ExportEventRow {
 
 /// The event list is intentionally a projection, not a detail endpoint.  Keep
 /// the fields needed to render/filter the list in typed SQLite columns and do
-/// not deserialize `payload_json` here.  Optional diagnostic fields (Codex
+/// not deserialize full `payload_json` here. sourceIP is extracted only for
+/// the selected page rows, avoiding a schema migration for this optional field.
+/// Optional diagnostic fields (Codex
 /// metadata, stream trace, tool calls, message and raw failure detail) remain
 /// available through `/runtime/events/{id}`.
 #[derive(Debug, sea_orm::FromQueryResult)]
 struct EventListProjection {
+    source_ip: Option<String>,
     hook_event: Option<String>,
     cache_read_state: Option<String>,
     cache_read_finality: Option<String>,
@@ -1388,6 +1391,7 @@ fn event_list_item_from_projection(row: EventListProjection) -> RuntimeEventList
     };
     let usage_present = usage != sumpter_core::events::ResponseUsage::default();
     RuntimeEventListItem {
+        source_ip: row.source_ip,
         details_omitted: true,
         session_source: row.session_source,
         hook_event: row.hook_event,

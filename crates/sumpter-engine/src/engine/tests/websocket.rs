@@ -70,6 +70,7 @@ fn websocket_codex_frame_preserves_workspace_and_canonical_identity() {
     let frame = WebSocketMessage::Text(body.to_string().into());
     let metadata = websocket_message_codex_metadata(&frame).unwrap();
     let context = WebSocketEventContext {
+        source_ip: None,
         request_id: "request".into(),
         request_path: "/v1/responses".into(),
         route_intent: "responses_websocket".into(),
@@ -130,6 +131,7 @@ fn websocket_first_frame_originator_upgrades_generic_attribution() {
     );
     let metadata = websocket_message_codex_metadata(&frame).expect("frame metadata");
     let context = WebSocketEventContext {
+        source_ip: None,
         request_id: "request".into(),
         request_path: "/v1/responses".into(),
         route_intent: "responses_websocket".into(),

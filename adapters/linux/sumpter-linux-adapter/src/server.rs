@@ -85,6 +85,7 @@ async fn dispatch(
                 &engine.config().listener.allowed_cidrs,
             );
             engine.record_rejected_websocket(
+                remote_ip,
                 &path_and_query,
                 &pairs,
                 if cidr_allowed { 401 } else { 403 },
@@ -111,7 +112,7 @@ async fn dispatch(
         let upgrade = select_websocket_protocol(upgrade, &pairs);
         if realtime {
             let prepared = match engine
-                .prepare_realtime_websocket(&path_and_query, &pairs)
+                .prepare_realtime_websocket(remote_ip, &path_and_query, &pairs)
                 .await
             {
                 Ok(prepared) => prepared,

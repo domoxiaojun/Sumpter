@@ -23,6 +23,7 @@ use sumpter_core::stream_terminal::SseDialect;
 /// path never contains a query string.
 #[derive(Clone)]
 pub(super) struct InboundRequestContext {
+    pub(super) source_ip: Option<String>,
     pub(super) session_source: Option<String>,
     pub(super) method: String,
     pub(super) path: String,
@@ -318,6 +319,9 @@ pub(super) fn apply_current_request_context(event: &mut RuntimeEvent) {
     event.request_method.get_or_insert(context.method);
     event.request_path.get_or_insert(context.path);
     event.route_intent.get_or_insert(context.route_intent);
+    if event.source_ip.is_none() {
+        event.source_ip = context.source_ip;
+    }
     if event.session_id.is_none() {
         event.session_id = context.session_id;
     }
@@ -353,14 +357,17 @@ pub(super) fn observed_session_id(headers: &[(String, String)]) -> Option<String
 
 pub(super) fn observed_session(headers: &[(String, String)]) -> Option<(String, &'static str)> {
     [
-        "x-sumpter-session-id",
+        // Prefer the client's native session identity.  Sumpter's attribution
+        // header is only a compatibility fallback; it must not override the
+        // protocol-level identity used for routing affinity.
+        "session-id",
+        "session_id",
         "x-claude-code-session-id",
         "x-grok-session-id",
         "x-grok-conv-id",
-        "session_id",
-        "session-id",
         "x-session-id",
         "x-session-affinity",
+        "x-sumpter-session-id",
     ]
     .iter()
     .find_map(|name| {
@@ -373,7 +380,7 @@ pub(super) fn observed_session(headers: &[(String, String)]) -> Option<(String, 
             end -= 1;
         }
         let source = match *name {
-            "x-sumpter-session-id" => "client_declared",
+            "x-sumpter-session-id" => "sumpter_attribution",
             "x-grok-session-id" => "grok_session",
             "x-grok-conv-id" => "grok_conversation",
             _ => "header",
@@ -438,11 +445,22 @@ mod session_observation_tests {
         );
         assert_eq!(
             observe_request_session(
+                ClientKind::Pi,
+                &[
+                    ("x-sumpter-session-id".into(), "legacy".into()),
+                    ("session_id".into(), "native".into())
+                ],
+                &json!({}).as_object().unwrap().clone()
+            ),
+            Some(("native".into(), "header"))
+        );
+        assert_eq!(
+            observe_request_session(
                 ClientKind::ClaudeCode,
                 &[("x-sumpter-session-id".into(), "explicit".into())],
                 &raw
             ),
-            Some(("explicit".into(), "client_declared"))
+            Some(("explicit".into(), "sumpter_attribution"))
         );
         assert_eq!(
             observe_request_session(ClientKind::GrokBuild, &[], &raw),

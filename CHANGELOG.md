@@ -6,6 +6,21 @@
 
 ## [Unreleased]
 
+## [0.4.10] - 2026-09-15
+
+### 修复
+
+- 修复 Anthropic、OpenAI Chat、Responses 与 Gemini 会话协议转换，补齐工具调用、图片、流式用量、推理历史和 Gemini thoughtSignature 回放；避免工具调用后的文本及跨分片调用丢失。
+- 会话归因优先使用客户端原生会话 ID，Sumpter 归因头作为兼容后备，保持 HTTP 与 WebSocket 一致。
+
+### 新增
+
+- Linux WebUI 与 macOS 请求事件显示源 IP，覆盖 HTTP、WebSocket、上游尝试、早期拒绝及历史查询。记录 TCP 对端地址，不采信转发头；经反向代理时显示代理地址。旧事件可为空，无需数据库 schema 迁移。
+
+### 边界
+
+- Compact、countTokens、embedContent、图片生成和 Realtime 继续使用原生协议路径。
+
 ## [0.4.9] - 2026-09-13
 
 ### 新增

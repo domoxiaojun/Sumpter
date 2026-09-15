@@ -352,6 +352,7 @@ impl Engine {
             upstream.request_method = Some("GET".into());
             upstream.request_path = Some(context.request_path.clone());
             upstream.route_intent = Some(context.route_intent.clone());
+            upstream.source_ip = context.source_ip.clone();
             upstream.client_model = Some(context.model.clone());
             upstream.effective_model = Some(context.model.clone());
             upstream.ttfb_ms = error.ttfb_ms;
@@ -411,6 +412,7 @@ impl Engine {
         upstream.request_method = Some("GET".into());
         upstream.request_path = Some(context.request_path.clone());
         upstream.route_intent = Some(context.route_intent.clone());
+        upstream.source_ip = context.source_ip.clone();
         upstream.client_model = Some(context.model.clone());
         upstream.effective_model = Some(context.model.clone());
         upstream.ttfb_ms = Some(connection.handshake_ttfb_ms);
@@ -444,6 +446,7 @@ impl Engine {
     /// by the first post-upgrade `response.create` frame.
     pub async fn prepare_realtime_websocket(
         &self,
+        remote: Option<IpAddr>,
         path_and_query: &str,
         headers: &[(String, String)],
     ) -> Result<PreparedWebSocket, WebSocketPrepareError> {
@@ -455,13 +458,25 @@ impl Engine {
                 "invalid_request",
                 "websocket path is not a Realtime endpoint",
             );
-            self.record_rejected_websocket(path_and_query, headers, error.status, error.message());
+            self.record_rejected_websocket(
+                remote,
+                path_and_query,
+                headers,
+                error.status,
+                error.message(),
+            );
             return Err(error);
         }
         if let Err(error) = validate_realtime_call_target(path_and_query) {
             let (status, code, message) = realtime_call_path_error(error);
             let prepared = WebSocketPrepareError::new(status.as_u16(), code, message);
-            self.record_rejected_websocket(path_and_query, headers, prepared.status, message);
+            self.record_rejected_websocket(
+                remote,
+                path_and_query,
+                headers,
+                prepared.status,
+                message,
+            );
             return Err(prepared);
         }
         let sideband_model = self
@@ -498,6 +513,7 @@ impl Engine {
                 let error =
                     WebSocketPrepareError::new(400, "invalid_request", "invalid websocket model");
                 self.record_rejected_websocket(
+                    remote,
                     path_and_query,
                     headers,
                     error.status,
@@ -506,8 +522,14 @@ impl Engine {
                 return Err(error);
             }
         };
-        let context =
-            websocket_event_context(path_and_query, headers, &request.model, intent, started);
+        let context = websocket_event_context(
+            remote,
+            path_and_query,
+            headers,
+            &request.model,
+            intent,
+            started,
+        );
         match self
             .connect_native_websocket(path, path_and_query, headers, &request)
             .await
@@ -591,7 +613,13 @@ impl Engine {
         let path = path_without_query(&path_and_query);
         if let Err(error) = validate_realtime_call_target(&path_and_query) {
             let (status, code, message) = realtime_call_path_error(error);
-            self.record_rejected_websocket(&path_and_query, &headers, status.as_u16(), message);
+            self.record_rejected_websocket(
+                remote,
+                &path_and_query,
+                &headers,
+                status.as_u16(),
+                message,
+            );
             let _ = send_websocket_json_error(&mut socket, code, message).await;
             return;
         }
@@ -639,6 +667,7 @@ impl Engine {
                 }
                 Some(Err(error)) => {
                     self.record_rejected_websocket(
+                        remote,
                         &path_and_query,
                         &headers,
                         400,
@@ -663,6 +692,7 @@ impl Engine {
                 .as_ref()
                 .and_then(websocket_message_codex_metadata);
             self.record_rejected_websocket_with_metadata(
+                remote,
                 &path_and_query,
                 &headers,
                 400,
@@ -684,6 +714,7 @@ impl Engine {
                 .as_ref()
                 .and_then(websocket_message_codex_metadata);
             self.record_rejected_websocket_with_metadata(
+                remote,
                 &path_and_query,
                 &headers,
                 400,
@@ -715,6 +746,7 @@ impl Engine {
             RealtimeRouteIntent::StandardRealtime
         };
         let context = websocket_event_context(
+            remote,
             &path_and_query,
             &headers,
             &request.model,

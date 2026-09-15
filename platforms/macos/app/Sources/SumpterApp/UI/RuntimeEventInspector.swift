@@ -17,6 +17,7 @@ struct RuntimeEventInspector: View {
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 6) {
                 InfoRow(title: "时间 / 类型", value: "\(RuntimeEventDisplay.dateTime(event.timestamp)) · \(RuntimeEventDisplay.kind(event.kind))")
                 InfoRow(title: "客户端 / 项目", value: RuntimeEventDisplay.requestSummary(event))
+                InfoRow(title: "请求源 IP", value: event.sourceIP ?? "—", copyable: event.sourceIP != nil)
                 if notify { InfoRow(title: "Hook 类型", value: event.hookEvent ?? "—") }
                 if !notify {
                     InfoRow(title: "客户端模型 / 入口", value: "\(event.clientModel ?? "—") · \(RuntimeEventDisplay.endpoint(event))")

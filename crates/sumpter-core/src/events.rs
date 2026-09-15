@@ -2556,6 +2556,10 @@ impl Default for DiagnosticCaptureSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeEvent {
+    /// 入站 TCP 对端地址；不采信客户端可伪造的 Forwarded / X-Forwarded-For。
+    /// 反向代理部署时为代理地址；旧事件或没有网络上下文时为空。
+    #[serde(rename = "sourceIP", default, skip_serializing_if = "is_none")]
+    pub source_ip: Option<String>,
     #[serde(
         rename = "sessionSource",
         default,
@@ -2979,6 +2983,7 @@ mod tests {
 
     fn event(id: &str, kind: &str, ts: f64) -> RuntimeEvent {
         RuntimeEvent {
+            source_ip: None,
             session_source: None,
             hook_event: None,
             cache_read: None,

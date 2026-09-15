@@ -85,6 +85,7 @@ mod tests {
 
     fn client_event(status: i64, ts: f64) -> RuntimeEvent {
         RuntimeEvent {
+            source_ip: None,
             session_source: None,
             hook_event: None,
             cache_read: None,

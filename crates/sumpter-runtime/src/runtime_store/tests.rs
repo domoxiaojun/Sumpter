@@ -1,6 +1,56 @@
 use super::*;
 
 #[test]
+fn source_ip_survives_persistence_restart_and_page_projection() {
+    let dir = test_dir("source-ip");
+    let path = dir.join("runtime.sqlite3");
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    for (id, ip) in [
+        ("v4", Some("192.0.2.25")),
+        ("v6", Some("2001:db8::25")),
+        ("legacy", None),
+    ] {
+        let mut value = event(
+            id,
+            KIND_CLIENT,
+            200,
+            RuntimeEventPhase::Completed,
+            Some(RuntimeEventOutcome::Succeeded),
+            event_now(),
+        );
+        value.source_ip = ip.map(str::to_owned);
+        store.enqueue(value, RuntimeCounters::default()).unwrap();
+    }
+    store.flush().unwrap();
+    drop(store);
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    let page =
+        crate::runtime_query::events_page(&path, &crate::runtime_query::EventPageQuery::default())
+            .unwrap();
+    for (id, ip) in [
+        ("v4", Some("192.0.2.25")),
+        ("v6", Some("2001:db8::25")),
+        ("legacy", None),
+    ] {
+        assert_eq!(
+            store.event(id).unwrap().unwrap().event.source_ip.as_deref(),
+            ip
+        );
+        assert_eq!(
+            page.events
+                .iter()
+                .find(|event| event.id == id)
+                .unwrap()
+                .source_ip
+                .as_deref(),
+            ip
+        );
+    }
+    drop(store);
+    remove_test_dir(&dir);
+}
+
+#[test]
 fn last_store_handle_closes_writer_before_returning() {
     let dir = test_dir("orm-writer-shutdown");
     let path = dir.join("runtime.sqlite3");

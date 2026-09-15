@@ -189,7 +189,7 @@ impl Engine {
                 &serde_json::json!({"error": issue.code, "message": issue.message}),
             );
         }
-        let context = self.inbound_request_context(method, path_and_query, &headers);
+        let context = self.inbound_request_context(remote, method, path_and_query, &headers);
         INBOUND_REQUEST_CONTEXT
             .scope(
                 RefCell::new(context),
@@ -200,6 +200,7 @@ impl Engine {
 
     pub(super) fn inbound_request_context(
         &self,
+        remote: Option<IpAddr>,
         method: &str,
         path_and_query: &str,
         headers: &[(String, String)],
@@ -212,6 +213,7 @@ impl Engine {
         let route_intent =
             route_intent_for_path(method, path_and_query, query_model.as_deref(), client_kind);
         InboundRequestContext {
+            source_ip: remote.map(|ip| ip.to_string()),
             session_source: super::context::observed_session(headers)
                 .map(|(_, source)| source.to_owned()),
             method: bounded_request_method(method),

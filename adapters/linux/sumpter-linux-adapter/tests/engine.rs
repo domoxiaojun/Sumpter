@@ -1,5 +1,8 @@
 //! 引擎行为测试:FakeTransport 脚本化上游,对照 docs/architecture.md §8 的核心条目。
 
+#[path = "../../../../tests/contracts/source_ip.rs"]
+mod source_ip;
+
 #[path = "../../../../tests/contracts/conversation.rs"]
 mod conversation;
 
