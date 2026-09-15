@@ -41,22 +41,37 @@ impl Wire {
         match self {
             Self::Anthropic => json!({
                 "model": "claude-opus-5",
+                "system": "instruction-top",
                 "max_tokens": 64,
-                "messages": [{"role": "user", "content": "hi"}],
+                "messages": [
+                    {"role": "user", "content": "hi"},
+                    {"role": "system", "content": "instruction-system"},
+                    {"role": "developer", "content": [{"type":"text", "text":"instruction-developer"}]}
+                ],
                 "stream": true,
             }),
             Self::Chat => json!({
                 "model": "claude-opus-5",
-                "messages": [{"role": "user", "content": "hi"}],
+                "messages": [
+                    {"role": "user", "content": "hi"},
+                    {"role": "system", "content": "instruction-system"},
+                    {"role": "developer", "content": "instruction-developer"}
+                ],
                 "stream": true,
             }),
             Self::Responses => json!({
                 "model": "claude-opus-5",
-                "input": "hi",
+                "instructions": "instruction-top",
+                "input": [
+                    {"role":"user", "content":"hi"},
+                    {"role":"system", "content":"instruction-system"},
+                    {"role":"developer", "content":"instruction-developer"}
+                ],
                 "stream": true,
             }),
             // Gemini 的模型在 URL 上,请求体里没有。
             Self::Gemini => json!({
+                "systemInstruction": {"parts":[{"text":"instruction-system"}, {"text":"instruction-developer"}]},
                 "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
             }),
         }
@@ -159,6 +174,40 @@ async fn run_direction(client: Wire, upstream: Wire) {
     assert_eq!(recorded.len(), 1, "{client:?} -> {upstream:?}");
     let sent = &recorded[0];
     assert_eq!(sent.host, "a.example.com");
+    let outbound: Value = serde_json::from_slice(&sent.body).unwrap();
+    let instructions = match upstream {
+        Wire::Anthropic if client == Wire::Anthropic => outbound.to_string(),
+        Wire::Anthropic => outbound["system"].to_string(),
+        Wire::Chat => outbound["messages"].to_string(),
+        Wire::Responses => format!("{} {}", outbound["instructions"], outbound["input"]),
+        Wire::Gemini => outbound["systemInstruction"].to_string(),
+    };
+    for marker in ["instruction-system", "instruction-developer"] {
+        assert!(
+            instructions.contains(marker),
+            "{client:?} -> {upstream:?} lost {marker}: {outbound}"
+        );
+    }
+    if client == upstream {
+        let expected = client.body();
+        for key in [
+            "model",
+            "system",
+            "messages",
+            "instructions",
+            "input",
+            "contents",
+            "systemInstruction",
+        ] {
+            if expected.get(key).is_some() {
+                assert_eq!(
+                    outbound.get(key),
+                    expected.get(key),
+                    "native path changed {key}"
+                );
+            }
+        }
+    }
     let expected_path = match upstream {
         Wire::Anthropic => "/v1/messages",
         Wire::Chat => "/v1/chat/completions",
@@ -223,5 +272,84 @@ async fn gemini_auxiliary_operations_never_enter_the_conversion_surface() {
         // 没有 Gemini 原生入口 → 拒绝;绝不能把 countTokens 改写成会话请求发出去。
         assert_eq!(status, 400, "{path}");
         assert!(fake.requests().is_empty(), "{path} 不得触达上游");
+    }
+}
+
+#[tokio::test]
+async fn unsupported_instruction_blocks_are_rejected_before_dispatch() {
+    for target in [Wire::Chat, Wire::Responses, Wire::Gemini] {
+        let fake = FakeTransport::new();
+        let engine = engine_with(single_wire_config(target), fake.clone());
+        let mut body = Wire::Anthropic.body();
+        body["messages"][1]["content"] = json!([{"type":"image", "text":"not text"}]);
+        let (status, response) = call(
+            &engine,
+            loopback(),
+            "/v1/messages",
+            vec![],
+            Bytes::from(serde_json::to_vec(&body).unwrap()),
+        )
+        .await;
+        assert_eq!(status, 400, "{target:?}");
+        assert!(String::from_utf8_lossy(&response).contains("image"));
+        assert!(fake.requests().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn instruction_messages_survive_failover_between_translated_protocols() {
+    for first in [Wire::Chat, Wire::Responses, Wire::Gemini] {
+        for fallback in [Wire::Chat, Wire::Responses, Wire::Gemini] {
+            if first == fallback {
+                continue;
+            }
+            let mut config = single_wire_config(first);
+            let mut backup = single_wire_config(fallback).endpoints.remove(0);
+            backup.id = "b".into();
+            backup.base_url = "https://b.example.com".into();
+            backup.priority = 10;
+            config.endpoints.push(backup);
+            config.retry.session_sticky_retries = 0;
+            let fake = FakeTransport::new();
+            fake.push(
+                "a.example.com",
+                Outcome::Status {
+                    status: 503,
+                    headers: vec![],
+                    chunks: vec![],
+                },
+            );
+            fake.push(
+                "b.example.com",
+                sse_ok(&[fallback.upstream_stream().as_str()]),
+            );
+            let engine = engine_with(config, fake.clone());
+            let (status, body) = call(
+                &engine,
+                loopback(),
+                "/v1/messages",
+                vec![],
+                Bytes::from(serde_json::to_vec(&Wire::Anthropic.body()).unwrap()),
+            )
+            .await;
+            assert_eq!(status, 200, "{first:?} -> {fallback:?}");
+            assert!(String::from_utf8_lossy(&body).contains(Wire::Anthropic.client_marker()));
+            let sent = fake.requests();
+            assert_eq!(sent.len(), 2);
+            assert_eq!(sent[1].host, "b.example.com");
+            for request in sent {
+                let body = String::from_utf8_lossy(&request.body);
+                for marker in [
+                    "instruction-top",
+                    "instruction-system",
+                    "instruction-developer",
+                ] {
+                    assert!(
+                        body.contains(marker),
+                        "{first:?} -> {fallback:?} lost {marker}"
+                    );
+                }
+            }
+        }
     }
 }

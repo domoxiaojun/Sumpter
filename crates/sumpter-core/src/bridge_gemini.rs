@@ -451,9 +451,21 @@ pub fn try_make_gemini_body(
             .rposition(|message| message.role == "assistant" && has_tool_use(&message.content))
     });
     let mut contents: Vec<Value> = Vec::new();
+    // Gemini only has a top-level instruction field. Keep every instruction
+    // in source order, including compatibility messages, without turning it
+    // into a user message or silently discarding it.
+    let mut instructions = Vec::new();
+    if let Some(system) = request.system.as_ref() {
+        instructions.push(system_text(system)?);
+    }
     let mut tool_names: ToolNames = ToolNames::new();
     for (index, message) in request.messages.iter().enumerate() {
         let path = format!("messages[{index}].content");
+        if matches!(message.role.as_str(), "system" | "developer") {
+            crate::bridge::validate_text_content(Some(&message.content), &path, &["text"], true)?;
+            instructions.push(system_text(&message.content)?);
+            continue;
+        }
         let role = match message.role.as_str() {
             "assistant" => "model",
             "user" => "user",
@@ -496,14 +508,16 @@ pub fn try_make_gemini_body(
 
     let mut body = Map::new();
     body.insert("contents".into(), Value::Array(contents));
-    if let Some(system) = request.system.as_ref() {
-        let text = system_text(system)?;
-        if !text.is_empty() {
-            body.insert(
-                "systemInstruction".into(),
-                json!({"parts": [{"text": text}]}),
-            );
-        }
+    let text = instructions
+        .into_iter()
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if !text.is_empty() {
+        body.insert(
+            "systemInstruction".into(),
+            json!({"parts": [{"text": text}]}),
+        );
     }
     let tools = anthropic_tools_to_gemini(request)?;
     if !tools.is_empty() {
@@ -558,6 +572,7 @@ fn thinking_budget(effort: ReasoningEffort) -> i64 {
 }
 
 fn system_text(system: &Value) -> Result<String, TranslationError> {
+    crate::bridge::validate_text_content(Some(system), "system", &["text"], true)?;
     match system {
         Value::Null => Ok(String::new()),
         Value::String(text) => Ok(text.clone()),

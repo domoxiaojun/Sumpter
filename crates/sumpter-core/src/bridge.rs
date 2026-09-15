@@ -183,6 +183,15 @@ fn validate_anthropic_request(
         validate_text_content(Some(system), "system", &["text"], true)?;
     }
     for (index, message) in request.messages.iter().enumerate() {
+        if matches!(message.role.as_str(), "system" | "developer") {
+            validate_text_content(
+                Some(&message.content),
+                &format!("messages[{index}].content"),
+                &["text"],
+                true,
+            )?;
+            continue;
+        }
         if message.role != "user" && message.role != "assistant" {
             return Err(TranslationError::UnsupportedField(format!(
                 "messages[{index}].role={}",
@@ -498,7 +507,12 @@ pub fn make_openai_chat_body(
         messages.push(json!({"role": "system", "content": system}));
     }
     for message in &request.messages {
-        if message.role == "user" || message.role == "assistant" {
+        // Compatibility clients may put instructions inside messages. Keep
+        // their role and position instead of dropping or promoting them.
+        if matches!(
+            message.role.as_str(),
+            "user" | "assistant" | "system" | "developer"
+        ) {
             push_chat_message(&mut messages, message);
         }
     }
@@ -572,7 +586,10 @@ pub fn make_responses_body(
 ) -> Value {
     let mut input: Vec<Value> = Vec::new();
     for message in &request.messages {
-        if message.role != "user" && message.role != "assistant" {
+        if !matches!(
+            message.role.as_str(),
+            "user" | "assistant" | "system" | "developer"
+        ) {
             continue;
         }
         push_responses_input(&mut input, message);
