@@ -14,6 +14,32 @@ use crate::bridge::{
 };
 use crate::model_name::{self, ReasoningEffort};
 
+/// 本桥自己的推理封装前缀。
+///
+/// 只解自己产生的内容:真实 Anthropic 的签名或别的上游的密文不是我们编码的,解不出来
+/// 就不该假装能解 —— 把无法回放的密文当成可回放的历史送上去,比明确拒绝更危险。
+const REASONING_ENVELOPE_PREFIX: &str = "sumpter.v1.";
+
+/// 把一轮推理连同签名封成不透明字符串,放进 Responses 的 `encrypted_content`。
+///
+/// Responses 客户端会把它当作不可理解的令牌原样回传,于是下一轮能还原成 Anthropic
+/// 的 thinking 块 —— 不封装的话,我们发出去的 reasoning 项会被自己的入站检查拒收。
+fn encode_reasoning_envelope(thinking: &str, signature: &str) -> String {
+    format!(
+        "{REASONING_ENVELOPE_PREFIX}{}",
+        json!({"thinking": thinking, "signature": signature})
+    )
+}
+
+/// 解开本桥自己的封装;不是我们的格式就返回 None(调用方按无法回放处理)。
+fn decode_reasoning_envelope(encrypted: &str) -> Option<(String, String)> {
+    let payload = encrypted.strip_prefix(REASONING_ENVELOPE_PREFIX)?;
+    let value: Value = serde_json::from_str(payload).ok()?;
+    let thinking = value.get("thinking").and_then(Value::as_str)?;
+    let signature = value.get("signature").and_then(Value::as_str)?;
+    Some((thinking.to_string(), signature.to_string()))
+}
+
 /// 入站客户端方言(由入站路径判定)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientDialect {
@@ -406,18 +432,28 @@ pub fn check_responses_to_anthropic(body: &Value) -> Result<(), TranslationError
                         check_message_content(Some(output), &format!("input[{index}].output"))?;
                     }
                     "reasoning" => {
-                        // 空 summary 且没有 encrypted_content 时没有可观察推理内容，
-                        // 可以安全忽略；一旦有正文/签名，Anthropic 中间格式无法
-                        // 保真表达，必须拒绝而不是静默丢弃。
-                        let summary_empty = item.get("summary").is_none_or(|summary| {
-                            summary.as_array().is_some_and(|items| items.is_empty())
-                        });
-                        let encrypted_empty =
-                            item.get("encrypted_content").is_none_or(Value::is_null);
-                        if !summary_empty || !encrypted_empty {
-                            return Err(TranslationError::UnsupportedField(format!(
-                                "input[{index}].reasoning"
-                            )));
+                        // 我们自己封装过的推理能原样还原成 Anthropic 的 thinking 块
+                        // (客户端回传的正是我们上一轮发出去的项,拒收它等于自己打自己)。
+                        let replayable = item
+                            .get("encrypted_content")
+                            .and_then(Value::as_str)
+                            .is_some_and(|encrypted| {
+                                decode_reasoning_envelope(encrypted).is_some()
+                            });
+                        // 其余情况:空 summary 且没有 encrypted_content 时没有可观察内容,
+                        // 可以安全忽略;一旦有正文或别家的密文,中间格式无法保真表达,
+                        // 必须拒绝而不是静默丢弃。
+                        if !replayable {
+                            let summary_empty = item.get("summary").is_none_or(|summary| {
+                                summary.as_array().is_some_and(|items| items.is_empty())
+                            });
+                            let encrypted_empty =
+                                item.get("encrypted_content").is_none_or(Value::is_null);
+                            if !summary_empty || !encrypted_empty {
+                                return Err(TranslationError::UnsupportedField(format!(
+                                    "input[{index}].reasoning"
+                                )));
+                            }
                         }
                     }
                     other => {
@@ -743,7 +779,26 @@ pub fn responses_to_anthropic(body: &Value) -> Result<Value, String> {
                         }
                         push_block(&mut messages, "user", block);
                     }
-                    // reasoning 项没有可回签的 thinking 签名,丢弃。
+                    "reasoning" => {
+                        // 回传的是我们上一轮封装的推理:还原成 Anthropic 的 thinking 块,
+                        // 历史推理与签名都保住。别家的推理没有可回签的签名,丢弃
+                        // (宽松转换只服务路由;真正发往异协议上游前的严格检查会拒绝)。
+                        if let Some((thinking, signature)) = item
+                            .get("encrypted_content")
+                            .and_then(Value::as_str)
+                            .and_then(decode_reasoning_envelope)
+                        {
+                            push_block(
+                                &mut messages,
+                                "assistant",
+                                json!({
+                                    "type": "thinking",
+                                    "thinking": thinking,
+                                    "signature": signature,
+                                }),
+                            );
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1114,6 +1169,8 @@ enum OutItem {
     },
     Thinking {
         text: String,
+        /// Anthropic 的 thinking 签名。拿到它才能把这一轮推理原样带回去。
+        signature: String,
     },
     Tool {
         id: String,
@@ -1286,6 +1343,7 @@ impl ChatClientBridge {
                             index,
                             OutItem::Thinking {
                                 text: String::new(),
+                                signature: String::new(),
                             },
                         ));
                     }
@@ -1326,13 +1384,28 @@ impl ChatClientBridge {
                             ));
                         }
                     }
+                    // Anthropic 把 thinking 的签名放在块末尾的单独增量里。它是这轮推理
+                    // 能否原样带回的关键,必须收下。
+                    "signature_delta" => {
+                        let signature = delta
+                            .get("signature")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        if !signature.is_empty()
+                            && let Some(OutItem::Thinking {
+                                signature: slot, ..
+                            }) = self.item_mut(index)
+                        {
+                            slot.push_str(signature);
+                        }
+                    }
                     "thinking_delta" => {
                         let piece = delta
                             .get("thinking")
                             .and_then(Value::as_str)
                             .unwrap_or_default()
                             .to_string();
-                        if let Some(OutItem::Thinking { text }) = self.item_mut(index) {
+                        if let Some(OutItem::Thinking { text, .. }) = self.item_mut(index) {
                             text.push_str(&piece);
                         }
                     }
@@ -1603,15 +1676,24 @@ impl ResponsesClientBridge {
                     json!([])
                 },
             }),
-            OutItem::Thinking { text } => json!({
-                "type": "reasoning",
-                "id": item_id,
-                "summary": if completed {
-                    json!([{"type": "summary_text", "text": text}])
-                } else {
-                    json!([])
-                },
-            }),
+            OutItem::Thinking { text, signature } => {
+                let mut item = json!({
+                    "type": "reasoning",
+                    "id": item_id,
+                    "summary": if completed {
+                        json!([{"type": "summary_text", "text": text}])
+                    } else {
+                        json!([])
+                    },
+                });
+                // 把这一轮推理连同签名封成不透明载荷。Responses 客户端会把它原样回传,
+                // 下一轮才能还原成 Anthropic 的 thinking 块 —— 否则我们发出去的项会被
+                // 自己的入站检查拒收。
+                if completed && !signature.is_empty() {
+                    item["encrypted_content"] = json!(encode_reasoning_envelope(text, signature));
+                }
+                item
+            }
             OutItem::Tool { id, name, args, .. } => json!({
                 "type": "function_call",
                 "id": item_id,
@@ -1685,6 +1767,7 @@ impl ResponsesClientBridge {
                         format!("rs_{}_{output_index}", self.id),
                         OutItem::Thinking {
                             text: String::new(),
+                            signature: String::new(),
                         },
                     ),
                     _ => (
@@ -1747,6 +1830,20 @@ impl ResponsesClientBridge {
                             })));
                         }
                     }
+                    // Anthropic 把 thinking 的签名放在块末尾的单独增量里。它是这轮推理
+                    // 能否原样带回的关键,必须收下。
+                    "signature_delta" => {
+                        let signature = delta
+                            .get("signature")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        if let OutItem::Thinking {
+                            signature: slot, ..
+                        } = item
+                        {
+                            slot.push_str(signature);
+                        }
+                    }
                     "thinking_delta" => {
                         let piece = delta
                             .get("thinking")
@@ -1755,7 +1852,7 @@ impl ResponsesClientBridge {
                         if piece.is_empty() {
                             return out;
                         }
-                        if let OutItem::Thinking { text } = item {
+                        if let OutItem::Thinking { text, .. } = item {
                             text.push_str(piece);
                         }
                         if self.stream {

@@ -828,11 +828,11 @@ pub struct GeminiStreamBridge {
     next_block_index: usize,
     /// 已开出的工具块(按声明顺序)。
     tool_blocks: Vec<ToolBlock>,
-    /// 本轮上游真实返回的 assistant parts(含 `thoughtSignature`),供 engine 回放。
+    /// 本轮上游真实返回的 `functionCall` parts(含 `thoughtSignature`),供 engine 回放。
     ///
-    /// 保存**最近一次的完整快照**而不是逐块累积:Gemini 的文本走累计快照语义,
-    /// 累积会把 "He" 和 "Hello" 两份都留下来,回放时被读成 "HeHello"。
-    replay_parts: Option<Vec<Value>>,
+    /// 只收 functionCall:签名只挂在它们上面,而它们不像文本那样走累计快照,
+    /// 逐块累积既完整又不会重复。
+    replay_parts: Vec<Value>,
 }
 
 struct ToolBlock {
@@ -862,14 +862,28 @@ impl GeminiStreamBridge {
             text_block_index: None,
             next_block_index: 0,
             tool_blocks: Vec::new(),
-            replay_parts: None,
+            replay_parts: Vec::new(),
         }
     }
 
     /// 本轮 Gemini assistant parts 的真实副本(含 `thoughtSignature`)。engine 用它
     /// 作为下轮工具回放的依据;没有真实签名时这里就是上游给的原样内容。
-    pub fn replay_parts(&self) -> Option<&[Value]> {
-        self.replay_parts.as_deref()
+    pub fn replay_parts(&self) -> &[Value] {
+        &self.replay_parts
+    }
+
+    /// 逐块累积本轮的 functionCall 部分。同一调用若被上游重复下发(相邻且内容相同)
+    /// 只保留一份,避免匹配时多出并不存在的调用。
+    fn collect_replay_calls(&mut self, parts: &[Value]) {
+        for part in parts {
+            if part.get("functionCall").is_none() {
+                continue;
+            }
+            if self.replay_parts.last() == Some(part) {
+                continue;
+            }
+            self.replay_parts.push(part.clone());
+        }
     }
 
     fn ensure_started(&mut self, events: &mut Vec<SseEvent>) {
@@ -1050,11 +1064,10 @@ impl GeminiStreamBridge {
                     for part in parts {
                         self.handle_part(part, &mut events);
                     }
-                }
-                // 保存真实的 parts 供下轮回放(签名只在这里出现)。整份替换,
-                // 不做累积 —— 上游给的是累计快照。
-                if let Some(parts) = content.get("parts").and_then(Value::as_array) {
-                    self.replay_parts = Some(parts.clone());
+                    // 只累积 functionCall 部分:签名只挂在它们上面,而它们每个只出现
+                    // 一次(累计快照语义只作用于文本)。整体替换会丢掉前面分片里的
+                    // 调用,逐块追加文本又会让 "HeHe" 这类重复进回放。
+                    self.collect_replay_calls(parts);
                 }
             }
             if let Some(reason) = candidate.get("finishReason").and_then(Value::as_str) {
@@ -1221,7 +1234,7 @@ impl SseBridge for GeminiStreamBridge {
     }
 
     fn replay_parts(&self) -> Option<Vec<Value>> {
-        self.replay_parts.clone()
+        (!self.replay_parts.is_empty()).then(|| self.replay_parts.clone())
     }
 }
 

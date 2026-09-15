@@ -715,3 +715,99 @@ fn bridges_report_error_when_upstream_truncated() {
     .unwrap();
     assert!(out2.contains("event: error\n"));
 }
+
+// ---------------------------------------------------------------------------
+// 推理历史的往返
+// ---------------------------------------------------------------------------
+
+/// 带签名的 thinking 块:签名在块末尾的单独增量里。
+fn anthropic_sse_with_thinking_signature() -> String {
+    [
+        r#"event: message_start
+data: {"type":"message_start","message":{"id":"m","model":"up","usage":{"input_tokens":3}}}"#,
+        r#"event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#,
+        r#"event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"mull"}}"#,
+        r#"event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-1"}}"#,
+        r#"event: content_block_stop
+data: {"type":"content_block_stop","index":0}"#,
+        r#"event: content_block_stop
+data: {"type":"content_block_stop","index":0}"#,
+        r#"event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":3,"output_tokens":2}}"#,
+        r#"event: message_stop
+data: {"type":"message_stop"}"#,
+    ]
+    .map(|block| format!("{block}\n\n"))
+    .join("")
+}
+
+/// 我们发给 Responses 客户端的推理项必须能被自己收回来:否则多轮推理在转换面上
+/// 会「发得出去、收不回来」,下一轮直接被自己的检查拒掉。
+#[test]
+fn reasoning_round_trips_through_the_responses_client() {
+    let mut bridge = ResponsesClientBridge::new("m1".into(), "fallback".into(), false);
+    let out = feed_in_pieces(&mut bridge, &anthropic_sse_with_thinking_signature(), 9);
+    let response: Value = serde_json::from_str(&out).unwrap();
+    let item = response["output"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["type"] == "reasoning")
+        .expect("reasoning 项");
+    assert_eq!(item["summary"][0]["text"], "mull");
+    let envelope = item["encrypted_content"]
+        .as_str()
+        .expect("必须带上可回传的封装");
+
+    // 客户端原样回传 → 还原成 thinking 块,历史推理与签名都保住。
+    let echoed = json!({
+        "model": "claude-opus-5",
+        "input": [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+            {"type": "reasoning", "id": "rs_1", "encrypted_content": envelope,
+             "summary": [{"type": "summary_text", "text": "mull"}]},
+            {"type": "message", "role": "assistant",
+             "content": [{"type": "output_text", "text": "ok"}]},
+        ],
+    });
+    assert!(
+        check_responses_to_anthropic(&echoed).is_ok(),
+        "自己发出去的推理项必须能收回来"
+    );
+    let converted = responses_to_anthropic(&echoed).unwrap();
+    let thinking = converted["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|message| message["content"].as_array().cloned().unwrap_or_default())
+        .find(|block| block["type"] == "thinking")
+        .expect("还原出的 thinking 块");
+    assert_eq!(thinking["thinking"], "mull");
+    assert_eq!(thinking["signature"], "sig-1");
+}
+
+/// 别家的密文解不出来,仍然拒绝 —— 不能把无法回放的历史当成可回放的送上去。
+#[test]
+fn foreign_reasoning_ciphertext_is_still_rejected() {
+    let foreign = json!({
+        "model": "claude-opus-5",
+        "input": [
+            {"type": "reasoning", "id": "rs_1", "encrypted_content": "gAAAAABforeign",
+             "summary": []},
+        ],
+    });
+    assert!(check_responses_to_anthropic(&foreign).is_err());
+
+    // 前缀对但内容不是我们的 JSON:同样按无法回放处理。
+    let malformed = json!({
+        "model": "claude-opus-5",
+        "input": [
+            {"type": "reasoning", "id": "rs_1", "encrypted_content": "sumpter.v1.not-json",
+             "summary": []},
+        ],
+    });
+    assert!(check_responses_to_anthropic(&malformed).is_err());
+}
