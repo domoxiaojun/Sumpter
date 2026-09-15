@@ -94,7 +94,7 @@ ports:
 
 格式为 `宿主机地址:宿主机端口:容器端口`。默认只允许从宿主机访问；例如本机端口冲突时可把第一条改为 `127.0.0.1:17878:57878`，客户端改用 `17878`，容器配置保持原值。
 
-模板无需 `.env`。镜像、端口、时区和挂载路径直接编辑 `compose.yaml`。如需固定版本，把 `x-runtime.image` 改为 `ghcr.io/domoxiaojun/sumpter:0.4.11`，正式部署前确认该版本已经发布。
+模板无需 `.env`。镜像、端口、时区和挂载路径直接编辑 `compose.yaml`。如需固定版本，把 `x-runtime.image` 改为 `ghcr.io/domoxiaojun/sumpter:0.4.15`，正式部署前确认该版本已经发布。
 
 ```bash
 sudo docker compose config --quiet
