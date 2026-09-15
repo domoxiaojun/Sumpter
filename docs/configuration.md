@@ -76,7 +76,7 @@ Linux Admin 是独立监听，默认 `127.0.0.1:57879`，由 CLI 参数或环境
 | `keepAlive` | 可选出站连接复用，省略或 false 为关闭 |
 | `catalog` | 「获取模型」的展示缓存，不会自动开放模型 |
 
-映射中的 `clientPattern` 支持精确名称和尾部 `*` 通配；精确匹配优先，通配按最长前缀。`upstreamModel` 为空表示同名。`thinking`、`context`、`effort` 和 `failoverTimeoutSeconds` 保存路由策略与兼容信息；raw 透传不会凭这些字段重写客户端正文或普通协议头，只有明确的模型映射才会替换可安全识别的模型字段。
+映射中的 `clientPattern` 支持精确名称和尾部 `*` 通配；精确匹配优先，通配按最长前缀。`upstreamModel` 为空表示同名。`thinking`、`context`、`effort` 和 `failoverTimeoutSeconds` 保存路由策略与兼容信息。协议一致的原生转发不会凭这些字段重写客户端正文或普通协议头，只有明确的模型映射才会替换可安全识别的模型字段；需要转成另一种协议时，这些字段参与目标请求的构造(例如 `effort` 映射到目标协议的推理档位)。
 
 ## modelGroups
 

@@ -14,7 +14,9 @@ Linux 提供后台服务和 Web 管理界面；macOS 提供原生 App。两端�
 - **查看运行情况**：区分客户端请求与上游尝试，查看耗时、结果、Token、缓存、项目和会话统计。
 - **控制访问和存储**：设置入站 Token、管理页凭据、统计保留策略；需要排障时再开启诊断捕获。
 
-当前主请求流程采用 raw 透传：上游仍须支持客户端实际使用的 API。配置协议标签不会把任意上游变成兼容服务；Sumpter 也不提供模型账号或代办上游登录。
+会话请求按协议择路：入口协议与客户端一致时按字节原生转发；不一致时在模型映射范围内经协议转换桥适配，响应再转回客户端方言。Anthropic Messages、OpenAI Chat Completions、OpenAI Responses 与 Gemini `generateContent`/`streamGenerateContent` 之间两两可转。Compact、countTokens、embedContent、图片生成、Realtime 等没有会话语义的接口仍只走原生路径。
+
+转换不等于全功能兼容：历史推理不回放，服务端工具、文件引用以及目标协议没有等价参数的项会被明确拒绝，而不是静默丢弃。Sumpter 也不提供模型账号或代办上游登录。
 
 ## 选择安装方式
 

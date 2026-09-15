@@ -14,7 +14,9 @@ Sumpter 的核心边界是“客户端请求进入一个地址，代理按配置
   → RuntimeEvent 与 usage 写入 SQLite
 ```
 
-主请求采用 raw 透传：保留客户端方法、路径、查询、请求体和响应流；代理只做鉴权、映射、路由、重试、上游凭据注入及必要的模型路径更新。旧桥接能力仍用于明确的内部兼容调用，不能把“入口 protocol”理解成自动转换器。
+会话请求按协议择路。入口协议与客户端一致时保留客户端方法、路径、查询、请求体和响应流，代理只做鉴权、映射、路由、重试与上游凭据注入；不一致时在该模型的映射范围内选择转换候选，把请求转成目标协议后发出，响应再转回客户端方言。Anthropic Messages、OpenAI Chat Completions、OpenAI Responses 与 Gemini `generateContent`/`streamGenerateContent` 四个会话协议之间两两可转；Compact、countTokens、embedContent、图片生成与 Realtime 等没有会话语义的接口不参与转换，仍按原生路径转发。
+
+转换面按「能力检查 + 构造」同源实现：检查器与转换器共用同一份字段映射，所以不会出现「检查放行、构造时丢字段」。目标协议表达不了的项（服务端工具、provider 文件引用、Responses 没有等价参数的 `stop_sequences` 等）显式拒绝并回报具体字段，不静默降级。
 
 HTTP、SSE 和 WebSocket 在上游响应或真实握手后才算成功。一个客户端请求可包含多次上游尝试，RuntimeEvent 用同一 request ID 关联它们，界面分别展示客户端最终结果和上游尝试链。
 

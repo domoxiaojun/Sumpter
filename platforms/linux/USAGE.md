@@ -201,7 +201,9 @@ bash setup-client-attribution.sh restore pi
 
 ## 8. 理解协议和高级能力
 
-当前主请求流程是 raw 透传。代理负责访问检查、入口选择、显式模型映射、上游认证、配置的 UA 和转发；保留客户端实际请求路径、查询和其余负载，按入口基础路径规则组合最终 URL。不会因为入口标为另一种协议而自动改写成那种 API。
+会话请求按协议择路:入口协议与客户端一致时保留客户端实际请求路径、查询和其余负载,按入口基础路径规则组合最终 URL;不一致时在该模型的映射范围内把请求转成入口协议,响应再转回客户端协议。Anthropic Messages、OpenAI Chat Completions、OpenAI Responses 与 Gemini `generateContent`/`streamGenerateContent` 之间两两可转;Compact、countTokens、embedContent、图片生成与 Realtime 等没有会话语义的接口不参与转换。
+
+转换不是全功能兼容:历史推理内容不会回放,服务端工具、provider 文件引用以及目标协议没有等价参数的项会被明确拒绝并说明字段,不会静默丢弃。
 
 | 请求 | 使用要求 |
 | --- | --- |

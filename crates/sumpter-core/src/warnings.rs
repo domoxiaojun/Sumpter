@@ -47,10 +47,11 @@ pub fn evaluate(config: &AppConfig) -> Vec<String> {
 
 /// 有损翻译降级提示。
 ///
-/// 出站桥能表达文本、图片和工具调用,但表达不了结构化输出(`output_config`),也不
-/// 回放历史推理。一个模型若**只**能落到非 Anthropic 协议的入口,该模型的 Claude
-/// 客户端流量就必然走翻译面 —— 这在运行时只表现为「模型行为不如预期」,配置期不
-/// 提示的话没人会想到是协议转换造成的。
+/// 出站桥能表达文本、图片、工具调用、推理档位(`output_config.effort`)与结构化
+/// 输出(`output_config.format`),但表达不了服务端工具、文件引用和 Responses 没有
+/// 等价参数的项(如 `stop_sequences`),也不回放历史推理。一个模型若**只**能落到
+/// 非 Anthropic 协议的入口,该模型的 Claude 客户端流量就必然走翻译面 —— 这在运行时
+/// 只表现为「模型行为不如预期」,配置期不提示的话没人会想到是协议转换造成的。
 ///
 /// 只在「该模型没有任何 Anthropic 入口可落」时提示:混合配置下 native 入口优先,
 /// 翻译面只在 native 全不可用时才会被用到,不值得为此报警。
@@ -78,7 +79,8 @@ fn append_lossy_translation_warnings(config: &AppConfig, risks: &mut Vec<String>
         }
         risks.push(format!(
             "{model} 只能落到 {} 协议入口：Claude 客户端的请求会经协议转换转发，\
-             结构化输出(output_config)会被拒绝，历史推理内容不会回放。",
+             历史推理内容不会回放，服务端工具、文件引用与目标协议没有等价参数的项\
+             会被明确拒绝。",
             translated_targets.join(" / ")
         ));
     }
