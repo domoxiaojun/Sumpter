@@ -3,6 +3,7 @@
 
 pub mod access;
 pub mod bridge;
+pub mod bridge_gemini;
 pub mod bridge_in;
 pub mod cache_read;
 pub mod capability;

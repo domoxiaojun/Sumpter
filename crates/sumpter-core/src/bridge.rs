@@ -970,7 +970,7 @@ fn flatten_text(value: &Value) -> String {
 // 响应侧共用件
 // ---------------------------------------------------------------------------
 
-fn message_start_event(message_id: &str, model: &str) -> SseEvent {
+pub(crate) fn message_start_event(message_id: &str, model: &str) -> SseEvent {
     SseEvent {
         event: "message_start".into(),
         data: json!({
@@ -989,7 +989,7 @@ fn message_start_event(message_id: &str, model: &str) -> SseEvent {
     }
 }
 
-fn text_block_start_event(index: usize) -> SseEvent {
+pub(crate) fn text_block_start_event(index: usize) -> SseEvent {
     SseEvent {
         event: "content_block_start".into(),
         data: json!({
@@ -1000,14 +1000,14 @@ fn text_block_start_event(index: usize) -> SseEvent {
     }
 }
 
-fn start_events(message_id: &str, model: &str) -> Vec<SseEvent> {
+pub(crate) fn start_events(message_id: &str, model: &str) -> Vec<SseEvent> {
     vec![
         message_start_event(message_id, model),
         text_block_start_event(0),
     ]
 }
 
-fn content_block_stop_event(index: usize) -> SseEvent {
+pub(crate) fn content_block_stop_event(index: usize) -> SseEvent {
     SseEvent {
         event: "content_block_stop".into(),
         data: json!({"type": "content_block_stop", "index": index}),
@@ -1016,7 +1016,7 @@ fn content_block_stop_event(index: usize) -> SseEvent {
 
 /// 工具参数增量。Anthropic 用 `input_json_delta` 传 JSON 文本片段,与 OpenAI 的
 /// `function.arguments` 增量是一一对应的(两侧都不保证片段本身是合法 JSON)。
-fn input_json_delta_event(partial_json: &str, index: usize) -> SseEvent {
+pub(crate) fn input_json_delta_event(partial_json: &str, index: usize) -> SseEvent {
     SseEvent {
         event: "content_block_delta".into(),
         data: json!({
@@ -1033,7 +1033,11 @@ fn input_json_delta_event(partial_json: &str, index: usize) -> SseEvent {
 /// `message_delta` 一并带上 `input_tokens`:上游的 prompt/input 用量只在流末尾
 /// 才确定,而 `message_start` 早已发出(那时只能是 0)。客户端方言桥(以及双桥的
 /// 第二跳)靠这里才能拿到真实输入量;只写 output 会让客户端看到 input=0。
-fn message_stop_events(stop_reason: &str, input_tokens: i64, output_tokens: i64) -> Vec<SseEvent> {
+pub(crate) fn message_stop_events(
+    stop_reason: &str,
+    input_tokens: i64,
+    output_tokens: i64,
+) -> Vec<SseEvent> {
     vec![
         SseEvent {
             event: "message_delta".into(),
@@ -1054,7 +1058,7 @@ fn message_stop_events(stop_reason: &str, input_tokens: i64, output_tokens: i64)
 /// explicit failure or ends before its protocol terminal.  Do not synthesize
 /// `message_stop` in these cases: doing so makes an HTTP 200 failure look like
 /// a successful model response to both the client and the runtime tracker.
-fn error_event(detail: &str) -> SseEvent {
+pub(crate) fn error_event(detail: &str) -> SseEvent {
     SseEvent {
         event: "error".into(),
         data: json!({
@@ -1073,7 +1077,7 @@ fn error_json(detail: &str) -> Value {
 
 const MAX_SSE_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 
-fn text_delta_event(text: &str, index: usize) -> SseEvent {
+pub(crate) fn text_delta_event(text: &str, index: usize) -> SseEvent {
     SseEvent {
         event: "content_block_delta".into(),
         data: json!({
