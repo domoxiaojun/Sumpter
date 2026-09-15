@@ -343,3 +343,35 @@ async fn translated_gemini_replays_thought_signature_across_turns() {
     // 签名之外，历史轮次仍按真实 parts 回放。
     assert_eq!(parts[0]["functionCall"]["name"], "read_file");
 }
+
+/// Vertex 形状的路径(`.../publishers/google/models/<id>:generateContent`)不带
+/// `/v1beta/models/` 前缀,不是 Gemini Developer API 的会话入口:它必须继续走 Raw
+/// 透传,不能被会话分支抢走、再因取不到模型名而 400。
+#[tokio::test]
+async fn vertex_shaped_paths_are_not_hijacked_by_the_session_branch() {
+    let fake = FakeTransport::new();
+    fake.push(
+        "a.example.com",
+        Outcome::Status {
+            status: 200,
+            headers: vec![("content-type".into(), "application/json".into())],
+            chunks: vec![b"{\"candidates\":[]}".to_vec()],
+        },
+    );
+    let engine = engine_with(config(), fake.clone());
+    let (status, body) = call(
+        &engine,
+        loopback(),
+        "/v1/projects/p/locations/l/publishers/google/models/gemini-test:generateContent?model=gemini-test",
+        headers(),
+        Bytes::from_static(b"{\"contents\":[]}"),
+    )
+    .await;
+    assert_eq!(
+        status,
+        200,
+        "Vertex 形状的路径应继续 Raw 透传: {}",
+        String::from_utf8_lossy(&body)
+    );
+    assert_eq!(fake.requests().len(), 1);
+}

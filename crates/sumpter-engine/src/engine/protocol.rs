@@ -368,10 +368,15 @@ pub(super) fn is_gemini_generate_path(path: &str) -> bool {
 /// 只有 `generateContent` / `streamGenerateContent` 是会话操作,进入转换面;
 /// `countTokens` / `embedContent` 没有会话语义,继续原生透传。
 pub(super) fn is_gemini_session_path(path: &str) -> bool {
-    matches!(
-        bridge_gemini::gemini_operation(path),
-        bridge_gemini::GeminiOperation::Generate | bridge_gemini::GeminiOperation::StreamGenerate
-    )
+    // 必须与 `gemini_model_from_path` 用同一套前缀判定:只看操作名会把
+    // `/v1/projects/.../models/gemini-x:generateContent`(Vertex 形状)也抢进会话
+    // 分支,随后因取不到模型而 400 —— 那条路径原本走 Raw 透传。
+    gemini_model_from_path(path).is_some()
+        && matches!(
+            bridge_gemini::gemini_operation(path),
+            bridge_gemini::GeminiOperation::Generate
+                | bridge_gemini::GeminiOperation::StreamGenerate
+        )
 }
 
 pub(super) fn gemini_model_from_path(path: &str) -> Option<String> {

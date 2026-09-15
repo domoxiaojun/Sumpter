@@ -451,6 +451,7 @@ pub fn try_make_gemini_body(
             .rposition(|message| message.role == "assistant" && has_tool_use(&message.content))
     });
     let mut contents: Vec<Value> = Vec::new();
+    let mut tool_names: ToolNames = ToolNames::new();
     for (index, message) in request.messages.iter().enumerate() {
         let path = format!("messages[{index}].content");
         let role = match message.role.as_str() {
@@ -463,15 +464,27 @@ pub fn try_make_gemini_body(
             }
         };
         // 命中回放:整轮用真实 parts(含签名)替换重建结果。
-        let replayed = replay.filter(|replay| {
+        let mut parts = anthropic_blocks_to_parts(&message.content, &path, &tool_names)?;
+        // 回放只搬运签名本身:正文与顺序仍走正常重建 —— 整轮替换会把上游分片
+        // 累积的文本一起覆盖掉,而匹配又要求逐字相同,等于两边都不成立。
+        if let Some(replay) = replay.filter(|replay| {
             Some(index) == replay_turn && replay.matches_tool_use(&message.content)
-        });
-        let parts = match replayed {
-            Some(replay) => replay.parts.clone(),
-            None => anthropic_blocks_to_parts(&message.content, &path)?,
-        };
+        }) {
+            apply_replay_signatures(&mut parts, replay);
+        }
         if parts.is_empty() {
             continue;
+        }
+        // 先登记本轮的 id→name,后面 user 消息里的 tool_result 才能取到函数名。
+        for block in message.content.as_array().into_iter().flatten() {
+            if block.get("type").and_then(Value::as_str) == Some("tool_use")
+                && let (Some(id), Some(name)) = (
+                    block.get("id").and_then(Value::as_str),
+                    block.get("name").and_then(Value::as_str),
+                )
+            {
+                tool_names.insert(id.to_string(), name.to_string());
+            }
         }
         contents.push(json!({"role": role, "parts": parts}));
     }
@@ -566,7 +579,18 @@ fn system_text(system: &Value) -> Result<String, TranslationError> {
     }
 }
 
-fn anthropic_blocks_to_parts(content: &Value, path: &str) -> Result<Vec<Value>, TranslationError> {
+/// 历史工具调用 id → 函数名。
+///
+/// Gemini 的 `functionResponse.name` 必须是被调用**函数的名字**(要与
+/// `functionDeclarations` 对得上),而不是 Anthropic 那边的 `tool_use_id` —— 转换面
+/// 合成的 id 形如 `gemini_call_1`,拿它当名字上游会把结果挂到不存在的函数上。
+type ToolNames = std::collections::HashMap<String, String>;
+
+fn anthropic_blocks_to_parts(
+    content: &Value,
+    path: &str,
+    tool_names: &ToolNames,
+) -> Result<Vec<Value>, TranslationError> {
     match content {
         Value::Null => Ok(Vec::new()),
         Value::String(text) => Ok(text_part(text).into_iter().collect()),
@@ -643,9 +667,15 @@ fn anthropic_blocks_to_parts(content: &Value, path: &str) -> Result<Vec<Value>, 
                                     "{block_path}.tool_use_id is required"
                                 ))
                             })?;
+                        // 名字取自前面那条 assistant 里对应的 tool_use;查不到就退回 id
+                        // (单轮、无历史的调用仍能走通),但绝不凭 id 编造函数名。
+                        let name = tool_names
+                            .get(tool_use_id)
+                            .map(String::as_str)
+                            .unwrap_or(tool_use_id);
                         let output = tool_result_text(object.get("content"))?;
                         let mut response = Map::new();
-                        response.insert("name".into(), json!(tool_use_id));
+                        response.insert("name".into(), json!(name));
                         response.insert("response".into(), json!({"output": output}));
                         response.insert("id".into(), json!(tool_use_id));
                         parts.push(json!({"functionResponse": Value::Object(response)}));
@@ -663,6 +693,29 @@ fn anthropic_blocks_to_parts(content: &Value, path: &str) -> Result<Vec<Value>, 
         _ => Err(TranslationError::InvalidInput(format!(
             "{path} must be a string or content-block array"
         ))),
+    }
+}
+
+/// 把回放里的真实签名贴到重建出的 functionCall 上。
+///
+/// 位置由工具调用在各自序列中的出现顺序决定:调用方已经用
+/// [`GeminiReplay::matches_tool_use`] 确认过名称与入参逐字对应。签名只搬不造 ——
+/// 回放里没有对应项时就不写这个字段。
+fn apply_replay_signatures(parts: &mut [Value], replay: &GeminiReplay) {
+    let signatures: Vec<&Value> = replay
+        .parts
+        .iter()
+        .filter_map(|part| part.get("thoughtSignature"))
+        .collect();
+    let mut next = 0;
+    for part in parts.iter_mut() {
+        if part.get("functionCall").is_none() {
+            continue;
+        }
+        if let Some(signature) = signatures.get(next) {
+            part["thoughtSignature"] = (*signature).clone();
+        }
+        next += 1;
     }
 }
 
@@ -764,11 +817,12 @@ pub struct GeminiStreamBridge {
     terminal: BridgeTerminal,
     json_emitted: bool,
     text: String,
-    emitted_text: usize,
     input_tokens: i64,
     output_tokens: i64,
     reasoning_tokens: i64,
     stop_reason: &'static str,
+    /// 是否见过上游的 finishReason。没见过的 EOF 是截断,不是完成。
+    saw_finish: bool,
     /// 当前开着的文本块索引。
     text_block_index: Option<usize>,
     next_block_index: usize,
@@ -800,11 +854,11 @@ impl GeminiStreamBridge {
             terminal: BridgeTerminal::Pending,
             json_emitted: false,
             text: String::new(),
-            emitted_text: 0,
             input_tokens: 0,
             output_tokens: 0,
             reasoning_tokens: 0,
             stop_reason: "end_turn",
+            saw_finish: false,
             text_block_index: None,
             next_block_index: 0,
             tool_blocks: Vec::new(),
@@ -846,9 +900,9 @@ impl GeminiStreamBridge {
         }
     }
 
-    /// 累计快照语义:只发出相对上次的新增后缀。
+    /// 累计快照语义:只发出相对已有的新增后缀。
     fn push_text(&mut self, snapshot: &str, events: &mut Vec<SseEvent>) {
-        let delta = if snapshot.len() >= self.emitted_text && snapshot.starts_with(&self.text) {
+        let delta = if snapshot.starts_with(&self.text) {
             snapshot[self.text.len()..].to_string()
         } else {
             // 上游回的是纯增量(或与已有文本无法拼接)时按增量处理。
@@ -858,7 +912,6 @@ impl GeminiStreamBridge {
             return;
         }
         self.text.push_str(&delta);
-        self.emitted_text = self.text.len();
         let index = self.open_text_block(events);
         events.push(text_delta_event(&delta, index));
     }
@@ -907,6 +960,11 @@ impl GeminiStreamBridge {
         if self.finished {
             return Vec::new();
         }
+        // 上游没给 finishReason 就结束 = 截断。把片段当完整回答回给客户端比报错更糟:
+        // 客户端会拿半截结果继续跑,而且没有任何可诊断的迹象。
+        if !self.saw_finish {
+            return self.fail("upstream stream ended without a finish reason");
+        }
         self.finished = true;
         self.terminal = BridgeTerminal::Completed;
         let mut events = Vec::new();
@@ -915,9 +973,16 @@ impl GeminiStreamBridge {
             // 没有块时补一个空文本块:客户端总要收到至少一个 content_block。
             self.open_text_block(&mut events);
         }
+        // 出过工具块就必须报 tool_use:回 end_turn 会让客户端以为轮次结束,不去执行
+        // 工具(与 bridge.rs 对同一情形的判定一致)。
+        let stop_reason = if self.tool_blocks.is_empty() {
+            self.stop_reason
+        } else {
+            "tool_use"
+        };
         self.close_all_blocks(&mut events);
         events.extend(message_stop_events(
-            self.stop_reason,
+            stop_reason,
             self.input_tokens,
             self.output_tokens,
         ));
@@ -994,6 +1059,7 @@ impl GeminiStreamBridge {
             }
             if let Some(reason) = candidate.get("finishReason").and_then(Value::as_str) {
                 self.stop_reason = map_finish_reason(reason);
+                self.saw_finish = true;
                 // finishReason 之后还可能有 usage-only 帧,完成留到流结束时再定。
             }
         }
@@ -1263,9 +1329,16 @@ impl GeminiClientBridge {
                     .unwrap_or("upstream error");
                 self.finished = true;
                 self.terminal = BridgeTerminal::Failed(detail.to_string());
-                self.frame(
-                    &json!({"error": {"code": 502, "message": detail, "status": "UNAVAILABLE"}}),
-                )
+                let body = json!({
+                    "error": {"code": 502, "message": detail, "status": "UNAVAILABLE"},
+                });
+                // 非流式客户端收到的是 application/json,SSE 帧在那边不是合法 JSON。
+                if self.stream {
+                    self.frame(&body)
+                } else {
+                    self.json_emitted = true;
+                    crate::bridge::canonical_json(&body).into_bytes()
+                }
             }
             "message_start" => {
                 if let Some(model) = event.pointer("/message/model").and_then(Value::as_str) {

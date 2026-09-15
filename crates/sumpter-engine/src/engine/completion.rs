@@ -199,6 +199,12 @@ impl CompletionGuard {
         self.upstream = Some(attempt);
     }
 
+    /// 本次尝试实际落到的入口(`attach_upstream` 之后恒为 Some)。
+    /// 流式收尾需要它来定位会话状态,不必让调用方另外捕获一份副本。
+    pub(super) fn upstream_endpoint(&self) -> Option<&PlannedEndpoint> {
+        self.upstream.as_ref().map(|attempt| &attempt.endpoint)
+    }
+
     /// accepted 后原地回填 client in-flight 事件的入口归属(upsert 不计数):
     /// 流式期间事件表的客户端行直接可见走的哪个入口,不用切「上游」筛选比对。
     /// timestamp 保持请求开始时刻;status 保留已收到的真实上游 HTTP 状态。

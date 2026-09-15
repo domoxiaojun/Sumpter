@@ -318,7 +318,9 @@ fn gemini_stream_bridge_emits_anthropic_events() {
     let events = sse_events(&out);
     assert_eq!(events[0].0, "content_block_stop");
     assert_eq!(events[1].0, "message_delta");
-    assert_eq!(events[1].1["delta"]["stop_reason"], "end_turn");
+    // 出过工具块就必须报 tool_use:回 end_turn 客户端会以为轮次结束,不去执行工具。
+    // Gemini 的 finishReason 仍是 STOP,但那是它的工具轮次常态。
+    assert_eq!(events[1].1["delta"]["stop_reason"], "tool_use");
     // prompt 含缓存命中 → Anthropic 的 input 是新鲜输入(20-5)。
     assert_eq!(events[1].1["usage"]["input_tokens"], 15);
     assert_eq!(events[1].1["usage"]["output_tokens"], 8);
@@ -484,17 +486,23 @@ fn anthropic_to_gemini_reuses_real_signatures_only_for_the_matching_turn() {
         }))
     };
 
-    // 入参与上一轮逐字相同 → 整轮换成真实 parts,签名原样回传。
+    // 入参与上一轮逐字相同 → 把上一轮的真实签名贴回重建出的 functionCall。
+    // 正文仍走正常重建:整轮替换会把上游分片累积的文本一起覆盖掉。
     let body = try_make_gemini_body(&turn(json!({"path": "a"})), None, Some(&replay)).unwrap();
     let parts = body["contents"][0]["parts"].as_array().unwrap();
-    assert_eq!(parts[0]["text"], "先看一下");
-    assert_eq!(parts[1]["thoughtSignature"], "sig-abc");
+    assert_eq!(parts[0]["functionCall"]["name"], "read_file");
+    assert_eq!(parts[0]["thoughtSignature"], "sig-abc");
+
+    // functionResponse 的 name 必须是**函数名**:Gemini 的转换面给工具合成的是
+    // `gemini_call_1` 这类 id,拿它当名字上游会把结果挂到不存在的函数上。
+    let follow_up = body["contents"][1]["parts"][0]["functionResponse"].clone();
+    assert_eq!(follow_up["name"], "read_file");
+    assert_eq!(follow_up["id"], "gemini_call_1");
 
     // 入参不同 → 不是同一轮。宁可没有签名,也不能把签名配到别的调用上。
     let drifted = try_make_gemini_body(&turn(json!({"path": "OTHER"})), None, Some(&replay));
     let parts = drifted.unwrap()["contents"][0]["parts"].clone();
     assert!(parts[0].get("thoughtSignature").is_none());
-    assert!(parts[0].get("text").is_none());
 
     // 没有回放状态时同样只发重建结果(不伪造签名)。
     let plain = try_make_gemini_body(&turn(json!({"path": "a"})), None, None).unwrap();
@@ -503,4 +511,45 @@ fn anthropic_to_gemini_reuses_real_signatures_only_for_the_matching_turn() {
             .get("thoughtSignature")
             .is_none()
     );
+}
+
+/// 上游没给 finishReason 就 EOF = 截断,不能当成功。
+#[test]
+fn gemini_stream_bridge_treats_missing_finish_reason_as_truncation() {
+    let mut bridge = GeminiStreamBridge::new("m".into(), "g".into(), true);
+    let out =
+        String::from_utf8(bridge.feed(
+            b"data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"partial\"}]}}]}\n\n",
+        ))
+        .unwrap();
+    assert!(out.contains("partial"));
+    let tail = String::from_utf8(bridge.finish()).unwrap();
+    assert!(tail.contains("event: error"), "{tail}");
+    assert!(matches!(
+        bridge.terminal(),
+        sumpter_core::bridge::BridgeTerminal::Failed(_)
+    ));
+}
+
+/// 非流式客户端收到的是 application/json:错误体不能是 SSE 帧。
+#[test]
+fn gemini_client_bridge_error_is_json_for_non_stream_clients() {
+    let mut bridge = GeminiClientBridge::new("gemini-2.5-pro".into(), false);
+    let out = String::from_utf8(
+        bridge
+            .feed(b"event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"boom\"}}\n\n"),
+    )
+    .unwrap();
+    assert!(!out.contains("data: "), "非流式不得发 SSE 帧: {out}");
+    let body: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(body["error"]["message"], "boom");
+
+    // 流式客户端仍然拿 SSE 帧。
+    let mut streaming = GeminiClientBridge::new("gemini-2.5-pro".into(), true);
+    let out = String::from_utf8(
+        streaming
+            .feed(b"event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"boom\"}}\n\n"),
+    )
+    .unwrap();
+    assert!(out.starts_with("data: "), "{out}");
 }

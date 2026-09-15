@@ -310,8 +310,12 @@ fn validate_output_config(request: &RoutingRequest) -> Result<(), TranslationErr
         match key.as_str() {
             // 已由 `output_config_effort` 消费;非法类型按缺失处理,见该函数说明。
             "effort" => {}
-            "format" if !value.is_null() => {
-                json_schema_format(value)?;
+            // 显式 null 与缺键同义(JSON 序列化器常把未设置的可选字段发成 null),
+            // 不能因为多写了一个 null 就把整条请求判成不可转换。
+            "format" => {
+                if !value.is_null() {
+                    json_schema_format(value)?;
+                }
             }
             other => {
                 return Err(TranslationError::UnsupportedField(format!(
@@ -1579,11 +1583,18 @@ impl OpenAiStreamBridge {
         {
             self.output_tokens += 1;
             self.text.push_str(text);
-            // 工具块开过之后这里会另开一个新文本块,而不是把文字丢掉:客户端
-            // 已经收到过旧块的 stop,再往那里写增量是非法的。
-            let index = self.open_text_block(&mut events);
-            self.streamed_len = self.text.len();
-            events.push(text_delta_event(text, index));
+            // 工具块还开着时不能插一个新文本块:Anthropic 的内容块必须先关后开,
+            // 客户端按开闭配对解析。文字先攒着,收尾由 `flush_unstreamed_text` 在
+            // 工具块关闭之后补发 —— 直接丢弃才会让这段文字彻底消失。
+            if self
+                .tool_calls
+                .iter()
+                .all(|call| call.block_index.is_none())
+            {
+                let index = self.open_text_block(&mut events);
+                self.streamed_len = self.text.len();
+                events.push(text_delta_event(text, index));
+            }
         }
         self.handle_tool_call_deltas(choice, &mut events);
         if let Some(finish) = choice
@@ -2080,11 +2091,16 @@ impl ResponsesStreamBridge {
                 self.ensure_message_started(&mut events);
                 self.output_tokens += 1;
                 self.text.push_str(delta);
-                // 工具块开过之后这里会另开一个新文本块,而不是把文字丢掉:客户端
-                // 已经收到过旧块的 stop,再往那里写增量是非法的。
-                let index = self.open_text_block(&mut events);
-                self.streamed_len = self.text.len();
-                events.push(text_delta_event(delta, index));
+                // 同上:工具块开着时先攒着,收尾在工具块关闭之后补发。
+                if self
+                    .tool_calls
+                    .iter()
+                    .all(|call| call.block_index.is_none())
+                {
+                    let index = self.open_text_block(&mut events);
+                    self.streamed_len = self.text.len();
+                    events.push(text_delta_event(delta, index));
+                }
             }
             "response.completed" => {
                 let response = object.get("response");
@@ -2687,6 +2703,8 @@ mod tests {
 
     /// 工具调用之后的文本必须照样发给客户端。旧行为是把它们只留在非流式响应体里,
     /// 流式客户端看不到模型在工具之后写的任何话。
+    ///
+    /// 但也不能为此插出一个交错的块:工具块还开着时先攒着,收尾在它关闭之后补发。
     #[test]
     fn chat_bridge_streams_text_after_tool_calls() {
         let mut bridge = OpenAiStreamBridge::new("msg_ta".into(), "up".into(), false, false);
@@ -2702,22 +2720,22 @@ mod tests {
         assert_eq!(start[0].1["index"], json!(0)); // 关文本块(索引 0)
         assert_eq!(start[1].1["index"], json!(1)); // 开工具块
 
-        // 工具之后的文本:必须另开一个新块(index 2),不能写回已关闭的 index 0。
+        // 工具块还开着:此刻不能开新文本块(内容块必须先关后开),文字先攒着。
         let after = chunk(r#"{"choices":[{"delta":{"content":"再写"}}]}"#);
-        assert_eq!(after[0].0, "content_block_start");
-        assert_eq!(after[0].1["index"], json!(2));
-        assert_eq!(after[1].0, "content_block_delta");
-        assert_eq!(after[1].1["index"], json!(2));
-        assert_eq!(after[1].1["delta"]["text"], "再写");
+        assert!(after.is_empty(), "工具块开着时不得插出新块: {after:?}");
 
         let done = parse_events(&bridge.feed(b"data: [DONE]\n\n"));
-        // 收尾顺序:先关新文本块,再关工具块 —— 不能反过来,否则块会交错。
-        let stops: Vec<i64> = done
+        let shape: Vec<(String, Value)> = done
             .iter()
-            .filter(|(event, _)| event == "content_block_stop")
-            .map(|(_, data)| data["index"].as_i64().unwrap())
+            .map(|(event, data)| (event.clone(), data["index"].clone()))
             .collect();
-        assert_eq!(stops, vec![2, 1]);
+        // 先关工具块,再补发新文本块 —— 顺序不会交错。
+        assert_eq!(shape[0], ("content_block_stop".into(), json!(1)));
+        assert_eq!(shape[1], ("content_block_start".into(), json!(2)));
+        assert_eq!(shape[2], ("content_block_delta".into(), json!(2)));
+        assert_eq!(done[2].1["delta"]["text"], "再写");
+        assert_eq!(shape[3], ("content_block_stop".into(), json!(2)));
+        assert_eq!(done.last().unwrap().0, "message_stop");
 
         // 非流式聚合里两段文字都在,顺序与增量一致。
         let mut aggregated =
@@ -2979,19 +2997,25 @@ mod tests {
         assert_eq!(added[1].1["index"], json!(1)); // 开工具块
 
         let after = chunk(r#"{"type":"response.output_text.delta","delta":"再写"}"#);
-        assert_eq!(after[0].0, "content_block_start");
-        assert_eq!(after[0].1["index"], json!(2));
-        assert_eq!(after[1].1["delta"]["text"], "再写");
+        assert!(after.is_empty(), "工具块开着时不得插出新块: {after:?}");
 
         let done = chunk(
             r#"{"type":"response.completed","response":{"status":"completed","usage":{"output_tokens":7}}}"#,
         );
-        let stops: Vec<i64> = done
+        let shape: Vec<(String, Value)> = done
             .iter()
-            .filter(|(event, _)| event == "content_block_stop")
-            .map(|(_, data)| data["index"].as_i64().unwrap())
+            .map(|(event, data)| (event.clone(), data["index"].clone()))
             .collect();
-        assert_eq!(stops, vec![2, 1]);
+        // 先关工具块,再补发新文本块。
+        assert_eq!(shape[0], ("content_block_stop".into(), json!(1)));
+        assert_eq!(shape[1], ("content_block_start".into(), json!(2)));
+        assert_eq!(done[1].1["delta"], Value::Null);
+        let delta = done
+            .iter()
+            .find(|(event, _)| event == "content_block_delta")
+            .expect("补发的文本增量");
+        assert_eq!(delta.1["index"], json!(2));
+        assert_eq!(delta.1["delta"]["text"], "再写");
     }
 
     #[test]
