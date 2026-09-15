@@ -351,9 +351,14 @@ pub fn check_anthropic_translation(
         ProviderProtocol::OpenAIResponses => {
             check_anthropic_to_openai_responses(request, websearch)
         }
-        ProviderProtocol::Gemini => Err(TranslationError::UnsupportedField(
-            "Anthropic to Gemini translation is not supported; use native Gemini requests".into(),
-        )),
+        // Gemini 侧有独立的会话桥(bridge_gemini)。服务端检索没有等价注入点,
+        // 保留拒绝而不是把搜索工具悄悄丢掉。
+        ProviderProtocol::Gemini => {
+            if websearch {
+                return Err(TranslationError::UnsupportedTool("web_search".into()));
+            }
+            crate::bridge_gemini::check_anthropic_to_gemini(request)
+        }
     }
 }
 

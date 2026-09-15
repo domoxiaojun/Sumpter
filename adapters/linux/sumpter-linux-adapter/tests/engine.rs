@@ -1,5 +1,8 @@
 //! 引擎行为测试:FakeTransport 脚本化上游,对照 docs/architecture.md §8 的核心条目。
 
+#[path = "../../../../tests/contracts/conversation.rs"]
+mod conversation;
+
 #[path = "../../../../tests/contracts/gemini.rs"]
 mod gemini;
 
