@@ -1012,12 +1012,13 @@ impl Engine {
         let realtime_intent = client_out.as_ref().is_some_and(|client| {
             client.passthrough.is_some() && client.passthrough_kind == PassthroughKind::Realtime
         });
-        if passthrough_kind == Some(PassthroughKind::GeminiGenerate)
-            && plan
-                .endpoints
-                .iter()
-                .any(|endpoint| !request_build::valid_gemini_model(&endpoint.upstream_model))
-        {
+        // 判据是**目标协议**而不是入站 kind:会话操作现在也能落到 Gemini 入口
+        // (反之亦然),只看入站 kind 会漏掉「OpenAI 入站 → Gemini 入口」这条路。
+        // 映射写错会让请求在上游变成一次莫名其妙的 404,不如在这里直接拒绝。
+        if plan.endpoints.iter().any(|endpoint| {
+            endpoint.protocol == ProviderProtocol::Gemini
+                && !request_build::valid_gemini_model(&endpoint.upstream_model)
+        }) {
             let message = "Gemini upstream model must be a model ID or models/<ID>";
             self.record_rejected_client_with_metadata(
                 400,
@@ -1245,6 +1246,8 @@ impl Engine {
             }
         }
 
+        // 原生专用请求(Compact、count_tokens、Gemini 辅助操作等)在目标协议上必须
+        // 原生承接:它们没有转换面。有转换面的会话请求由各自的 kind 返回 None。
         if let Some(required) = client_out
             .as_ref()
             .and_then(|client| required_native_protocol(client.passthrough_kind))

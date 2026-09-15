@@ -3,6 +3,7 @@
 
 use serde_json::{Value, json};
 use sumpter_core::bridge;
+use sumpter_core::bridge_gemini;
 use sumpter_core::config::{
     ContextMode, EndpointProtocolMode, ProviderProtocol, ThinkingMode, UserAgentMode,
     UserAgentSettings,
@@ -171,8 +172,12 @@ pub enum PassthroughKind {
     /// OpenAI model discovery. The response is owned by the upstream Provider;
     /// Sumpter only routes and relays it.
     Models,
-    /// Gemini Developer API generateContent / streamGenerateContent.
+    /// Gemini Developer API 辅助操作(countTokens / embedContent 等)。没有会话
+    /// 语义,不参与协议转换。
     GeminiGenerate,
+    /// Gemini Developer API 会话操作(generateContent / streamGenerateContent):
+    /// 有转换面,可以落到别的协议入口。
+    GeminiSession,
 }
 
 /// CPA's Codex Live handler authenticates the downstream request with the
@@ -180,11 +185,15 @@ pub enum PassthroughKind {
 /// Live hop identical to a direct CPA call: a single Bearer credential is
 /// sufficient and avoids presenting the same key through two auth schemes to
 /// gateways that treat `x-api-key` as a separate credential.
-fn auth_headers_for_kind(
+///
+/// 鉴权方式按**目标协议**决定,不按入站 kind:入站是 OpenAI 方言、目标是 Gemini
+/// 入口时,必须发 Gemini 凭据(`x-goog-api-key`),否则上游只会回 401。
+fn auth_headers_for_target(
     api_key: &str,
+    protocol: ProviderProtocol,
     kind: Option<PassthroughKind>,
 ) -> Vec<(&'static str, String)> {
-    if kind == Some(PassthroughKind::GeminiGenerate) {
+    if protocol == ProviderProtocol::Gemini {
         let key = api_key.trim();
         if key.is_empty() {
             Vec::new()
@@ -221,7 +230,7 @@ impl PassthroughKind {
             Self::Videos => "/videos",
             Self::Realtime => "/realtime",
             Self::Models => "/models",
-            Self::GeminiGenerate => "/",
+            Self::GeminiGenerate | Self::GeminiSession => "/",
         }
     }
 
@@ -241,6 +250,7 @@ impl PassthroughKind {
             Self::Realtime => "realtime",
             Self::Models => "models",
             Self::GeminiGenerate => "gemini-generate",
+            Self::GeminiSession => "gemini-session",
         }
     }
 }
@@ -299,7 +309,7 @@ pub fn build_outbound(
     let raw_passthrough = passthrough.as_ref().is_some_and(|request| {
         matches!(
             request.kind,
-            PassthroughKind::Raw | PassthroughKind::GeminiGenerate
+            PassthroughKind::Raw | PassthroughKind::GeminiGenerate | PassthroughKind::GeminiSession
         )
     });
     // 优先级:入口/规则注入的 effort → 模型名后缀。请求体的 `output_config.effort`
@@ -326,9 +336,11 @@ pub fn build_outbound(
 
     // 2. 强制写入(先删同名再写,严防双份 —— DashScope 对重复 MIME 直接 500)。
     //    空 key = 无鉴权上游:不发任何鉴权头(入站的 authorization/x-api-key 已被黑名单剥除)。
-    for (name, value) in
-        auth_headers_for_kind(api_key, passthrough.as_ref().map(|request| request.kind))
-    {
+    for (name, value) in auth_headers_for_target(
+        api_key,
+        protocol,
+        passthrough.as_ref().map(|request| request.kind),
+    ) {
         set_header(&mut headers, name, &value);
     }
     set_header(&mut headers, "accept-encoding", IDENTITY_ACCEPT_ENCODING);
@@ -350,9 +362,11 @@ pub fn build_outbound(
             }
             headers.push((lower, value.clone()));
         }
-        for (name, value) in
-            auth_headers_for_kind(api_key, passthrough.as_ref().map(|request| request.kind))
-        {
+        for (name, value) in auth_headers_for_target(
+            api_key,
+            protocol,
+            passthrough.as_ref().map(|request| request.kind),
+        ) {
             headers.push((name.to_string(), value));
         }
     }
@@ -434,7 +448,10 @@ pub fn build_outbound(
                 &request.model,
                 &endpoint.upstream_model,
             )
-        } else if passthrough.kind == PassthroughKind::GeminiGenerate {
+        } else if matches!(
+            passthrough.kind,
+            PassthroughKind::GeminiGenerate | PassthroughKind::GeminiSession
+        ) {
             rewrite_gemini_model_path(
                 &gemini_resource_path(&base_path, inbound_path_and_query),
                 &request.model,
@@ -455,6 +472,7 @@ pub fn build_outbound(
                         | PassthroughKind::Realtime
                         | PassthroughKind::Models
                         | PassthroughKind::GeminiGenerate
+                        | PassthroughKind::GeminiSession
                 ) {
                     path_and_query
                 } else {
@@ -489,7 +507,7 @@ pub fn build_outbound(
                 &beta_header(client_beta.as_deref(), endpoint.context, effort),
             );
             (
-                join_paths(&base_path, inbound_path_and_query),
+                join_paths(&base_path, anthropic_messages_path(inbound_path_and_query)),
                 rewrite_anthropic_body(
                     request,
                     &endpoint.routed_model,
@@ -528,12 +546,23 @@ pub fn build_outbound(
             )
         }
         ProviderProtocol::Gemini => {
-            // Gemini requests use the native passthrough branch above. Keep a
-            // defensive raw fallback for internal callers that omit it.
-            (
-                gemini_resource_path(&base_path, inbound_path_and_query),
-                serde_json::to_vec(&request.raw).unwrap_or_default(),
-            )
+            // 会话转换面:模型走 URL(`/v1beta/models/{model}:{action}`),所以 body
+            // 里不带 model。恒用流式 + alt=sse,与 Chat/Responses 目标一致 ——
+            // 客户端要非流式时由客户端桥在最外层聚合。
+            set_header(&mut headers, "accept", "text/event-stream");
+            let model = endpoint
+                .upstream_model
+                .strip_prefix("models/")
+                .unwrap_or(&endpoint.upstream_model);
+            let path = gemini_resource_path(
+                &base_path,
+                &format!("/v1beta/models/{model}:streamGenerateContent?alt=sse"),
+            );
+            let body = bridge_gemini::try_make_gemini_body(request, effort)
+                .map(|body| serde_json::to_vec(&body).unwrap_or_default())
+                // checker 已用同一份映射校验过这条请求,构建失败在正常路径上不可达。
+                .unwrap_or_default();
+            (path, body)
         }
     };
 
@@ -654,7 +683,8 @@ fn rewrite_passthrough_model(
         PassthroughKind::Files | PassthroughKind::Videos | PassthroughKind::Models => {
             return raw.to_vec();
         }
-        PassthroughKind::GeminiGenerate => return raw.to_vec(),
+        // Gemini 的模型在 URL 上,正文里没有可改写字段 —— 原样转发。
+        PassthroughKind::GeminiGenerate | PassthroughKind::GeminiSession => return raw.to_vec(),
         PassthroughKind::Realtime => {
             let mut changed = false;
             if object.get("model").is_some_and(Value::is_string) {
@@ -739,6 +769,23 @@ pub fn openai_resource_path(base_path: &str, inbound_path_and_query: &str) -> St
     match query {
         Some(query) if !query.is_empty() => format!("{output}?{query}"),
         _ => output,
+    }
+}
+
+/// Anthropic 上游的目标路径。
+///
+/// 原生 Messages 入站保留客户端原始路径与查询(`/v1/messages?beta=true` 这类客户端
+/// 参数要跟着走);其余来源是转换面 —— 中间格式恒为 Messages,而入站路径可能是
+/// `/v1/responses`、`/v1beta/models/...:generateContent` 等,直接拼上去会把一个
+/// 非 Messages 的路径发给 Anthropic 上游。
+fn anthropic_messages_path(inbound_path_and_query: &str) -> &str {
+    let path = inbound_path_and_query
+        .split_once('?')
+        .map_or(inbound_path_and_query, |(path, _)| path);
+    if matches!(path, "/v1/messages" | "/messages") {
+        inbound_path_and_query
+    } else {
+        "/v1/messages"
     }
 }
 

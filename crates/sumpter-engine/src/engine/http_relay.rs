@@ -10,6 +10,7 @@ use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
 use serde_json::Value;
 use sumpter_core::bridge::{self, SseBridge};
+use sumpter_core::bridge_gemini;
 use sumpter_core::bridge_in::{self, ClientDialect};
 use sumpter_core::config::{AppConfig, ProviderProtocol};
 use sumpter_core::events::{RuntimeEventPhase, message_tokens};
@@ -307,8 +308,15 @@ impl Engine {
                         bridge_stream,
                     )))
                 }
+                // Gemini 上游:在流中把 generateContent 的结果桥回 Anthropic SSE。
+                // 该桥同时记录真实的 assistant parts(含 thoughtSignature),供本轮
+                // 结束时写入会话回放状态。
+                ProviderProtocol::Gemini => Some(Box::new(bridge_gemini::GeminiStreamBridge::new(
+                    message_id,
+                    endpoint.upstream_model.clone(),
+                    bridge_stream,
+                ))),
                 ProviderProtocol::Anthropic => None,
-                ProviderProtocol::Gemini => None,
             }
         } else {
             None
@@ -332,6 +340,10 @@ impl Engine {
                                 client.stream,
                             ))
                         }
+                        ClientDialect::Gemini => Box::new(bridge_gemini::GeminiClientBridge::new(
+                            endpoint.upstream_model.clone(),
+                            client.stream,
+                        )),
                     },
                 )
             }
@@ -397,6 +409,7 @@ impl Engine {
                         PassthroughKind::Chat
                             | PassthroughKind::Responses
                             | PassthroughKind::GeminiGenerate
+                            | PassthroughKind::GeminiSession
                     )
                 })
             } else if !passthrough && client_out.is_none() && !client_stream {

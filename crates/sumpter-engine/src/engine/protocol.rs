@@ -4,6 +4,7 @@ use axum::http::StatusCode;
 use serde_json::Value;
 
 use sumpter_core::bridge;
+use sumpter_core::bridge_gemini;
 use sumpter_core::bridge_in;
 use sumpter_core::config::{AppConfig, ProviderProtocol};
 use sumpter_core::events::ClientKind;
@@ -33,6 +34,7 @@ pub(super) fn source_format_for_passthrough(kind: PassthroughKind) -> ProviderPr
         | PassthroughKind::Realtime
         | PassthroughKind::Models
         | PassthroughKind::Raw => ProviderProtocol::OpenAI,
+        PassthroughKind::GeminiSession => ProviderProtocol::Gemini,
         PassthroughKind::GeminiGenerate => ProviderProtocol::Gemini,
     }
 }
@@ -54,6 +56,8 @@ pub(super) fn required_native_protocol(kind: PassthroughKind) -> Option<Provider
         | PassthroughKind::Models => None,
         PassthroughKind::ImagesGenerations | PassthroughKind::ImagesEdits => None,
         PassthroughKind::Chat | PassthroughKind::Responses => None,
+        // 会话操作有转换面,不再强制原生;辅助操作仍必须落到原生入口。
+        PassthroughKind::GeminiSession => None,
         PassthroughKind::GeminiGenerate => Some(ProviderProtocol::Gemini),
     }
 }
@@ -89,9 +93,18 @@ pub(super) fn translation_supported(
                 request_build::server_retrieval_enabled(endpoint, request, purpose),
             )
         }
-        ProviderProtocol::Gemini => Err(bridge::TranslationError::InvalidInput(
-            "Gemini requires native passthrough".into(),
-        )),
+        ProviderProtocol::Gemini => {
+            // Gemini 会话请求经 `gemini_to_anthropic` 归一化后同样是一份
+            // Anthropic 中间格式,再按目标协议走同一道能力检查。
+            let body = serde_json::from_slice::<Value>(inbound_body)
+                .map_err(|_| bridge::TranslationError::InvalidInput("body is not JSON".into()))?;
+            bridge_gemini::check_gemini_to_anthropic(&body, &request.model)?;
+            bridge::check_anthropic_translation(
+                request,
+                endpoint.protocol,
+                request_build::server_retrieval_enabled(endpoint, request, purpose),
+            )
+        }
     }
 }
 
@@ -350,6 +363,15 @@ pub(super) fn native_passthrough_kind(path: &str) -> PassthroughKind {
 /// raw relay and do not receive Gemini authentication headers.
 pub(super) fn is_gemini_generate_path(path: &str) -> bool {
     gemini_model_from_path(path).is_some()
+}
+
+/// 只有 `generateContent` / `streamGenerateContent` 是会话操作,进入转换面;
+/// `countTokens` / `embedContent` 没有会话语义,继续原生透传。
+pub(super) fn is_gemini_session_path(path: &str) -> bool {
+    matches!(
+        bridge_gemini::gemini_operation(path),
+        bridge_gemini::GeminiOperation::Generate | bridge_gemini::GeminiOperation::StreamGenerate
+    )
 }
 
 pub(super) fn gemini_model_from_path(path: &str) -> Option<String> {

@@ -21,6 +21,8 @@ pub enum ClientDialect {
     Chat,
     /// `/v1/responses`
     Responses,
+    /// Gemini `generateContent` / `streamGenerateContent`(会话操作)。
+    Gemini,
 }
 /// 客户端是否要求流式(`"stream": true`;缺省按非流式处理,与 OpenAI 语义一致)。
 pub fn client_wants_stream(body: &Value) -> bool {

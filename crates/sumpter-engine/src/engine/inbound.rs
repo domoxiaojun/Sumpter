@@ -38,6 +38,7 @@ use super::protocol::classify_realtime_intent;
 use super::protocol::decoded_query_value;
 use super::protocol::gemini_model_from_path;
 use super::protocol::gemini_stream_path;
+use super::protocol::is_gemini_session_path;
 use super::protocol::is_openai_resource_tree;
 use super::protocol::is_realtime_call_bootstrap_path;
 use super::protocol::is_realtime_client_secret_path;
@@ -66,6 +67,7 @@ use std::cell::RefCell;
 use std::net::IpAddr;
 use std::sync::Arc;
 use sumpter_core::access;
+use sumpter_core::bridge_gemini;
 use sumpter_core::bridge_in;
 use sumpter_core::bridge_in::ClientDialect;
 use sumpter_core::config::AppConfig;
@@ -107,6 +109,35 @@ pub fn header_pairs(headers: &HeaderMap) -> Vec<(String, String)> {
 
 /// 请求体上限：server body-limit 与 Engine 实际读取共用，防止异常请求无限占用内存。
 pub const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
+/// Gemini 入站的公共约束:必须 POST、凭据不能走 query、流式必须 `alt=sse`。
+/// 会话与辅助操作共用,避免两条路径的判定漂移。
+fn gemini_request_error(method: &str, path_and_query: &str) -> Option<(i64, &'static str)> {
+    let query = path_and_query
+        .split_once('?')
+        .map(|(_, query)| query)
+        .unwrap_or("");
+    if !method.eq_ignore_ascii_case("POST") {
+        Some((405, "Gemini model operations require POST"))
+    } else if decoded_query_value(query, "key").is_some() {
+        Some((
+            400,
+            "use x-goog-api-key or Bearer for inbound authentication, not a query key",
+        ))
+    } else if gemini_stream_path(path_without_query(path_and_query))
+        && decoded_query_value(query, "alt").as_deref() != Some("sse")
+    {
+        Some((400, "streamGenerateContent requires alt=sse"))
+    } else {
+        None
+    }
+}
+
+/// Gemini 会话入站的路径派生字段:模型与流式意图都只在 URL 上,请求体里没有。
+struct GeminiInbound {
+    model: String,
+    stream: bool,
+}
+
 impl Engine {
     // -----------------------------------------------------------------------
     // 入站分发
@@ -424,6 +455,49 @@ impl Engine {
         }
 
         match path {
+            _ if is_gemini_session_path(path) => {
+                // 与会话/辅助操作共用同一份入站约束,避免两条路径的校验漂移。
+                if let Some((status, message)) = gemini_request_error(method, path_and_query) {
+                    self.record_rejected_client_with_metadata(
+                        status,
+                        message,
+                        None,
+                        Some(RequestPurpose::Standard),
+                        detect_client_kind(&headers, true),
+                        CodexMetadata::from_request(&headers, None),
+                        ClientDeclaredMetadata::from_headers(&headers),
+                        Some(ProviderProtocol::Gemini),
+                    );
+                    return error_response(
+                        StatusCode::from_u16(status as u16).unwrap_or(StatusCode::BAD_REQUEST),
+                        &[("error", "invalid_gemini_request"), ("message", message)],
+                    );
+                }
+                // 会话操作走转换面:模型与流式意图都只在 URL 上,请求体没有 model,
+                // 所以这里直接从路径取,不读 body。
+                let Some(model) = gemini_model_from_path(path) else {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        &[
+                            ("error", "invalid_request"),
+                            ("message", "Gemini model is required in the request path"),
+                        ],
+                    );
+                };
+                self.handle_openai_inbound(
+                    &config,
+                    ClientDialect::Gemini,
+                    false,
+                    Some(GeminiInbound {
+                        model,
+                        stream: gemini_stream_path(path),
+                    }),
+                    path_and_query,
+                    headers,
+                    body,
+                )
+                .await
+            }
             _ if super::protocol::is_gemini_generate_path(path) => {
                 self.handle_native_openai_passthrough(
                     &config,
@@ -449,6 +523,7 @@ impl Engine {
                     &config,
                     ClientDialect::Chat,
                     false,
+                    None,
                     path_and_query,
                     headers,
                     body,
@@ -460,6 +535,7 @@ impl Engine {
                     &config,
                     ClientDialect::Responses,
                     false,
+                    None,
                     path_and_query,
                     headers,
                     body,
@@ -473,6 +549,7 @@ impl Engine {
                     &config,
                     ClientDialect::Responses,
                     true,
+                    None,
                     path_and_query,
                     headers,
                     body,
@@ -778,12 +855,16 @@ impl Engine {
     // 路由、粘性、failover 与可取消重试管线；响应在 relay 中转回客户端方言。
     // -----------------------------------------------------------------------
 
+    /// OpenAI 系与 Gemini 会话入站共享同一条管线:先归一化成 Anthropic 中间格式
+    /// 供路由使用,原始正文留给原生透传,响应侧再桥回客户端方言。
+    #[allow(clippy::too_many_arguments)]
     async fn handle_openai_inbound(
         &self,
         config: &AppConfig,
         dialect: ClientDialect,
         compact: bool,
-        _path_and_query: &str,
+        gemini: Option<GeminiInbound>,
+        path_and_query: &str,
         headers: Vec<(String, String)>,
         body: Body,
     ) -> Response {
@@ -791,6 +872,7 @@ impl Engine {
         let source_format = match dialect {
             ClientDialect::Chat => ProviderProtocol::OpenAI,
             ClientDialect::Responses => ProviderProtocol::OpenAIResponses,
+            ClientDialect::Gemini => ProviderProtocol::Gemini,
         };
         let request_purpose = compact.then_some(RequestPurpose::Compact);
         let header_codex_metadata = CodexMetadata::from_request(&headers, None);
@@ -868,7 +950,12 @@ impl Engine {
                 true,
             );
         }
-        let client_stream = !compact && bridge_in::client_wants_stream(&parsed);
+        // Gemini 的流式意图在 URL 上(`:streamGenerateContent`),请求体里没有。
+        let client_stream = !compact
+            && match &gemini {
+                Some(inbound) => inbound.stream,
+                None => bridge_in::client_wants_stream(&parsed),
+            };
         let converted = if compact {
             parsed
                 .get("model")
@@ -880,6 +967,18 @@ impl Engine {
             match dialect {
                 ClientDialect::Chat => bridge_in::chat_to_anthropic(&parsed),
                 ClientDialect::Responses => bridge_in::responses_to_anthropic(&parsed),
+                // 归一化只服务于路由:模型本来就在路径上,正文在原生路径上按字节
+                // 转发,所以这里不因正文不可转换就拦下整条请求 —— 转换候选会在
+                // `translation_supported` 用真实正文再检一次,并回报具体原因。
+                ClientDialect::Gemini => match gemini.as_ref() {
+                    Some(inbound) => {
+                        Ok(bridge_gemini::gemini_to_anthropic(&parsed, &inbound.model)
+                            .unwrap_or_else(
+                                |_| json!({"model": inbound.model, "stream": inbound.stream}),
+                            ))
+                    }
+                    None => Err("Gemini model is required in the request path".into()),
+                },
             }
         };
         let converted = match converted {
@@ -927,13 +1026,14 @@ impl Engine {
             headers,
             body.clone(),
             "POST",
-            "/v1/messages",
+            path_and_query,
             Some(ClientOut {
                 dialect: Some(dialect),
                 passthrough_kind: match (dialect, compact) {
                     (ClientDialect::Chat, _) => PassthroughKind::Chat,
                     (ClientDialect::Responses, true) => PassthroughKind::ResponsesCompact,
                     (ClientDialect::Responses, false) => PassthroughKind::Responses,
+                    (ClientDialect::Gemini, _) => PassthroughKind::GeminiSession,
                 },
                 stream: client_stream,
                 passthrough: Some(body),
@@ -941,6 +1041,7 @@ impl Engine {
                 terminal_dialect: match dialect {
                     ClientDialect::Chat => SseDialect::OpenAiChat,
                     ClientDialect::Responses => SseDialect::OpenAiResponses,
+                    ClientDialect::Gemini => SseDialect::Gemini,
                 },
                 realtime_client_secret: false,
             }),
@@ -993,25 +1094,7 @@ impl Engine {
             );
         }
         if kind == PassthroughKind::GeminiGenerate {
-            let query = path_and_query
-                .split_once('?')
-                .map(|(_, query)| query)
-                .unwrap_or("");
-            let invalid = if !method.eq_ignore_ascii_case("POST") {
-                Some((405, "Gemini model operations require POST"))
-            } else if decoded_query_value(query, "key").is_some() {
-                Some((
-                    400,
-                    "use x-goog-api-key or Bearer for inbound authentication, not a query key",
-                ))
-            } else if gemini_stream_path(path_without_query(path_and_query))
-                && decoded_query_value(query, "alt").as_deref() != Some("sse")
-            {
-                Some((400, "streamGenerateContent requires alt=sse"))
-            } else {
-                None
-            };
-            if let Some((status, message)) = invalid {
+            if let Some((status, message)) = gemini_request_error(method, path_and_query) {
                 self.record_rejected_client_with_metadata(
                     status,
                     message,
@@ -1465,7 +1548,9 @@ impl Engine {
                     | PassthroughKind::Videos
                     | PassthroughKind::Realtime
                     | PassthroughKind::Models => SseDialect::OpenAiResponses,
-                    PassthroughKind::GeminiGenerate => SseDialect::Gemini,
+                    PassthroughKind::GeminiGenerate | PassthroughKind::GeminiSession => {
+                        SseDialect::Gemini
+                    }
                 },
                 realtime_client_secret: is_realtime_client_secret_path(path_and_query),
             }),
