@@ -272,6 +272,7 @@ extension AppModel {
                     value = try await admin.runtimeEventPage(
                         page: max(1, page), pageSize: pageSize,
                         snapshotSeq: anchor?.snapshotSeq,
+                        snapshotChangeSeq: anchor?.snapshotChangeSeq,
                         historyGeneration: anchor?.historyGeneration,
                         filter: filter
                     )
@@ -323,6 +324,7 @@ extension AppModel {
                     value = try await admin.runtimeEventPage(
                         page: page, pageSize: pageSize,
                         snapshotSeq: anchor?.snapshotSeq,
+                        snapshotChangeSeq: anchor?.snapshotChangeSeq,
                         historyGeneration: anchor?.historyGeneration,
                         filter: filter
                     )
@@ -517,6 +519,7 @@ extension AppModel {
                 for: board,
                 using: admin,
                 snapshotSeq: snapshot,
+                snapshotChangeSeq: page.snapshotChangeSeq,
                 historyGeneration: historyGeneration,
                 filter: filter
             )
@@ -568,6 +571,7 @@ extension AppModel {
         for board: String,
         using admin: AdminClient,
         snapshotSeq: Int,
+        snapshotChangeSeq: Int?,
         historyGeneration: Int,
         filter: AdminWire.RuntimeFilter
     ) async throws -> AdminWire.RuntimeTrendSeries? {
@@ -576,6 +580,7 @@ extension AppModel {
             range: runtimeAnalyticsRange,
             granularity: "auto",
             snapshotSeq: snapshotSeq,
+            snapshotChangeSeq: snapshotChangeSeq,
             historyGeneration: historyGeneration,
             filter: filter
         )
@@ -618,6 +623,7 @@ extension AppModel {
                 page: max(1, page),
                 pageSize: runtimeHistoryPageSize,
                 snapshotSeq: anchor?.snapshotSeq,
+                        snapshotChangeSeq: anchor?.snapshotChangeSeq,
                 historyGeneration: anchor?.historyGeneration,
                 filter: runtimeV2Filter()
             )
@@ -647,6 +653,7 @@ extension AppModel {
 
     func applyRuntimeHistoryPage(_ page: AdminWire.RuntimeHistoryPage) {
         if runtimeHistoryPage?.snapshotSeq != page.snapshotSeq
+            || runtimeHistoryPage?.snapshotChangeSeq != page.snapshotChangeSeq
             || runtimeHistoryPage?.historyGeneration != page.historyGeneration {
             runtimeExportEstimate = nil
             runtimeExportEstimateError = nil
@@ -907,6 +914,7 @@ extension AppModel {
                     sort: sort,
                     order: order,
                     snapshotSeq: anchor.snapshotSeq,
+                    snapshotChangeSeq: anchor.snapshotChangeSeq,
                     historyGeneration: anchor.historyGeneration,
                     filter: filter
                 )
@@ -973,6 +981,7 @@ extension AppModel {
                     sort: endpointSort,
                     order: endpointOrder,
                     snapshotSeq: anchor.snapshotSeq,
+                    snapshotChangeSeq: anchor.snapshotChangeSeq,
                     historyGeneration: anchor.historyGeneration,
                     filter: filter
                 )
@@ -983,6 +992,7 @@ extension AppModel {
                     sort: projectSort,
                     order: projectOrder,
                     snapshotSeq: anchor.snapshotSeq,
+                    snapshotChangeSeq: anchor.snapshotChangeSeq,
                     historyGeneration: anchor.historyGeneration,
                     filter: filter
                 )
@@ -993,6 +1003,7 @@ extension AppModel {
                     sort: sessionSort,
                     order: sessionOrder,
                     snapshotSeq: anchor.snapshotSeq,
+                    snapshotChangeSeq: anchor.snapshotChangeSeq,
                     historyGeneration: anchor.historyGeneration,
                     filter: sessionFilter
                 )
@@ -1004,6 +1015,7 @@ extension AppModel {
                     sort: modelSort,
                     order: modelOrder,
                     snapshotSeq: anchor.snapshotSeq,
+                    snapshotChangeSeq: anchor.snapshotChangeSeq,
                     historyGeneration: anchor.historyGeneration,
                     filter: modelFilter
                 )
@@ -1055,6 +1067,7 @@ extension AppModel {
                     page: page,
                     pageSize: self.runtimeErrorPageSize,
                     snapshotSeq: anchor.snapshotSeq,
+                    snapshotChangeSeq: anchor.snapshotChangeSeq,
                     historyGeneration: anchor.historyGeneration,
                     filter: self.runtimeV2Filter()
                 )
@@ -1188,24 +1201,28 @@ extension AppModel {
                     value = try await admin.runtimeDimensions(
                         kind: "endpoint", page: page, pageSize: pageSize, search: search,
                         sort: sort, order: order, snapshotSeq: anchor.snapshotSeq,
+                    snapshotChangeSeq: anchor.snapshotChangeSeq,
                         historyGeneration: anchor.historyGeneration, filter: self.runtimeV2Filter()
                     )
                 } else if kind == .project {
                     value = try await admin.runtimeProjects(
                         page: page, pageSize: pageSize, search: search, sort: sort,
                         order: self.runtimeProjectOrder, snapshotSeq: anchor.snapshotSeq,
+                    snapshotChangeSeq: anchor.snapshotChangeSeq,
                         historyGeneration: anchor.historyGeneration, filter: self.runtimeV2Filter()
                     )
                 } else if kind == .session {
                     value = try await admin.runtimeSessions(
                         page: page, pageSize: pageSize, search: search, sort: sort,
                         order: self.runtimeSessionOrder, snapshotSeq: anchor.snapshotSeq,
+                    snapshotChangeSeq: anchor.snapshotChangeSeq,
                         historyGeneration: anchor.historyGeneration, filter: self.runtimeV2Filter(includeLocalProject: true)
                     )
                 } else {
                     value = try await admin.runtimeDimensions(
                         kind: "model", page: page, pageSize: pageSize, search: search,
                         sort: sort, order: order, snapshotSeq: anchor.snapshotSeq,
+                    snapshotChangeSeq: anchor.snapshotChangeSeq,
                         historyGeneration: anchor.historyGeneration, filter: self.runtimeV2Filter(includeLocalProject: true)
                     )
                 }
@@ -1341,6 +1358,7 @@ extension AppModel {
                     scope: scope, format: format, privacy: privacy,
                     confirmStored: confirmStored,
                     snapshotSeq: anchor?.snapshotSeq,
+                        snapshotChangeSeq: anchor?.snapshotChangeSeq,
                     historyGeneration: anchor?.historyGeneration,
                     filter: self.runtimeV2Filter()
                 )
@@ -1386,6 +1404,7 @@ extension AppModel {
                     to: destination, scope: scope, format: format, privacy: privacy,
                     confirmStored: confirmStored,
                     snapshotSeq: anchor?.snapshotSeq,
+                        snapshotChangeSeq: anchor?.snapshotChangeSeq,
                     historyGeneration: anchor?.historyGeneration,
                     filter: self.runtimeV2Filter()
                 )

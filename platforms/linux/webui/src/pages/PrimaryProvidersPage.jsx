@@ -260,7 +260,7 @@ function mappingFromDraftRow(row) {
 
 // 入口的模型映射表:所有单元格就地编辑,勾选多行批量删除 / 批量改策略,改完一次保存。
 // 此前每条映射都要点“编辑”进弹窗、再点“删除”确认;几十个模型一条条点太慢。
-function EndpointMappingTable({ endpoint, saveConfig, addToast }) {
+function EndpointMappingTable({ endpoint, configDoc, saveConfig, addToast }) {
   const baseline = JSON.stringify(endpointMappings(endpoint).map((mapping) => mappingFromDraftRow(mappingDraftRow(mapping, ''))));
   const keyRef = useRef(0);
   const nextKey = () => `m${keyRef.current += 1}`;
@@ -270,12 +270,21 @@ function EndpointMappingTable({ endpoint, saveConfig, addToast }) {
   const [query, setQuery] = useState('');
   const [saving, setSaving] = useState(false);
   const focusKeyRef = useRef(null);
+  const draftSource = useRef(configDoc);
+  const [draftBaseline, setDraftBaseline] = useState(baseline);
+  const endpointIDRef = useRef(endpoint?.id);
+  const dirty = JSON.stringify(draft.map(mappingFromDraftRow)) !== draftBaseline;
 
-  // 切换入口或服务端配置变了就以服务端为准重置草稿;未保存改动会被覆盖,所以 dirty 时有明显提示。
+  // 同一入口收到外部刷新时保留脏草稿；保存以原始 generation 检测冲突。
   useEffect(() => {
-    setDraft(buildDraft());
-    setSelected(new Set());
-  }, [endpoint?.id, baseline]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (endpointIDRef.current !== endpoint?.id || !dirty) {
+      endpointIDRef.current = endpoint?.id;
+      draftSource.current = configDoc;
+      setDraftBaseline(baseline);
+      setDraft(buildDraft());
+      setSelected(new Set());
+    }
+  }, [endpoint?.id, baseline, configDoc]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!focusKeyRef.current) return;
@@ -283,7 +292,6 @@ function EndpointMappingTable({ endpoint, saveConfig, addToast }) {
     focusKeyRef.current = null;
   }, [draft.length]);
 
-  const dirty = JSON.stringify(draft.map(mappingFromDraftRow)) !== baseline;
   const normalizedQuery = query.trim().toLowerCase();
   const visible = normalizedQuery
     ? draft.filter((row) => `${row.from} ${row.to}`.toLowerCase().includes(normalizedQuery))
@@ -325,19 +333,26 @@ function EndpointMappingTable({ endpoint, saveConfig, addToast }) {
     setDraft((rows) => rows.map((row) => (selected.has(row._key) ? { ...row, ...patch } : row)));
   };
 
-  const discard = () => { setDraft(buildDraft()); setSelected(new Set()); };
+  const discard = () => {
+    draftSource.current = configDoc;
+    setDraftBaseline(baseline);
+    setDraft(buildDraft());
+    setSelected(new Set());
+  };
   const save = async () => {
     if (invalidCount) { addToast(`还有 ${invalidCount} 行映射不完整，请先修正`, 'warning'); return; }
     setSaving(true);
     try {
       const mappings = draft.map(mappingFromDraftRow);
-      await saveConfig((latestConfig) => {
+      const saved = await saveConfig((latestConfig) => {
         const target = latestConfig.endpoints?.find((item) => item.id === endpoint.id);
         if (!target) throw new Error('入口已不存在，请刷新页面');
         target.modelMappings = mappings;
         delete target.mappings;
         return latestConfig;
-      });
+      }, {}, draftSource.current);
+      draftSource.current = saved;
+      setDraftBaseline(JSON.stringify(mappings));
       addToast(`已保存 ${mappings.length} 条模型映射`, 'success');
     } catch (error) {
       addToast(`保存映射失败：${error.message}`, 'error');
@@ -459,7 +474,7 @@ function EndpointPricingEditor({ endpoint, config, onSaved }) {
 }
 
 export function PrimaryProvidersPage() {
-  const { config, secretStatus, saveConfig, openModal, addToast } = useApp();
+  const { config, configDoc, secretStatus, saveConfig, openModal, addToast } = useApp();
   const [selectedEndpointID, setSelectedEndpointID] = useState(null);
   const [fetchingModelEndpointIDs, setFetchingModelEndpointIDs] = useState(() => new Set());
   const [reorderingEndpointID, setReorderingEndpointID] = useState(null);
@@ -646,7 +661,7 @@ export function PrimaryProvidersPage() {
               });
               existing.add(key);
             }
-            await saveConfig(nextConfig);
+            await saveConfig(nextConfig, {}, configDoc);
             addToast(`已添加 ${target.modelMappings.length - existingMappings.length} 条模型映射`, 'success');
             return false;
           },
@@ -662,7 +677,7 @@ export function PrimaryProvidersPage() {
       const targetEp = nextConfig.endpoints.find((e) => e.id === endpointId);
       if (targetEp) {
         targetEp.enabled = enabled;
-        await saveConfig(nextConfig);
+        await saveConfig(nextConfig, {}, configDoc);
         addToast(`入口「${targetEp.name}」已${enabled ? '启用' : '停用'}`, 'success');
       }
     } catch (err) {
@@ -678,7 +693,7 @@ export function PrimaryProvidersPage() {
       const nextConfig = clone(config);
       const [moved] = nextConfig.endpoints.splice(index, 1);
       nextConfig.endpoints.splice(newIndex, 0, moved);
-      await saveConfig(nextConfig);
+      await saveConfig(nextConfig, {}, configDoc);
       addToast('同优先级入口顺序已调整', 'success');
     } catch (err) {
       addToast(`调整失败: ${err.message}`, 'error');
@@ -706,7 +721,7 @@ export function PrimaryProvidersPage() {
         const nextConfig = clone(config);
         const [moved] = nextConfig.endpoints.splice(sourceIndex, 1);
         nextConfig.endpoints.splice(insertionIndex, 0, moved);
-        await saveConfig(nextConfig);
+        await saveConfig(nextConfig, {}, configDoc);
         addToast('入口顺序已保存', 'success');
       } catch (err) {
         addToast(`入口顺序保存失败: ${err.message}`, 'error');
@@ -801,7 +816,7 @@ export function PrimaryProvidersPage() {
     try {
       const nextConfig = clone(config);
       nextConfig.endpoints = nextConfig.endpoints.filter((e) => e.id !== endpoint.id);
-      await saveConfig(nextConfig);
+      await saveConfig(nextConfig, {}, configDoc);
       addToast('入口已删除', 'success');
     } catch (err) {
       addToast(`删除失败: ${err.message}`, 'error');
@@ -979,7 +994,7 @@ export function PrimaryProvidersPage() {
               maxDeferredRounds: maxRoundsNumber,
               maxRetryDurationSeconds: maxDurationNumber,
             };
-            await saveConfig(nextConfig);
+            await saveConfig(nextConfig, {}, configDoc);
             return false;
           },
         },
@@ -1225,7 +1240,7 @@ export function PrimaryProvidersPage() {
               }
             }
 
-            await saveConfig(nextConfig, secretUpdates);
+            await saveConfig(nextConfig, secretUpdates, configDoc);
             return false;
           },
         },
@@ -1686,7 +1701,7 @@ export function PrimaryProvidersPage() {
             </div>
           </div>
 
-          <EndpointMappingTable endpoint={selectedEndpoint} saveConfig={saveConfig} addToast={addToast} />
+          <EndpointMappingTable endpoint={selectedEndpoint} configDoc={configDoc} saveConfig={saveConfig} addToast={addToast} />
         </div>
       )}
     </div>

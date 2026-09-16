@@ -1562,7 +1562,7 @@ class ApiService {
     return this.request(`/runtime/events${query.toString() ? `?${query}` : ''}`, { signal });
   }
   getRuntimeEventPage({
-    page = 1, pageSize = RUNTIME_DEFAULT_PAGE_SIZE, snapshotSeq, historyGeneration,
+    page = 1, pageSize = RUNTIME_DEFAULT_PAGE_SIZE, snapshotSeq, snapshotChangeSeq, historyGeneration,
     kind, outcome, clientKind, requestPurpose, requestID, endpointID,
     model, projectID, project, sessionID, failureKind, failurePhase, from, to, signal,
   } = {}) {
@@ -1576,6 +1576,7 @@ class ApiService {
       model, projectID, project, sessionID, failureKind, failurePhase, from, to,
     };
     if (snapshotSeq != null) query.set('snapshotSeq', String(snapshotSeq));
+    if (snapshotChangeSeq != null) query.set('snapshotChangeSeq', String(snapshotChangeSeq));
     if (historyGeneration != null) query.set('historyGeneration', String(historyGeneration));
     for (const [key, value] of Object.entries(filters)) {
       if (value != null && String(value).trim() !== '') query.set(key, String(value));
@@ -1602,31 +1603,31 @@ class ApiService {
     appendQueryValues(query, { ...runtimeRangeFilter(range), from: filters.from, to: filters.to });
     return this.request(`/runtime/analytics?${query.toString()}`, options);
   }
-  getRuntimeTrends({ range = '24h', granularity = 'auto', snapshotSeq, historyGeneration, filters = {} } = {}, options = {}) {
+  getRuntimeTrends({ range = '24h', granularity = 'auto', snapshotSeq, snapshotChangeSeq, historyGeneration, filters = {} } = {}, options = {}) {
     const query = new URLSearchParams({ range, granularity });
-    appendQueryValues(query, { snapshotSeq, historyGeneration, ...runtimeRangeFilter(range), ...runtimeFilterValues(filters) });
+    appendQueryValues(query, { snapshotSeq, snapshotChangeSeq, historyGeneration, ...runtimeRangeFilter(range), ...runtimeFilterValues(filters) });
     return this.request(`/runtime/trends?${query.toString()}`, options);
   }
-  getRuntimeErrors({ page = 1, pageSize = RUNTIME_DEFAULT_PAGE_SIZE, snapshotSeq, historyGeneration, filters = {} } = {}, options = {}) {
+  getRuntimeErrors({ page = 1, pageSize = RUNTIME_DEFAULT_PAGE_SIZE, snapshotSeq, snapshotChangeSeq, historyGeneration, filters = {} } = {}, options = {}) {
     const query = new URLSearchParams({ page: String(Math.max(1, Number(page) || 1)), pageSize: String(Number(pageSize) || RUNTIME_DEFAULT_PAGE_SIZE) });
-    appendQueryValues(query, { snapshotSeq, historyGeneration, ...runtimeFilterValues(filters) });
+    appendQueryValues(query, { snapshotSeq, snapshotChangeSeq, historyGeneration, ...runtimeFilterValues(filters) });
     return this.request(`/runtime/errors?${query.toString()}`, options);
   }
   getRuntimeDimension(kind, {
-    page = 1, pageSize = RUNTIME_DEFAULT_PAGE_SIZE, search, sort = 'last_seen', order = 'desc', snapshotSeq, historyGeneration, filters = {},
+    page = 1, pageSize = RUNTIME_DEFAULT_PAGE_SIZE, search, sort = 'last_seen', order = 'desc', snapshotSeq, snapshotChangeSeq, historyGeneration, filters = {},
   } = {}, options = {}) {
     if (!['projects', 'sessions'].includes(kind)) throw new TypeError(`不支持的 runtime 维度: ${kind}`);
     const query = new URLSearchParams({ page: String(Math.max(1, Number(page) || 1)), pageSize: String(Number(pageSize) || RUNTIME_DEFAULT_PAGE_SIZE), sort, order });
-    appendQueryValues(query, { search, snapshotSeq, historyGeneration, ...runtimeFilterValues(filters) });
+    appendQueryValues(query, { search, snapshotSeq, snapshotChangeSeq, historyGeneration, ...runtimeFilterValues(filters) });
     return this.request(`/runtime/${kind}?${query.toString()}`, options);
   }
   getRuntimeDimensions(kind, {
-    page = 1, pageSize = RUNTIME_DEFAULT_PAGE_SIZE, search, sort = 'last_seen', order = 'desc', snapshotSeq, historyGeneration, filters = {},
+    page = 1, pageSize = RUNTIME_DEFAULT_PAGE_SIZE, search, sort = 'last_seen', order = 'desc', snapshotSeq, snapshotChangeSeq, historyGeneration, filters = {},
   } = {}, options = {}) {
     const allowed = ['endpoint', 'model', 'clientKind', 'purpose', 'failureKind', 'failurePhase', 'protocol', 'streamTerminal', 'project', 'session', 'clientVariant', 'agentRole', 'agentName', 'parentThread', 'parentTurn', 'rootTurn'];
     if (!allowed.includes(kind)) throw new TypeError(`不支持的 runtime 维度: ${kind}`);
     const query = new URLSearchParams({ kind, page: String(Math.max(1, Number(page) || 1)), pageSize: String(Number(pageSize) || RUNTIME_DEFAULT_PAGE_SIZE), sort, order });
-    appendQueryValues(query, { search, snapshotSeq, historyGeneration, ...runtimeFilterValues(filters) });
+    appendQueryValues(query, { search, snapshotSeq, snapshotChangeSeq, historyGeneration, ...runtimeFilterValues(filters) });
     return this.request(`/runtime/dimensions?${query.toString()}`, options);
   }
   // One endpoint/transaction returns all picker dimensions.  The old
@@ -1683,19 +1684,19 @@ class ApiService {
       body: JSON.stringify(payload || {}),
     });
   }
-  estimateRuntimeExport({ scope = 'events', format = 'jsonl', privacy = 'stored', confirmStored = false, snapshotSeq, historyGeneration, filters = {} } = {}, options = {}) {
+  estimateRuntimeExport({ scope = 'events', format = 'jsonl', privacy = 'stored', confirmStored = false, snapshotSeq, snapshotChangeSeq, historyGeneration, filters = {} } = {}, options = {}) {
     const query = new URLSearchParams({ scope, format, privacy });
     if (confirmStored) query.set('confirmStored', 'true');
-    appendQueryValues(query, { snapshotSeq, historyGeneration, ...runtimeFilterValues(filters) });
+    appendQueryValues(query, { snapshotSeq, snapshotChangeSeq, historyGeneration, ...runtimeFilterValues(filters) });
     return this.request(`/runtime/export/estimate?${query.toString()}`, options);
   }
-  downloadRuntimeExport({ scope = 'events', format = 'jsonl', privacy = 'stored', confirmStored = false, snapshotSeq, historyGeneration, filters = {} } = {}) {
+  downloadRuntimeExport({ scope = 'events', format = 'jsonl', privacy = 'stored', confirmStored = false, snapshotSeq, snapshotChangeSeq, historyGeneration, filters = {} } = {}) {
     const query = new URLSearchParams({ scope, format, privacy });
     if (confirmStored) query.set('confirmStored', 'true');
-    appendQueryValues(query, { snapshotSeq, historyGeneration, ...runtimeFilterValues(filters) });
+    appendQueryValues(query, { snapshotSeq, snapshotChangeSeq, historyGeneration, ...runtimeFilterValues(filters) });
     const path = `/runtime/export?${query.toString()}`;
     if (isMock) {
-      return this.estimateRuntimeExport({ scope, format, privacy, confirmStored, snapshotSeq, historyGeneration, filters })
+      return this.estimateRuntimeExport({ scope, format, privacy, confirmStored, snapshotSeq, snapshotChangeSeq, historyGeneration, filters })
         .then((estimate) => ({ started: true, mock: true, estimate }));
     }
     // The server returns an attachment stream. A temporary same-origin link

@@ -10,7 +10,8 @@ const effortOptions = [
 ];
 
 export function FeatureRuleEditor({ rule, catalogLoader }) {
-  const { config, saveConfig, closeModal } = useApp();
+  const { config, configDoc, saveConfig, closeModal } = useApp();
+  const draftSource = useRef(configDoc);
   const [draft, setDraft] = useState(() => ({
     id: rule?.id || createLocalID('rule'), name: rule?.name || '',
     requestKind: rule?.match?.requestKind || 'websearch',
@@ -79,7 +80,7 @@ export function FeatureRuleEditor({ rule, catalogLoader }) {
     setSaveError('');
     try {
       await saveConfig((latest) => saveFeatureRule(latest, rule, draft,
-        activeModels?.catalog ? { key: endpointKey, catalog: activeModels.catalog } : null));
+        activeModels?.catalog ? { key: endpointKey, catalog: activeModels.catalog } : null), {}, draftSource.current);
       if (mountedRef.current) closeModal();
     } catch (error) {
       if (mountedRef.current) setSaveError(error.message || '保存失败，请重试');

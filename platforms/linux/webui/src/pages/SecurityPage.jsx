@@ -1,7 +1,7 @@
 import { StatusBadge } from '../components/StatusBadge.jsx';
 import { Icon } from '../utils/icons.jsx';
 import { UnifiedAttributionPanel } from '../components/UnifiedAttributionPanel.jsx';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext.jsx';
 import { QuickToggle } from '../components/QuickToggle.jsx';
 import { api } from '../services/api.js';
@@ -10,7 +10,8 @@ import {
 } from '../utils/helpers.js';
 
 export function SecurityPage() {
-  const { config, secretStatus, saveConfig, addToast, auth } = useApp();
+  const { config, configDoc, secretStatus, saveConfig, addToast, auth } = useApp();
+  const listenerSource = useRef(configDoc);
 
   // Listener draft state
   const [host, setHost] = useState(config?.listener?.host || '127.0.0.1');
@@ -70,11 +71,11 @@ export function SecurityPage() {
     }
 
     try {
-      const nextConfig = clone(config);
+      const nextConfig = clone(listenerSource.current.config);
       nextConfig.listener.host = host.trim();
       nextConfig.listener.port = portNum;
       nextConfig.listener.allowedCIDRs = parseList(cidrs);
-      await saveConfig(nextConfig);
+      listenerSource.current = await saveConfig(nextConfig, {}, listenerSource.current);
     } catch (err) {
       addToast(`保存监听失败: ${err.message}`, 'error');
     }
@@ -84,7 +85,7 @@ export function SecurityPage() {
   const handleSetToken = async () => {
     if (!inboundToken.trim()) return addToast('请输入有效的入站 Token', 'warning');
     try {
-      await saveConfig(clone(config), { inboundAuthToken: inboundToken.trim() });
+      await saveConfig((latest) => latest, { inboundAuthToken: inboundToken.trim() });
       setInboundToken('');
       addToast('入站 Token 已更新', 'success');
     } catch (err) {
@@ -95,7 +96,7 @@ export function SecurityPage() {
   const handleClearToken = async () => {
     if (!confirm('清除入站 Token 后，客户端无需认证即可访问代理监听。确认继续？')) return;
     try {
-      await saveConfig(clone(config), { inboundAuthToken: '' });
+      await saveConfig((latest) => latest, { inboundAuthToken: '' });
       addToast('入站 Token 已清除', 'success');
     } catch (err) {
       addToast(`清除失败: ${err.message}`, 'error');

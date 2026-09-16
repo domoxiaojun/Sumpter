@@ -98,7 +98,7 @@ public enum ProviderModelCatalog {
                 if let child = dictionary[key] { visit(child, into: &ids, depth: depth + 1) }
             }
             if ids.count == before {
-                for key in ["id", "name", "model", "model_id"] {
+                for key in ["id", "slug", "name", "model", "model_id"] {
                     if let model = dictionary[key] as? String {
                         visit(model, into: &ids, depth: depth + 1)
                         break
@@ -150,6 +150,33 @@ public enum ProviderModelCatalog {
         }
     }
 
+    struct ProbeIdentity {
+        let protocolMode: ProviderProtocol
+        let userAgent: String
+    }
+
+    static func probeIdentities(mode: EndpointProtocolMode, settings: UserAgentSettings) -> [ProbeIdentity] {
+        let protocols: [ProviderProtocol]
+        if mode == .anthropic {
+            protocols = [.anthropic, .openai]
+        } else if let fixed = mode.fixedProtocol {
+            protocols = [fixed]
+        } else {
+            protocols = [.openai, .anthropic, .gemini]
+        }
+        return protocols.map { proto in
+            let rule: UserAgentRule
+            switch proto {
+            case .anthropic: rule = settings.anthropic
+            case .openai, .openaiResponses: rule = settings.openai
+            case .gemini: rule = settings.gemini
+            }
+            let configured = rule.value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return ProbeIdentity(protocolMode: proto, userAgent: configured.isEmpty
+                ? (proto == .anthropic ? userAgent : "codex_cli_rs/0.5.0") : configured)
+        }
+    }
+
     public static func fetch(
         baseURL: URL,
         apiKey: String,
@@ -174,70 +201,61 @@ public enum ProviderModelCatalog {
         // 鉴权。带 Key 时先复用 Rust 数据面同时发送的两种鉴权头，再尝试
         // 单头兼容组合；无 Key 时每个候选路径只发一次。
         let authHeaderSets = authenticationHeaderSets(for: key)
-        let userAgents = try userAgentSettings.validated().probeUserAgents(protocolMode: protocolMode)
+        let identities = probeIdentities(mode: protocolMode, settings: try userAgentSettings.validated())
         var errors: [String] = []
+        var discovered = Set<String>()
         let deadline = Date().addingTimeInterval(overallDeadline)
 
-        for url in candidateURLs(baseURL: baseURL) {
-            let path = url.path
+        identitiesLoop: for (index, identity) in identities.enumerated() {
+            let budget = max(0, deadline.timeIntervalSinceNow) / Double(identities.count - index)
+            let identityDeadline = Date().addingTimeInterval(budget)
             for headers in authHeaderSets {
-                for agent in userAgents {
-                // 死入口会让每个组合都超时;超过总时限就尽早失败,不再逐个耗满 8s。
-                if Date() >= deadline {
-                    errors.append("整体超时,已停止尝试")
-                    let unique = dedupedErrors(errors)
-                    throw ProviderModelCatalogError.noModels(
-                        summarize(unique)
-                    )
-                }
-                let remaining = max(1, deadline.timeIntervalSinceNow)
-                var request = URLRequest(url: url, timeoutInterval: min(timeout, remaining))
-                for (header, value) in headers where !header.isEmpty {
-                    request.setValue(value, forHTTPHeaderField: header)
-                }
-                request.setValue("application/json", forHTTPHeaderField: "Accept")
-                request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
-                request.setValue("close", forHTTPHeaderField: "Connection")
-                request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-                request.setValue(agent, forHTTPHeaderField: "User-Agent")
-
-                do {
-                    let (data, response) = try await session.data(
-                        for: request,
-                        delegate: redirectBlocker
-                    )
-                    let status = (response as? HTTPURLResponse)?.statusCode ?? 200
-                    guard status == 200 else {
-                        errors.append("\(path) HTTP \(status)")
-                        continue
+                for url in candidateURLs(baseURL: baseURL) {
+                    let path = url.path
+                    let remaining = identityDeadline.timeIntervalSinceNow
+                    if remaining <= 0 {
+                        errors.append("目录身份探测超时，继续其它身份")
+                        continue identitiesLoop
                     }
-                    guard data.count <= maxResponseBytes else {
-                        errors.append("\(path) 响应过大(>\(maxResponseBytes / 1024) KiB)")
-                        continue
+                    var request = URLRequest(url: url, timeoutInterval: min(timeout, remaining))
+                    for (header, value) in headers where !header.isEmpty {
+                        request.setValue(value, forHTTPHeaderField: header)
                     }
-                    let ids = try modelIDs(from: data)
-                    if !ids.isEmpty {
-                        return ids
+                    request.setValue("application/json", forHTTPHeaderField: "Accept")
+                    request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+                    request.setValue("close", forHTTPHeaderField: "Connection")
+                    if identity.protocolMode == .anthropic {
+                        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
                     }
-                    errors.append("\(path) 200 但无模型列表")
-                } catch {
-                    if let urlError = error as? URLError,
-                       case .badServerResponse = urlError.code {
-                        errors.append("\(path) HTTP 错误")
-                    } else {
-                        let message = error.localizedDescription
-                        errors.append("\(path) \(String(message.prefix(50)))")
+                    request.setValue(identity.userAgent, forHTTPHeaderField: "User-Agent")
+                    do {
+                        let (data, response) = try await session.data(for: request, delegate: redirectBlocker)
+                        let status = (response as? HTTPURLResponse)?.statusCode ?? 200
+                        guard status == 200 else {
+                            errors.append("\(path) HTTP \(status)")
+                            continue
+                        }
+                        guard data.count <= maxResponseBytes else {
+                            errors.append("\(path) 响应过大(>\(maxResponseBytes / 1024) KiB)")
+                            continue
+                        }
+                        let ids = try modelIDs(from: data)
+                        if !ids.isEmpty {
+                            for id in ids where discovered.count < maxModelCount {
+                                discovered.insert(id)
+                            }
+                            continue identitiesLoop
+                        }
+                        errors.append("\(path) 200 但无模型列表")
+                    } catch {
+                        if Task.isCancelled { throw CancellationError() }
+                        errors.append("\(path) \(String(error.localizedDescription.prefix(50)))")
                     }
-                }
                 }
             }
         }
-
-        var unique: [String] = []
-        for error in errors where !unique.contains(error) {
-            unique.append(error)
-        }
-        throw ProviderModelCatalogError.noModels(summarize(unique))
+        if !discovered.isEmpty { return discovered.sorted() }
+        throw ProviderModelCatalogError.noModels(summarize(dedupedErrors(errors)))
     }
 
     private static func dedupedErrors(_ errors: [String]) -> [String] {

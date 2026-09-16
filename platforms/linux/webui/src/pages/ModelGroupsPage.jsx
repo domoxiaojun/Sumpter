@@ -35,7 +35,8 @@ function CategoryPicker({ categories, selected, onChange }) {
 }
 
 export function ModelGroupsPage() {
-  const { config, saveConfig, addToast, openModal } = useApp();
+  const { config, configDoc, saveConfig, addToast, openModal } = useApp();
+  const draftSource = useRef(configDoc);
   const [groups, setGroups] = useState(() => groupModels(config));
   const [selected, setSelected] = useState(groups[0]?.id);
   const [editorTab, setEditorTab] = useState('models');
@@ -45,8 +46,11 @@ export function ModelGroupsPage() {
   const drag = useRef(null);
   const endpoints = config?.endpoints || [];
   useEffect(() => {
-    if (!dirty.current) setGroups(groupModels(config));
-  }, [config]);
+    if (!dirty.current) {
+      draftSource.current = configDoc;
+      setGroups(groupModels(config));
+    }
+  }, [config, configDoc]);
   const change = (fn) => {
     dirty.current = true; setDirty(true);
     setGroups((old) => { const next = clone(old); fn(next); return next; });
@@ -73,9 +77,10 @@ export function ModelGroupsPage() {
   const save = async () => {
     setSaving(true);
     try {
-      const next = pruneGroupReferences({ ...clone(config), modelGroups: clone(groups) });
-      await saveConfig(next);
-      setGroups(next.modelGroups); dirty.current = false; setDirty(false);
+      const next = pruneGroupReferences({ ...clone(draftSource.current.config), modelGroups: clone(groups) });
+      const saved = await saveConfig(next, {}, draftSource.current);
+      draftSource.current = saved;
+      setGroups(groupModels(saved.config)); dirty.current = false; setDirty(false);
       addToast('模型组已保存，客户端地址保持不变', 'success');
     } catch (error) { addToast(`保存失败：${error.message}`, 'error'); }
     finally { setSaving(false); }
@@ -102,7 +107,7 @@ export function ModelGroupsPage() {
           }
         }}>新建模型组</button>
         <button className="btn btn-primary" disabled={saving || (!isDirty && config?.modelGroups != null)} onClick={save}>{saving ? '保存中…' : '保存更改'}</button>
-        {isDirty && <button className="btn btn-ghost" disabled={saving} onClick={() => { dirty.current = false; setDirty(false); setGroups(groupModels(config)); }}>撤销更改</button>}
+        {isDirty && <button className="btn btn-ghost" disabled={saving} onClick={() => { dirty.current = false; setDirty(false); draftSource.current = configDoc; setGroups(groupModels(config)); }}>撤销更改</button>}
       </div>
     </div>
     {groups.length === 0 && <div className="glass-panel panel-padded">尚无模型组。新建组后选择模型，再从入口库添加入口。</div>}

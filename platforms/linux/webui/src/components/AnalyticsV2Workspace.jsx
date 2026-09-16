@@ -1612,7 +1612,7 @@ function ExportPanel({ addToast, filters = {} }) {
     if (privacy === 'stored' && !confirmStored) return;
     setLoading(true); setError(null);
     try {
-      await api.downloadRuntimeExport({ scope, format, privacy, confirmStored, snapshotSeq: estimate.snapshotSeq, historyGeneration: estimate.historyGeneration, filters });
+      await api.downloadRuntimeExport({ scope, format, privacy, confirmStored, snapshotSeq: estimate.snapshotSeq, snapshotChangeSeq: estimate.snapshotChangeSeq, historyGeneration: estimate.historyGeneration, filters });
       addToast?.('已按快照开始流式下载', 'success');
     } catch (nextError) { setError(nextError); }
     finally { setLoading(false); }
@@ -1727,7 +1727,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     const request = beginLatestRequest(errorsRequestRef);
     setErrorsLoading(true); setErrorsError(null);
     try {
-      const value = await api.getRuntimeErrors({ page, pageSize: nextPageSize, snapshotSeq: snapshot?.snapshotSeq, historyGeneration: snapshot?.historyGeneration, filters: activeFilters }, { signal: request.controller.signal });
+      const value = await api.getRuntimeErrors({ page, pageSize: nextPageSize, snapshotSeq: snapshot?.snapshotSeq, snapshotChangeSeq: snapshot?.snapshotChangeSeq, historyGeneration: snapshot?.historyGeneration, filters: activeFilters }, { signal: request.controller.signal });
       const normalized = normalizeRuntimePagedResult(value, { itemsKey: 'groups', page, pageSize: nextPageSize });
       if (!normalized) throw new Error('错误聚合响应不是 v2 分页形状');
       if (request.isCurrent()) setErrors((previous) => (sameJSON(previous, normalized) ? previous : normalized));
@@ -1790,7 +1790,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
         : activeFilters;
       const value = await api.getRuntimeDimensions(kind, {
         page, pageSize: nextPageSize, search, sort, order,
-        snapshotSeq: snapshot?.snapshotSeq, historyGeneration: snapshot?.historyGeneration,
+        snapshotSeq: snapshot?.snapshotSeq, snapshotChangeSeq: snapshot?.snapshotChangeSeq, historyGeneration: snapshot?.historyGeneration,
         filters: queryFilters,
       }, { signal: request.controller.signal });
       const normalized = normalizeRuntimePagedResult(value, { page, pageSize: nextPageSize });

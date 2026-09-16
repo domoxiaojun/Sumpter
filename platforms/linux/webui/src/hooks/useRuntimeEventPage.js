@@ -9,19 +9,10 @@ import {
   runtimeSnapshotRecoveryMessage,
 } from '../utils/runtimeAnalyticsV2.js';
 import { eventIsInFlight } from '../utils/helpers.js';
+import { completedEventsAfterSnapshot, mergeCompletedPage } from '../utils/runtimeEventSnapshot.js';
 
 function eventMatchesKind(event, kind) {
   return !kind || event?.kind === kind;
-}
-
-function completedNewEventCount(events, snapshotSeq, kind) {
-  if (snapshotSeq == null) return 0;
-  const ids = new Set();
-  for (const event of events || []) {
-    if (!eventMatchesKind(event, kind) || eventIsInFlight(event)) continue;
-    if (Number(event?.seq || 0) > Number(snapshotSeq)) ids.add(event.id);
-  }
-  return ids.size;
 }
 
 export function useRuntimeEventPage({
@@ -70,6 +61,7 @@ export function useRuntimeEventPage({
         pageSize,
         kind: eventKind || undefined,
         snapshotSeq: useSnapshot ? snapshot?.snapshotSeq : undefined,
+        snapshotChangeSeq: useSnapshot ? snapshot?.snapshotChangeSeq : undefined,
         historyGeneration: useSnapshot ? snapshot?.historyGeneration : undefined,
         signal: controller.signal,
       });
@@ -99,10 +91,7 @@ export function useRuntimeEventPage({
           setResult(null);
           return;
         }
-        snapshotRef.current = {
-          snapshotSeq: normalized.snapshotSeq,
-          historyGeneration: normalized.historyGeneration,
-        };
+        snapshotRef.current = normalized;
         setResult(normalized);
         setMode('page');
         if (normalized.page !== requestedPage) setPageState(normalized.page);
@@ -145,10 +134,13 @@ export function useRuntimeEventPage({
   }, [eventKind, mode, page, recentEvents]);
 
   const persistedEvents = useMemo(() => {
-    const source = mode === 'page' ? (result?.events || []) : recentEvents;
+    const additions = mode === 'page' && page === 1
+      ? completedEventsAfterSnapshot(recentEvents, result, eventKind) : [];
+    const source = mode === 'page'
+      ? mergeCompletedPage(result?.events || [], additions, pageSize) : recentEvents;
     const liveIDs = new Set(liveEvents.map((event) => event.id));
-    return source.filter((event) => !liveIDs.has(event.id) && !eventIsInFlight(event));
-  }, [eventKind, liveEvents, mode, recentEvents, result?.events]);
+    return source.filter((event) => eventMatchesKind(event, eventKind) && !liveIDs.has(event.id) && !eventIsInFlight(event));
+  }, [eventKind, liveEvents, mode, page, pageSize, recentEvents, result]);
 
   const events = useMemo(() => [...liveEvents, ...persistedEvents], [liveEvents, persistedEvents]);
 
@@ -158,11 +150,10 @@ export function useRuntimeEventPage({
   // completed events results in one stable-snapshot request.
   useEffect(() => {
     if (mode !== 'page' || page !== 1 || refreshing || snapshotRef.current == null) return undefined;
-    const pending = completedNewEventCount(recentEvents, snapshotRef.current.snapshotSeq, eventKind);
-    if (pending <= 0 || autoRefreshTimerRef.current != null) return undefined;
-    const newest = recentEvents.filter((event) => eventMatchesKind(event, eventKind) && !eventIsInFlight(event))
-      .reduce((value, event) => Math.max(value, Number(event.seq || 0)), 0);
-    const signature = `${eventKind}:${snapshotRef.current.snapshotSeq}:${newest}`;
+    const changes = completedEventsAfterSnapshot(recentEvents, snapshotRef.current, eventKind);
+    if (!changes.length || autoRefreshTimerRef.current != null) return undefined;
+    const newest = Math.max(...changes.map((event) => Number(event.changeSeq || 0)));
+    const signature = `${eventKind}:${snapshotRef.current.snapshotChangeSeq ?? 'legacy'}:${newest}`;
     // A persisted snapshot can lag its SSE notice. Do not restart the same
     // refresh on every loading transition; retry only with progress or a later poll.
     const last = lastAutoRefreshRef.current;
@@ -200,6 +191,7 @@ export function useRuntimeEventPage({
     hasNext: Boolean(result?.hasNext),
     hasPrevious: Boolean(result?.hasPrevious),
     snapshotSeq: result?.snapshotSeq ?? null,
+    snapshotChangeSeq: result?.snapshotChangeSeq ?? null,
     historyGeneration: result?.historyGeneration ?? null,
     setPage,
     setPageSize,

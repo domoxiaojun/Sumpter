@@ -39,6 +39,11 @@ extension AppModel {
 
     /// spawn sumpterd 并等握手;成功后建立 admin 通道与 SSE 订阅。
     func startSidecar() async {
+        do { try await startSidecarChecked() }
+        catch { /* 交互入口的错误已由启动流程展示；配置事务使用抛错入口。 */ }
+    }
+
+    func startSidecarChecked() async throws {
         guard !sidecar.isRunning else { return }
         sidecarState = .starting
         statusText = "启动中"
@@ -84,6 +89,7 @@ extension AppModel {
             lastError = "\(error)"
             statusText = "启动失败"
             flash("引擎启动失败")
+            throw error
         }
     }
 

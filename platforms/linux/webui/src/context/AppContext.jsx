@@ -3,6 +3,7 @@ import { api, getAuthState, openEventStream, subscribeAuth } from '../services/a
 import { upsertRuntimeEvent, mergeRuntimeEvent } from '../utils/runtimeEvents.js';
 import { fetchRuntimeChanges, mergeRuntimeListItems, RUNTIME_API_VERSION } from '../utils/runtimeSync.js';
 import { clone } from '../utils/helpers.js';
+import { configDraftWrite, requireDraftGeneration } from '../utils/configDraft.js';
 
 const AppContext = createContext(null);
 
@@ -85,42 +86,6 @@ function runtimeSummaryRevision(summary) {
 function sameJSON(left, right) {
   if (left === right) return true;
   try { return JSON.stringify(left) === JSON.stringify(right); } catch { return false; }
-}
-
-// Three-way merge for queued config saves. It preserves edits that landed
-// while a caller was waiting (especially catalog writes) while still allowing
-// the caller's intentional fields to win. Endpoint arrays are merged by id
-// when their membership/order is unchanged; structural edits remain explicit.
-function mergeConfigChanges(source, requested, latest) {
-  const result = clone(latest || {});
-  const sourceValue = source || {};
-  const requestedValue = requested || {};
-  for (const key of new Set([...Object.keys(sourceValue), ...Object.keys(requestedValue)])) {
-    if (key === 'endpoints' && Array.isArray(requestedValue.endpoints) && Array.isArray(sourceValue.endpoints)) {
-      const sourceIDs = sourceValue.endpoints.map((item) => item?.id);
-      const requestedIDs = requestedValue.endpoints.map((item) => item?.id);
-      if (!sameJSON(sourceIDs, requestedIDs)) {
-        result.endpoints = clone(requestedValue.endpoints);
-        continue;
-      }
-      const latestByID = new Map((result.endpoints || []).map((item) => [item?.id, item]));
-      result.endpoints = requestedValue.endpoints.map((requestedEndpoint, index) => {
-        const sourceEndpoint = sourceValue.endpoints[index] || {};
-        const latestEndpoint = clone(latestByID.get(requestedEndpoint?.id) || requestedEndpoint);
-        for (const field of new Set([...Object.keys(sourceEndpoint), ...Object.keys(requestedEndpoint || {})])) {
-          if (!sameJSON(sourceEndpoint[field], requestedEndpoint?.[field])) {
-            latestEndpoint[field] = clone(requestedEndpoint[field]);
-          }
-        }
-        return latestEndpoint;
-      });
-      continue;
-    }
-    if (!sameJSON(sourceValue[key], requestedValue[key])) {
-      result[key] = clone(requestedValue[key]);
-    }
-  }
-  return result;
 }
 
 export function AppProvider({ children }) {
@@ -795,30 +760,23 @@ export function AppProvider({ children }) {
     }
   }, [status, addToast, refreshCore]);
 
-  const saveConfig = useCallback((newConfig, secretUpdates = {}) => {
-    // Serialize config writes in the browser. A function updater is resolved
-    // against a freshly-read document, which makes targeted updates (catalog
-    // status/models) merge-safe even while another page is editing settings.
-    const queuedSource = configDocRef.current;
-    const queuedGeneration = queuedSource?.generation;
-    const queuedConfig = typeof newConfig === 'function' ? null : clone(newConfig);
+  const saveConfig = useCallback((newConfig, secretUpdates = {}, sourceDocument = null) => {
+    // 窄操作基于最新文档执行；完整草稿始终提交编辑时的 generation，冲突不覆盖草稿。
+    const queuedDraft = typeof newConfig === 'function' ? null : configDraftWrite(newConfig, sourceDocument);
     const operation = async () => {
       try {
-        let base = configDocRef.current;
-        let nextConfig = queuedConfig;
+        let base = sourceDocument;
+        let nextConfig = queuedDraft?.config;
         if (typeof newConfig === 'function') {
           base = await api.getConfig();
-          configDocRef.current = base;
-          setConfigDoc((previous) => (sameJSON(previous, base) ? previous : base));
+          requireDraftGeneration(sourceDocument, base);
           nextConfig = await newConfig(clone(base?.config || {}), base);
-        } else if (base?.generation !== queuedGeneration) {
-          nextConfig = mergeConfigChanges(queuedSource?.config, nextConfig, base?.config);
         }
-        const res = await api.saveConfig(base?.generation, nextConfig, secretUpdates);
+        const res = await api.saveConfig(queuedDraft?.generation ?? base?.generation, nextConfig, secretUpdates);
         configDocRef.current = res;
         setConfigDoc(res);
         addToast('配置已成功保存并热生效', 'success');
-        return true;
+        return res;
       } catch (err) {
         addToast(`保存配置失败: ${err.message}`, 'error');
         throw err;

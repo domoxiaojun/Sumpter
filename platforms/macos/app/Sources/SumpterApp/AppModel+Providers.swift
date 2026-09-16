@@ -560,6 +560,7 @@ extension AppModel {
     /// 所有配置修改的唯一入口:在草稿上改,归一化内建规则,落盘并刷新引擎。
     func mutateConfig(_ body: (inout AppConfig) throws -> Void) async throws {
         let previous = config
+        let wasRunning = sidecar.isRunning
         var draft = previous
         try body(&draft)
         draft.pruneDanglingEndpointReferences()
@@ -578,7 +579,7 @@ extension AppModel {
             if config == draft {
                 config = previous
                 do {
-                    try await persistConfigAndRefresh()
+                    try await persistConfigAndRefresh(restartStopped: wasRunning)
                 } catch {
                     throw AppModelError.invalidInput("保存失败（\(saveError.localizedDescription)），回滚也失败：\(error.localizedDescription)")
                 }

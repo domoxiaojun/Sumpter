@@ -12,7 +12,7 @@ import { api } from '../services/api.js';
 const catalogLoaderFactory = (fetchModels) => createRouteCatalogLoader(fetchModels);
 
 export function RoutingPage() {
-  const { config, saveConfig, openModal, addToast } = useApp();
+  const { config, configDoc, saveConfig, openModal, addToast } = useApp();
   const rules = config?.featureRules || [];
   const catalogLoaderRef = useRef(null);
   if (!catalogLoaderRef.current) catalogLoaderRef.current = catalogLoaderFactory((endpointID, options) => api.fetchProviderModels(endpointID, options));
@@ -22,14 +22,14 @@ export function RoutingPage() {
     try {
       const nextConfig = clone(config);
       const targetRule = nextConfig.featureRules.find((r) => r.id === ruleId);
-      if (targetRule) { targetRule.enabled = enabled; await saveConfig(nextConfig); addToast(`规则「${targetRule.name || targetRule.id}」已${enabled ? '启用' : '停用'}`, 'success'); }
+      if (targetRule) { targetRule.enabled = enabled; await saveConfig(nextConfig, {}, configDoc); addToast(`规则「${targetRule.name || targetRule.id}」已${enabled ? '启用' : '停用'}`, 'success'); }
     } catch (err) { addToast(`操作失败: ${err.message}`, 'error'); }
   };
 
   const handleDeleteRule = async (rule) => {
     if (isBuiltinRule(rule)) { addToast('内建分流规则只能调整启停和目标，不能删除', 'warning'); return; }
     if (!confirm(`确定删除分流规则「${rule.name || rule.id}」吗？`)) return;
-    try { const nextConfig = clone(config); nextConfig.featureRules = nextConfig.featureRules.filter((r) => r.id !== rule.id); await saveConfig(nextConfig); addToast('分流规则已删除', 'success'); }
+    try { const nextConfig = clone(config); nextConfig.featureRules = nextConfig.featureRules.filter((r) => r.id !== rule.id); await saveConfig(nextConfig, {}, configDoc); addToast('分流规则已删除', 'success'); }
     catch (err) { addToast(`删除失败: ${err.message}`, 'error'); }
   };
 

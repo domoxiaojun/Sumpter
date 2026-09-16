@@ -73,7 +73,7 @@ extension AppModel {
         }
     }
 
-    func persistConfigAndRefresh() async throws {
+    func persistConfigAndRefresh(restartStopped: Bool = false) async throws {
         let predecessor = configPersistenceTail
         let operation = Task { @MainActor [weak self] in
             if let predecessor {
@@ -98,7 +98,7 @@ extension AppModel {
                 }
             }
             do {
-                try await self.pushConfigToSidecar()
+                try await self.pushConfigToSidecar(restartStopped: restartStopped)
             } catch {
                 let adminError = error as? AdminClient.AdminError
                 throw ConfigSaveError(code: adminError?.serverCode ?? "reload_failed", reason: error.localizedDescription)

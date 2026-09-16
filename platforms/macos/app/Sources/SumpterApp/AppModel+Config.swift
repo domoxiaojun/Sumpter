@@ -68,12 +68,15 @@ extension AppModel {
 
     /// 配置已落盘后让 sumpterd 生效:监听地址变了要重启进程(热 reload 不重绑端口),
     /// 否则 admin reload 热加载并拿 generation/warnings 回执。
-    func pushConfigToSidecar() async throws {
-        guard sidecar.isRunning else { return }
+    func pushConfigToSidecar(restartStopped: Bool = false) async throws {
+        guard sidecar.isRunning else {
+            if restartStopped { try await startSidecarChecked() }
+            return
+        }
         if let applied = lastAppliedListener, applied != config.listener {
             // 监听地址/端口变了:热 reload 不重绑端口,必须重启进程。
             await stopSidecar()
-            await startSidecar()
+            try await startSidecarChecked()
             flash("监听配置已变更,引擎已重启")
             return
         }

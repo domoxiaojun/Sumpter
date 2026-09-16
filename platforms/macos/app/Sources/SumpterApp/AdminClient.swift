@@ -274,6 +274,7 @@ public struct AdminClient: Sendable {
         page: Int = 1,
         pageSize: Int = AdminWire.RuntimeHistoryPage.defaultPageSize,
         snapshotSeq: Int? = nil,
+        snapshotChangeSeq: Int? = nil,
         historyGeneration: Int? = nil,
         filter: AdminWire.RuntimeFilter = .init()
     ) async throws -> AdminWire.RuntimeHistoryPage {
@@ -283,6 +284,7 @@ public struct AdminClient: Sendable {
             "pageSize": String(AdminWire.RuntimeHistoryPage.allowedPageSizes.contains(pageSize) ? pageSize : AdminWire.RuntimeHistoryPage.defaultPageSize)
         ]
         if let snapshotSeq { query["snapshotSeq"] = String(snapshotSeq) }
+        if let snapshotChangeSeq { query["snapshotChangeSeq"] = String(snapshotChangeSeq) }
         if let historyGeneration { query["historyGeneration"] = String(historyGeneration) }
         filter.add(to: &query)
         var value = request("/admin/runtime/events", query: query)
@@ -301,11 +303,13 @@ public struct AdminClient: Sendable {
         range: String = "24h",
         granularity: String = "auto",
         snapshotSeq: Int? = nil,
+        snapshotChangeSeq: Int? = nil,
         historyGeneration: Int? = nil,
         filter: AdminWire.RuntimeFilter = .init()
     ) async throws -> AdminWire.RuntimeTrendSeries {
         var query = ["range": range, "granularity": granularity]
         if let snapshotSeq { query["snapshotSeq"] = String(snapshotSeq) }
+        if let snapshotChangeSeq { query["snapshotChangeSeq"] = String(snapshotChangeSeq) }
         if let historyGeneration { query["historyGeneration"] = String(historyGeneration) }
         filter.add(to: &query)
         return try await send(request("/admin/runtime/trends", query: query), as: AdminWire.RuntimeTrendSeries.self)
@@ -327,11 +331,13 @@ public struct AdminClient: Sendable {
         page: Int = 1,
         pageSize: Int = AdminWire.RuntimeHistoryPage.defaultPageSize,
         snapshotSeq: Int? = nil,
+        snapshotChangeSeq: Int? = nil,
         historyGeneration: Int? = nil,
         filter: AdminWire.RuntimeFilter = .init()
     ) async throws -> AdminWire.RuntimeErrorPage {
         var query = ["page": String(max(1, page)), "pageSize": String(AdminWire.RuntimeHistoryPage.allowedPageSizes.contains(pageSize) ? pageSize : AdminWire.RuntimeHistoryPage.defaultPageSize)]
         if let snapshotSeq { query["snapshotSeq"] = String(snapshotSeq) }
+        if let snapshotChangeSeq { query["snapshotChangeSeq"] = String(snapshotChangeSeq) }
         if let historyGeneration { query["historyGeneration"] = String(historyGeneration) }
         filter.add(to: &query)
         return try await send(request("/admin/runtime/errors", query: query), as: AdminWire.RuntimeErrorPage.self)
@@ -344,12 +350,14 @@ public struct AdminClient: Sendable {
         sort: String = "last_seen",
         order: String = "desc",
         snapshotSeq: Int? = nil,
+        snapshotChangeSeq: Int? = nil,
         historyGeneration: Int? = nil,
         filter: AdminWire.RuntimeFilter = .init()
     ) async throws -> AdminWire.RuntimeDimensionPage {
         try await runtimeDimensionPage(
             path: "/admin/runtime/projects", kind: "project", page: page, pageSize: pageSize,
             search: search, sort: sort, order: order, snapshotSeq: snapshotSeq,
+            snapshotChangeSeq: snapshotChangeSeq,
             historyGeneration: historyGeneration, filter: filter
         )
     }
@@ -361,12 +369,14 @@ public struct AdminClient: Sendable {
         sort: String = "last_seen",
         order: String = "desc",
         snapshotSeq: Int? = nil,
+        snapshotChangeSeq: Int? = nil,
         historyGeneration: Int? = nil,
         filter: AdminWire.RuntimeFilter = .init()
     ) async throws -> AdminWire.RuntimeDimensionPage {
         try await runtimeDimensionPage(
             path: "/admin/runtime/sessions", kind: "session", page: page, pageSize: pageSize,
             search: search, sort: sort, order: order, snapshotSeq: snapshotSeq,
+            snapshotChangeSeq: snapshotChangeSeq,
             historyGeneration: historyGeneration, filter: filter
         )
     }
@@ -382,6 +392,7 @@ public struct AdminClient: Sendable {
         sort: String = "last_seen",
         order: String = "desc",
         snapshotSeq: Int? = nil,
+        snapshotChangeSeq: Int? = nil,
         historyGeneration: Int? = nil,
         filter: AdminWire.RuntimeFilter = .init()
     ) async throws -> AdminWire.RuntimeDimensionPage {
@@ -394,6 +405,7 @@ public struct AdminClient: Sendable {
         ]
         if let search, !search.isEmpty { query["search"] = search }
         if let snapshotSeq { query["snapshotSeq"] = String(snapshotSeq) }
+        if let snapshotChangeSeq { query["snapshotChangeSeq"] = String(snapshotChangeSeq) }
         if let historyGeneration { query["historyGeneration"] = String(historyGeneration) }
         filter.add(to: &query)
         return try await send(
@@ -411,6 +423,7 @@ public struct AdminClient: Sendable {
         sort: String,
         order: String,
         snapshotSeq: Int?,
+        snapshotChangeSeq: Int?,
         historyGeneration: Int?,
         filter: AdminWire.RuntimeFilter
     ) async throws -> AdminWire.RuntimeDimensionPage {
@@ -423,6 +436,7 @@ public struct AdminClient: Sendable {
         _ = kind // endpoint path carries the dimension; kept for call-site clarity.
         if let search, !search.isEmpty { query["search"] = search }
         if let snapshotSeq { query["snapshotSeq"] = String(snapshotSeq) }
+        if let snapshotChangeSeq { query["snapshotChangeSeq"] = String(snapshotChangeSeq) }
         if let historyGeneration { query["historyGeneration"] = String(historyGeneration) }
         filter.add(to: &query)
         return try await send(request(path, query: query), as: AdminWire.RuntimeDimensionPage.self)
@@ -458,12 +472,14 @@ public struct AdminClient: Sendable {
         privacy: String = "stored",
         confirmStored: Bool = false,
         snapshotSeq: Int? = nil,
+        snapshotChangeSeq: Int? = nil,
         historyGeneration: Int? = nil,
         filter: AdminWire.RuntimeFilter = .init()
     ) async throws -> AdminWire.RuntimeExportEstimate {
         var query = ["scope": scope, "format": format, "privacy": privacy]
         if confirmStored { query["confirmStored"] = "true" }
         if let snapshotSeq { query["snapshotSeq"] = String(snapshotSeq) }
+        if let snapshotChangeSeq { query["snapshotChangeSeq"] = String(snapshotChangeSeq) }
         if let historyGeneration { query["historyGeneration"] = String(historyGeneration) }
         filter.add(to: &query)
         return try await send(request("/admin/runtime/export/estimate", query: query), as: AdminWire.RuntimeExportEstimate.self)
@@ -478,12 +494,14 @@ public struct AdminClient: Sendable {
         privacy: String = "stored",
         confirmStored: Bool = false,
         snapshotSeq: Int? = nil,
+        snapshotChangeSeq: Int? = nil,
         historyGeneration: Int? = nil,
         filter: AdminWire.RuntimeFilter = .init()
     ) async throws {
         var query = ["scope": scope, "format": format, "privacy": privacy]
         if confirmStored { query["confirmStored"] = "true" }
         if let snapshotSeq { query["snapshotSeq"] = String(snapshotSeq) }
+        if let snapshotChangeSeq { query["snapshotChangeSeq"] = String(snapshotChangeSeq) }
         if let historyGeneration { query["historyGeneration"] = String(historyGeneration) }
         filter.add(to: &query)
         var value = request("/admin/runtime/export", query: query)
@@ -882,6 +900,7 @@ public enum AdminWire {
         public let totalCount: Int
         public let totalPages: Int
         public let snapshotSeq: Int
+        public let snapshotChangeSeq: Int?
         public let historyGeneration: Int
         public let resetGeneration: Int
         public let retainedFromSeq: Int
@@ -996,6 +1015,7 @@ public enum AdminWire {
         public let from: Double
         public let to: Double
         public let snapshotSeq: Int
+        public let snapshotChangeSeq: Int?
         public let historyGeneration: Int
         public let retainedFromSeq: Int
         public let thresholds: RuntimeLatencyThresholds
@@ -1007,6 +1027,7 @@ public enum AdminWire {
     public struct RuntimeFacetSnapshot: Decodable, Equatable, Sendable {
         public let apiVersion: Int
         public let snapshotSeq: Int
+        public let snapshotChangeSeq: Int?
         public let historyGeneration: Int
         public let retainedFromSeq: Int
         public let facets: RuntimeAnalytics.Facets
@@ -1039,6 +1060,7 @@ public enum AdminWire {
         public let totalCount: Int
         public let totalPages: Int
         public let snapshotSeq: Int
+        public let snapshotChangeSeq: Int?
         public let historyGeneration: Int
         public let retainedFromSeq: Int
         public let hasNext: Bool
@@ -1094,6 +1116,7 @@ public enum AdminWire {
         public let totalCount: Int
         public let totalPages: Int
         public let snapshotSeq: Int
+        public let snapshotChangeSeq: Int?
         public let historyGeneration: Int
         public let retainedFromSeq: Int
         public let hasNext: Bool
@@ -1256,6 +1279,7 @@ public enum AdminWire {
         public let rowCount: Int
         public let estimatedBytes: Int
         public let snapshotSeq: Int
+        public let snapshotChangeSeq: Int?
         public let historyGeneration: Int
         public let retainedFromSeq: Int
     }
