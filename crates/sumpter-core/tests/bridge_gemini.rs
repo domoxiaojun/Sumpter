@@ -286,7 +286,7 @@ fn anthropic_to_gemini_rejects_url_images() {
 #[test]
 fn gemini_stream_bridge_emits_anthropic_events() {
     let mut bridge = GeminiStreamBridge::new("msg_g".into(), "gemini-2.5-pro".into(), true);
-    // Gemini 的文本可能是累计快照:重复的前缀不能重复发出。
+    // Gemini 文本是增量；后一帧即使以前一帧为前缀也必须完整追加。
     let out = String::from_utf8(bridge.feed(
         b"data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"He\"}]}}]}\n\n",
     ))
@@ -301,7 +301,7 @@ fn gemini_stream_bridge_emits_anthropic_events() {
     ))
     .unwrap();
     let events = sse_events(&out);
-    assert_eq!(events[0].1["delta"]["text"], "llo");
+    assert_eq!(events[0].1["delta"]["text"], "Hello");
 
     let out = String::from_utf8(bridge.feed(
         b"data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"functionCall\":{\"name\":\"read_file\",\"args\":{\"path\":\"a\"}}}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":20,\"cachedContentTokenCount\":5,\"candidatesTokenCount\":8,\"thoughtsTokenCount\":3}}\n\n",
@@ -328,7 +328,7 @@ fn gemini_stream_bridge_emits_anthropic_events() {
 
     let (input, output, reasoning) = bridge.usage();
     assert_eq!((input, output, reasoning), (15, 8, 3));
-    // 真实的 functionCall parts 留给 engine 做签名回放(文本走累计快照,不进回放)。
+    // 真实的 functionCall parts 留给 engine 做签名回放，文本不进回放。
     let replayed = bridge.replay_parts();
     assert_eq!(replayed.len(), 1);
     assert_eq!(replayed[0]["functionCall"]["name"], "read_file");

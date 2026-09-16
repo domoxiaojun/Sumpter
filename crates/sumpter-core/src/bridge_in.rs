@@ -240,6 +240,62 @@ fn validate_parallel_tool_calls(value: Option<&Value>) -> Result<(), Translation
     Ok(())
 }
 
+/// 将 OpenAI 的结构化输出映射到中间格式。保留 name/strict/description，
+/// 再由目标协议检查器决定能否表达，不能在第一次归一化时丢掉这些字段。
+fn openai_output_config(
+    object: &Map<String, Value>,
+    responses: bool,
+) -> Result<Option<Value>, TranslationError> {
+    let (format, path) = if responses {
+        let Some(text) = object.get("text").filter(|value| !value.is_null()) else {
+            return Ok(None);
+        };
+        let text = text
+            .as_object()
+            .ok_or_else(|| TranslationError::InvalidInput("text must be an object".into()))?;
+        for key in text.keys() {
+            if key != "format" {
+                return Err(TranslationError::UnsupportedField(format!("text.{key}")));
+            }
+        }
+        (text.get("format"), "text.format")
+    } else {
+        (object.get("response_format"), "response_format")
+    };
+    let Some(format) = format.filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    let format = format
+        .as_object()
+        .ok_or_else(|| TranslationError::InvalidInput(format!("{path} must be an object")))?;
+    match format.get("type").and_then(Value::as_str) {
+        Some("text") if format.len() == 1 => return Ok(None),
+        Some("json_schema") => {}
+        _ => return Err(TranslationError::UnsupportedField(format!("{path}.type"))),
+    }
+    let mut normalized = if responses {
+        Value::Object(format.clone())
+    } else {
+        for key in format.keys() {
+            if !matches!(key.as_str(), "type" | "json_schema") {
+                return Err(TranslationError::UnsupportedField(format!("{path}.{key}")));
+            }
+        }
+        Value::Object(
+            format
+                .get("json_schema")
+                .and_then(Value::as_object)
+                .cloned()
+                .ok_or_else(|| {
+                    TranslationError::InvalidInput(format!("{path}.json_schema must be an object"))
+                })?,
+        )
+    };
+    normalized["type"] = json!("json_schema");
+    crate::bridge::json_schema_format(&normalized)?;
+    Ok(Some(json!({"format": normalized})))
+}
+
 /// 检查 chat/completions → Anthropic 的可转换能力。
 ///
 /// 判据是「映射会不会丢掉客户端依赖的语义」:文本、图片(data URL / http(s) URL)、
@@ -344,6 +400,7 @@ pub fn check_chat_to_anthropic(body: &Value) -> Result<(), TranslationError> {
     }
     validate_tool_choice(object.get("tool_choice"), !tools.is_empty(), true)?;
     validate_parallel_tool_calls(object.get("parallel_tool_calls"))?;
+    openai_output_config(object, false)?;
     if let Some(effort) = object.get("reasoning_effort")
         && !effort.is_null()
         && effort
@@ -490,6 +547,12 @@ pub fn check_responses_to_anthropic(body: &Value) -> Result<(), TranslationError
     }
     validate_tool_choice(object.get("tool_choice"), !tools.is_empty(), false)?;
     validate_parallel_tool_calls(object.get("parallel_tool_calls"))?;
+    openai_output_config(object, true)?;
+    for field in ["previous_response_id", "conversation"] {
+        if object.get(field).is_some_and(|value| !value.is_null()) {
+            return Err(TranslationError::UnsupportedField(field.into()));
+        }
+    }
     if let Some(reasoning) = object.get("reasoning")
         && !reasoning.is_null()
     {
@@ -669,6 +732,10 @@ pub fn chat_to_anthropic(body: &Value) -> Result<Value, String> {
     if let Some(stops) = stop_sequences_of(object.get("stop")) {
         out.insert("stop_sequences".into(), stops);
     }
+    // 原生请求仍用原始 body；无法转换的格式留给严格 checker 拒绝。
+    if let Ok(Some(config)) = openai_output_config(object, false) {
+        out.insert("output_config".into(), config);
+    }
     let tools = chat_tools(object.get("tools"));
     if !tools.is_empty() {
         out.insert("tools".into(), Value::Array(tools));
@@ -826,6 +893,9 @@ pub fn responses_to_anthropic(body: &Value) -> Result<Value, String> {
     out.insert("stream".into(), json!(true));
     copy_number(object, &mut out, "temperature");
     copy_number(object, &mut out, "top_p");
+    if let Ok(Some(config)) = openai_output_config(object, true) {
+        out.insert("output_config".into(), config);
+    }
     let tools = responses_tools(object.get("tools"));
     if !tools.is_empty() {
         out.insert("tools".into(), Value::Array(tools));

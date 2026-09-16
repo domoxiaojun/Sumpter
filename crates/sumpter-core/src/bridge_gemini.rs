@@ -442,6 +442,10 @@ pub fn try_make_gemini_body(
     effort: Option<ReasoningEffort>,
     replay: Option<&GeminiReplay>,
 ) -> Result<Value, TranslationError> {
+    crate::bridge::validate_output_config_for_target(
+        request,
+        crate::config::ProviderProtocol::Gemini,
+    )?;
     // 只有**最后**一轮带工具调用的 assistant 消息才需要回放签名:那正是上一轮
     // 上游刚签发、且客户端即将回传结果的那一轮。
     let replay_turn = replay.and_then(|_| {
@@ -523,6 +527,12 @@ pub fn try_make_gemini_body(
     if !tools.is_empty() {
         body.insert("tools".into(), Value::Array(tools));
     }
+    if let Some(choice) = anthropic_tool_choice_to_gemini(request)? {
+        body.insert(
+            "toolConfig".into(),
+            json!({"functionCallingConfig": choice}),
+        );
+    }
     let mut config = Map::new();
     if let Some(max_tokens) = request.raw.get("max_tokens").and_then(Value::as_i64) {
         config.insert("maxOutputTokens".into(), json!(max_tokens));
@@ -559,6 +569,79 @@ pub fn try_make_gemini_body(
         body.insert("generationConfig".into(), Value::Object(config));
     }
     Ok(Value::Object(body))
+}
+
+fn anthropic_tool_choice_to_gemini(
+    request: &RoutingRequest,
+) -> Result<Option<Value>, TranslationError> {
+    let Some(choice) = request
+        .raw
+        .get("tool_choice")
+        .filter(|value| !value.is_null())
+    else {
+        return Ok(None);
+    };
+    let choice = choice
+        .as_object()
+        .ok_or_else(|| TranslationError::InvalidInput("tool_choice must be an object".into()))?;
+    for key in choice.keys() {
+        if !matches!(key.as_str(), "type" | "name" | "disable_parallel_tool_use") {
+            return Err(TranslationError::UnsupportedField(format!(
+                "tool_choice.{key}"
+            )));
+        }
+    }
+    let kind = choice.get("type").and_then(Value::as_str).unwrap_or("");
+    let mode = match kind {
+        "none" => "NONE",
+        "auto" => "AUTO",
+        "any" | "tool" => "ANY",
+        _ => {
+            return Err(TranslationError::UnsupportedField(
+                "tool_choice.type".into(),
+            ));
+        }
+    };
+    if let Some(parallel) = choice.get("disable_parallel_tool_use") {
+        if !parallel.is_boolean() {
+            return Err(TranslationError::InvalidInput(
+                "tool_choice.disable_parallel_tool_use must be a boolean".into(),
+            ));
+        }
+        if parallel == &json!(true) && kind != "none" {
+            return Err(TranslationError::UnsupportedField(
+                "tool_choice.disable_parallel_tool_use".into(),
+            ));
+        }
+    }
+    if request.tools.is_empty() && matches!(kind, "any" | "tool") {
+        return Err(TranslationError::InvalidInput(
+            "tool_choice requires tools".into(),
+        ));
+    }
+    let mut config = json!({"mode": mode});
+    if kind == "tool" {
+        let name = choice
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| TranslationError::InvalidInput("tool_choice.name is required".into()))?;
+        if !request
+            .tools
+            .iter()
+            .any(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
+        {
+            return Err(TranslationError::InvalidInput(
+                "tool_choice.name must name a declared tool".into(),
+            ));
+        }
+        config["allowedFunctionNames"] = json!([name]);
+    } else if choice.get("name").is_some() {
+        return Err(TranslationError::UnsupportedField(
+            "tool_choice.name".into(),
+        ));
+    }
+    Ok(Some(config))
 }
 
 fn thinking_budget(effort: ReasoningEffort) -> i64 {
@@ -755,6 +838,12 @@ fn tool_result_text(content: Option<&Value>) -> Result<Value, TranslationError> 
     match content {
         Value::String(text) => Ok(json!(text)),
         Value::Array(blocks) => {
+            crate::bridge::validate_text_content(
+                Some(content),
+                "tool_result.content",
+                &["text"],
+                true,
+            )?;
             let mut out = String::new();
             for (index, block) in blocks.iter().enumerate() {
                 let text = block.get("text").and_then(Value::as_str).ok_or_else(|| {
@@ -820,8 +909,7 @@ pub fn check_anthropic_to_gemini(request: &RoutingRequest) -> Result<(), Transla
 
 /// 上游 Gemini SSE → Anthropic SSE。
 ///
-/// Gemini 的流是「累计快照 + 增量混用」:文本可能是完整前缀而不是增量片段。这里按
-/// 快照语义处理 —— 记录已发出的前缀,只发出新增部分,重复快照不会重复输出。
+/// Gemini 的文本 part 按增量追加；网络分片只影响 SSE 分帧，不改变正文语义。
 pub struct GeminiStreamBridge {
     message_id: String,
     model: String,
@@ -845,8 +933,7 @@ pub struct GeminiStreamBridge {
     tool_blocks: Vec<ToolBlock>,
     /// 本轮上游真实返回的 `functionCall` parts(含 `thoughtSignature`),供 engine 回放。
     ///
-    /// 只收 functionCall:签名只挂在它们上面,而它们不像文本那样走累计快照,
-    /// 逐块累积既完整又不会重复。
+    /// 只收 functionCall，逐块保留工具调用及其签名。
     replay_parts: Vec<Value>,
 }
 
@@ -929,20 +1016,14 @@ impl GeminiStreamBridge {
         }
     }
 
-    /// 累计快照语义:只发出相对已有的新增后缀。
-    fn push_text(&mut self, snapshot: &str, events: &mut Vec<SseEvent>) {
-        let delta = if snapshot.starts_with(&self.text) {
-            snapshot[self.text.len()..].to_string()
-        } else {
-            // 上游回的是纯增量(或与已有文本无法拼接)时按增量处理。
-            snapshot.to_string()
-        };
+    /// Gemini 文本分片是增量；重复片段也是真实正文，不能按前缀去重。
+    fn push_text(&mut self, delta: &str, events: &mut Vec<SseEvent>) {
         if delta.is_empty() {
             return;
         }
-        self.text.push_str(&delta);
+        self.text.push_str(delta);
         let index = self.open_text_block(events);
-        events.push(text_delta_event(&delta, index));
+        events.push(text_delta_event(delta, index));
     }
 
     fn open_tool_block(&mut self, name: &str, args: &Value, events: &mut Vec<SseEvent>) -> usize {
@@ -1002,16 +1083,13 @@ impl GeminiStreamBridge {
             // 没有块时补一个空文本块:客户端总要收到至少一个 content_block。
             self.open_text_block(&mut events);
         }
-        // 出过工具块就必须报 tool_use:回 end_turn 会让客户端以为轮次结束,不去执行
-        // 工具(与 bridge.rs 对同一情形的判定一致)。
-        let stop_reason = if self.tool_blocks.is_empty() {
-            self.stop_reason
-        } else {
-            "tool_use"
-        };
+        // 正常工具轮次报 tool_use；达到 token 上限或被拒绝时保留真实停止原因。
+        if !self.tool_blocks.is_empty() && self.stop_reason == "end_turn" {
+            self.stop_reason = "tool_use";
+        }
         self.close_all_blocks(&mut events);
         events.extend(message_stop_events(
-            stop_reason,
+            self.stop_reason,
             self.input_tokens,
             self.output_tokens,
         ));
@@ -1079,9 +1157,7 @@ impl GeminiStreamBridge {
                     for part in parts {
                         self.handle_part(part, &mut events);
                     }
-                    // 只累积 functionCall 部分:签名只挂在它们上面,而它们每个只出现
-                    // 一次(累计快照语义只作用于文本)。整体替换会丢掉前面分片里的
-                    // 调用,逐块追加文本又会让 "HeHe" 这类重复进回放。
+                    // 保留前面分片里的调用；文本不属于工具签名回放状态。
                     self.collect_replay_calls(parts);
                 }
             }

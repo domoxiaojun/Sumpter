@@ -224,7 +224,18 @@ fn validate_anthropic_request(
     // `output_config` 是复合对象,不能整块拒绝:`effort` 只是推理强度,Claude Code
     // 默认就带它;整块拒绝会把「入口协议不同」误报成「没有可用 Provider」。逐键
     // 判断见 `validate_output_config`。
-    validate_output_config(request)?;
+    validate_output_config_for_target(request, target)?;
+    for (message_index, message) in request.messages.iter().enumerate() {
+        for (block_index, block) in message.content.as_array().into_iter().flatten().enumerate() {
+            if block.get("type").and_then(Value::as_str) == Some("tool_result") {
+                validate_tool_result_content(
+                    block.get("content"),
+                    &format!("messages[{message_index}].content[{block_index}].content"),
+                    target,
+                )?;
+            }
+        }
+    }
     if target == ProviderProtocol::OpenAIResponses
         && request
             .raw
@@ -283,11 +294,32 @@ pub(crate) fn json_schema_format(value: &Value) -> Result<&Value, TranslationErr
         )));
     }
     for key in object.keys() {
-        if !matches!(key.as_str(), "type" | "schema") {
+        if !matches!(
+            key.as_str(),
+            "type" | "schema" | "name" | "strict" | "description"
+        ) {
             return Err(TranslationError::UnsupportedField(format!(
                 "output_config.format.{key}"
             )));
         }
+    }
+    for key in ["name", "description"] {
+        if let Some(value) = object.get(key)
+            && (value.as_str().is_none()
+                || (key == "name" && value.as_str().is_some_and(|name| name.trim().is_empty())))
+        {
+            return Err(TranslationError::InvalidInput(format!(
+                "output_config.format.{key} must be a string"
+            )));
+        }
+    }
+    if object
+        .get("strict")
+        .is_some_and(|value| !value.is_boolean())
+    {
+        return Err(TranslationError::InvalidInput(
+            "output_config.format.strict must be a boolean".into(),
+        ));
     }
     let schema = object
         .get("schema")
@@ -336,6 +368,118 @@ fn validate_output_config(request: &RoutingRequest) -> Result<(), TranslationErr
     Ok(())
 }
 
+/// 中间格式保留 OpenAI 的 schema 名和严格度；目标不能表达时拒绝，不把扩展键
+/// 塞进 Anthropic/Gemini 的请求，也不悄悄删掉客户端声明的约束。
+pub(crate) fn validate_output_config_for_target(
+    request: &RoutingRequest,
+    target: ProviderProtocol,
+) -> Result<(), TranslationError> {
+    validate_output_config(request)?;
+    if matches!(
+        target,
+        ProviderProtocol::Anthropic | ProviderProtocol::Gemini
+    ) && let Some(format) = request
+        .raw
+        .get("output_config")
+        .and_then(|v| v.get("format"))
+    {
+        for key in ["name", "strict", "description"] {
+            if format.get(key).is_some() {
+                return Err(TranslationError::UnsupportedField(format!(
+                    "output_config.format.{key}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn openai_output_format(request: &RoutingRequest) -> Option<Value> {
+    let schema = output_config_schema(request)?;
+    let source = request.raw.get("output_config")?.get("format")?;
+    let mut format = json!({"type": "json_schema", "name": JSON_SCHEMA_NAME, "schema": schema});
+    for key in ["name", "strict", "description"] {
+        if let Some(value) = source.get(key) {
+            format[key] = value.clone();
+        }
+    }
+    Some(format)
+}
+
+/// 工具结果只接受能完整转换的文本/图片；Responses 支持图片结果，Chat 的
+/// role=tool 只支持文本。未知块与引用必须在压平前拒绝。
+fn validate_tool_result_content(
+    content: Option<&Value>,
+    path: &str,
+    target: ProviderProtocol,
+) -> Result<(), TranslationError> {
+    let Some(content) = content else {
+        return Ok(());
+    };
+    match content {
+        Value::Null | Value::String(_) => Ok(()),
+        Value::Array(blocks) => {
+            for (index, block) in blocks.iter().enumerate() {
+                let block_path = format!("{path}[{index}]");
+                match block.get("type").and_then(Value::as_str) {
+                    Some("text") => validate_text_content(
+                        Some(&Value::Array(vec![block.clone()])),
+                        &block_path,
+                        &["text"],
+                        true,
+                    )?,
+                    Some("image") if target == ProviderProtocol::OpenAIResponses => {
+                        if block.as_object().and_then(image_url).is_none() {
+                            return Err(TranslationError::InvalidInput(format!(
+                                "{block_path}.source requires a complete base64 or URL image"
+                            )));
+                        }
+                    }
+                    Some(kind) => {
+                        return Err(TranslationError::UnsupportedContentBlock(format!(
+                            "{block_path}.{kind}"
+                        )));
+                    }
+                    None => {
+                        return Err(TranslationError::InvalidInput(format!(
+                            "{block_path}.type is required"
+                        )));
+                    }
+                }
+            }
+            Ok(())
+        }
+        _ => Err(TranslationError::InvalidInput(format!(
+            "{path} must be a string or content-block array"
+        ))),
+    }
+}
+
+fn responses_tool_result(content: Option<&Value>) -> Value {
+    let Some(content) = content else {
+        return json!("");
+    };
+    let Some(blocks) = content.as_array().filter(|blocks| {
+        blocks
+            .iter()
+            .any(|block| block.get("type").and_then(Value::as_str) == Some("image"))
+    }) else {
+        return json!(flatten_text(content));
+    };
+    Value::Array(
+        blocks
+            .iter()
+            .filter_map(|block| match block.get("type")?.as_str()? {
+                "text" => Some(json!({"type": "input_text", "text": block.get("text")?})),
+                "image" => Some(
+                    json!({"type": "input_image", "image_url": image_url(block.as_object()?)?}),
+                ),
+                _ => None,
+            })
+            .collect(),
+    )
+}
+
 /// 检查 Anthropic → OpenAI Chat 的首版安全转换范围。
 pub fn check_anthropic_to_openai_chat(
     request: &RoutingRequest,
@@ -359,7 +503,9 @@ pub fn check_anthropic_translation(
     websearch: bool,
 ) -> Result<(), TranslationError> {
     match target {
-        ProviderProtocol::Anthropic => Ok(()),
+        ProviderProtocol::Anthropic => {
+            validate_output_config_for_target(request, ProviderProtocol::Anthropic)
+        }
         ProviderProtocol::OpenAI => check_anthropic_to_openai_chat(request, websearch),
         ProviderProtocol::OpenAIResponses => {
             check_anthropic_to_openai_responses(request, websearch)
@@ -550,13 +696,14 @@ pub fn make_openai_chat_body(
     if let Some(effort) = effort {
         body.insert("reasoning_effort".into(), json!(effort.as_str()));
     }
-    if let Some(schema) = output_config_schema(request) {
+    if let Some(mut format) = openai_output_format(request) {
+        format
+            .as_object_mut()
+            .expect("output format is an object")
+            .remove("type");
         body.insert(
             "response_format".into(),
-            json!({
-                "type": "json_schema",
-                "json_schema": {"name": JSON_SCHEMA_NAME, "schema": schema},
-            }),
+            json!({"type": "json_schema", "json_schema": format}),
         );
     }
     // 客户端工具声明必须透传:Claude Code 的主对话恒带工具,丢掉它们会让上游
@@ -617,17 +764,8 @@ pub fn make_responses_body(
     if let Some(effort) = effort {
         body.insert("reasoning".into(), json!({"effort": effort.as_str()}));
     }
-    if let Some(schema) = output_config_schema(request) {
-        body.insert(
-            "text".into(),
-            json!({
-                "format": {
-                    "type": "json_schema",
-                    "name": JSON_SCHEMA_NAME,
-                    "schema": schema,
-                },
-            }),
-        );
+    if let Some(format) = openai_output_format(request) {
+        body.insert("text".into(), json!({"format": format}));
     }
     // 客户端工具与内建搜索工具共存:两者都要出现在同一个 `tools` 数组里。
     let mut tools = responses_tools_from_anthropic(request);
@@ -930,7 +1068,7 @@ fn push_responses_input(input: &mut Vec<Value>, message: &RoutingMessage) {
                         .get("tool_use_id")
                         .and_then(Value::as_str)
                         .unwrap_or_default(),
-                    "output": object.get("content").map(flatten_text).unwrap_or_default(),
+                    "output": responses_tool_result(object.get("content")),
                 }));
             }
             _ => {}
@@ -1131,21 +1269,29 @@ fn map_openai_stop_reason(finish_reason: &str) -> &'static str {
 
 /// SSE 事件块缓冲:按 `\n\n` 切块,抽取 `data:` 行(多行以 \n 连接)。
 pub(crate) struct SseBlockBuffer {
-    buffer: String,
+    buffer: Vec<u8>,
+    previous_cr: bool,
 }
 
 impl SseBlockBuffer {
     pub(crate) fn new() -> Self {
         Self {
-            buffer: String::new(),
+            buffer: Vec::new(),
+            previous_cr: false,
         }
     }
 
     pub(crate) fn push(&mut self, data: &[u8]) -> Vec<String> {
-        let normalized = String::from_utf8_lossy(data).replace("\r\n", "\n");
-        // A peer that never emits a blank line must not grow this buffer
-        // without bound. Dropping the incomplete frame is preferable to an
-        // OOM; subsequent complete frames remain observable.
+        // 先按字节跨网络分片收集完整帧，再解码 UTF-8；逐 chunk lossy 解码会
+        // 把横跨两个 chunk 的中文字符替换成 U+FFFD。CRLF 也可跨 chunk。
+        let mut normalized = Vec::with_capacity(data.len());
+        for &byte in data {
+            if byte != b'\n' || !self.previous_cr {
+                normalized.push(if byte == b'\r' { b'\n' } else { byte });
+            }
+            self.previous_cr = byte == b'\r';
+        }
+        // 未闭合帧仍保留原有内存上限。
         if normalized.len() > MAX_SSE_BUFFER_BYTES {
             self.buffer.clear();
             return Vec::new();
@@ -1153,10 +1299,10 @@ impl SseBlockBuffer {
         if self.buffer.len().saturating_add(normalized.len()) > MAX_SSE_BUFFER_BYTES {
             self.buffer.clear();
         }
-        self.buffer.push_str(&normalized);
+        self.buffer.extend_from_slice(&normalized);
         let mut blocks = Vec::new();
-        while let Some(pos) = self.buffer.find("\n\n") {
-            let block: String = self.buffer[..pos].to_string();
+        while let Some(pos) = self.buffer.windows(2).position(|bytes| bytes == b"\n\n") {
+            let block = String::from_utf8_lossy(&self.buffer[..pos]).into_owned();
             self.buffer.drain(..pos + 2);
             blocks.push(block);
         }
@@ -1167,7 +1313,7 @@ impl SseBlockBuffer {
         if self.buffer.is_empty() {
             return None;
         }
-        Some(std::mem::take(&mut self.buffer))
+        Some(String::from_utf8_lossy(&std::mem::take(&mut self.buffer)).into_owned())
     }
 }
 
