@@ -2547,7 +2547,6 @@ fn pending_batch_resets_local_byte_accounting_after_take() {
             Some(RuntimeEventOutcome::Succeeded),
             event_now(),
         ),
-        counters: RuntimeCounters::default(),
         bytes: 17,
     };
     let inner = Arc::new(Inner {
@@ -2559,6 +2558,8 @@ fn pending_batch_resets_local_byte_accounting_after_take() {
             reset_generation: 0,
             history_generation: 0,
             counters: RuntimeCounters::default(),
+            source_counters: RuntimeCounters::default(),
+            pending_counter_deltas: BTreeMap::new(),
             active_sequences: HashMap::new(),
             recent_changes: VecDeque::new(),
             latest_event: None,

@@ -21,8 +21,13 @@ pub fn export_estimate_on(
     let filters = query.filter.normalized()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
     require_projection(&transaction)?;
-    let snapshot = history_snapshot(&transaction, query.snapshot_seq, query.history_generation)?;
-    let mut builder = export_filter(&filters, snapshot.snapshot_seq, query.scope);
+    let snapshot = history_snapshot(
+        &transaction,
+        query.snapshot_seq,
+        query.snapshot_change_seq,
+        query.history_generation,
+    )?;
+    let mut builder = export_filter(&filters, &snapshot, query.scope);
     let where_sql = builder.where_sql();
     let (row_count, source_bytes) = match query.scope {
         ExportScope::Events => transaction.query_row(
@@ -68,6 +73,7 @@ pub fn export_estimate_on(
         row_count,
         estimated_bytes,
         snapshot_seq: snapshot.snapshot_seq,
+        snapshot_change_seq: snapshot.snapshot_change_seq,
         history_generation: snapshot.history_generation,
         retained_from_seq: snapshot.retained_from_seq,
     })
@@ -100,8 +106,13 @@ where
     let filters = query.filter.normalized()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
     require_projection(&transaction)?;
-    let snapshot = history_snapshot(&transaction, query.snapshot_seq, query.history_generation)?;
-    let builder = export_filter(&filters, snapshot.snapshot_seq, query.scope);
+    let snapshot = history_snapshot(
+        &transaction,
+        query.snapshot_seq,
+        query.snapshot_change_seq,
+        query.history_generation,
+    )?;
+    let builder = export_filter(&filters, &snapshot, query.scope);
     let mut row_count = 0_i64;
     let mut bytes_written = 0_u64;
     if query.format == ExportFormat::Csv {
@@ -141,12 +152,17 @@ where
         row_count,
         bytes_written,
         snapshot_seq: snapshot.snapshot_seq,
+        snapshot_change_seq: snapshot.snapshot_change_seq,
         history_generation: snapshot.history_generation,
         privacy: query.privacy,
     })
 }
 
-fn export_filter(filter: &RuntimeFilter, snapshot_seq: i64, scope: ExportScope) -> SqlFilter {
+fn export_filter(
+    filter: &RuntimeFilter,
+    snapshot: &super::HistorySnapshot,
+    scope: ExportScope,
+) -> SqlFilter {
     let mut builder = SqlFilter::default();
     builder.raw("is_in_flight = 0");
     builder.raw(format!("projection_version = {PROJECTION_VERSION}"));
@@ -156,7 +172,7 @@ fn export_filter(filter: &RuntimeFilter, snapshot_seq: i64, scope: ExportScope) 
             builder.raw("COALESCE(attribution_scope,'unknown') != 'internal_feature'");
         }
     }
-    builder.le_i64("seq", snapshot_seq);
+    builder.completed_snapshot(snapshot);
     append_runtime_filter(&mut builder, filter);
     builder
 }

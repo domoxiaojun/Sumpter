@@ -1,24 +1,11 @@
 use super::{
-    AnalyticsFilter, Arc, Connection, Duration, HashSet, Inner, KIND_CLIENT, Ordering,
-    PendingBatch, RuntimeCleanupMutation, RuntimeCleanupPreview, RuntimePricingMutation,
-    RuntimePricingUpdate, RuntimeRetentionMutation, RuntimeRetentionUpdate, StorageRotation,
-    counters_from_connection, hourly_bucket_start, load_cached_storage, load_state,
-    mark_hourly_rollup_bucket, mark_request_hourly_rollups_dirty, meta_i64, now, params,
-    rotate_retention_now, set_meta, set_retention_max_age_meta, set_storage_limit_meta,
-    setup_connection, write_batch,
+    Arc, Connection, Duration, HashSet, Inner, KIND_CLIENT, Ordering, PendingBatch,
+    RuntimeCleanupMutation, RuntimeCleanupPreview, RuntimePricingMutation, RuntimePricingUpdate,
+    RuntimeRetentionMutation, RuntimeRetentionUpdate, StorageRotation, counters_from_connection,
+    hourly_bucket_start, load_cached_storage, load_state, mark_hourly_rollup_bucket,
+    mark_request_hourly_rollups_dirty, meta_i64, now, params, rotate_retention_now, set_meta,
+    set_retention_max_age_meta, set_storage_limit_meta, setup_connection, write_batch,
 };
-
-impl AnalyticsFilter {
-    pub fn is_active(&self) -> bool {
-        self.client_kind.is_some()
-            || self.endpoint_id.is_some()
-            || self.project_id.is_some()
-            || self.project.is_some()
-            || self.session_id.is_some()
-            || self.from.is_some()
-            || self.to.is_some()
-    }
-}
 
 pub(super) fn refresh_cached_storage(
     inner: &Arc<Inner>,
@@ -53,7 +40,19 @@ pub(super) fn reconcile_rotation_state(
         .recent_changes
         .retain(|change| !rotated.contains(&change.event.id));
     state.counters = refreshed.counters;
-    state.latest_event = refreshed.latest_event;
+    let deltas = state
+        .pending_counter_deltas
+        .values()
+        .copied()
+        .collect::<Vec<_>>();
+    for delta in deltas {
+        state
+            .counters
+            .adjust(super::RuntimeCounters::default(), delta);
+    }
+    if state.pending_counter_deltas.is_empty() {
+        state.latest_event = refreshed.latest_event;
+    }
     state.history_generation = refreshed.history_generation;
     Ok(())
 }
@@ -97,6 +96,29 @@ pub(super) fn commit_pending(
             return Err(error);
         }
     };
+    let committed_change = batch
+        .iter()
+        .map(|message| message.change_seq)
+        .max()
+        .unwrap_or(0);
+    let durable_counters = super::models::load_counters(connection)?;
+    {
+        let mut state = inner.state.lock().unwrap();
+        state
+            .pending_counter_deltas
+            .retain(|change, _| *change > committed_change);
+        state.counters = durable_counters;
+        let deltas = state
+            .pending_counter_deltas
+            .values()
+            .copied()
+            .collect::<Vec<_>>();
+        for delta in deltas {
+            state
+                .counters
+                .adjust(super::RuntimeCounters::default(), delta);
+        }
+    }
     refresh_cached_storage(inner, connection, !rotation.deleted_event_ids.is_empty())?;
     inner
         .pending_events

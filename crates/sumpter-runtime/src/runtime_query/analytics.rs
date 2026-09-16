@@ -50,8 +50,8 @@ pub fn analytics_on(
     filters.to = Some(filters.to.map_or(now, |value| value.min(now)));
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
     require_projection(&transaction)?;
-    let snapshot = history_snapshot(&transaction, None, None)?;
-    let client_builder = analytics_client_builder(&filters, snapshot.snapshot_seq);
+    let snapshot = history_snapshot(&transaction, None, None, None)?;
+    let client_builder = analytics_client_builder(&filters, &snapshot);
     let client_where_sql = client_builder.where_sql();
     let aggregate_sql = format!(
         "SELECT COUNT(*),\
@@ -104,7 +104,7 @@ pub fn analytics_on(
             ))
         },
     )?;
-    let upstream_builder = analytics_upstream_builder(&filters, snapshot.snapshot_seq);
+    let upstream_builder = analytics_upstream_builder(&filters, &snapshot);
     let upstream_sql = format!(
         "SELECT COUNT(*),SUM(CASE WHEN outcome='succeeded' THEN 1 ELSE 0 END),\
                 SUM(CASE WHEN outcome='failed' THEN 1 ELSE 0 END)\
@@ -237,7 +237,7 @@ pub fn analytics_on(
             Some("kind='client'"),
         )?,
     };
-    let facets = analytics_facets_for_filter(&transaction, &filters, snapshot.snapshot_seq)?;
+    let facets = analytics_facets_for_filter(&transaction, &filters, &snapshot)?;
     let tool_calls = analytics_tool_calls(&transaction, &client_builder)?;
     transaction.commit()?;
     let completed = client_successes

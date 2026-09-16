@@ -25,6 +25,7 @@ pub(super) fn setup_connection(connection: &mut Connection) -> crate::database::
             "runtime schema {previous_version} is newer than supported {SCHEMA_VERSION}"
         )));
     }
+    ensure_completion_watermark(connection)?;
     let hourly_rollup_meta_exists = meta_i64(connection, "hourly_rollup_complete")?.is_some();
     let unprojected_exists = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM runtime_events
@@ -127,6 +128,35 @@ pub(super) fn setup_connection(connection: &mut Connection) -> crate::database::
         }
     }
     Ok(())
+}
+
+/// 当前 schema 的增量迁移：保留历史行，只补首次完成水位。
+fn ensure_completion_watermark(connection: &mut Connection) -> crate::database::Result<()> {
+    let transaction = connection.transaction()?;
+    let columns = transaction
+        .prepare("PRAGMA table_info(runtime_events)")?
+        .query_map(crate::database::params![], |row| row.get::<_, String>(1))?
+        .collect::<Result<HashSet<_>, _>>()?;
+    if !columns.contains("completed_change_seq") {
+        transaction
+            .execute_batch("ALTER TABLE runtime_events ADD COLUMN completed_change_seq INTEGER;")?;
+    }
+    if meta_i64(&transaction, "completion_watermark_version")? != Some(1) {
+        transaction.execute(
+            "UPDATE runtime_events SET completed_change_seq=change_seq
+             WHERE is_in_flight=0 AND completed_change_seq IS NULL",
+            crate::database::params![],
+        )?;
+        // 旧版计数可能包含已轮换事件；迁移时一次性修复，热写入只维护差量。
+        let counters = super::counters_from_connection(&transaction)?;
+        super::models::save_counters(&transaction, &counters)?;
+        set_meta(&transaction, "completion_watermark_version", 1)?;
+    }
+    transaction.execute_batch(
+        "CREATE INDEX IF NOT EXISTS runtime_events_completion_change
+         ON runtime_events(completed_change_seq) WHERE is_in_flight=0;",
+    )?;
+    transaction.commit()
 }
 
 pub(super) fn create_projection_indexes(connection: &Connection) -> crate::database::Result<()> {

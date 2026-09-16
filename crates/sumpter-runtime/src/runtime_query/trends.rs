@@ -53,10 +53,11 @@ pub fn trends_on(connection: &mut Connection, request: &TrendRequest) -> QueryRe
     let snapshot = history_snapshot(
         &transaction,
         request.snapshot_seq,
+        request.snapshot_change_seq,
         request.history_generation,
     )?;
     let prices = load_price_catalog(&transaction)?;
-    let cache_builder = super::analytics_client_builder(&filters, snapshot.snapshot_seq);
+    let cache_builder = super::analytics_client_builder(&filters, &snapshot);
     let cache_read = super::analytics_queries::cache_read_statistics(&transaction, &cache_builder)?;
     if let Some((points, totals)) = try_hourly_rollup(
         &transaction,
@@ -77,6 +78,7 @@ pub fn trends_on(connection: &mut Connection, request: &TrendRequest) -> QueryRe
             from: request.from,
             to: request.to,
             snapshot_seq: snapshot.snapshot_seq,
+            snapshot_change_seq: snapshot.snapshot_change_seq,
             history_generation: snapshot.history_generation,
             retained_from_seq: snapshot.retained_from_seq,
             thresholds: LatencyThresholds::default(),
@@ -89,7 +91,7 @@ pub fn trends_on(connection: &mut Connection, request: &TrendRequest) -> QueryRe
     builder.raw("is_in_flight = 0");
     builder.raw(format!("projection_version = {PROJECTION_VERSION}"));
     builder.raw("kind IN ('client','upstream')");
-    builder.le_i64("seq", snapshot.snapshot_seq);
+    builder.completed_snapshot(&snapshot);
     let mut dimension_filters = filters.clone();
     dimension_filters.from = None;
     dimension_filters.to = None;
@@ -164,6 +166,7 @@ pub fn trends_on(connection: &mut Connection, request: &TrendRequest) -> QueryRe
         from: request.from,
         to: request.to,
         snapshot_seq: snapshot.snapshot_seq,
+        snapshot_change_seq: snapshot.snapshot_change_seq,
         history_generation: snapshot.history_generation,
         retained_from_seq: snapshot.retained_from_seq,
         thresholds: LatencyThresholds::default(),
@@ -212,11 +215,17 @@ fn try_hourly_rollup(
     let failed = meta_i64(transaction, "hourly_rollup_failed")?.unwrap_or(0) != 0;
     let max_seq = meta_i64(transaction, "hourly_rollup_max_seq")?.unwrap_or(0);
     let generation = meta_i64(transaction, "hourly_rollup_history_generation")?.unwrap_or(-1);
+    let newest_completion = transaction.query_row(
+        "SELECT COALESCE(MAX(completed_change_seq),0) FROM runtime_events WHERE is_in_flight=0",
+        crate::database::params![],
+        |row| row.get::<_, i64>(0),
+    )?;
     if !only_time_filters
         || granularity != TrendGranularity::Hour
         || !aligned
         || !complete
         || failed
+        || newest_completion > snapshot.snapshot_change_seq
         || max_seq != snapshot.snapshot_seq
         || generation != snapshot.history_generation
     {

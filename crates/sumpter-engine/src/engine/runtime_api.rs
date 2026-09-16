@@ -21,7 +21,11 @@ use super::events::{EngineNotice, RuntimeSnapshot, runtime_outcome_token};
 
 impl Engine {
     pub fn runtime_snapshot(&self) -> RuntimeSnapshot {
-        self.inner.state.lock().unwrap().runtime.clone()
+        let mut snapshot = self.inner.state.lock().unwrap().runtime.clone();
+        if let Some(store) = self.inner.runtime_store.get() {
+            store.counters().apply_to_snapshot(&mut snapshot);
+        }
+        snapshot
     }
 
     pub fn runtime_summary_value(&self) -> Value {
@@ -35,9 +39,7 @@ impl Engine {
         };
         if let Some(store) = self.inner.runtime_store.get() {
             let mut summary = store.summary();
-            // Memory is the real-time source of truth; storage fields describe
-            // durability and may lag while a batch is pending.
-            summary.counters = counters;
+            // Store 计数合并持久化值与有界待提交增量，保留实时性且不复活已轮换计数。
             summary.latest_event = latest_event;
             return serde_json::to_value(summary).unwrap_or(Value::Null);
         }
@@ -324,16 +326,7 @@ impl Engine {
     ) -> Result<Value, String> {
         let filter = filter.normalized();
         if let Some(store) = self.inner.runtime_store.get() {
-            let query_filter = RuntimeFilter {
-                client_kind: filter.client_kind.clone(),
-                endpoint_id: filter.endpoint_id.clone(),
-                project_id: filter.project_id.clone(),
-                project_name: filter.project.clone(),
-                session_id: filter.session_id.clone(),
-                from: filter.from,
-                to: filter.to,
-                ..RuntimeFilter::default()
-            };
+            let query_filter = filter.to_runtime_filter();
             return runtime_query::analytics(store.database_path(), range, &query_filter)
                 .map_err(|error| error.to_string())
                 .and_then(|value| serde_json::to_value(value).map_err(|error| error.to_string()));
@@ -514,5 +507,134 @@ impl Engine {
             .runtime_store
             .get()
             .map_or(Ok(()), RuntimeStore::flush)
+    }
+}
+
+#[cfg(test)]
+mod runtime_regression_tests {
+    use super::*;
+    use crate::ReplayTransport;
+    use std::sync::Arc;
+    use sumpter_core::{config::AppConfig, events::RuntimeEvent};
+
+    fn fixture(label: &str) -> (std::path::PathBuf, Engine) {
+        let dir = std::env::temp_dir().join(format!(
+            "sumpter-engine-runtime-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        let engine = Engine::new(
+            AppConfig::from_json("{}").unwrap(),
+            Some(ConfigDir::new(&dir)),
+            Arc::new(ReplayTransport::new([])),
+        );
+        (dir, engine)
+    }
+
+    fn event(id: &str, timestamp: f64, selected: bool) -> RuntimeEvent {
+        serde_json::from_value(json!({
+            "id":id,"kind":"client","timestamp":timestamp,"phase":"completed",
+            "statusCode":200,"outcome":"succeeded","requestID":format!("r-{id}"),
+            "clientVariant":if selected {"cli"} else {"web"},
+            "agentRole":if selected {"subagent"} else {"root"},
+            "agentName":if selected {"worker"} else {"other"},
+            "parentThreadId":if selected {"parent"} else {"other"},
+            "parentTurnId":if selected {"turn"} else {"other"},
+            "rootTurnId":if selected {"root"} else {"other"},
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn analytics_filter_survives_engine_facade_and_memory_fallback() {
+        let (dir, engine) = fixture("filters");
+        engine.complete_client(event("selected", 100.0, true), None);
+        engine.complete_client(event("other", 100.0, false), None);
+        engine.flush_stats().unwrap();
+        for filter in [
+            AnalyticsFilter {
+                client_variant: Some("cli".into()),
+                ..Default::default()
+            },
+            AnalyticsFilter {
+                agent_role: Some("subagent".into()),
+                ..Default::default()
+            },
+            AnalyticsFilter {
+                agent_name: Some("worker".into()),
+                ..Default::default()
+            },
+            AnalyticsFilter {
+                parent_thread_id: Some("parent".into()),
+                ..Default::default()
+            },
+            AnalyticsFilter {
+                parent_turn_id: Some("turn".into()),
+                ..Default::default()
+            },
+            AnalyticsFilter {
+                root_turn_id: Some("root".into()),
+                ..Default::default()
+            },
+        ] {
+            let value = engine.runtime_analytics_filtered("all", &filter).unwrap();
+            assert_eq!(value["clientRequests"], 1);
+            let fallback = Engine::new(
+                AppConfig::from_json("{}").unwrap(),
+                None,
+                Arc::new(ReplayTransport::new([])),
+            );
+            fallback.complete_client(event("memory", 100.0, true), None);
+            let value = fallback.runtime_analytics_filtered("all", &filter).unwrap();
+            assert_eq!(value["clientRequests"], 0);
+            assert_eq!(value["filtersApplied"], false);
+        }
+        drop(engine);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn retention_counters_stay_realtime_without_reviving_deleted_requests() {
+        let (dir, engine) = fixture("retention");
+        let now = sumpter_core::events::unix_to_apple_epoch(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs_f64(),
+        );
+        engine.complete_client(event("old", now - 3.0 * 86_400.0, true), None);
+        engine.complete_client(event("fresh", now, true), None);
+        assert_eq!(engine.runtime_snapshot().client_requests, 2);
+        engine
+            .runtime_set_retention(RuntimeRetentionUpdate {
+                expected_revision: 1,
+                max_age_days: Some(1),
+                storage_limit_bytes: None,
+            })
+            .unwrap();
+        assert_eq!(
+            engine.runtime_summary_value()["counters"]["clientRequests"],
+            1
+        );
+        engine.complete_client(event("next", now, true), None);
+        assert_eq!(engine.runtime_snapshot().client_requests, 2);
+        assert_eq!(
+            engine.runtime_summary_value()["counters"]["clientRequests"],
+            2
+        );
+        engine.flush_stats().unwrap();
+        assert_eq!(engine.runtime_snapshot().client_requests, 2);
+        drop(engine);
+        let engine = Engine::new(
+            AppConfig::from_json("{}").unwrap(),
+            Some(ConfigDir::new(&dir)),
+            Arc::new(ReplayTransport::new([])),
+        );
+        assert_eq!(engine.runtime_snapshot().client_requests, 2);
+        drop(engine);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

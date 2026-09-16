@@ -108,6 +108,8 @@ pub(crate) struct RuntimeEventsQuery {
     page_size: Option<usize>,
     #[serde(rename = "snapshotSeq", alias = "snapshot_seq")]
     snapshot_seq: Option<i64>,
+    #[serde(rename = "snapshotChangeSeq", alias = "snapshot_change_seq")]
+    snapshot_change_seq: Option<i64>,
     #[serde(rename = "historyGeneration", alias = "history_generation")]
     history_generation: Option<i64>,
     pub(crate) before_seq: Option<i64>,
@@ -178,6 +180,7 @@ pub(crate) async fn runtime_events(
             page: query.page.unwrap_or(1),
             page_size: query.page_size.unwrap_or(10),
             snapshot_seq: query.snapshot_seq,
+            snapshot_change_seq: query.snapshot_change_seq,
             history_generation: query.history_generation,
             filter: runtime_filter_from_events_query(&query),
         };
@@ -363,6 +366,8 @@ pub(crate) struct RuntimeTrendQuery {
     range: Option<String>,
     granularity: Option<String>,
     snapshot_seq: Option<i64>,
+    #[serde(rename = "snapshotChangeSeq", alias = "snapshot_change_seq")]
+    snapshot_change_seq: Option<i64>,
     history_generation: Option<i64>,
     #[serde(flatten)]
     filters: RuntimeFilterQuery,
@@ -449,6 +454,7 @@ pub(crate) async fn runtime_trends(
         to: filters.to.unwrap_or(default_to),
         granularity,
         snapshot_seq: query.snapshot_seq,
+        snapshot_change_seq: query.snapshot_change_seq,
         history_generation: query.history_generation,
         filter: filters,
     };
@@ -464,6 +470,8 @@ pub(crate) struct RuntimePagedQuery {
     page: Option<usize>,
     page_size: Option<usize>,
     snapshot_seq: Option<i64>,
+    #[serde(rename = "snapshotChangeSeq", alias = "snapshot_change_seq")]
+    snapshot_change_seq: Option<i64>,
     history_generation: Option<i64>,
     search: Option<String>,
     sort: Option<String>,
@@ -480,6 +488,7 @@ pub(crate) async fn runtime_errors(
         page: query.page.unwrap_or(1),
         page_size: query.page_size.unwrap_or(10),
         snapshot_seq: query.snapshot_seq,
+        snapshot_change_seq: query.snapshot_change_seq,
         history_generation: query.history_generation,
         filter: query.filters.into(),
     };
@@ -584,6 +593,7 @@ pub(crate) fn runtime_dimension_response(
         sort,
         order,
         snapshot_seq: query.snapshot_seq,
+        snapshot_change_seq: query.snapshot_change_seq,
         history_generation: query.history_generation,
         filter: query.filters.into(),
     };
@@ -775,6 +785,8 @@ pub(crate) struct RuntimeExportQuery {
     privacy: Option<String>,
     confirm_stored: Option<bool>,
     snapshot_seq: Option<i64>,
+    #[serde(rename = "snapshotChangeSeq", alias = "snapshot_change_seq")]
+    snapshot_change_seq: Option<i64>,
     history_generation: Option<i64>,
     #[serde(flatten)]
     filters: RuntimeFilterQuery,
@@ -825,6 +837,7 @@ pub(crate) fn parse_runtime_export_query(
         privacy,
         confirm_stored: query.confirm_stored == Some(true),
         snapshot_seq: query.snapshot_seq,
+        snapshot_change_seq: query.snapshot_change_seq,
         history_generation: query.history_generation,
         filter: query.filters.into(),
     })
@@ -867,10 +880,12 @@ pub(crate) async fn runtime_export(
         Err(error) => return runtime_query_error_response(error),
     };
     let snapshot_seq = estimate["snapshotSeq"].as_i64().unwrap_or(0);
+    let snapshot_change_seq = estimate["snapshotChangeSeq"].as_i64().unwrap_or(0);
     let history_generation = estimate["historyGeneration"].as_i64().unwrap_or(0);
     let row_count = estimate["rowCount"].as_i64().unwrap_or(0);
     let mut stream_query = query.clone();
     stream_query.snapshot_seq = Some(snapshot_seq);
+    stream_query.snapshot_change_seq = Some(snapshot_change_seq);
     stream_query.history_generation = Some(history_generation);
 
     let (sender, receiver) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(8);
@@ -921,6 +936,10 @@ pub(crate) async fn runtime_export(
     );
     for (name, value) in [
         ("x-sumpter-snapshot-seq", snapshot_seq.to_string()),
+        (
+            "x-sumpter-snapshot-change-seq",
+            snapshot_change_seq.to_string(),
+        ),
         (
             "x-sumpter-history-generation",
             history_generation.to_string(),

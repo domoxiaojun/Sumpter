@@ -45,6 +45,7 @@ pub fn dimension_page_on(
     let snapshot = history_snapshot(
         &transaction,
         request.snapshot_seq,
+        request.snapshot_change_seq,
         request.history_generation,
     )?;
     let (
@@ -191,7 +192,7 @@ pub fn dimension_page_on(
     if !extra_clause.is_empty() {
         builder.raw(extra_clause);
     }
-    builder.le_i64("seq", snapshot.snapshot_seq);
+    builder.completed_snapshot(&snapshot);
     append_runtime_filter(&mut builder, &filters);
     if let Some(search) = search.as_ref() {
         builder.text_values(
@@ -414,6 +415,7 @@ pub fn dimension_page_on(
         total_count,
         total_pages,
         snapshot_seq: snapshot.snapshot_seq,
+        snapshot_change_seq: snapshot.snapshot_change_seq,
         history_generation: snapshot.history_generation,
         retained_from_seq: snapshot.retained_from_seq,
         has_next: request.page < total_pages,

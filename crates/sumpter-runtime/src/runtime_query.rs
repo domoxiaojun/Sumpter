@@ -270,6 +270,7 @@ pub fn merge_range_lower_bound(
 #[serde(rename_all = "camelCase")]
 pub struct HistorySnapshot {
     pub snapshot_seq: i64,
+    pub snapshot_change_seq: i64,
     pub history_generation: i64,
     pub reset_generation: i64,
     pub retained_from_seq: i64,
@@ -280,6 +281,7 @@ pub struct EventPageRequest {
     pub page: usize,
     pub page_size: usize,
     pub snapshot_seq: Option<i64>,
+    pub snapshot_change_seq: Option<i64>,
     pub history_generation: Option<i64>,
     pub filter: RuntimeFilter,
 }
@@ -292,6 +294,7 @@ impl Default for EventPageRequest {
             page: 1,
             page_size: 10,
             snapshot_seq: None,
+            snapshot_change_seq: None,
             history_generation: None,
             filter: RuntimeFilter::default(),
         }
@@ -308,6 +311,7 @@ pub struct EventPage {
     pub total_count: i64,
     pub total_pages: usize,
     pub snapshot_seq: i64,
+    pub snapshot_change_seq: i64,
     pub history_generation: i64,
     pub reset_generation: i64,
     pub retained_from_seq: i64,
@@ -345,6 +349,7 @@ pub struct TrendRequest {
     pub to: f64,
     pub granularity: TrendGranularity,
     pub snapshot_seq: Option<i64>,
+    pub snapshot_change_seq: Option<i64>,
     pub history_generation: Option<i64>,
     pub filter: RuntimeFilter,
 }
@@ -476,6 +481,7 @@ pub struct TrendSeries {
     pub from: f64,
     pub to: f64,
     pub snapshot_seq: i64,
+    pub snapshot_change_seq: i64,
     pub history_generation: i64,
     pub retained_from_seq: i64,
     pub thresholds: LatencyThresholds,
@@ -568,6 +574,7 @@ pub struct AnalyticsFacets {
 pub struct RuntimeFacetSnapshot {
     pub api_version: u8,
     pub snapshot_seq: i64,
+    pub snapshot_change_seq: i64,
     pub history_generation: i64,
     pub retained_from_seq: i64,
     pub facets: AnalyticsFacets,
@@ -637,6 +644,7 @@ pub struct ErrorPageQuery {
     pub page: usize,
     pub page_size: usize,
     pub snapshot_seq: Option<i64>,
+    pub snapshot_change_seq: Option<i64>,
     pub history_generation: Option<i64>,
     pub filter: RuntimeFilter,
 }
@@ -649,6 +657,7 @@ impl Default for ErrorPageQuery {
             page: 1,
             page_size: 10,
             snapshot_seq: None,
+            snapshot_change_seq: None,
             history_generation: None,
             filter: RuntimeFilter::default(),
         }
@@ -685,6 +694,7 @@ pub struct ErrorPage {
     pub total_count: i64,
     pub total_pages: usize,
     pub snapshot_seq: i64,
+    pub snapshot_change_seq: i64,
     pub history_generation: i64,
     pub retained_from_seq: i64,
     pub has_next: bool,
@@ -746,6 +756,7 @@ pub struct DimensionPageQuery {
     pub sort: DimensionSort,
     pub order: SortOrder,
     pub snapshot_seq: Option<i64>,
+    pub snapshot_change_seq: Option<i64>,
     pub history_generation: Option<i64>,
     pub filter: RuntimeFilter,
 }
@@ -761,6 +772,7 @@ impl Default for DimensionPageQuery {
             sort: DimensionSort::LastSeen,
             order: SortOrder::Desc,
             snapshot_seq: None,
+            snapshot_change_seq: None,
             history_generation: None,
             filter: RuntimeFilter::default(),
         }
@@ -823,6 +835,7 @@ pub struct DimensionPage {
     pub total_count: i64,
     pub total_pages: usize,
     pub snapshot_seq: i64,
+    pub snapshot_change_seq: i64,
     pub history_generation: i64,
     pub retained_from_seq: i64,
     pub has_next: bool,
@@ -930,6 +943,7 @@ pub struct ExportQuery {
     pub privacy: ExportPrivacy,
     pub confirm_stored: bool,
     pub snapshot_seq: Option<i64>,
+    pub snapshot_change_seq: Option<i64>,
     pub history_generation: Option<i64>,
     pub filter: RuntimeFilter,
 }
@@ -945,6 +959,7 @@ pub struct ExportEstimate {
     pub row_count: i64,
     pub estimated_bytes: u64,
     pub snapshot_seq: i64,
+    pub snapshot_change_seq: i64,
     pub history_generation: i64,
     pub retained_from_seq: i64,
 }
@@ -955,6 +970,7 @@ pub struct ExportManifest {
     pub row_count: i64,
     pub bytes_written: u64,
     pub snapshot_seq: i64,
+    pub snapshot_change_seq: i64,
     pub history_generation: i64,
     pub privacy: ExportPrivacy,
 }
@@ -1643,6 +1659,11 @@ impl SqlFilter {
         self.values.push(SqlValue::Integer(value));
     }
 
+    fn completed_snapshot(&mut self, snapshot: &HistorySnapshot) {
+        self.le_i64("seq", snapshot.snapshot_seq);
+        self.le_i64("completed_change_seq", snapshot.snapshot_change_seq);
+    }
+
     fn where_sql(&self) -> String {
         if self.clauses.is_empty() {
             String::new()
@@ -1693,17 +1714,17 @@ fn append_runtime_filter(builder: &mut SqlFilter, filter: &RuntimeFilter) {
     builder.le_real("timestamp", filter.to);
 }
 
-fn analytics_filter_builder(filter: &RuntimeFilter, snapshot_seq: i64) -> SqlFilter {
+fn analytics_filter_builder(filter: &RuntimeFilter, snapshot: &HistorySnapshot) -> SqlFilter {
     let mut builder = SqlFilter::default();
     builder.raw("is_in_flight = 0");
     builder.raw(format!("projection_version = {PROJECTION_VERSION}"));
-    builder.le_i64("seq", snapshot_seq);
+    builder.completed_snapshot(snapshot);
     append_runtime_filter(&mut builder, filter);
     builder
 }
 
-fn analytics_client_builder(filter: &RuntimeFilter, snapshot_seq: i64) -> SqlFilter {
-    let mut builder = analytics_filter_builder(filter, snapshot_seq);
+fn analytics_client_builder(filter: &RuntimeFilter, snapshot: &HistorySnapshot) -> SqlFilter {
+    let mut builder = analytics_filter_builder(filter, snapshot);
     builder.raw("kind = 'client'");
     builder
 }
@@ -1712,11 +1733,11 @@ fn analytics_client_builder(filter: &RuntimeFilter, snapshot_seq: i64) -> SqlFil
 /// filters (client/project/session) select a request first; all upstream
 /// attempts belonging to those requests are then included so failover counts
 /// and endpoint attribution remain truthful.
-fn analytics_upstream_builder(filter: &RuntimeFilter, snapshot_seq: i64) -> SqlFilter {
+fn analytics_upstream_builder(filter: &RuntimeFilter, snapshot: &HistorySnapshot) -> SqlFilter {
     let mut builder = SqlFilter::default();
     builder.raw("is_in_flight = 0");
     builder.raw(format!("projection_version = {PROJECTION_VERSION}"));
-    builder.le_i64("seq", snapshot_seq);
+    builder.completed_snapshot(snapshot);
     builder.eq_text("kind", filter.kind.as_deref());
     builder.eq_text("outcome", filter.outcome.as_deref());
     builder.eq_text("request_purpose", filter.request_purpose.as_deref());
@@ -1744,7 +1765,7 @@ fn analytics_upstream_builder(filter: &RuntimeFilter, snapshot_seq: i64) -> SqlF
     if has_client_selection {
         let mut client_filter = filter.clone();
         client_filter.kind = None;
-        let client = analytics_client_builder(&client_filter, snapshot_seq);
+        let client = analytics_client_builder(&client_filter, snapshot);
         builder.raw(format!(
             "request_id IN (SELECT request_id FROM runtime_events{} )",
             client.where_sql()
@@ -1949,6 +1970,7 @@ fn require_projection(transaction: &Transaction<'_>) -> QueryResult<()> {
 fn history_snapshot(
     transaction: &Transaction<'_>,
     requested_seq: Option<i64>,
+    requested_change_seq: Option<i64>,
     requested_generation: Option<i64>,
 ) -> QueryResult<HistorySnapshot> {
     if requested_seq.is_none() && requested_generation.is_some() {
@@ -1962,6 +1984,17 @@ fn history_snapshot(
         ));
     }
     let history_generation = meta_i64(transaction, "history_generation")?.unwrap_or(0);
+    if requested_seq.is_some() != requested_change_seq.is_some() {
+        return Err(RuntimeQueryError::SnapshotExpired {
+            requested: requested_generation.unwrap_or(-1),
+            current: history_generation,
+        });
+    }
+    if requested_change_seq.is_some_and(|value| value < 0) {
+        return Err(RuntimeQueryError::InvalidInput(
+            "snapshotChangeSeq must not be negative".into(),
+        ));
+    }
     if let Some(requested) = requested_generation
         && requested != history_generation
     {
@@ -1975,7 +2008,13 @@ fn history_snapshot(
         crate::database::params![],
         |row| row.get(0),
     )?;
+    let max_change_seq = transaction.query_row(
+        "SELECT COALESCE(MAX(change_seq),0) FROM runtime_events",
+        crate::database::params![],
+        |row| row.get::<_, i64>(0),
+    )?;
     let snapshot_seq = requested_seq.unwrap_or(max_seq);
+    let snapshot_change_seq = requested_change_seq.unwrap_or(max_change_seq);
     let retained_from_seq =
         meta_i64(transaction, "retained_from_seq")?.unwrap_or(i64::from(max_seq != 0));
     if requested_seq.is_some()
@@ -1990,6 +2029,7 @@ fn history_snapshot(
     }
     Ok(HistorySnapshot {
         snapshot_seq,
+        snapshot_change_seq,
         history_generation,
         reset_generation: meta_i64(transaction, "reset_generation")?.unwrap_or(0),
         retained_from_seq,

@@ -18,6 +18,7 @@ fn test_connection() -> Connection {
                    ('user_deleted_events','0'),('user_deleted_requests','0');
                  CREATE TABLE runtime_events(
                    seq INTEGER PRIMARY KEY,change_seq INTEGER NOT NULL UNIQUE,
+                   completed_change_seq INTEGER,
                    event_id TEXT NOT NULL UNIQUE,request_id TEXT,timestamp REAL NOT NULL,
                    kind TEXT NOT NULL,phase TEXT,outcome TEXT,status_code INTEGER NOT NULL,
                    client_variant TEXT,agent_role TEXT,agent_name TEXT,parent_thread_id TEXT,parent_turn_id TEXT,root_turn_id TEXT,
@@ -42,6 +43,9 @@ fn test_connection() -> Connection {
                    request_method TEXT,request_path TEXT,route_intent TEXT,
                    model_group_id TEXT,model_group_name TEXT
                  );
+                 CREATE TRIGGER test_completed_watermark AFTER INSERT ON runtime_events
+                   WHEN NEW.is_in_flight=0 AND NEW.completed_change_seq IS NULL
+                   BEGIN UPDATE runtime_events SET completed_change_seq=NEW.change_seq WHERE seq=NEW.seq; END;
                  CREATE INDEX runtime_events_kind_seq ON runtime_events(kind,seq DESC);
                  CREATE INDEX runtime_events_request_id ON runtime_events(request_id);
                  CREATE INDEX runtime_events_timestamp ON runtime_events(timestamp);
@@ -257,6 +261,7 @@ fn projected_queries_are_bounded_on_100k_rows() {
             to: 6_000_000.0,
             granularity: TrendGranularity::Auto,
             snapshot_seq: None,
+            snapshot_change_seq: None,
             history_generation: None,
             filter: RuntimeFilter::default(),
         },
@@ -466,6 +471,7 @@ fn all_range_trends_coarsen_instead_of_returning_point_limit_error() {
             to: 9_368.0 * 3_600.0,
             granularity: TrendGranularity::Auto,
             snapshot_seq: None,
+            snapshot_change_seq: None,
             history_generation: None,
             filter: RuntimeFilter::default(),
         },
@@ -588,6 +594,7 @@ fn project_id_and_display_alias_are_independent_and_consistent() {
             to: 6_000_000.0,
             granularity: TrendGranularity::Auto,
             snapshot_seq: None,
+            snapshot_change_seq: None,
             history_generation: None,
             filter: filter.clone(),
         },
@@ -641,6 +648,7 @@ fn project_id_and_display_alias_are_independent_and_consistent() {
         privacy: ExportPrivacy::Redacted,
         confirm_stored: false,
         snapshot_seq: None,
+        snapshot_change_seq: None,
         history_generation: None,
         filter,
     };
@@ -688,6 +696,7 @@ fn snapshot_generation_and_retention_are_enforced() {
         &mut connection,
         &EventPageRequest {
             snapshot_seq: Some(10),
+            snapshot_change_seq: Some(10),
             history_generation: Some(2),
             ..EventPageRequest::default()
         },
@@ -711,6 +720,7 @@ fn snapshot_generation_and_retention_are_enforced() {
         &mut connection,
         &EventPageRequest {
             snapshot_seq: Some(40),
+            snapshot_change_seq: Some(40),
             history_generation: Some(3),
             ..EventPageRequest::default()
         },

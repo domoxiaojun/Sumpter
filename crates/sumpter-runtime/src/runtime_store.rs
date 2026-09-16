@@ -91,6 +91,30 @@ pub struct AnalyticsFilter {
 }
 
 impl AnalyticsFilter {
+    pub fn to_runtime_filter(&self) -> crate::runtime_query::RuntimeFilter {
+        let filter = self.normalized();
+        crate::runtime_query::RuntimeFilter {
+            client_kind: filter.client_kind,
+            client_variant: filter.client_variant,
+            agent_role: filter.agent_role,
+            agent_name: filter.agent_name,
+            parent_thread_id: filter.parent_thread_id,
+            parent_turn_id: filter.parent_turn_id,
+            root_turn_id: filter.root_turn_id,
+            endpoint_id: filter.endpoint_id,
+            project_id: filter.project_id,
+            project_name: filter.project,
+            session_id: filter.session_id,
+            from: filter.from,
+            to: filter.to,
+            ..Default::default()
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.to_runtime_filter() != crate::runtime_query::RuntimeFilter::default()
+    }
+
     /// Normalize values at the storage boundary as well as in the HTTP
     /// handler.  Callers other than Admin (tests, Swift bridge, and future
     /// integrations) must get the same matching and reporting semantics.
@@ -384,6 +408,62 @@ pub struct RuntimeCounters {
 }
 
 impl RuntimeCounters {
+    fn event_contribution(event: &RuntimeEvent) -> Self {
+        Self::row_contribution(
+            &event.kind,
+            event.is_in_flight(),
+            option_token(event.outcome).as_deref(),
+            event.failover,
+        )
+    }
+
+    fn row_contribution(
+        kind: &str,
+        in_flight: bool,
+        outcome: Option<&str>,
+        failover: bool,
+    ) -> Self {
+        if in_flight {
+            return Self::default();
+        }
+        Self {
+            client_requests: i64::from(kind == KIND_CLIENT),
+            client_successes: i64::from(kind == KIND_CLIENT && outcome == Some("succeeded")),
+            client_failures: i64::from(kind == KIND_CLIENT && outcome == Some("failed")),
+            upstream_attempts: i64::from(kind == KIND_UPSTREAM),
+            upstream_successes: i64::from(kind == KIND_UPSTREAM && outcome == Some("succeeded")),
+            upstream_failures: i64::from(kind == KIND_UPSTREAM && outcome == Some("failed")),
+            failovers: i64::from(kind == KIND_CLIENT && failover),
+        }
+    }
+
+    fn adjust(&mut self, previous: Self, next: Self) {
+        macro_rules! adjust {
+            ($($field:ident),+) => { $(
+                self.$field = self.$field.saturating_sub(previous.$field).saturating_add(next.$field);
+            )+ };
+        }
+        adjust!(
+            client_requests,
+            client_successes,
+            client_failures,
+            upstream_attempts,
+            upstream_successes,
+            upstream_failures,
+            failovers
+        );
+    }
+
+    pub fn apply_to_snapshot(&self, snapshot: &mut RuntimeSnapshot) {
+        snapshot.client_requests = self.client_requests;
+        snapshot.client_successes = self.client_successes;
+        snapshot.client_failures = self.client_failures;
+        snapshot.upstream_attempts = self.upstream_attempts;
+        snapshot.upstream_successes = self.upstream_successes;
+        snapshot.upstream_failures = self.upstream_failures;
+        snapshot.failovers = self.failovers;
+    }
+
     pub fn from_snapshot(snapshot: &RuntimeSnapshot) -> Self {
         Self {
             client_requests: snapshot.client_requests,
@@ -681,7 +761,6 @@ struct WriteMessage {
     seq: i64,
     change_seq: i64,
     event: RuntimeEvent,
-    counters: RuntimeCounters,
     bytes: usize,
 }
 
@@ -706,6 +785,12 @@ impl PendingBatch {
             .messages
             .insert(message.event.id.clone(), message.clone())
         {
+            let mut state = inner.state.lock().unwrap();
+            if let Some(delta) = state.pending_counter_deltas.remove(&previous.change_seq) {
+                if let Some(current) = state.pending_counter_deltas.get_mut(&message.change_seq) {
+                    current.adjust(RuntimeCounters::default(), delta);
+                }
+            }
             self.bytes = self.bytes.saturating_sub(previous.bytes);
             inner.pending_events.fetch_sub(1, Ordering::AcqRel);
             inner
@@ -835,6 +920,8 @@ struct StoreState {
     reset_generation: i64,
     history_generation: i64,
     counters: RuntimeCounters,
+    source_counters: RuntimeCounters,
+    pending_counter_deltas: BTreeMap<i64, RuntimeCounters>,
     active_sequences: HashMap<String, i64>,
     recent_changes: VecDeque<RuntimeChange>,
     latest_event: Option<RuntimeEvent>,
@@ -926,6 +1013,8 @@ use maintenance::*;
 use schema::*;
 use worker::*;
 
+#[cfg(test)]
+mod regression_tests;
 #[cfg(test)]
 mod tests;
 

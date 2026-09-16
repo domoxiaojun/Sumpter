@@ -123,6 +123,15 @@ pub(super) fn delete_session_database(
         history_generation,
     )?;
     transaction.commit()?;
+    {
+        let mut state = inner.state.lock().unwrap();
+        state
+            .active_sequences
+            .retain(|event_id, _| !delete_ids.contains(event_id));
+        state
+            .recent_changes
+            .retain(|change| !delete_ids.contains(&change.event.id));
+    }
     refresh_cached_storage(inner, connection, true)?;
     Ok(SessionMutation {
         reset_generation: generation,

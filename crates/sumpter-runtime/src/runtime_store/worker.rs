@@ -93,7 +93,7 @@ pub(super) fn normalize_startup(
         let payload = serde_json::to_string(&event)
             .map_err(|error| crate::database::Error::Conversion(Box::new(error)))?;
         transaction.execute(
-            "UPDATE runtime_events SET change_seq=?2,is_in_flight=0,phase='completed',
+            "UPDATE runtime_events SET change_seq=?2,completed_change_seq=COALESCE(completed_change_seq,?2),is_in_flight=0,phase='completed',
              outcome=?3,failure_kind=?4,payload_json=?5,updated_at=?6 WHERE event_id=?1",
             params![
                 event_id,
@@ -332,6 +332,8 @@ pub(super) fn load_state(connection: &Connection) -> crate::database::Result<Sto
         reset_generation,
         history_generation,
         counters,
+        source_counters: counters,
+        pending_counter_deltas: Default::default(),
         active_sequences: HashMap::new(),
         recent_changes: VecDeque::new(),
         latest_event,
@@ -646,21 +648,26 @@ pub(super) fn write_batch(
     }
     let transaction = connection.transaction()?;
     let mut retained_event_count = meta_i64(&transaction, "retained_event_count")?.unwrap_or(0);
+    let mut counters = super::models::load_counters(&transaction)?;
     for message in batch {
         let previous = transaction
             .query_row(
-                "SELECT kind,is_in_flight,timestamp FROM runtime_events WHERE event_id=?1",
+                "SELECT kind,is_in_flight,timestamp,outcome,COALESCE(failover,0),completed_change_seq
+                 FROM runtime_events WHERE event_id=?1",
                 params![message.event.id],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, i64>(1)?,
                         row.get::<_, f64>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, bool>(4)?,
+                        row.get::<_, Option<i64>>(5)?,
                     ))
                 },
             )
             .optional()?;
-        if let Some((kind, is_in_flight, timestamp)) = previous.as_ref()
+        if let Some((kind, is_in_flight, timestamp, _, _, _)) = previous.as_ref()
             && kind == KIND_CLIENT
             && *is_in_flight == 0
         {
@@ -676,6 +683,25 @@ pub(super) fn write_batch(
         let mut model = projection.active_model();
         model.seq = Set(message.seq);
         model.change_seq = Set(message.change_seq);
+        model.completed_change_seq = Set(previous
+            .as_ref()
+            .and_then(|row| row.5)
+            .or_else(|| (!message.event.is_in_flight()).then_some(message.change_seq)));
+        let previous_contribution = previous.as_ref().map_or_else(
+            super::RuntimeCounters::default,
+            |(kind, in_flight, _, outcome, failover, _)| {
+                super::RuntimeCounters::row_contribution(
+                    kind,
+                    *in_flight != 0,
+                    outcome.as_deref(),
+                    *failover,
+                )
+            },
+        );
+        counters.adjust(
+            previous_contribution,
+            super::RuntimeCounters::event_contribution(&message.event),
+        );
         model.event_id = Set(message.event.id.clone());
         model.request_id = Set(message.event.request_id.clone());
         model.timestamp = Set(message.event.timestamp);
@@ -710,11 +736,7 @@ pub(super) fn write_batch(
             retained_event_count = retained_event_count.saturating_add(1);
         }
     }
-    let latest = batch
-        .iter()
-        .max_by_key(|message| message.change_seq)
-        .expect("non-empty batch");
-    super::models::save_counters(&transaction, &latest.counters)?;
+    super::models::save_counters(&transaction, &counters)?;
     let max_seq = batch.iter().map(|message| message.seq).max().unwrap_or(0);
     let max_change_seq = batch
         .iter()

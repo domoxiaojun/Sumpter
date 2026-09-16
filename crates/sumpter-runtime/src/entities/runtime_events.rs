@@ -8,6 +8,8 @@ pub struct Model {
     pub seq: i64,
     #[sea_orm(unique, column_type = "Integer")]
     pub change_seq: i64,
+    #[sea_orm(column_type = "Integer")]
+    pub completed_change_seq: Option<i64>,
     #[sea_orm(unique)]
     pub event_id: String,
     pub request_id: Option<String>,

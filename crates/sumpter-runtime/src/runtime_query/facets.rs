@@ -24,12 +24,13 @@ pub fn facets_on(
     let filters = filter.normalized()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
     require_projection(&transaction)?;
-    let snapshot = history_snapshot(&transaction, None, None)?;
-    let facets = analytics_facets_for_filter(&transaction, &filters, snapshot.snapshot_seq)?;
+    let snapshot = history_snapshot(&transaction, None, None, None)?;
+    let facets = analytics_facets_for_filter(&transaction, &filters, &snapshot)?;
     transaction.commit()?;
     Ok(RuntimeFacetSnapshot {
         api_version: API_VERSION,
         snapshot_seq: snapshot.snapshot_seq,
+        snapshot_change_seq: snapshot.snapshot_change_seq,
         history_generation: snapshot.history_generation,
         retained_from_seq: snapshot.retained_from_seq,
         facets,
@@ -39,7 +40,7 @@ pub fn facets_on(
 pub(super) fn analytics_facets_for_filter(
     transaction: &Transaction<'_>,
     filters: &RuntimeFilter,
-    snapshot_seq: i64,
+    snapshot: &super::HistorySnapshot,
 ) -> QueryResult<AnalyticsFacets> {
     // A facet ignores its own active filter while retaining every other
     // filter. This prevents a selected value from making the next picker
@@ -85,7 +86,7 @@ pub(super) fn analytics_facets_for_filter(
     let mut base = SqlFilter::default();
     base.raw("is_in_flight = 0");
     base.raw(format!("projection_version = {PROJECTION_VERSION}"));
-    base.le_i64("seq", snapshot_seq);
+    base.completed_snapshot(snapshot);
     if filters.kind.as_deref().is_some_and(|kind| kind != "client") {
         // Preserve the legacy empty-facet behavior for an upstream-only
         // query, including the selected-value placeholders added below.

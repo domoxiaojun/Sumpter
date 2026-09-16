@@ -24,13 +24,14 @@ pub fn error_groups_on(
     let snapshot = history_snapshot(
         &transaction,
         request.snapshot_seq,
+        request.snapshot_change_seq,
         request.history_generation,
     )?;
     let mut builder = SqlFilter::default();
     builder.raw("is_in_flight = 0");
     builder.raw(format!("projection_version = {PROJECTION_VERSION}"));
     builder.raw("outcome = 'failed'");
-    builder.le_i64("seq", snapshot.snapshot_seq);
+    builder.completed_snapshot(&snapshot);
     append_runtime_filter(&mut builder, &filters);
     let where_sql = builder.where_sql();
     let group_columns = "failure_kind,failure_phase,endpoint_id,endpoint_name,\
@@ -53,7 +54,10 @@ pub fn error_groups_on(
         .saturating_sub(1)
         .checked_mul(request.page_size)
         .ok_or_else(|| RuntimeQueryError::InvalidInput("page offset is too large".into()))?;
-    let mut values = vec![SqlValue::Integer(snapshot.snapshot_seq)];
+    let mut values = vec![
+        SqlValue::Integer(snapshot.snapshot_seq),
+        SqlValue::Integer(snapshot.snapshot_change_seq),
+    ];
     values.extend(builder.values);
     values.push(SqlValue::Integer(request.page_size as i64));
     values.push(SqlValue::Integer(offset.min(i64::MAX as usize) as i64));
@@ -61,7 +65,7 @@ pub fn error_groups_on(
         "WITH recovered_requests AS (\
              SELECT DISTINCT request_id FROM runtime_events \
              WHERE request_id IS NOT NULL AND kind='client' AND outcome='succeeded' \
-               AND failover=1 AND is_in_flight=0 AND seq<=?\
+               AND failover=1 AND is_in_flight=0 AND seq<=? AND completed_change_seq<=?\
          )\
          SELECT failure_kind,failure_phase,endpoint_id,endpoint_name,effective_model,\
                 upstream_status_code,COUNT(*) AS occurrences,\
@@ -106,6 +110,7 @@ pub fn error_groups_on(
         total_count,
         total_pages,
         snapshot_seq: snapshot.snapshot_seq,
+        snapshot_change_seq: snapshot.snapshot_change_seq,
         history_generation: snapshot.history_generation,
         retained_from_seq: snapshot.retained_from_seq,
         has_next: request.page < total_pages,

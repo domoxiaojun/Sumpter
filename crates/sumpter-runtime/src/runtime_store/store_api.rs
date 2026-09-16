@@ -393,6 +393,9 @@ impl RuntimeStore {
             .len();
         let mut state = self.inner.state.lock().unwrap();
         let previous_counters = state.counters;
+        let mut counter_delta = RuntimeCounters::default();
+        counter_delta.adjust(state.source_counters, counters);
+        state.source_counters = counters;
         let previous_latest_event = state.latest_event.clone();
         let previous_active_sequence = state.active_sequences.get(&event.id).copied();
         let replacing_active = state.active_sequences.contains_key(&event.id);
@@ -405,7 +408,14 @@ impl RuntimeStore {
             state.last_error = Some("runtime_storage_backpressure".into());
             return Err("runtime_storage_backpressure".into());
         }
-        let seq = if let Some(seq) = state.active_sequences.get(&event.id).copied() {
+        let seq = if let Some(seq) = state.active_sequences.get(&event.id).copied().or_else(|| {
+            state
+                .recent_changes
+                .iter()
+                .rev()
+                .find(|change| change.event.id == event.id)
+                .map(|change| change.seq)
+        }) {
             if !event.is_in_flight() {
                 state.active_sequences.remove(&event.id);
             }
@@ -420,7 +430,12 @@ impl RuntimeStore {
         };
         let change_seq = state.next_change_seq;
         state.next_change_seq += 1;
-        state.counters = counters;
+        state
+            .counters
+            .adjust(RuntimeCounters::default(), counter_delta);
+        state
+            .pending_counter_deltas
+            .insert(change_seq, counter_delta);
         state.latest_event = Some(event.clone());
         // Admission and reservation share the state lock. Without reserving
         // before releasing it, concurrent request threads could all pass the
@@ -433,7 +448,6 @@ impl RuntimeStore {
             seq,
             change_seq,
             event: event.clone(),
-            counters,
             bytes: payload_size,
         };
         if let Err(error) = self.inner.sender.try_send(Command::Write(message)) {
@@ -442,6 +456,7 @@ impl RuntimeStore {
                 .pending_bytes
                 .fetch_sub(payload_size, Ordering::AcqRel);
             state.counters = previous_counters;
+            state.pending_counter_deltas.remove(&change_seq);
             state.latest_event = previous_latest_event;
             match previous_active_sequence {
                 Some(previous) => {
@@ -525,6 +540,8 @@ impl RuntimeStore {
         let generation = receiver.recv().map_err(|e| e.to_string())??;
         let mut state = self.inner.state.lock().unwrap();
         state.counters = RuntimeCounters::default();
+        state.source_counters = RuntimeCounters::default();
+        state.pending_counter_deltas.clear();
         state.latest_event = None;
         state.reset_generation = generation;
         state.active_sequences.clear();
@@ -548,6 +565,8 @@ impl RuntimeStore {
         let generation = receiver.recv().map_err(|e| e.to_string())??;
         let mut state = self.inner.state.lock().unwrap();
         state.counters = RuntimeCounters::default();
+        state.source_counters = RuntimeCounters::default();
+        state.pending_counter_deltas.clear();
         state.latest_event = None;
         state.reset_generation = generation;
         state.history_generation = state.history_generation.saturating_add(1);
@@ -585,9 +604,9 @@ impl RuntimeStore {
             load_state(&read_connection(&self.inner.path)?).map_err(|error| error.to_string())?;
         let mut state = self.inner.state.lock().unwrap();
         state.counters = refreshed.counters;
+        state.source_counters = refreshed.counters;
         state.latest_event = refreshed.latest_event;
         state.history_generation = mutation.history_generation;
-        state.active_sequences.clear();
         state.recent_changes.clear();
         state.last_commit_at = Some(now());
         state.last_error = None;
@@ -627,9 +646,9 @@ impl RuntimeStore {
             load_state(&read_connection(&self.inner.path)?).map_err(|error| error.to_string())?;
         let mut state = self.inner.state.lock().unwrap();
         state.counters = refreshed.counters;
+        state.source_counters = refreshed.counters;
         state.latest_event = refreshed.latest_event;
         state.reset_generation = mutation.reset_generation;
-        state.active_sequences.clear();
         state.recent_changes.clear();
         state.last_commit_at = Some(now());
         state.last_error = None;
@@ -710,6 +729,10 @@ impl RuntimeStore {
             return Err("该会话存在与其他会话共享的粘性归属，未执行清除".into());
         }
         Ok(keys.into_iter().map(|(key, _)| key).collect())
+    }
+
+    pub fn counters(&self) -> RuntimeCounters {
+        self.inner.state.lock().unwrap().counters
     }
 
     pub fn summary(&self) -> RuntimeSummary {
@@ -999,23 +1022,7 @@ impl RuntimeStore {
         range: &str,
         filter: &AnalyticsFilter,
     ) -> Result<Value, String> {
-        let filter = filter.normalized();
-        let query_filter = crate::runtime_query::RuntimeFilter {
-            client_kind: filter.client_kind,
-            client_variant: filter.client_variant,
-            agent_role: filter.agent_role,
-            agent_name: filter.agent_name,
-            parent_thread_id: filter.parent_thread_id,
-            parent_turn_id: filter.parent_turn_id,
-            root_turn_id: filter.root_turn_id,
-            endpoint_id: filter.endpoint_id,
-            project_id: filter.project_id,
-            project_name: filter.project,
-            session_id: filter.session_id,
-            from: filter.from,
-            to: filter.to,
-            ..crate::runtime_query::RuntimeFilter::default()
-        };
+        let query_filter = filter.to_runtime_filter();
         let summary = crate::runtime_query::analytics(&self.inner.path, range, &query_filter)
             .map_err(|error| error.to_string())?;
         serde_json::to_value(summary).map_err(|error| error.to_string())
