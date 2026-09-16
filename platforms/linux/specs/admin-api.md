@@ -75,6 +75,8 @@ GET    /admin/api/runtime/export/estimate        估算导出大小
 
 带时间范围的查询接受 `today`、`1h`、`24h`、`7d`、`30d`、`all`，也可提供 `from` / `to`。筛选条件按 AND 组合。事件正文、Authorization、Cookie、API Key 和完整绝对路径不属于普通统计响应；项目和 workspace 使用清洗后的投影。
 
+`GET /runtime/events?view=page` 使用 `page` / `pageSize` 返回已完成事件页，进行中事件由实时流单独展示。首次查询不传快照 token；后续页及关联趋势、维度、错误、导出查询同时回传响应中的 `snapshotSeq`、`snapshotChangeSeq`、`historyGeneration`。`snapshotChangeSeq` 固定首次完成水位，防止并发请求后来完成使分页重漏；旧 token 缺少该字段时返回快照失效，客户端应重新获取首页而非降级到旧游标接口。
+
 `runtime.sqlite3` 是唯一运行统计存储。`maxAgeDays` 与 `storageLimitBytes` 任一达到即轮换已完成请求组，进行中的请求组受保护；两者都为 null 时不自动删除。`reset`、会话删除和 `recreate` 的删除范围不同，调用方必须向用户明确说明。
 
 ## 诊断捕获
@@ -87,7 +89,7 @@ PUT    /admin/api/diagnostic-capture       {"enabled":true,"maxBytes":...}
 DELETE /admin/api/diagnostic-capture
 ```
 
-索引接口只返回请求摘要；详情和导出可能包含未脱敏 Header、Body、上游响应和 Chunk。捕获默认关闭，快照保存在配置目录并使用 0600。分享前必须自行脱敏。
+索引接口只返回请求摘要；详情和原始导出可能包含未脱敏 Header、Body、上游响应和 Chunk。捕获默认关闭，快照保存在配置目录并使用 0600。导出使用 `privacy=redacted` 时，current/selected/all 范围都会清除已识别的凭据字段与 URL/path 查询凭据，包括 Gemini `key`。这是规则脱敏，不保证识别任意正文中的机密，分享前仍须检查；`privacy=raw` 必须显式确认。
 
 ## 平台约束
 

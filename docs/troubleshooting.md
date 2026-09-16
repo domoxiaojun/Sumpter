@@ -35,6 +35,12 @@ Linux systemd 查看 `journalctl`；Compose 查看 `docker compose logs`。确�
 
 入口必须启用且有 mapping；模型组必须启用该模型并绑定入口；绑定范围不能是空数组。入口「获取模型」成功只是目录提示，不会替你建立 mapping。精确模型名、通配符和 `upstreamModel` 逐一核对。
 
+### Codex 列表里没有 CPA 的 Gemini 模型
+
+先在对应入口重新执行「获取模型」，刷新旧缓存。目录探测区分 OpenAI 与 Anthropic 身份，并合并有效结果；旧版本探测的 Anthropic 头可能使 CPA 返回经过改名的 Claude 专用目录，不能据此认定 Gemini 不可用。
+
+刷新后检查 Gemini 原始模型 ID 是否在入口 mapping、已启用模型组及绑定范围内。Codex 的 `/v1/models?client_version=...` 只列配置实际开放的模型，不会自动开放整个上游目录。列表可见后仍需发送一条 Responses 请求验证上游能力；不要把 CPA 私有别名手工反转或硬编码成原始 ID。显式自定义 UA 会保留，若该 UA 触发上游专用目录，请核对入口 UA 设置。
+
 ### 返回上游 401 / 403 / 404 / 429 / 5xx
 
 在「运行」打开请求详情，区分最终客户端结果和中途上游尝试。确认对应入口的 API Key、Base URL、协议和上游实际路径。Sumpter 尽量透传最终上游状态；不要只凭某一次 failover 尝试判断。

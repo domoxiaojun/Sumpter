@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+### 修复
+
+- Codex 现在能看到 CPA 等网关上的 Gemini 模型：「获取模型」按协议身份探测并合并目录，不再因 Anthropic 头拿到改名的 Claude 专用列表；目录解析兼容 Codex `slug` 与 Gemini `name`。
+- 协议转换不再静默丢字段：Chat/Responses 的 JSON Schema 约束、工具结果中的图片、Responses 的 `previous_response_id` 在目标无法表达时明确拒绝；Gemini 流式文本按增量拼接，工具调用结束原因流式与非流式一致，`tool_choice` 映射到 `toolConfig`。
+- WebSocket 转发剥离 `x-goog-api-key` 与全部 `x-sumpter-*` 入站头；会话请求非 POST 方法返回 405；大于 1 MiB 的完整非流式响应不再记为传输中断；标准 Realtime 请求任何失败都不重放。
+- Linux 停止代理时等待并关闭已升级的 WebSocket；诊断脱敏导出覆盖 `path`、Gemini `key` 及 percent 编码查询键。
+- 运行统计：保留策略后计数不再被旧累计值写回；分页快照新增 `snapshotChangeSeq` 固定已完成集合，避免并发请求后来完成造成重复或漏行；统计总览完整传递代理/线程筛选；清理不再改变在途请求序号。
+- WebUI 编辑草稿以打开时的配置版本提交，冲突时保留草稿；事件列表按完成变更水位刷新。
+- macOS sidecar 握手超时可取消��停止先关闭 stdin 不再依赖强杀，孤儿回收校验进程身份，监听重绑失败会回滚配置并重启旧监听。
+- Linux 安装失败时恢复 Admin drop-in；发布流程在串行区检查版本前进，拒绝覆盖已正式发布的同版本。
+
 ## [0.4.16] - 2026-09-16
 
 ### 修复

@@ -105,6 +105,8 @@ jobs:
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - name: Check repository contracts
         run: ./scripts/check.sh docs
+      - name: Test release publication guards
+        run: node --test scripts/tests/release-publication.test.mjs
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -454,6 +456,28 @@ jobs:
           (cd release && sha256sum --check SHA256SUMS)
           (cd macos-release && sha256sum --check macOS-SHA256SUMS)
 
+      - name: Check publication advances inside serialized job
+        id: publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -Eeuo pipefail
+          gh api --paginate --slurp "repos/$GH_REPO/releases?per_page=100" > release-state.json
+          : > current-appcast.xml
+          git ls-remote origin refs/heads/macos-updates > appcast-ref.txt
+          if [[ -s appcast-ref.txt ]]; then
+            git fetch origin refs/heads/macos-updates:refs/remotes/origin/macos-updates
+            git show refs/remotes/origin/macos-updates:macos/appcast.xml > current-appcast.xml
+          fi
+          node scripts/maintenance/check-release-publication.mjs \
+            "$TAG" release-state.json macos-release/appcast.xml current-appcast.xml
+          if [[ "$(jq --arg tag "$TAG" '[.[][] | select(.tag_name == $tag)] | length' release-state.json)" -eq 0 ]]; then
+            gh release create "$TAG" --verify-tag --draft \
+              --notes-file release/CHANGELOG.md --title "$TAG"
+          fi
+
       - name: Prepare runtime image context
         run: |
           set -Eeuo pipefail
@@ -512,13 +536,8 @@ jobs:
           VERSION: ${{ needs.resolve.outputs.version }}
         run: |
           set -Eeuo pipefail
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" \
-              --verify-tag \
-              --draft \
-              --notes-file release/CHANGELOG.md \
-              --title "$TAG"
-          fi
+          [[ "$(gh release view "$TAG" --json isDraft --jq '.isDraft')" == "true" ]] \
+            || { echo "拒绝覆盖已正式发布的 Release: $TAG" >&2; exit 1; }
           assets=(
             release/sumpter-linux-x86_64.tar.gz
             release/sumpter-linux-aarch64.tar.gz

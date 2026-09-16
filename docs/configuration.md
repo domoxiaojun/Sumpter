@@ -78,6 +78,8 @@ Linux Admin 是独立监听，默认 `127.0.0.1:57879`，由 CLI 参数或环境
 
 映射中的 `clientPattern` 支持精确名称和尾部 `*` 通配；精确匹配优先，通配按最长前缀。`upstreamModel` 为空表示同名。`thinking`、`context`、`effort` 和 `failoverTimeoutSeconds` 保存路由策略与兼容信息。协议一致的原生转发不会凭这些字段重写客户端正文或普通协议头，只有明确的模型映射才会替换可安全识别的模型字段；需要转成另一种协议时，这些字段参与目标请求的构造(例如 `effort` 映射到目标协议的推理档位)。
 
+「获取模型」按明确的目录协议身份探测，在总期限和数量上限内合并去重；OpenAI/Responses 默认不附带 Anthropic 目录头。Anthropic 入口另尝试通用目录，避免 CPA 的 Claude 专用别名遮住 Gemini 原始 ID。显式 UA 设置仍被保留。刷新目录不会修改 mapping 或模型组，旧目录缓存需重新获取。
+
 ## modelGroups
 
 模型组把模型范围与入口绑定分开管理。组 `priority` 决定组顺序，绑定 `priority` 决定组内入口顺序。绑定的 `models` 省略或为 null 表示承接入口已添加的全部组内模型，空数组表示不承接，填写数组则进一步收紧范围。

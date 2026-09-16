@@ -16,7 +16,7 @@ Sumpter 的核心边界是“客户端请求进入一个地址，代理按配置
 
 会话请求按协议择路。入口协议与客户端一致时保留客户端方法、路径、查询、请求体和响应流，代理只做鉴权、映射、路由、重试与上游凭据注入；不一致时在该模型的映射范围内选择转换候选，把请求转成目标协议后发出，响应再转回客户端方言。Anthropic Messages、OpenAI Chat Completions、OpenAI Responses 与 Gemini `generateContent`/`streamGenerateContent` 四个会话协议之间两两可转；Compact、countTokens、embedContent、图片生成与 Realtime 等没有会话语义的接口不参与转换，仍按原生路径转发。
 
-转换面按「能力检查 + 构造」同源实现：检查器与转换器共用同一份字段映射，所以不会出现「检查放行、构造时丢字段」。目标协议表达不了的项（服务端工具、provider 文件引用、Responses 没有等价参数的 `stop_sequences` 等）显式拒绝并回报具体字段，不静默降级。
+转换面按「能力检查 + 构造」同源实现。目标协议表达不了的项（服务端工具、provider 文件引用、Responses 没有等价参数的 `stop_sequences` 等）显式拒绝并回报具体字段，不静默降级。Chat/Responses 的 JSON Schema 约束及工具结果中的图片只转换到能保留其语义的目标；Responses 的 `previous_response_id` 等服务端上下文引用不能跨协议还原时拒绝转换，原生请求不受此限制。Gemini SSE 文本按增量拼接，工具调用的流式与非流式结束原因保持一致。
 
 HTTP、SSE 和 WebSocket 在上游响应或真实握手后才算成功。一个客户端请求可包含多次上游尝试，RuntimeEvent 用同一 request ID 关联它们，界面分别展示客户端最终结果和上游尝试链。
 
@@ -30,7 +30,9 @@ HTTP、SSE 和 WebSocket 在上游响应或真实握手后才算成功。一个�
 
 `sumpter-runtime` 使用 bundled SQLite、WAL 和有界后台写入。内存快照让请求热路径不等待每次数据库写入；存储退化和 backpressure 通过 Admin 状态暴露。运行统计、会话删除、清理、重置和重建是不同操作，文档不得混用。
 
-统计只从客户端完成事件的上游 usage 聚合，pending 单独计数；缓存 Token 按协议口径保留原始值。诊断捕获独立于统计，默认关闭，可能包含未脱敏正文和凭据。
+统计只从客户端完成事件的上游 usage 聚合，pending 单独计数；缓存 Token 按协议口径保留原始值。存储计数按事件状态变更维护，并叠加有界待提交增量；保留策略删去的计数不会被旧 Engine 累计快照写回。诊断捕获独立于统计，默认关闭，可能包含未脱敏正文和凭据。
+
+分页快照同时使用 `snapshotSeq`、`snapshotChangeSeq` 与 `historyGeneration`。事件入队 `seq` 不变，首次完成水位固定快照的已完成集合；后续补充 metadata 不改变该水位。缺少完成水位的旧 token 明确失效，由客户端重取快照，不静默产生重复行或漏行。数据库以补列和回填方式兼容现有事件，不重建历史。
 
 请求事件的 `sourceIP` 记录入站 TCP 对端地址，支持 IPv4 / IPv6，并随客户端请求、上游尝试、拒绝和完成事件保存。两端事件列表与详情显示该字段；旧事件或缺少网络上下文时为空。经过反向代理时记录代理 IP，不采信 `Forwarded`、`X-Forwarded-For` 或 `X-Real-IP`。它复用事件 JSON 持久化，无需升级数据库 schema。
 

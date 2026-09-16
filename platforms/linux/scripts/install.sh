@@ -17,6 +17,11 @@ ADMIN_PASSWORD_FILE_CLI=""
 TRANSACTION_ACTIVE=0
 PROGRAM_SWAPPED=0
 UNIT_SWAPPED=0
+ADMIN_DROPIN_SWAPPED=0
+HAD_ADMIN_DROPIN=0
+HAD_ADMIN_DROPIN_DIR=0
+ADMIN_DROPIN_BACKUP=""
+ADMIN_DROPIN_STAGE=""
 HAD_INSTALL=0
 HAD_UNIT=0
 WAS_ACTIVE=0
@@ -393,7 +398,21 @@ apply_admin_listen_unit_override() {
         write_password_file="$ADMIN_DROPIN_PASSWORD_FILE"
     fi
 
+    if [[ -e "$UNIT_DROPIN_DIR" || -L "$UNIT_DROPIN_DIR" ]]; then
+        [[ -d "$UNIT_DROPIN_DIR" && ! -L "$UNIT_DROPIN_DIR" ]] \
+            || die "Admin drop-in 目录必须是非链接目录:$UNIT_DROPIN_DIR"
+        HAD_ADMIN_DROPIN_DIR=1
+    fi
+    if [[ -e "$UNIT_DROPIN_FILE" || -L "$UNIT_DROPIN_FILE" ]]; then
+        [[ -f "$UNIT_DROPIN_FILE" && ! -L "$UNIT_DROPIN_FILE" ]] \
+            || die "Admin drop-in 必须是非链接普通文件:$UNIT_DROPIN_FILE"
+        ADMIN_DROPIN_BACKUP="$(mktemp "$UNIT_DIR/.sumpter.admin-backup.XXXXXX")"
+        cp -p -- "$UNIT_DROPIN_FILE" "$ADMIN_DROPIN_BACKUP"
+        HAD_ADMIN_DROPIN=1
+    fi
+    ADMIN_DROPIN_SWAPPED=1
     ensure_directory "$UNIT_DROPIN_DIR" 0755
+    ADMIN_DROPIN_STAGE="$(mktemp "$UNIT_DROPIN_DIR/.admin-listen.XXXXXX")"
     {
         echo "# Managed by sumpter install.sh. Re-run install with --admin-host/--admin-port/--admin-password-file to update."
         echo "[Service]"
@@ -406,8 +425,10 @@ apply_admin_listen_unit_override() {
         if [[ -n "$write_password_file" ]]; then
             printf 'Environment=SUMPTER_ADMIN_PASSWORD_FILE=%s\n' "$write_password_file"
         fi
-    } >"$UNIT_DROPIN_FILE"
-    chmod 0644 "$UNIT_DROPIN_FILE"
+    } >"$ADMIN_DROPIN_STAGE"
+    chmod 0644 "$ADMIN_DROPIN_STAGE"
+    mv -f -- "$ADMIN_DROPIN_STAGE" "$UNIT_DROPIN_FILE"
+    ADMIN_DROPIN_STAGE=""
     note "已写入 Admin 监听覆盖:$UNIT_DROPIN_FILE"
     if [[ -n "$write_host" ]]; then
         note "  SUMPTER_ADMIN_HOST=$write_host"
@@ -688,6 +709,25 @@ rollback() {
         fi
     fi
 
+    if [[ "$ADMIN_DROPIN_SWAPPED" -eq 1 ]]; then
+        if [[ "$HAD_ADMIN_DROPIN" -eq 1 ]]; then
+            if mv -f -- "$ADMIN_DROPIN_BACKUP" "$UNIT_DROPIN_FILE"; then
+                ADMIN_DROPIN_BACKUP=""
+            else
+                rollback_ok=0
+            fi
+        else
+            rm -f -- "$UNIT_DROPIN_FILE" || rollback_ok=0
+        fi
+        if [[ -n "$ADMIN_DROPIN_STAGE" ]]; then
+            rm -f -- "$ADMIN_DROPIN_STAGE" || rollback_ok=0
+            ADMIN_DROPIN_STAGE=""
+        fi
+        if [[ "$HAD_ADMIN_DROPIN_DIR" -eq 0 && -d "$UNIT_DROPIN_DIR" ]]; then
+            rmdir -- "$UNIT_DROPIN_DIR" || rollback_ok=0
+        fi
+    fi
+
     run_systemctl daemon-reload >/dev/null 2>&1 || rollback_ok=0
     if [[ "$WAS_ENABLED" -eq 1 ]]; then
         run_systemctl enable "$SERVICE_NAME" >/dev/null 2>&1 || rollback_ok=0
@@ -720,6 +760,16 @@ finish() {
     fi
     if [[ -n "$UNIT_STAGE" && "$UNIT_STAGE" == "$UNIT_DIR/.sumpter.service."* ]]; then
         rm -f -- "$UNIT_STAGE"
+    fi
+    if [[ -n "$ADMIN_DROPIN_STAGE" ]]; then
+        rm -f -- "$ADMIN_DROPIN_STAGE"
+    fi
+    if [[ -n "$ADMIN_DROPIN_BACKUP" ]]; then
+        if [[ "$status" -eq 0 || "$ADMIN_DROPIN_SWAPPED" -eq 0 ]]; then
+            rm -f -- "$ADMIN_DROPIN_BACKUP"
+        else
+            echo "Admin drop-in 恢复备份保留于:$ADMIN_DROPIN_BACKUP" >&2
+        fi
     fi
     if [[ -n "$DOWNLOAD_DIR" ]]; then
         safe_remove_temp "$DOWNLOAD_DIR" "${TMPDIR:-/tmp}/sumpter-download."

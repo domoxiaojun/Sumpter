@@ -155,6 +155,14 @@ exercise_user_scope() {
     [[ ! -e "$USER_HOME/.config/systemd/user/sumpter.service.d/50-admin-listen.conf" ]]
     CONFIG_SUM="$(hash_file "$USER_HOME/.config/sumpter/config.json")"
     DEFAULT_PASSWORD_SUM="$(hash_file "$USER_HOME/.config/sumpter/admin-password")"
+    touch "$STUB_STATE_DIR/user.fail-start-once"
+    if run_user install.sh --admin-host 0.0.0.0 --admin-port 58113 \
+        --admin-password-file "$ADMIN_PASSWORD_FILE"; then
+        echo "新增 drop-in 后的失败升级应返回非零" >&2
+        exit 1
+    fi
+    [[ ! -e "$USER_HOME/.config/systemd/user/sumpter.service.d" ]]
+    [[ -f "$STUB_STATE_DIR/user.active" && -f "$STUB_STATE_DIR/user.enabled" ]]
 
     # 默认密码文件让自定义监听无需再重复配置密码路径。
     run_user install.sh --admin-host 0.0.0.0
@@ -198,12 +206,14 @@ exercise_user_scope() {
     UNIT_SUM="$(hash_file "$USER_HOME/.config/systemd/user/sumpter.service")"
     reset_package_binary "$FALSE_BIN"
     touch "$STUB_STATE_DIR/user.fail-start-once"
-    if run_user install.sh; then
+    if run_user install.sh --admin-host 127.0.0.2 --admin-port 58111 \
+        --admin-password-file "$USER_HOME/.config/sumpter/admin-password"; then
         echo "user 新版本启动失败时安装器应返回非零" >&2
         exit 1
     fi
     [[ "$(hash_file "$USER_HOME/.local/share/sumpter/sumpterd")" == "$INSTALLED_SUM" ]]
     [[ "$(hash_file "$USER_HOME/.config/systemd/user/sumpter.service")" == "$UNIT_SUM" ]]
+    [[ "$(hash_file "$USER_HOME/.config/systemd/user/sumpter.service.d/50-admin-listen.conf")" == "$DROPIN_SUM" ]]
     [[ -f "$STUB_STATE_DIR/user.active" && -f "$STUB_STATE_DIR/user.enabled" ]]
     [[ "$(hash_file "$USER_HOME/.config/sumpter/config.json")" == "$CONFIG_SUM" ]]
     [[ "$(hash_file "$USER_HOME/.config/sumpter/admin-password")" == "$DEFAULT_PASSWORD_SUM" ]]
@@ -256,14 +266,17 @@ exercise_system_scope() {
 
     SYSTEM_INSTALLED_SUM="$(hash_file "$SYSTEM_ROOT/opt/sumpter/sumpterd")"
     SYSTEM_UNIT_SUM="$(hash_file "$SYSTEM_ROOT/etc/systemd/system/sumpter.service")"
+    SYSTEM_DROPIN_SUM="$(hash_file "$SYSTEM_ROOT/etc/systemd/system/sumpter.service.d/50-admin-listen.conf")"
     reset_package_binary "$FALSE_BIN"
     touch "$STUB_STATE_DIR/system.fail-start-once"
-    if run_system install.sh; then
+    if run_system install.sh --admin-host 127.0.0.2 --admin-port 58112 \
+        --admin-password-file "$SYSTEM_ROOT/var/lib/sumpter/admin-password"; then
         echo "system 新版本启动失败时安装器应返回非零" >&2
         exit 1
     fi
     [[ "$(hash_file "$SYSTEM_ROOT/opt/sumpter/sumpterd")" == "$SYSTEM_INSTALLED_SUM" ]]
     [[ "$(hash_file "$SYSTEM_ROOT/etc/systemd/system/sumpter.service")" == "$SYSTEM_UNIT_SUM" ]]
+    [[ "$(hash_file "$SYSTEM_ROOT/etc/systemd/system/sumpter.service.d/50-admin-listen.conf")" == "$SYSTEM_DROPIN_SUM" ]]
     [[ -f "$STUB_STATE_DIR/system.active" && -f "$STUB_STATE_DIR/system.enabled" ]]
     [[ "$(hash_file "$SYSTEM_ROOT/var/lib/sumpter/config.json")" == "$SYSTEM_CONFIG_SUM" ]]
     [[ "$(hash_file "$SYSTEM_ROOT/var/lib/sumpter/admin-password")" == "$SYSTEM_PASSWORD_SUM" ]]
