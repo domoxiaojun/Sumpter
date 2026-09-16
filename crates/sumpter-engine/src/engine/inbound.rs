@@ -494,6 +494,7 @@ impl Engine {
                         model,
                         stream: gemini_stream_path(path),
                     }),
+                    method,
                     path_and_query,
                     headers,
                     body,
@@ -526,6 +527,7 @@ impl Engine {
                     ClientDialect::Chat,
                     false,
                     None,
+                    method,
                     path_and_query,
                     headers,
                     body,
@@ -538,6 +540,7 @@ impl Engine {
                     ClientDialect::Responses,
                     false,
                     None,
+                    method,
                     path_and_query,
                     headers,
                     body,
@@ -552,6 +555,7 @@ impl Engine {
                     ClientDialect::Responses,
                     true,
                     None,
+                    method,
                     path_and_query,
                     headers,
                     body,
@@ -866,6 +870,7 @@ impl Engine {
         dialect: ClientDialect,
         compact: bool,
         gemini: Option<GeminiInbound>,
+        method: &str,
         path_and_query: &str,
         headers: Vec<(String, String)>,
         body: Body,
@@ -877,6 +882,19 @@ impl Engine {
             ClientDialect::Gemini => ProviderProtocol::Gemini,
         };
         let request_purpose = compact.then_some(RequestPurpose::Compact);
+        if !method.eq_ignore_ascii_case("POST") {
+            self.record_rejected_client_with_metadata(
+                405,
+                "method not allowed for conversation request",
+                None,
+                request_purpose,
+                client_kind,
+                CodexMetadata::from_request(&headers, None),
+                ClientDeclaredMetadata::from_headers(&headers),
+                Some(source_format),
+            );
+            return method_not_allowed_response("POST");
+        }
         let header_codex_metadata = CodexMetadata::from_request(&headers, None);
         if config.listener.has_inbound_auth()
             && !inbound_auth_ok(&headers, &config.listener.auth_token)
@@ -1027,7 +1045,7 @@ impl Engine {
             source_format,
             headers,
             body.clone(),
-            "POST",
+            method,
             path_and_query,
             Some(ClientOut {
                 dialect: Some(dialect),

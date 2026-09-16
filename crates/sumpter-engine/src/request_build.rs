@@ -66,6 +66,55 @@ pub fn probe_user_agents(
     agents
 }
 
+/// 模型目录必须显式区分协议身份，否则 CPA 会把 Gemini ID 改写成 Claude 别名。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelCatalogProbe {
+    pub protocol: ProviderProtocol,
+    pub user_agent: String,
+}
+
+pub fn model_catalog_probes(
+    mode: EndpointProtocolMode,
+    settings: &UserAgentSettings,
+) -> Vec<ModelCatalogProbe> {
+    let protocols = match mode.fixed_protocol() {
+        Some(ProviderProtocol::Anthropic) => {
+            vec![ProviderProtocol::Anthropic, ProviderProtocol::OpenAI]
+        }
+        Some(protocol) => vec![protocol],
+        None => vec![
+            ProviderProtocol::OpenAI,
+            ProviderProtocol::Anthropic,
+            ProviderProtocol::Gemini,
+        ],
+    };
+    protocols
+        .into_iter()
+        .map(|protocol| {
+            let configured = settings.rule(protocol).value.trim();
+            let user_agent = if !configured.is_empty() {
+                configured.to_string()
+            } else if protocol == ProviderProtocol::Anthropic {
+                CLAUDE_CODE_USER_AGENT.to_string()
+            } else {
+                CODEX_USER_AGENT.to_string()
+            };
+            ModelCatalogProbe {
+                protocol,
+                user_agent,
+            }
+        })
+        .collect()
+}
+
+pub fn model_catalog_probe_headers(probe: &ModelCatalogProbe) -> Vec<(&'static str, String)> {
+    let mut headers = provider_probe_headers_with_user_agent("", &probe.user_agent);
+    if probe.protocol != ProviderProtocol::Anthropic {
+        headers.retain(|(name, _)| *name != "anthropic-version");
+    }
+    headers
+}
+
 /// Authentication headers forced by the real data plane and reused by
 /// daemon-originated Provider probes.
 pub fn provider_auth_headers(api_key: &str) -> Vec<(&'static str, String)> {
@@ -143,6 +192,16 @@ const HEADER_BLOCKLIST: [&str; 24] = [
     "accept-encoding",
 ];
 
+/// 入站凭据与私有归因不能跨越 HTTP 或 WebSocket 的上游边界。
+pub fn is_private_inbound_header(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name.starts_with("x-sumpter-")
+        || matches!(
+            name.as_str(),
+            "authorization" | "x-api-key" | "x-goog-api-key"
+        )
+}
+
 pub struct OutboundBuild {
     pub request: OutboundRequest,
     /// 本次请求解析出的 effort 后缀(记账/调试用)。
@@ -215,22 +274,24 @@ fn auth_headers_for_target(
 }
 
 impl PassthroughKind {
-    fn suffix(self) -> &'static str {
+    /// 有标准 OpenAI 路径的操作；`None` 表示按入站路径原样转发的资源面。
+    fn canonical_suffix(self) -> Option<&'static str> {
         match self {
-            Self::Raw => "/",
-            Self::Chat => "/chat/completions",
-            Self::Completions => "/completions",
-            Self::Responses => "/responses",
-            Self::ResponsesCompact => "/responses/compact",
-            Self::ImagesGenerations => "/images/generations",
-            Self::ImagesEdits => "/images/edits",
-            Self::AlphaSearch => "/alpha/search",
-            Self::ClaudeCountTokens => "/messages/count_tokens",
-            Self::Files => "/files",
-            Self::Videos => "/videos",
-            Self::Realtime => "/realtime",
-            Self::Models => "/models",
-            Self::GeminiGenerate | Self::GeminiSession => "/",
+            Self::Chat => Some("/chat/completions"),
+            Self::Completions => Some("/completions"),
+            Self::Responses => Some("/responses"),
+            Self::ResponsesCompact => Some("/responses/compact"),
+            Self::ImagesGenerations => Some("/images/generations"),
+            Self::ImagesEdits => Some("/images/edits"),
+            Self::AlphaSearch => Some("/alpha/search"),
+            Self::ClaudeCountTokens => Some("/messages/count_tokens"),
+            Self::Raw
+            | Self::Files
+            | Self::Videos
+            | Self::Realtime
+            | Self::Models
+            | Self::GeminiGenerate
+            | Self::GeminiSession => None,
         }
     }
 
@@ -331,7 +392,7 @@ pub fn build_outbound(
     let mut headers: Vec<(String, String)> = Vec::new();
     for (name, value) in inbound_headers {
         let lower = name.to_lowercase();
-        if HEADER_BLOCKLIST.contains(&lower.as_str()) {
+        if is_private_inbound_header(&lower) || HEADER_BLOCKLIST.contains(&lower.as_str()) {
             continue;
         }
         set_header(&mut headers, &lower, value);
@@ -358,8 +419,9 @@ pub fn build_outbound(
         headers.clear();
         for (name, value) in inbound_headers {
             let lower = name.to_ascii_lowercase();
-            if HEADER_BLOCKLIST.contains(&lower.as_str())
-                && !matches!(lower.as_str(), "content-type" | "accept-encoding")
+            if is_private_inbound_header(&lower)
+                || (HEADER_BLOCKLIST.contains(&lower.as_str())
+                    && !matches!(lower.as_str(), "content-type" | "accept-encoding"))
             {
                 continue;
             }
@@ -460,6 +522,18 @@ pub fn build_outbound(
                 &request.model,
                 &endpoint.upstream_model,
             )
+        } else if let Some(suffix) = passthrough.kind.canonical_suffix() {
+            // 会话/资源别名（`/backend-api/codex/...`、无 `/v1` 前缀）规范化到
+            // Provider 的标准路径，但入站 query（如 `api-version`）必须原样保留。
+            let query = inbound_path_and_query
+                .split_once('?')
+                .map(|(_, query)| query)
+                .filter(|query| !query.is_empty());
+            let path = openai_suffix_path(&base_path, suffix);
+            match query {
+                Some(query) => format!("{path}?{query}"),
+                None => path,
+            }
         } else {
             openai_resource_path(&base_path, inbound_path_and_query)
         };
@@ -467,20 +541,7 @@ pub fn build_outbound(
             request: OutboundRequest {
                 method: inbound_method.to_string(),
                 base_url: endpoint.base_url.clone(),
-                path_and_query: if matches!(
-                    passthrough.kind,
-                    PassthroughKind::Raw
-                        | PassthroughKind::Files
-                        | PassthroughKind::Videos
-                        | PassthroughKind::Realtime
-                        | PassthroughKind::Models
-                        | PassthroughKind::GeminiGenerate
-                        | PassthroughKind::GeminiSession
-                ) {
-                    path_and_query
-                } else {
-                    openai_suffix_path(&base_path, passthrough.kind.suffix())
-                },
+                path_and_query,
                 headers,
                 // JSON bodies can safely follow feature-rule model rewrites. Multipart
                 // uploads stay byte-for-byte intact so boundaries and binary images are
@@ -1271,6 +1332,95 @@ mod tests {
     }
 
     #[test]
+    fn catalog_probe_identity_does_not_cloak_openai_or_gemini_models() {
+        for mode in [
+            EndpointProtocolMode::OpenAI,
+            EndpointProtocolMode::OpenAIResponses,
+            EndpointProtocolMode::Gemini,
+        ] {
+            let probes = model_catalog_probes(mode, &UserAgentSettings::default());
+            assert_eq!(probes.len(), 1);
+            let headers = model_catalog_probe_headers(&probes[0]);
+            assert!(!headers.iter().any(|(name, _)| *name == "anthropic-version"));
+            assert!(!probes[0].user_agent.starts_with("claude-cli"));
+        }
+        let probes = model_catalog_probes(
+            EndpointProtocolMode::Anthropic,
+            &UserAgentSettings::default(),
+        );
+        assert_eq!(probes.len(), 2);
+        assert!(
+            model_catalog_probe_headers(&probes[0])
+                .iter()
+                .any(|(name, _)| *name == "anthropic-version")
+        );
+        assert!(
+            !model_catalog_probe_headers(&probes[1])
+                .iter()
+                .any(|(name, _)| *name == "anthropic-version")
+        );
+        let mut settings = UserAgentSettings::default();
+        settings.openai.value = "custom-gateway/1".into();
+        assert_eq!(
+            model_catalog_probes(EndpointProtocolMode::OpenAI, &settings)[0].user_agent,
+            "custom-gateway/1"
+        );
+    }
+
+    #[test]
+    fn native_conversation_paths_preserve_alias_query_and_method() {
+        for (kind, path, expected) in [
+            (
+                PassthroughKind::Chat,
+                "/chat/completions?api-version=2025-04-01-preview",
+                "/v1/chat/completions?api-version=2025-04-01-preview",
+            ),
+            (
+                PassthroughKind::Responses,
+                "/backend-api/codex/responses?trace=keep",
+                "/v1/responses?trace=keep",
+            ),
+            (
+                PassthroughKind::ResponsesCompact,
+                "/responses/compact?trace=keep",
+                "/v1/responses/compact?trace=keep",
+            ),
+        ] {
+            let ep = endpoint(
+                ProviderProtocol::OpenAI,
+                ContextMode::Standard,
+                ThinkingMode::Disabled,
+            );
+            let build = build_outbound(
+                &ep,
+                &request("gpt-test"),
+                &[],
+                "PUT",
+                path,
+                "synthetic",
+                RequestPurpose::Standard,
+                Some(PassthroughRequest {
+                    kind,
+                    body: b"{}",
+                    content_type: Some("application/json"),
+                    stream: false,
+                }),
+                None,
+            );
+            assert_eq!(build.request.method, "PUT");
+            assert_eq!(
+                build.request.path_and_query,
+                format!(
+                    "{}{expected}",
+                    base_path_of(&ep.base_url)
+                        .trim_end_matches("/v1")
+                        .trim_end_matches('/')
+                )
+            );
+        }
+    }
+
+    #[test]
     fn provider_probe_headers_share_the_data_plane_fingerprint() {
         let headers = provider_probe_headers("sk-test");
         assert!(headers.contains(&("authorization", "Bearer sk-test".into())));
@@ -1387,6 +1537,44 @@ mod tests {
         }
         // 无关 header 仍照常透传。
         assert_eq!(header(&build, "anthropic-version"), vec!["2023-06-01"]);
+    }
+
+    #[test]
+    fn private_header_prefix_is_removed_from_both_http_paths() {
+        let ep = endpoint(
+            ProviderProtocol::OpenAI,
+            ContextMode::Standard,
+            ThinkingMode::Disabled,
+        );
+        let inbound = vec![
+            (
+                "X-Sumpter-Future-Private".into(),
+                "synthetic-private".into(),
+            ),
+            ("X-Goog-Api-Key".into(), "synthetic-listener".into()),
+            ("x-public-test".into(), "keep".into()),
+        ];
+        for kind in [PassthroughKind::Chat, PassthroughKind::Raw] {
+            let build = build_outbound(
+                &ep,
+                &request("synthetic"),
+                &inbound,
+                "POST",
+                "/v1/chat/completions",
+                "synthetic-provider",
+                RequestPurpose::Standard,
+                Some(PassthroughRequest {
+                    kind,
+                    body: b"{}",
+                    content_type: Some("application/json"),
+                    stream: false,
+                }),
+                None,
+            );
+            assert!(header(&build, "x-sumpter-future-private").is_empty());
+            assert!(header(&build, "x-goog-api-key").is_empty());
+            assert_eq!(header(&build, "x-public-test"), vec!["keep"]);
+        }
     }
 
     #[test]

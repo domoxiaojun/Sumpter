@@ -45,6 +45,37 @@ fn catalog_config() -> AppConfig {
 }
 
 #[test]
+fn codex_catalog_keeps_dynamic_gemini_within_enabled_model_groups() {
+    let config: AppConfig = serde_json::from_value(json!({
+        "schemaVersion":7,
+        "endpoints":[{"id":"cpa","name":"CPA","baseURL":"https://cpa.invalid","protocol":"openai","enabled":true,
+            "catalog":{"models":["gemini-dynamic-review","gemini-excluded"]},
+            "mappings":[{"clientPattern":"gemini-*","upstreamModel":""}]}],
+        "modelGroups":[{"id":"allowed","name":"allowed","enabled":true,"priority":0,
+            "models":["gemini-dynamic-review"],"bindings":[{"endpointID":"cpa","enabled":true,"priority":0}]}]
+    })).unwrap();
+    for version in ["0.143.9", "0.149.1"] {
+        let body = local_models_json(
+            &config,
+            "/v1/models",
+            Some(&format!("client_version={version}")),
+            &[],
+        )
+        .unwrap();
+        let models = body["models"].as_array().unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["slug"], "gemini-dynamic-review");
+        assert_eq!(models[0]["visibility"], "list");
+        assert_eq!(models[0]["prefer_websockets"], false);
+    }
+    let mut disabled = config;
+    disabled.endpoints[0].enabled = false;
+    let body =
+        local_models_json(&disabled, "/v1/models", Some("client_version=0.149.1"), &[]).unwrap();
+    assert!(body["models"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn local_models_catalog_uses_openai_list_shape() {
     let json = local_models_json(&catalog_config(), "/v1/models", None, &[]).expect("catalog");
     assert_eq!(json["object"], "list");

@@ -1987,6 +1987,11 @@ impl Engine {
                         realtime_secret_request_session.clone(),
                     );
                 }
+                // 标准 Realtime 的任何失败都不可重放，包括独立 HTTP 500 重试与
+                // 后备入口；只有已识别的 Codex Live bootstrap 允许有界重试。
+                if realtime_request && !live_bootstrap_request {
+                    break;
+                }
                 // HTTP 500 使用独立的入口内重试次数，不参与 sessionStickyRetries。
                 // 达到次数后默认继续遍历下一个入口；关闭 failoverOn500 时在当前入口终止。
                 let last_was_500 = round_state

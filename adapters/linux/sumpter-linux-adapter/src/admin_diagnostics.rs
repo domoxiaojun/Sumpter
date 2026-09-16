@@ -89,6 +89,27 @@ pub(crate) fn parse_diagnostic_capture_format(
     }
 }
 
+#[cfg(test)]
+#[path = "../../../../tests/contracts/diagnostic_redaction.rs"]
+mod diagnostic_redaction_tests;
+
+#[cfg(test)]
+fn diagnostic_test_state(dir: sumpter_core::config_store::ConfigDir) -> AdminState {
+    let engine = crate::engine::Engine::new(
+        sumpter_core::config::AppConfig::bootstrap().normalized(),
+        Some(dir.clone()),
+        std::sync::Arc::new(crate::outbound::ReqwestTransport::new()),
+    );
+    AdminState::new(
+        engine.clone(),
+        super::ProxySupervisor::new(engine),
+        dir,
+        None,
+        super::AdminListen::default(),
+        super::AdminAuth::password(b"synthetic-test-password").unwrap(),
+    )
+}
+
 pub(crate) fn sensitive_capture_key(key: &str) -> bool {
     let key = key.to_ascii_lowercase().replace(['-', '_'], "");
     [
@@ -136,7 +157,15 @@ pub(crate) fn redact_url_query(raw: &str) -> String {
                 return pair.to_string();
             };
             let (key, value) = pair.split_at(equal);
-            if sensitive_capture_key(key) || key.to_ascii_lowercase().contains("token") {
+            let decoded_key = reqwest::Url::parse(&format!("https://redaction.invalid/?{key}="))
+                .ok()
+                .and_then(|url| url.query_pairs().next().map(|(key, _)| key.into_owned()))
+                .unwrap_or_else(|| key.to_string())
+                .to_ascii_lowercase();
+            if decoded_key == "key"
+                || sensitive_capture_key(&decoded_key)
+                || decoded_key.contains("token")
+            {
                 format!("{key}=[REDACTED]")
             } else {
                 format!("{key}{value}")
@@ -235,7 +264,7 @@ pub(crate) fn redact_capture_value(value: &mut Value) {
                             *child = Value::String(redact_body_text(text));
                         }
                     }
-                    "outboundURL" => {
+                    "outboundURL" | "path" => {
                         if let Some(text) = child.as_str() {
                             *child = Value::String(redact_url_query(text));
                         }
@@ -375,8 +404,11 @@ pub(crate) async fn diagnostic_capture_export(
     let redacted = privacy == "redacted";
     let engine = state.inner.engine.clone();
     if scope == "current" {
-        let bytes = serde_json::to_vec(&engine.diagnostic_capture_index())
-            .unwrap_or_else(|_| b"{}".to_vec());
+        let mut index = engine.diagnostic_capture_index();
+        if redacted {
+            redact_capture_value(&mut index);
+        }
+        let bytes = serde_json::to_vec(&index).unwrap_or_else(|_| b"{}".to_vec());
         let body = if format == DiagnosticCaptureFormat::Jsonl {
             let mut line = bytes;
             line.push(b'\n');

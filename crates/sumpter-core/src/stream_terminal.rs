@@ -110,6 +110,11 @@ impl SseTerminalTracker {
         self.observation_truncated
     }
 
+    /// 非流式正文超出观察容量只代表终态未知，不能推断为上游传输截断。
+    pub fn json_observation_incomplete(&self) -> bool {
+        self.observation_truncated && !self.json_observed && !self.json_pending.is_empty()
+    }
+
     /// Observe a non-stream JSON response. The body is bounded and parsed only
     /// for the protocol's documented usage/terminal summary fields.
     pub fn observe_json(&mut self, data: &[u8]) -> Option<SseTerminal> {

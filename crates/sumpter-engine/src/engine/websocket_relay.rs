@@ -107,6 +107,7 @@ pub(super) async fn relay_native_websocket(
     socket: WebSocket,
     upstream: NativeWebSocket,
     initial_message: Option<WebSocketMessage>,
+    shutdown: tokio_util::sync::CancellationToken,
 ) -> WebSocketRelayMetrics {
     let started = Instant::now();
     let counters = Arc::new(WebSocketRelayCounters::default());
@@ -115,11 +116,15 @@ pub(super) async fn relay_native_websocket(
     if let Some(message) = initial_message {
         counters.observe_first_client_text(&message);
         let bytes = websocket_message_size(&message);
-        if upstream_tx
-            .send(websocket_message_to_tungstenite(message))
-            .await
-            .is_err()
-        {
+        let sent = tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => {
+                counters.record_error("server_shutdown", "server");
+                return counters.snapshot(started);
+            }
+            result = upstream_tx.send(websocket_message_to_tungstenite(message)) => result,
+        };
+        if sent.is_err() {
             counters.record_error("initial_frame_send_failed", "relay_error");
             let _ = downstream_tx.close().await;
             return counters.snapshot(started);
@@ -246,8 +251,15 @@ pub(super) async fn relay_native_websocket(
         let _ = downstream_tx.close().await;
         upstream_cancel.cancel();
     };
-    let (_downstream_result, _upstream_result) =
-        tokio::join!(downstream_to_upstream, upstream_to_downstream,);
+    tokio::select! {
+        biased;
+        _ = shutdown.cancelled() => {
+            // 丢弃两个方向的 future 同时释放四个 split half，即便 send/close 正阻塞
+            // 也不留下后台转发任务；调用方仍能用计数快照完成事件记账。
+            counters.record_error("server_shutdown", "server");
+        }
+        _ = async { tokio::join!(downstream_to_upstream, upstream_to_downstream); } => {}
+    }
     counters.snapshot(started)
 }
 

@@ -16,6 +16,83 @@ use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 
 #[tokio::test]
+async fn shutdown_waits_for_upgraded_websocket_relays_and_closes_both_peers() {
+    use std::time::Duration;
+    for path in [
+        "/v1/responses?model=gpt-4o",
+        "/v1/realtime?model=gpt-realtime",
+    ] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_address = listener.local_addr().unwrap();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let upstream_task = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut peer = accept_async(stream).await.unwrap();
+            let _ = ready_tx.send(());
+            // 服务停止之前不主动发送 close，确保覆盖仍活跃的升级连接。
+            peer.next().await
+        });
+        let engine = Engine::new(
+            config_with_base(&format!("http://{upstream_address}"), "openai-responses"),
+            None,
+            Arc::new(ReplayTransport::new([])),
+        );
+        let (address, handle) = server::serve(engine.clone(), "127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap();
+        let mut client = connect(format!("ws://{address}{path}"), Some("listener-secret")).await;
+        ready_rx.await.unwrap();
+        tokio::time::timeout(Duration::from_secs(3), handle.shutdown())
+            .await
+            .expect("shutdown must wait for relay exit");
+        let client_result = tokio::time::timeout(Duration::from_secs(1), client.next())
+            .await
+            .expect("downstream closed");
+        assert!(!matches!(
+            client_result,
+            Some(Ok(Message::Text(_) | Message::Binary(_)))
+        ));
+        let upstream_result = tokio::time::timeout(Duration::from_secs(1), upstream_task)
+            .await
+            .expect("upstream closed")
+            .unwrap();
+        assert!(!matches!(
+            upstream_result,
+            Some(Ok(Message::Text(_) | Message::Binary(_)))
+        ));
+        assert!(
+            engine
+                .runtime_snapshot()
+                .recent_events
+                .iter()
+                .any(|event| event.kind == "client" && event.outcome.is_some())
+        );
+    }
+}
+
+#[tokio::test]
+async fn shutdown_cancels_websocket_waiting_for_its_first_model_frame() {
+    use std::time::Duration;
+    let engine = Engine::new(config(), None, Arc::new(ReplayTransport::new([])));
+    let (address, handle) = server::serve(engine, "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let mut client = connect(
+        format!("ws://{address}/v1/responses"),
+        Some("listener-secret"),
+    )
+    .await;
+    tokio::time::timeout(Duration::from_secs(3), handle.shutdown())
+        .await
+        .expect("first-frame wait is cancellable");
+    assert!(
+        tokio::time::timeout(Duration::from_secs(1), client.next())
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
 async fn legacy_fixed_ips_do_not_duplicate_live_posts_and_new_captures_omit_ip() {
     use axum::http::{HeaderMap, Method, StatusCode, Uri};
     use bytes::Bytes;

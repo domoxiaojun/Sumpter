@@ -600,10 +600,18 @@ impl Engine {
                         if let Some(terminal) = terminal {
                             st.guard.record_stream_terminal(&terminal);
                             st.guard.complete_from_protocol_terminal(terminal);
-                        } else if st.strict_terminal {
+                        } else if st.strict_terminal
+                            && (st.observe_sse
+                                || !st
+                                    .terminal_tracker
+                                    .as_ref()
+                                    .is_some_and(SseTerminalTracker::json_observation_incomplete))
+                        {
                             st.guard
                                 .complete_from_stream(Some(StreamReadError::MissingTerminal));
                         } else {
+                            // 非流式大正文仅耗尽观察容量；完整 EOF 不伪装成协议终止，
+                            // 也不能被标记为传输截断。cache evidence 保留 truncated。
                             st.guard.complete_from_stream(None);
                         }
                         if !tail.is_empty() {

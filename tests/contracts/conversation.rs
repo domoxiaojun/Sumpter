@@ -251,6 +251,61 @@ async fn translated_directions_use_the_conversion_surface() {
     }
 }
 
+#[tokio::test]
+async fn codex_discovers_and_calls_configured_gemini_models() {
+    for upstream in [Wire::Chat, Wire::Responses, Wire::Gemini] {
+        let mut config = single_wire_config(upstream);
+        config.model_groups = None;
+        config.endpoints[0].mappings[0].client_pattern = "gemini-dynamic-review".into();
+        config.endpoints[0].mappings[0].upstream_model = "gemini-dynamic-review".into();
+        let fake = FakeTransport::new();
+        fake.push(
+            "a.example.com",
+            sse_ok(&[upstream.upstream_stream().as_str()]),
+        );
+        let engine = engine_with(config.normalized(), fake.clone());
+        let (status, models) = call_get(
+            &engine,
+            loopback(),
+            "/v1/models?client_version=0.149.1",
+            vec![],
+        )
+        .await;
+        assert_eq!(status, 200);
+        let catalog: Value = serde_json::from_slice(&models).unwrap();
+        let entry = catalog["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|model| model["slug"] == "gemini-dynamic-review")
+            .expect("Gemini 应在 Codex 目录可见");
+        assert_eq!(entry["visibility"], "list");
+        let (status, body) = call(
+            &engine,
+            loopback(),
+            "/v1/responses",
+            vec![],
+            Bytes::from_static(br#"{"model":"gemini-dynamic-review","input":"hi","stream":true}"#),
+        )
+        .await;
+        assert_eq!(
+            status,
+            200,
+            "{upstream:?}: {}",
+            String::from_utf8_lossy(&body)
+        );
+        assert!(String::from_utf8_lossy(&body).contains("response.completed"));
+        assert_eq!(fake.requests().len(), 1);
+        let expected = match upstream {
+            Wire::Chat => "/v1/chat/completions",
+            Wire::Responses => "/v1/responses",
+            Wire::Gemini => "/v1beta/models/gemini-dynamic-review:streamGenerateContent?alt=sse",
+            Wire::Anthropic => unreachable!(),
+        };
+        assert_eq!(fake.requests()[0].path, expected);
+    }
+}
+
 /// Gemini 的辅助操作没有会话语义,不进转换面:即便入口是别的协议也不得改写成
 /// 会话请求,而是留在原生路径上(或按能力边界拒绝)。
 #[tokio::test]

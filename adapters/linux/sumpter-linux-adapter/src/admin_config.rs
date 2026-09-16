@@ -401,28 +401,28 @@ pub(crate) async fn fetch_provider_models_inner(
         .build()
         .map_err(|error| error.to_string())?;
     let mut errors = Vec::new();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
-    // 鉴权 -> 路径的顺序让同一鉴权有机会快速覆盖
-    // `/v1/models`、`/models` 等候选；每次请求和整个探测均受 deadline 约束，
-    // 避免一个失联入口把完整矩阵拖到分钟级。
-    'probes: for auth in provider_model_auth_sets(key) {
-        for path in model_catalog_paths(&base) {
-            for user_agent in
-                crate::request_build::probe_user_agents(endpoint.protocol, &endpoint.user_agent)
-            {
-                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+    let mut discovered = std::collections::BTreeSet::new();
+    let mut source = None;
+    let probes =
+        crate::request_build::model_catalog_probes(endpoint.protocol, &endpoint.user_agent);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(11_500);
+    // 每种身份独立取一份目录，避免第一份 Claude 别名目录遮住 Gemini 原名。
+    'probes: for (index, probe) in probes.iter().enumerate() {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        let probe_deadline = std::time::Instant::now() + remaining / (probes.len() - index) as u32;
+        for auth in provider_model_auth_sets(key) {
+            for path in model_catalog_paths(&base) {
+                let remaining = probe_deadline.saturating_duration_since(std::time::Instant::now());
                 if remaining.is_zero() {
-                    errors.push("整体超时，已停止尝试".into());
-                    break 'probes;
+                    errors.push("目录身份探测超时，继续其它身份".into());
+                    continue 'probes;
                 }
                 let mut url = base.clone();
                 url.set_path(&path);
                 url.set_query(None);
                 url.set_fragment(None);
                 let mut request = client.get(url.clone());
-                for (header, value) in
-                    crate::request_build::provider_probe_headers_with_user_agent("", &user_agent)
-                {
+                for (header, value) in crate::request_build::model_catalog_probe_headers(probe) {
                     request = request.header(header, value);
                 }
                 for (header, value) in &auth {
@@ -448,7 +448,14 @@ pub(crate) async fn fetch_provider_models_inner(
                                 Ok(value) => {
                                     let models = extract_models(&value);
                                     if !models.is_empty() {
-                                        return Ok((models, url.to_string()));
+                                        source.get_or_insert_with(|| url.to_string());
+                                        for model in models {
+                                            if discovered.len() >= MAX_MODEL_CATALOG_ITEMS {
+                                                break;
+                                            }
+                                            discovered.insert(model);
+                                        }
+                                        continue 'probes;
                                     }
                                     errors.push(format!("{}: 响应中没有模型", url.path()));
                                 }
@@ -463,6 +470,9 @@ pub(crate) async fn fetch_provider_models_inner(
                 }
             }
         }
+    }
+    if let Some(source) = source {
+        return Ok((discovered.into_iter().collect(), source));
     }
     let mut unique = Vec::new();
     for error in errors {
@@ -587,6 +597,10 @@ pub(crate) fn provider_model_auth_sets(key: &str) -> Vec<Vec<(&'static str, Stri
     ]
 }
 
+#[cfg(test)]
+#[path = "../../../../tests/contracts/provider_catalog.rs"]
+mod provider_catalog_contract;
+
 pub(crate) fn extract_models(value: &Value) -> Vec<String> {
     fn visit(value: &Value, models: &mut Vec<String>, depth: usize) {
         if depth > 8 || models.len() >= MAX_MODEL_CATALOG_ITEMS {
@@ -615,7 +629,7 @@ pub(crate) fn extract_models(value: &Value) -> Vec<String> {
             }
         }
         if models.len() == before {
-            for key in ["id", "name", "model", "model_id"] {
+            for key in ["id", "slug", "name", "model", "model_id"] {
                 if let Some(model) = object.get(key).and_then(Value::as_str) {
                     visit(&Value::String(model.to_string()), models, depth + 1);
                     break;

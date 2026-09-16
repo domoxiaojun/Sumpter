@@ -3,6 +3,8 @@
 //! drop 传播取消(见 engine.rs)。
 
 use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use axum::Router;
 use axum::body::Body;
@@ -17,10 +19,45 @@ use tokio_util::sync::CancellationToken;
 
 use crate::engine::{Engine, MAX_BODY_BYTES};
 
+#[derive(Clone)]
+struct WebSocketShutdown {
+    cancellation: CancellationToken,
+    active: Arc<AtomicUsize>,
+    drained: Arc<tokio::sync::Notify>,
+}
+
+impl WebSocketShutdown {
+    fn track(&self) -> WebSocketTaskGuard {
+        self.active.fetch_add(1, Ordering::AcqRel);
+        WebSocketTaskGuard(self.clone())
+    }
+
+    async fn wait(&self) {
+        loop {
+            let notified = self.drained.notified();
+            if self.active.load(Ordering::Acquire) == 0 {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
+
+struct WebSocketTaskGuard(WebSocketShutdown);
+
+impl Drop for WebSocketTaskGuard {
+    fn drop(&mut self) {
+        if self.0.active.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.0.drained.notify_one();
+        }
+    }
+}
+
 /// 同时控制 accept loop 与已接入请求/响应体的服务句柄。
 pub struct ServerHandle {
     shutdown: CancellationToken,
     task: tokio::task::JoinHandle<()>,
+    websockets: WebSocketShutdown,
 }
 
 impl ServerHandle {
@@ -33,6 +70,7 @@ impl ServerHandle {
     pub async fn shutdown(mut self) {
         self.shutdown.cancel();
         let _ = (&mut self.task).await;
+        self.websockets.wait().await;
     }
 }
 
@@ -69,6 +107,13 @@ async fn dispatch(
     if request.method() == Method::GET
         && let Ok(upgrade) = upgrade
     {
+        let lifecycle = request.extensions().get::<WebSocketShutdown>().cloned();
+        // 升级回调在 HTTP 服务任务之外运行，必须在返回 101 之前登记；升级失败
+        // 或回调完成时 guard 都会释放，shutdown 才能可靠等待归零。
+        let websocket_guard = lifecycle.as_ref().map(WebSocketShutdown::track);
+        let websocket_shutdown = lifecycle
+            .map(|state| state.cancellation)
+            .unwrap_or_default();
         let path_and_query = uri
             .path_and_query()
             .map(|value| value.as_str().to_string())
@@ -122,15 +167,28 @@ async fn dispatch(
             };
             let ws_engine = engine.clone();
             return upgrade.on_upgrade(move |socket| async move {
+                let _guard = websocket_guard;
                 ws_engine
-                    .handle_prepared_websocket(socket, remote_ip, prepared)
+                    .handle_prepared_websocket_with_shutdown(
+                        socket,
+                        remote_ip,
+                        prepared,
+                        websocket_shutdown,
+                    )
                     .await;
             });
         }
         let ws_engine = engine.clone();
         return upgrade.on_upgrade(move |socket| async move {
+            let _guard = websocket_guard;
             ws_engine
-                .handle_websocket(socket, remote_ip, path_and_query, pairs)
+                .handle_websocket_with_shutdown(
+                    socket,
+                    remote_ip,
+                    path_and_query,
+                    pairs,
+                    websocket_shutdown,
+                )
                 .await;
         });
     }
@@ -263,7 +321,12 @@ pub async fn bind_listener(
 
 pub fn serve_bound_router(app: Router, listener: tokio::net::TcpListener) -> ServerHandle {
     let shutdown = CancellationToken::new();
-    let request_shutdown = shutdown.clone();
+    let websockets = WebSocketShutdown {
+        cancellation: shutdown.clone(),
+        active: Arc::new(AtomicUsize::new(0)),
+        drained: Arc::new(tokio::sync::Notify::new()),
+    };
+    let request_shutdown = websockets.clone();
     let app = app.layer(middleware::from_fn(move |request, next| {
         shutdown_aware(request_shutdown.clone(), request, next)
     }));
@@ -276,14 +339,20 @@ pub fn serve_bound_router(app: Router, listener: tokio::net::TcpListener) -> Ser
         .with_graceful_shutdown(serve_shutdown.cancelled_owned())
         .await;
     });
-    ServerHandle { shutdown, task }
+    ServerHandle {
+        shutdown,
+        task,
+        websockets,
+    }
 }
 
 async fn shutdown_aware(
-    shutdown: CancellationToken,
-    request: Request<Body>,
+    lifecycle: WebSocketShutdown,
+    mut request: Request<Body>,
     next: Next,
 ) -> Response {
+    let shutdown = lifecycle.cancellation.clone();
+    request.extensions_mut().insert(lifecycle);
     let body_shutdown = shutdown.clone();
     let response = tokio::select! {
         _ = shutdown.cancelled() => {

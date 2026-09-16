@@ -158,6 +158,13 @@ fn websocket_first_frame_originator_upgrades_generic_attribution() {
 fn realtime_websocket_does_not_forward_listener_or_project_headers() {
     let forwarded = websocket_upstream_headers(&[
         ("authorization".into(), "Bearer listener-secret".into()),
+        ("X-Goog-Api-Key".into(), "synthetic-listener-key".into()),
+        ("x-api-key".into(), "synthetic-listener-key".into()),
+        ("X-Sumpter-Agent-Name".into(), "synthetic-agent".into()),
+        (
+            "x-sumpter-future-private-field".into(),
+            "synthetic-private".into(),
+        ),
         ("x-sumpter-project".into(), "private-workspace".into()),
         ("x-sumpter-user".into(), "kkl".into()),
         ("openai-beta".into(), "realtime=v1".into()),
@@ -168,12 +175,11 @@ fn realtime_websocket_does_not_forward_listener_or_project_headers() {
             .iter()
             .any(|(name, _)| name.eq_ignore_ascii_case("authorization"))
     );
-    assert!(
-        !forwarded
-            .iter()
-            .any(|(name, _)| name.eq_ignore_ascii_case("x-sumpter-project")
-                || name.eq_ignore_ascii_case("x-sumpter-user"))
-    );
+    assert!(!forwarded.iter().any(
+        |(name, _)| name.to_ascii_lowercase().starts_with("x-sumpter-")
+            || name.eq_ignore_ascii_case("x-goog-api-key")
+            || name.eq_ignore_ascii_case("x-api-key")
+    ));
     assert!(forwarded.iter().any(
             |(name, value)| name.eq_ignore_ascii_case("openai-beta") && value == "realtime=v1"
         ));

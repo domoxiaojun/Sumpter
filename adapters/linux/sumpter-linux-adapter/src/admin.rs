@@ -1556,6 +1556,30 @@ mod tests {
         assert_eq!(page["apiVersion"], 3);
         assert_eq!(page["totalCount"], 0);
         assert_eq!(page["pageSize"], 25);
+        assert!(page["snapshotChangeSeq"].as_i64().is_some());
+        let token = format!(
+            "snapshotSeq={}&snapshotChangeSeq={}&historyGeneration={}",
+            page["snapshotSeq"], page["snapshotChangeSeq"], page["historyGeneration"]
+        );
+        for suffix in [
+            format!("events?view=page&page=2&{token}"),
+            format!("errors?page=1&{token}"),
+            format!("projects?page=1&{token}"),
+            format!("trends?range=24h&{token}"),
+            format!("export/estimate?scope=events&format=jsonl&privacy=redacted&{token}"),
+        ] {
+            let response = client
+                .get(format!("http://{address}/admin/api/runtime/{suffix}"))
+                .header(header::COOKIE, &cookie)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{suffix}");
+        }
+        let old_token = client.get(format!("http://{address}/admin/api/runtime/events?view=page&snapshotSeq={}&historyGeneration={}",
+            page["snapshotSeq"], page["historyGeneration"]))
+            .header(header::COOKIE, &cookie).send().await.unwrap();
+        assert_eq!(old_token.status(), StatusCode::CONFLICT);
 
         let mixed_cursor = client
             .get(format!(

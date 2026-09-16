@@ -309,26 +309,28 @@ async fn fetch_provider_models_inner(
         .build()
         .map_err(|error| error.to_string())?;
     let mut errors = Vec::new();
+    let mut discovered = std::collections::BTreeSet::new();
+    let mut source = None;
     let paths = model_catalog_paths(&base);
-    let deadline = std::time::Instant::now() + Duration::from_secs(12);
-    'probes: for auth in provider_model_auth_sets(key) {
-        for path in &paths {
-            for user_agent in
-                crate::request_build::probe_user_agents(endpoint.protocol, &endpoint.user_agent)
-            {
-                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+    let probes =
+        crate::request_build::model_catalog_probes(endpoint.protocol, &endpoint.user_agent);
+    let deadline = std::time::Instant::now() + Duration::from_millis(11_500);
+    'probes: for (index, probe) in probes.iter().enumerate() {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        let probe_deadline = std::time::Instant::now() + remaining / (probes.len() - index) as u32;
+        for auth in provider_model_auth_sets(key) {
+            for path in &paths {
+                let remaining = probe_deadline.saturating_duration_since(std::time::Instant::now());
                 if remaining.is_zero() {
-                    errors.push("整体超时，已停止尝试".into());
-                    break 'probes;
+                    errors.push("目录身份探测超时，继续其它身份".into());
+                    continue 'probes;
                 }
                 let mut url = base.clone();
                 url.set_path(path);
                 url.set_query(None);
                 url.set_fragment(None);
                 let mut request = client.get(url.clone());
-                for (header, value) in
-                    crate::request_build::provider_probe_headers_with_user_agent("", &user_agent)
-                {
+                for (header, value) in crate::request_build::model_catalog_probe_headers(probe) {
                     request = request.header(header, value);
                 }
                 for (header, value) in &auth {
@@ -354,7 +356,14 @@ async fn fetch_provider_models_inner(
                                 Ok(value) => {
                                     let models = extract_models(&value);
                                     if !models.is_empty() {
-                                        return Ok((models, url.to_string()));
+                                        source.get_or_insert_with(|| url.to_string());
+                                        for model in models {
+                                            if discovered.len() >= MAX_MODEL_CATALOG_ITEMS {
+                                                break;
+                                            }
+                                            discovered.insert(model);
+                                        }
+                                        continue 'probes;
                                     }
                                     errors.push(format!("{}: 响应中没有模型", url.path()));
                                 }
@@ -369,6 +378,9 @@ async fn fetch_provider_models_inner(
                 }
             }
         }
+    }
+    if let Some(source) = source {
+        return Ok((discovered.into_iter().collect(), source));
     }
     errors.dedup();
     Err(errors.into_iter().take(4).collect::<Vec<_>>().join("；"))
@@ -425,6 +437,10 @@ fn provider_model_auth_sets(key: &str) -> Vec<Vec<(&'static str, String)>> {
     ]
 }
 
+#[cfg(test)]
+#[path = "../../../../tests/contracts/provider_catalog.rs"]
+mod provider_catalog_contract;
+
 fn extract_models(value: &Value) -> Vec<String> {
     fn visit(value: &Value, models: &mut Vec<String>, depth: usize) {
         if depth > 8 || models.len() >= MAX_MODEL_CATALOG_ITEMS {
@@ -453,7 +469,7 @@ fn extract_models(value: &Value) -> Vec<String> {
             }
         }
         if models.len() == before {
-            for key in ["id", "name", "model", "model_id"] {
+            for key in ["id", "slug", "name", "model", "model_id"] {
                 if let Some(model) = object.get(key).and_then(Value::as_str) {
                     visit(&Value::String(model.to_string()), models, depth + 1);
                     break;
@@ -500,6 +516,8 @@ struct RuntimeEventsQuery {
     page_size: Option<usize>,
     #[serde(rename = "snapshotSeq", alias = "snapshot_seq")]
     snapshot_seq: Option<i64>,
+    #[serde(rename = "snapshotChangeSeq", alias = "snapshot_change_seq")]
+    snapshot_change_seq: Option<i64>,
     #[serde(rename = "historyGeneration", alias = "history_generation")]
     history_generation: Option<i64>,
     before_seq: Option<i64>,
@@ -570,6 +588,7 @@ async fn runtime_events(
             page: query.page.unwrap_or(1),
             page_size: query.page_size.unwrap_or(10),
             snapshot_seq: query.snapshot_seq,
+            snapshot_change_seq: query.snapshot_change_seq,
             history_generation: query.history_generation,
             filter: runtime_filter_from_events_query(&query),
         };
@@ -752,6 +771,8 @@ struct RuntimeTrendQuery {
     range: Option<String>,
     granularity: Option<String>,
     snapshot_seq: Option<i64>,
+    #[serde(rename = "snapshotChangeSeq", alias = "snapshot_change_seq")]
+    snapshot_change_seq: Option<i64>,
     history_generation: Option<i64>,
     #[serde(flatten)]
     filters: RuntimeFilterQuery,
@@ -838,6 +859,7 @@ async fn runtime_trends(
         to: filters.to.unwrap_or(default_to),
         granularity,
         snapshot_seq: query.snapshot_seq,
+        snapshot_change_seq: query.snapshot_change_seq,
         history_generation: query.history_generation,
         filter: filters,
     };
@@ -853,6 +875,8 @@ struct RuntimePagedQuery {
     page: Option<usize>,
     page_size: Option<usize>,
     snapshot_seq: Option<i64>,
+    #[serde(rename = "snapshotChangeSeq", alias = "snapshot_change_seq")]
+    snapshot_change_seq: Option<i64>,
     history_generation: Option<i64>,
     search: Option<String>,
     sort: Option<String>,
@@ -869,6 +893,7 @@ async fn runtime_errors(
         page: query.page.unwrap_or(1),
         page_size: query.page_size.unwrap_or(10),
         snapshot_seq: query.snapshot_seq,
+        snapshot_change_seq: query.snapshot_change_seq,
         history_generation: query.history_generation,
         filter: query.filters.into(),
     };
@@ -973,6 +998,7 @@ fn runtime_dimension_response(
         sort,
         order,
         snapshot_seq: query.snapshot_seq,
+        snapshot_change_seq: query.snapshot_change_seq,
         history_generation: query.history_generation,
         filter: query.filters.into(),
     };
@@ -1152,6 +1178,8 @@ struct RuntimeExportQuery {
     privacy: Option<String>,
     confirm_stored: Option<bool>,
     snapshot_seq: Option<i64>,
+    #[serde(rename = "snapshotChangeSeq", alias = "snapshot_change_seq")]
+    snapshot_change_seq: Option<i64>,
     history_generation: Option<i64>,
     #[serde(flatten)]
     filters: RuntimeFilterQuery,
@@ -1200,6 +1228,7 @@ fn parse_runtime_export_query(query: RuntimeExportQuery) -> Result<ExportQuery, 
         privacy,
         confirm_stored: query.confirm_stored == Some(true),
         snapshot_seq: query.snapshot_seq,
+        snapshot_change_seq: query.snapshot_change_seq,
         history_generation: query.history_generation,
         filter: query.filters.into(),
     })
@@ -1242,10 +1271,12 @@ async fn runtime_export(
         Err(error) => return runtime_query_error_response(error),
     };
     let snapshot_seq = estimate["snapshotSeq"].as_i64().unwrap_or(0);
+    let snapshot_change_seq = estimate["snapshotChangeSeq"].as_i64().unwrap_or(0);
     let history_generation = estimate["historyGeneration"].as_i64().unwrap_or(0);
     let row_count = estimate["rowCount"].as_i64().unwrap_or(0);
     let mut stream_query = query.clone();
     stream_query.snapshot_seq = Some(snapshot_seq);
+    stream_query.snapshot_change_seq = Some(snapshot_change_seq);
     stream_query.history_generation = Some(history_generation);
 
     let (sender, receiver) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(8);
@@ -1296,6 +1327,10 @@ async fn runtime_export(
     );
     for (name, value) in [
         ("x-sumpter-snapshot-seq", snapshot_seq.to_string()),
+        (
+            "x-sumpter-snapshot-change-seq",
+            snapshot_change_seq.to_string(),
+        ),
         (
             "x-sumpter-history-generation",
             history_generation.to_string(),
@@ -1792,6 +1827,20 @@ fn parse_diagnostic_capture_format(raw: Option<&str>) -> Result<DiagnosticCaptur
     }
 }
 
+#[cfg(test)]
+#[path = "../../../../tests/contracts/diagnostic_redaction.rs"]
+mod diagnostic_redaction_tests;
+
+#[cfg(test)]
+fn diagnostic_test_state(dir: sumpter_core::config_store::ConfigDir) -> Engine {
+    Engine::new(
+        sumpter_core::config::AppConfig::bootstrap().normalized(),
+        Some(dir),
+        std::sync::Arc::new(crate::outbound::ReqwestTransport::new()),
+        "synthetic-control-token".into(),
+    )
+}
+
 fn sensitive_capture_key(key: &str) -> bool {
     let key = key.to_ascii_lowercase().replace(['-', '_'], "");
     [
@@ -1839,7 +1888,15 @@ fn redact_url_query(raw: &str) -> String {
                 return pair.to_string();
             };
             let (key, value) = pair.split_at(equal);
-            if sensitive_capture_key(key) || key.to_ascii_lowercase().contains("token") {
+            let decoded_key = reqwest::Url::parse(&format!("https://redaction.invalid/?{key}="))
+                .ok()
+                .and_then(|url| url.query_pairs().next().map(|(key, _)| key.into_owned()))
+                .unwrap_or_else(|| key.to_string())
+                .to_ascii_lowercase();
+            if decoded_key == "key"
+                || sensitive_capture_key(&decoded_key)
+                || decoded_key.contains("token")
+            {
                 format!("{key}=[REDACTED]")
             } else {
                 format!("{key}{value}")
@@ -1938,7 +1995,7 @@ fn redact_capture_value(value: &mut Value) {
                             *child = Value::String(redact_body_text(text));
                         }
                     }
-                    "outboundURL" => {
+                    "outboundURL" | "path" => {
                         if let Some(text) = child.as_str() {
                             *child = Value::String(redact_url_query(text));
                         }
@@ -2079,8 +2136,11 @@ async fn diagnostic_capture_export(
 
     let redacted = privacy == "redacted";
     if scope == "current" {
-        let bytes = serde_json::to_vec(&engine.diagnostic_capture_index())
-            .unwrap_or_else(|_| b"{}".to_vec());
+        let mut index = engine.diagnostic_capture_index();
+        if redacted {
+            redact_capture_value(&mut index);
+        }
+        let bytes = serde_json::to_vec(&index).unwrap_or_else(|_| b"{}".to_vec());
         let body = if format == DiagnosticCaptureFormat::Jsonl {
             let mut line = bytes;
             line.push(b'\n');
@@ -2657,6 +2717,36 @@ mod tests {
         assert_eq!(page["apiVersion"], 3);
         assert_eq!(page["totalCount"], 0);
         assert_eq!(page["pageSize"], 25);
+        assert!(page["snapshotChangeSeq"].as_i64().is_some());
+        let token = format!(
+            "snapshotSeq={}&snapshotChangeSeq={}&historyGeneration={}",
+            page["snapshotSeq"], page["snapshotChangeSeq"], page["historyGeneration"]
+        );
+        for suffix in [
+            format!("events?view=page&page=2&{token}"),
+            format!("errors?page=1&{token}"),
+            format!("projects?page=1&{token}"),
+            format!("trends?range=24h&{token}"),
+            format!("export/estimate?scope=events&format=jsonl&privacy=redacted&{token}"),
+        ] {
+            let response = client
+                .get(format!("{base}/admin/runtime/{suffix}"))
+                .header("x-control-token", "runtime-control-token")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{suffix}");
+        }
+        let old_token = client
+            .get(format!(
+                "{base}/admin/runtime/events?view=page&snapshotSeq={}&historyGeneration={}",
+                page["snapshotSeq"], page["historyGeneration"]
+            ))
+            .header("x-control-token", "runtime-control-token")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(old_token.status(), StatusCode::CONFLICT);
 
         let mixed_cursor = client
             .get(format!(

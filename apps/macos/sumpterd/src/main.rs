@@ -208,19 +208,27 @@ async fn run(
     if let Err(error) = engine.flush_resource_bindings() {
         tracing::warn!("资源绑定落盘失败: {error}");
     }
-    let _ = std::fs::remove_file(dir.pid_path());
+    let pid_path = dir.pid_path();
+    if std::fs::read_to_string(&pid_path).is_ok_and(|value| value.trim() == pid.to_string()) {
+        let _ = std::fs::remove_file(pid_path);
+    }
     ExitCode::SUCCESS
 }
 
-/// 读 stdin 直到 EOF(父进程持有写端;其退出/崩溃即触发)。
+/// stdin 的阻塞读不使用 Tokio blocking pool；SIGTERM 时 runtime 不应等待仍打开的 stdin。
 async fn stdin_eof() {
-    use tokio::io::AsyncReadExt;
-    let mut stdin = tokio::io::stdin();
-    let mut buffer = [0u8; 256];
-    loop {
-        match stdin.read(&mut buffer).await {
-            Ok(0) | Err(_) => return,
-            Ok(_) => continue,
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        use std::io::Read;
+        let mut stdin = std::io::stdin().lock();
+        let mut buffer = [0u8; 256];
+        loop {
+            match stdin.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
         }
-    }
+        let _ = sender.send(());
+    });
+    let _ = receiver.await;
 }

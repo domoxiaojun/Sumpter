@@ -199,20 +199,7 @@ pub(super) fn websocket_upstream_headers(headers: &[(String, String)]) -> Vec<(S
     }
     forwarded
         .into_iter()
-        .filter(|(name, _)| {
-            !name.eq_ignore_ascii_case("authorization")
-                && !name.eq_ignore_ascii_case("x-api-key")
-                && !matches!(
-                    name.to_ascii_lowercase().as_str(),
-                    "x-sumpter-project"
-                        | "x-sumpter-client"
-                        | "x-sumpter-session-id"
-                        | "x-sumpter-attribution-encoding"
-                        | "x-sumpter-workspace"
-                        | "x-sumpter-git-remote"
-                        | "x-sumpter-user"
-                )
-        })
+        .filter(|(name, _)| !request_build::is_private_inbound_header(name))
         .collect()
 }
 
@@ -553,12 +540,28 @@ impl Engine {
         remote: Option<IpAddr>,
         prepared: PreparedWebSocket,
     ) {
+        self.handle_prepared_websocket_with_shutdown(
+            socket,
+            remote,
+            prepared,
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+    }
+
+    pub async fn handle_prepared_websocket_with_shutdown(
+        &self,
+        socket: WebSocket,
+        remote: Option<IpAddr>,
+        prepared: PreparedWebSocket,
+        shutdown: tokio_util::sync::CancellationToken,
+    ) {
         let mut connection = prepared.connection;
         let upstream = connection
             .upstream
             .take()
             .expect("prepared websocket owns an upstream connection");
-        let metrics = relay_native_websocket(socket, upstream, None).await;
+        let metrics = relay_native_websocket(socket, upstream, None, shutdown).await;
         self.record_websocket_completion(&prepared.context, &connection, &metrics);
         let _ = remote;
     }
@@ -572,8 +575,14 @@ impl Engine {
         path_and_query: String,
         headers: Vec<(String, String)>,
     ) {
-        self.handle_native_websocket(socket, remote, path_and_query, headers)
-            .await;
+        self.handle_websocket_with_shutdown(
+            socket,
+            remote,
+            path_and_query,
+            headers,
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
     }
 
     /// Compatibility wrapper for callers that name the Realtime/Live route.
@@ -585,8 +594,14 @@ impl Engine {
         path_and_query: String,
         headers: Vec<(String, String)>,
     ) {
-        self.handle_native_websocket(socket, remote, path_and_query, headers)
-            .await;
+        self.handle_websocket_with_shutdown(
+            socket,
+            remote,
+            path_and_query,
+            headers,
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
     }
 
     /// Relay any upgraded data-plane connection. Provider selection uses only
@@ -599,16 +614,23 @@ impl Engine {
         path_and_query: String,
         headers: Vec<(String, String)>,
     ) {
-        self.handle_native_websocket(socket, remote, path_and_query, headers)
-            .await;
+        self.handle_websocket_with_shutdown(
+            socket,
+            remote,
+            path_and_query,
+            headers,
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
     }
 
-    async fn handle_native_websocket(
+    pub async fn handle_websocket_with_shutdown(
         &self,
         mut socket: WebSocket,
         remote: Option<IpAddr>,
         path_and_query: String,
         headers: Vec<(String, String)>,
+        shutdown: tokio_util::sync::CancellationToken,
     ) {
         let path = path_without_query(&path_and_query);
         if let Err(error) = validate_realtime_call_target(&path_and_query) {
@@ -659,7 +681,21 @@ impl Engine {
             // CPA selects a Responses WebSocket from the first
             // `response.create` frame when the query has no model. Buffer
             // that frame so it can still be relayed after route planning.
-            let frame_model = match socket.recv().await {
+            let next = tokio::select! {
+                biased;
+                _ = shutdown.cancelled() => {
+                    self.record_rejected_websocket(
+                        remote,
+                        &path_and_query,
+                        &headers,
+                        503,
+                        "proxy stopped before the first websocket frame",
+                    );
+                    return;
+                }
+                next = socket.recv() => next,
+            };
+            let frame_model = match next {
                 Some(Ok(message)) => {
                     let model = websocket_message_model(&message);
                     initial_message = Some(message);
@@ -761,10 +797,24 @@ impl Engine {
             .as_ref()
             .and_then(websocket_message_codex_metadata);
         let context = websocket_context_with_first_frame(&context, first_frame_metadata.as_ref());
-        let mut connection = match self
-            .connect_native_websocket(path, &path_and_query, &headers, &request)
-            .await
-        {
+        let connected = tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => {
+                // 服务停止打断了上游握手：客户端事件仍须落账，否则该请求永远
+                // 停留在进行中，界面与统计都对不上。
+                let error = WebSocketPrepareError::new(
+                    503,
+                    "server_shutdown",
+                    "proxy stopped before the upstream websocket connected",
+                );
+                self.record_websocket_prepare_failure(&context, &error);
+                // 停机时只发送关闭帧，不再向客户端推送文本错误帧。
+                let _ = socket.send(axum::extract::ws::Message::Close(None)).await;
+                return;
+            }
+            result = self.connect_native_websocket(path, &path_and_query, &headers, &request) => result,
+        };
+        let mut connection = match connected {
             Ok(connection) => connection,
             Err(error) => {
                 self.record_websocket_prepare_failure(&context, &error);
@@ -777,7 +827,7 @@ impl Engine {
             .upstream
             .take()
             .expect("connected websocket owns an upstream connection");
-        let metrics = relay_native_websocket(socket, upstream, initial_message).await;
+        let metrics = relay_native_websocket(socket, upstream, initial_message, shutdown).await;
         self.record_websocket_completion(&context, &connection, &metrics);
         let _ = remote;
     }
