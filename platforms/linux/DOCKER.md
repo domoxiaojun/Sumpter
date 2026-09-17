@@ -43,7 +43,8 @@ sudo vi config/config.json
   "host": "0.0.0.0",
   "port": 57878,
   "allowedCIDRs": [],
-  "authToken": "替换为你生成的代理入站 Token"
+  "authToken": "替换为你生成的代理入站 Token",
+  "trustedProxyCIDRs": []
 }
 ```
 
@@ -152,7 +153,17 @@ ssh -N \
 
 需要局域网或 VPN 访问时，可将端口映射的宿主机地址改成相应网卡 IP，并配置防火墙和入站 Token。公开管理页应通过 HTTPS 反向代理，通常保留宿主机管理端口为回环地址。仓库及 Linux 包提供 `deploy/nginx-sumpter-admin.conf.example`；只有两份模板的独立部署目录需另外下载该反代示例。
 
-反代要保留 Cookie，设置 `X-Forwarded-Proto`，对事件流关闭 buffering。另行反代代理端口时，还需支持长响应及 WebSocket Upgrade。
+反代要保留 Cookie，设置 `X-Forwarded-Proto`，对事件流关闭 buffering。另行反代代理端口时，还需支持长响应及 WebSocket Upgrade；仓库提供 `deploy/nginx-sumpter-proxy.conf.example` 作为数据面反代示例。
+
+### 事件中的客户端 IP
+
+运行事件的「请求源 IP」默认是 Sumpter 看到的 TCP 对端。默认 bridge 网络下，直接访问宿主机发布端口的客户端会经过 Docker 的 NAT：宿主机本机访问通常显示为网关地址（如 `172.18.0.1`），来自其它机器的连接在多数 Linux 发行版上仍保留原始地址。经反向代理时显示的是代理容器或代理进程的地址。
+
+要显示真实客户端 IP，把**实际的**代理地址填到 `listener.trustedProxyCIDRs`（WebUI「安全」页的「可信代理 IP / CIDR」），并让代理传递 `X-Forwarded-For`；示例里的边界 Nginx 会用 `$remote_addr` 覆盖客户端自带的头，内层代理再按链路追加。该设置只改变事件记录，入站 Token 和 `allowedCIDRs` 仍按 TCP 对端判定。
+
+不要把整个 Docker 网桥或全部私网填成可信代理。若直连流量和代理流量经 NAT 后呈现为同一个网关地址，信任该网关就会让直连客户端伪造 IP；此时应给代理和 Sumpter 建独立的 Compose 网络，或用防火墙保证该入口只有代理能访问。
+
+如果只有纯 NAT 而没有任何代理传递地址，Sumpter 记录的就是网关地址，不会伪造真实 IP。可选做法：一是保留源地址的网络路径，例如让流量走保留原地址的接口而不是宿主机回环，或改用 `network_mode: host`（需自行处理端口冲突，模板不默认切换）；二是在直接接收客户端的位置放一层可信反代传递地址。
 
 在 SELinux 主机上，将共享挂载改为 `./config:/config:z`，为两个服务共享的数据目录设置容器标签。
 
@@ -201,6 +212,7 @@ sudo docker compose logs --tail 100 init sumpter
 | `permission denied` | 标准 Docker 下 `config/` 应由 root 拥有、目录 0700；SELinux 检查 `:z` |
 | 登录失败 | 代理 Token 不是管理密码；改密后的初始密码失效；重启后需要重新登录 |
 | 新端口不生效 | 修改的是宿主机映射还是容器监听；Compose 改动需重新 `up` |
+| 事件源 IP 都是 `172.x` 网关或代理地址 | 见「事件中的客户端 IP」：填写可信代理并让代理传 `X-Forwarded-For`，或改用保留源地址的网络路径 |
 
 模板里的 `init` 只创建缺失文件，不覆盖已有配置或密码。按本教程准备好文件时，它不会生成新密码；若未准备密码而依赖它自动初始化，初始密码会输出到 init 日志，仅在可信终端查看日志。
 

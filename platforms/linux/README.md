@@ -51,7 +51,7 @@ sudo cat /var/lib/sumpter/admin-password
 ssh -N -L 57879:127.0.0.1:57879 -L 57878:127.0.0.1:57878 your-user@your-server
 ```
 
-然后从本机访问上述地址。长期公开管理访问使用 HTTPS 反代，示例见 [Nginx 配置](deploy/nginx-sumpter-admin.conf.example)。局域网访问需调整对应监听与防火墙，并使用服务器实际 IP。
+然后从本机访问上述地址。长期公开管理访问使用 HTTPS 反代，示例见 [Nginx 配置](deploy/nginx-sumpter-admin.conf.example)；反代代理数据面（含 SSE 与 WebSocket）见 [数据面 Nginx 配置](deploy/nginx-sumpter-proxy.conf.example)，并把代理地址填进 `listener.trustedProxyCIDRs` 让运行事件显示真实客户端 IP。局域网访问需调整对应监听与防火墙，并使用服务器实际 IP。
 
 ## 服务管理
 

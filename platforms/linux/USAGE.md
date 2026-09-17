@@ -48,6 +48,8 @@
 
 `listener.allowedCIDRs` 是允许访问的 IP 网段列表，空数组表示不按网段限制。Compose 默认只将端口发布到宿主机回环地址；远程使用按部署教程设置 SSH 隧道、VPN 或 HTTPS 反向代理。
 
+经反向代理接入时，运行事件默认显示代理地址。把实际代理的 IP 或网段填进 `listener.trustedProxyCIDRs`（安全页「可信代理 IP / CIDR」），并让代理设置 `X-Forwarded-For` 或 `X-Real-IP`，事件就会显示真实客户端 IP。它只影响事件显示，不改变入站 Token 与 CIDR 白名单的判定。
+
 Linux 首次管理用户名为 `kkl`，密码来自部署时准备的 `admin-password`。登录后可在「安全」修改用户名和密码；文件会保存为 Argon2 哈希 JSON，初始密码随即失效。重启服务会让现有浏览器会话失效，需要重新登录。
 
 ## 4. 接入客户端

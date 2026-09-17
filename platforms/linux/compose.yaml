@@ -51,7 +51,7 @@ services:
           echo "请登录后立即在 WebUI「安全」页修改；改密后初始密码立即失效"
         fi
         if [ ! -e config.json ]; then
-          printf '%s\n' '{"schemaVersion":7,"endpoints":[],"listener":{"host":"0.0.0.0","port":57878,"authToken":"","allowedCIDRs":[]}}' > "$$stage/config.json"
+          printf '%s\n' '{"schemaVersion":7,"endpoints":[],"listener":{"host":"0.0.0.0","port":57878,"authToken":"","allowedCIDRs":[],"trustedProxyCIDRs":[]}}' > "$$stage/config.json"
           ln "$$stage/config.json" config.json
         fi
         chmod 600 config.json admin-password 2>/dev/null \

@@ -128,6 +128,7 @@ check_file "$ROOT/specs/admin-api.md"
 check_file "$ROOT/deploy/sumpter.service"
 check_file "$ROOT/deploy/sumpter-system.service"
 check_file "$ROOT/deploy/nginx-sumpter-admin.conf.example"
+check_file "$ROOT/deploy/nginx-sumpter-proxy.conf.example"
 check_file "$ROOT/scripts/start.sh"
 check_file "$ROOT/scripts/stop.sh"
 check_file "$ROOT/scripts/smoke.sh"
@@ -216,6 +217,8 @@ for entry in "${TARGETS[@]}"; do
     cp "$ROOT/deploy/sumpter-system.service" "$stage/sumpter-system.service"
     cp "$ROOT/deploy/nginx-sumpter-admin.conf.example" \
         "$stage/deploy/nginx-sumpter-admin.conf.example"
+    cp "$ROOT/deploy/nginx-sumpter-proxy.conf.example" \
+        "$stage/deploy/nginx-sumpter-proxy.conf.example"
     cp "$ROOT/specs/admin-api.md" "$stage/specs/admin-api.md"
     cp "$ROOT/config.example.json" "$stage/config.example.json"
     cp "$ROOT/README.md" "$stage/README.md"

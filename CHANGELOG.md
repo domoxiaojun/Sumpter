@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### 新增
+
+- `listener.trustedProxyCIDRs`：来自所列可信代理的连接，运行事件的请求源 IP 改用 `X-Forwarded-For`（缺失时用 `X-Real-IP`）；非可信来源、非法或超限头仍记录 TCP 对端。只影响事件记录，入站 Token、CIDR 白名单和 `/__status` 继续检查连接对端。Linux WebUI 与 macOS 安全页可编辑该列表，非法条目在保存时报错。Docker 教程新增事件客户端 IP 说明与数据面 Nginx 反代示例，Linux CI 增加容器直连、反代与 NAT 回退验证。
+
 ### 修复
 
 - Codex 现在能看到 CPA 等网关上的 Gemini 模型：「获取模型」按协议身份探测并合并目录，不再因 Anthropic 头拿到改名的 Claude 专用列表；目录解析兼容 Codex `slug` 与 Gemini `name`。

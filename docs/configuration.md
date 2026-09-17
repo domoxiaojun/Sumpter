@@ -30,11 +30,14 @@ Sumpter 使用一份 JSON 配置文件，Linux 和 macOS 共用格式。新用�
   "host": "127.0.0.1",
   "port": 57878,
   "allowedCIDRs": [],
-  "authToken": ""
+  "authToken": "",
+  "trustedProxyCIDRs": []
 }
 ```
 
 `host` 和 `port` 是客户端访问的代理数据面。空 `authToken` 表示不校验入站 Token；生产环境建议设置随机非空值。`allowedCIDRs` 非空时只允许列出的 IP 网段。
+
+`trustedProxyCIDRs` 是可信反向代理的 IP 或 CIDR 列表，默认空，省略时按空处理。只有 TCP 对端命中该列表时，请求事件的 `sourceIP` 才改为代理传来的 `X-Forwarded-For`（从右向左跳过可信代理，取第一个非可信地址；仅在该头缺失时使用单值 `X-Real-IP`）；头缺失、含主机名或端口、超过 4 KiB 或 32 项时仍记录 TCP 对端。它只影响事件记录：入站 Token、`allowedCIDRs` 与 `/__status` 的回环限制继续检查 TCP 对端，转发给上游的请求头也不改写。两组列表里的非法条目会在加载和保存时报错。不要直接信任整个 Docker 网桥或全部私网，只填实际代理地址；部署方式见 [Compose 教程](../platforms/linux/DOCKER.md)。
 
 Compose 特例：容器内 `host` 应为 `0.0.0.0`，容器端口保持 57878；宿主机暴露地址和端口由 Compose `ports` 决定。Linux systemd / macOS 本机通常使用 `127.0.0.1`。
 

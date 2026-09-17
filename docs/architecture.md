@@ -34,7 +34,7 @@ HTTP、SSE 和 WebSocket 在上游响应或真实握手后才算成功。一个�
 
 分页快照同时使用 `snapshotSeq`、`snapshotChangeSeq` 与 `historyGeneration`。事件入队 `seq` 不变，首次完成水位固定快照的已完成集合；后续补充 metadata 不改变该水位。缺少完成水位的旧 token 明确失效，由客户端重取快照，不静默产生重复行或漏行。数据库以补列和回填方式兼容现有事件，不重建历史。
 
-请求事件的 `sourceIP` 记录入站 TCP 对端地址，支持 IPv4 / IPv6，并随客户端请求、上游尝试、拒绝和完成事件保存。两端事件列表与详情显示该字段；旧事件或缺少网络上下文时为空。经过反向代理时记录代理 IP，不采信 `Forwarded`、`X-Forwarded-For` 或 `X-Real-IP`。它复用事件 JSON 持久化，无需升级数据库 schema。
+请求事件的 `sourceIP` 默认记录入站 TCP 对端地址，支持 IPv4 / IPv6，并随客户端请求、上游尝试、拒绝、取消和完成事件保存。当对端命中 `listener.trustedProxyCIDRs` 时，共享 core 的 `access::resolve_client_ip` 改用 `X-Forwarded-For`（右向左跳过可信代理）或缺失时的单值 `X-Real-IP`；非法或超限头回退到对端，HTTP 与 WebSocket 入口在请求进入时只解析一次。不解析 `Forwarded` 与 PROXY protocol。解析结果只用于事件：入站鉴权、`allowedCIDRs` 与 `/__status` 继续判断 TCP 对端，上游转发头不改写。两端事件列表与详情显示该字段；旧事件或缺少网络上下文时为空。它复用事件 JSON 持久化，无需升级数据库 schema，也不回填历史记录。
 
 ## 平台边界
 
