@@ -154,3 +154,43 @@ jobs:
 
       - name: Check Docker and Compose deployment inputs
         run: ./scripts/check.sh docker
+
+  container-source-ip:
+    name: Container source IP paths
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # 运行镜像只接受静态 musl 二进制；与发布流程一致地喂给 Dockerfile.runtime，
+      # 但这里用 musl-tools 原生构建单架构，不引入 zig。
+      - name: Install Rust 1.88 with the x86_64 musl target
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup target add --toolchain 1.88.0 x86_64-unknown-linux-musl
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+
+      - name: Build static sumpterd
+        run: |
+          set -Eeuo pipefail
+          cargo build --release --locked --target x86_64-unknown-linux-musl --bin sumpterd-linux
+          file target/x86_64-unknown-linux-musl/release/sumpterd-linux | grep -Eq 'ELF.*(statically linked|static-pie linked)'
+          mkdir -p platforms/linux/docker-bin
+          cp target/x86_64-unknown-linux-musl/release/sumpterd-linux platforms/linux/docker-bin/sumpterd-amd64
+
+      - name: Build runtime image
+        run: |
+          docker build \
+            --file platforms/linux/Dockerfile.runtime \
+            --build-arg TARGETARCH=amd64 \
+            --tag sumpter:source-ip-selftest \
+            platforms/linux
+
+      - name: Verify direct, reverse-proxy and NAT source IP paths in containers
+        env:
+          SUMPTER_TEST_IMAGE: sumpter:source-ip-selftest
+        run: ./scripts/tests/source-ip-container-selftest.sh
