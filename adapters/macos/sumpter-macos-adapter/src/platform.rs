@@ -233,7 +233,7 @@ impl Platform {
         };
 
         let event = RuntimeEvent {
-            source_ip: request.remote_ip.map(|ip| ip.to_string()),
+            source_ip: request.source_ip.clone(),
             session_source: None,
             hook_event: hook_event.clone(),
             cache_read: None,

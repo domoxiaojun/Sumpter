@@ -434,8 +434,10 @@ pub(super) fn websocket_connect_retry_after(
     retry_after_seconds(&headers)
 }
 
+/// `source_ip` 已按可信代理规则解析(与 HTTP 入口同一函数),调用方从
+/// `Engine::inbound_request_context` 取得后传入,握手与中继事件共用一份。
 pub(super) fn websocket_event_context(
-    remote: Option<std::net::IpAddr>,
+    source_ip: Option<String>,
     path_and_query: &str,
     headers: &[(String, String)],
     model: &str,
@@ -455,7 +457,7 @@ pub(super) fn websocket_event_context(
     };
     let client_kind = detect_client_kind(headers, true);
     WebSocketEventContext {
-        source_ip: remote.map(|ip| ip.to_string()),
+        source_ip,
         request_id: new_event_id(),
         request_path: bounded_request_path(path),
         route_intent: route_intent.into(),

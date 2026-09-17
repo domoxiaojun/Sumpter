@@ -51,7 +51,7 @@ pub(crate) use config_routes::{
 #[cfg(test)]
 use config_routes::{
     SecretUpdates, extract_models, model_catalog_paths, provider_model_auth_modes,
-    provider_model_auth_sets, proxy_hint_for, summarize_probe_failure, valid_cidr,
+    provider_model_auth_sets, proxy_hint_for, summarize_probe_failure,
 };
 #[cfg(test)]
 use diagnostics_routes::{
@@ -884,12 +884,26 @@ mod tests {
     }
 
     #[test]
-    fn cidr_validation_accepts_hosts_and_networks() {
-        assert!(valid_cidr("127.0.0.1"));
-        assert!(valid_cidr("10.0.0.0/8"));
-        assert!(valid_cidr("::1/128"));
-        assert!(!valid_cidr("10.0.0.0/99"));
-        assert!(!valid_cidr("not-an-ip"));
+    fn cidr_validation_covers_allowed_and_trusted_proxy_lists() {
+        let mut config = AppConfig::bootstrap();
+        config.listener.allowed_cidrs = vec!["127.0.0.1".into(), "10.0.0.0/8".into()];
+        config.listener.trusted_proxy_cidrs = vec!["::1/128".into(), "172.16.0.0/12".into()];
+        validate_config(&config).unwrap();
+
+        config.listener.allowed_cidrs = vec!["10.0.0.0/99".into()];
+        assert!(
+            validate_config(&config)
+                .unwrap_err()
+                .contains("无效 allowedCIDR: 10.0.0.0/99")
+        );
+
+        config.listener.allowed_cidrs.clear();
+        config.listener.trusted_proxy_cidrs = vec!["not-an-ip".into()];
+        assert!(
+            validate_config(&config)
+                .unwrap_err()
+                .contains("无效 trustedProxyCIDR: not-an-ip")
+        );
     }
 
     #[test]

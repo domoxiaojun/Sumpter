@@ -11,7 +11,6 @@ use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
-use std::net::IpAddr;
 use std::time::{SystemTime, UNIX_EPOCH};
 use sumpter_core::config::{AppConfig, Endpoint, SCHEMA_VERSION};
 use sumpter_core::config_store::validate_config_wire;
@@ -226,11 +225,7 @@ pub fn validate_config(config: &AppConfig) -> Result<(), String> {
     validate_config_identity(config)?;
     config.validate_model_groups()?;
     let _ = listener_address(config)?;
-    for cidr in &config.listener.allowed_cidrs {
-        if !valid_cidr(cidr) {
-            return Err(format!("无效 allowedCIDR: {cidr}"));
-        }
-    }
+    config.listener.validate_cidr_lists()?;
     if config.retry.max_deferred_rounds < 0
         || config.retry.max_retry_duration_seconds < 0.0
         || config.retry.max_500_retries < 0
@@ -308,19 +303,6 @@ pub fn validate_config(config: &AppConfig) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-pub(crate) fn valid_cidr(raw: &str) -> bool {
-    let Some((ip, prefix)) = raw.trim().split_once('/') else {
-        return raw.trim().parse::<IpAddr>().is_ok();
-    };
-    let Ok(ip) = ip.parse::<IpAddr>() else {
-        return false;
-    };
-    let Ok(prefix) = prefix.parse::<u8>() else {
-        return false;
-    };
-    prefix <= if ip.is_ipv4() { 32 } else { 128 }
 }
 
 #[derive(Debug, Deserialize)]

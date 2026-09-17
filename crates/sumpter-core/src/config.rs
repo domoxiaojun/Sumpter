@@ -361,6 +361,12 @@ pub struct ListenerConfig {
     /// Swift 侧为 Int,监听时才校验 u16 范围——此处保持宽容。
     #[serde(default = "ListenerConfig::default_port")]
     pub port: i64,
+    /// 可信反向代理的 IP / CIDR 列表。只有来自这些地址的 TCP 连接,其
+    /// `X-Forwarded-For` / `X-Real-IP` 才会被用作事件 `sourceIP`;鉴权与
+    /// `allowedCIDRs` 仍只看 TCP 对端。空 = 不信任任何转发头(默认);
+    /// 旧配置文件省略该键时按空列表读取。
+    #[serde(rename = "trustedProxyCIDRs", default)]
+    pub trusted_proxy_cidrs: Vec<String>,
 }
 
 impl ListenerConfig {
@@ -374,6 +380,22 @@ impl ListenerConfig {
     pub fn has_inbound_auth(&self) -> bool {
         !self.auth_token.is_empty()
     }
+
+    /// 校验两组 CIDR 列表的语法;供配置加载、Admin 保存和 macOS 保存共用,
+    /// 让非法条目在写入前而不是首个请求到达时暴露。
+    pub fn validate_cidr_lists(&self) -> Result<(), String> {
+        for cidr in &self.allowed_cidrs {
+            if !crate::access::is_valid_cidr(cidr) {
+                return Err(format!("无效 allowedCIDR: {cidr}"));
+            }
+        }
+        for cidr in &self.trusted_proxy_cidrs {
+            if !crate::access::is_valid_cidr(cidr) {
+                return Err(format!("无效 trustedProxyCIDR: {cidr}"));
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Default for ListenerConfig {
@@ -383,6 +405,7 @@ impl Default for ListenerConfig {
             auth_token: String::new(),
             host: Self::default_host(),
             port: Self::default_port(),
+            trusted_proxy_cidrs: Vec::new(),
         }
     }
 }

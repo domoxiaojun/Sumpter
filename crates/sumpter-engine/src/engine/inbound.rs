@@ -213,7 +213,13 @@ impl Engine {
         let route_intent =
             route_intent_for_path(method, path_and_query, query_model.as_deref(), client_kind);
         InboundRequestContext {
-            source_ip: remote.map(|ip| ip.to_string()),
+            // 事件来源在入口只算一次:可信代理传来的转发头替换 TCP 对端,
+            // 其余情况仍是对端。鉴权、白名单与 /__status 继续用 `remote`。
+            source_ip: access::resolve_client_ip_text(
+                remote,
+                headers,
+                &self.config().listener.trusted_proxy_cidrs,
+            ),
             session_source: super::context::observed_session(headers)
                 .map(|(_, source)| source.to_owned()),
             method: bounded_request_method(method),
@@ -263,6 +269,8 @@ impl Engine {
                 path_and_query: path_and_query.to_string(),
                 headers,
                 remote_ip: remote,
+                source_ip: super::context::current_request_context()
+                    .and_then(|context| context.source_ip),
                 body,
             };
             return self
@@ -713,6 +721,7 @@ impl Engine {
                 "host": config.listener.host,
                 "port": config.listener.port,
                 "allowedCIDRs": config.listener.allowed_cidrs,
+                "trustedProxyCIDRs": config.listener.trusted_proxy_cidrs,
                 "authToken": if config.listener.auth_token.is_empty() { "" } else { "***" },
             },
             "providers": config.endpoints.len(),

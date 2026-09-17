@@ -42,7 +42,10 @@ pub struct PlatformRequest {
     pub method: String,
     pub path_and_query: String,
     pub headers: Vec<(String, String)>,
+    /// TCP 对端;平台动作的鉴权(环回 / 控制 token)只看这个。
     pub remote_ip: Option<IpAddr>,
+    /// 事件应记录的客户端 IP:引擎已按可信代理规则解析,可能与 `remote_ip` 不同。
+    pub source_ip: Option<String>,
     pub body: Body,
 }
 

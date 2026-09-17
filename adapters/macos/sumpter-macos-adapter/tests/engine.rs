@@ -2106,6 +2106,58 @@ async fn control_endpoints_require_token_and_status_masks_auth() {
     assert_eq!(status, 403);
 }
 
+/// `/__notify` 事件也走同一套来源解析:可信代理传来的客户端 IP 替换对端,
+/// 非可信对端的伪造头被忽略;控制 token 校验不受转发头影响。
+#[tokio::test]
+async fn notify_events_use_trusted_proxy_client_ip() {
+    let mut config = two_endpoint_config();
+    config.listener.trusted_proxy_cidrs = vec!["127.0.0.1".into()];
+    let engine = engine_with(config, FakeTransport::new());
+    let body = || Bytes::from(serde_json::to_vec(&json!({"type": "Stop", "message": "done"})).unwrap());
+    let forwarded = vec![("x-forwarded-for".to_string(), "203.0.113.9".to_string())];
+
+    let (status, _) = call(
+        &engine,
+        loopback(),
+        "/__notify?token=test-token",
+        forwarded.clone(),
+        body(),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let (status, _) = call(
+        &engine,
+        Some("10.0.0.9".parse().unwrap()),
+        "/__notify?token=test-token",
+        forwarded.clone(),
+        body(),
+    )
+    .await;
+    assert_eq!(status, 200);
+    // 转发头不能替代 token,也不能让非环回对端通过状态端点的环回限制。
+    let (status, _) = call(&engine, loopback(), "/__notify", forwarded.clone(), body()).await;
+    assert_eq!(status, 403);
+    let (status, _) = call(
+        &engine,
+        Some("10.0.0.9".parse().unwrap()),
+        "/__status",
+        forwarded,
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(status, 403);
+
+    let runtime = runtime_of(&engine).await;
+    let mut notify_ips = runtime
+        .recent_events
+        .iter()
+        .filter(|event| event.kind == "notify")
+        .map(|event| event.source_ip.clone().unwrap_or_default())
+        .collect::<Vec<_>>();
+    notify_ips.sort();
+    assert_eq!(notify_ips, vec!["10.0.0.9".to_string(), "203.0.113.9".to_string()]);
+}
+
 #[tokio::test]
 async fn ingress_preflight_never_polls_rejected_or_bodyless_request_bodies() {
     let fake = FakeTransport::new();

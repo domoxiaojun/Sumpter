@@ -35,7 +35,10 @@
     ],
     "authToken": "sk-inbound-token",
     "host": "0.0.0.0",
-    "port": 57878
+    "port": 57878,
+    "trustedProxyCIDRs": [
+      "172.18.0.0/16"
+    ]
   },
   "retry": {
     "max500Retries": 0,

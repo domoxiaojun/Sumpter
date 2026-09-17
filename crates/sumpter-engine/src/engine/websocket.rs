@@ -260,6 +260,15 @@ impl Engine {
             || (allow_ephemeral && self.realtime_client_secret_authorized(headers)))
     }
 
+    /// WebSocket 事件的客户端 IP,与 HTTP 入口同一解析规则;握手鉴权仍用 `remote`。
+    fn websocket_source_ip(
+        &self,
+        remote: Option<IpAddr>,
+        headers: &[(String, String)],
+    ) -> Option<String> {
+        access::resolve_client_ip_text(remote, headers, &self.config().listener.trusted_proxy_cidrs)
+    }
+
     fn record_websocket_prepare_failure(
         &self,
         context: &WebSocketEventContext,
@@ -510,7 +519,7 @@ impl Engine {
             }
         };
         let context = websocket_event_context(
-            remote,
+            self.websocket_source_ip(remote, headers),
             path_and_query,
             headers,
             &request.model,
@@ -782,7 +791,7 @@ impl Engine {
             RealtimeRouteIntent::StandardRealtime
         };
         let context = websocket_event_context(
-            remote,
+            self.websocket_source_ip(remote, &headers),
             &path_and_query,
             &headers,
             &request.model,

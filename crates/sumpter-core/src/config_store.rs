@@ -696,6 +696,12 @@ fn validate_current_wire(value: &Value) -> Result<(), String> {
     {
         return Err("schema v7 不允许 listener.inboundDialectPassthrough".into());
     }
+    if let Some(listener) = root.get("listener") {
+        // 非法 CIDR 在加载与保存时就拒绝,而不是等到首个请求悄悄匹配失败。
+        let listener: crate::config::ListenerConfig = serde_json::from_value(listener.clone())
+            .map_err(|error| format!("listener 格式无效: {error}"))?;
+        listener.validate_cidr_lists()?;
+    }
     if root.contains_key("pools") {
         return Err("schema v7 不允许 pools；请先完成 Provider 候选迁移".into());
     }
@@ -1349,6 +1355,35 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("inboundDialectPassthrough");
+        // 两组 CIDR 列表在 wire 层就校验;省略 trustedProxyCIDRs 等于空列表。
+        value["listener"]["trustedProxyCIDRs"] = json!(["10.0.0.0/8", "::1"]);
+        assert!(validate_config_wire(&value).is_ok());
+        value["listener"]["trustedProxyCIDRs"] = json!(["10.0.0.0/8", "proxy.example"]);
+        assert!(
+            validate_config_wire(&value)
+                .unwrap_err()
+                .contains("无效 trustedProxyCIDR: proxy.example")
+        );
+        value["listener"]["trustedProxyCIDRs"] = json!("10.0.0.0/8");
+        assert!(
+            validate_config_wire(&value)
+                .unwrap_err()
+                .contains("listener 格式无效")
+        );
+        value["listener"]
+            .as_object_mut()
+            .unwrap()
+            .remove("trustedProxyCIDRs");
+        value["listener"]["allowedCIDRs"] = json!(["10.0.0.0/99"]);
+        assert!(
+            validate_config_wire(&value)
+                .unwrap_err()
+                .contains("无效 allowedCIDR: 10.0.0.0/99")
+        );
+        value["listener"]
+            .as_object_mut()
+            .unwrap()
+            .remove("allowedCIDRs");
         value["endpoints"][0]["searchDialect"] = json!("openai");
         assert!(
             validate_config_wire(&value)

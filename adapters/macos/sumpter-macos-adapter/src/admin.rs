@@ -174,6 +174,7 @@ async fn status(State(engine): State<Engine>) -> Response {
             "host": config.listener.host,
             "port": config.listener.port,
             "allowedCIDRs": config.listener.allowed_cidrs,
+            "trustedProxyCIDRs": config.listener.trusted_proxy_cidrs,
             "hasAuthToken": !config.listener.auth_token.is_empty(),
         },
         "providers": config.endpoints.len(),
