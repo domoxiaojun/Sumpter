@@ -6,6 +6,7 @@ export const mockConfig = {
     host: '127.0.0.1',
     port: 57878,
     allowedCIDRs: ['127.0.0.1/32', '192.168.1.0/24'],
+    trustedProxyCIDRs: [],
   },
   endpoints: [
         {

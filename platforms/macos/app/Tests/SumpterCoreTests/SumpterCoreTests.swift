@@ -1398,6 +1398,33 @@ final class SumpterCoreTests: XCTestCase {
         XCTAssertEqual(roundTripped, off)
     }
 
+    /// 可信代理列表与 Rust 侧同键;旧配置省略该键时按空列表读取,保存其它监听项不能丢掉它。
+    func testListenerTrustedProxyCIDRsRoundTripAndDefaultEmpty() throws {
+        let legacy = try JSONDecoder().decode(
+            ListenerConfig.self,
+            from: Data(#"{"host":"0.0.0.0","port":57878,"allowedCIDRs":[],"authToken":""}"#.utf8)
+        )
+        XCTAssertEqual(legacy.trustedProxyCIDRs, [])
+        let legacyTree = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: try JSONEncoder().encode(legacy)) as? [String: Any]
+        )
+        XCTAssertEqual(legacyTree["trustedProxyCIDRs"] as? [String], [])
+
+        var configured = ListenerConfig(host: "0.0.0.0", port: 57878, allowedCIDRs: ["10.0.0.0/8"])
+        configured.trustedProxyCIDRs = ["172.18.0.5", "fd00::/8"]
+        let tree = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: try JSONEncoder().encode(configured)) as? [String: Any]
+        )
+        XCTAssertEqual(tree["trustedProxyCIDRs"] as? [String], ["172.18.0.5", "fd00::/8"])
+        XCTAssertEqual(tree["allowedCIDRs"] as? [String], ["10.0.0.0/8"])
+        let decoded = try JSONDecoder().decode(ListenerConfig.self, from: try JSONEncoder().encode(configured))
+        XCTAssertEqual(decoded, configured)
+        // 只改 host 的草稿保留可信代理列表。
+        var draft = decoded
+        draft.host = "127.0.0.1"
+        XCTAssertEqual(draft.trustedProxyCIDRs, ["172.18.0.5", "fd00::/8"])
+    }
+
     /// 列表选中的 id 必须**跨 decode 稳定**:旧版每次 decode 现生成 UUID,
     /// 「重新加载配置」或外部 /__reload 后选中丢失、开着的编辑 sheet 保存报「不存在」。
     func testListSelectionIDsSurviveReload() throws {

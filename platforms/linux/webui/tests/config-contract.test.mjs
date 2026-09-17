@@ -89,6 +89,22 @@ test('mock routing config mirrors all built-in Claude Code rules', () => {
   );
 });
 
+test('listener trustedProxyCIDRs survives wire conversion and stays optional', async () => {
+  assert.deepEqual(mockConfig.listener.trustedProxyCIDRs, []);
+  const ui = fromWireConfig({ generation: 'g', config: { schemaVersion: 7, listener: { authToken: '', host: '0.0.0.0', port: 57878, allowedCIDRs: ['10.0.0.0/8'], trustedProxyCIDRs: ['172.18.0.5', 'fd00::/8'] }, retry: {}, featureRules: [], endpoints: [] } });
+  assert.deepEqual(ui.config.listener.trustedProxyCIDRs, ['172.18.0.5', 'fd00::/8']);
+  const wire = toWireConfig(ui);
+  assert.deepEqual(wire.listener.trustedProxyCIDRs, ['172.18.0.5', 'fd00::/8']);
+  assert.deepEqual(wire.listener.allowedCIDRs, ['10.0.0.0/8']);
+  // 旧配置没有该键时不得凭空补出非空值。
+  const legacy = fromWireConfig({ generation: 'g', config: { schemaVersion: 7, listener: { authToken: '', host: '127.0.0.1', port: 57878 }, retry: {}, featureRules: [], endpoints: [] } });
+  assert.equal(legacy.config.listener.trustedProxyCIDRs, undefined);
+  const securityPage = await readFile(new URL('../src/pages/SecurityPage.jsx', import.meta.url), 'utf8');
+  assert.match(securityPage, /listener\.trustedProxyCIDRs = parseList\(trustedProxies\)/);
+  assert.match(securityPage, /可信代理 IP \/ CIDR/);
+  assert.match(securityPage, /不影响入站认证/);
+});
+
 test('v7 endpoint protocol contract exposes five modes and defaults mock entries to Auto', () => {
   assert.equal(mockConfig.schemaVersion, 7);
   assert.equal('inboundDialectPassthrough' in mockConfig.listener, false);

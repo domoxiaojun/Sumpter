@@ -17,6 +17,7 @@ export function SecurityPage() {
   const [host, setHost] = useState(config?.listener?.host || '127.0.0.1');
   const [port, setPort] = useState(config?.listener?.port || 57878);
   const [cidrs, setCidrs] = useState((config?.listener?.allowedCIDRs || []).join(', '));
+  const [trustedProxies, setTrustedProxies] = useState((config?.listener?.trustedProxyCIDRs || []).join(', '));
   const [inboundToken, setInboundToken] = useState('');
 
   // Admin password change state
@@ -75,6 +76,7 @@ export function SecurityPage() {
       nextConfig.listener.host = host.trim();
       nextConfig.listener.port = portNum;
       nextConfig.listener.allowedCIDRs = parseList(cidrs);
+      nextConfig.listener.trustedProxyCIDRs = parseList(trustedProxies);
       listenerSource.current = await saveConfig(nextConfig, {}, listenerSource.current);
     } catch (err) {
       addToast(`保存监听失败: ${err.message}`, 'error');
@@ -283,6 +285,21 @@ export function SecurityPage() {
               placeholder="如: 192.168.1.0/24, 10.0.0.0/8"
             />
           </div>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">可信代理 IP / CIDR</label>
+          <input
+            type="text"
+            className="form-input"
+            value={trustedProxies}
+            onChange={(e) => setTrustedProxies(e.target.value)}
+            placeholder="如: 172.18.0.5, 10.0.0.0/8"
+          />
+          <p className="form-hint">
+            仅来自这些地址的连接，其 <code>X-Forwarded-For</code> / <code>X-Real-IP</code> 才会记为事件的请求源 IP；
+            不影响入站认证与上面的 CIDR 白名单。留空则事件始终记录连接对端。
+          </p>
         </div>
 
         <button

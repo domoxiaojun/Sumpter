@@ -272,24 +272,30 @@ public struct ListenerConfig: Codable, Equatable, Sendable {
     public var allowedCIDRs: [String]
     /// 入站 Auth Token;空 = 不校验(仅环回可达时的默认状态)。
     public var authToken: String
+    /// 可信反向代理 IP / CIDR。仅来自这些地址的连接才采信 `X-Forwarded-For` /
+    /// `X-Real-IP` 作为事件源 IP;鉴权与 allowedCIDRs 仍看 TCP 对端。空 = 不信任。
+    public var trustedProxyCIDRs: [String]
 
     enum CodingKeys: String, CodingKey {
         case host
         case port
         case allowedCIDRs
         case authToken
+        case trustedProxyCIDRs
     }
 
     public init(
         host: String = "127.0.0.1",
         port: Int = 57_878,
         allowedCIDRs: [String] = [],
-        authToken: String = ""
+        authToken: String = "",
+        trustedProxyCIDRs: [String] = []
     ) {
         self.host = host
         self.port = port
         self.allowedCIDRs = allowedCIDRs
         self.authToken = authToken
+        self.trustedProxyCIDRs = trustedProxyCIDRs
     }
 
     public init(from decoder: Decoder) throws {
@@ -298,6 +304,7 @@ public struct ListenerConfig: Codable, Equatable, Sendable {
         port = try keyed.decodeIfPresent(Int.self, forKey: .port) ?? 57_878
         allowedCIDRs = try keyed.decodeIfPresent([String].self, forKey: .allowedCIDRs) ?? []
         authToken = try keyed.decodeIfPresent(String.self, forKey: .authToken) ?? ""
+        trustedProxyCIDRs = try keyed.decodeIfPresent([String].self, forKey: .trustedProxyCIDRs) ?? []
     }
 
     public var hasInboundAuth: Bool {

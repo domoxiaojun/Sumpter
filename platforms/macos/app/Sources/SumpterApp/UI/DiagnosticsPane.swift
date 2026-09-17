@@ -135,6 +135,7 @@ struct SecurityPane: View {
     @State private var draftHost = ""
     @State private var draftPort = ""
     @State private var draftCIDRs = ""
+    @State private var draftTrustedProxies = ""
     @State private var draftLoaded = false
     @State private var listenerError: String?
     @State private var confirmRestartListener = false
@@ -207,6 +208,14 @@ struct SecurityPane: View {
                 FormLine(title: "CIDR") {
                     TextField("192.168.31.0/24, 10.0.0.0/8", text: $draftCIDRs)
                 }
+                FormLine(title: "可信代理") {
+                    VStack(alignment: .leading, spacing: 4) {
+                        TextField("172.18.0.5, 10.0.0.0/8", text: $draftTrustedProxies)
+                        Text("仅来自这些 IP / CIDR 的连接，其 X-Forwarded-For / X-Real-IP 才会记为事件的请求源 IP；不影响入站认证与 CIDR 白名单。留空则事件始终记录连接对端。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 if let listenerError {
                     Label(listenerError, systemImage: "exclamationmark.triangle.fill")
                         .font(.caption)
@@ -245,18 +254,28 @@ struct SecurityPane: View {
         draftHost = model.config.listener.host
         draftPort = String(model.config.listener.port)
         draftCIDRs = model.config.listener.allowedCIDRs.joined(separator: ", ")
+        draftTrustedProxies = model.config.listener.trustedProxyCIDRs.joined(separator: ", ")
         listenerError = nil
     }
 
     private var listenerDirty: Bool {
         parsedCIDRs != model.config.listener.allowedCIDRs
+            || parsedTrustedProxies != model.config.listener.trustedProxyCIDRs
             || draftHost != model.config.listener.host
             || draftPort != String(model.config.listener.port)
     }
 
     /// 逗号/空白分隔;保留用户输入顺序,过滤空片段(输入中途的尾随逗号不再被吞)。
     private var parsedCIDRs: [String] {
-        draftCIDRs
+        Self.splitCIDRList(draftCIDRs)
+    }
+
+    private var parsedTrustedProxies: [String] {
+        Self.splitCIDRList(draftTrustedProxies)
+    }
+
+    private static func splitCIDRList(_ text: String) -> [String] {
+        text
             .split { $0 == "," || $0 == " " || $0 == "\n" || $0 == "\t" }
             .map(String.init)
             .filter { !$0.isEmpty }
@@ -277,6 +296,9 @@ struct SecurityPane: View {
         }
         for cidr in parsedCIDRs where !ClientAccessControl.isValidCIDR(cidr) {
             return "CIDR 格式不正确:\(cidr)"
+        }
+        for cidr in parsedTrustedProxies where !ClientAccessControl.isValidCIDR(cidr) {
+            return "可信代理格式不正确:\(cidr)"
         }
         return nil
     }
@@ -299,7 +321,8 @@ struct SecurityPane: View {
         model.updateListener(
             host: draftHost.trimmingCharacters(in: .whitespaces),
             port: Int(draftPort.trimmingCharacters(in: .whitespaces)) ?? model.config.listener.port,
-            allowedCIDRs: parsedCIDRs
+            allowedCIDRs: parsedCIDRs,
+            trustedProxyCIDRs: parsedTrustedProxies
         )
     }
 

@@ -1482,6 +1482,7 @@ public enum AdminWire {
             public let host: String
             public let port: Int
             public let allowedCIDRs: [String]
+            public let trustedProxyCIDRs: [String]?
             public let hasAuthToken: Bool
         }
         public struct Counters: Decodable, Equatable, Sendable {
