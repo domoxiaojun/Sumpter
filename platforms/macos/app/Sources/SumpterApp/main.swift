@@ -14,7 +14,17 @@ struct SumpterNativeApp: App {
         //
         // SwiftUI App 要求至少声明一个 Scene;本 app 是 LSUIElement(无 Dock 图标、
         // 无应用菜单栏),Settings 场景不会被显示出来,只用于满足这个要求。
+        // 主窗口打开后 activation policy 切到 regular，此时应用菜单会显示
+        // 「检查更新…」；菜单栏图标右键和关于页也走同一更新器。
         Settings { EmptyView() }
+            .commands {
+                CommandGroup(after: .appInfo) {
+                    Button("检查更新…") {
+                        AppUpdateController.shared.checkForUpdates()
+                    }
+                    .disabled(!AppUpdateController.shared.canCheckForUpdates)
+                }
+            }
     }
 }
 
@@ -29,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         MainActor.assumeIsolated {
             NativeNotifier.shared.configure()
+            AppUpdateController.shared.startIfNeeded()
             statusItemController = StatusItemController(model: AppModel())
         }
     }

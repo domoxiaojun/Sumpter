@@ -1,7 +1,6 @@
 import AppKit
 import Combine
 import SumpterCore
-import Sparkle
 import SwiftUI
 
 /// 菜单栏状态项:**左键直接打开主窗口,右键弹操作菜单**。
@@ -14,24 +13,14 @@ final class StatusItemController: NSObject {
     private let model: AppModel
     private let statusItem: NSStatusItem
     private let settingsWindow: SettingsWindowController
-    /// 仅在打包时提供了 appcast 后启用，避免本地 SwiftPM 调试包启动时弹出
-    /// Sparkle 配置错误提示。生产包由 package-app.sh 写入 SUFeedURL。
-    private let updaterController: SPUStandardUpdaterController?
+    private let updater: AppUpdateController
     private var indicatorObserver: AnyCancellable?
 
-    init(model: AppModel) {
+    init(model: AppModel, updater: AppUpdateController = .shared) {
         self.model = model
+        self.updater = updater
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         self.settingsWindow = SettingsWindowController(model: model)
-        if Self.hasUpdateFeed {
-            self.updaterController = SPUStandardUpdaterController(
-                startingUpdater: true,
-                updaterDelegate: nil,
-                userDriverDelegate: nil
-            )
-        } else {
-            self.updaterController = nil
-        }
         super.init()
 
         if let button = statusItem.button {
@@ -110,7 +99,7 @@ final class StatusItemController: NSObject {
             menuItem(
                 title: "检查更新…",
                 action: #selector(menuCheckForUpdates),
-                enabled: updaterController != nil
+                enabled: updater.canCheckForUpdates
             )
         )
         menu.addItem(menuItem(title: "打开配置目录", action: #selector(menuOpenConfigDirectory)))
@@ -142,20 +131,9 @@ final class StatusItemController: NSObject {
     @objc private func menuToggleProxy() { model.toggleProxy() }
     @objc private func menuRefresh() { model.refresh() }
     @objc private func menuReloadConfig() { model.reloadConfigFromDisk() }
-    @objc private func menuCheckForUpdates() { updaterController?.checkForUpdates(nil) }
+    @objc private func menuCheckForUpdates() { updater.checkForUpdates() }
     @objc private func menuOpenConfigDirectory() { model.openConfigDirectory() }
     @objc private func menuQuit() { model.shutdownAndQuit() }
-
-    private static var hasUpdateFeed: Bool {
-        guard let rawURL = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String,
-              !rawURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              URL(string: rawURL) != nil,
-              let publicKey = Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String,
-              !publicKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return false
-        }
-        return true
-    }
 }
 
 /// 主设置窗口。由 AppKit 持有而不是 SwiftUI `Window` scene:状态项的点击回调在

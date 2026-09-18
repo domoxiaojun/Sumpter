@@ -165,6 +165,12 @@ struct HelpPane: View {
 
 struct AboutPane: View {
     @ObservedObject var model: AppModel
+    @ObservedObject var updater: AppUpdateController
+
+    init(model: AppModel, updater: AppUpdateController = .shared) {
+        self.model = model
+        self.updater = updater
+    }
 
     private var appVersion: String {
         if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
@@ -182,7 +188,7 @@ struct AboutPane: View {
                         .fixedSize(horizontal: false, vertical: true)
                     Divider()
                     AboutRow(title: "作者 / Maintainer", value: "Domo Mido")
-                    AboutRow(title: "版本", value: appVersion)
+                    AboutVersionRow(version: appVersion, updater: updater)
                     AboutRow(title: "许可证", value: "MIT License")
                     AboutRow(title: "配置", value: model.configPath.isEmpty ? "尚未读取" : model.configPath)
                 }
@@ -266,6 +272,41 @@ private struct AboutRow: View {
             Text(title).foregroundStyle(.secondary).frame(width: 150, alignment: .leading)
             Text(value).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
+        }
+    }
+}
+
+private struct AboutVersionRow: View {
+    let version: String
+    @ObservedObject var updater: AppUpdateController
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 16) {
+                Text("版本").foregroundStyle(.secondary).frame(width: 150, alignment: .leading)
+                Text(version).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                Button("检查更新…") {
+                    updater.checkForUpdates()
+                }
+                .disabled(!updater.canCheckForUpdates)
+                .help(updater.availability.userMessage ?? "从 Sparkle 更新源检查新版本")
+                .accessibilityLabel("检查更新")
+                .accessibilityHint(updater.availability.userMessage ?? "打开更新检查对话框")
+            }
+            if let message = updater.availability.userMessage {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 166)
+                Link(
+                    "打开 GitHub Releases",
+                    destination: URL(string: "https://github.com/domoxiaojun/sumpter/releases/latest")!
+                )
+                .font(.caption)
+                .padding(.leading, 166)
+            }
         }
     }
 }

@@ -112,7 +112,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .statistics: "按请求用途、入口和模型看成功率、延迟与成本。"
         case .diagnostics: "配置路径、最近请求和诊断捕获。"
         case .help: "快速开始、客户端接入、常见问题与安全边界。"
-        case .about: "版本、许可证、作者与项目链接。"
+        case .about: "版本、检查更新、许可证、作者与项目链接。"
         }
     }
 
