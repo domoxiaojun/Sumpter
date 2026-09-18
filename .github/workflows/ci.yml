@@ -97,7 +97,7 @@ jobs:
 
   macos:
     name: macOS App
-    # 稳定工具链版本由 platforms/macos/app/select-xcode.sh 统一校验。
+    # 完整 Xcode 工具链由 platforms/macos/app/select-xcode.sh 统一选择。
     runs-on: macos-26
     timeout-minutes: 30
     steps:
@@ -105,7 +105,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Select stable Xcode toolchain
+      - name: Select current Xcode toolchain
         run: |
           set -euo pipefail
           selected="$(bash platforms/macos/app/select-xcode.sh)"

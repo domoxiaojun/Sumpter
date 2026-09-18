@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
-# CI、Release、本地检查与打包共用的稳定工具链基线；stdout 只输出 Developer 路径。
+# CI、Release、本地检查与打包共用的完整 Xcode 选择器；stdout 只输出 Developer 路径。
 set -euo pipefail
-
-required_version=26.6
-required_build=17F113
-required_sdk=26.5
 
 if [[ -n "${DEVELOPER_DIR:-}" ]]; then
   candidates=("$DEVELOPER_DIR")
 else
-  candidates=(
-    "/Applications/Xcode_${required_version}.app/Contents/Developer"
-    "/Applications/Xcode.app/Contents/Developer"
-    "$(xcode-select -p 2>/dev/null || true)"
-  )
+  candidates=()
+  # 直接沿用 xcode-select 当前选中的完整 Xcode；若当前选择是
+  # CommandLineTools 或路径失效，再从 /Applications 下的 Xcode 兜底。
+  selected_by_xcode_select="$(xcode-select -p 2>/dev/null || true)"
+  [[ -n "$selected_by_xcode_select" ]] && candidates+=("$selected_by_xcode_select")
+  # 允许并行安装任意版本的 Xcode。未匹配的 glob 会保留字面量，
+  # 后续的 -d 检查会将其过滤掉。
+  for app in /Applications/Xcode*.app; do
+    [[ -d "$app" ]] && candidates+=("$app/Contents/Developer")
+  done
 fi
 
 for candidate in "${candidates[@]}"; do
@@ -23,18 +24,14 @@ for candidate in "${candidates[@]}"; do
   esac
   [[ -x "$candidate/usr/bin/xcodebuild" ]] || continue
   [[ -x "$candidate/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift" ]] || continue
-  version_output="$(DEVELOPER_DIR="$candidate" "$candidate/usr/bin/xcodebuild" -version 2>/dev/null)" || continue
-  version="$(printf '%s\n' "$version_output" | awk '$1 == "Xcode" { print $2; exit }')"
-  build="$(printf '%s\n' "$version_output" | awk '$1 == "Build" && $2 == "version" { print $3; exit }')"
-  [[ "$version" == "$required_version" && "$build" == "$required_build" ]] || continue
-  sdk="$(DEVELOPER_DIR="$candidate" xcrun --sdk macosx --show-sdk-version 2>/dev/null)" || continue
-  [[ "$sdk" == "$required_sdk" ]] || continue
+  sdk_path="$(DEVELOPER_DIR="$candidate" xcrun --sdk macosx --show-sdk-path 2>/dev/null)" || continue
+  [[ -n "$sdk_path" && -d "$sdk_path" && "$sdk_path" != *CommandLineTools* ]] || continue
   printf '%s\n' "$candidate"
   exit 0
 done
 
-echo "需要 Xcode ${required_version} (${required_build}) / macOS SDK ${required_sdk}；请安装该稳定版工具链。" >&2
+echo "找不到可用的完整 Xcode 工具链；请安装 Xcode，或通过 DEVELOPER_DIR 指向其 Contents/Developer 目录。" >&2
 if [[ -n "${DEVELOPER_DIR:-}" ]]; then
-  echo "DEVELOPER_DIR=$DEVELOPER_DIR 未匹配；请指向该版本的 Xcode，或取消覆盖以使用默认安装位置。" >&2
+  echo "DEVELOPER_DIR=$DEVELOPER_DIR 未匹配；请指向完整 Xcode，或取消覆盖以使用 /Applications 下的安装。" >&2
 fi
 exit 1

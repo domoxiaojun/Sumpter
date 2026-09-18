@@ -321,8 +321,8 @@ acquire_lock() {
 }
 
 ensure_xcode_toolchain() {
-  # 先通过共享选择器锁定稳定版本，再执行下面的完整 Swift/SDK 校验。
-  # 这样直接调用 package-app.sh 也不会绕过 CI 的工具链基线。
+  # 先通过共享选择器使用当前完整 Xcode，再执行下面的 Swift/SDK 校验。
+  # 这样直接调用 package-app.sh 也不会绕过完整工具链检查。
   local selected_by_policy
   selected_by_policy="$(bash "$ROOT/select-xcode.sh")"
   export DEVELOPER_DIR="$selected_by_policy"

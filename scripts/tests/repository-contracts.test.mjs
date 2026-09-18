@@ -56,11 +56,11 @@ test('shared onboarding facts stay in both USAGE files', () => {
     }
   }
 });
-test('macOS build paths pin the same stable Xcode and SDK baseline', () => {
+test('macOS build paths select a complete Xcode toolchain', () => {
   const selector = text('platforms/macos/app/select-xcode.sh');
-  assert.match(selector, /required_version=26\.6/);
-  assert.match(selector, /required_build=17F113/);
-  assert.match(selector, /required_sdk=26\.5/);
+  assert.match(selector, /Xcode\*\.app/);
+  assert.match(selector, /CommandLineTools/);
+  assert.doesNotMatch(selector, /required_version|required_build|required_sdk/);
   for (const workflow of ['.github/workflows/ci.yml', '.github/workflows/release.yml']) {
     assert.match(text(workflow), /runs-on: macos-26/);
     assert.match(text(workflow), /select-xcode\.sh/);
