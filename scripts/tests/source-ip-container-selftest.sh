@@ -33,10 +33,29 @@ PROJECT="sumpter-source-ip-$$"
 FAILED=0
 note() { echo "[source-ip] $*"; }
 fail() { echo "[source-ip] 失败：$*" >&2; FAILED=1; }
+# 运行镜像以 root + cap_drop ALL 启动，没有 CAP_DAC_OVERRIDE。
+# 与 DOCKER.md「自备 config.json 与初始密码」一样，文件必须属于容器内 root，
+# 否则宿主机用户的 0600 凭据会 Permission denied。
+own_config() {
+    if [[ "$(id -u)" -eq 0 ]]; then
+        chown -R root:root "$WORK/config"
+    else
+        sudo -n chown -R root:root "$WORK/config"
+    fi
+}
+remove_work() {
+    if [[ "$(id -u)" -eq 0 ]]; then
+        rm -rf "$WORK"
+    elif sudo -n rm -rf "$WORK" 2>/dev/null; then
+        :
+    else
+        rm -rf "$WORK"
+    fi
+}
 cleanup() {
     docker compose -p "$PROJECT" -f "$WORK/compose.yaml" logs --no-color sumpter nginx 2>/dev/null | tail -n 80 || true
     docker compose -p "$PROJECT" -f "$WORK/compose.yaml" down -v --remove-orphans >/dev/null 2>&1 || true
-    rm -rf "$WORK"
+    remove_work
 }
 trap cleanup EXIT
 
@@ -48,6 +67,7 @@ cat >"$WORK/config/config.json" <<EOF
 EOF
 printf '%s\n' "$ADMIN_PASSWORD" >"$WORK/config/admin-password"
 chmod 600 "$WORK/config/config.json" "$WORK/config/admin-password"
+own_config
 
 # Nginx 配置直接来自仓库示例：map 留在 http 级，location 包进 server；后端改为服务名。
 awk '
