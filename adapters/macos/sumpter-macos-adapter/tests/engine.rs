@@ -2113,7 +2113,8 @@ async fn notify_events_use_trusted_proxy_client_ip() {
     let mut config = two_endpoint_config();
     config.listener.trusted_proxy_cidrs = vec!["127.0.0.1".into()];
     let engine = engine_with(config, FakeTransport::new());
-    let body = || Bytes::from(serde_json::to_vec(&json!({"type": "Stop", "message": "done"})).unwrap());
+    let body =
+        || Bytes::from(serde_json::to_vec(&json!({"type": "Stop", "message": "done"})).unwrap());
     let forwarded = vec![("x-forwarded-for".to_string(), "203.0.113.9".to_string())];
 
     let (status, _) = call(
@@ -2155,7 +2156,10 @@ async fn notify_events_use_trusted_proxy_client_ip() {
         .map(|event| event.source_ip.clone().unwrap_or_default())
         .collect::<Vec<_>>();
     notify_ips.sort();
-    assert_eq!(notify_ips, vec!["10.0.0.9".to_string(), "203.0.113.9".to_string()]);
+    assert_eq!(
+        notify_ips,
+        vec!["10.0.0.9".to_string(), "203.0.113.9".to_string()]
+    );
 }
 
 #[tokio::test]
