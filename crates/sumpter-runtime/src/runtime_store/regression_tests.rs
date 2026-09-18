@@ -305,7 +305,7 @@ fn completion_watermark_migration_preserves_current_database_rows() {
     drop(db);
     drop(store);
     let db = Connection::open(&path).unwrap();
-    db.execute_batch("DROP INDEX runtime_events_completion_change; ALTER TABLE runtime_events DROP COLUMN completed_change_seq; DELETE FROM runtime_meta WHERE key='completion_watermark_version'; UPDATE runtime_meta SET value='999' WHERE key='schema_version'; UPDATE runtime_counters SET client_requests=99;").unwrap();
+    db.execute_batch("DROP INDEX runtime_events_completion_change; ALTER TABLE runtime_events DROP COLUMN completed_change_seq; DELETE FROM runtime_meta WHERE key='completion_watermark_version'; UPDATE runtime_meta SET value='999' WHERE key='schema_version'; UPDATE runtime_counters SET client_requests=99; PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
     drop(db);
     let before = std::fs::read(&path).unwrap();
     assert!(RuntimeStore::new(&path).is_err());

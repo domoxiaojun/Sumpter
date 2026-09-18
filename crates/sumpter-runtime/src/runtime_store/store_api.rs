@@ -338,6 +338,9 @@ impl RuntimeStore {
                 if let Some(worker_inner) = worker_ref.upgrade() {
                     let _ = commit_pending(&worker_inner, &mut connection, &mut pending);
                 }
+                // 最后一个 writer 必须在 join 返回前把 WAL 折进主库。
+                // 否则下一个只读打开会在部分平台上改写主文件，或看到残留 -wal。
+                let _ = connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
             })
             .map_err(|error| error.to_string())?;
         let worker = Arc::new(super::WorkerLifecycle {
