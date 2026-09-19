@@ -112,6 +112,15 @@
           ],
           "thinking": "passthrough",
           "context": "standard"
+        },
+        {
+          "clientPattern": "gpt-realtime-2.1",
+          "upstreamModel": "gpt-realtime-2.1",
+          "capabilities": [
+            "live"
+          ],
+          "thinking": "passthrough",
+          "context": "standard"
         }
       ]
     }
@@ -126,7 +135,8 @@
         "claude-opus-*",
         "claude-haiku-4-5-20251001",
         "gpt-live-1-codex",
-        "gpt-realtime"
+        "gpt-realtime",
+        "gpt-realtime-2.1"
       ],
       "bindings": [
         {
@@ -145,7 +155,8 @@
             "claude-opus-*",
             "claude-haiku-4-5-20251001",
             "gpt-live-1-codex",
-            "gpt-realtime"
+            "gpt-realtime",
+            "gpt-realtime-2.1"
           ]
         }
       ]

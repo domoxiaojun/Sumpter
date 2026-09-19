@@ -695,31 +695,7 @@ impl Endpoint {
                 capability,
             )
         };
-        let direct = best_mapping(&self.mappings, &cleaned, serves);
-        if direct.is_some() {
-            return direct;
-        }
-
-        // CPA's Codex OAuth handler normalizes the public Realtime family to
-        // `gpt-live-1-codex` for provider selection.  Preserve the caller's
-        // logical model in the route plan, but allow an installation that
-        // declares only the private mapping to serve `gpt-realtime` and
-        // `realtime-preview*` requests.  This alias is intentionally scoped
-        // to the Live capability; text/image routes never see it.
-        if capability == ModelCapability::Live
-            && crate::capability::is_realtime_model_name(&cleaned)
-        {
-            let live_model = "gpt-live-1-codex";
-            return best_mapping(&self.mappings, live_model, |mapping| {
-                crate::capability::mapping_serves_capability(
-                    &mapping.capabilities,
-                    &mapping.client_pattern,
-                    live_model,
-                    capability,
-                )
-            });
-        }
-        None
+        best_mapping(&self.mappings, &cleaned, serves)
     }
 }
 

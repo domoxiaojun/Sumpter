@@ -1441,8 +1441,8 @@ fn explicit_mapping_capabilities_override_name_inference_for_routing() {
 }
 
 #[test]
-fn realtime_public_model_aliases_use_private_codex_live_mapping() {
-    let mut endpoint = endpoint(
+fn public_realtime_requires_its_own_mapping_and_preserves_the_public_model() {
+    let mut private = endpoint(
         "cpa",
         vec![ModelMapping {
             client_pattern: "gpt-live-1-codex".into(),
@@ -1451,9 +1451,9 @@ fn realtime_public_model_aliases_use_private_codex_live_mapping() {
             ..mapping("gpt-live-1-codex", "")
         }],
     );
-    endpoint.protocol = EndpointProtocolMode::OpenAI;
+    private.protocol = EndpointProtocolMode::OpenAI;
     let config = AppConfig {
-        endpoints: vec![endpoint],
+        endpoints: vec![private],
         feature_rules: vec![],
         listener: ListenerConfig::default(),
         retry: RetryPolicy::default(),
@@ -1463,23 +1463,46 @@ fn realtime_public_model_aliases_use_private_codex_live_mapping() {
     }
     .normalized();
 
-    let plan = RoutePlanner::plan_for_capability(
-        &request_from(json!({"model": "gpt-realtime"})),
+    let error = RoutePlanner::plan_for_capability(
+        &request_from(json!({"model": "gpt-realtime-2.1"})),
         &config,
         ProviderProtocol::OpenAI,
         ModelCapability::Live,
     )
-    .expect("private Live mapping should serve public Realtime alias");
-    assert_eq!(plan.client_model, "gpt-realtime");
-    assert_eq!(plan.endpoints[0].routed_model, "gpt-realtime");
-    assert_eq!(plan.endpoints[0].upstream_model, "gpt-live-1-codex");
+    .expect_err("private Codex Live mapping must not claim public Realtime");
+    assert!(matches!(
+        error,
+        RoutePlanError::NoProviderForCapability { .. }
+    ));
 
-    let preview = RoutePlanner::plan_for_capability(
-        &request_from(json!({"model": "realtime-preview-2025"})),
+    let mut public = endpoint(
+        "cpa",
+        vec![ModelMapping {
+            client_pattern: "gpt-realtime-2.1".into(),
+            upstream_model: "gpt-realtime-2.1".into(),
+            capabilities: vec![ModelCapability::Live],
+            ..mapping("gpt-realtime-2.1", "gpt-realtime-2.1")
+        }],
+    );
+    public.protocol = EndpointProtocolMode::OpenAI;
+    let config = AppConfig {
+        endpoints: vec![public],
+        feature_rules: vec![],
+        listener: ListenerConfig::default(),
+        retry: RetryPolicy::default(),
+        session_sticky_ttl_hours: DEFAULT_SESSION_STICKY_TTL_HOURS,
+        schema_version: SCHEMA_VERSION,
+        model_groups: None,
+    }
+    .normalized();
+    let plan = RoutePlanner::plan_for_capability(
+        &request_from(json!({"model": "gpt-realtime-2.1"})),
         &config,
         ProviderProtocol::OpenAI,
         ModelCapability::Live,
     )
-    .expect("realtime-preview should share the alias scope");
-    assert_eq!(preview.endpoints[0].upstream_model, "gpt-live-1-codex");
+    .expect("public Realtime mapping should be routable");
+    assert_eq!(plan.client_model, "gpt-realtime-2.1");
+    assert_eq!(plan.endpoints[0].routed_model, "gpt-realtime-2.1");
+    assert_eq!(plan.endpoints[0].upstream_model, "gpt-realtime-2.1");
 }

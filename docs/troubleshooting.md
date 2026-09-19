@@ -47,7 +47,7 @@ Linux systemd 查看 `journalctl`；Compose 查看 `docker compose logs`。确�
 
 ### Live / Realtime / Video 失败
 
-这些能力需要上游真实支持，并在入口配置精确能力映射。普通文本的通配 mapping 不会承接 Live；Codex Live 需要 `gpt-live-1-codex`。能获取模型列表不等于能完成 WebSocket 握手或异步资源后续请求。
+这些能力需要上游真实支持，并在入口配置精确能力映射。普通文本的通配 mapping 不会承接 Live。Codex Live 的 `/v1/live` / Quicksilver 路径需要私有 `gpt-live-1-codex`；标准 `/v1/realtime` 与 `/v1/realtime/client_secrets` 使用公开 `gpt-realtime-2.1`，向 CPA 转发时不要把它预先改写成私有模型。能获取模型列表不等于能完成 WebSocket 握手或异步资源后续请求。
 
 ### 只有某个会话失败
 

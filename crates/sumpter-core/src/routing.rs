@@ -1117,11 +1117,10 @@ impl RoutePlanner {
         {
             return result;
         }
-        // Capability routes may use CPA's public Realtime aliases even when
-        // the configuration intentionally declares only the private
-        // `gpt-live-1-codex` mapping.  Check the capability-aware mapping
-        // surface instead of the text-model union in that case; a broad text
-        // wildcard still cannot satisfy image/video/live requests.
+        // Capability routes use the capability-aware mapping surface instead
+        // of the text-model union; a broad text wildcard still cannot satisfy
+        // image/video/live requests. Public Realtime and private Codex Live
+        // models intentionally require separate mappings.
         let model_is_mapped = match capability {
             Some(wanted) => config.routing_endpoints().iter().any(|scoped| {
                 let endpoint = &scoped.endpoint;
@@ -1308,25 +1307,10 @@ impl RoutePlanner {
                 } else {
                     configured_protocol.resolve(source_format, protocol_override)?
                 };
-                let mut upstream_model = mapping
+                let upstream_model = mapping
                     .as_ref()
                     .map(|m| m.upstream_model_for(effective_model))
                     .unwrap_or_else(|| effective_model.to_string());
-                // A legacy/compact config often leaves `upstreamModel` empty
-                // on the private Live mapping.  When that mapping is being
-                // used as the alias target for a public Realtime model, the
-                // OAuth upstream still expects its canonical Codex model.
-                // Keep `routed_model` (and therefore event attribution) as
-                // the caller's logical `gpt-realtime` value.
-                if capability == Some(crate::capability::ModelCapability::Live)
-                    && upstream_model == effective_model
-                    && crate::capability::is_realtime_model_name(effective_model)
-                    && mapping.as_ref().is_some_and(|mapping| {
-                        model_name::clean(&mapping.client_pattern) == "gpt-live-1-codex"
-                    })
-                {
-                    upstream_model = "gpt-live-1-codex".into();
-                }
                 Some(PlannedEndpoint {
                     endpoint_id: endpoint.id.clone(),
                     endpoint_name: endpoint.name.clone(),

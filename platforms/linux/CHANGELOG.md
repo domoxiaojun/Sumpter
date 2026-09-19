@@ -6,9 +6,15 @@
 
 ## [Unreleased]
 
+## [0.4.19] - 2026-09-19
+
 ### 新增
 
 - macOS「关于」页版本行提供「检查更新…」按钮；主窗口打开后的应用菜单与菜单栏图标右键菜单共用同一 Sparkle 更新器。开发包未写入更新源时按钮禁用，并给出从 GitHub Releases 安装正式版的说明。
+
+### 修复
+
+- Codex 实时语音对齐 CPA v7.3.8：标准 Realtime 保留公开 `gpt-realtime-2.1` 模型名，`/v1/live` / Quicksilver 继续使用私有 `gpt-live-1-codex`，避免把公开 WebSocket 请求提前改写到错误的私有协议模型。
 
 ## [0.4.18] - 2026-09-18
 
