@@ -16,6 +16,30 @@ use super::{
     validate_retention_update,
 };
 
+/// Checkpoint WAL, close the writer, then remove sidecar files left behind.
+fn release_sqlite_sidecars(connection: Connection, path: &Path) {
+    let mut idle = false;
+    for _ in 0..8 {
+        match connection.query_row("PRAGMA wal_checkpoint(TRUNCATE)", params![], |row| {
+            row.get(0)
+        }) {
+            Ok(0) => {
+                idle = true;
+                break;
+            }
+            _ => thread::sleep(Duration::from_millis(50)),
+        }
+    }
+    drop(connection);
+    if !idle {
+        return;
+    }
+    for suffix in ["-wal", "-shm"] {
+        let sidecar = PathBuf::from(format!("{}{suffix}", path.display()));
+        let _ = std::fs::remove_file(sidecar);
+    }
+}
+
 impl RuntimeStore {
     pub fn new(path: impl Into<PathBuf>) -> Result<(Self, RuntimeSnapshot), String> {
         let path = path.into();
@@ -62,7 +86,7 @@ impl RuntimeStore {
         let worker_thread = thread::Builder::new()
             .name("runtime-sqlite".into())
             .spawn(move || {
-                let mut connection = match Connection::open(worker_path) {
+                let mut connection = match Connection::open(&worker_path) {
                     Ok(connection) => connection,
                     Err(error) => {
                         if let Some(worker_inner) = worker_ref.upgrade() {
@@ -75,6 +99,7 @@ impl RuntimeStore {
                     if let Some(worker_inner) = worker_ref.upgrade() {
                         worker_inner.state.lock().unwrap().last_error = Some(error.to_string());
                     }
+                    release_sqlite_sidecars(connection, &worker_path);
                     return;
                 }
                 let mut projection_maintenance =
@@ -338,9 +363,10 @@ impl RuntimeStore {
                 if let Some(worker_inner) = worker_ref.upgrade() {
                     let _ = commit_pending(&worker_inner, &mut connection, &mut pending);
                 }
-                // 最后一个 writer 必须在 join 返回前把 WAL 折进主库。
-                // 否则下一个只读打开会在部分平台上改写主文件，或看到残留 -wal。
-                let _ = connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+                // 最后一个 writer 必须在线程退出前把 WAL 折进主库并关掉连接。
+                // checkpoint 成功后若仍留下 -wal/-shm，关闭连接池时的并发收尾
+                // 可能没能删掉它们；下一个只读打开就会看到残留日志。
+                release_sqlite_sidecars(connection, &worker_path);
             })
             .map_err(|error| error.to_string())?;
         let worker = Arc::new(super::WorkerLifecycle {

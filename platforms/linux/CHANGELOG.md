@@ -16,6 +16,7 @@
 
 - Live / Realtime 改为入口级原生能力：上游即使不在 `/v1/models` 返回 `gpt-live-1-codex` 或 `gpt-realtime-2.1`，也可由启用 `capabilities: ["live"]` 的入口原样透传，无需伪造模型 mapping 或模型组项目。Linux 与 macOS 入口编辑器同步提供该开关。
 - 请求失败后的故障转移不再打到模型组内已停用的入口。分流规则钉住该入口时，若组内绑定或入口库已停用，改走其余启用绑定。
+- 关闭最后一个 runtime 写入连接时，确认 WAL checkpoint 完成后再删掉残留的 `-wal` / `-shm`，避免下一个只读打开碰到未折入的日志。
 
 ## [0.4.20] - 2026-09-19
 
