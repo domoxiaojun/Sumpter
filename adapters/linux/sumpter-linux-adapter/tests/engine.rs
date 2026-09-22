@@ -12,6 +12,9 @@ mod gemini;
 #[path = "../../../../tests/contracts/model_scope.rs"]
 mod model_scope;
 
+#[path = "../../../../tests/contracts/disabled_binding_failover.rs"]
+mod disabled_binding_failover;
+
 #[path = "../../../../tests/contracts/round_robin.rs"]
 mod round_robin;
 

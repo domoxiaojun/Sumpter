@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 use sumpter_core::config::{AppConfig, ProviderProtocol};
-use sumpter_core::routing::{RoutePlanner, RoutingRequest};
+use sumpter_core::routing::{RoutePlanError, RoutePlanner, RoutingRequest};
 
 fn config() -> AppConfig {
     serde_json::from_value(json!({
@@ -24,6 +24,16 @@ fn route(config: &AppConfig, model: &str) -> Vec<sumpter_core::routing::PlannedE
     RoutePlanner::plan_for_passthrough(&request, config, ProviderProtocol::OpenAIResponses)
         .unwrap()
         .endpoints
+}
+
+fn pin_rule(endpoint_id: &str, model: &str) -> Value {
+    json!({
+        "id": "pin",
+        "enabled": true,
+        "name": "pin",
+        "match": {"modelEquals": model},
+        "target": {"endpointID": endpoint_id, "model": model}
+    })
 }
 
 #[test]
@@ -467,4 +477,102 @@ fn broad_group_and_binding_preserve_narrow_endpoint_wildcard() {
     assert_eq!(route(&c, "gpt-5.5")[0].endpoint_id, "a");
     assert!(!c.matches_model("gpt-6-astra"));
     assert!(!c.matches_model("claude-x"));
+}
+
+#[test]
+fn disabled_group_binding_leaves_the_failover_plan() {
+    let mut c = config();
+    c.model_groups.as_mut().unwrap()[0].bindings[0].enabled = false;
+    assert_eq!(
+        route(&c, "gpt-x")
+            .iter()
+            .map(|endpoint| endpoint.endpoint_id.as_str())
+            .collect::<Vec<_>>(),
+        ["a", "c"]
+    );
+}
+
+#[test]
+fn library_disabled_endpoint_leaves_the_group_plan() {
+    let mut c = config();
+    c.endpoints
+        .iter_mut()
+        .find(|endpoint| endpoint.id == "b")
+        .unwrap()
+        .enabled = false;
+    assert_eq!(
+        route(&c, "gpt-x")
+            .iter()
+            .map(|endpoint| endpoint.endpoint_id.as_str())
+            .collect::<Vec<_>>(),
+        ["a", "c"]
+    );
+}
+
+#[test]
+fn pinned_rule_skips_group_disabled_binding_and_keeps_other_enabled_bindings() {
+    let mut c = config();
+    c.model_groups.as_mut().unwrap()[0].bindings[0].enabled = false;
+    c.feature_rules = vec![serde_json::from_value(pin_rule("b", "gpt-x")).unwrap()];
+    let plan = RoutePlanner::plan_for_passthrough(
+        &RoutingRequest::from_value(&json!({"model":"gpt-x"})).unwrap(),
+        &c,
+        ProviderProtocol::OpenAIResponses,
+    )
+    .unwrap();
+    assert_eq!(plan.feature_rule_id.as_deref(), Some("pin"));
+    assert_eq!(
+        plan.endpoints
+            .iter()
+            .map(|endpoint| endpoint.endpoint_id.as_str())
+            .collect::<Vec<_>>(),
+        ["a", "c"]
+    );
+}
+
+#[test]
+fn pinned_rule_fails_when_every_group_binding_is_disabled() {
+    let mut c = config();
+    for group in c.model_groups.as_mut().unwrap() {
+        for binding in &mut group.bindings {
+            binding.enabled = false;
+        }
+    }
+    c.feature_rules = vec![serde_json::from_value(pin_rule("b", "gpt-x")).unwrap()];
+    let error = RoutePlanner::plan_for_passthrough(
+        &RoutingRequest::from_value(&json!({"model":"gpt-x"})).unwrap(),
+        &c,
+        ProviderProtocol::OpenAIResponses,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        RoutePlanError::NoCompatibleProvider {
+            source_format: "openai-responses".into(),
+        }
+    );
+}
+
+#[test]
+fn pinned_rule_uses_the_same_endpoint_through_another_enabled_binding() {
+    let mut c = config();
+    c.model_groups.as_mut().unwrap()[0].bindings[0].enabled = false;
+    c.model_groups.as_mut().unwrap()[1].bindings.push(
+        serde_json::from_value(json!({"endpointID":"b","priority":1,"models":null})).unwrap(),
+    );
+    c.feature_rules = vec![serde_json::from_value(pin_rule("b", "gpt-x")).unwrap()];
+    let endpoints = route(&c, "gpt-x");
+    assert_eq!(endpoints.len(), 1);
+    assert_eq!(endpoints[0].endpoint_id, "b");
+    assert_eq!(endpoints[0].model_group_id.as_deref(), Some("backup"));
+}
+
+#[test]
+fn enabled_binding_pin_still_bypasses_group_model_scope() {
+    let mut c = config();
+    c.feature_rules = vec![serde_json::from_value(pin_rule("a", "not-listed")).unwrap()];
+    let endpoints = route(&c, "not-listed");
+    assert_eq!(endpoints.len(), 1);
+    assert_eq!(endpoints[0].endpoint_id, "a");
+    assert_eq!(endpoints[0].upstream_model, "not-listed");
 }

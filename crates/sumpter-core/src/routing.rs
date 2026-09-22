@@ -869,6 +869,26 @@ pub enum RoutePlanError {
     NoProviderForCapability { capability: String },
 }
 
+/// 钉住入口可参与调度：入口库启用；已配置模型组时还须有一条启用的组绑定。
+fn pinned_endpoint_available(config: &AppConfig, endpoint_id: &str) -> bool {
+    let Some(endpoint) = config.endpoint(endpoint_id) else {
+        return false;
+    };
+    if !endpoint.enabled {
+        return false;
+    }
+    match &config.model_groups {
+        None => true,
+        Some(groups) => groups.iter().any(|group| {
+            group.enabled
+                && group
+                    .bindings
+                    .iter()
+                    .any(|binding| binding.enabled && binding.endpoint_id == endpoint_id)
+        }),
+    }
+}
+
 pub struct RoutePlanner;
 
 /// Synthetic model used for native resource requests that do not carry a
@@ -1203,11 +1223,10 @@ impl RoutePlanner {
         } else {
             target.protocol_override
         };
-        let pinned_endpoint_available = target.endpoint_id.as_deref().is_some_and(|endpoint_id| {
-            config
-                .endpoint(endpoint_id)
-                .is_some_and(|endpoint| endpoint.enabled)
-        });
+        let pinned_endpoint_available = target
+            .endpoint_id
+            .as_deref()
+            .is_some_and(|endpoint_id| pinned_endpoint_available(config, endpoint_id));
         let mut endpoints = Self::planned_endpoints(
             config,
             &effective_model,
@@ -1219,7 +1238,8 @@ impl RoutePlanner {
             false,
             capability,
         );
-        // 规则钉住的入口被停用/删除时降级为候选序列 failover,而不是让整条规则失效。
+        // 钉住的入口在入口库停用、被删除，或模型组里已经没有启用绑定时，
+        // 退回其余启用绑定，而不是继续把请求发到组内停用的入口。
         if endpoints.is_empty() && target.endpoint_id.is_some() && !pinned_endpoint_available {
             endpoints = Self::planned_endpoints(
                 config,
@@ -1253,6 +1273,7 @@ impl RoutePlanner {
 
     /// `protocol_override` 非空(分流规则指定协议)时覆盖各入口自身协议;
     /// `pinned_endpoint_id` 非空(规则钉住入口)时只保留该入口并**跳过模型映射筛选**。
+    /// 已有模型组时，钉住入口仍必须来自启用的组绑定。
     #[allow(clippy::too_many_arguments)]
     fn planned_endpoints(
         config: &AppConfig,
@@ -1265,8 +1286,8 @@ impl RoutePlanner {
         allow_unmapped: bool,
         capability: Option<crate::capability::ModelCapability>,
     ) -> Vec<PlannedEndpoint> {
-        let scoped = if pinned_endpoint_id.is_some() {
-            // Explicit feature rules/resource affinity retain their original semantics.
+        let scoped = if pinned_endpoint_id.is_some() && config.model_groups.is_none() {
+            // 没有模型组时，钉住入口保持旧语义：直接使用入口库并跳过映射筛选。
             config
                 .endpoints
                 .iter()
