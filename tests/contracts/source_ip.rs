@@ -1,5 +1,7 @@
-//! Both adapters must retain the network peer across request lifecycle boundaries,
-//! and must only trust forwarded client addresses from configured proxies.
+//! Both adapters must retain the network peer across request lifecycle boundaries
+//! and resolve the event `sourceIP` with the shared rule: `X-Real-IP`, then
+//! `X-Forwarded-For`, then the TCP peer, without a trusted-proxy precondition.
+//! Access control keeps evaluating the TCP peer.
 use super::*;
 
 fn assert_source_ip(engine: &Engine, expected: Option<&str>, count: usize) {
@@ -12,7 +14,8 @@ fn assert_source_ip(engine: &Engine, expected: Option<&str>, count: usize) {
     }
 }
 
-fn spoofed_headers() -> Vec<(String, String)> {
+/// Headers a client or proxy may attach; `Forwarded` is never parsed.
+fn declared_headers() -> Vec<(String, String)> {
     vec![
         ("x-forwarded-for".into(), "198.51.100.99".into()),
         ("forwarded".into(), "for=198.51.100.99".into()),
@@ -20,8 +23,10 @@ fn spoofed_headers() -> Vec<(String, String)> {
     ]
 }
 
+/// Without forwarded headers every event of the request (client, both upstream
+/// attempts) records the TCP peer, IPv4 or IPv6.
 #[tokio::test]
-async fn source_ip_survives_retries_stream_completion_and_spoofed_headers() {
+async fn source_ip_survives_retries_and_stream_completion() {
     for ip in ["127.0.0.1", "::1"] {
         let fake = FakeTransport::new();
         fake.push(
@@ -38,12 +43,41 @@ async fn source_ip_survives_retries_stream_completion_and_spoofed_headers() {
             &engine,
             Some(ip.parse().unwrap()),
             "/v1/messages",
-            spoofed_headers(),
+            vec![],
             body(),
         )
         .await;
         assert_eq!(status, 200);
         assert_source_ip(&engine, Some(ip), 3);
+    }
+}
+
+/// A declared client address needs no trusted-proxy entry: loopback, IPv6 and
+/// private peers all get their `X-Real-IP` recorded for the whole request.
+#[tokio::test]
+async fn declared_client_ip_replaces_source_ip_without_trust_list() {
+    for peer in ["127.0.0.1", "::1", "10.0.0.5"] {
+        let fake = FakeTransport::new();
+        fake.push(
+            "a.example.com",
+            Outcome::Status {
+                status: 503,
+                headers: vec![],
+                chunks: vec![],
+            },
+        );
+        fake.push("b.example.com", sse_ok(&["data: {\"type\":\"ping\"}\n\n"]));
+        let engine = engine_with(two_endpoint_config(), fake);
+        let (status, _) = call(
+            &engine,
+            Some(peer.parse().unwrap()),
+            "/v1/messages",
+            declared_headers(),
+            body(),
+        )
+        .await;
+        assert_eq!(status, 200, "{peer}");
+        assert_source_ip(&engine, Some("198.51.100.99"), 3);
     }
 }
 
@@ -101,15 +135,23 @@ async fn source_ip_records_rejection_and_leaves_unknown_peer_absent() {
     }
 }
 
-/// A trusted proxy peer replaces `sourceIP` with the forwarded client for every
-/// event of the request (client, both upstream attempts, cancellation), while
-/// the same headers from an untrusted peer are ignored.
+/// Header precedence and fallbacks apply to every event of the request
+/// (client, both upstream attempts, cancellation).
 #[tokio::test]
-async fn trusted_proxy_forwarded_client_replaces_source_ip_for_whole_request() {
+async fn forwarded_header_precedence_applies_to_whole_request() {
     let mut config = two_endpoint_config();
     config.listener.trusted_proxy_cidrs = vec!["127.0.0.1".into(), "fd00::/8".into()];
     for (peer, headers, expected) in [
-        // Loopback proxy explicitly trusted: the chain's rightmost untrusted hop wins.
+        // X-Real-IP wins over X-Forwarded-For, whatever the peer is.
+        (
+            "10.0.0.5",
+            vec![
+                ("x-forwarded-for".to_string(), "198.51.100.99".to_string()),
+                ("x-real-ip".to_string(), "192.0.2.10".to_string()),
+            ],
+            "192.0.2.10",
+        ),
+        // Listed proxy hops are skipped from the right of the chain.
         (
             "127.0.0.1",
             vec![(
@@ -118,20 +160,27 @@ async fn trusted_proxy_forwarded_client_replaces_source_ip_for_whole_request() {
             )],
             "198.51.100.99",
         ),
-        // X-Real-IP only when X-Forwarded-For is absent; IPv6 peer and client.
+        // IPv6 peer and client.
         (
             "fd00::1",
             vec![("x-real-ip".to_string(), "[2001:db8::7]".to_string())],
             "2001:db8::7",
         ),
-        // Untrusted peer: forwarded headers are ignored entirely.
-        ("10.0.0.5", spoofed_headers(), "10.0.0.5"),
-        // Trusted peer with a malformed chain falls back to the peer, not X-Real-IP.
+        // A malformed X-Real-IP falls through to X-Forwarded-For.
+        (
+            "127.0.0.1",
+            vec![
+                ("x-real-ip".to_string(), "not-an-ip".to_string()),
+                ("x-forwarded-for".to_string(), "203.0.113.5".to_string()),
+            ],
+            "203.0.113.5",
+        ),
+        // Both malformed: the TCP peer stays.
         (
             "127.0.0.1",
             vec![
                 ("x-forwarded-for".to_string(), "not-an-ip".to_string()),
-                ("x-real-ip".to_string(), "198.51.100.99".to_string()),
+                ("x-real-ip".to_string(), "198.51.100.99:8080".to_string()),
             ],
             "127.0.0.1",
         ),
@@ -159,10 +208,11 @@ async fn trusted_proxy_forwarded_client_replaces_source_ip_for_whole_request() {
         assert_source_ip(&engine, Some(expected), 3);
     }
 
-    // Cancellation after the inbound scope ends keeps the resolved client.
+    // Cancellation after the inbound scope ends keeps the declared client, with
+    // the default (empty) trusted-proxy list.
     let fake = FakeTransport::new();
     fake.push("a.example.com", Outcome::Gated { status: 200 });
-    let engine = engine_with(config.clone(), fake.clone());
+    let engine = engine_with(two_endpoint_config(), fake.clone());
     let response = engine
         .handle_request(
             loopback(),
@@ -188,61 +238,49 @@ async fn trusted_proxy_forwarded_client_replaces_source_ip_for_whole_request() {
 }
 
 /// Forwarded headers never change authentication, the CIDR allow-list or the
-/// loopback-only `/__status` policy: those keep evaluating the TCP peer.
+/// loopback-only `/__status` policy: those keep evaluating the TCP peer, while
+/// the rejection event still records the declared client.
 #[tokio::test]
 async fn forwarded_headers_do_not_affect_access_control() {
-    // 1. allowedCIDRs rejects the peer even though a trusted-looking client is forwarded.
-    let mut config = two_endpoint_config();
-    config.listener.allowed_cidrs = vec!["192.0.2.0/24".into()];
-    config.listener.trusted_proxy_cidrs = vec!["10.0.0.0/8".into()];
-    let engine = engine_with(config, FakeTransport::new());
-    let (status, _) = call(
-        &engine,
-        Some("10.0.0.1".parse().unwrap()),
-        "/v1/messages",
-        vec![("x-forwarded-for".into(), "192.0.2.10".into())],
-        body(),
-    )
-    .await;
-    assert_eq!(status, 403);
-    // The rejection event still records the forwarded client because the peer is trusted.
-    assert_source_ip(&engine, Some("192.0.2.10"), 1);
+    // 1. allowedCIDRs rejects the peer even though an allow-listed client is
+    //    declared, with or without a trusted-proxy list.
+    for trusted in [vec![], vec!["10.0.0.0/8".to_string()]] {
+        let mut config = two_endpoint_config();
+        config.listener.allowed_cidrs = vec!["192.0.2.0/24".into()];
+        config.listener.trusted_proxy_cidrs = trusted;
+        let engine = engine_with(config, FakeTransport::new());
+        let (status, _) = call(
+            &engine,
+            Some("10.0.0.1".parse().unwrap()),
+            "/v1/messages",
+            vec![("x-forwarded-for".into(), "192.0.2.10".into())],
+            body(),
+        )
+        .await;
+        assert_eq!(status, 403);
+        assert_source_ip(&engine, Some("192.0.2.10"), 1);
+    }
 
-    // 2. A forwarded loopback address does not unlock the peer-only status policy,
-    //    and an untrusted peer cannot spoof an allow-listed client.
-    let mut config = two_endpoint_config();
-    config.listener.allowed_cidrs = vec!["192.0.2.0/24".into()];
-    let engine = engine_with(config, FakeTransport::new());
-    let (status, _) = call(
-        &engine,
-        Some("10.0.0.1".parse().unwrap()),
-        "/v1/messages",
-        vec![("x-forwarded-for".into(), "192.0.2.10".into())],
-        body(),
-    )
-    .await;
-    assert_eq!(status, 403);
-    assert_source_ip(&engine, Some("10.0.0.1"), 1);
-
-    let mut config = two_endpoint_config();
-    config.listener.trusted_proxy_cidrs = vec!["10.0.0.0/8".into()];
-    let engine = engine_with(config, FakeTransport::new());
+    // 2. A declared loopback address does not unlock the peer-only status policy.
+    let engine = engine_with(two_endpoint_config(), FakeTransport::new());
     let response = engine
         .handle_request(
             Some("10.0.0.1".parse().unwrap()),
             "GET",
             "/__status",
-            vec![("x-forwarded-for".into(), "127.0.0.1".into())],
+            vec![
+                ("x-forwarded-for".into(), "127.0.0.1".into()),
+                ("x-real-ip".into(), "127.0.0.1".into()),
+            ],
             Bytes::new(),
         )
         .await;
     assert_eq!(response.status(), 403);
 
-    // 3. Inbound auth is unaffected: a trusted proxy without the token is still 401,
-    //    and the rejection is attributed to the forwarded client.
+    // 3. Inbound auth is unaffected: a request without the token is still 401,
+    //    and the rejection is attributed to the declared client.
     let mut config = two_endpoint_config();
     config.listener.auth_token = "test-secret".into();
-    config.listener.trusted_proxy_cidrs = vec!["127.0.0.1".into()];
     let engine = engine_with(config, FakeTransport::new());
     let (status, _) = call(
         &engine,

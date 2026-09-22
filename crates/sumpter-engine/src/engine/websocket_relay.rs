@@ -434,7 +434,7 @@ pub(super) fn websocket_connect_retry_after(
     retry_after_seconds(&headers)
 }
 
-/// `source_ip` 已按可信代理规则解析(与 HTTP 入口同一函数),调用方从
+/// `source_ip` 已按转发头规则解析(与 HTTP 入口同一函数),调用方从
 /// `Engine::inbound_request_context` 取得后传入,握手与中继事件共用一份。
 pub(super) fn websocket_event_context(
     source_ip: Option<String>,

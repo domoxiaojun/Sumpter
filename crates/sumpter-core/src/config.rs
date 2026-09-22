@@ -361,10 +361,10 @@ pub struct ListenerConfig {
     /// Swift 侧为 Int,监听时才校验 u16 范围——此处保持宽容。
     #[serde(default = "ListenerConfig::default_port")]
     pub port: i64,
-    /// 可信反向代理的 IP / CIDR 列表。只有来自这些地址的 TCP 连接,其
-    /// `X-Forwarded-For` / `X-Real-IP` 才会被用作事件 `sourceIP`;鉴权与
-    /// `allowedCIDRs` 仍只看 TCP 对端。空 = 不信任任何转发头(默认);
-    /// 旧配置文件省略该键时按空列表读取。
+    /// 已知反向代理的 IP / CIDR 列表。事件 `sourceIP` 按 `X-Real-IP`、
+    /// `X-Forwarded-For`、TCP 对端的顺序取第一个合法值,不以本列表为前置条件;
+    /// 列表只决定 `X-Forwarded-For` 链的取法(空 = 最左侧,非空 = 从右向左跳过
+    /// 所列代理)。鉴权与 `allowedCIDRs` 仍只看 TCP 对端;旧配置文件省略该键时按空列表读取。
     #[serde(rename = "trustedProxyCIDRs", default)]
     pub trusted_proxy_cidrs: Vec<String>,
 }

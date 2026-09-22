@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### 变更
+
+- 运行事件的请求源 IP 不再以 `listener.trustedProxyCIDRs` 为前置条件：按 `X-Real-IP`、`X-Forwarded-For`、TCP 对端的顺序取第一个合法值，任何对端声明的合法转发头都直接记录。该列表只用于多层代理的 `X-Forwarded-For` 链（为空取最左侧，非空从右向左跳过所列代理）。入站 Token、CIDR 白名单和 `/__status` 继续检查连接对端；Linux WebUI、macOS 安全页提示、配置文档、Docker 教程与 Nginx 示例同步更新。
+
 ## [0.4.20] - 2026-09-19
 
 ### 新增

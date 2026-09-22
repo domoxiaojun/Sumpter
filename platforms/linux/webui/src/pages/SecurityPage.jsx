@@ -297,8 +297,8 @@ export function SecurityPage() {
             placeholder="如: 172.18.0.5, 10.0.0.0/8"
           />
           <p className="form-hint">
-            仅来自这些地址的连接，其 <code>X-Forwarded-For</code> / <code>X-Real-IP</code> 才会记为事件的请求源 IP；
-            不影响入站认证与上面的 CIDR 白名单。留空则事件始终记录连接对端。
+            事件的请求源 IP 按 <code>X-Real-IP</code>、<code>X-Forwarded-For</code>、连接对端的顺序取第一个合法值，不需要先登记代理。
+            这里填多层代理中的已知代理，<code>X-Forwarded-For</code> 链会跳过它们；不影响入站认证与上面的 CIDR 白名单。
           </p>
         </div>
 

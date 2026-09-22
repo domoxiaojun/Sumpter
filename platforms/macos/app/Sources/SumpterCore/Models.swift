@@ -272,8 +272,9 @@ public struct ListenerConfig: Codable, Equatable, Sendable {
     public var allowedCIDRs: [String]
     /// 入站 Auth Token;空 = 不校验(仅环回可达时的默认状态)。
     public var authToken: String
-    /// 可信反向代理 IP / CIDR。仅来自这些地址的连接才采信 `X-Forwarded-For` /
-    /// `X-Real-IP` 作为事件源 IP;鉴权与 allowedCIDRs 仍看 TCP 对端。空 = 不信任。
+    /// 已知反向代理 IP / CIDR。只用于 `X-Forwarded-For` 链的跳过判断;事件源 IP
+    /// 按 X-Real-IP、X-Forwarded-For、TCP 对端取第一个合法值,不以此为前置条件。
+    /// 鉴权与 allowedCIDRs 仍看 TCP 对端。空 = 链取最左侧。
     public var trustedProxyCIDRs: [String]
 
     enum CodingKeys: String, CodingKey {

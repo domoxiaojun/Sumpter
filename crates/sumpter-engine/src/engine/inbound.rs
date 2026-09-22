@@ -213,8 +213,8 @@ impl Engine {
         let route_intent =
             route_intent_for_path(method, path_and_query, query_model.as_deref(), client_kind);
         InboundRequestContext {
-            // 事件来源在入口只算一次:可信代理传来的转发头替换 TCP 对端,
-            // 其余情况仍是对端。鉴权、白名单与 /__status 继续用 `remote`。
+            // 事件来源在入口只算一次:X-Real-IP / X-Forwarded-For 声明的客户端替换
+            // TCP 对端,没有合法头时仍是对端。鉴权、白名单与 /__status 继续用 `remote`。
             source_ip: access::resolve_client_ip_text(
                 remote,
                 headers,

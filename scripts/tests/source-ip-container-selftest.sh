@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# 真实容器验证：事件 sourceIP 在 Docker bridge 部署下的三种来源路径。
-#   A. 同一容器网络直连（地址保留）      → 记录客户端容器 IP，伪造头被忽略
-#   B. 经可信 Nginx 反代（传递 X-Forwarded-For） → 记录客户端容器 IP，客户端自带的伪造头被代理覆盖
-#   C. 宿主机访问发布端口（Docker NAT）    → 记录网关地址，不伪造真实 IP
+# 真实容器验证：事件 sourceIP 在 Docker bridge 部署下的来源路径。
+#   A. 同一容器网络直连、不带转发头            → 记录客户端容器 IP
+#   A2. 直连并自行声明 X-Real-IP               → 直接记录声明值，不需要登记可信代理
+#   B. 经 Nginx 反代（示例用 $remote_addr 覆盖客户端自带头）→ 记录客户端容器 IP
+#   C. 宿主机访问发布端口（Docker NAT）、不带转发头 → 记录网关地址，不伪造真实 IP
 #   D. 转发头不改变 /__status 的环回限制
 #   E. 重启容器后历史事件仍带解析结果
 # 只在 Linux CI 运行，需要 docker compose v2、curl、jq 与已构建的镜像（SUMPTER_TEST_IMAGE）。
@@ -17,7 +18,7 @@ SUBNET="172.29.0.0/24"
 GATEWAY="172.29.0.1"
 NGINX_IP="172.29.0.10"
 CLIENT_IP="172.29.0.20"
-SPOOF="198.51.100.99"
+DECLARED="198.51.100.99"
 ADMIN_USER="kkl"
 PROXY_PORT="${SUMPTER_TEST_PROXY_PORT:-$((RANDOM % 1000 + 47000))}"
 ADMIN_PORT="${SUMPTER_TEST_ADMIN_PORT:-$((PROXY_PORT + 1))}"
@@ -61,9 +62,9 @@ trap cleanup EXIT
 
 mkdir -p "$WORK/config" "$WORK/nginx"
 chmod 700 "$WORK/config"
-# 可信代理只填 Nginx 的固定地址：不信任整个网桥，才能证明直连伪造头被忽略。
+# 不登记任何代理：验证转发头不需要前置条件。多层代理的链跳过由单元与合同测试覆盖。
 cat >"$WORK/config/config.json" <<EOF
-{"schemaVersion":7,"endpoints":[],"listener":{"host":"0.0.0.0","port":57878,"authToken":"","allowedCIDRs":[],"trustedProxyCIDRs":["$NGINX_IP"]}}
+{"schemaVersion":7,"endpoints":[],"listener":{"host":"0.0.0.0","port":57878,"authToken":"","allowedCIDRs":[],"trustedProxyCIDRs":[]}}
 EOF
 printf '%s\n' "$ADMIN_PASSWORD" >"$WORK/config/admin-password"
 chmod 600 "$WORK/config/config.json" "$WORK/config/admin-password"
@@ -129,13 +130,13 @@ ADMIN_BASE="http://127.0.0.1:$ADMIN_PORT"
 note "宿主机端口：proxy=$PROXY_PORT admin=$ADMIN_PORT"
 
 # 客户端容器发起请求；每个场景用独立会话 ID 标记，便于按事件回查。
+# 场景自带的转发头通过额外参数传入。
 client_request() {
     local url="$1" session="$2"; shift 2
     docker compose -p "$PROJECT" -f "$WORK/compose.yaml" exec -T client \
         curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
         -H 'Content-Type: application/json' \
         -H "x-claude-code-session-id: $session" \
-        -H "X-Forwarded-For: $SPOOF" -H "X-Real-IP: $SPOOF" \
         "$@" -X POST --data '{"model":"claude-opus-5","messages":[{"role":"user","content":"hi"}]}' "$url"
 }
 
@@ -172,38 +173,44 @@ expect_ip() {
 
 admin_login
 
-note "A. 容器网络直连（非可信对端，伪造头应被忽略）"
-code="$(client_request "http://sumpter:57878/v1/messages" "direct-spoofed")"
+note "A. 容器网络直连、不带转发头（记录客户端容器地址）"
+code="$(client_request "http://sumpter:57878/v1/messages" "direct-plain")"
 [[ "$code" =~ ^4 ]] || fail "直连请求应被拒绝为 4xx（无入口），实际 $code"
-expect_ip "direct-spoofed" "$CLIENT_IP" "直连保留客户端容器地址"
+expect_ip "direct-plain" "$CLIENT_IP" "直连保留客户端容器地址"
 
-note "B. 经可信 Nginx 反代（代理覆盖客户端伪造头）"
-code="$(client_request "http://nginx/v1/messages" "via-nginx")"
+note "A2. 容器网络直连并声明 X-Real-IP（无需登记可信代理即采信）"
+code="$(client_request "http://sumpter:57878/v1/messages" "direct-declared" -H "X-Real-IP: $DECLARED")"
+[[ "$code" =~ ^4 ]] || fail "直连请求应被拒绝为 4xx（无入口），实际 $code"
+expect_ip "direct-declared" "$DECLARED" "直连采信声明的 X-Real-IP"
+
+note "B. 经 Nginx 反代（示例用 \$remote_addr 覆盖客户端自带头）"
+code="$(client_request "http://nginx/v1/messages" "via-nginx" -H "X-Forwarded-For: $DECLARED" -H "X-Real-IP: $DECLARED")"
 [[ "$code" =~ ^4 ]] || fail "反代请求应透传为 4xx，实际 $code"
 expect_ip "via-nginx" "$CLIENT_IP" "反代传递真实客户端地址"
 
-note "C. 宿主机访问发布端口（NAT 抹去源地址，记录网关而非伪造值）"
+note "C. 宿主机访问发布端口、不带转发头（NAT 抹去源地址，记录网关）"
 code="$(curl --noproxy '*' -sS -o /dev/null -w '%{http_code}' --max-time 10 \
     -H 'Content-Type: application/json' -H 'x-claude-code-session-id: host-nat' \
-    -H "X-Forwarded-For: $SPOOF" -X POST --data '{"model":"claude-opus-5","messages":[]}' \
+    -X POST --data '{"model":"claude-opus-5","messages":[]}' \
     "http://127.0.0.1:$PROXY_PORT/v1/messages")"
 [[ "$code" =~ ^4 ]] || fail "宿主机请求应为 4xx，实际 $code"
 nat_ip="$(event_source_ip host-nat)"
 if [[ "$nat_ip" == "$GATEWAY" ]]; then
     note "✓ NAT 回退到网关地址：sourceIP=$nat_ip"
-elif [[ "$nat_ip" != "$SPOOF" && "$nat_ip" != "missing" && "$nat_ip" != "null" ]]; then
-    # 部分 runner 的 docker-proxy/NAT 组合会呈现其它网桥地址；只要不是伪造值即可。
+elif [[ "$nat_ip" != "$DECLARED" && "$nat_ip" != "missing" && "$nat_ip" != "null" ]]; then
+    # 部分 runner 的 docker-proxy/NAT 组合会呈现其它网桥地址；只要是真实对端即可。
     note "✓ NAT 回退到对端地址（非网关 $GATEWAY）：sourceIP=$nat_ip"
 else
-    fail "NAT 场景 sourceIP=$nat_ip，不应等于伪造值或缺失"
+    fail "NAT 场景 sourceIP=$nat_ip，不应缺失或等于未声明的值"
 fi
 
 note "D. 转发头不改变 /__status 的环回限制"
 for target in "http://sumpter:57878/__status" "http://nginx/__status"; do
     code="$(docker compose -p "$PROJECT" -f "$WORK/compose.yaml" exec -T client \
-        curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -H 'X-Forwarded-For: 127.0.0.1' "$target")"
+        curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+        -H 'X-Forwarded-For: 127.0.0.1' -H 'X-Real-IP: 127.0.0.1' "$target")"
     if [[ "$code" == "403" ]]; then
-        note "✓ 伪造环回地址访问 $target 仍 403"
+        note "✓ 声明环回地址访问 $target 仍 403"
     else
         fail "$target 应 403，实际 $code"
     fi
@@ -214,7 +221,7 @@ docker compose -p "$PROJECT" -f "$WORK/compose.yaml" restart sumpter
 docker compose -p "$PROJECT" -f "$WORK/compose.yaml" up -d --wait --wait-timeout 120 sumpter
 admin_login
 expect_ip "via-nginx" "$CLIENT_IP" "重启后反代事件仍为客户端地址"
-expect_ip "direct-spoofed" "$CLIENT_IP" "重启后直连事件仍为客户端地址"
+expect_ip "direct-declared" "$DECLARED" "重启后直连事件仍为声明地址"
 
 if [[ "$FAILED" -ne 0 ]]; then
     echo "[source-ip] 存在失败项" >&2

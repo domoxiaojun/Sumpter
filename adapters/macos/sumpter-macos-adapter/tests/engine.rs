@@ -2109,13 +2109,11 @@ async fn control_endpoints_require_token_and_status_masks_auth() {
     assert_eq!(status, 403);
 }
 
-/// `/__notify` 事件也走同一套来源解析:可信代理传来的客户端 IP 替换对端,
-/// 非可信对端的伪造头被忽略;控制 token 校验不受转发头影响。
+/// `/__notify` 事件也走同一套来源解析:X-Real-IP / X-Forwarded-For 声明的客户端 IP
+/// 直接替换对端,不需要登记可信代理;控制 token 校验不受转发头影响。
 #[tokio::test]
-async fn notify_events_use_trusted_proxy_client_ip() {
-    let mut config = two_endpoint_config();
-    config.listener.trusted_proxy_cidrs = vec!["127.0.0.1".into()];
-    let engine = engine_with(config, FakeTransport::new());
+async fn notify_events_use_declared_client_ip() {
+    let engine = engine_with(two_endpoint_config(), FakeTransport::new());
     let body =
         || Bytes::from(serde_json::to_vec(&json!({"type": "Stop", "message": "done"})).unwrap());
     let forwarded = vec![("x-forwarded-for".to_string(), "203.0.113.9".to_string())];
@@ -2133,7 +2131,7 @@ async fn notify_events_use_trusted_proxy_client_ip() {
         &engine,
         Some("10.0.0.9".parse().unwrap()),
         "/__notify?token=test-token",
-        forwarded.clone(),
+        vec![("x-real-ip".to_string(), "198.51.100.23".to_string())],
         body(),
     )
     .await;
@@ -2161,7 +2159,7 @@ async fn notify_events_use_trusted_proxy_client_ip() {
     notify_ips.sort();
     assert_eq!(
         notify_ips,
-        vec!["10.0.0.9".to_string(), "203.0.113.9".to_string()]
+        vec!["198.51.100.23".to_string(), "203.0.113.9".to_string()]
     );
 }
 

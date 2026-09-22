@@ -211,7 +211,7 @@ struct SecurityPane: View {
                 FormLine(title: "可信代理") {
                     VStack(alignment: .leading, spacing: 4) {
                         TextField("172.18.0.5, 10.0.0.0/8", text: $draftTrustedProxies)
-                        Text("仅来自这些 IP / CIDR 的连接，其 X-Forwarded-For / X-Real-IP 才会记为事件的请求源 IP；不影响入站认证与 CIDR 白名单。留空则事件始终记录连接对端。")
+                        Text("事件的请求源 IP 按 X-Real-IP、X-Forwarded-For、连接对端的顺序取第一个合法值，不需要先登记代理。这里填多层代理中的已知代理，X-Forwarded-For 链会跳过它们；不影响入站认证与 CIDR 白名单。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

@@ -5,16 +5,16 @@
 #
 # 使用方式:
 #   1. 放进已有的 HTTPS `server { ... }`,替换 server_name 与后端地址。
-#   2. 在 Sumpter 的 listener.trustedProxyCIDRs 填写本 Nginx 连接 Sumpter 时的
-#      出口地址(容器部署通常是代理容器在 Compose 网络中的 IP 或该网络的网段;
-#      同机部署通常是 127.0.0.1)。只有命中该列表,运行事件的「请求源 IP」才会
-#      改用下面传递的 X-Forwarded-For。
+#   2. 运行事件的「请求源 IP」按 X-Real-IP、X-Forwarded-For、TCP 对端的顺序取
+#      第一个合法值,不需要预先登记代理地址。若本 Nginx 前面还有 CDN、负载均衡等
+#      更多层,把这些已知代理填进 Sumpter 的 listener.trustedProxyCIDRs,
+#      X-Forwarded-For 链就会从右向左跳过它们。
 #   3. 入站 Token 与 allowedCIDRs 仍按 Sumpter 看到的 TCP 对端(本 Nginx)判定;
 #      需要限制客户端网段时请在 Nginx 用 allow/deny,或让 allowedCIDRs 只包含代理。
 #
 # 本 Nginx 直接面对客户端,所以 X-Forwarded-For / X-Real-IP 都用 $remote_addr
-# 覆盖,丢弃客户端自带的伪造值。若本 Nginx 前面还有一层可信代理(CDN、负载均衡),
-# 改为 $proxy_add_x_forwarded_for 追加链路,并把前一层也加入 trustedProxyCIDRs。
+# 覆盖,丢弃客户端自带的值。若本 Nginx 前面还有一层代理(CDN、负载均衡),
+# 改为 $proxy_add_x_forwarded_for 追加链路,并把前一层加入 trustedProxyCIDRs。
 
 # 长 SSE / WebSocket 会话不应因为默认 60s 读超时被切断。
 map $http_upgrade $sumpter_connection_upgrade {

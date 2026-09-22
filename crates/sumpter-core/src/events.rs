@@ -2556,8 +2556,8 @@ impl Default for DiagnosticCaptureSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeEvent {
-    /// 入站 TCP 对端地址；不采信客户端可伪造的 Forwarded / X-Forwarded-For。
-    /// 反向代理部署时为代理地址；旧事件或没有网络上下文时为空。
+    /// 事件记录的客户端地址：按 X-Real-IP、X-Forwarded-For、入站 TCP 对端的顺序
+    /// 取第一个合法值；转发头由请求方声明，不校验来源。旧事件或没有网络上下文时为空。
     #[serde(rename = "sourceIP", default, skip_serializing_if = "is_none")]
     pub source_ip: Option<String>,
     #[serde(

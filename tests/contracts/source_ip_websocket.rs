@@ -1,5 +1,5 @@
 //! Real TCP peer collection for both platform WebSocket dispatchers, and the
-//! trusted-proxy substitution shared with the HTTP ingress.
+//! forwarded-header substitution shared with the HTTP ingress.
 use super::{pi_test_engine, pi_test_shutdown, server};
 use futures_util::{SinkExt, StreamExt};
 use sumpter_core::config::AppConfig;
@@ -33,7 +33,12 @@ fn websocket_config(upstream_address: std::net::SocketAddr, trusted: &[&str]) ->
     .normalized()
 }
 
-async fn relay_and_reject(path: &str, trusted: &[&str], expected_ip: &str) {
+async fn relay_and_reject(
+    path: &str,
+    trusted: &[&str],
+    headers: &[(&'static str, &'static str)],
+    expected_ip: &str,
+) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let upstream_address = listener.local_addr().unwrap();
     let task = tokio::spawn(async move {
@@ -53,9 +58,9 @@ async fn relay_and_reject(path: &str, trusted: &[&str], expected_ip: &str) {
     request
         .headers_mut()
         .insert("authorization", "Bearer listener-secret".parse().unwrap());
-    request
-        .headers_mut()
-        .insert("x-forwarded-for", "198.51.100.99".parse().unwrap());
+    for (name, value) in headers {
+        request.headers_mut().insert(*name, value.parse().unwrap());
+    }
     let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
     socket.send(Message::Text("hello".into())).await.unwrap();
     assert_eq!(
@@ -75,14 +80,14 @@ async fn relay_and_reject(path: &str, trusted: &[&str], expected_ip: &str) {
     for event in events {
         assert_eq!(event.source_ip.as_deref(), Some(expected_ip), "{path}");
     }
-    // Early rejection (missing token) with the same forwarded header: auth still
-    // fails and the rejection is attributed with the same rule.
+    // Early rejection (missing token) with the same headers: auth still fails
+    // and the rejection is attributed with the same rule.
     let mut request = format!("ws://{address}{path}")
         .into_client_request()
         .unwrap();
-    request
-        .headers_mut()
-        .insert("x-forwarded-for", "198.51.100.99".parse().unwrap());
+    for (name, value) in headers {
+        request.headers_mut().insert(*name, value.parse().unwrap());
+    }
     let error = tokio_tungstenite::connect_async(request).await.unwrap_err();
     assert!(matches!(
         error,
@@ -96,13 +101,45 @@ async fn relay_and_reject(path: &str, trusted: &[&str], expected_ip: &str) {
 }
 
 #[tokio::test]
-async fn source_ip_websocket_relay_and_early_rejections() {
+async fn source_ip_websocket_records_peer_without_forwarded_headers() {
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         for path in [
             "/v1/responses?model=gpt-4o",
             "/v1/realtime?model=gpt-realtime",
         ] {
-            relay_and_reject(path, &[], "127.0.0.1").await;
+            relay_and_reject(path, &[], &[], "127.0.0.1").await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+/// X-Real-IP first, then the leftmost X-Forwarded-For hop, with no trusted
+/// proxy configured.
+#[tokio::test]
+async fn source_ip_websocket_honors_declared_client_without_trust_list() {
+    tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        for path in [
+            "/v1/responses?model=gpt-4o",
+            "/v1/realtime?model=gpt-realtime",
+        ] {
+            relay_and_reject(
+                path,
+                &[],
+                &[
+                    ("x-real-ip", "203.0.113.7"),
+                    ("x-forwarded-for", "198.51.100.99"),
+                ],
+                "203.0.113.7",
+            )
+            .await;
+            relay_and_reject(
+                path,
+                &[],
+                &[("x-forwarded-for", "198.51.100.99, 10.0.0.1")],
+                "198.51.100.99",
+            )
+            .await;
         }
     })
     .await
@@ -110,13 +147,19 @@ async fn source_ip_websocket_relay_and_early_rejections() {
 }
 
 #[tokio::test]
-async fn source_ip_websocket_uses_forwarded_client_from_trusted_proxy() {
+async fn source_ip_websocket_skips_listed_proxy_hops() {
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         for path in [
             "/v1/responses?model=gpt-4o",
             "/v1/realtime?model=gpt-realtime",
         ] {
-            relay_and_reject(path, &["127.0.0.1"], "198.51.100.99").await;
+            relay_and_reject(
+                path,
+                &["127.0.0.1"],
+                &[("x-forwarded-for", "198.51.100.99, 127.0.0.1")],
+                "198.51.100.99",
+            )
+            .await;
         }
     })
     .await
