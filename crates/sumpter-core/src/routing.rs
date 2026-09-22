@@ -949,7 +949,9 @@ impl RoutePlanner {
         Self::plan_for_source_mode(request, config, source_format, true, None)
     }
 
-    /// First configured mapping that can serve `capability`.
+    /// First concrete model declared by a mapping for `capability`.
+    /// Endpoint-level passthrough capabilities intentionally have no default
+    /// model because the client's model must remain unchanged.
     pub fn default_model_for_capability(
         config: &AppConfig,
         capability: crate::capability::ModelCapability,
@@ -1005,9 +1007,10 @@ impl RoutePlanner {
         None
     }
 
-    /// Passthrough planning that also requires the matched mapping to serve
-    /// `capability`. A text wildcard therefore cannot steal image/video/live
-    /// traffic merely because it matches the client model string.
+    /// Passthrough planning that requires either an endpoint-level declaration
+    /// or a matching capability mapping. A text wildcard therefore cannot
+    /// steal image/video/live traffic merely because it matches the client
+    /// model string.
     pub fn plan_for_capability(
         request: &RoutingRequest,
         config: &AppConfig,
@@ -1137,17 +1140,13 @@ impl RoutePlanner {
         {
             return result;
         }
-        // Capability routes use the capability-aware mapping surface instead
-        // of the text-model union; a broad text wildcard still cannot satisfy
-        // image/video/live requests. Public Realtime and private Codex Live
-        // models intentionally require separate mappings.
+        // Capability routes use endpoint declarations or capability-aware
+        // mappings instead of the text-model union; a broad text wildcard
+        // still cannot satisfy image/video/live requests.
         let model_is_mapped = match capability {
             Some(wanted) => config.routing_endpoints().iter().any(|scoped| {
                 let endpoint = &scoped.endpoint;
-                endpoint.enabled
-                    && endpoint
-                        .mapping_for_capability(&base_model, wanted)
-                        .is_some()
+                endpoint.enabled && endpoint.supports_capability(&base_model, wanted)
             }),
             None => config.matches_model(&base_model),
         };
@@ -1303,19 +1302,23 @@ impl RoutePlanner {
             .filter(|e| pinned_endpoint_id.is_none_or(|id| e.endpoint.id == id))
             .filter_map(|scoped| {
                 let endpoint = &scoped.endpoint;
-                // 每个入口都通过显式 mappings 声明承接范围。
+                // 普通模型由 mapping 声明范围；原生能力也可由入口直接声明。
                 let mapping = match capability {
                     Some(wanted) => endpoint.mapping_for_capability(effective_model, wanted),
                     None => endpoint.mapping_for(effective_model),
                 }
                 .cloned();
+                let endpoint_capability =
+                    capability.is_some_and(|wanted| endpoint.has_capability(wanted));
                 // A feature rule may pin an endpoint for ordinary passthrough
                 // even when its model is intentionally unmapped (legacy
                 // behavior).  Capability routes are different: allowing the
                 // pin to bypass the mapping check would reintroduce the exact
                 // text-provider-stealing bug this planner is meant to stop.
                 if mapping.is_none()
-                    && (capability.is_some() || (pinned_endpoint_id.is_none() && !allow_unmapped))
+                    && (!endpoint_capability
+                        && (capability.is_some()
+                            || (pinned_endpoint_id.is_none() && !allow_unmapped)))
                 {
                     return None;
                 }

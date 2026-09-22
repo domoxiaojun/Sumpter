@@ -150,6 +150,9 @@ impl AppConfig {
                 let mut endpoint = source.clone();
                 endpoint.priority = binding.priority;
                 endpoint.mappings.clear();
+                // Endpoint-level native capabilities are independent of the
+                // model namespace. A group binding scopes conversational
+                // models but must not erase `/v1/live` passthrough support.
                 // Preserve every existing capability-specific mapping and all
                 // of its thinking/context/effort/timeout settings inside the scope.
                 // Projection can make a broad source mapping and a precise

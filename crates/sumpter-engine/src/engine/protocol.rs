@@ -313,29 +313,21 @@ pub(super) fn is_resource_passthrough_kind(kind: PassthroughKind) -> bool {
     matches!(kind, PassthroughKind::Files | PassthroughKind::Models)
 }
 
-pub(super) fn has_exact_codex_live_mapping(config: &AppConfig, endpoint_id: &str) -> bool {
+pub(super) fn endpoint_supports_codex_live(config: &AppConfig, endpoint_id: &str) -> bool {
     let live_model = request_build::DEFAULT_CODEX_LIVE_MODEL;
     config.endpoint(endpoint_id).is_some_and(|endpoint| {
-        // Capability filtering must happen before mapping precedence.  This
-        // accepts an explicitly declared `gpt-live-*`/`*` Live mapping while
-        // still rejecting a text-only mapping that merely shares the model
-        // prefix; the endpoint is eligible only for the Live surface.
-        endpoint
-            .mapping_for_capability(live_model, sumpter_core::capability::ModelCapability::Live)
-            .is_some()
+        endpoint.supports_capability(live_model, sumpter_core::capability::ModelCapability::Live)
     })
 }
 
-pub(super) fn has_exact_realtime_mapping(
+pub(super) fn endpoint_supports_realtime_model(
     config: &AppConfig,
     endpoint_id: &str,
     model: &str,
 ) -> bool {
     let model = sumpter_core::model_name::clean(model);
     config.endpoint(endpoint_id).is_some_and(|endpoint| {
-        endpoint
-            .mapping_for_capability(&model, sumpter_core::capability::ModelCapability::Live)
-            .is_some()
+        endpoint.supports_capability(&model, sumpter_core::capability::ModelCapability::Live)
     })
 }
 
@@ -823,8 +815,8 @@ pub(super) fn realtime_route_model(
         } else if cleaned.starts_with("gpt-4o") || cleaned.contains("live") {
             // Standard Realtime sessions and explicitly named custom Live
             // models remain selectable when the configuration has a matching
-            // capability mapping.  The config-aware resolver below falls
-            // back to the private Live mapping when they do not.
+            // capability route. The config-aware resolver below falls back
+            // to a legacy mapping default when needed.
             candidate
         } else {
             // A leaked chat model (Claude/Fable, GPT text, etc.) must never
@@ -866,11 +858,10 @@ pub(super) fn is_standard_realtime_model_name(model: &str) -> bool {
 }
 
 /// Resolve a logical Realtime/Live model against the configured capability
-/// catalog.  CPA accepts a standard client-facing model (for example
-/// `gpt-4o`) but may send it through the Codex Live OAuth surface.  If that
-/// logical model has no `live` mapping in this installation, use the explicit
-/// `gpt-live-1-codex` mapping instead of allowing the request to fall into a
-/// text-only wildcard or an arbitrary first endpoint.
+/// catalog. An endpoint-level `live` declaration accepts the client model
+/// unchanged. Legacy mapping-level declarations may still provide a concrete
+/// fallback model, without allowing a text-only wildcard or arbitrary first
+/// endpoint to receive the request.
 pub(super) fn resolve_realtime_route_model(
     config: &AppConfig,
     method: &str,
@@ -888,15 +879,14 @@ pub(super) fn resolve_realtime_route_model(
         secret_model,
         intent,
     );
-    let has_mapping = |model: &str| {
+    let has_live_route = |model: &str| {
         config.endpoints.iter().any(|endpoint| {
             endpoint.enabled
                 && endpoint
-                    .mapping_for_capability(model, sumpter_core::capability::ModelCapability::Live)
-                    .is_some()
+                    .supports_capability(model, sumpter_core::capability::ModelCapability::Live)
         })
     };
-    if has_mapping(&candidate) {
+    if has_live_route(&candidate) {
         return candidate;
     }
     if intent == RealtimeRouteIntent::CodexLive
@@ -1163,9 +1153,9 @@ pub(super) fn unsupported_realtime_call_action(path: &str) -> bool {
     validate_realtime_call_target(path) == Err(RealtimeCallPathError::UnsupportedAction)
 }
 
-/// Realtime credential/session and SIP/control surfaces.  They share the
-/// `live` capability in the mapping catalog, but are not Codex Live
-/// bootstraps and must never be wrapped as Quicksilver.
+/// Realtime credential/session and SIP/control surfaces. They share the
+/// `live` capability surface, but are not Codex Live bootstraps and must
+/// never be wrapped as Quicksilver.
 pub(super) fn is_realtime_control_path(path: &str) -> bool {
     [
         "/v1/realtime/client_secrets",

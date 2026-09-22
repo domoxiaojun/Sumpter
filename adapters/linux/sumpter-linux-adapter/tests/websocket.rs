@@ -603,11 +603,13 @@ async fn websocket_paths_keep_http_methods_on_the_engine_fallback() {
             chunks: vec![Ok(bytes::Bytes::from_static(b"v=0\r\n"))],
         }),
     ]));
-    let engine = Engine::new(
-        config_with_base("https://provider.invalid", "openai"),
-        None,
-        transport.clone(),
-    );
+    let mut config = config_with_base("https://provider.invalid", "openai");
+    config.endpoints[0].capabilities = vec![sumpter_core::ModelCapability::Live];
+    config.endpoints[0].mappings.retain(|mapping| {
+        mapping.client_pattern != "gpt-live-1-codex"
+            && !mapping.client_pattern.starts_with("gpt-realtime")
+    });
+    let engine = Engine::new(config, None, transport.clone());
     let (address, handle) = server::serve(engine, "127.0.0.1:0".parse().unwrap())
         .await
         .expect("bind server");
@@ -673,7 +675,7 @@ async fn websocket_paths_keep_http_methods_on_the_engine_fallback() {
 }
 
 #[tokio::test]
-async fn codex_live_without_a_live_mapping_returns_no_live_provider() {
+async fn codex_live_without_live_capability_returns_no_live_provider() {
     let mut config = config();
     config.endpoints[0]
         .mappings

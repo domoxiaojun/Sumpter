@@ -217,6 +217,10 @@ impl AppConfig {
             }
             endpoint.priority = endpoint.priority.max(0);
             endpoint.sticky_group = normalized_group(endpoint.sticky_group.take());
+            endpoint
+                .capabilities
+                .sort_by_key(|capability| capability.as_str());
+            endpoint.capabilities.dedup();
             for rule in [
                 &mut endpoint.user_agent.anthropic,
                 &mut endpoint.user_agent.openai,
@@ -627,6 +631,11 @@ pub struct Endpoint {
     pub api_key: String,
     #[serde(rename = "baseURL")]
     pub base_url: String,
+    /// Provider-level native passthrough surfaces that are not discoverable
+    /// from `/v1/models`. For example, `live` allows Realtime traffic to
+    /// select this endpoint without inventing model mappings.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<ModelCapability>,
     /// 「获取模型」拉回的目录,纯展示,不参与路由;空目录不落盘。
     #[serde(default, skip_serializing_if = "is_none")]
     pub catalog: Option<EndpointCatalog>,
@@ -674,6 +683,17 @@ impl Endpoint {
     pub fn mapping_for(&self, client_model: &str) -> Option<&ModelMapping> {
         let cleaned = model_name::clean(client_model);
         best_mapping(&self.mappings, &cleaned, |_| true)
+    }
+
+    pub fn has_capability(&self, capability: ModelCapability) -> bool {
+        self.capabilities.contains(&capability)
+    }
+
+    /// Whether this endpoint accepts a native capability for `model`.
+    /// Endpoint declarations are model-agnostic passthrough support; mapping
+    /// declarations remain supported for existing configurations.
+    pub fn supports_capability(&self, model: &str, capability: ModelCapability) -> bool {
+        self.has_capability(capability) || self.mapping_for_capability(model, capability).is_some()
     }
 
     /// Find the best mapping that can serve a particular request capability.

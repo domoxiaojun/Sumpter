@@ -95,6 +95,34 @@ fn local_models_catalog_uses_openai_list_shape() {
 }
 
 #[test]
+fn endpoint_live_capability_does_not_fabricate_model_rows() {
+    let config: AppConfig = serde_json::from_value(json!({
+        "schemaVersion": 7,
+        "endpoints": [{
+            "id": "cpa",
+            "name": "CPA",
+            "baseURL": "https://cpa.invalid",
+            "protocol": "openai",
+            "enabled": true,
+            "capabilities": ["live"],
+            "mappings": []
+        }],
+        "modelGroups": [{
+            "id": "default",
+            "name": "default",
+            "enabled": true,
+            "priority": 0,
+            "models": [],
+            "bindings": [{"endpointID": "cpa", "enabled": true, "priority": 0, "models": []}]
+        }]
+    }))
+    .unwrap();
+
+    let body = local_models_json(&config, "/v1/models", None, &[]).unwrap();
+    assert!(body["data"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn local_models_catalog_uses_codex_client_version_shape() {
     let json = local_models_json(
         &catalog_config(),

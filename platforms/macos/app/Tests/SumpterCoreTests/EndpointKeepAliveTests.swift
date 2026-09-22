@@ -3,6 +3,16 @@ import XCTest
 
 /// keepAlive 字段的磁盘往返；sumpterd 侧生效，壳侧入口编辑器也可直接设置。
 final class EndpointKeepAliveTests: XCTestCase {
+    func testEndpointCapabilitiesRoundTripWithoutModelMappings() throws {
+        let json = #"{"id":"cpa","baseURL":"https://cpa.example.com","capabilities":["live"],"mappings":[]}"#
+        let endpoint = try JSONDecoder().decode(Endpoint.self, from: Data(json.utf8))
+        XCTAssertEqual(endpoint.capabilities, ["live"])
+        XCTAssertTrue(endpoint.mappings.isEmpty)
+
+        let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(endpoint)) as? [String: Any]
+        XCTAssertEqual(object?["capabilities"] as? [String], ["live"])
+    }
+
     func testKeepAliveRoundTripAndNewEntryDefault() throws {
         // 手改配置启用后,UI 保存必须保留。
         let json = #"{"id":"e1","baseURL":"https://x.example.com","keepAlive":true}"#

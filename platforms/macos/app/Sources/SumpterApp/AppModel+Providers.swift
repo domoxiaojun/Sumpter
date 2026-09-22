@@ -17,6 +17,7 @@ extension AppModel {
         priority: Int = 0,
         stickyGroup: String = "",
         keepAlive: Bool = true,
+        livePassthrough: Bool = false,
         userAgent: UserAgentSettings = UserAgentSettings()
     ) async throws {
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -45,6 +46,7 @@ extension AppModel {
                 id: id,
                 name: cleanName,
                 baseURL: baseURL,
+                capabilities: livePassthrough ? ["live"] : [],
                 protocolMode: try Self.endpointProtocolMode(protocolName),
                 userAgent: try userAgent.validated(),
                 enabled: enabled,
@@ -67,6 +69,7 @@ extension AppModel {
         priority: Int = 0,
         stickyGroup: String = "",
         keepAlive: Bool = false,
+        livePassthrough: Bool = false,
         userAgent: UserAgentSettings = UserAgentSettings()
     ) async throws {
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -95,6 +98,10 @@ extension AppModel {
             config.endpoints[location.endpoint].priority = priority
             config.endpoints[location.endpoint].stickyGroup = group.isEmpty ? nil : group
             config.endpoints[location.endpoint].keepAlive = keepAlive
+            var capabilities = config.endpoints[location.endpoint].capabilities
+                .filter { $0 != "live" }
+            if livePassthrough { capabilities.append("live") }
+            config.endpoints[location.endpoint].capabilities = capabilities
             config.endpoints[location.endpoint].userAgent = try userAgent.validated()
         }
     }

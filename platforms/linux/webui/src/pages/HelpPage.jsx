@@ -132,7 +132,7 @@ export function HelpPage() {
         <div className="help-faq-grid">
           <HelpQuestion question="Claude Code 连不上？">确认 Base URL 指向当前监听地址；若启用了入站认证，客户端 Token 必须与配置完全一致。</HelpQuestion>
           <HelpQuestion question="请求返回模型未找到？">先检查入口的模型映射是否包含客户端模型；配置了模型组时，还要启用组和入口绑定，并确保模型在两者范围内。模型目录仅供发现，不自动授权路由。</HelpQuestion>
-          <HelpQuestion question="Realtime、Files 或 Videos 失败？">这些能力由代理直接 relay 给上游：先检查 Provider 的 baseURL、API key、模型 mapping，以及上游是否开放对应 HTTP/WebSocket 能力。代理不会在本地重建协议。</HelpQuestion>
+          <HelpQuestion question="Realtime、Files 或 Videos 失败？">这些能力由代理直接 relay 给上游：Realtime/Live 需在入口启用原样透传能力；Files/Videos 仍检查对应 mapping。再确认 baseURL、API key 与上游 HTTP/WebSocket 能力。代理不会在本地重建协议。</HelpQuestion>
           <HelpQuestion question="仍然无法判断故障在哪？">先看“运行”和“诊断”页，再带上脱敏后的请求 ID、时间和错误阶段提交 Issue；不要上传 raw 捕获。</HelpQuestion>
         </div>
       </section>

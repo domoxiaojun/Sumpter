@@ -79,6 +79,9 @@
       "name": "示例 Provider 入口（请替换）",
       "baseURL": "https://fallback.example.invalid",
       "protocol": "auto",
+      "capabilities": [
+        "live"
+      ],
       "enabled": false,
       "apiKey": "sk-test-fallback-replace-me",
       "priority": 10,
@@ -94,33 +97,6 @@
           "upstreamModel": "claude-haiku-4-5-20251001",
           "thinking": "disabled",
           "context": "oneMillion"
-        },
-        {
-          "clientPattern": "gpt-live-1-codex",
-          "upstreamModel": "gpt-live-1-codex",
-          "capabilities": [
-            "live"
-          ],
-          "thinking": "passthrough",
-          "context": "standard"
-        },
-        {
-          "clientPattern": "gpt-realtime",
-          "upstreamModel": "gpt-realtime",
-          "capabilities": [
-            "live"
-          ],
-          "thinking": "passthrough",
-          "context": "standard"
-        },
-        {
-          "clientPattern": "gpt-realtime-2.1",
-          "upstreamModel": "gpt-realtime-2.1",
-          "capabilities": [
-            "live"
-          ],
-          "thinking": "passthrough",
-          "context": "standard"
         }
       ]
     }
@@ -133,10 +109,7 @@
       "priority": 0,
       "models": [
         "claude-opus-*",
-        "claude-haiku-4-5-20251001",
-        "gpt-live-1-codex",
-        "gpt-realtime",
-        "gpt-realtime-2.1"
+        "claude-haiku-4-5-20251001"
       ],
       "bindings": [
         {
@@ -153,10 +126,7 @@
           "priority": 10,
           "models": [
             "claude-opus-*",
-            "claude-haiku-4-5-20251001",
-            "gpt-live-1-codex",
-            "gpt-realtime",
-            "gpt-realtime-2.1"
+            "claude-haiku-4-5-20251001"
           ]
         }
       ]

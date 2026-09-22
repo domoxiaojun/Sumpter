@@ -1333,9 +1333,10 @@ impl Engine {
             }
         } else if kind == PassthroughKind::Realtime {
             // CPA Live/Realtime bootstrap always uses Codex OAuth and maps
-            // empty/`gpt-realtime*` names to `gpt-live-1-codex`. Sumpter
-            // selects providers by mapping, so voice bootstrap must not inherit
-            // the surrounding chat model (the original fable-5 failure).
+            // empty/`gpt-realtime*` names to `gpt-live-1-codex`. Sumpter uses
+            // the Live capability to select providers, so voice bootstrap
+            // must not inherit the surrounding chat model (the original
+            // fable-5 failure).
             let query_model = path_and_query
                 .split_once('?')
                 .and_then(|(_, query)| decoded_query_value(query, "model"))

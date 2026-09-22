@@ -36,8 +36,8 @@ use super::failure::FailureInfo;
 use super::http_response::{error_response, proxy_failure_response};
 use super::payload::realtime_client_secret_request_session;
 use super::protocol::{
-    RealtimeRouteIntent, classify_realtime_intent, has_exact_codex_live_mapping,
-    has_exact_realtime_mapping, is_codex_live_family_path, is_codex_live_sideband_target,
+    RealtimeRouteIntent, classify_realtime_intent, endpoint_supports_codex_live,
+    endpoint_supports_realtime_model, is_codex_live_family_path, is_codex_live_sideband_target,
     is_live_bootstrap_request, is_realtime_http_path, is_videos_lookup_path, path_without_query,
     realtime_client_secret_models_match, required_native_protocol, translation_supported,
 };
@@ -949,7 +949,7 @@ impl Engine {
         } else if passthrough_kind == Some(PassthroughKind::Realtime) {
             // Both public Realtime and Codex Live use the voice capability;
             // the classifier below decides the protocol variant, while the
-            // planner must select a capability-qualified mapping first.
+            // planner must select a capability-qualified endpoint first.
             RoutePlanner::plan_for_capability(
                 &request,
                 config,
@@ -1050,8 +1050,12 @@ impl Engine {
             ) == RealtimeRouteIntent::CodexLive;
             plan.endpoints.retain(|endpoint| {
                 endpoint.protocol != ProviderProtocol::Anthropic
-                    && has_exact_realtime_mapping(config, &endpoint.endpoint_id, &request.model)
-                    && (!codex_live || has_exact_codex_live_mapping(config, &endpoint.endpoint_id))
+                    && endpoint_supports_realtime_model(
+                        config,
+                        &endpoint.endpoint_id,
+                        &request.model,
+                    )
+                    && (!codex_live || endpoint_supports_codex_live(config, &endpoint.endpoint_id))
             });
             if plan.endpoints.is_empty() {
                 let is_live = codex_live;

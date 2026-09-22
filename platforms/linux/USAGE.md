@@ -213,8 +213,8 @@ bash setup-client-attribution.sh restore pi
 | Gemini | 上游支持 Developer API 原生模型路径 |
 | 图片、文件、视频 | 上游实现对应资源接口；异步资源后续请求依赖原入口绑定 |
 | WebSocket | 上游完成真实握手后才建立客户端连接 |
-| Codex Live | 入口有私有 `gpt-live-1-codex` 精确映射及相应能力；用于 `/v1/live` / Quicksilver，不作为公开模型展示 |
-| 标准 Realtime | 入口有公开 `gpt-realtime-2.1` 精确映射及相应能力；向 CPA 转发时保留该模型名，由 CPA 内部选择 Codex OAuth 凭据 |
+| Codex Live | 入口声明 `capabilities: ["live"]`；`/v1/live` / Quicksilver 原样透传，不要求私有模型出现在 mapping 或模型目录 |
+| 标准 Realtime | 同一入口级 `live` 能力承接；保留客户端公开模型名，由 CPA 内部选择 Codex OAuth 凭据 |
 
 没有可用 Live 入口时会出现 `no_live_provider`。能发送普通文本请求不代表上游支持语音、视频或所有资源接口；更改协议标签也不会补齐这些能力。
 

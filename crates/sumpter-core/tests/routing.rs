@@ -18,6 +18,7 @@ fn endpoint(id: &str, mappings: Vec<ModelMapping>) -> Endpoint {
     Endpoint {
         api_key: "sk-test".into(),
         base_url: format!("https://{id}.example.com"),
+        capabilities: vec![],
         catalog: None,
         enabled: true,
         id: id.into(),
@@ -1441,7 +1442,7 @@ fn explicit_mapping_capabilities_override_name_inference_for_routing() {
 }
 
 #[test]
-fn public_realtime_requires_its_own_mapping_and_preserves_the_public_model() {
+fn mapping_level_live_capability_remains_model_scoped() {
     let mut private = endpoint(
         "cpa",
         vec![ModelMapping {
@@ -1469,7 +1470,7 @@ fn public_realtime_requires_its_own_mapping_and_preserves_the_public_model() {
         ProviderProtocol::OpenAI,
         ModelCapability::Live,
     )
-    .expect_err("private Codex Live mapping must not claim public Realtime");
+    .expect_err("a legacy private-model capability must not claim public Realtime");
     assert!(matches!(
         error,
         RoutePlanError::NoProviderForCapability { .. }
@@ -1505,4 +1506,33 @@ fn public_realtime_requires_its_own_mapping_and_preserves_the_public_model() {
     assert_eq!(plan.client_model, "gpt-realtime-2.1");
     assert_eq!(plan.endpoints[0].routed_model, "gpt-realtime-2.1");
     assert_eq!(plan.endpoints[0].upstream_model, "gpt-realtime-2.1");
+}
+
+#[test]
+fn endpoint_live_capability_routes_without_a_model_mapping() {
+    let mut cpa = endpoint("cpa", vec![]);
+    cpa.protocol = EndpointProtocolMode::OpenAI;
+    cpa.capabilities = vec![ModelCapability::Live];
+    let config = AppConfig {
+        endpoints: vec![cpa],
+        feature_rules: vec![],
+        listener: ListenerConfig::default(),
+        retry: RetryPolicy::default(),
+        session_sticky_ttl_hours: DEFAULT_SESSION_STICKY_TTL_HOURS,
+        schema_version: SCHEMA_VERSION,
+        model_groups: None,
+    }
+    .normalized();
+
+    for model in ["gpt-live-1-codex", "gpt-realtime-2.1"] {
+        let plan = RoutePlanner::plan_for_capability(
+            &request_from(json!({"model": model})),
+            &config,
+            ProviderProtocol::OpenAI,
+            ModelCapability::Live,
+        )
+        .expect("endpoint Live capability should route without a model mapping");
+        assert_eq!(plan.endpoints[0].routed_model, model);
+        assert_eq!(plan.endpoints[0].upstream_model, model);
+    }
 }

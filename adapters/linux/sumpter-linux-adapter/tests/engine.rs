@@ -198,6 +198,7 @@ fn endpoint(id: &str, host: &str, key: &str) -> Endpoint {
     Endpoint {
         api_key: key.into(),
         base_url: format!("https://{host}"),
+        capabilities: vec![],
         catalog: None,
         enabled: true,
         id: id.into(),

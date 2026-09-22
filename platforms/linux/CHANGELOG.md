@@ -10,6 +10,11 @@
 
 - 运行事件的请求源 IP 不再以 `listener.trustedProxyCIDRs` 为前置条件：按 `X-Real-IP`、`X-Forwarded-For`、TCP 对端的顺序取第一个合法值，任何对端声明的合法转发头都直接记录。该列表只用于多层代理的 `X-Forwarded-For` 链（为空取最左侧，非空从右向左跳过所列代理）。入站 Token、CIDR 白名单和 `/__status` 继续检查连接对端；Linux WebUI、macOS 安全页提示、配置文档、Docker 教程与 Nginx 示例同步更新。
 
+### 修复
+
+- Live / Realtime 改为入口级原生能力：上游即使不在 `/v1/models` 返回 `gpt-live-1-codex` 或 `gpt-realtime-2.1`，也可由启用 `capabilities: ["live"]` 的入口原样透传，无需伪造模型 mapping 或模型组项目。Linux 与 macOS 入口编辑器同步提供该开关。
+- 请求失败后的故障转移不再打到模型组内已停用的入口。分流规则钉住该入口时，若组内绑定或入口库已停用，改走其余启用绑定。
+
 ## [0.4.20] - 2026-09-19
 
 ### 新增

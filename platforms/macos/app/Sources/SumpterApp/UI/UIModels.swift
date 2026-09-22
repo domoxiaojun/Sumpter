@@ -6,6 +6,7 @@ struct EndpointDisplayRow: Identifiable, Hashable {
     let id: String
     let name: String
     let baseURL: String
+    let capabilities: [String]
     let protocolName: String
     let enabled: Bool
     let apiKey: String
@@ -20,6 +21,7 @@ struct EndpointDisplayRow: Identifiable, Hashable {
         id = endpoint.id
         name = endpoint.name
         baseURL = endpoint.baseURL.absoluteString
+        capabilities = endpoint.capabilities
         protocolName = endpoint.protocolMode.rawValue
         enabled = endpoint.enabled
         apiKey = endpoint.apiKey
@@ -37,6 +39,7 @@ struct EndpointDisplayRow: Identifiable, Hashable {
     var priorityText: String { String(priority) }
     var stickyGroupText: String { stickyGroup ?? "入口 ID（独立组）" }
     var keepAliveText: String { keepAlive ? "启用" : "关闭" }
+    var livePassthrough: Bool { capabilities.contains("live") }
     var userAgentText: String { userAgent.summary }
     var protocolDisplayName: String {
         EndpointProtocolMode(rawValue: protocolName)?.displayName ?? protocolName

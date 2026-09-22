@@ -555,6 +555,8 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
     public var id: String
     public var name: String
     public var baseURL: URL
+    /// Provider-level native passthrough capabilities, independent of model mappings.
+    public var capabilities: [String]
     public var protocolMode: EndpointProtocolMode
     public var userAgent: UserAgentSettings
     public var enabled: Bool
@@ -574,6 +576,7 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         case id
         case name
         case baseURL
+        case capabilities
         case protocolMode = "protocol"
         case userAgent
         case enabled
@@ -589,6 +592,7 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         id: String,
         name: String,
         baseURL: URL,
+        capabilities: [String] = [],
         protocolMode: EndpointProtocolMode = .auto,
         userAgent: UserAgentSettings = UserAgentSettings(),
         enabled: Bool = true,
@@ -602,6 +606,7 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         self.id = id
         self.name = name
         self.baseURL = baseURL
+        self.capabilities = capabilities
         self.protocolMode = protocolMode
         self.userAgent = userAgent
         self.enabled = enabled
@@ -618,6 +623,7 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         id = try keyed.decode(String.self, forKey: .id)
         name = try keyed.decodeIfPresent(String.self, forKey: .name) ?? id
         baseURL = try keyed.decode(URL.self, forKey: .baseURL)
+        capabilities = try keyed.decodeIfPresent([String].self, forKey: .capabilities) ?? []
         protocolMode = try keyed.decodeIfPresent(EndpointProtocolMode.self, forKey: .protocolMode) ?? .auto
         userAgent = try keyed.decodeIfPresent(UserAgentSettings.self, forKey: .userAgent) ?? UserAgentSettings()
         enabled = try keyed.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
@@ -634,6 +640,9 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         try keyed.encode(id, forKey: .id)
         try keyed.encode(name, forKey: .name)
         try keyed.encode(baseURL, forKey: .baseURL)
+        if !capabilities.isEmpty {
+            try keyed.encode(capabilities, forKey: .capabilities)
+        }
         try keyed.encode(protocolMode, forKey: .protocolMode)
         if userAgent != UserAgentSettings() {
             try keyed.encode(userAgent, forKey: .userAgent)

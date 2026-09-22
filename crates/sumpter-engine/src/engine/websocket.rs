@@ -11,8 +11,8 @@ use super::failure::FailureInfo;
 use super::protocol::RealtimeRouteIntent;
 use super::protocol::classify_realtime_intent;
 use super::protocol::decoded_query_value;
-use super::protocol::has_exact_codex_live_mapping;
-use super::protocol::has_exact_realtime_mapping;
+use super::protocol::endpoint_supports_codex_live;
+use super::protocol::endpoint_supports_realtime_model;
 use super::protocol::is_codex_live_family_path;
 use super::protocol::is_codex_live_sideband_target;
 use super::protocol::is_realtime_http_path;
@@ -613,9 +613,9 @@ impl Engine {
         .await;
     }
 
-    /// Relay any upgraded data-plane connection. Provider selection uses only
-    /// configured mappings; the original path/query and every WebSocket frame
-    /// are forwarded unchanged.
+    /// Relay any upgraded data-plane connection. Provider selection uses the
+    /// configured mapping or native capability surface; the original
+    /// path/query and every WebSocket frame are forwarded unchanged.
     pub async fn handle_websocket(
         &self,
         socket: WebSocket,
@@ -896,7 +896,7 @@ impl Engine {
             }
         };
         // Anthropic endpoints cannot speak the OpenAI Realtime/Quicksilver
-        // wire protocol. Keep voice traffic on an exact mapping only.
+        // wire protocol. Keep voice traffic on an explicitly capable endpoint.
         if is_realtime_http_path(path) {
             let client_kind = detect_client_kind(headers, true);
             let query_model = path_and_query
@@ -916,8 +916,12 @@ impl Engine {
             let codex_live = intent == RealtimeRouteIntent::CodexLive;
             plan.endpoints.retain(|endpoint| {
                 endpoint.protocol != ProviderProtocol::Anthropic
-                    && has_exact_realtime_mapping(&config, &endpoint.endpoint_id, &request.model)
-                    && (!codex_live || has_exact_codex_live_mapping(&config, &endpoint.endpoint_id))
+                    && endpoint_supports_realtime_model(
+                        &config,
+                        &endpoint.endpoint_id,
+                        &request.model,
+                    )
+                    && (!codex_live || endpoint_supports_codex_live(&config, &endpoint.endpoint_id))
             });
             if plan.endpoints.is_empty() {
                 return Err(WebSocketPrepareError::new(

@@ -209,12 +209,14 @@ async fn realtime_upstream_handshake_error_is_returned_before_101() {
 
 #[tokio::test]
 async fn websocket_paths_keep_http_methods_on_the_engine_fallback() {
-    let engine = Engine::new(
-        config(),
-        None,
-        Arc::new(ReplayTransport::new([Ok(ReplayReply::ok("{}"))])),
-        String::new(),
-    );
+    let mut config = config();
+    config.endpoints[0].capabilities = vec![sumpter_core::ModelCapability::Live];
+    config.endpoints[0].mappings.retain(|mapping| {
+        mapping.client_pattern != "gpt-live-1-codex"
+            && !mapping.client_pattern.starts_with("gpt-realtime")
+    });
+    let transport = Arc::new(ReplayTransport::new([Ok(ReplayReply::ok("{}"))]));
+    let engine = Engine::new(config, None, transport.clone(), String::new());
     let (address, server) = server::serve(engine, "127.0.0.1:0".parse().unwrap())
         .await
         .expect("bind server");
@@ -233,6 +235,11 @@ async fn websocket_paths_keep_http_methods_on_the_engine_fallback() {
         .expect("live bootstrap response");
     assert_ne!(response.status().as_u16(), 405);
     assert_eq!(response.status().as_u16(), 200);
+    let calls = transport.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].method, "POST");
+    assert_eq!(calls[0].path_and_query, "/v1/live");
+    assert_eq!(calls[0].body, b"v=0\r\n");
     server.abort();
 }
 

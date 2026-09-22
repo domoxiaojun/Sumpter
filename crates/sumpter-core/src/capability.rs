@@ -13,8 +13,8 @@ pub enum ModelCapability {
     Text,
     Image,
     Video,
-    /// Realtime / Live 语音面。由 `has_exact_codex_live_mapping` 消费,用来确认某个
-    /// 入口真的声明了 Live 模型,而不是靠名字猜。
+    /// Realtime / Live 语音面。可由入口直接声明，也兼容旧的 mapping 声明；
+    /// 用来确认某个入口确实支持原生语音面，而不是靠普通文本模型名猜测。
     Live,
     /// Files 资源面。显式 `capabilities: ["files"]` 时由
     /// `RoutePlanner::plan_for_resource_capability` 选入口；模型名无法可靠推断

@@ -19,18 +19,21 @@ fn realtime_config(upstream_address: std::net::SocketAddr) -> AppConfig {
                 "apiKey": "provider-secret",
                 "protocol": "openai",
                 "enabled": true,
-                "mappings": [
-                    {
-                        "clientPattern": "gpt-live-1-codex",
-                        "upstreamModel": "gpt-live-1-codex",
-                        "capabilities": ["live"]
-                    },
-                    {
-                        "clientPattern": "gpt-realtime-2.1",
-                        "upstreamModel": "gpt-realtime-2.1",
-                        "capabilities": ["live"]
-                    }
-                ]
+                "capabilities": ["live"],
+                "mappings": []
+            }],
+            "modelGroups": [{
+                "id": "default",
+                "name": "default",
+                "enabled": true,
+                "priority": 0,
+                "models": [],
+                "bindings": [{
+                    "endpointID": "cpa",
+                    "enabled": true,
+                    "priority": 0,
+                    "models": []
+                }]
             }]
         })
         .to_string(),

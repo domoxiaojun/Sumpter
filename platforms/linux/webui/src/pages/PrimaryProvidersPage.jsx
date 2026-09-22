@@ -1035,6 +1035,7 @@ export function PrimaryProvidersPage() {
     let enabled = endpoint?.enabled !== false;
     // 新入口默认开启；编辑已有入口时严格保留其显式配置（缺省旧配置仍为关闭）。
     let keepAlive = isNew ? true : endpoint?.keepAlive === true;
+    let livePassthrough = Array.isArray(endpoint?.capabilities) && endpoint.capabilities.includes('live');
     let stickyGroup = endpoint?.stickyGroup || '';
     let modelMappings = clone(endpointMappings(endpoint));
     let apiKeyTouched = false;
@@ -1148,6 +1149,11 @@ export function PrimaryProvidersPage() {
               <LocalToggle initial={keepAlive} onChange={(value) => { keepAlive = value; }} label={(value) => (value ? '启用连接复用' : '每请求新建连接')} ariaLabel="切换连接复用（Keep-Alive）" />
               <span className="form-hint">新入口默认启用；可按入口关闭。启用后复用出站连接，可减少 TCP/TLS 握手开销。</span>
             </div>
+            <div className="form-group">
+              <label className="form-label">原生能力</label>
+              <LocalToggle initial={livePassthrough} onChange={(value) => { livePassthrough = value; }} label={(value) => (value ? 'Live / Realtime 透传' : '未声明 Live')} ariaLabel="切换 Live / Realtime 原样透传" />
+              <span className="form-hint">只声明入口路由能力，不把上游未公开的语音模型加入模型列表。</span>
+            </div>
           </div>
 
           {!isNew && endpoint && (
@@ -1216,6 +1222,7 @@ export function PrimaryProvidersPage() {
                 name: name.trim(),
                 baseURL: baseURL.trim(),
                 protocol: normalizeEndpointProtocol(protocol, 'auto'),
+                capabilities: livePassthrough ? ['live'] : [],
                 userAgent,
                 priority: Number(priority),
                 stickyGroup: stickyGroup.trim() || null,
@@ -1230,6 +1237,10 @@ export function PrimaryProvidersPage() {
                 target.name = name.trim();
                 target.baseURL = baseURL.trim();
                 target.protocol = normalizeEndpointProtocol(protocol, 'auto');
+                target.capabilities = [
+                  ...(Array.isArray(target.capabilities) ? target.capabilities.filter((capability) => capability !== 'live') : []),
+                  ...(livePassthrough ? ['live'] : []),
+                ];
                 target.userAgent = userAgent;
                 target.priority = Number(priority);
                 target.enabled = enabled;

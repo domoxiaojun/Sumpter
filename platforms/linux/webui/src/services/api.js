@@ -260,6 +260,11 @@ export function fromWireConfig(document) {
       endpoint.modelMappings = wireMappings.map(normalizeMappingForUI);
 
       endpoint.catalog = normalizeCatalog(endpoint.catalog);
+      endpoint.capabilities = [...new Set(
+        (Array.isArray(endpoint.capabilities) ? endpoint.capabilities : [])
+          .map((capability) => String(capability).trim().toLowerCase())
+          .filter(Boolean),
+      )];
       delete endpoint.searchDialect;
       endpoint.baseURL = endpoint.baseURL || '';
       endpoint.protocol = normalizeEndpointProtocol(endpoint.protocol, schemaVersion < 4 ? 'anthropic' : 'auto');
@@ -289,6 +294,13 @@ export function toWireConfig(document) {
         throw new TypeError(`入口 ${endpoint.id || '(unknown)'} 的 protocol 非法: ${rawProtocol}`);
       }
       endpoint.protocol = rawProtocol || 'auto';
+      const endpointCapabilities = [...new Set(
+        (Array.isArray(endpoint.capabilities) ? endpoint.capabilities : [])
+          .map((capability) => String(capability).trim().toLowerCase())
+          .filter(Boolean),
+      )];
+      if (endpointCapabilities.length > 0) endpoint.capabilities = endpointCapabilities;
+      else delete endpoint.capabilities;
       const normalizedUserAgent = normalizeUserAgentSettings(endpoint.userAgent);
       if (Object.keys(normalizedUserAgent).length > 0) endpoint.userAgent = normalizedUserAgent;
       else delete endpoint.userAgent;

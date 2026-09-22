@@ -16,6 +16,7 @@ struct ProviderAccountEditorSheet: View {
     @State private var priorityText: String
     @State private var stickyGroup: String
     @State private var keepAlive: Bool
+    @State private var livePassthrough: Bool
     @State private var anthropicUA: String
     @State private var openaiUA: String
     @State private var geminiUA: String
@@ -45,6 +46,7 @@ struct ProviderAccountEditorSheet: View {
         _stickyGroup = State(initialValue: row?.stickyGroup ?? "")
         // 新入口默认开启；编辑已有入口时保留磁盘中的显式值。
         _keepAlive = State(initialValue: row?.keepAlive ?? true)
+        _livePassthrough = State(initialValue: row?.livePassthrough ?? false)
         _anthropicUA = State(initialValue: row?.userAgent.anthropic.value ?? "")
         _openaiUA = State(initialValue: row?.userAgent.openai.value ?? "")
         _geminiUA = State(initialValue: row?.userAgent.gemini.value ?? "")
@@ -151,6 +153,15 @@ struct ProviderAccountEditorSheet: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                FormLine(title: "原生能力") {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Toggle("Live / Realtime 原样透传", isOn: $livePassthrough)
+                            .labelsHidden()
+                        Text("用于上游不在模型目录公开语音模型的入口；只声明路由能力，不把私有模型加入模型列表。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 FormLine(title: "成本价格") {
                     VStack(alignment: .leading, spacing: 6) {
                         Button {
@@ -198,6 +209,7 @@ struct ProviderAccountEditorSheet: View {
                         priority: priority,
                         stickyGroup: stickyGroup,
                         keepAlive: keepAlive,
+                        livePassthrough: livePassthrough,
                         userAgent: userAgentSettings
                     )
                 } else {
@@ -211,6 +223,7 @@ struct ProviderAccountEditorSheet: View {
                         priority: priority,
                         stickyGroup: stickyGroup,
                         keepAlive: keepAlive,
+                        livePassthrough: livePassthrough,
                         userAgent: userAgentSettings
                     )
                 }

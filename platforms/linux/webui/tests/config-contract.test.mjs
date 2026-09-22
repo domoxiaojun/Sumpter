@@ -131,6 +131,19 @@ test('Provider 新入口默认启用连接复用，编辑旧入口保留原值',
   assert.match(providerEditorSource, /新入口默认启用；可按入口关闭/);
 });
 
+test('Provider 入口级 Live 能力往返且不需要伪模型映射', () => {
+  const wire = {
+    schemaVersion: 7,
+    endpoints: [{ id: 'cpa', baseURL: 'https://cpa.invalid', protocol: 'auto', capabilities: ['live'], mappings: [] }],
+  };
+  const decoded = fromWireConfig({ config: wire, secretStatus: { endpoints: {} } }).config;
+  assert.deepEqual(decoded.endpoints[0].capabilities, ['live']);
+  assert.deepEqual(decoded.endpoints[0].modelMappings, []);
+  const encoded = toWireConfig(decoded);
+  assert.deepEqual(encoded.endpoints[0].capabilities, ['live']);
+  assert.deepEqual(encoded.endpoints[0].mappings, []);
+});
+
 test('Provider editor stores catalog mappings without a compatibility transform', () => {
   assert.match(providerEditorSource, /const upstream = readableCatalogModel\(raw\);/);
   assert.match(providerEditorSource, /to: upstream,/);

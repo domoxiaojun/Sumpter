@@ -90,6 +90,9 @@ pub(super) fn collect_local_models(
         .filter(|e| e.endpoint.enabled)
     {
         let endpoint = &scoped.endpoint;
+        // Endpoint-level native capabilities are intentionally absent from
+        // this model catalog. The upstream may omit private/Realtime IDs;
+        // capability routing must not fabricate model rows.
         let mut concrete_models = std::collections::BTreeSet::new();
         for mapping in &endpoint.mappings {
             let pattern = mapping.client_pattern.trim();
