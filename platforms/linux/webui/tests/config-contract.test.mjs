@@ -7,6 +7,7 @@ const { mockConfig } = await import('../src/services/mockData.js');
 const {
   api,
   fromWireConfig,
+  isValidResolveIP,
   toWireConfig,
 } = await import('../src/services/api.js');
 const {
@@ -897,6 +898,31 @@ test('save adapter emits only Rust v6 endpoint and routing fields', () => {
   assert.equal('inboundDialectPassthrough' in wire.listener, false);
   assert.equal(endpoint.protocol, 'openai');
   assert.equal('pools' in wire, false);
+});
+
+test('resolveIP validates IPv4/IPv6 and omits empty values on save', () => {
+  assert.equal(isValidResolveIP('203.0.113.10'), true);
+  assert.equal(isValidResolveIP('2001:db8::10'), true);
+  assert.equal(isValidResolveIP('203.0.113.999'), false);
+  const decoded = fromWireConfig({ config: {
+    schemaVersion: 7,
+    listener: {},
+    retry: {},
+    featureRules: [],
+    endpoints: [{ id: 'ep', baseURL: 'https://example.invalid', resolveIP: '203.0.113.10' }],
+  } }).config;
+  assert.equal(decoded.endpoints[0].resolveIP, '203.0.113.10');
+  assert.equal(toWireConfig({
+    schemaVersion: 7,
+    listener: {},
+    retry: {},
+    featureRules: [],
+    endpoints: [{ id: 'ep', baseURL: 'https://example.invalid', resolveIP: '  ' }],
+  }).endpoints[0].resolveIP, undefined);
+  assert.throws(() => fromWireConfig({ config: {
+    schemaVersion: 7, listener: {}, retry: {}, featureRules: [],
+    endpoints: [{ id: 'bad', resolveIP: 'not-an-ip' }],
+  } }), /resolveIP/);
 });
 
 test('legacy pool-level model rules are handled by the server migration', () => {

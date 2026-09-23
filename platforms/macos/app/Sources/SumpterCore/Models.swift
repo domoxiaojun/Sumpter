@@ -1,4 +1,5 @@
 import Foundation
+import Network
 
 public enum ProviderProtocol: String, Codable, Sendable, CaseIterable {
     case anthropic
@@ -555,6 +556,8 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
     public var id: String
     public var name: String
     public var baseURL: URL
+    /// Optional fixed upstream address; URL hostname remains the Host/TLS SNI name.
+    public var resolveIP: String
     /// Provider-level native passthrough capabilities, independent of model mappings.
     public var capabilities: [String]
     public var protocolMode: EndpointProtocolMode
@@ -576,6 +579,7 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         case id
         case name
         case baseURL
+        case resolveIP
         case capabilities
         case protocolMode = "protocol"
         case userAgent
@@ -592,6 +596,7 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         id: String,
         name: String,
         baseURL: URL,
+        resolveIP: String = "",
         capabilities: [String] = [],
         protocolMode: EndpointProtocolMode = .auto,
         userAgent: UserAgentSettings = UserAgentSettings(),
@@ -606,6 +611,7 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         self.id = id
         self.name = name
         self.baseURL = baseURL
+        self.resolveIP = resolveIP.trimmingCharacters(in: .whitespacesAndNewlines)
         self.capabilities = capabilities
         self.protocolMode = protocolMode
         self.userAgent = userAgent
@@ -623,6 +629,15 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         id = try keyed.decode(String.self, forKey: .id)
         name = try keyed.decodeIfPresent(String.self, forKey: .name) ?? id
         baseURL = try keyed.decode(URL.self, forKey: .baseURL)
+        resolveIP = (try keyed.decodeIfPresent(String.self, forKey: .resolveIP) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard resolveIP.isEmpty || IPv4Address(resolveIP) != nil || IPv6Address(resolveIP) != nil else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .resolveIP,
+                in: keyed,
+                debugDescription: "resolveIP must be a valid IPv4 or IPv6 address"
+            )
+        }
         capabilities = try keyed.decodeIfPresent([String].self, forKey: .capabilities) ?? []
         protocolMode = try keyed.decodeIfPresent(EndpointProtocolMode.self, forKey: .protocolMode) ?? .auto
         userAgent = try keyed.decodeIfPresent(UserAgentSettings.self, forKey: .userAgent) ?? UserAgentSettings()
@@ -636,10 +651,22 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
     }
 
     public func encode(to encoder: Encoder) throws {
+        guard resolveIP.isEmpty || IPv4Address(resolveIP) != nil || IPv6Address(resolveIP) != nil else {
+            throw EncodingError.invalidValue(
+                resolveIP,
+                EncodingError.Context(
+                    codingPath: encoder.codingPath,
+                    debugDescription: "resolveIP must be a valid IPv4 or IPv6 address"
+                )
+            )
+        }
         var keyed = encoder.container(keyedBy: CodingKeys.self)
         try keyed.encode(id, forKey: .id)
         try keyed.encode(name, forKey: .name)
         try keyed.encode(baseURL, forKey: .baseURL)
+        if !resolveIP.isEmpty {
+            try keyed.encode(resolveIP, forKey: .resolveIP)
+        }
         if !capabilities.isEmpty {
             try keyed.encode(capabilities, forKey: .capabilities)
         }

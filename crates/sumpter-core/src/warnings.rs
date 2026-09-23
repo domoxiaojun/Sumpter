@@ -244,6 +244,7 @@ mod tests {
         Endpoint {
             api_key: key.into(),
             base_url: format!("https://{id}.example.com"),
+            resolve_ip: String::new(),
             capabilities: vec![],
             catalog: None,
             enabled: true,

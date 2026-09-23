@@ -9,6 +9,7 @@
 //! - 取消:future drop 即撕连接(tokio 语义),对应 Swift 的 cancel → connectionFailed。
 
 use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -43,6 +44,8 @@ pub struct OutboundRequest {
     pub method: String,
     /// endpoint.baseURL(scheme/host/port/根路径来源)。
     pub base_url: String,
+    /// Optional fixed upstream address. The request URL remains on the base URL hostname.
+    pub resolve_ip: String,
     /// 拼接好的路径+query(base path 与入站路径已去重斜杠)。
     pub path_and_query: String,
     /// 已构造完毕的出站 header(黑名单/强制项由引擎处理)。
@@ -124,7 +127,7 @@ pub fn join_paths(base_path: &str, inbound_path: &str) -> String {
     format!("{base}{inbound}")
 }
 
-type ClientKey = (String, u16, bool);
+type ClientKey = (String, u16, bool, String);
 
 pub struct ReqwestTransport {
     clients: Mutex<HashMap<ClientKey, reqwest::Client>>,
@@ -142,8 +145,14 @@ impl ReqwestTransport {
         host: &str,
         port: u16,
         keep_alive: bool,
+        resolve_ip: &str,
     ) -> Result<reqwest::Client, TransportError> {
-        let key: ClientKey = (host.to_string(), port, keep_alive);
+        let key: ClientKey = (
+            host.to_string(),
+            port,
+            keep_alive,
+            resolve_ip.trim().to_string(),
+        );
         if let Some(client) = self.clients.lock().unwrap().get(&key) {
             return Ok(client.clone());
         }
@@ -159,6 +168,12 @@ impl ReqwestTransport {
             .no_brotli()
             .no_zstd()
             .no_proxy();
+        if !resolve_ip.trim().is_empty() {
+            let ip = resolve_ip.trim().parse::<IpAddr>().map_err(|_| {
+                TransportError::InvalidResponse(format!("invalid resolve IP {resolve_ip}"))
+            })?;
+            builder = builder.resolve(host, SocketAddr::new(ip, port));
+        }
         // 【实验】keepAlive 入口:小池 + 90s 空闲回收,省去每次 TCP+TLS 握手
         // (远程中转实测 ~100ms);默认仍关池对齐手写栈行为面。
         builder = if keep_alive {
@@ -233,7 +248,12 @@ impl UpstreamTransport for ReqwestTransport {
         response_timeout: Option<Duration>,
     ) -> Result<UpstreamResponse, TransportError> {
         let target = resolve_target(&request.base_url, &request.path_and_query)?;
-        let client = self.client_for(&target.host, target.port, request.keep_alive)?;
+        let client = self.client_for(
+            &target.host,
+            target.port,
+            request.keep_alive,
+            &request.resolve_ip,
+        )?;
 
         let method = reqwest::Method::from_bytes(request.method.as_bytes()).map_err(|_| {
             TransportError::InvalidResponse(format!("bad method {}", request.method))
@@ -345,5 +365,49 @@ mod tests {
         let rendered = bounded_error_chain(&nested);
         assert!(rendered.contains("TLS peer closed during handshake"));
         assert!(rendered.chars().count() <= MAX_ERROR_CHAIN_CHARS);
+    }
+
+    #[tokio::test]
+    async fn fixed_ip_uses_socket_address_but_preserves_http_host() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = vec![0_u8; 4096];
+            let count = socket.read(&mut request).await.unwrap();
+            let request = String::from_utf8_lossy(&request[..count]).to_string();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                .await
+                .unwrap();
+            request
+        });
+
+        let transport = ReqwestTransport::new();
+        let response = transport
+            .send_streaming(
+                OutboundRequest {
+                    method: "GET".into(),
+                    base_url: format!("http://provider.test:{port}"),
+                    resolve_ip: "127.0.0.1".into(),
+                    path_and_query: "/v1/models".into(),
+                    headers: Vec::new(),
+                    body: Vec::new(),
+                    keep_alive: false,
+                },
+                Some(Duration::from_secs(2)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status, 200);
+        let request = server.await.unwrap();
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains(&format!("host: provider.test:{port}"))
+        );
     }
 }

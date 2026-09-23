@@ -1065,6 +1065,7 @@ mod tests {
         config.endpoints.push(Endpoint {
             api_key: SYNTHETIC_KEY.into(),
             base_url: "https://api.example.com".into(),
+            resolve_ip: String::new(),
             capabilities: vec![],
             catalog: None,
             enabled: true,

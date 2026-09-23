@@ -298,7 +298,7 @@ async fn fetch_provider_models_inner(
     {
         return Err("baseURL 仅支持不带凭据、query 或 fragment 的 HTTP(S) 地址".into());
     }
-    let client = reqwest::Client::builder()
+    let mut client_builder = reqwest::Client::builder()
         .use_rustls_tls()
         .http1_only()
         .redirect(reqwest::redirect::Policy::none())
@@ -306,9 +306,22 @@ async fn fetch_provider_models_inner(
         .no_proxy()
         .pool_max_idle_per_host(0)
         .connect_timeout(Duration::from_secs(2))
-        .timeout(Duration::from_secs(3))
-        .build()
-        .map_err(|error| error.to_string())?;
+        .timeout(Duration::from_secs(3));
+    if !endpoint.resolve_ip.trim().is_empty() {
+        let ip = endpoint
+            .resolve_ip
+            .trim()
+            .parse::<std::net::IpAddr>()
+            .map_err(|_| format!("resolveIP 无效: {}", endpoint.resolve_ip))?;
+        let host = base
+            .host_str()
+            .ok_or_else(|| "baseURL 缺少主机名".to_string())?;
+        let port = base
+            .port_or_known_default()
+            .ok_or_else(|| "baseURL 缺少有效端口".to_string())?;
+        client_builder = client_builder.resolve(host, std::net::SocketAddr::new(ip, port));
+    }
+    let client = client_builder.build().map_err(|error| error.to_string())?;
     let mut errors = Vec::new();
     let mut discovered = std::collections::BTreeSet::new();
     let mut source = None;

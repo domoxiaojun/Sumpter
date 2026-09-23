@@ -10,6 +10,7 @@ struct ProviderAccountEditorSheet: View {
     @State private var idText: String
     @State private var name: String
     @State private var baseURL: String
+    @State private var resolveIP: String
     @State private var protocolName: String
     @State private var enabled: Bool
     @State private var apiKey: String
@@ -39,6 +40,7 @@ struct ProviderAccountEditorSheet: View {
         _idText = State(initialValue: row?.id ?? "")
         _name = State(initialValue: row?.name ?? "")
         _baseURL = State(initialValue: row?.baseURL ?? "https://")
+        _resolveIP = State(initialValue: row?.resolveIP ?? "")
         _protocolName = State(initialValue: row?.protocolName ?? EndpointProtocolMode.auto.rawValue)
         _enabled = State(initialValue: row?.enabled ?? true)
         _apiKey = State(initialValue: row?.apiKey ?? "")
@@ -90,6 +92,14 @@ struct ProviderAccountEditorSheet: View {
                 }
                 FormLine(title: "API 地址") {
                     TextField("https://api.example.com", text: $baseURL)
+                }
+                FormLine(title: "指定解析 IP") {
+                    VStack(alignment: .leading, spacing: 2) {
+                        TextField("留空使用系统 DNS", text: $resolveIP)
+                        Text("连接固定 IPv4/IPv6 地址；Host、HTTPS SNI、证书校验和 WebSocket 握手仍使用 API 地址中的域名。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 FormLine(title: "API Key") {
                     VStack(alignment: .leading, spacing: 2) {
@@ -203,6 +213,7 @@ struct ProviderAccountEditorSheet: View {
                         id: row.id,
                         name: name,
                         baseURLText: baseURL,
+                        resolveIPText: resolveIP,
                         protocolName: protocolName,
                         enabled: enabled,
                         apiKey: apiKey,
@@ -217,6 +228,7 @@ struct ProviderAccountEditorSheet: View {
                         idText: idText,
                         name: name,
                         baseURLText: baseURL,
+                        resolveIPText: resolveIP,
                         protocolName: protocolName,
                         enabled: enabled,
                         apiKey: apiKey,

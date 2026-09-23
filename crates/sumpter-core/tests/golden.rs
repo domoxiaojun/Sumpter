@@ -101,6 +101,19 @@ fn legacy_fixed_ip_fields_are_ignored_and_omitted_on_save() {
 }
 
 #[test]
+fn resolve_ip_roundtrips_and_empty_value_is_omitted() {
+    let mut config = AppConfig::from_json(EXAMPLE).expect("example config");
+    config.endpoints[0].resolve_ip = "2001:db8::10".into();
+    let value: serde_json::Value = serde_json::from_str(&config.to_json_pretty().unwrap()).unwrap();
+    assert_eq!(value["endpoints"][0]["resolveIP"], "2001:db8::10");
+    config.endpoints[0].resolve_ip.clear();
+    let value: serde_json::Value = serde_json::from_str(&config.to_json_pretty().unwrap()).unwrap();
+    assert!(value["endpoints"][0].get("resolveIP").is_none());
+    config.endpoints[0].resolve_ip = "not-an-ip".into();
+    assert!(config.validate_resolve_ips().is_err());
+}
+
+#[test]
 fn unknown_fields_are_tolerated() {
     let mut value: serde_json::Value = serde_json::from_str(EXAMPLE).unwrap();
     value["futureField"] = serde_json::json!({"nested": true});

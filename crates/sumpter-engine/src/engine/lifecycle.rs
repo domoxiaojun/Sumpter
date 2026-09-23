@@ -108,6 +108,7 @@ impl Engine {
         let loaded = dir
             .load_config_with_notice()
             .map_err(|error| error.to_string())?;
+        loaded.config.validate_resolve_ips()?;
         let (generation, warnings) = self.replace_config(loaded.config.normalized());
         if let Some(notice) = loaded.migration_notice {
             self.publish_platform_notice(PlatformNotice::Migration(notice));

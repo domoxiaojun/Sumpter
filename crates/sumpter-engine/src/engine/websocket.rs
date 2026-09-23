@@ -45,6 +45,7 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use serde_json::json;
 use std::net::IpAddr;
+use std::net::SocketAddr;
 use std::time::Duration;
 use std::time::Instant;
 use sumpter_core::access;
@@ -65,6 +66,45 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 /// handshake independently.
 const REALTIME_WEBSOCKET_CONNECT_TIMEOUT_SECS: f64 = 15.0;
 pub(super) const MAX_WEBSOCKET_METADATA_FRAME_BYTES: usize = 64 * 1024;
+
+async fn connect_upstream_websocket(
+    request: tokio_tungstenite::tungstenite::handshake::client::Request,
+    resolve_ip: &str,
+) -> Result<
+    (
+        NativeWebSocket,
+        tokio_tungstenite::tungstenite::handshake::client::Response,
+    ),
+    tokio_tungstenite::tungstenite::Error,
+> {
+    if resolve_ip.trim().is_empty() {
+        return tokio_tungstenite::connect_async(request).await;
+    }
+    let ip = resolve_ip.trim().parse::<IpAddr>().map_err(|error| {
+        tokio_tungstenite::tungstenite::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            error,
+        ))
+    })?;
+    let uri = request.uri();
+    uri.host().ok_or_else(|| {
+        tokio_tungstenite::tungstenite::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "upstream websocket URL has no host",
+        ))
+    })?;
+    let port = uri.port_u16().unwrap_or_else(|| {
+        if uri.scheme_str() == Some("wss") {
+            443
+        } else {
+            80
+        }
+    });
+    let socket = tokio::net::TcpStream::connect(SocketAddr::new(ip, port))
+        .await
+        .map_err(tokio_tungstenite::tungstenite::Error::Io)?;
+    tokio_tungstenite::client_async_tls_with_config(request, socket, None, None).await
+}
 
 pub(super) type NativeWebSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -1105,7 +1145,7 @@ impl Engine {
             }
             let connect_result = tokio::time::timeout(
                 Duration::from_secs_f64(REALTIME_WEBSOCKET_CONNECT_TIMEOUT_SECS),
-                tokio_tungstenite::connect_async(upstream_request),
+                connect_upstream_websocket(upstream_request, &endpoint.resolve_ip),
             )
             .await;
             match connect_result {

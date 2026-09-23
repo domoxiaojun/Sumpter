@@ -222,6 +222,7 @@ pub(crate) fn validate_config_identity(config: &AppConfig) -> Result<(), String>
 
 pub fn validate_config(config: &AppConfig) -> Result<(), String> {
     config.validate_user_agents()?;
+    config.validate_resolve_ips()?;
     validate_config_identity(config)?;
     config.validate_model_groups()?;
     let _ = listener_address(config)?;
@@ -371,7 +372,7 @@ pub(crate) async fn fetch_provider_models_inner(
     // 不代表真实转发。默认 reqwest 会读 HTTPS_PROXY/ALL_PROXY 环境代理、做 h2 ALPN
     // 协商、跟随重定向——设了系统代理的机器上探测与转发会走两条不同链路，只认 h1
     // CC 指纹的上游也会给出与转发不同的结果。
-    let client = reqwest::Client::builder()
+    let mut client_builder = reqwest::Client::builder()
         .use_rustls_tls()
         .http1_only()
         .redirect(reqwest::redirect::Policy::none())
@@ -379,9 +380,22 @@ pub(crate) async fn fetch_provider_models_inner(
         .no_proxy()
         .pool_max_idle_per_host(0)
         .connect_timeout(std::time::Duration::from_secs(2))
-        .timeout(std::time::Duration::from_secs(3))
-        .build()
-        .map_err(|error| error.to_string())?;
+        .timeout(std::time::Duration::from_secs(3));
+    if !endpoint.resolve_ip.trim().is_empty() {
+        let ip = endpoint
+            .resolve_ip
+            .trim()
+            .parse::<std::net::IpAddr>()
+            .map_err(|_| format!("resolveIP 无效: {}", endpoint.resolve_ip))?;
+        let host = base
+            .host_str()
+            .ok_or_else(|| "baseURL 缺少主机名".to_string())?;
+        let port = base
+            .port_or_known_default()
+            .ok_or_else(|| "baseURL 缺少有效端口".to_string())?;
+        client_builder = client_builder.resolve(host, std::net::SocketAddr::new(ip, port));
+    }
+    let client = client_builder.build().map_err(|error| error.to_string())?;
     let mut errors = Vec::new();
     let mut discovered = std::collections::BTreeSet::new();
     let mut source = None;

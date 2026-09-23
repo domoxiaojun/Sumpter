@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Network
 import ServiceManagement
 import SwiftUI
 import UserNotifications
@@ -11,6 +12,7 @@ extension AppModel {
         idText: String,
         name: String,
         baseURLText: String,
+        resolveIPText: String = "",
         protocolName: String,
         enabled: Bool,
         apiKey: String,
@@ -28,6 +30,7 @@ extension AppModel {
             throw AppModelError.invalidInput("入口名称不能为空")
         }
         let url = try validatedURLString(baseURLText, field: "API 地址")
+        let resolveIP = try validatedResolveIP(resolveIPText)
         guard let baseURL = URL(string: url) else {
             throw AppModelError.invalidInput("API 地址无效")
         }
@@ -46,6 +49,7 @@ extension AppModel {
                 id: id,
                 name: cleanName,
                 baseURL: baseURL,
+                resolveIP: resolveIP,
                 capabilities: livePassthrough ? ["live"] : [],
                 protocolMode: try Self.endpointProtocolMode(protocolName),
                 userAgent: try userAgent.validated(),
@@ -63,6 +67,7 @@ extension AppModel {
         id: String,
         name: String,
         baseURLText: String,
+        resolveIPText: String = "",
         protocolName: String,
         enabled: Bool,
         apiKey: String,
@@ -79,6 +84,7 @@ extension AppModel {
             throw AppModelError.invalidInput("入口名称不能为空")
         }
         let url = try validatedURLString(baseURLText, field: "API 地址")
+        let resolveIP = try validatedResolveIP(resolveIPText)
         guard let baseURL = URL(string: url) else {
             throw AppModelError.invalidInput("API 地址无效")
         }
@@ -91,6 +97,7 @@ extension AppModel {
             let location = try Self.locate(endpointID: id, in: config)
             config.endpoints[location.endpoint].name = cleanName
             config.endpoints[location.endpoint].baseURL = baseURL
+            config.endpoints[location.endpoint].resolveIP = resolveIP
             config.endpoints[location.endpoint].apiKey = cleanKey
             config.endpoints[location.endpoint].protocolMode =
                 try Self.endpointProtocolMode(protocolName)
@@ -104,6 +111,14 @@ extension AppModel {
             config.endpoints[location.endpoint].capabilities = capabilities
             config.endpoints[location.endpoint].userAgent = try userAgent.validated()
         }
+    }
+
+    private func validatedResolveIP(_ raw: String) throws -> String {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.isEmpty || IPv4Address(value) != nil || IPv6Address(value) != nil else {
+            throw AppModelError.invalidInput("指定解析 IP 必须是合法的 IPv4 或 IPv6 地址")
+        }
+        return value
     }
 
     /// 快捷启停只改一个字段，并在落盘/reload 任一步失败时恢复原状态。

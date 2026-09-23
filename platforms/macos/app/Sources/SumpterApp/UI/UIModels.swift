@@ -6,6 +6,7 @@ struct EndpointDisplayRow: Identifiable, Hashable {
     let id: String
     let name: String
     let baseURL: String
+    let resolveIP: String
     let capabilities: [String]
     let protocolName: String
     let enabled: Bool
@@ -21,6 +22,7 @@ struct EndpointDisplayRow: Identifiable, Hashable {
         id = endpoint.id
         name = endpoint.name
         baseURL = endpoint.baseURL.absoluteString
+        resolveIP = endpoint.resolveIP
         capabilities = endpoint.capabilities
         protocolName = endpoint.protocolMode.rawValue
         enabled = endpoint.enabled
@@ -39,6 +41,7 @@ struct EndpointDisplayRow: Identifiable, Hashable {
     var priorityText: String { String(priority) }
     var stickyGroupText: String { stickyGroup ?? "入口 ID（独立组）" }
     var keepAliveText: String { keepAlive ? "启用" : "关闭" }
+    var resolveIPText: String { resolveIP.isEmpty ? "系统 DNS" : resolveIP }
     var livePassthrough: Bool { capabilities.contains("live") }
     var userAgentText: String { userAgent.summary }
     var protocolDisplayName: String {

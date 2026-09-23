@@ -516,6 +516,7 @@ struct ProvidersPane: View {
                     EndpointDetailField(title: "优先级", value: row.priorityText)
                     EndpointDetailField(title: "入口协议", value: row.protocolDisplayName)
                     EndpointDetailField(title: "API 地址", value: row.baseURL, copyable: true)
+                    EndpointDetailField(title: "指定解析 IP", value: row.resolveIPText, copyable: !row.resolveIP.isEmpty)
                     EndpointDetailField(title: "API Key", value: row.keyStatusText)
                     EndpointDetailField(title: "粘性分组", value: row.stickyGroupText)
                     EndpointDetailField(title: "连接复用", value: row.keepAliveText)

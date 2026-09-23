@@ -19,6 +19,26 @@ import {
 
 const isMock = new URLSearchParams(window.location.search).get('mock') === '1';
 
+export function normalizeResolveIP(value) {
+  return String(value ?? '').trim();
+}
+
+export function isValidResolveIP(value) {
+  const candidate = normalizeResolveIP(value);
+  if (!candidate) return true;
+  const octets = candidate.split('.');
+  if (octets.length === 4 && octets.every((octet) => /^\d+$/.test(octet))) {
+    return octets.every((octet) => Number(octet) >= 0 && Number(octet) <= 255);
+  }
+  if (!candidate.includes(':') || candidate.includes('[') || candidate.includes(']')) return false;
+  try {
+    new URL(`http://[${candidate}]/`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function mockPageSize(value, fallback) {
   const parsed = value == null || String(value).trim() === '' ? fallback : Number(value);
   if (!RUNTIME_EVENT_PAGE_SIZES.includes(parsed)) {
@@ -267,6 +287,11 @@ export function fromWireConfig(document) {
       )];
       delete endpoint.searchDialect;
       endpoint.baseURL = endpoint.baseURL || '';
+      endpoint.resolveIP = normalizeResolveIP(endpoint.resolveIP);
+      if (endpoint.resolveIP && !isValidResolveIP(endpoint.resolveIP)) {
+        throw new TypeError(`入口 ${endpoint.id || '(unknown)'} 的 resolveIP 不是合法 IPv4/IPv6 地址`);
+      }
+      if (!endpoint.resolveIP) delete endpoint.resolveIP;
       endpoint.protocol = normalizeEndpointProtocol(endpoint.protocol, schemaVersion < 4 ? 'anthropic' : 'auto');
       const normalizedUserAgent = normalizeUserAgentSettings(endpoint.userAgent);
       if (Object.keys(normalizedUserAgent).length > 0) endpoint.userAgent = normalizedUserAgent;
@@ -294,6 +319,11 @@ export function toWireConfig(document) {
         throw new TypeError(`入口 ${endpoint.id || '(unknown)'} 的 protocol 非法: ${rawProtocol}`);
       }
       endpoint.protocol = rawProtocol || 'auto';
+      endpoint.resolveIP = normalizeResolveIP(endpoint.resolveIP);
+      if (endpoint.resolveIP && !isValidResolveIP(endpoint.resolveIP)) {
+        throw new TypeError(`入口 ${endpoint.id || '(unknown)'} 的 resolveIP 不是合法 IPv4/IPv6 地址`);
+      }
+      if (!endpoint.resolveIP) delete endpoint.resolveIP;
       const endpointCapabilities = [...new Set(
         (Array.isArray(endpoint.capabilities) ? endpoint.capabilities : [])
           .map((capability) => String(capability).trim().toLowerCase())

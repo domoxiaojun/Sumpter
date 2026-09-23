@@ -816,6 +816,8 @@ pub struct PlannedEndpoint {
     pub model_group_rank: usize,
     pub scheduling_strategy: ModelGroupSchedulingStrategy,
     pub base_url: String,
+    /// 非空时连接到该固定 IP，URL/Host/TLS SNI 仍使用 base_url 域名。
+    pub resolve_ip: String,
     /// 配置中声明的四态入口模式。
     pub configured_protocol: EndpointProtocolMode,
     /// 入站路径确定的真实 SourceFormat。
@@ -1343,6 +1345,7 @@ impl RoutePlanner {
                     model_group_rank: scoped.group_rank,
                     scheduling_strategy: scoped.scheduling_strategy,
                     base_url: endpoint.base_url.clone(),
+                    resolve_ip: endpoint.resolve_ip.clone(),
                     configured_protocol,
                     source_format,
                     protocol,

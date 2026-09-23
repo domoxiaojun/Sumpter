@@ -18,6 +18,7 @@ fn endpoint(id: &str, mappings: Vec<ModelMapping>) -> Endpoint {
     Endpoint {
         api_key: "sk-test".into(),
         base_url: format!("https://{id}.example.com"),
+        resolve_ip: String::new(),
         capabilities: vec![],
         catalog: None,
         enabled: true,

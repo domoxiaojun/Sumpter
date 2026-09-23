@@ -43,6 +43,7 @@ public struct PlannedEndpoint: Equatable, Sendable, Identifiable {
     public var endpointID: String
     public var endpointName: String
     public var baseURL: URL
+    public var resolveIP: String
     public var configuredProtocol: EndpointProtocolMode
     public var sourceFormat: ProviderProtocol
     public var providerProtocol: ProviderProtocol
@@ -67,6 +68,7 @@ public struct PlannedEndpoint: Equatable, Sendable, Identifiable {
         endpointID: String,
         endpointName: String,
         baseURL: URL,
+        resolveIP: String = "",
         configuredProtocol: EndpointProtocolMode = .anthropic,
         sourceFormat: ProviderProtocol = .anthropic,
         providerProtocol: ProviderProtocol,
@@ -82,6 +84,7 @@ public struct PlannedEndpoint: Equatable, Sendable, Identifiable {
         self.endpointID = endpointID
         self.endpointName = endpointName
         self.baseURL = baseURL
+        self.resolveIP = resolveIP
         self.configuredProtocol = configuredProtocol
         self.sourceFormat = sourceFormat
         self.providerProtocol = providerProtocol
@@ -103,6 +106,7 @@ public struct PlannedEndpoint: Equatable, Sendable, Identifiable {
         endpointID: String,
         endpointName: String,
         baseURL: URL,
+        resolveIP: String = "",
         configuredProtocol: EndpointProtocolMode = .anthropic,
         sourceFormat: ProviderProtocol = .anthropic,
         providerProtocol: ProviderProtocol,
@@ -118,6 +122,7 @@ public struct PlannedEndpoint: Equatable, Sendable, Identifiable {
             endpointID: endpointID,
             endpointName: endpointName,
             baseURL: baseURL,
+            resolveIP: resolveIP,
             configuredProtocol: configuredProtocol,
             sourceFormat: sourceFormat,
             providerProtocol: providerProtocol,
@@ -645,6 +650,7 @@ public struct RoutePlanner {
                     endpointID: endpoint.id,
                     endpointName: endpoint.name,
                     baseURL: endpoint.baseURL,
+                    resolveIP: endpoint.resolveIP,
                     configuredProtocol: endpoint.protocolMode,
                     sourceFormat: sourceFormat,
                     providerProtocol: providerProtocol,

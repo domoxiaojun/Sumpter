@@ -178,6 +178,21 @@ impl AppConfig {
         Ok(())
     }
 
+    pub fn validate_resolve_ips(&self) -> Result<(), String> {
+        for (index, endpoint) in self.endpoints.iter().enumerate() {
+            if !endpoint.resolve_ip.trim().is_empty()
+                && endpoint
+                    .resolve_ip
+                    .trim()
+                    .parse::<std::net::IpAddr>()
+                    .is_err()
+            {
+                return Err(format!("endpoints[{index}].resolveIP 不是合法 IP 地址"));
+            }
+        }
+        Ok(())
+    }
+
     /// 磁盘保真解码,不做任何归一化(golden round-trip 用)。
     pub fn from_json(data: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(data)
@@ -216,6 +231,7 @@ impl AppConfig {
                 endpoint.name = endpoint.id.clone();
             }
             endpoint.priority = endpoint.priority.max(0);
+            endpoint.resolve_ip = endpoint.resolve_ip.trim().to_string();
             endpoint.sticky_group = normalized_group(endpoint.sticky_group.take());
             endpoint
                 .capabilities
@@ -658,6 +674,13 @@ pub struct Endpoint {
     pub priority: i64,
     #[serde(default)]
     pub protocol: EndpointProtocolMode,
+    /// 非空时连接到此 IP，但 HTTP Host、TLS SNI 与证书校验仍使用 baseURL 域名。
+    #[serde(
+        rename = "resolveIP",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub resolve_ip: String,
     /// 同组入口共享会话粘性与冷却；None 使用自身 id 作为独立组并参与 Provider 分流。
     #[serde(rename = "stickyGroup", default, skip_serializing_if = "is_none")]
     pub sticky_group: Option<String>,

@@ -541,6 +541,7 @@ pub fn build_outbound(
             request: OutboundRequest {
                 method: inbound_method.to_string(),
                 base_url: endpoint.base_url.clone(),
+                resolve_ip: endpoint.resolve_ip.clone(),
                 path_and_query,
                 headers,
                 // JSON bodies can safely follow feature-rule model rewrites. Multipart
@@ -634,6 +635,7 @@ pub fn build_outbound(
         request: OutboundRequest {
             method: inbound_method.to_string(),
             base_url: endpoint.base_url.clone(),
+            resolve_ip: endpoint.resolve_ip.clone(),
             path_and_query: path,
             headers,
             body,
@@ -1181,6 +1183,7 @@ mod tests {
             model_group_rank: 0,
             scheduling_strategy: sumpter_core::ModelGroupSchedulingStrategy::Priority,
             base_url: "https://up.example.com".into(),
+            resolve_ip: String::new(),
             configured_protocol: match protocol {
                 ProviderProtocol::Anthropic => EndpointProtocolMode::Anthropic,
                 ProviderProtocol::OpenAI => EndpointProtocolMode::OpenAI,

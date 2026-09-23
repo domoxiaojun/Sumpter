@@ -118,6 +118,7 @@ mod random_sticky_tests {
             model_group_rank: 0,
             scheduling_strategy: strategy,
             base_url: "https://example.invalid".into(),
+            resolve_ip: String::new(),
             configured_protocol: EndpointProtocolMode::OpenAI,
             source_format: ProviderProtocol::OpenAI,
             protocol: ProviderProtocol::OpenAI,

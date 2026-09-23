@@ -55,6 +55,10 @@ fn main() -> ExitCode {
     let (config, migration_notice) = match dir.load_config_with_notice() {
         Ok(loaded) => {
             let original = loaded.config;
+            if let Err(error) = original.validate_resolve_ips() {
+                eprintln!("config.json 校验失败: {error}");
+                return ExitCode::FAILURE;
+            }
             let normalized = original.clone().normalized();
             if normalized != original {
                 if let Err(error) = dir.save_config(&normalized) {

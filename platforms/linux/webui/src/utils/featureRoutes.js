@@ -14,7 +14,7 @@ export function routeModelChoices(endpoints, endpointID, catalog) {
 }
 
 export function routeCatalogKey(endpoint) {
-  return JSON.stringify([endpoint.id, endpoint.baseURL, endpoint.protocol, endpoint.headers, endpoint.pinnedIP, endpoint.pinnedIPExclusive, endpoint.userAgent]);
+  return JSON.stringify([endpoint.id, endpoint.baseURL, endpoint.resolveIP, endpoint.protocol, endpoint.headers, endpoint.pinnedIP, endpoint.pinnedIPExclusive, endpoint.userAgent]);
 }
 
 // Cache only successful discoveries. Aborted/outdated probes must never become

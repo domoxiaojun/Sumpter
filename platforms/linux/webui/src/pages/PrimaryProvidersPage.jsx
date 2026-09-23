@@ -5,7 +5,7 @@ import { PricingPanel } from '../components/AnalyticsV2Workspace.jsx';
 import { QuickToggle } from '../components/QuickToggle.jsx';
 import { StatusBadge } from '../components/StatusBadge.jsx';
 import { Icon } from '../utils/icons.jsx';
-import { api } from '../services/api.js';
+import { api, isValidResolveIP, normalizeResolveIP } from '../services/api.js';
 import { UserAgentEditor } from '../components/UserAgentEditor.jsx';
 import { normalizeUserAgentSettings, userAgentSummary } from '../utils/userAgent.js';
 import { addEndpointToLibrary } from '../utils/modelGroups.js';
@@ -1024,6 +1024,7 @@ export function PrimaryProvidersPage() {
     let endpointID = endpoint?.id || '';
     let name = endpoint?.name || '';
     let baseURL = endpoint?.baseURL || '';
+    let resolveIP = endpoint?.resolveIP || '';
     let protocol = normalizeEndpointProtocol(endpoint?.protocol, 'auto');
     let userAgent = {
       anthropic: { mode: endpoint?.userAgent?.anthropic?.mode || 'auto', value: endpoint?.userAgent?.anthropic?.value || '' },
@@ -1101,6 +1102,18 @@ export function PrimaryProvidersPage() {
               placeholder="https://api.anthropic.com"
               onChange={(e) => { baseURL = e.target.value; }}
             />
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">指定解析 IP</label>
+            <input
+              type="text"
+              className="form-input"
+              defaultValue={resolveIP}
+              placeholder="留空使用系统 DNS，如 203.0.113.10 或 2001:db8::10"
+              onChange={(e) => { resolveIP = e.target.value; }}
+            />
+            <span className="form-hint">连接固定地址，Host、HTTPS SNI、证书校验和 WebSocket 握手仍使用 API 地址中的域名。</span>
           </div>
 
           <div className="form-group">
@@ -1200,6 +1213,11 @@ export function PrimaryProvidersPage() {
               addToast('API 地址必须是无凭据、query 和 fragment 的有效 http/https 地址', 'warning');
               return true;
             }
+            resolveIP = normalizeResolveIP(resolveIP);
+            if (resolveIP && !isValidResolveIP(resolveIP)) {
+              addToast('指定解析 IP 必须是合法的 IPv4 或 IPv6 地址', 'warning');
+              return true;
+            }
 
             const nextConfig = clone(config);
             const secretUpdates = {};
@@ -1221,6 +1239,7 @@ export function PrimaryProvidersPage() {
                 id: newId,
                 name: name.trim(),
                 baseURL: baseURL.trim(),
+                ...(resolveIP ? { resolveIP } : {}),
                 protocol: normalizeEndpointProtocol(protocol, 'auto'),
                 capabilities: livePassthrough ? ['live'] : [],
                 userAgent,
@@ -1236,6 +1255,8 @@ export function PrimaryProvidersPage() {
               if (target) {
                 target.name = name.trim();
                 target.baseURL = baseURL.trim();
+                if (resolveIP) target.resolveIP = resolveIP;
+                else delete target.resolveIP;
                 target.protocol = normalizeEndpointProtocol(protocol, 'auto');
                 target.capabilities = [
                   ...(Array.isArray(target.capabilities) ? target.capabilities.filter((capability) => capability !== 'live') : []),
@@ -1302,6 +1323,15 @@ export function PrimaryProvidersPage() {
       render: (row) => (
         <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
           {endpointProtocolLabel(row.protocol)}
+        </span>
+      ),
+    },
+    {
+      title: '固定解析',
+      width: '118px',
+      render: (row) => (
+        <span className="mono-cell" title={row.resolveIP || '使用系统 DNS'}>
+          {row.resolveIP || '系统 DNS'}
         </span>
       ),
     },
@@ -1559,6 +1589,7 @@ export function PrimaryProvidersPage() {
                       <dd>{endpointMappings(endpoint).length} 条</dd>
                     </div>
                     <div><dt>UA</dt><dd>{userAgentSummary(endpoint.userAgent)}</dd></div>
+                    <div><dt>解析 IP</dt><dd className="mono-cell">{endpoint.resolveIP || '系统 DNS'}</dd></div>
                     <div>
                       <dt>模型目录</dt>
                       <dd className={endpoint.catalog?.status === '获取失败' ? 'provider-secret-missing' : undefined}>
@@ -1676,6 +1707,7 @@ export function PrimaryProvidersPage() {
           <div className="grid-4col endpoint-detail-grid">
             <div><span style={{ color: 'var(--text-muted)' }}>入口 ID：</span><span className="mono-cell">{selectedEndpoint.id}</span></div>
             <div><span style={{ color: 'var(--text-muted)' }}>API 地址：</span><span className="mono-cell">{selectedEndpoint.baseURL}</span></div>
+            <div><span style={{ color: 'var(--text-muted)' }}>指定解析 IP：</span><span className="mono-cell">{selectedEndpoint.resolveIP || '系统 DNS'}</span></div>
             <div><span style={{ color: 'var(--text-muted)' }}>API Key：</span><span className={secretStatus?.endpoints?.[selectedEndpoint.id]?.configured ? 'provider-secret-configured' : 'provider-secret-missing'}>{secretStatus?.endpoints?.[selectedEndpoint.id]?.configured ? `已配置 · 尾号 ${secretStatus.endpoints[selectedEndpoint.id].last4 || '****'}` : '未配置'}</span></div>
             <div><span style={{ color: 'var(--text-muted)' }}>入口协议：</span><span className="mono-cell">{endpointProtocolLabel(selectedEndpoint.protocol)}</span></div>
             <div><span style={{ color: 'var(--text-muted)' }}>粘性分组：</span><span className="mono-cell">{selectedEndpoint.stickyGroup || '独立分组'}</span></div>
