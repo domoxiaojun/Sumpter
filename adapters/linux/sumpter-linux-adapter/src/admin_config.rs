@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::{
     AdminState, JsonPayload, MAX_MODEL_CATALOG_BYTES, MAX_MODEL_CATALOG_ITEMS, api_error, json_ok,
     listener_address, require_json,
@@ -345,12 +347,11 @@ pub(crate) async fn provider_models(
 pub(crate) async fn fetch_provider_models(
     endpoint: &Endpoint,
 ) -> Result<(Vec<String>, String), String> {
-    tokio::time::timeout(
-        std::time::Duration::from_secs(12),
-        fetch_provider_models_inner(endpoint),
-    )
-    .await
-    .map_err(|_| "获取模型整体超时（12 秒）".to_string())?
+    let snapshot = sumpter_engine::model_catalog::ProviderCatalogFetcher::fetch(endpoint).await;
+    match snapshot.error {
+        Some(error) => Err(error),
+        None => Ok((snapshot.models, snapshot.source)),
+    }
 }
 
 pub(crate) async fn fetch_provider_models_inner(

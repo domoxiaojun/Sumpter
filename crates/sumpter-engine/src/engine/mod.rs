@@ -4,7 +4,7 @@
 //! Dropping the response body cancels that relay and records a cancelled request.
 
 pub mod capture;
-mod catalog;
+pub(crate) mod catalog;
 mod completion;
 mod context;
 mod dispatch;
@@ -99,5 +99,17 @@ impl Clone for Engine {
         Self {
             inner: self.inner.clone(),
         }
+    }
+}
+
+impl Engine {
+    pub(crate) fn model_catalog_status_store(
+        &self,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::model_catalog::ModelCatalogStatus>> {
+        std::sync::Arc::clone(&self.inner.model_catalog_status)
+    }
+
+    pub(crate) fn notice_sender(&self) -> &tokio::sync::broadcast::Sender<EngineNotice> {
+        &self.inner.notices
     }
 }

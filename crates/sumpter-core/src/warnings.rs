@@ -245,6 +245,7 @@ mod tests {
             api_key: key.into(),
             base_url: format!("https://{id}.example.com"),
             resolve_ip: String::new(),
+            force_claude_code: false,
             capabilities: vec![],
             catalog: None,
             enabled: true,
@@ -278,6 +279,7 @@ mod tests {
             retry: RetryPolicy::default(),
             session_sticky_ttl_hours: crate::config::DEFAULT_SESSION_STICKY_TTL_HOURS,
             schema_version: SCHEMA_VERSION,
+            model_catalog: ModelCatalogSettings::default(),
             model_groups: None,
         }
     }

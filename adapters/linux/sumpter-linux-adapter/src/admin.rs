@@ -631,6 +631,10 @@ pub fn admin_router(state: AdminState) -> Router {
         .route("/config", get(get_config).put(put_config))
         .route("/reload", post(reload))
         .route("/provider-models", post(provider_models))
+        .route(
+            "/model-catalog/status",
+            get(model_catalog_status).post(model_catalog_refresh),
+        )
         .route("/endpoint-secret", get(endpoint_secret))
         .route("/diagnostics", get(diagnostics))
         .route(
@@ -719,6 +723,22 @@ pub(crate) async fn events(
                                     json!({"running": running, "host": host, "port": port}),
                                 ),
                                 EngineNotice::PlatformNotice(_) => continue,
+                                EngineNotice::ModelCatalogUpdated {
+                                    endpoint_id,
+                                    model_count,
+                                    generation,
+                                } => (
+                                    "model-catalog-updated",
+                                    json!({
+                                        "endpointID": endpoint_id,
+                                        "modelCount": model_count,
+                                        "generation": generation,
+                                    }),
+                                ),
+                                EngineNotice::ModelMetadataUpdated { catalog, revision } => (
+                                    "model-metadata-updated",
+                                    json!({"catalog": catalog, "revision": revision}),
+                                ),
                             };
                             let event = SseEvent::default().event(name).data(data.to_string());
                             let event = if name == "runtime-change" {
@@ -750,6 +770,30 @@ pub(crate) async fn events(
         }
     });
     Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+async fn model_catalog_status(State(state): State<AdminState>) -> Response {
+    let status = state.inner.engine.model_catalog_status().await;
+    let config = state.inner.engine.config();
+    json_ok(&json!({
+        "providerCatalog": status,
+        "remoteMetadata": status.remote_metadata,
+        "endpoints": config.endpoints.iter().map(|endpoint| json!({
+            "endpointID": endpoint.id,
+            "enabled": endpoint.enabled,
+            "status": endpoint.catalog.as_ref().map(|catalog| catalog.status.clone()).unwrap_or_default(),
+            "modelCount": endpoint.catalog.as_ref().map(|catalog| catalog.models.len()).unwrap_or(0),
+            "source": endpoint.catalog.as_ref().map(|catalog| catalog.source.clone()).unwrap_or_default(),
+            "updatedAt": endpoint.catalog.as_ref().map(|catalog| catalog.updated_at.clone()).unwrap_or_default(),
+            "attemptedAt": endpoint.catalog.as_ref().map(|catalog| catalog.attempted_at.clone()).unwrap_or_default(),
+            "error": endpoint.catalog.as_ref().map(|catalog| catalog.error.clone()).unwrap_or_default(),
+        })).collect::<Vec<_>>(),
+    }))
+}
+
+async fn model_catalog_refresh(State(state): State<AdminState>) -> Response {
+    state.inner.engine.refresh_model_catalog_now().await;
+    model_catalog_status(State(state)).await
 }
 
 pub(crate) async fn autostart_status(scope: SystemdScope) -> Value {
@@ -1066,6 +1110,7 @@ mod tests {
             api_key: SYNTHETIC_KEY.into(),
             base_url: "https://api.example.com".into(),
             resolve_ip: String::new(),
+            force_claude_code: false,
             capabilities: vec![],
             catalog: None,
             enabled: true,

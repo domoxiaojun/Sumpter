@@ -664,6 +664,8 @@ export function AppProvider({ children }) {
         scheduleRuntimeAggregatesRefresh();
       },
       onConfigReloaded: () => refreshCore(),
+      onModelCatalogUpdated: () => refreshCore(),
+      onModelMetadataUpdated: () => refreshCore(),
       onConfigMigrated: (notice) => { showMigrationNotice(notice); refreshCore(); },
       onStatsReset: () => {
         lastChangeSeqRef.current = 0;

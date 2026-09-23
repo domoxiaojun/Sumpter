@@ -11,7 +11,7 @@ use super::http_response::{error_response, json_response};
 use super::protocol::decoded_query_value;
 
 #[path = "codex_client_catalog.rs"]
-mod codex_client_catalog;
+pub(crate) mod codex_client_catalog;
 
 pub(super) fn supports_extended_reasoning_levels(client_version: &str) -> bool {
     let trimmed = client_version.trim().trim_start_matches('v');

@@ -89,7 +89,8 @@
         ],
         "source": "api",
         "status": "获取失败",
-        "updatedAt": "2026-07-11 17:22:38"
+        "updatedAt": "2026-07-11 17:22:38",
+        "attemptedAt": "2026-07-11 17:22:38"
       },
       "enabled": true,
       "id": "qwen",
@@ -147,5 +148,11 @@
       "protocol": "openai-responses",
       "priority": 12
     }
-  ]
+  ],
+  "modelCatalog": {
+    "autoRefresh": true,
+    "refreshOnStartup": true,
+    "refreshIntervalMinutes": 180,
+    "remoteMetadataEnabled": true
+  }
 }

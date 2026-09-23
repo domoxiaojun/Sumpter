@@ -2,7 +2,8 @@
 //! templates by slug, otherwise clone `gpt-5.5` and only rewrite identity.
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{OnceLock, RwLock};
 
 use serde_json::{Value, json};
 
@@ -14,33 +15,75 @@ const CODEX_CLIENT_MODELS_JSON: &str = include_str!("codex_client_models.json");
 const DEFAULT_TEMPLATE_SLUG: &str = "gpt-5.5";
 const LEGACY_REASONING_LEVELS: &[&str] = &["none", "minimal", "low", "medium", "high", "xhigh"];
 
-struct CodexClientTemplates {
+#[derive(Clone)]
+pub(crate) struct CodexClientTemplates {
     by_slug: HashMap<String, Value>,
     default_template: Value,
     max_priority: i64,
 }
 
-fn templates() -> &'static CodexClientTemplates {
-    static TEMPLATES: OnceLock<CodexClientTemplates> = OnceLock::new();
-    TEMPLATES.get_or_init(load_templates)
+fn templates() -> &'static RwLock<CodexClientTemplates> {
+    static TEMPLATES: OnceLock<RwLock<CodexClientTemplates>> = OnceLock::new();
+    TEMPLATES.get_or_init(|| RwLock::new(load_templates()))
 }
 
 fn load_templates() -> CodexClientTemplates {
     let payload: Value = serde_json::from_str(CODEX_CLIENT_MODELS_JSON)
         .expect("embedded Codex client catalog must be valid JSON");
+    parse_templates(&payload).expect("embedded Codex client catalog is invalid")
+}
+
+fn parse_templates(payload: &Value) -> Result<CodexClientTemplates, String> {
     let models = payload
         .get("models")
         .and_then(Value::as_array)
-        .expect("embedded Codex client catalog must have models[]");
+        .ok_or_else(|| "models 必须是非空数组".to_string())?;
+    if models.is_empty() {
+        return Err("models 必须是非空数组".into());
+    }
     let mut by_slug = HashMap::new();
     let mut max_priority = 0_i64;
     for model in models {
-        let Some(slug) = model.get("slug").and_then(Value::as_str) else {
-            continue;
-        };
+        let slug = model
+            .get("slug")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "模型缺少 slug".to_string())?;
         let slug = slug.trim();
         if slug.is_empty() {
-            continue;
+            return Err("模型 slug 不能为空".into());
+        }
+        if by_slug.contains_key(slug) {
+            return Err(format!("模型 slug 重复: {slug}"));
+        }
+        let context = model
+            .get("context_window")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| format!("{slug} 缺少 context_window"))?;
+        let max_context = model
+            .get("max_context_window")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| format!("{slug} 缺少 max_context_window"))?;
+        if context == 0 || max_context == 0 || context > max_context {
+            return Err(format!("{slug} context_window 无效"));
+        }
+        let levels = model
+            .get("supported_reasoning_levels")
+            .and_then(Value::as_array)
+            .ok_or_else(|| format!("{slug} 缺少 supported_reasoning_levels"))?;
+        if levels.is_empty() {
+            return Err(format!("{slug} reasoning levels 不能为空"));
+        }
+        let default = model
+            .get("default_reasoning_level")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("{slug} 缺少 default_reasoning_level"))?;
+        if !levels.iter().any(|level| {
+            level
+                .get("effort")
+                .and_then(Value::as_str)
+                .is_some_and(|effort| effort == default)
+        }) {
+            return Err(format!("{slug} default_reasoning_level 不在支持列表中"));
         }
         max_priority = max_priority.max(json_priority(model));
         by_slug.insert(slug.to_string(), model.clone());
@@ -48,12 +91,31 @@ fn load_templates() -> CodexClientTemplates {
     let default_template = by_slug
         .get(DEFAULT_TEMPLATE_SLUG)
         .cloned()
-        .expect("embedded Codex client catalog must include gpt-5.5");
-    CodexClientTemplates {
+        .ok_or_else(|| "必须包含 gpt-5.5".to_string())?;
+    Ok(CodexClientTemplates {
         by_slug,
         default_template,
         max_priority,
+    })
+}
+
+pub(crate) fn replace_templates(payload: &Value) -> Result<u64, String> {
+    let next = parse_templates(payload)?;
+    let current = templates().read().map_err(|_| "模板锁已损坏".to_string())?;
+    if current.by_slug == next.by_slug {
+        return Ok(template_revision());
     }
+    drop(current);
+    *templates()
+        .write()
+        .map_err(|_| "模板锁已损坏".to_string())? = next;
+    Ok(TEMPLATE_REVISION.fetch_add(1, Ordering::AcqRel) + 1)
+}
+
+static TEMPLATE_REVISION: AtomicU64 = AtomicU64::new(1);
+
+pub(crate) fn template_revision() -> u64 {
+    TEMPLATE_REVISION.load(Ordering::Acquire)
 }
 
 pub(super) fn codex_models_payload(models: &[LocalModelEntry], client_version: &str) -> Value {
@@ -61,7 +123,9 @@ pub(super) fn codex_models_payload(models: &[LocalModelEntry], client_version: &
 }
 
 fn build_codex_models(models: &[LocalModelEntry], client_version: &str) -> Vec<Value> {
-    let templates = templates();
+    let templates = templates()
+        .read()
+        .expect("Codex client catalog lock poisoned");
     let mut result = Vec::with_capacity(models.len());
     let mut extra_indexes = Vec::new();
     for model in models {

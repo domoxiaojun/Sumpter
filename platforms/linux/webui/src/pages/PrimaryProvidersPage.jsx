@@ -480,6 +480,41 @@ export function PrimaryProvidersPage() {
   const [reorderingEndpointID, setReorderingEndpointID] = useState(null);
   const [stickyTTLDraft, setStickyTTLDraft] = useState('');
   const [savingStickyTTL, setSavingStickyTTL] = useState(false);
+  const modelCatalog = config?.modelCatalog || {};
+  const [catalogRefreshing, setCatalogRefreshing] = useState(false);
+  const [catalogIntervalDraft, setCatalogIntervalDraft] = useState(String(modelCatalog.refreshIntervalMinutes ?? 180));
+  useEffect(() => {
+    setCatalogIntervalDraft(String(modelCatalog.refreshIntervalMinutes ?? 180));
+  }, [modelCatalog.refreshIntervalMinutes]);
+  const updateModelCatalog = async (patch) => {
+    try {
+      await saveConfig((latestConfig) => ({
+        ...latestConfig,
+        modelCatalog: {
+          autoRefresh: true,
+          refreshOnStartup: true,
+          refreshIntervalMinutes: 180,
+          remoteMetadataEnabled: true,
+          ...(latestConfig.modelCatalog || {}),
+          ...patch,
+        },
+      }));
+      addToast('模型目录设置已保存', 'success');
+    } catch (error) {
+      addToast(`保存模型目录设置失败：${error.message}`, 'error');
+    }
+  };
+  const refreshModelCatalog = async () => {
+    setCatalogRefreshing(true);
+    try {
+      await api.refreshModelCatalog();
+      addToast('模型目录刷新已完成', 'success');
+    } catch (error) {
+      addToast(`模型目录刷新失败：${error.message}`, 'error');
+    } finally {
+      setCatalogRefreshing(false);
+    }
+  };
   const stickyTTLEffective = Number.isFinite(Number(config?.sessionStickyTtlHours))
     ? Number(config.sessionStickyTtlHours)
     : 72;
@@ -1037,6 +1072,7 @@ export function PrimaryProvidersPage() {
     // 新入口默认开启；编辑已有入口时严格保留其显式配置（缺省旧配置仍为关闭）。
     let keepAlive = isNew ? true : endpoint?.keepAlive === true;
     let livePassthrough = Array.isArray(endpoint?.capabilities) && endpoint.capabilities.includes('live');
+    let forceClaudeCode = endpoint?.forceClaudeCode === true;
     let stickyGroup = endpoint?.stickyGroup || '';
     let modelMappings = clone(endpointMappings(endpoint));
     let apiKeyTouched = false;
@@ -1169,6 +1205,17 @@ export function PrimaryProvidersPage() {
             </div>
           </div>
 
+          <div className="form-group">
+            <label className="form-label">Anthropic 兼容</label>
+            <LocalToggle
+              initial={forceClaudeCode}
+              onChange={(value) => { forceClaudeCode = value; }}
+              label={(value) => (value ? '强制 Claude Code 归一化' : '普通 Anthropic 请求')}
+              ariaLabel="切换强制 Claude Code 归一化"
+            />
+            <span className="form-hint">仅 Anthropic 出站请求生效：补齐 Claude Code 身份、system 前缀、消息块、缓存标记和 context management；不伪造设备身份或工具桩。</span>
+          </div>
+
           {!isNew && endpoint && (
             <div className="form-group endpoint-pricing-entry">
               <label className="form-label">成本价格</label>
@@ -1246,6 +1293,7 @@ export function PrimaryProvidersPage() {
                 priority: Number(priority),
                 stickyGroup: stickyGroup.trim() || null,
                 keepAlive,
+                forceClaudeCode,
                 enabled,
                 modelMappings,
               });
@@ -1266,6 +1314,7 @@ export function PrimaryProvidersPage() {
                 target.priority = Number(priority);
                 target.enabled = enabled;
                 target.keepAlive = keepAlive;
+                target.forceClaudeCode = forceClaudeCode;
                 target.stickyGroup = stickyGroup.trim() || null;
                 target.modelMappings = modelMappings;
                 if (apiKeyTouched) secretUpdates[endpoint.id] = apiKey.trim();
@@ -1501,6 +1550,65 @@ export function PrimaryProvidersPage() {
             <div>跨轮最长时长：<strong className="mono-cell">{retry.maxRetryDurationSeconds ? `${retry.maxRetryDurationSeconds}s` : '不限时长'}</strong></div>
           </div>
         </div>
+
+        <div className="glass-panel panel-padded-stack">
+          <div className="panel-toolbar">
+            <span style={{ fontSize: '0.82rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+              自动模型目录
+            </span>
+            <StatusBadge text={modelCatalog.autoRefresh === false ? '已停用' : '已启用'} kind={modelCatalog.autoRefresh === false ? 'muted' : 'good'} />
+          </div>
+          <div className="grid-2col summary-grid">
+            <label>
+              <span>Provider 自动刷新</span>
+              <QuickToggle
+                checked={modelCatalog.autoRefresh !== false}
+                onChange={(checked) => void updateModelCatalog({ autoRefresh: checked })}
+                label={modelCatalog.autoRefresh === false ? '关闭' : '开启'}
+                ariaLabel="切换 Provider 模型目录自动刷新"
+              />
+            </label>
+            <label>
+              <span>启动时刷新</span>
+              <QuickToggle
+                checked={modelCatalog.refreshOnStartup !== false}
+                onChange={(checked) => void updateModelCatalog({ refreshOnStartup: checked })}
+                label={modelCatalog.refreshOnStartup === false ? '关闭' : '开启'}
+                ariaLabel="切换启动时刷新模型目录"
+              />
+            </label>
+            <label>
+              <span>公共元数据</span>
+              <QuickToggle
+                checked={modelCatalog.remoteMetadataEnabled !== false}
+                onChange={(checked) => void updateModelCatalog({ remoteMetadataEnabled: checked })}
+                label={modelCatalog.remoteMetadataEnabled === false ? '关闭' : '开启'}
+                ariaLabel="切换公共模型元数据刷新"
+              />
+            </label>
+            <label>
+              <span>刷新周期（分钟）</span>
+              <input
+                className="form-input"
+                type="number"
+                min="15"
+                max="1440"
+                step="15"
+                value={catalogIntervalDraft}
+                onChange={(event) => setCatalogIntervalDraft(event.target.value)}
+                onBlur={() => {
+                  const value = Math.min(1440, Math.max(15, Number(catalogIntervalDraft) || 180));
+                  setCatalogIntervalDraft(String(value));
+                  void updateModelCatalog({ refreshIntervalMinutes: value });
+                }}
+              />
+            </label>
+          </div>
+          <button type="button" className="btn btn-secondary" disabled={catalogRefreshing} onClick={() => void refreshModelCatalog()}>
+            <Icon name="refresh" size={14} />
+            <span>{catalogRefreshing ? '刷新中…' : '立即刷新目录'}</span>
+          </button>
+        </div>
       </div>
 
       {/* Endpoints Table */}
@@ -1712,6 +1820,7 @@ export function PrimaryProvidersPage() {
             <div><span style={{ color: 'var(--text-muted)' }}>入口协议：</span><span className="mono-cell">{endpointProtocolLabel(selectedEndpoint.protocol)}</span></div>
             <div><span style={{ color: 'var(--text-muted)' }}>粘性分组：</span><span className="mono-cell">{selectedEndpoint.stickyGroup || '独立分组'}</span></div>
             <div><span style={{ color: 'var(--text-muted)' }}>连接复用：</span><span className="mono-cell">{selectedEndpoint.keepAlive ? '开启' : '关闭'}</span></div>
+            <div><span style={{ color: 'var(--text-muted)' }}>Claude Code 归一化：</span><span className="mono-cell">{selectedEndpoint.forceClaudeCode === true ? '开启' : '关闭'}</span></div>
             <div><span style={{ color: 'var(--text-muted)' }}>UA：</span><span>{userAgentSummary(selectedEndpoint.userAgent)}</span></div>
           </div>
 

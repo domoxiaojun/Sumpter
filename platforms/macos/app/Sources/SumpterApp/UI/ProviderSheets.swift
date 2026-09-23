@@ -18,6 +18,7 @@ struct ProviderAccountEditorSheet: View {
     @State private var stickyGroup: String
     @State private var keepAlive: Bool
     @State private var livePassthrough: Bool
+    @State private var forceClaudeCode: Bool
     @State private var anthropicUA: String
     @State private var openaiUA: String
     @State private var geminiUA: String
@@ -49,6 +50,7 @@ struct ProviderAccountEditorSheet: View {
         // 新入口默认开启；编辑已有入口时保留磁盘中的显式值。
         _keepAlive = State(initialValue: row?.keepAlive ?? true)
         _livePassthrough = State(initialValue: row?.livePassthrough ?? false)
+        _forceClaudeCode = State(initialValue: row?.forceClaudeCode ?? false)
         _anthropicUA = State(initialValue: row?.userAgent.anthropic.value ?? "")
         _openaiUA = State(initialValue: row?.userAgent.openai.value ?? "")
         _geminiUA = State(initialValue: row?.userAgent.gemini.value ?? "")
@@ -172,6 +174,17 @@ struct ProviderAccountEditorSheet: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                FormLine(title: "Anthropic 兼容") {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Toggle("强制 Claude Code 归一化", isOn: $forceClaudeCode)
+                            .labelsHidden()
+                            .disabled(protocolName != EndpointProtocolMode.anthropic.rawValue && protocolName != EndpointProtocolMode.auto.rawValue)
+                        Text("仅 Anthropic 出站请求生效：补齐 Claude Code 身份、system 前缀、消息块、缓存标记和 context management；不伪造设备身份或工具桩。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
                 FormLine(title: "成本价格") {
                     VStack(alignment: .leading, spacing: 6) {
                         Button {
@@ -221,6 +234,7 @@ struct ProviderAccountEditorSheet: View {
                         stickyGroup: stickyGroup,
                         keepAlive: keepAlive,
                         livePassthrough: livePassthrough,
+                        forceClaudeCode: forceClaudeCode,
                         userAgent: userAgentSettings
                     )
                 } else {
@@ -236,6 +250,7 @@ struct ProviderAccountEditorSheet: View {
                         stickyGroup: stickyGroup,
                         keepAlive: keepAlive,
                         livePassthrough: livePassthrough,
+                        forceClaudeCode: forceClaudeCode,
                         userAgent: userAgentSettings
                     )
                 }

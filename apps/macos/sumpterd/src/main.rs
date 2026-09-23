@@ -142,6 +142,7 @@ async fn run(
         engine.publish_migration_notice(notice);
     }
     engine.spawn_stats_flusher();
+    let _model_catalog_task = engine.shared().spawn_model_catalog_scheduler();
 
     let proxy_local = if let Some(issue) = engine.runtime_database_issue() {
         tracing::error!("{message}", message = issue.message);

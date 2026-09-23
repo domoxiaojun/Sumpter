@@ -1,6 +1,7 @@
 //! admin API(sumpterd 专属,SwiftUI 壳的控制通道)。
 //! 鉴权:**loopback + `X-Control-Token`**(值同 `.control_token`);非环回一律 403。
 //! 端点镜像 schema v5,设计参考 PLAN.md §5。
+#![allow(dead_code)]
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -108,6 +109,10 @@ pub fn admin_router(engine: Engine) -> Router {
             "/admin/provider-models",
             get(provider_models_get).post(provider_models),
         )
+        .route(
+            "/admin/model-catalog/status",
+            get(model_catalog_status).post(model_catalog_refresh),
+        )
         .route("/admin/events", get(events))
         .route("/admin/diagnostics", get(diagnostics))
         .route(
@@ -190,6 +195,30 @@ async fn status(State(engine): State<Engine>) -> Response {
         "lastError": engine.last_error(),
         "statsWritable": engine.stats_writable(),
     }))
+}
+
+async fn model_catalog_status(State(engine): State<Engine>) -> Response {
+    let status = engine.shared().model_catalog_status().await;
+    let config = engine.shared().config();
+    json_ok(&json!({
+        "providerCatalog": status,
+        "remoteMetadata": status.remote_metadata,
+        "endpoints": config.endpoints.iter().map(|endpoint| json!({
+            "endpointID": endpoint.id,
+            "enabled": endpoint.enabled,
+            "status": endpoint.catalog.as_ref().map(|catalog| catalog.status.clone()).unwrap_or_default(),
+            "modelCount": endpoint.catalog.as_ref().map(|catalog| catalog.models.len()).unwrap_or(0),
+            "source": endpoint.catalog.as_ref().map(|catalog| catalog.source.clone()).unwrap_or_default(),
+            "updatedAt": endpoint.catalog.as_ref().map(|catalog| catalog.updated_at.clone()).unwrap_or_default(),
+            "attemptedAt": endpoint.catalog.as_ref().map(|catalog| catalog.attempted_at.clone()).unwrap_or_default(),
+            "error": endpoint.catalog.as_ref().map(|catalog| catalog.error.clone()).unwrap_or_default(),
+        })).collect::<Vec<_>>(),
+    }))
+}
+
+async fn model_catalog_refresh(State(engine): State<Engine>) -> Response {
+    engine.shared().refresh_model_catalog_now().await;
+    model_catalog_status(State(engine)).await
 }
 
 async fn runtime_summary(State(engine): State<Engine>) -> Response {
@@ -275,12 +304,11 @@ async fn provider_models_for_endpoint(engine: Engine, endpoint_id: String) -> Re
 async fn fetch_provider_models(
     endpoint: &sumpter_core::config::Endpoint,
 ) -> Result<(Vec<String>, String), String> {
-    tokio::time::timeout(
-        Duration::from_secs(12),
-        fetch_provider_models_inner(endpoint),
-    )
-    .await
-    .map_err(|_| "获取模型整体超时（12 秒）".to_string())?
+    let snapshot = sumpter_engine::model_catalog::ProviderCatalogFetcher::fetch(endpoint).await;
+    match snapshot.error {
+        Some(error) => Err(error),
+        None => Ok((snapshot.models, snapshot.source)),
+    }
 }
 
 async fn fetch_provider_models_inner(
@@ -1748,6 +1776,22 @@ async fn events(
                                     json!({"resetGeneration": engine.runtime_summary_value()["resetGeneration"]}),
                                 ),
                                 EngineNotice::ProxyState { .. } => continue,
+                                EngineNotice::ModelCatalogUpdated {
+                                    endpoint_id,
+                                    model_count,
+                                    generation,
+                                } => (
+                                    "model-catalog-updated",
+                                    json!({
+                                        "endpointID": endpoint_id,
+                                        "modelCount": model_count,
+                                        "generation": generation,
+                                    }),
+                                ),
+                                EngineNotice::ModelMetadataUpdated { catalog, revision } => (
+                                    "model-metadata-updated",
+                                    json!({"catalog": catalog, "revision": revision}),
+                                ),
                             };
                             let event = SseEvent::default().event(name).data(data.to_string());
                             let event = if name == "runtime-change" {

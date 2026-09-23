@@ -23,6 +23,7 @@ use super::sessions::{
     LiveSessionEntry, RealtimeClientSecretEntry, SessionStickyEntry, prune_session_sticky,
 };
 use crate::boundary::{EngineServices, PlatformBoundary};
+use crate::model_catalog::ModelCatalogStatus;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) struct RoundRobinKey {
@@ -76,6 +77,8 @@ pub struct EngineInner {
     pub(super) runtime_store: OnceLock<RuntimeStore>,
     pub(super) runtime_database_issue: Mutex<Option<crate::runtime_store::RuntimeDatabaseIssue>>,
     pub(super) runtime_write: Mutex<()>,
+    pub(super) config_persistence: Mutex<()>,
+    pub(super) model_catalog_status: Arc<RwLock<ModelCatalogStatus>>,
     pub(super) realtime_client_secrets: Mutex<HashMap<String, RealtimeClientSecretEntry>>,
     pub(super) live_sessions: Mutex<HashMap<String, LiveSessionEntry>>,
     pub(super) video_sessions: Mutex<HashMap<String, LiveSessionEntry>>,
@@ -124,6 +127,7 @@ impl Engine {
         services: EngineServices,
     ) -> Self {
         let generation = config_generation(&config);
+        let model_catalog_status = Arc::new(RwLock::new(ModelCatalogStatus::for_config(&config)));
         let session_sticky_ttl_secs = config.session_sticky_ttl_secs();
         let (runtime_store, runtime, stats_writable, stats_error) = match dir.as_ref() {
             Some(dir) => match RuntimeStore::new(dir.root.join("runtime.sqlite3")) {
@@ -263,6 +267,8 @@ impl Engine {
                 runtime_store: runtime_store.map(OnceLock::from).unwrap_or_default(),
                 runtime_database_issue: Mutex::new(runtime_database_issue),
                 runtime_write: Mutex::new(()),
+                config_persistence: Mutex::new(()),
+                model_catalog_status,
                 realtime_client_secrets: Mutex::new(HashMap::new()),
                 live_sessions: Mutex::new(live_sessions),
                 video_sessions: Mutex::new(video_sessions),

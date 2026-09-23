@@ -56,6 +56,15 @@ pub enum EngineNotice {
     ConfigReloaded {
         generation: String,
     },
+    ModelCatalogUpdated {
+        endpoint_id: String,
+        model_count: usize,
+        generation: String,
+    },
+    ModelMetadataUpdated {
+        catalog: String,
+        revision: u64,
+    },
     StatsReset,
     ProxyState {
         running: bool,

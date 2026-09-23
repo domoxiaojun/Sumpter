@@ -139,6 +139,8 @@ pub struct AppConfig {
     pub model_groups: Option<Vec<crate::model_groups::ModelGroup>>,
     #[serde(rename = "featureRules", default)]
     pub feature_rules: Vec<FeatureRule>,
+    #[serde(rename = "modelCatalog", default)]
+    pub model_catalog: ModelCatalogSettings,
     #[serde(default)]
     pub listener: ListenerConfig,
     #[serde(default)]
@@ -215,6 +217,7 @@ impl AppConfig {
     /// - 内建分流规则归一:name/match 纠回 canonical,只保留用户的 enabled/target,
     ///   顺序恒为「内建三条(websearch/webfetch/classifier)在前 + 自定义原序在后」。
     pub fn normalized(mut self) -> Self {
+        self.model_catalog.normalize();
         self.retry.max_deferred_rounds = self.retry.max_deferred_rounds.max(0);
         self.retry.max_retry_duration_seconds = self.retry.max_retry_duration_seconds.max(0.0);
         self.retry.session_sticky_retries = self.retry.session_sticky_retries.max(0);
@@ -311,6 +314,12 @@ impl AppConfig {
             .find(|endpoint| endpoint.id == endpoint_id)
     }
 
+    pub fn endpoint_mut(&mut self, endpoint_id: &str) -> Option<&mut Endpoint> {
+        self.endpoints
+            .iter_mut()
+            .find(|endpoint| endpoint.id == endpoint_id)
+    }
+
     /// 粘性 TTL 的调度层秒数;`0` 表示不按 TTL 淘汰(仅条目数上限)。
     pub fn session_sticky_ttl_secs(&self) -> f64 {
         if self.session_sticky_ttl_hours.is_finite() && self.session_sticky_ttl_hours > 0.0 {
@@ -353,11 +362,88 @@ impl AppConfig {
             endpoints: vec![],
             model_groups: None,
             feature_rules: builtin_rules::canonical(),
+            model_catalog: ModelCatalogSettings::default(),
             listener: ListenerConfig::default(),
             retry: RetryPolicy::default(),
             session_sticky_ttl_hours: DEFAULT_SESSION_STICKY_TTL_HOURS,
             schema_version: SCHEMA_VERSION,
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelCatalogSettings {
+    #[serde(
+        rename = "autoRefresh",
+        default = "ModelCatalogSettings::default_auto_refresh"
+    )]
+    pub auto_refresh: bool,
+    #[serde(
+        rename = "refreshOnStartup",
+        default = "ModelCatalogSettings::default_refresh_on_startup"
+    )]
+    pub refresh_on_startup: bool,
+    #[serde(
+        rename = "refreshIntervalMinutes",
+        default = "ModelCatalogSettings::default_refresh_interval_minutes"
+    )]
+    pub refresh_interval_minutes: u64,
+    #[serde(
+        rename = "remoteMetadataEnabled",
+        default = "ModelCatalogSettings::default_remote_metadata_enabled"
+    )]
+    pub remote_metadata_enabled: bool,
+}
+
+impl Default for ModelCatalogSettings {
+    fn default() -> Self {
+        Self {
+            auto_refresh: true,
+            refresh_on_startup: true,
+            refresh_interval_minutes: 180,
+            remote_metadata_enabled: true,
+        }
+    }
+}
+
+impl ModelCatalogSettings {
+    pub const MIN_REFRESH_INTERVAL_MINUTES: u64 = 15;
+    pub const MAX_REFRESH_INTERVAL_MINUTES: u64 = 1440;
+
+    const fn default_auto_refresh() -> bool {
+        true
+    }
+
+    const fn default_refresh_on_startup() -> bool {
+        true
+    }
+
+    const fn default_refresh_interval_minutes() -> u64 {
+        180
+    }
+
+    const fn default_remote_metadata_enabled() -> bool {
+        true
+    }
+
+    pub fn normalize(&mut self) {
+        self.refresh_interval_minutes = self.refresh_interval_minutes.clamp(
+            Self::MIN_REFRESH_INTERVAL_MINUTES,
+            Self::MAX_REFRESH_INTERVAL_MINUTES,
+        );
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if !(Self::MIN_REFRESH_INTERVAL_MINUTES..=Self::MAX_REFRESH_INTERVAL_MINUTES)
+            .contains(&self.refresh_interval_minutes)
+        {
+            return Err(format!(
+                "modelCatalog.refreshIntervalMinutes 必须在 {}..={} 之间",
+                Self::MIN_REFRESH_INTERVAL_MINUTES,
+                Self::MAX_REFRESH_INTERVAL_MINUTES
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -681,6 +767,9 @@ pub struct Endpoint {
         skip_serializing_if = "String::is_empty"
     )]
     pub resolve_ip: String,
+    /// Anthropic 入口强制使用 Claude Code 官方请求形状与兼容 headers。
+    #[serde(rename = "forceClaudeCode", default, skip_serializing_if = "is_false")]
+    pub force_claude_code: bool,
     /// 同组入口共享会话粘性与冷却；None 使用自身 id 作为独立组并参与 Provider 分流。
     #[serde(rename = "stickyGroup", default, skip_serializing_if = "is_none")]
     pub sticky_group: Option<String>,
@@ -802,6 +891,8 @@ pub struct EndpointCatalog {
     pub source: String,
     #[serde(default)]
     pub status: String,
+    #[serde(rename = "attemptedAt", default)]
+    pub attempted_at: String,
     #[serde(rename = "updatedAt", default)]
     pub updated_at: String,
 }
@@ -811,8 +902,45 @@ impl EndpointCatalog {
         self.models.is_empty()
             && self.source.is_empty()
             && self.status.is_empty()
+            && self.attempted_at.is_empty()
             && self.error.is_empty()
             && self.updated_at.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod model_catalog_tests {
+    use super::{AppConfig, EndpointCatalog, ModelCatalogSettings};
+
+    #[test]
+    fn old_config_gets_model_catalog_defaults() {
+        let config: AppConfig = serde_json::from_str(
+            r#"{"schemaVersion":7,"endpoints":[],"listener":{"host":"127.0.0.1","port":57878}}"#,
+        )
+        .unwrap();
+        assert_eq!(config.model_catalog, ModelCatalogSettings::default());
+    }
+
+    #[test]
+    fn endpoint_catalog_keeps_attempt_and_success_times() {
+        let catalog: EndpointCatalog = serde_json::from_str(
+            r#"{"models":["a"],"attemptedAt":"10","updatedAt":"9","status":"获取失败"}"#,
+        )
+        .unwrap();
+        assert_eq!(catalog.attempted_at, "10");
+        assert_eq!(catalog.updated_at, "9");
+        assert_eq!(catalog.models, vec!["a"]);
+    }
+
+    #[test]
+    fn refresh_interval_validation_rejects_out_of_range_values() {
+        let mut settings = ModelCatalogSettings {
+            refresh_interval_minutes: 14,
+            ..ModelCatalogSettings::default()
+        };
+        assert!(settings.validate().is_err());
+        settings.refresh_interval_minutes = 1441;
+        assert!(settings.validate().is_err());
     }
 }
 

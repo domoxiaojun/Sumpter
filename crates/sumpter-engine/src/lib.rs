@@ -7,6 +7,7 @@
 
 pub mod boundary;
 pub mod health;
+pub mod model_catalog;
 pub mod outbound;
 pub mod replay;
 pub mod request_build;

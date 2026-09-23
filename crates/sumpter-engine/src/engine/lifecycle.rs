@@ -27,6 +27,7 @@ use super::Engine;
 use super::events::{EngineNotice, RuntimeEvent, RuntimeSnapshot};
 use super::state::config_generation;
 use crate::boundary::{ConfigReplacement, EngineCapabilities, PlatformNotice};
+use crate::model_catalog::{ModelCatalogScheduler, ModelCatalogStatus, ProviderCatalogSnapshot};
 
 #[async_trait::async_trait]
 impl EngineCapabilities for Engine {
@@ -58,6 +59,76 @@ impl EngineCapabilities for Engine {
     }
 }
 impl Engine {
+    pub fn spawn_model_catalog_scheduler(&self) -> tokio::task::JoinHandle<()> {
+        ModelCatalogScheduler::new(self.clone()).start()
+    }
+
+    pub async fn model_catalog_status(&self) -> ModelCatalogStatus {
+        ModelCatalogScheduler::new(self.clone()).status().await
+    }
+
+    pub async fn refresh_model_catalog_now(&self) {
+        ModelCatalogScheduler::new(self.clone())
+            .refresh_once()
+            .await;
+    }
+
+    pub fn apply_provider_catalog_snapshot(
+        &self,
+        snapshot: &ProviderCatalogSnapshot,
+    ) -> Result<bool, String> {
+        for _attempt in 0..2 {
+            let _guard = self.inner.config_persistence.lock().unwrap();
+            let expected_generation = self.generation();
+            let current = self.config();
+            let Some(endpoint) = current.endpoint(&snapshot.endpoint_id) else {
+                return Ok(false);
+            };
+            let mut next = current.as_ref().clone();
+            let target = next
+                .endpoint_mut(&snapshot.endpoint_id)
+                .ok_or_else(|| "模型目录入口已不存在".to_string())?;
+            let mut catalog = target.catalog.clone().unwrap_or_default();
+            catalog.attempted_at = snapshot.attempted_at.clone();
+            if let Some(error) = &snapshot.error {
+                catalog.status = "获取失败".into();
+                catalog.error = error.clone();
+            } else {
+                catalog.models = snapshot.models.clone();
+                catalog.source = snapshot.source.clone();
+                catalog.status = "已获取".into();
+                catalog.error.clear();
+                catalog.updated_at = snapshot.updated_at.clone();
+            }
+            if endpoint.catalog.as_ref() == Some(&catalog) {
+                return Ok(false);
+            }
+            if self.generation() != expected_generation {
+                continue;
+            }
+            target.catalog = Some(catalog);
+            next = next.normalized();
+            if let Some(dir) = &self.inner.dir {
+                let _ = dir
+                    .save_config(&next)
+                    .map_err(|error| format!("模型目录配置写盘失败: {error}"))?;
+            }
+            let (generation, _) = self.replace_config(next);
+            let model_count = self
+                .config()
+                .endpoint(&snapshot.endpoint_id)
+                .and_then(|endpoint| endpoint.catalog.as_ref())
+                .map_or(0, |catalog| catalog.models.len());
+            let _ = self.inner.notices.send(EngineNotice::ModelCatalogUpdated {
+                endpoint_id: snapshot.endpoint_id.clone(),
+                model_count,
+                generation,
+            });
+            return Ok(true);
+        }
+        Err("配置在目录刷新期间连续变化，本次目录结果未写入".into())
+    }
+
     /// session affinity 的后台防抖任务。SQLite 自己的专用 worker 已按
     /// 1 秒/条数/字节阈值提交，不能在 Tokio 请求线程重复 fsync。
     pub fn spawn_stats_flusher(&self) {
@@ -86,6 +157,14 @@ impl Engine {
         // 只影响后续的周期淘汰。
         let session_sticky_ttl_secs = config.session_sticky_ttl_secs();
         *self.inner.config.write().unwrap() = Arc::new(config);
+        {
+            let config = self.config();
+            let mut status = self.inner.model_catalog_status.write().unwrap();
+            status.enabled = config.model_catalog.auto_refresh;
+            status.refresh_on_startup = config.model_catalog.refresh_on_startup;
+            status.interval_minutes = config.model_catalog.refresh_interval_minutes;
+            status.remote_metadata.enabled = config.model_catalog.remote_metadata_enabled;
+        }
         {
             let mut state = self.inner.state.lock().unwrap();
             state.session_sticky_ttl_secs = session_sticky_ttl_secs;

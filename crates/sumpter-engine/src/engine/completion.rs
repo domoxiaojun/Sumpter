@@ -671,6 +671,7 @@ mod tests {
                 scheduling_strategy: sumpter_core::ModelGroupSchedulingStrategy::Priority,
                 base_url: "https://upstream.invalid".into(),
                 resolve_ip: String::new(),
+                force_claude_code: false,
                 configured_protocol: EndpointProtocolMode::Anthropic,
                 source_format: ProviderProtocol::Anthropic,
                 protocol: ProviderProtocol::Anthropic,

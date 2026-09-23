@@ -110,6 +110,7 @@ struct ProvidersPane: View {
                     retryPolicyPanel
                 }
             }
+            modelCatalogSettingsPanel
             // 入口详情平铺在入口列表下方，模型映射再紧随其后，保持一条清晰的
             // “先选入口 → 看入口配置 → 看该入口映射”阅读路径。
             VStack(alignment: .leading, spacing: SumpterTheme.Layout.panelSpacing) {
@@ -198,6 +199,53 @@ struct ProvidersPane: View {
             Button("好", role: .cancel) { stickyTTLError = nil }
         } message: {
             Text(stickyTTLError ?? "")
+        }
+    }
+
+    private var modelCatalogSettingsPanel: some View {
+        SectionPanel(
+            title: "自动模型目录",
+            hint: "目录刷新只更新发现数据，不会创建映射或扩大模型组范围。"
+        ) {
+            let settings = model.config.modelCatalog
+            Toggle("Provider 启用自动刷新", isOn: Binding(
+                get: { settings.autoRefresh },
+                set: { value in
+                    model.config.modelCatalog.autoRefresh = value
+                    model.saveConfig()
+                }
+            ))
+            Toggle("启动时刷新", isOn: Binding(
+                get: { settings.refreshOnStartup },
+                set: { value in
+                    model.config.modelCatalog.refreshOnStartup = value
+                    model.saveConfig()
+                }
+            ))
+            Toggle("刷新公共模型元数据", isOn: Binding(
+                get: { settings.remoteMetadataEnabled },
+                set: { value in
+                    model.config.modelCatalog.remoteMetadataEnabled = value
+                    model.saveConfig()
+                }
+            ))
+            HStack {
+                Text("刷新周期")
+                Spacer()
+                Stepper(
+                    "\(settings.refreshIntervalMinutes) 分钟",
+                    value: Binding(
+                        get: { settings.refreshIntervalMinutes },
+                        set: { value in
+                            model.config.modelCatalog.refreshIntervalMinutes = min(1440, max(15, value))
+                            model.saveConfig()
+                        }
+                    ),
+                    in: 15...1440,
+                    step: 15
+                )
+                .frame(maxWidth: 190)
+            }
         }
     }
 
@@ -520,6 +568,7 @@ struct ProvidersPane: View {
                     EndpointDetailField(title: "API Key", value: row.keyStatusText)
                     EndpointDetailField(title: "粘性分组", value: row.stickyGroupText)
                     EndpointDetailField(title: "连接复用", value: row.keepAliveText)
+                    EndpointDetailField(title: "Claude Code 归一化", value: row.forceClaudeCodeText)
                     EndpointDetailField(title: "UA", value: row.userAgentText)
                     EndpointDetailField(title: "已知模型", value: row.modelCatalogText)
                     EndpointDetailField(title: "模型状态", value: row.modelCatalogStatusText)

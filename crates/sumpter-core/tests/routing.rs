@@ -19,6 +19,7 @@ fn endpoint(id: &str, mappings: Vec<ModelMapping>) -> Endpoint {
         api_key: "sk-test".into(),
         base_url: format!("https://{id}.example.com"),
         resolve_ip: String::new(),
+        force_claude_code: false,
         capabilities: vec![],
         catalog: None,
         enabled: true,
@@ -74,6 +75,7 @@ fn base_config() -> AppConfig {
         retry: RetryPolicy::default(),
         session_sticky_ttl_hours: DEFAULT_SESSION_STICKY_TTL_HOURS,
         schema_version: SCHEMA_VERSION,
+        model_catalog: ModelCatalogSettings::default(),
         model_groups: None,
     }
     .normalized()
@@ -261,6 +263,7 @@ fn resource_plan_does_not_require_text_model_mapping_or_anthropic_endpoint() {
         retry: RetryPolicy::default(),
         session_sticky_ttl_hours: DEFAULT_SESSION_STICKY_TTL_HOURS,
         schema_version: SCHEMA_VERSION,
+        model_catalog: ModelCatalogSettings::default(),
         model_groups: None,
     }
     .normalized();
@@ -287,6 +290,7 @@ fn files_resource_plan_requires_explicit_files_capability() {
         retry: RetryPolicy::default(),
         session_sticky_ttl_hours: DEFAULT_SESSION_STICKY_TTL_HOURS,
         schema_version: SCHEMA_VERSION,
+        model_catalog: ModelCatalogSettings::default(),
         model_groups: None,
     }
     .normalized();
@@ -322,6 +326,7 @@ fn files_resource_plan_honors_explicit_files_capability() {
         retry: RetryPolicy::default(),
         session_sticky_ttl_hours: DEFAULT_SESSION_STICKY_TTL_HOURS,
         schema_version: SCHEMA_VERSION,
+        model_catalog: ModelCatalogSettings::default(),
         model_groups: None,
     }
     .normalized();
@@ -351,6 +356,7 @@ fn files_resource_plan_does_not_treat_live_or_chat_mapping_as_files() {
         retry: RetryPolicy::default(),
         session_sticky_ttl_hours: DEFAULT_SESSION_STICKY_TTL_HOURS,
         schema_version: SCHEMA_VERSION,
+        model_catalog: ModelCatalogSettings::default(),
         model_groups: None,
     }
     .normalized();
@@ -427,6 +433,7 @@ fn no_providers_at_all_reports_no_provider_for_model() {
         retry: RetryPolicy::default(),
         session_sticky_ttl_hours: DEFAULT_SESSION_STICKY_TTL_HOURS,
         schema_version: SCHEMA_VERSION,
+        model_catalog: ModelCatalogSettings::default(),
         model_groups: None,
     }
     .normalized();
@@ -1338,6 +1345,7 @@ fn video_intent_does_not_use_the_first_text_provider() {
         retry: RetryPolicy::default(),
         session_sticky_ttl_hours: DEFAULT_SESSION_STICKY_TTL_HOURS,
         schema_version: SCHEMA_VERSION,
+        model_catalog: ModelCatalogSettings::default(),
         model_groups: None,
     }
     .normalized();
@@ -1388,6 +1396,7 @@ fn text_wildcard_cannot_steal_video_capability_traffic() {
         retry: RetryPolicy::default(),
         session_sticky_ttl_hours: DEFAULT_SESSION_STICKY_TTL_HOURS,
         schema_version: SCHEMA_VERSION,
+        model_catalog: ModelCatalogSettings::default(),
         model_groups: None,
     }
     .normalized();
@@ -1425,6 +1434,7 @@ fn explicit_mapping_capabilities_override_name_inference_for_routing() {
         retry: RetryPolicy::default(),
         session_sticky_ttl_hours: DEFAULT_SESSION_STICKY_TTL_HOURS,
         schema_version: SCHEMA_VERSION,
+        model_catalog: ModelCatalogSettings::default(),
         model_groups: None,
     }
     .normalized();
@@ -1461,6 +1471,7 @@ fn mapping_level_live_capability_remains_model_scoped() {
         retry: RetryPolicy::default(),
         session_sticky_ttl_hours: DEFAULT_SESSION_STICKY_TTL_HOURS,
         schema_version: SCHEMA_VERSION,
+        model_catalog: ModelCatalogSettings::default(),
         model_groups: None,
     }
     .normalized();
@@ -1494,6 +1505,7 @@ fn mapping_level_live_capability_remains_model_scoped() {
         retry: RetryPolicy::default(),
         session_sticky_ttl_hours: DEFAULT_SESSION_STICKY_TTL_HOURS,
         schema_version: SCHEMA_VERSION,
+        model_catalog: ModelCatalogSettings::default(),
         model_groups: None,
     }
     .normalized();
@@ -1521,6 +1533,7 @@ fn endpoint_live_capability_routes_without_a_model_mapping() {
         retry: RetryPolicy::default(),
         session_sticky_ttl_hours: DEFAULT_SESSION_STICKY_TTL_HOURS,
         schema_version: SCHEMA_VERSION,
+        model_catalog: ModelCatalogSettings::default(),
         model_groups: None,
     }
     .normalized();

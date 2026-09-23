@@ -575,6 +575,8 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
     /// 【实验】出站连接复用(sumpterd 侧生效);新入口编辑器默认 true。
     /// 入口编辑器可直接设置；旧配置缺省仍解码为 false，保存时保留省略策略。
     public var keepAlive: Bool
+    /// 对 Anthropic 入口启用 Claude Code 官方请求形状归一化。
+    public var forceClaudeCode: Bool
     enum CodingKeys: String, CodingKey {
         case id
         case name
@@ -590,6 +592,7 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         case catalog
         case mappings
         case keepAlive
+        case forceClaudeCode
     }
 
     public init(
@@ -606,7 +609,8 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         stickyGroup: String? = nil,
         catalog: ModelCatalog = ModelCatalog(),
         mappings: [ModelMapping] = [],
-        keepAlive: Bool = true
+        keepAlive: Bool = true,
+        forceClaudeCode: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -622,6 +626,7 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         self.catalog = catalog
         self.mappings = mappings
         self.keepAlive = keepAlive
+        self.forceClaudeCode = forceClaudeCode
     }
 
     public init(from decoder: Decoder) throws {
@@ -648,6 +653,7 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         catalog = try keyed.decodeIfPresent(ModelCatalog.self, forKey: .catalog) ?? ModelCatalog()
         mappings = try keyed.decodeIfPresent([ModelMapping].self, forKey: .mappings) ?? []
         keepAlive = try keyed.decodeIfPresent(Bool.self, forKey: .keepAlive) ?? false
+        forceClaudeCode = try keyed.decodeIfPresent(Bool.self, forKey: .forceClaudeCode) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -687,6 +693,9 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         // 与 sumpterd 的省略策略一致:false 不落盘。
         if keepAlive {
             try keyed.encode(keepAlive, forKey: .keepAlive)
+        }
+        if forceClaudeCode {
+            try keyed.encode(forceClaudeCode, forKey: .forceClaudeCode)
         }
     }
 
@@ -1000,6 +1009,42 @@ public enum BuiltInFeatureRules {
     }
 }
 
+public struct ModelCatalogSettings: Codable, Equatable, Sendable {
+    public var autoRefresh: Bool
+    public var refreshOnStartup: Bool
+    public var refreshIntervalMinutes: Int
+    public var remoteMetadataEnabled: Bool
+
+    public init(
+        autoRefresh: Bool = true,
+        refreshOnStartup: Bool = true,
+        refreshIntervalMinutes: Int = 180,
+        remoteMetadataEnabled: Bool = true
+    ) {
+        self.autoRefresh = autoRefresh
+        self.refreshOnStartup = refreshOnStartup
+        self.refreshIntervalMinutes = min(1440, max(15, refreshIntervalMinutes))
+        self.remoteMetadataEnabled = remoteMetadataEnabled
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case autoRefresh
+        case refreshOnStartup
+        case refreshIntervalMinutes
+        case remoteMetadataEnabled
+    }
+
+    public init(from decoder: Decoder) throws {
+        let keyed = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            autoRefresh: try keyed.decodeIfPresent(Bool.self, forKey: .autoRefresh) ?? true,
+            refreshOnStartup: try keyed.decodeIfPresent(Bool.self, forKey: .refreshOnStartup) ?? true,
+            refreshIntervalMinutes: try keyed.decodeIfPresent(Int.self, forKey: .refreshIntervalMinutes) ?? 180,
+            remoteMetadataEnabled: try keyed.decodeIfPresent(Bool.self, forKey: .remoteMetadataEnabled) ?? true
+        )
+    }
+}
+
 public struct AppConfig: Codable, Equatable, Sendable {
     public static let currentSchemaVersion = 7
     /// 会话粘性归属的默认存活时长(小时)。72h;`<= 0` 表示永不过期。
@@ -1009,6 +1054,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var listener: ListenerConfig
     /// 转发与重试参数,全局共享。
     public var retry: RetryPolicy
+    public var modelCatalog: ModelCatalogSettings
     /// 会话粘性归属的存活时长(小时)。`<= 0` 表示永不过期(仍受条目数上限约束)。
     /// 与 Rust `AppConfig::session_sticky_ttl_hours` 是同一契约。
     public var sessionStickyTtlHours: Double
@@ -1021,6 +1067,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         case schemaVersion
         case listener
         case retry
+        case modelCatalog
         case sessionStickyTtlHours
         case endpoints
         case featureRules
@@ -1031,6 +1078,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         schemaVersion: Int = AppConfig.currentSchemaVersion,
         listener: ListenerConfig = ListenerConfig(),
         retry: RetryPolicy = RetryPolicy(),
+        modelCatalog: ModelCatalogSettings = ModelCatalogSettings(),
         sessionStickyTtlHours: Double = AppConfig.defaultSessionStickyTTLHours,
         endpoints: [Endpoint] = [],
         featureRules: [FeatureRule] = [],
@@ -1039,6 +1087,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.schemaVersion = schemaVersion
         self.listener = listener
         self.retry = retry
+        self.modelCatalog = modelCatalog
         self.sessionStickyTtlHours = sessionStickyTtlHours
         self.endpoints = endpoints
         self.featureRules = featureRules
@@ -1065,6 +1114,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         schemaVersion = try keyed.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? AppConfig.currentSchemaVersion
         listener = try keyed.decodeIfPresent(ListenerConfig.self, forKey: .listener) ?? ListenerConfig()
         retry = try keyed.decodeIfPresent(RetryPolicy.self, forKey: .retry) ?? RetryPolicy()
+        modelCatalog = try keyed.decodeIfPresent(ModelCatalogSettings.self, forKey: .modelCatalog) ?? ModelCatalogSettings()
         let ttl = try keyed.decodeIfPresent(Double.self, forKey: .sessionStickyTtlHours) ?? AppConfig.defaultSessionStickyTTLHours
         sessionStickyTtlHours = ttl.isFinite ? max(0, ttl) : 0
         endpoints = try keyed.decodeIfPresent([Endpoint].self, forKey: .endpoints) ?? []
@@ -1081,6 +1131,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         try keyed.encode(AppConfig.currentSchemaVersion, forKey: .schemaVersion)
         try keyed.encode(listener, forKey: .listener)
         try keyed.encode(retry, forKey: .retry)
+        try keyed.encode(modelCatalog, forKey: .modelCatalog)
         // 契约对齐 Rust:显式序列化(含 0),让两端配置视图一致。
         try keyed.encode(sessionStickyTtlHours.isFinite ? max(0, sessionStickyTtlHours) : 0, forKey: .sessionStickyTtlHours)
         try keyed.encode(endpoints, forKey: .endpoints)

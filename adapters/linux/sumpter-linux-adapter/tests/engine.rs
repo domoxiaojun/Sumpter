@@ -199,6 +199,7 @@ fn endpoint(id: &str, host: &str, key: &str) -> Endpoint {
         api_key: key.into(),
         base_url: format!("https://{host}"),
         resolve_ip: String::new(),
+        force_claude_code: false,
         capabilities: vec![],
         catalog: None,
         enabled: true,
@@ -246,6 +247,7 @@ fn two_endpoint_config() -> AppConfig {
         retry,
         session_sticky_ttl_hours: sumpter_core::config::DEFAULT_SESSION_STICKY_TTL_HOURS,
         schema_version: 6,
+        model_catalog: ModelCatalogSettings::default(),
         model_groups: None,
     }
     .normalized()

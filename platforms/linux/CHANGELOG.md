@@ -6,6 +6,22 @@
 
 ## [Unreleased]
 
+## [0.4.24] - 2026-09-23
+
+### 新增
+
+- Provider 模型目录支持启动刷新和周期自动刷新，失败时保留最近一次成功目录。
+- 新增 `modelCatalog` 配置、目录刷新状态、手动刷新接口及 Linux/macOS UI 展示。
+- 公共模型元数据和 Codex 客户端模板支持固定远程源、镜像、缓存、内置回退和严格校验。
+- 自动刷新只更新目录与元数据，不自动创建 mapping、扩展 modelGroups 或扩大路由授权。
+
+## [0.4.23] - 2026-09-23
+
+### 新增
+
+- Provider 入口新增 `forceClaudeCode` 开关，可将 Anthropic 请求归一为 Claude Code 官方兼容形状，补齐身份 headers、system 前缀、消息块、缓存标记、context management 与 beta 能力。
+- Linux WebUI 与 macOS Provider 入口编辑器同步提供该开关，并默认关闭。
+
 ## [0.4.22] - 2026-09-23
 
 ### 新增

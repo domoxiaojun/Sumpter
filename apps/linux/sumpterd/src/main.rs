@@ -318,6 +318,7 @@ async fn run(options: Options) -> ExitCode {
         }
     };
     engine.spawn_stats_flusher();
+    let _model_catalog_task = engine.shared().spawn_model_catalog_scheduler();
     let proxy = ProxySupervisor::new(engine.clone());
     let admin_listen = options.admin_listen;
     let admin_auth = options.admin_auth;

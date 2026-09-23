@@ -215,6 +215,36 @@ impl ConfigDir {
         self.root.join("sumpterd.pid")
     }
 
+    pub fn model_catalog_dir(&self) -> PathBuf {
+        self.root.join("model-catalog")
+    }
+
+    pub fn model_catalog_path(&self, name: &str) -> PathBuf {
+        self.model_catalog_dir().join(name)
+    }
+
+    pub fn save_model_catalog(&self, name: &str, data: &[u8]) -> io::Result<PersistOutcome> {
+        if !matches!(name, "models.json" | "codex_client_models.json") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "不支持的模型目录文件名",
+            ));
+        }
+        let directory = self.model_catalog_dir();
+        std::fs::create_dir_all(&directory)?;
+        atomic_write(&self.model_catalog_path(name), data)
+    }
+
+    pub fn load_model_catalog(&self, name: &str) -> io::Result<Vec<u8>> {
+        if !matches!(name, "models.json" | "codex_client_models.json") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "不支持的模型目录文件名",
+            ));
+        }
+        std::fs::read(self.model_catalog_path(name))
+    }
+
     pub fn ensure_exists(&self) -> io::Result<()> {
         std::fs::create_dir_all(&self.root)?;
         #[cfg(unix)]
@@ -696,6 +726,12 @@ fn validate_current_wire(value: &Value) -> Result<(), String> {
     {
         return Err("schema v7 不允许 listener.inboundDialectPassthrough".into());
     }
+    if let Some(value) = root.get("modelCatalog") {
+        let settings: crate::config::ModelCatalogSettings =
+            serde_json::from_value(value.clone())
+                .map_err(|error| format!("modelCatalog 格式无效: {error}"))?;
+        settings.validate()?;
+    }
     if let Some(listener) = root.get("listener") {
         // 非法 CIDR 在加载与保存时就拒绝,而不是等到首个请求悄悄匹配失败。
         let listener: crate::config::ListenerConfig = serde_json::from_value(listener.clone())
@@ -712,6 +748,13 @@ fn validate_current_wire(value: &Value) -> Result<(), String> {
             .ok_or_else(|| "endpoints 必须是数组".to_string())?,
     };
     for (endpoint_index, endpoint) in endpoints.iter().enumerate() {
+        if let Some(force_claude_code) = endpoint.get("forceClaudeCode")
+            && !force_claude_code.is_boolean()
+        {
+            return Err(format!(
+                "endpoints[{endpoint_index}].forceClaudeCode 必须是布尔值"
+            ));
+        }
         if endpoint.get("searchDialect").is_some() {
             return Err(format!(
                 "endpoints[{endpoint_index}] 不允许遗留 searchDialect；WebSearch 能力由目标协议决定"
@@ -1335,6 +1378,18 @@ mod tests {
         );
 
         value["endpoints"][0]["protocol"] = json!("auto");
+        value["endpoints"][0]["forceClaudeCode"] = json!(true);
+        assert!(validate_config_wire(&value).is_ok());
+        value["endpoints"][0]["forceClaudeCode"] = json!("true");
+        assert!(
+            validate_config_wire(&value)
+                .unwrap_err()
+                .contains("forceClaudeCode 必须是布尔值")
+        );
+        value["endpoints"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("forceClaudeCode");
         value["endpoints"][0]["protocols"] = json!(["anthropic"]);
         assert!(
             validate_config_wire(&value)

@@ -145,6 +145,7 @@ function normalizeCatalog(value) {
     source: String(source.source ?? ''),
     status: String(source.status ?? ''),
     error: String(source.error ?? ''),
+    attemptedAt: String(source.attemptedAt ?? ''),
     updatedAt: String(source.updatedAt ?? ''),
   };
 }
@@ -293,6 +294,7 @@ export function fromWireConfig(document) {
       }
       if (!endpoint.resolveIP) delete endpoint.resolveIP;
       endpoint.protocol = normalizeEndpointProtocol(endpoint.protocol, schemaVersion < 4 ? 'anthropic' : 'auto');
+      endpoint.forceClaudeCode = endpoint.forceClaudeCode === true;
       const normalizedUserAgent = normalizeUserAgentSettings(endpoint.userAgent);
       if (Object.keys(normalizedUserAgent).length > 0) endpoint.userAgent = normalizedUserAgent;
       else delete endpoint.userAgent;
@@ -319,6 +321,7 @@ export function toWireConfig(document) {
         throw new TypeError(`入口 ${endpoint.id || '(unknown)'} 的 protocol 非法: ${rawProtocol}`);
       }
       endpoint.protocol = rawProtocol || 'auto';
+      endpoint.forceClaudeCode = endpoint.forceClaudeCode === true;
       endpoint.resolveIP = normalizeResolveIP(endpoint.resolveIP);
       if (endpoint.resolveIP && !isValidResolveIP(endpoint.resolveIP)) {
         throw new TypeError(`入口 ${endpoint.id || '(unknown)'} 的 resolveIP 不是合法 IPv4/IPv6 地址`);
@@ -363,7 +366,7 @@ export function toWireConfig(document) {
       delete endpoint.searchDialect;
       if (endpoint.catalog != null) {
         const catalog = normalizeCatalog(endpoint.catalog);
-        if (catalog.models.length || catalog.source || catalog.status || catalog.error || catalog.updatedAt) {
+        if (catalog.models.length || catalog.source || catalog.status || catalog.error || catalog.attemptedAt || catalog.updatedAt) {
           endpoint.catalog = catalog;
         } else {
           delete endpoint.catalog;
@@ -1807,6 +1810,10 @@ class ApiService {
       body: JSON.stringify({ endpointID: id }),
     }).then((value) => normalizeProviderModelsResponse(value, id));
   }
+  getModelCatalogStatus(options = {}) { return this.request('/model-catalog/status', options); }
+  refreshModelCatalog() {
+    return this.request('/model-catalog/status', { method: 'POST' });
+  }
   // Kept as a small compatibility alias for callers that used the endpoint
   // name before the UI standardized on fetchProviderModels.
   providerModels(endpointID) { return this.fetchProviderModels(endpointID); }
@@ -1875,7 +1882,7 @@ class ApiService {
 
 export const api = new ApiService();
 
-export function openEventStream({ onRuntimeChange, onRuntimeEvent, onConfigReloaded, onConfigMigrated, onStatsReset, onProxyState, onStatus } = {}) {
+export function openEventStream({ onRuntimeChange, onRuntimeEvent, onConfigReloaded, onConfigMigrated, onStatsReset, onProxyState, onModelCatalogUpdated, onModelMetadataUpdated, onStatus } = {}) {
   if (isMock) {
     let timer = null;
     onStatus?.('open');
@@ -1909,6 +1916,8 @@ export function openEventStream({ onRuntimeChange, onRuntimeEvent, onConfigReloa
     source.addEventListener('stats_reset', (event) => parse(event, onStatsReset));
     source.addEventListener('proxy-state', (event) => parse(event, onProxyState));
     source.addEventListener('proxy_state', (event) => parse(event, onProxyState));
+    source.addEventListener('model-catalog-updated', (event) => parse(event, onModelCatalogUpdated));
+    source.addEventListener('model-metadata-updated', (event) => parse(event, onModelMetadataUpdated));
     source.onmessage = runtime;
     source.onopen = () => { retryDelay = 1000; onStatus?.('open'); };
     source.onerror = async () => {
