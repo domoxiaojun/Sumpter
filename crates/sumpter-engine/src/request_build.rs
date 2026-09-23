@@ -16,6 +16,7 @@ use crate::outbound::{OutboundRequest, join_paths};
 /// Claude Code 指纹 UA:入站 UA 透传优先,仅在客户端未带 UA 时作回落
 /// (无 UA 探针打 DashScope 会 405,回落保住指纹放行面)。
 pub const CLAUDE_CODE_USER_AGENT: &str = "claude-cli/2.1.220 (external, cli)";
+const FORCED_CLAUDE_CODE_USER_AGENT: &str = "claude-cli/2.1.280 (external, cli)";
 /// Codex-compatible identity required by several Responses upstream gateways.
 pub const CODEX_USER_AGENT: &str = "codex_cli_rs/0.5.0";
 pub const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -160,12 +161,11 @@ pub fn provider_probe_headers(api_key: &str) -> Vec<(&'static str, String)> {
 /// Claude Code's stable Anthropic capability headers. Client-declared beta
 /// tokens are merged on top of this set by `beta_header`.
 const ANTHROPIC_BETA_BASE: &str = "claude-code-20250219,interleaved-thinking-2025-05-14,mid-conversation-system-2026-04-07,fallback-credit-2026-06-01";
-const ANTHROPIC_BETA_CLAUDE_CODE: &str = "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,effort-2025-11-24,fallback-credit-2026-06-01";
+const ANTHROPIC_BETA_CLAUDE_CODE: &str = "claude-code-20250219,interleaved-thinking-2025-05-14,mid-conversation-system-2026-04-07,effort-2025-11-24,fallback-credit-2026-06-01";
 const ANTHROPIC_BETA_EFFORT: &str = "effort-2025-11-24";
 const ANTHROPIC_DANGEROUS_DIRECT_BROWSER_ACCESS: &str = "true";
 const ANTHROPIC_APP: &str = "cli";
-const CLAUDE_CODE_SYSTEM_PREFIX: &str =
-    "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
+const CLAUDE_CODE_SYSTEM_PREFIX: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
 
 /// 入站 header 黑名单(不透传;其余如 anthropic-version 原样透传)。
 ///
@@ -257,8 +257,16 @@ fn auth_headers_for_target(
     api_key: &str,
     protocol: ProviderProtocol,
     kind: Option<PassthroughKind>,
+    force_claude_code: bool,
 ) -> Vec<(&'static str, String)> {
-    if protocol == ProviderProtocol::Gemini {
+    if protocol == ProviderProtocol::Anthropic && force_claude_code {
+        let key = api_key.trim();
+        if key.is_empty() {
+            Vec::new()
+        } else {
+            vec![("authorization", format!("Bearer {key}"))]
+        }
+    } else if protocol == ProviderProtocol::Gemini {
         let key = api_key.trim();
         if key.is_empty() {
             Vec::new()
@@ -410,6 +418,7 @@ pub fn build_outbound(
         api_key,
         protocol,
         passthrough.as_ref().map(|request| request.kind),
+        endpoint.force_claude_code,
     ) {
         set_header(&mut headers, name, &value);
     }
@@ -437,6 +446,7 @@ pub fn build_outbound(
             api_key,
             protocol,
             passthrough.as_ref().map(|request| request.kind),
+            endpoint.force_claude_code,
         ) {
             headers.push((name.to_string(), value));
         }
@@ -587,10 +597,8 @@ pub fn build_outbound(
                 );
                 set_default_header(&mut headers, "x-app", ANTHROPIC_APP);
             }
-            if endpoint.force_claude_code
-                && endpoint.user_agent.rule(protocol).mode != UserAgentMode::Override
-            {
-                set_header(&mut headers, "user-agent", CLAUDE_CODE_USER_AGENT);
+            if endpoint.force_claude_code {
+                set_header(&mut headers, "user-agent", FORCED_CLAUDE_CODE_USER_AGENT);
             }
             // 客户端自己声明的 beta:重建头时以它为基底(见 beta_header)。
             let client_beta = headers
@@ -615,14 +623,16 @@ pub fn build_outbound(
                 join_paths(&base_path, anthropic_messages_path(inbound_path_and_query)),
                 rewrite_anthropic_body(
                     request,
-                    &endpoint.routed_model,
                     &endpoint.upstream_model,
-                    endpoint.thinking,
-                    effort,
-                    purpose,
-                    server_retrieval,
-                    endpoint.force_claude_code,
-                    claude_code_session_id,
+                    AnthropicBodyOptions {
+                        routed_model: &endpoint.routed_model,
+                        thinking: endpoint.thinking,
+                        effort,
+                        purpose,
+                        server_retrieval,
+                        force_claude_code: endpoint.force_claude_code,
+                        claude_code_session_id,
+                    },
                 ),
             )
         }
@@ -1078,7 +1088,8 @@ pub(crate) fn strip_codex_live_query(path_and_query: &str) -> String {
     }
 }
 
-/// `anthropic-beta` 组装:以客户端原值为基底,再补齐代理需要的 base token。
+/// `anthropic-beta` 组装:普通模式以客户端原值为基底,再补齐代理需要的 base token;
+/// 强制 Claude Code 模式只保留真实 CC 的稳定能力,避免把未知实验 token 送给兼容层。
 /// `oneMillion` 强制补 `context-1m`;`standard` 保留客户端原值;
 /// `strip` 只移除 `context-1m-*`,让上游自行决定上下文能力。
 fn beta_header(
@@ -1088,9 +1099,17 @@ fn beta_header(
     force_claude_code: bool,
 ) -> String {
     let mut parts: Vec<String> = Vec::new();
-    for token in client_beta.unwrap_or_default().split(',') {
-        if context != ContextMode::Strip || !is_context_1m_beta(token) {
-            push_beta(&mut parts, token);
+    if force_claude_code {
+        if context != ContextMode::Strip
+            && client_beta.is_some_and(|value| value.split(',').any(is_context_1m_beta))
+        {
+            push_beta(&mut parts, sumpter_core::config::ANTHROPIC_CONTEXT_1M_BETA);
+        }
+    } else {
+        for token in client_beta.unwrap_or_default().split(',') {
+            if context != ContextMode::Strip || !is_context_1m_beta(token) {
+                push_beta(&mut parts, token);
+            }
         }
     }
     let base = if force_claude_code {
@@ -1136,23 +1155,26 @@ fn push_beta(parts: &mut Vec<String>, token: &str) {
 /// 要对接严格校验类型版本的上游,应改成按入口配置而不是继续加硬编码分支。
 const SERVER_WEB_SEARCH_TOOL_TYPE: &str = "web_search_20250305";
 
+struct AnthropicBodyOptions<'a> {
+    routed_model: &'a str,
+    thinking: ThinkingMode,
+    effort: Option<ReasoningEffort>,
+    purpose: RequestPurpose,
+    server_retrieval: bool,
+    force_claude_code: bool,
+    claude_code_session_id: Option<&'a str>,
+}
+
 /// anthropic 直连的 body 改写:
 /// - `model` 换成上游模型;
 /// - 客户端模型带合法 `(effort)` 后缀时优先注入:
 ///   none = 删 thinking + output_config.effort;auto = thinking adaptive;
 ///   其余档位 = thinking adaptive + output_config.effort;
 /// - 否则按入口 thinking:disabled 删 / adaptive 写 `{"type":"adaptive"}` / passthrough 不动。
-#[allow(clippy::too_many_arguments)]
 fn rewrite_anthropic_body(
     request: &RoutingRequest,
-    routed_model: &str,
     upstream_model: &str,
-    thinking: ThinkingMode,
-    effort: Option<ReasoningEffort>,
-    purpose: RequestPurpose,
-    server_retrieval: bool,
-    force_claude_code: bool,
-    claude_code_session_id: Option<&str>,
+    options: AnthropicBodyOptions<'_>,
 ) -> Vec<u8> {
     let mut body = request.raw.clone();
     body.insert("model".into(), json!(upstream_model));
@@ -1160,8 +1182,8 @@ fn rewrite_anthropic_body(
     // Claude Code 强制指定 WebSearch 工具时使用 `{type:"tool",name:"web_search"}`；
     // Grok 的 Anthropic 兼容层接受 `{type:"any"}`，并由服务端继续执行 web/x 搜索。
     // 只按规则选中的逻辑模型判断，避免 ccc 等入口把上游模型改成不透明别名后失配。
-    if server_retrieval {
-        if purpose == RequestPurpose::WebFetch {
+    if options.server_retrieval {
+        if options.purpose == RequestPurpose::WebFetch {
             body.insert(
                 "tools".into(),
                 json!([{
@@ -1173,7 +1195,7 @@ fn rewrite_anthropic_body(
         }
         // ccc/Grok 的 Anthropic 兼容层不接受 Claude Code 的命名工具选择
         // `{type:"tool",name:"web_search"}`；`any` 仍强制执行一次服务端检索。
-        if model_name::clean(routed_model)
+        if model_name::clean(options.routed_model)
             .to_ascii_lowercase()
             .starts_with("grok-")
         {
@@ -1181,7 +1203,7 @@ fn rewrite_anthropic_body(
         }
     }
 
-    match effort {
+    match options.effort {
         Some(ReasoningEffort::None) => {
             body.remove("thinking");
             remove_output_config_effort(&mut body);
@@ -1199,7 +1221,7 @@ fn rewrite_anthropic_body(
                 map.insert("effort".into(), json!(level.as_str()));
             }
         }
-        None => match thinking {
+        None => match options.thinking {
             ThinkingMode::Disabled => {
                 body.remove("thinking");
             }
@@ -1209,8 +1231,8 @@ fn rewrite_anthropic_body(
             ThinkingMode::Passthrough => {}
         },
     }
-    if force_claude_code {
-        normalize_claude_code_body(&mut body, claude_code_session_id);
+    if options.force_claude_code {
+        normalize_claude_code_body(&mut body, options.claude_code_session_id);
     }
     serde_json::to_vec(&Value::Object(body)).unwrap_or_default()
 }
@@ -1256,13 +1278,6 @@ fn normalize_claude_code_body(
 
     if let Some(Value::Array(messages)) = body.get_mut("messages") {
         normalize_claude_code_messages(messages);
-    }
-
-    if !body.contains_key("context_management") {
-        body.insert(
-            "context_management".into(),
-            json!({"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]}),
-        );
     }
 
     if let Some(session_id) = claude_code_session_id
@@ -1832,6 +1847,10 @@ mod tests {
             ThinkingMode::Passthrough,
         );
         endpoint.force_claude_code = true;
+        endpoint.user_agent.anthropic = UserAgentRule {
+            mode: UserAgentMode::Override,
+            value: "pi/1.0".into(),
+        };
         let request = RoutingRequest::from_value(&json!({
             "model": "claude-opus-5",
             "system": "project instructions",
@@ -1861,7 +1880,12 @@ mod tests {
             None,
         );
         let body: Value = serde_json::from_slice(&build.request.body).unwrap();
-        assert_eq!(header(&build, "user-agent"), vec![CLAUDE_CODE_USER_AGENT]);
+        assert_eq!(
+            header(&build, "user-agent"),
+            vec![FORCED_CLAUDE_CODE_USER_AGENT]
+        );
+        assert_eq!(header(&build, "authorization"), vec!["Bearer sk-key"]);
+        assert!(header(&build, "x-api-key").is_empty());
         assert_eq!(header(&build, "x-app"), vec!["cli"]);
         assert_eq!(
             header(&build, "anthropic-dangerous-direct-browser-access"),
@@ -1880,10 +1904,7 @@ mod tests {
             body["messages"][0]["content"][1]["cache_control"]["type"],
             "ephemeral"
         );
-        assert_eq!(
-            body["context_management"]["edits"][0]["type"],
-            "clear_thinking_20251015"
-        );
+        assert!(body.get("context_management").is_none());
         assert_eq!(
             body["metadata"]["user_id"],
             r#"{"session_id":"session-123"}"#

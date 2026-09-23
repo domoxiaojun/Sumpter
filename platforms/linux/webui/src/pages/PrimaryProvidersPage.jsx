@@ -1213,7 +1213,7 @@ export function PrimaryProvidersPage() {
               label={(value) => (value ? '强制 Claude Code 归一化' : '普通 Anthropic 请求')}
               ariaLabel="切换强制 Claude Code 归一化"
             />
-            <span className="form-hint">仅 Anthropic 出站请求生效：补齐 Claude Code 身份、system 前缀、消息块、缓存标记和 context management；不伪造设备身份或工具桩。</span>
+            <span className="form-hint">仅 Anthropic 出站请求生效：对齐 Claude Code 身份、system 前缀、消息块、缓存标记和兼容 headers；不伪造设备身份或工具桩。</span>
           </div>
 
           {!isNew && endpoint && (
