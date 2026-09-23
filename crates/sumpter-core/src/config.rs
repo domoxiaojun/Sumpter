@@ -681,6 +681,9 @@ pub struct Endpoint {
         skip_serializing_if = "String::is_empty"
     )]
     pub resolve_ip: String,
+    /// 对 Anthropic 入口启用 Claude Code 请求形状归一化。
+    #[serde(rename = "forceClaudeCode", default, skip_serializing_if = "is_false")]
+    pub force_claude_code: bool,
     /// 同组入口共享会话粘性与冷却；None 使用自身 id 作为独立组并参与 Provider 分流。
     #[serde(rename = "stickyGroup", default, skip_serializing_if = "is_none")]
     pub sticky_group: Option<String>,

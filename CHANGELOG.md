@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+## [0.4.23] - 2026-09-23
+
+### 新增
+
+- Provider 入口新增 `forceClaudeCode` 开关，可将 Anthropic 请求归一为 Claude Code 官方兼容形状，补齐身份 headers、system 前缀、消息块、缓存标记、context management 与 beta 能力。
+- Linux WebUI 与 macOS Provider 入口编辑器同步提供该开关，并默认关闭。
+
 ## [0.4.22] - 2026-09-23
 
 ### 新增

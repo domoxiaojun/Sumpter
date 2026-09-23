@@ -199,6 +199,7 @@ fn endpoint(id: &str, host: &str, key: &str) -> Endpoint {
         api_key: key.into(),
         base_url: format!("https://{host}"),
         resolve_ip: String::new(),
+        force_claude_code: false,
         capabilities: vec![],
         catalog: None,
         enabled: true,

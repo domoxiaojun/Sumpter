@@ -818,6 +818,8 @@ pub struct PlannedEndpoint {
     pub base_url: String,
     /// 非空时连接到该固定 IP，URL/Host/TLS SNI 仍使用 base_url 域名。
     pub resolve_ip: String,
+    /// 对 Anthropic 入口启用 Claude Code 官方请求形状归一化。
+    pub force_claude_code: bool,
     /// 配置中声明的四态入口模式。
     pub configured_protocol: EndpointProtocolMode,
     /// 入站路径确定的真实 SourceFormat。
@@ -1346,6 +1348,7 @@ impl RoutePlanner {
                     scheduling_strategy: scoped.scheduling_strategy,
                     base_url: endpoint.base_url.clone(),
                     resolve_ip: endpoint.resolve_ip.clone(),
+                    force_claude_code: endpoint.force_claude_code,
                     configured_protocol,
                     source_format,
                     protocol,

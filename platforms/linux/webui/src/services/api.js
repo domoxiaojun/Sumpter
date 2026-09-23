@@ -293,6 +293,7 @@ export function fromWireConfig(document) {
       }
       if (!endpoint.resolveIP) delete endpoint.resolveIP;
       endpoint.protocol = normalizeEndpointProtocol(endpoint.protocol, schemaVersion < 4 ? 'anthropic' : 'auto');
+      endpoint.forceClaudeCode = endpoint.forceClaudeCode === true;
       const normalizedUserAgent = normalizeUserAgentSettings(endpoint.userAgent);
       if (Object.keys(normalizedUserAgent).length > 0) endpoint.userAgent = normalizedUserAgent;
       else delete endpoint.userAgent;
@@ -319,6 +320,7 @@ export function toWireConfig(document) {
         throw new TypeError(`入口 ${endpoint.id || '(unknown)'} 的 protocol 非法: ${rawProtocol}`);
       }
       endpoint.protocol = rawProtocol || 'auto';
+      endpoint.forceClaudeCode = endpoint.forceClaudeCode === true;
       endpoint.resolveIP = normalizeResolveIP(endpoint.resolveIP);
       if (endpoint.resolveIP && !isValidResolveIP(endpoint.resolveIP)) {
         throw new TypeError(`入口 ${endpoint.id || '(unknown)'} 的 resolveIP 不是合法 IPv4/IPv6 地址`);

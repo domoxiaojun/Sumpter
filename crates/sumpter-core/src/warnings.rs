@@ -245,6 +245,7 @@ mod tests {
             api_key: key.into(),
             base_url: format!("https://{id}.example.com"),
             resolve_ip: String::new(),
+            force_claude_code: false,
             capabilities: vec![],
             catalog: None,
             enabled: true,

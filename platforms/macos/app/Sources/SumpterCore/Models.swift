@@ -575,6 +575,8 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
     /// 【实验】出站连接复用(sumpterd 侧生效);新入口编辑器默认 true。
     /// 入口编辑器可直接设置；旧配置缺省仍解码为 false，保存时保留省略策略。
     public var keepAlive: Bool
+    /// 对 Anthropic 入口启用 Claude Code 官方请求形状归一化。
+    public var forceClaudeCode: Bool
     enum CodingKeys: String, CodingKey {
         case id
         case name
@@ -590,6 +592,7 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         case catalog
         case mappings
         case keepAlive
+        case forceClaudeCode
     }
 
     public init(
@@ -606,7 +609,8 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         stickyGroup: String? = nil,
         catalog: ModelCatalog = ModelCatalog(),
         mappings: [ModelMapping] = [],
-        keepAlive: Bool = true
+        keepAlive: Bool = true,
+        forceClaudeCode: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -622,6 +626,7 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         self.catalog = catalog
         self.mappings = mappings
         self.keepAlive = keepAlive
+        self.forceClaudeCode = forceClaudeCode
     }
 
     public init(from decoder: Decoder) throws {
@@ -648,6 +653,7 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         catalog = try keyed.decodeIfPresent(ModelCatalog.self, forKey: .catalog) ?? ModelCatalog()
         mappings = try keyed.decodeIfPresent([ModelMapping].self, forKey: .mappings) ?? []
         keepAlive = try keyed.decodeIfPresent(Bool.self, forKey: .keepAlive) ?? false
+        forceClaudeCode = try keyed.decodeIfPresent(Bool.self, forKey: .forceClaudeCode) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -687,6 +693,9 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         // 与 sumpterd 的省略策略一致:false 不落盘。
         if keepAlive {
             try keyed.encode(keepAlive, forKey: .keepAlive)
+        }
+        if forceClaudeCode {
+            try keyed.encode(forceClaudeCode, forKey: .forceClaudeCode)
         }
     }
 

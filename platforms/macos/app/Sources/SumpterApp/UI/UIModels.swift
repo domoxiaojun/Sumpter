@@ -14,6 +14,7 @@ struct EndpointDisplayRow: Identifiable, Hashable {
     let priority: Int
     let stickyGroup: String?
     let keepAlive: Bool
+    let forceClaudeCode: Bool
     let userAgent: UserAgentSettings
     let mappingCount: Int
     let catalog: ModelCatalog
@@ -30,6 +31,7 @@ struct EndpointDisplayRow: Identifiable, Hashable {
         priority = endpoint.priority
         stickyGroup = endpoint.stickyGroup
         keepAlive = endpoint.keepAlive
+        forceClaudeCode = endpoint.forceClaudeCode
         userAgent = endpoint.userAgent
         mappingCount = endpoint.mappings.count
         catalog = endpoint.catalog
@@ -41,6 +43,7 @@ struct EndpointDisplayRow: Identifiable, Hashable {
     var priorityText: String { String(priority) }
     var stickyGroupText: String { stickyGroup ?? "入口 ID（独立组）" }
     var keepAliveText: String { keepAlive ? "启用" : "关闭" }
+    var forceClaudeCodeText: String { forceClaudeCode ? "启用" : "关闭" }
     var resolveIPText: String { resolveIP.isEmpty ? "系统 DNS" : resolveIP }
     var livePassthrough: Bool { capabilities.contains("live") }
     var userAgentText: String { userAgent.summary }

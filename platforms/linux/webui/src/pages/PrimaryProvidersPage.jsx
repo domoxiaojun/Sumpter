@@ -1037,6 +1037,7 @@ export function PrimaryProvidersPage() {
     // 新入口默认开启；编辑已有入口时严格保留其显式配置（缺省旧配置仍为关闭）。
     let keepAlive = isNew ? true : endpoint?.keepAlive === true;
     let livePassthrough = Array.isArray(endpoint?.capabilities) && endpoint.capabilities.includes('live');
+    let forceClaudeCode = endpoint?.forceClaudeCode === true;
     let stickyGroup = endpoint?.stickyGroup || '';
     let modelMappings = clone(endpointMappings(endpoint));
     let apiKeyTouched = false;
@@ -1169,6 +1170,17 @@ export function PrimaryProvidersPage() {
             </div>
           </div>
 
+          <div className="form-group">
+            <label className="form-label">Anthropic 兼容</label>
+            <LocalToggle
+              initial={forceClaudeCode}
+              onChange={(value) => { forceClaudeCode = value; }}
+              label={(value) => (value ? '强制 Claude Code 归一化' : '普通 Anthropic 请求')}
+              ariaLabel="切换强制 Claude Code 归一化"
+            />
+            <span className="form-hint">仅 Anthropic 出站请求生效：补齐 Claude Code 身份、system 前缀、消息块、缓存标记和 context management；不伪造设备身份或工具桩。</span>
+          </div>
+
           {!isNew && endpoint && (
             <div className="form-group endpoint-pricing-entry">
               <label className="form-label">成本价格</label>
@@ -1246,6 +1258,7 @@ export function PrimaryProvidersPage() {
                 priority: Number(priority),
                 stickyGroup: stickyGroup.trim() || null,
                 keepAlive,
+                forceClaudeCode,
                 enabled,
                 modelMappings,
               });
@@ -1266,6 +1279,7 @@ export function PrimaryProvidersPage() {
                 target.priority = Number(priority);
                 target.enabled = enabled;
                 target.keepAlive = keepAlive;
+                target.forceClaudeCode = forceClaudeCode;
                 target.stickyGroup = stickyGroup.trim() || null;
                 target.modelMappings = modelMappings;
                 if (apiKeyTouched) secretUpdates[endpoint.id] = apiKey.trim();
@@ -1712,6 +1726,7 @@ export function PrimaryProvidersPage() {
             <div><span style={{ color: 'var(--text-muted)' }}>入口协议：</span><span className="mono-cell">{endpointProtocolLabel(selectedEndpoint.protocol)}</span></div>
             <div><span style={{ color: 'var(--text-muted)' }}>粘性分组：</span><span className="mono-cell">{selectedEndpoint.stickyGroup || '独立分组'}</span></div>
             <div><span style={{ color: 'var(--text-muted)' }}>连接复用：</span><span className="mono-cell">{selectedEndpoint.keepAlive ? '开启' : '关闭'}</span></div>
+            <div><span style={{ color: 'var(--text-muted)' }}>Claude Code 归一化：</span><span className="mono-cell">{selectedEndpoint.forceClaudeCode === true ? '开启' : '关闭'}</span></div>
             <div><span style={{ color: 'var(--text-muted)' }}>UA：</span><span>{userAgentSummary(selectedEndpoint.userAgent)}</span></div>
           </div>
 
