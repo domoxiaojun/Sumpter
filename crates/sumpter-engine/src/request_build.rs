@@ -157,9 +157,15 @@ pub fn provider_probe_headers(api_key: &str) -> Vec<(&'static str, String)> {
     provider_probe_headers_with_user_agent(api_key, CLAUDE_CODE_USER_AGENT)
 }
 
-const ANTHROPIC_BETA_BASE: &str =
-    "claude-code-20250219,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12";
+/// Claude Code's stable Anthropic capability headers. Client-declared beta
+/// tokens are merged on top of this set by `beta_header`.
+const ANTHROPIC_BETA_BASE: &str = "claude-code-20250219,interleaved-thinking-2025-05-14,mid-conversation-system-2026-04-07,fallback-credit-2026-06-01";
+const ANTHROPIC_BETA_CLAUDE_CODE: &str = "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,effort-2025-11-24,fallback-credit-2026-06-01";
 const ANTHROPIC_BETA_EFFORT: &str = "effort-2025-11-24";
+const ANTHROPIC_DANGEROUS_DIRECT_BROWSER_ACCESS: &str = "true";
+const ANTHROPIC_APP: &str = "cli";
+const CLAUDE_CODE_SYSTEM_PREFIX: &str =
+    "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
 
 /// 入站 header 黑名单(不透传;其余如 anthropic-version 原样透传)。
 ///
@@ -561,6 +567,31 @@ pub fn build_outbound(
 
     let (path, body) = match protocol {
         ProviderProtocol::Anthropic => {
+            // Complete the stable Anthropic compatibility surface. The
+            // force profile pins the Claude Code identity; ordinary Anthropic
+            // traffic only fills missing defaults.
+            if endpoint.force_claude_code {
+                set_header(&mut headers, "anthropic-version", ANTHROPIC_VERSION);
+                set_header(
+                    &mut headers,
+                    "anthropic-dangerous-direct-browser-access",
+                    ANTHROPIC_DANGEROUS_DIRECT_BROWSER_ACCESS,
+                );
+                set_header(&mut headers, "x-app", ANTHROPIC_APP);
+            } else {
+                set_default_header(&mut headers, "anthropic-version", ANTHROPIC_VERSION);
+                set_default_header(
+                    &mut headers,
+                    "anthropic-dangerous-direct-browser-access",
+                    ANTHROPIC_DANGEROUS_DIRECT_BROWSER_ACCESS,
+                );
+                set_default_header(&mut headers, "x-app", ANTHROPIC_APP);
+            }
+            if endpoint.force_claude_code
+                && endpoint.user_agent.rule(protocol).mode != UserAgentMode::Override
+            {
+                set_header(&mut headers, "user-agent", CLAUDE_CODE_USER_AGENT);
+            }
             // 客户端自己声明的 beta:重建头时以它为基底(见 beta_header)。
             let client_beta = headers
                 .iter()
@@ -569,8 +600,17 @@ pub fn build_outbound(
             set_header(
                 &mut headers,
                 "anthropic-beta",
-                &beta_header(client_beta.as_deref(), endpoint.context, effort),
+                &beta_header(
+                    client_beta.as_deref(),
+                    endpoint.context,
+                    effort,
+                    endpoint.force_claude_code,
+                ),
             );
+            let claude_code_session_id = headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("x-claude-code-session-id"))
+                .map(|(_, value)| value.as_str());
             (
                 join_paths(&base_path, anthropic_messages_path(inbound_path_and_query)),
                 rewrite_anthropic_body(
@@ -581,6 +621,8 @@ pub fn build_outbound(
                     effort,
                     purpose,
                     server_retrieval,
+                    endpoint.force_claude_code,
+                    claude_code_session_id,
                 ),
             )
         }
@@ -793,6 +835,15 @@ fn rewrite_passthrough_model(
 fn set_header(headers: &mut Vec<(String, String)>, name: &str, value: &str) {
     headers.retain(|(n, _)| !n.eq_ignore_ascii_case(name));
     headers.push((name.to_string(), value.to_string()));
+}
+
+fn set_default_header(headers: &mut Vec<(String, String)>, name: &str, value: &str) {
+    if !headers
+        .iter()
+        .any(|(n, v)| n.eq_ignore_ascii_case(name) && !v.trim().is_empty())
+    {
+        set_header(headers, name, value);
+    }
 }
 
 fn base_path_of(base_url: &str) -> String {
@@ -1034,6 +1085,7 @@ fn beta_header(
     client_beta: Option<&str>,
     context: ContextMode,
     effort: Option<ReasoningEffort>,
+    force_claude_code: bool,
 ) -> String {
     let mut parts: Vec<String> = Vec::new();
     for token in client_beta.unwrap_or_default().split(',') {
@@ -1041,7 +1093,12 @@ fn beta_header(
             push_beta(&mut parts, token);
         }
     }
-    for token in ANTHROPIC_BETA_BASE.split(',') {
+    let base = if force_claude_code {
+        ANTHROPIC_BETA_CLAUDE_CODE
+    } else {
+        ANTHROPIC_BETA_BASE
+    };
+    for token in base.split(',') {
         push_beta(&mut parts, token);
     }
     if context == ContextMode::OneMillion {
@@ -1085,6 +1142,7 @@ const SERVER_WEB_SEARCH_TOOL_TYPE: &str = "web_search_20250305";
 ///   none = 删 thinking + output_config.effort;auto = thinking adaptive;
 ///   其余档位 = thinking adaptive + output_config.effort;
 /// - 否则按入口 thinking:disabled 删 / adaptive 写 `{"type":"adaptive"}` / passthrough 不动。
+#[allow(clippy::too_many_arguments)]
 fn rewrite_anthropic_body(
     request: &RoutingRequest,
     routed_model: &str,
@@ -1093,6 +1151,8 @@ fn rewrite_anthropic_body(
     effort: Option<ReasoningEffort>,
     purpose: RequestPurpose,
     server_retrieval: bool,
+    force_claude_code: bool,
+    claude_code_session_id: Option<&str>,
 ) -> Vec<u8> {
     let mut body = request.raw.clone();
     body.insert("model".into(), json!(upstream_model));
@@ -1149,7 +1209,123 @@ fn rewrite_anthropic_body(
             ThinkingMode::Passthrough => {}
         },
     }
+    if force_claude_code {
+        normalize_claude_code_body(&mut body, claude_code_session_id);
+    }
     serde_json::to_vec(&Value::Object(body)).unwrap_or_default()
+}
+
+/// Normalize the stable Claude Code Messages shape without inventing a device
+/// identity or tool definitions that the downstream client cannot execute.
+/// The operation is idempotent so real Claude Code requests do not accumulate
+/// prefixes, cache markers, or duplicate context edits.
+fn normalize_claude_code_body(
+    body: &mut serde_json::Map<String, Value>,
+    claude_code_session_id: Option<&str>,
+) {
+    let system = body.remove("system");
+    let mut system_blocks = Vec::new();
+    let has_prefix = match system.as_ref() {
+        Some(Value::Array(blocks)) => blocks.iter().any(|block| {
+            block
+                .get("text")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text == CLAUDE_CODE_SYSTEM_PREFIX)
+        }),
+        Some(Value::String(text)) => text == CLAUDE_CODE_SYSTEM_PREFIX,
+        _ => false,
+    };
+    if !has_prefix {
+        system_blocks.push(json!({
+            "type": "text",
+            "text": CLAUDE_CODE_SYSTEM_PREFIX,
+            "cache_control": {"type": "ephemeral"}
+        }));
+    }
+    match system {
+        Some(Value::Array(blocks)) => system_blocks.extend(blocks),
+        Some(Value::String(text)) if !text.is_empty() => {
+            system_blocks.push(json!({"type": "text", "text": text}));
+        }
+        Some(value) if !value.is_null() => system_blocks.push(value),
+        _ => {}
+    }
+    if !system_blocks.is_empty() {
+        body.insert("system".into(), Value::Array(system_blocks));
+    }
+
+    if let Some(Value::Array(messages)) = body.get_mut("messages") {
+        normalize_claude_code_messages(messages);
+    }
+
+    if !body.contains_key("context_management") {
+        body.insert(
+            "context_management".into(),
+            json!({"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]}),
+        );
+    }
+
+    if let Some(session_id) = claude_code_session_id
+        .map(str::trim)
+        .filter(|session_id| !session_id.is_empty())
+    {
+        let metadata = body
+            .entry("metadata".to_string())
+            .or_insert_with(|| Value::Object(Default::default()));
+        if let Some(metadata) = metadata.as_object_mut() {
+            metadata
+                .entry("user_id".to_string())
+                .or_insert_with(|| Value::String(json!({"session_id": session_id}).to_string()));
+        }
+    }
+}
+
+fn normalize_claude_code_messages(messages: &mut Vec<Value>) {
+    let original = std::mem::take(messages);
+    let mut normalized = Vec::with_capacity(original.len());
+    for mut message in original {
+        let Some(object) = message.as_object_mut() else {
+            normalized.push(message);
+            continue;
+        };
+        let is_user = object.get("role").and_then(Value::as_str) == Some("user");
+        if is_user {
+            let content = object.remove("content").unwrap_or(Value::Null);
+            let blocks = match content {
+                Value::Array(blocks) => blocks,
+                Value::String(text) => vec![json!({"type": "text", "text": text})],
+                Value::Null => Vec::new(),
+                value => vec![value],
+            };
+            object.insert("content".into(), Value::Array(blocks));
+        }
+
+        if is_user
+            && let Some(previous) = normalized.last_mut().and_then(Value::as_object_mut)
+            && previous.get("role").and_then(Value::as_str) == Some("user")
+        {
+            let current = object.remove("content").unwrap_or(Value::Array(Vec::new()));
+            if let (Some(previous_blocks), Value::Array(current_blocks)) = (
+                previous.get_mut("content").and_then(Value::as_array_mut),
+                current,
+            ) {
+                previous_blocks.extend(current_blocks);
+                continue;
+            }
+        }
+        normalized.push(message);
+    }
+
+    if let Some(last_user) = normalized.iter_mut().rev().find_map(|message| {
+        let object = message.as_object_mut()?;
+        (object.get("role").and_then(Value::as_str) == Some("user")).then_some(object)
+    }) && let Some(blocks) = last_user.get_mut("content").and_then(Value::as_array_mut)
+        && let Some(last_block) = blocks.last_mut().and_then(Value::as_object_mut)
+        && !last_block.contains_key("cache_control")
+    {
+        last_block.insert("cache_control".into(), json!({"type": "ephemeral"}));
+    }
+    *messages = normalized;
 }
 
 fn remove_output_config_effort(body: &mut serde_json::Map<String, Value>) {
@@ -1184,6 +1360,7 @@ mod tests {
             scheduling_strategy: sumpter_core::ModelGroupSchedulingStrategy::Priority,
             base_url: "https://up.example.com".into(),
             resolve_ip: String::new(),
+            force_claude_code: false,
             configured_protocol: match protocol {
                 ProviderProtocol::Anthropic => EndpointProtocolMode::Anthropic,
                 ProviderProtocol::OpenAI => EndpointProtocolMode::OpenAI,
@@ -1617,6 +1794,264 @@ mod tests {
     }
 
     #[test]
+    fn anthropic_protocol_completes_claude_compatibility_headers() {
+        let build = build_outbound(
+            &endpoint(
+                ProviderProtocol::Anthropic,
+                ContextMode::Standard,
+                ThinkingMode::Passthrough,
+            ),
+            &request("claude-opus-5"),
+            &[],
+            "POST",
+            "/v1/messages",
+            "sk-key",
+            RequestPurpose::Standard,
+            None,
+            None,
+        );
+        assert_eq!(header(&build, "anthropic-version"), vec!["2023-06-01"]);
+        assert_eq!(
+            header(&build, "anthropic-dangerous-direct-browser-access"),
+            vec!["true"]
+        );
+        assert_eq!(header(&build, "x-app"), vec!["cli"]);
+        assert_eq!(
+            header(&build, "anthropic-beta"),
+            vec![
+                "claude-code-20250219,interleaved-thinking-2025-05-14,mid-conversation-system-2026-04-07,fallback-credit-2026-06-01"
+            ]
+        );
+    }
+
+    #[test]
+    fn force_claude_code_normalizes_body_and_uses_official_identity() {
+        let mut endpoint = endpoint(
+            ProviderProtocol::Anthropic,
+            ContextMode::OneMillion,
+            ThinkingMode::Passthrough,
+        );
+        endpoint.force_claude_code = true;
+        let request = RoutingRequest::from_value(&json!({
+            "model": "claude-opus-5",
+            "system": "project instructions",
+            "messages": [
+                {"role": "user", "content": "first"},
+                {"role": "user", "content": [{"type": "text", "text": "second"}]}
+            ],
+        }))
+        .unwrap();
+        let build = build_outbound(
+            &endpoint,
+            &request,
+            &[
+                ("x-claude-code-session-id".into(), "session-123".into()),
+                ("user-agent".into(), "pi/1.0".into()),
+                ("x-app".into(), "pi".into()),
+                (
+                    "anthropic-dangerous-direct-browser-access".into(),
+                    "false".into(),
+                ),
+            ],
+            "POST",
+            "/v1/messages",
+            "sk-key",
+            RequestPurpose::Standard,
+            None,
+            None,
+        );
+        let body: Value = serde_json::from_slice(&build.request.body).unwrap();
+        assert_eq!(header(&build, "user-agent"), vec![CLAUDE_CODE_USER_AGENT]);
+        assert_eq!(header(&build, "x-app"), vec!["cli"]);
+        assert_eq!(
+            header(&build, "anthropic-dangerous-direct-browser-access"),
+            vec!["true"]
+        );
+        let beta = header(&build, "anthropic-beta").join(",");
+        for token in ANTHROPIC_BETA_CLAUDE_CODE.split(',') {
+            assert!(beta.split(',').any(|part| part == token), "missing {token}");
+        }
+        assert!(beta.split(',').any(|part| part == "context-1m-2025-08-07"));
+        assert_eq!(body["system"][0]["text"], CLAUDE_CODE_SYSTEM_PREFIX);
+        assert_eq!(body["system"][1]["text"], "project instructions");
+        assert_eq!(body["messages"].as_array().unwrap().len(), 1);
+        assert_eq!(body["messages"][0]["content"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            body["messages"][0]["content"][1]["cache_control"]["type"],
+            "ephemeral"
+        );
+        assert_eq!(
+            body["context_management"]["edits"][0]["type"],
+            "clear_thinking_20251015"
+        );
+        assert_eq!(
+            body["metadata"]["user_id"],
+            r#"{"session_id":"session-123"}"#
+        );
+    }
+
+    #[test]
+    fn force_claude_code_disabled_preserves_anthropic_body_shape() {
+        let build = build_outbound(
+            &endpoint(
+                ProviderProtocol::Anthropic,
+                ContextMode::Standard,
+                ThinkingMode::Passthrough,
+            ),
+            &request("claude-opus-5"),
+            &[],
+            "POST",
+            "/v1/messages",
+            "sk-key",
+            RequestPurpose::Standard,
+            None,
+            None,
+        );
+        let body: Value = serde_json::from_slice(&build.request.body).unwrap();
+        assert_eq!(body["system"], "s");
+        assert_eq!(body["messages"][0]["content"], "hi");
+        assert!(body.get("context_management").is_none());
+        assert!(body.get("metadata").is_none());
+    }
+
+    #[test]
+    fn force_claude_code_is_idempotent_for_existing_cc_shape() {
+        let mut endpoint = endpoint(
+            ProviderProtocol::Anthropic,
+            ContextMode::Standard,
+            ThinkingMode::Passthrough,
+        );
+        endpoint.force_claude_code = true;
+        let request = RoutingRequest::from_value(&json!({
+            "model": "claude-opus-5",
+            "system": [{
+                "type": "text",
+                "text": CLAUDE_CODE_SYSTEM_PREFIX,
+                "cache_control": {"type": "ephemeral"}
+            }],
+            "messages": [{
+                "role": "user",
+                "content": [{
+                    "type": "text",
+                    "text": "hello",
+                    "cache_control": {"type": "ephemeral"}
+                }]
+            }],
+            "context_management": {
+                "edits": [{"type": "custom", "keep": "all"}]
+            },
+            "metadata": {"user_id": "caller"},
+        }))
+        .unwrap();
+        let build = build_outbound(
+            &endpoint,
+            &request,
+            &[],
+            "POST",
+            "/v1/messages",
+            "sk-key",
+            RequestPurpose::Standard,
+            None,
+            None,
+        );
+        let body: Value = serde_json::from_slice(&build.request.body).unwrap();
+        assert_eq!(body["system"].as_array().unwrap().len(), 1);
+        assert_eq!(body["messages"].as_array().unwrap().len(), 1);
+        assert_eq!(body["messages"][0]["content"].as_array().unwrap().len(), 1);
+        assert_eq!(body["context_management"]["edits"][0]["type"], "custom");
+        assert_eq!(body["metadata"]["user_id"], "caller");
+    }
+
+    #[test]
+    fn anthropic_compatibility_defaults_preserve_client_values() {
+        let inbound = vec![
+            ("anthropic-version".into(), "2023-06-01".into()),
+            (
+                "anthropic-dangerous-direct-browser-access".into(),
+                "false".into(),
+            ),
+            ("x-app".into(), "custom-client".into()),
+        ];
+        let build = build_outbound(
+            &endpoint(
+                ProviderProtocol::Anthropic,
+                ContextMode::Standard,
+                ThinkingMode::Passthrough,
+            ),
+            &request("claude-opus-5"),
+            &inbound,
+            "POST",
+            "/v1/messages",
+            "sk-key",
+            RequestPurpose::Standard,
+            None,
+            None,
+        );
+        assert_eq!(header(&build, "anthropic-version"), vec!["2023-06-01"]);
+        assert_eq!(
+            header(&build, "anthropic-dangerous-direct-browser-access"),
+            vec!["false"]
+        );
+        assert_eq!(header(&build, "x-app"), vec!["custom-client"]);
+    }
+
+    #[test]
+    fn pi_anthropic_request_keeps_runtime_headers_and_completes_claude_headers() {
+        let mut endpoint = endpoint(
+            ProviderProtocol::Anthropic,
+            ContextMode::OneMillion,
+            ThinkingMode::Passthrough,
+        );
+        endpoint.user_agent.anthropic = UserAgentRule {
+            mode: UserAgentMode::Override,
+            value: "claude-cli/2.1.280 (external, cli)".into(),
+        };
+        let inbound = vec![
+            ("user-agent".into(), "pi (darwin; arm64)".into()),
+            ("anthropic-version".into(), "2023-06-01".into()),
+            (
+                "anthropic-dangerous-direct-browser-access".into(),
+                "true".into(),
+            ),
+            ("x-stainless-runtime".into(), "node".into()),
+            ("x-sumpter-client".into(), "pi".into()),
+        ];
+        let build = build_outbound(
+            &endpoint,
+            &request("claude-opus-5"),
+            &inbound,
+            "POST",
+            "/v1/messages",
+            "test-key",
+            RequestPurpose::Standard,
+            None,
+            None,
+        );
+        assert_eq!(
+            header(&build, "user-agent"),
+            vec!["claude-cli/2.1.280 (external, cli)"]
+        );
+        assert_eq!(header(&build, "anthropic-version"), vec!["2023-06-01"]);
+        assert_eq!(
+            header(&build, "anthropic-dangerous-direct-browser-access"),
+            vec!["true"]
+        );
+        assert_eq!(header(&build, "x-stainless-runtime"), vec!["node"]);
+        assert_eq!(header(&build, "x-app"), vec!["cli"]);
+        assert!(header(&build, "x-sumpter-client").is_empty());
+        let beta = header(&build, "anthropic-beta");
+        assert_eq!(beta.len(), 1);
+        for token in [
+            "claude-code-20250219",
+            "context-1m-2025-08-07",
+            "mid-conversation-system-2026-04-07",
+            "fallback-credit-2026-06-01",
+        ] {
+            assert!(beta[0].split(',').any(|part| part == token));
+        }
+    }
+
+    #[test]
     fn beta_header_composition() {
         let build = build_outbound(
             &endpoint(
@@ -1636,7 +2071,7 @@ mod tests {
         assert_eq!(
             header(&build, "anthropic-beta"),
             vec![
-                "claude-code-20250219,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-1m-2025-08-07,effort-2025-11-24"
+                "claude-code-20250219,interleaved-thinking-2025-05-14,mid-conversation-system-2026-04-07,fallback-credit-2026-06-01,context-1m-2025-08-07,effort-2025-11-24"
             ]
         );
         let build = build_outbound(
@@ -1656,7 +2091,9 @@ mod tests {
         );
         assert_eq!(
             header(&build, "anthropic-beta"),
-            vec!["claude-code-20250219,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12"]
+            vec![
+                "claude-code-20250219,interleaved-thinking-2025-05-14,mid-conversation-system-2026-04-07,fallback-credit-2026-06-01"
+            ]
         );
     }
 
