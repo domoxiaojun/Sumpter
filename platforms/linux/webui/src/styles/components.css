@@ -7350,6 +7350,7 @@ button.responsive-data-card {
 .ua-rule { display: grid; grid-template-columns: minmax(0, 1fr) 110px; gap: 6px 10px; align-items: center; min-width: 0; }
 .ua-rule .form-label { margin: 0; }
 .ua-value { grid-column: 1 / -1; min-width: 0; width: 100%; box-sizing: border-box; }
+.ua-force { grid-column: 1 / -1; min-width: 0; }
 .ua-summary { white-space: normal; overflow-wrap: anywhere; font-size: 10px; }
 .route-editor { gap: 14px; }
 .route-editor-fields { border: 0; padding: 0; margin: 0; min-width: 0; }

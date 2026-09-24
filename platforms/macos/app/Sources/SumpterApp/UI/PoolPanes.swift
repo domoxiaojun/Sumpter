@@ -568,7 +568,6 @@ struct ProvidersPane: View {
                     EndpointDetailField(title: "API Key", value: row.keyStatusText)
                     EndpointDetailField(title: "粘性分组", value: row.stickyGroupText)
                     EndpointDetailField(title: "连接复用", value: row.keepAliveText)
-                    EndpointDetailField(title: "Claude Code 归一化", value: row.forceClaudeCodeText)
                     EndpointDetailField(title: "UA", value: row.userAgentText)
                     EndpointDetailField(title: "已知模型", value: row.modelCatalogText)
                     EndpointDetailField(title: "模型状态", value: row.modelCatalogStatusText)

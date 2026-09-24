@@ -124,6 +124,22 @@ test('endpoint User-Agent settings normalize, summarize, and reject unsafe value
   assert.throws(() => normalizeUserAgentSettings({ gemini: { mode: 'invalid' } }), /模式无效/);
 });
 
+test('UA 规则旁的强制官方客户端开关按协议归一', () => {
+  const settings = normalizeUserAgentSettings({
+    anthropic: { mode: 'auto', value: '', forceClient: true },
+    openai: { mode: 'auto', value: '', forceClient: false },
+  });
+  assert.deepEqual(settings, { anthropic: { mode: 'auto', forceClient: true } });
+  assert.match(userAgentSummary(settings), /Anthropic 强制 Claude Code/);
+  assert.match(
+    userAgentSummary(normalizeUserAgentSettings({ openai: { forceClient: true } })),
+    /OpenAI 强制 Codex/,
+  );
+  assert.throws(() => normalizeUserAgentSettings({ gemini: { forceClient: true } }), /不支持强制官方客户端/);
+  assert.throws(() => normalizeUserAgentSettings({ anthropic: { forceClient: 'true' } }), /布尔值/);
+  assert.doesNotMatch(providerEditorSource, /forceClaudeCode/);
+});
+
 test('Provider 新入口默认启用连接复用，编辑旧入口保留原值', () => {
   assert.match(
     providerEditorSource,

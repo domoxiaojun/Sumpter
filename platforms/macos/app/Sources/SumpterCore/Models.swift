@@ -67,18 +67,22 @@ public enum UserAgentMode: String, Codable, Sendable, Hashable {
 public struct UserAgentRule: Codable, Equatable, Sendable, Hashable {
     public var mode: UserAgentMode
     public var value: String
+    /// 强制官方客户端身份：Anthropic = Claude Code；OpenAI 仅作用于 Responses = Codex。
+    public var forceClient: Bool
 
-    public init(mode: UserAgentMode = .auto, value: String = "") {
+    public init(mode: UserAgentMode = .auto, value: String = "", forceClient: Bool = false) {
         self.mode = mode
         self.value = value
+        self.forceClient = forceClient
     }
 
-    enum CodingKeys: String, CodingKey { case mode, value }
+    enum CodingKeys: String, CodingKey { case mode, value, forceClient }
 
     public init(from decoder: Decoder) throws {
         let keyed = try decoder.container(keyedBy: CodingKeys.self)
         mode = try keyed.decodeIfPresent(UserAgentMode.self, forKey: .mode) ?? .auto
         value = try keyed.decodeIfPresent(String.self, forKey: .value) ?? ""
+        forceClient = try keyed.decodeIfPresent(Bool.self, forKey: .forceClient) ?? false
         try validate()
     }
 
@@ -87,6 +91,7 @@ public struct UserAgentRule: Codable, Equatable, Sendable, Hashable {
         var keyed = encoder.container(keyedBy: CodingKeys.self)
         try keyed.encode(mode, forKey: .mode)
         if !value.isEmpty { try keyed.encode(value, forKey: .value) }
+        if forceClient { try keyed.encode(forceClient, forKey: .forceClient) }
     }
 
     public func validate() throws {
@@ -139,16 +144,21 @@ public struct UserAgentSettings: Codable, Equatable, Sendable, Hashable {
             do { try rule.validate() }
             catch { throw UserAgentValidationError.invalid("\(name)：\(error.localizedDescription)") }
         }
+        if gemini.forceClient {
+            throw UserAgentValidationError.invalid("Gemini：不支持强制官方客户端身份")
+        }
         return Self(
-            anthropic: UserAgentRule(mode: anthropic.mode, value: anthropic.value.trimmingCharacters(in: .whitespacesAndNewlines)),
-            openai: UserAgentRule(mode: openai.mode, value: openai.value.trimmingCharacters(in: .whitespacesAndNewlines)),
+            anthropic: UserAgentRule(mode: anthropic.mode, value: anthropic.value.trimmingCharacters(in: .whitespacesAndNewlines), forceClient: anthropic.forceClient),
+            openai: UserAgentRule(mode: openai.mode, value: openai.value.trimmingCharacters(in: .whitespacesAndNewlines), forceClient: openai.forceClient),
             gemini: UserAgentRule(mode: gemini.mode, value: gemini.value.trimmingCharacters(in: .whitespacesAndNewlines))
         )
     }
 
     public var summary: String {
-        [("Anthropic", anthropic), ("OpenAI", openai), ("Gemini", gemini)].map { name, rule in
-            let state = rule.mode == .forced ? (rule.value.isEmpty ? "强覆盖（默认）" : "强覆盖") : (rule.value.isEmpty ? "默认" : "自动")
+        [("Anthropic", anthropic, "强制 Claude Code"), ("OpenAI", openai, "强制 Codex"), ("Gemini", gemini, "")].map { name, rule, forced in
+            let state = rule.forceClient && !forced.isEmpty
+                ? forced
+                : rule.mode == .forced ? (rule.value.isEmpty ? "强覆盖（默认）" : "强覆盖") : (rule.value.isEmpty ? "默认" : "自动")
             return "\(name) \(state)"
         }.joined(separator: " · ")
     }
@@ -575,8 +585,6 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
     /// 【实验】出站连接复用(sumpterd 侧生效);新入口编辑器默认 true。
     /// 入口编辑器可直接设置；旧配置缺省仍解码为 false，保存时保留省略策略。
     public var keepAlive: Bool
-    /// 对 Anthropic 入口启用 Claude Code 官方请求形状归一化。
-    public var forceClaudeCode: Bool
     enum CodingKeys: String, CodingKey {
         case id
         case name
@@ -592,7 +600,6 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         case catalog
         case mappings
         case keepAlive
-        case forceClaudeCode
     }
 
     public init(
@@ -609,8 +616,7 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         stickyGroup: String? = nil,
         catalog: ModelCatalog = ModelCatalog(),
         mappings: [ModelMapping] = [],
-        keepAlive: Bool = true,
-        forceClaudeCode: Bool = false
+        keepAlive: Bool = true
     ) {
         self.id = id
         self.name = name
@@ -626,7 +632,6 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         self.catalog = catalog
         self.mappings = mappings
         self.keepAlive = keepAlive
-        self.forceClaudeCode = forceClaudeCode
     }
 
     public init(from decoder: Decoder) throws {
@@ -653,7 +658,6 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         catalog = try keyed.decodeIfPresent(ModelCatalog.self, forKey: .catalog) ?? ModelCatalog()
         mappings = try keyed.decodeIfPresent([ModelMapping].self, forKey: .mappings) ?? []
         keepAlive = try keyed.decodeIfPresent(Bool.self, forKey: .keepAlive) ?? false
-        forceClaudeCode = try keyed.decodeIfPresent(Bool.self, forKey: .forceClaudeCode) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -693,9 +697,6 @@ public struct Endpoint: Codable, Equatable, Sendable, Identifiable {
         // 与 sumpterd 的省略策略一致:false 不落盘。
         if keepAlive {
             try keyed.encode(keepAlive, forKey: .keepAlive)
-        }
-        if forceClaudeCode {
-            try keyed.encode(forceClaudeCode, forKey: .forceClaudeCode)
         }
     }
 

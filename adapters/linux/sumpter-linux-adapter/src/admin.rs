@@ -1110,7 +1110,6 @@ mod tests {
             api_key: SYNTHETIC_KEY.into(),
             base_url: "https://api.example.com".into(),
             resolve_ip: String::new(),
-            force_claude_code: false,
             capabilities: vec![],
             catalog: None,
             enabled: true,

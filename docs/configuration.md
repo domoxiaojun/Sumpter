@@ -77,9 +77,12 @@ Linux Admin 是独立监听，默认 `127.0.0.1:57879`，由 CLI 参数或环境
 | `stickyGroup` | 相同值的入口共享会话调度组；省略时使用自身 ID |
 | `mappings` | 入口明确承接的模型；空数组不承接普通模型 |
 | `keepAlive` | 可选出站连接复用，省略或 false 为关闭 |
+| `userAgent` | 按协议的上游 UA 规则：`anthropic`、`openai`（Chat 与 Responses 共用）、`gemini`，每条含 `mode`（`auto`/`override`）、`value` 和可选 `forceClient` |
 | `catalog` | 「获取模型」的展示缓存，不会自动开放模型 |
 
 映射中的 `clientPattern` 支持精确名称和尾部 `*` 通配；精确匹配优先，通配按最长前缀。`upstreamModel` 为空表示同名。`thinking`、`context`、`effort` 和 `failoverTimeoutSeconds` 保存路由策略与兼容信息。协议一致的原生转发不会凭这些字段重写客户端正文或普通协议头，只有明确的模型映射才会替换可安全识别的模型字段；需要转成另一种协议时，这些字段参与目标请求的构造(例如 `effort` 映射到目标协议的推理档位)。
+
+`userAgent.anthropic.forceClient` 让 Anthropic 出站强制使用 Claude Code 官方身份：Claude Code UA、仅 Bearer 鉴权、`?beta=true`、`x-claude-code-session-id`、缺失时补齐的 Stainless 指纹、Claude Code system 前缀、消息块与缓存标记，以及 `metadata.user_id`（`device_id` 按入口与凭据稳定派生，`session_id` 优先沿用客户端会话，否则按入口与会话来源派生）。`userAgent.openai.forceClient` 只作用于 Responses 出站，强制 Codex 身份：`codex_exec` UA 与 `originator`、仅 Bearer 鉴权、`session-id`/`thread-id`/`x-codex-window-id`/`x-codex-installation-id` 等缺失时补齐，并在没有 `previous_response_id` 时写入 `store:false`。开启后该协议的 UA 由官方身份决定；Gemini 不支持。两者都不伪造工具桩或 `context_management`，也不读取本机 Claude Code 账户文件。
 
 「获取模型」按明确的目录协议身份探测，在总期限和数量上限内合并去重；OpenAI/Responses 默认不附带 Anthropic 目录头。Anthropic 入口另尝试通用目录，避免 CPA 的 Claude 专用别名遮住 Gemini 原始 ID。显式 UA 设置仍被保留。刷新目录不会修改 mapping 或模型组，旧目录缓存需重新获取。
 

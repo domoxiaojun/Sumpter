@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### 变更
+
+- 移除入口级 `forceClaudeCode`，改为按协议 UA 规则上的 `forceClient` 开关：Anthropic 规则强制 Claude Code 身份，OpenAI 规则仅对 Responses 出站强制 Codex 身份；Gemini 不支持。旧配置中的 `forceClaudeCode` 不再生效，需要在对应 UA 规则旁重新开启。
+
+### 新增
+
+- 强制 Claude Code 补齐 `?beta=true`、`x-claude-code-session-id`、Stainless 指纹默认值与完整 `metadata.user_id`；会话与设备身份由 Sumpter 稳定派生，不读取本机账户文件。
+- 强制 Codex 覆盖 Responses 原生透传与协议转换，补齐 `codex_exec` UA/originator、会话/线程/窗口/安装 ID 头，并在未续写服务端状态时写入 `store:false`。
+- Linux WebUI 与 macOS 入口编辑器在对应协议 UA 行旁提供开关。
+
 ## [0.4.25] - 2026-09-23
 
 ### 修复

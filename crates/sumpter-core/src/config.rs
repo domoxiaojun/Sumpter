@@ -49,6 +49,10 @@ pub struct UserAgentRule {
     pub mode: UserAgentMode,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub value: String,
+    /// 强制官方客户端身份：Anthropic 规则 = Claude Code；OpenAI 规则只作用于
+    /// Responses 出站 = Codex；Gemini 不支持。开启后 UA 由官方身份决定。
+    #[serde(rename = "forceClient", default, skip_serializing_if = "is_false")]
+    pub force_client: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -63,7 +67,7 @@ pub struct UserAgentSettings {
 
 impl UserAgentRule {
     pub fn is_empty(&self) -> bool {
-        self.value.is_empty() && self.mode == UserAgentMode::Auto
+        self.value.is_empty() && self.mode == UserAgentMode::Auto && !self.force_client
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -99,7 +103,20 @@ impl UserAgentSettings {
             rule.validate()
                 .map_err(|message| format!("userAgent.{name}: {message}"))?;
         }
+        if self.gemini.force_client {
+            return Err("userAgent.gemini: 不支持强制官方客户端身份".into());
+        }
         Ok(())
+    }
+
+    /// Anthropic 出站是否强制 Claude Code 官方请求形状。
+    pub fn force_claude_code(&self) -> bool {
+        self.anthropic.force_client
+    }
+
+    /// OpenAI Responses 出站是否强制 Codex 官方请求身份；Chat Completions 不受影响。
+    pub fn force_codex(&self) -> bool {
+        self.openai.force_client
     }
 }
 
@@ -767,9 +784,6 @@ pub struct Endpoint {
         skip_serializing_if = "String::is_empty"
     )]
     pub resolve_ip: String,
-    /// Anthropic 入口强制使用 Claude Code 官方请求形状与兼容 headers。
-    #[serde(rename = "forceClaudeCode", default, skip_serializing_if = "is_false")]
-    pub force_claude_code: bool,
     /// 同组入口共享会话粘性与冷却；None 使用自身 id 作为独立组并参与 Provider 分流。
     #[serde(rename = "stickyGroup", default, skip_serializing_if = "is_none")]
     pub sticky_group: Option<String>,
@@ -1151,6 +1165,7 @@ mod tests {
             openai: UserAgentRule {
                 mode: UserAgentMode::Override,
                 value: "gateway/1".into(),
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -1167,6 +1182,32 @@ mod tests {
             }
             .validate()
             .is_err()
+        );
+    }
+
+    #[test]
+    fn user_agent_force_client_round_trips_and_rejects_gemini() {
+        let settings: UserAgentSettings = serde_json::from_value(json!({
+            "anthropic": {"forceClient": true},
+            "openai": {"mode": "auto", "forceClient": true}
+        }))
+        .unwrap();
+        assert!(settings.force_claude_code());
+        assert!(settings.force_codex());
+        assert!(!settings.anthropic.is_empty());
+        let value = serde_json::to_value(&settings).unwrap();
+        assert_eq!(value["anthropic"]["forceClient"], true);
+        assert!(value.get("gemini").is_none());
+        assert!(settings.validate().is_ok());
+
+        let gemini: UserAgentSettings =
+            serde_json::from_value(json!({"gemini": {"forceClient": true}})).unwrap();
+        assert!(gemini.validate().unwrap_err().contains("gemini"));
+        assert!(
+            serde_json::to_value(UserAgentRule::default())
+                .unwrap()
+                .get("forceClient")
+                .is_none()
         );
     }
 }

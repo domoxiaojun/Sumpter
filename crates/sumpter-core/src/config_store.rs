@@ -748,13 +748,6 @@ fn validate_current_wire(value: &Value) -> Result<(), String> {
             .ok_or_else(|| "endpoints 必须是数组".to_string())?,
     };
     for (endpoint_index, endpoint) in endpoints.iter().enumerate() {
-        if let Some(force_claude_code) = endpoint.get("forceClaudeCode")
-            && !force_claude_code.is_boolean()
-        {
-            return Err(format!(
-                "endpoints[{endpoint_index}].forceClaudeCode 必须是布尔值"
-            ));
-        }
         if endpoint.get("searchDialect").is_some() {
             return Err(format!(
                 "endpoints[{endpoint_index}] 不允许遗留 searchDialect；WebSearch 能力由目标协议决定"
@@ -1378,18 +1371,27 @@ mod tests {
         );
 
         value["endpoints"][0]["protocol"] = json!("auto");
-        value["endpoints"][0]["forceClaudeCode"] = json!(true);
+        value["endpoints"][0]["userAgent"] = json!({
+            "anthropic": {"forceClient": true},
+            "openai": {"forceClient": true}
+        });
         assert!(validate_config_wire(&value).is_ok());
-        value["endpoints"][0]["forceClaudeCode"] = json!("true");
+        value["endpoints"][0]["userAgent"] = json!({"anthropic": {"forceClient": "true"}});
         assert!(
             validate_config_wire(&value)
                 .unwrap_err()
-                .contains("forceClaudeCode 必须是布尔值")
+                .contains("userAgent 格式无效")
+        );
+        value["endpoints"][0]["userAgent"] = json!({"gemini": {"forceClient": true}});
+        assert!(
+            validate_config_wire(&value)
+                .unwrap_err()
+                .contains("不支持强制官方客户端身份")
         );
         value["endpoints"][0]
             .as_object_mut()
             .unwrap()
-            .remove("forceClaudeCode");
+            .remove("userAgent");
         value["endpoints"][0]["protocols"] = json!(["anthropic"]);
         assert!(
             validate_config_wire(&value)

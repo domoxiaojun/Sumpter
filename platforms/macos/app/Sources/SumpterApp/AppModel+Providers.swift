@@ -20,7 +20,6 @@ extension AppModel {
         stickyGroup: String = "",
         keepAlive: Bool = true,
         livePassthrough: Bool = false,
-        forceClaudeCode: Bool = false,
         userAgent: UserAgentSettings = UserAgentSettings()
     ) async throws {
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -58,8 +57,7 @@ extension AppModel {
                 apiKey: cleanKey,
                 priority: priority,
                 stickyGroup: group.isEmpty ? nil : group,
-                keepAlive: keepAlive,
-                forceClaudeCode: forceClaudeCode
+                keepAlive: keepAlive
             ))
 
         }
@@ -77,7 +75,6 @@ extension AppModel {
         stickyGroup: String = "",
         keepAlive: Bool = false,
         livePassthrough: Bool = false,
-        forceClaudeCode: Bool = false,
         userAgent: UserAgentSettings = UserAgentSettings()
     ) async throws {
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -108,7 +105,6 @@ extension AppModel {
             config.endpoints[location.endpoint].priority = priority
             config.endpoints[location.endpoint].stickyGroup = group.isEmpty ? nil : group
             config.endpoints[location.endpoint].keepAlive = keepAlive
-            config.endpoints[location.endpoint].forceClaudeCode = forceClaudeCode
             var capabilities = config.endpoints[location.endpoint].capabilities
                 .filter { $0 != "live" }
             if livePassthrough { capabilities.append("live") }
