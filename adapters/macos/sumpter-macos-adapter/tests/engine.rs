@@ -1,5 +1,8 @@
 //! 引擎行为测试:FakeTransport 脚本化上游,对照 docs/architecture.md §8 的核心条目。
 
+#[path = "../../../../tests/contracts/request_size.rs"]
+mod request_size;
+
 #[path = "../../../../tests/contracts/source_ip.rs"]
 mod source_ip;
 
@@ -41,6 +44,7 @@ use sumpter_macos_adapter::engine::Engine;
 use sumpter_macos_adapter::outbound::{
     OutboundRequest, TransportError, UpstreamResponse, UpstreamTransport,
 };
+use sumpter_macos_adapter::server;
 use tokio::io::AsyncWriteExt;
 
 // ---------------------------------------------------------------------------
@@ -2110,6 +2114,39 @@ async fn control_endpoints_require_token_and_status_masks_auth() {
     )
     .await;
     assert_eq!(status, 403);
+}
+
+#[tokio::test]
+async fn request_size_notify_accepts_large_body_and_auth_precedes_reading() {
+    let engine = engine_with(two_endpoint_config(), FakeTransport::new());
+    let polled = Arc::new(AtomicBool::new(false));
+    let rejected = engine
+        .handle_request(
+            loopback(),
+            "POST",
+            "/__notify?token=wrong-token",
+            vec![],
+            body_with_poll_flag(polled.clone()),
+        )
+        .await;
+    assert_eq!(rejected.status().as_u16(), 403);
+    assert!(!polled.load(Ordering::SeqCst));
+
+    let mut payload = br#"{"type":"Stop","message":"large hook accepted","unused":""#.to_vec();
+    payload.resize(payload.len() + 64 * 1024 * 1024 + 1, b'x');
+    payload.extend_from_slice(br#""}"#);
+    let (status, _) = call(
+        &engine,
+        loopback(),
+        "/__notify?token=test-token",
+        vec![],
+        Bytes::from(payload),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert!(engine.runtime_snapshot().recent_events.iter().any(|event| {
+        event.kind == "notify" && event.message.as_deref() == Some("large hook accepted")
+    }));
 }
 
 /// `/__notify` 事件也走同一套来源解析:X-Real-IP / X-Forwarded-For 声明的客户端 IP

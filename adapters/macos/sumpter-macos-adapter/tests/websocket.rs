@@ -1,6 +1,9 @@
 #[path = "../../../../tests/contracts/pi_websocket.rs"]
 mod pi_websocket;
 
+#[path = "../../../../tests/contracts/websocket_size.rs"]
+mod websocket_size;
+
 #[path = "../../../../tests/contracts/realtime_websocket.rs"]
 mod realtime_websocket;
 

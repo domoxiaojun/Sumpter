@@ -676,7 +676,7 @@ pub fn admin_router(state: AdminState) -> Router {
             );
     }
     router
-        .layer(axum::extract::DefaultBodyLimit::max(4 * 1024 * 1024))
+        .layer(axum::extract::DefaultBodyLimit::disable())
         .layer(axum::middleware::from_fn(admin_security_headers))
         .route("/healthz", get(|| async { StatusCode::NO_CONTENT }))
         .with_state(state)
@@ -1200,6 +1200,49 @@ mod tests {
         let text = view.text().await.unwrap();
         assert!(!text.contains(SYNTHETIC_KEY));
 
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn request_size_admin_accepts_body_above_previous_limit() {
+        let engine = Engine::new(
+            AppConfig::bootstrap().normalized(),
+            None,
+            Arc::new(crate::outbound::ReqwestTransport::new()),
+        );
+        let dir = ConfigDir::new(std::env::temp_dir().join(format!(
+            "sumpter-admin-size-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        )));
+        let state = AdminState::new(
+            engine.clone(),
+            ProxySupervisor::new(engine),
+            dir,
+            None,
+            AdminListen::default(),
+            AdminAuth::password(b"synthetic-admin-password").unwrap(),
+        );
+        let (address, server) =
+            crate::server::serve_router(admin_router(state), "127.0.0.1:0".parse().unwrap())
+                .await
+                .unwrap();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let (cookie, csrf) = login_test_session(&client, address, "synthetic-admin-password").await;
+        let mut body = vec![b' '; 4 * 1024 * 1024 + 1];
+        body.extend_from_slice(br#"{"enabled":false}"#);
+        let response = client
+            .put(format!("http://{address}/admin/api/diagnostic-capture"))
+            .header(header::COOKIE, cookie)
+            .header("x-sumpter-csrf", csrf)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
+        assert_eq!(body["enabled"], false);
         server.shutdown().await;
     }
 

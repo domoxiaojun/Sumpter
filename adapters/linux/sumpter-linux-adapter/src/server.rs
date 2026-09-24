@@ -17,7 +17,7 @@ use futures_util::StreamExt;
 use sumpter_core::access;
 use tokio_util::sync::CancellationToken;
 
-use crate::engine::{Engine, MAX_BODY_BYTES};
+use crate::engine::Engine;
 
 #[derive(Clone)]
 struct WebSocketShutdown {
@@ -87,7 +87,7 @@ pub fn router(engine: Engine) -> Router {
         // path/method is forwarded as received; WebSocket upgrades are
         // selected by the request headers rather than a path allow-list.
         .fallback(dispatch)
-        .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
+        .layer(axum::extract::DefaultBodyLimit::disable())
         .with_state(engine)
 }
 
@@ -154,7 +154,9 @@ async fn dispatch(
                 }))
                 .unwrap_or_else(|_| Response::new(Body::empty()));
         }
-        let upgrade = select_websocket_protocol(upgrade, &pairs);
+        let upgrade = select_websocket_protocol(upgrade, &pairs)
+            .max_frame_size(usize::MAX)
+            .max_message_size(usize::MAX);
         if realtime {
             let prepared = match engine
                 .prepare_realtime_websocket(remote_ip, &path_and_query, &pairs)

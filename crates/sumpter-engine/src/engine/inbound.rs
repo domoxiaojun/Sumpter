@@ -107,8 +107,8 @@ pub fn header_pairs(headers: &HeaderMap) -> Vec<(String, String)> {
         .collect()
 }
 
-/// 请求体上限：server body-limit 与 Engine 实际读取共用，防止异常请求无限占用内存。
-pub const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
+/// 保留兼容常量；请求体不设置产品级大小上限，实际容量受可用内存约束。
+pub const MAX_BODY_BYTES: usize = usize::MAX;
 /// Gemini 入站的公共约束:必须 POST、凭据不能走 query、流式必须 `alt=sse`。
 /// 会话与辅助操作共用,避免两条路径的判定漂移。
 fn gemini_request_error(method: &str, path_and_query: &str) -> Option<(i64, &'static str)> {
@@ -432,7 +432,7 @@ impl Engine {
                         .await
                         .unwrap_or(Err("request_decompression_failed"))
                 }
-                Err(_) => Err("encoded_request_too_large"),
+                Err(_) => Err("request_body_read_failed"),
             };
             match decoded {
                 Ok(bytes) => {
@@ -680,9 +680,8 @@ impl Engine {
                 //
                 // Query model is the cheap path.  JSON raw requests may carry
                 // the model only in their body, so let those reach the native
-                // handler (which already enforces MAX_BODY_BYTES and validates
-                // the field).  Opaque/non-JSON unknown paths still short-cut
-                // to 404 without consuming arbitrary probe payloads.
+                // handler to validate the field. Opaque/non-JSON unknown paths
+                // still short-cut to 404 without consuming probe payloads.
                 let query_model = query
                     .and_then(|query| decoded_query_value(query, "model"))
                     .filter(|model| !model.trim().is_empty());
@@ -1592,11 +1591,10 @@ impl Engine {
     }
 }
 
-// The output cap also protects against decompression bombs. Error strings never
-// include request bytes or arbitrary header values.
+// Error strings never include request bytes or arbitrary header values.
 fn decode_inference_body(raw: &[u8], encoding: &str) -> Result<Vec<u8>, &'static str> {
     use std::io::Read;
-    let decoder: Box<dyn Read + '_> = match encoding.trim().to_ascii_lowercase().as_str() {
+    let mut decoder: Box<dyn Read + '_> = match encoding.trim().to_ascii_lowercase().as_str() {
         "zstd" => {
             Box::new(zstd::stream::read::Decoder::new(raw).map_err(|_| "invalid_zstd_request")?)
         }
@@ -1605,12 +1603,8 @@ fn decode_inference_body(raw: &[u8], encoding: &str) -> Result<Vec<u8>, &'static
     };
     let mut decoded = Vec::new();
     decoder
-        .take(MAX_BODY_BYTES as u64 + 1)
         .read_to_end(&mut decoded)
         .map_err(|_| "invalid_compressed_request")?;
-    if decoded.len() > MAX_BODY_BYTES {
-        return Err("decoded_request_too_large");
-    }
     Ok(decoded)
 }
 
@@ -1630,11 +1624,74 @@ mod compression_tests {
             raw
         );
         assert!(decode_inference_body(b"invalid", "zstd").is_err());
+        assert!(decode_inference_body(b"invalid", "gzip").is_err());
         assert!(decode_inference_body(raw, "br").is_err());
-        let huge = zstd::stream::encode_all(&vec![0; MAX_BODY_BYTES + 1][..], 1).unwrap();
-        assert_eq!(
-            decode_inference_body(&huge, "zstd"),
-            Err("decoded_request_too_large")
-        );
+    }
+
+    #[tokio::test]
+    async fn request_size_compressed_body_above_previous_limit_reaches_upstream() {
+        use crate::replay::{ReplayReply, ReplayTransport};
+        use std::io::Write;
+        use std::sync::Arc;
+        let content_len = 64 * 1024 * 1024 + 1;
+        let mut raw = br#"{"model":"size-model","input":""#.to_vec();
+        raw.resize(raw.len() + content_len, b'x');
+        raw.extend_from_slice(br#""}"#);
+        for encoding in ["zstd", "gzip"] {
+            let encoded = if encoding == "zstd" {
+                zstd::stream::encode_all(&raw[..], 1).unwrap()
+            } else {
+                let mut gzip =
+                    flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+                gzip.write_all(&raw).unwrap();
+                gzip.finish().unwrap()
+            };
+            assert!(decode_inference_body(&encoded, encoding).unwrap() == raw);
+            let transport = Arc::new(ReplayTransport::new([Ok(ReplayReply::ok("{}"))]));
+            let config = AppConfig::from_json(
+                &serde_json::json!({
+                    "schemaVersion":6,
+                    "listener":{"host":"127.0.0.1","port":0,"authToken":"size-test-token"},
+                    "retry":{"maxDeferredRounds":0,"sessionStickyRetries":0},
+                    "endpoints":[{"id":"size","name":"size","baseURL":"https://size.invalid",
+                        "apiKey":"synthetic-token","protocol":"openai-responses","enabled":true,
+                        "mappings":[{"clientPattern":"size-model","upstreamModel":"size-model"}]}]
+                })
+                .to_string(),
+            )
+            .unwrap()
+            .normalized();
+            let engine = Engine::new(config, None, transport.clone());
+            let response = engine
+                .handle_request(
+                    Some("127.0.0.1".parse().unwrap()),
+                    "POST",
+                    "/v1/responses",
+                    vec![
+                        ("authorization".into(), "Bearer size-test-token".into()),
+                        ("content-type".into(), "application/json".into()),
+                        ("content-encoding".into(), encoding.into()),
+                        ("content-length".into(), encoded.len().to_string()),
+                    ],
+                    Body::from(encoded),
+                )
+                .await;
+            assert_eq!(response.status(), StatusCode::OK, "{encoding}");
+            let _ = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let calls = transport.calls();
+            assert_eq!(calls.len(), 1);
+            assert!(
+                !calls[0]
+                    .headers
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case("content-encoding"))
+            );
+            let sent: Value = serde_json::from_slice(&calls[0].body).unwrap();
+            let input = sent["input"].as_str().unwrap();
+            assert_eq!(input.len(), content_len);
+            assert!(input.bytes().all(|byte| byte == b'x'));
+        }
     }
 }

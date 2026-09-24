@@ -77,8 +77,11 @@ async fn connect_upstream_websocket(
     ),
     tokio_tungstenite::tungstenite::Error,
 > {
+    let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
+        .max_frame_size(None)
+        .max_message_size(None);
     if resolve_ip.trim().is_empty() {
-        return tokio_tungstenite::connect_async(request).await;
+        return tokio_tungstenite::connect_async_with_config(request, Some(config), false).await;
     }
     let ip = resolve_ip.trim().parse::<IpAddr>().map_err(|error| {
         tokio_tungstenite::tungstenite::Error::Io(std::io::Error::new(
@@ -103,7 +106,7 @@ async fn connect_upstream_websocket(
     let socket = tokio::net::TcpStream::connect(SocketAddr::new(ip, port))
         .await
         .map_err(tokio_tungstenite::tungstenite::Error::Io)?;
-    tokio_tungstenite::client_async_tls_with_config(request, socket, None, None).await
+    tokio_tungstenite::client_async_tls_with_config(request, socket, Some(config), None).await
 }
 
 pub(super) type NativeWebSocket =

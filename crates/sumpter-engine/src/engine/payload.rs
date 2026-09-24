@@ -188,7 +188,7 @@ pub(super) fn raw_request_body_hint(method: &str, headers: &[(String, String)]) 
                 .is_some_and(|value| !value.trim().is_empty());
         }
         // Invalid framing must not make us discard a request that may contain
-        // a model; the body limit and parser provide the final validation.
+        // a model; the body reader and parser provide the final validation.
         return true;
     }
     if header_value(headers, "transfer-encoding").is_some_and(|value| !value.trim().is_empty())

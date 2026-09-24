@@ -1,5 +1,8 @@
 //! 引擎行为测试:FakeTransport 脚本化上游,对照 docs/architecture.md §8 的核心条目。
 
+#[path = "../../../../tests/contracts/request_size.rs"]
+mod request_size;
+
 #[path = "../../../../tests/contracts/source_ip.rs"]
 mod source_ip;
 
@@ -39,6 +42,7 @@ use sumpter_linux_adapter::engine::Engine;
 use sumpter_linux_adapter::outbound::{
     OutboundRequest, TransportError, UpstreamResponse, UpstreamTransport,
 };
+use sumpter_linux_adapter::server;
 use tokio::io::AsyncWriteExt;
 
 // ---------------------------------------------------------------------------

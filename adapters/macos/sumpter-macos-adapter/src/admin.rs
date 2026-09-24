@@ -130,6 +130,7 @@ pub fn admin_router(engine: Engine) -> Router {
             get(diagnostic_capture_detail),
         )
         .fallback(not_found)
+        .layer(axum::extract::DefaultBodyLimit::disable())
         .layer(axum::middleware::from_fn_with_state(engine.clone(), guard))
         .with_state(engine)
 }
@@ -2357,6 +2358,34 @@ mod tests {
             Arc::new(crate::outbound::ReqwestTransport::new()),
             "test-control-token".into(),
         )
+    }
+
+    #[tokio::test]
+    async fn request_size_admin_accepts_body_above_default_limit() {
+        let (address, server) = crate::server::serve_router(
+            admin_router(test_engine()),
+            "127.0.0.1:0".parse().unwrap(),
+        )
+        .await
+        .unwrap();
+        let mut body = vec![b' '; 2 * 1024 * 1024 + 1];
+        body.extend_from_slice(br#"{"enabled":false}"#);
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .put(format!("http://{address}/admin/diagnostic-capture"))
+            .header("x-control-token", "test-control-token")
+            .header("content-type", "application/json")
+            .body(body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
+        assert_eq!(body["enabled"], false);
+        server.abort();
+        let _ = server.await;
     }
 
     /// sticky-clear:loopback + token 门禁之下的运维动作;空库走 200 空计数,
