@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.4.26] - 2026-09-24
+
 ### 变更
 
 - 移除入口级 `forceClaudeCode`，改为按协议 UA 规则上的 `forceClient` 开关：Anthropic 规则强制 Claude Code 身份，OpenAI 规则仅对 Responses 出站强制 Codex 身份；Gemini 不支持。旧配置中的 `forceClaudeCode` 不再生效，需要在对应 UA 规则旁重新开启。

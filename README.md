@@ -4,7 +4,7 @@ Sumpter 把多个 AI 服务入口集中到一个代理地址。客户端连接 S
 
 适合同时使用多个 Provider、希望统一管理客户端连接，或需要按项目查看 AI 用量的个人与小团队。你需要自行准备可用的上游服务和 API Key。
 
-Linux 提供后台服务和 Web 管理界面；macOS 提供原生 App。两端共用 Rust 引擎和配置格式。本文对应 **0.4.25 / schema v7**，版本以 [Cargo.toml](Cargo.toml) 为准。
+Linux 提供后台服务和 Web 管理界面；macOS 提供原生 App。两端共用 Rust 引擎和配置格式。本文对应 **0.4.26 / schema v7**，版本以 [Cargo.toml](Cargo.toml) 为准。
 
 ## 可以做什么
 
