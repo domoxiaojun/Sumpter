@@ -67,22 +67,17 @@ public enum UserAgentMode: String, Codable, Sendable, Hashable {
 public struct UserAgentRule: Codable, Equatable, Sendable, Hashable {
     public var mode: UserAgentMode
     public var value: String
-    /// 强制官方客户端身份：Anthropic = Claude Code；OpenAI 仅作用于 Responses = Codex。
-    public var forceClient: Bool
-
-    public init(mode: UserAgentMode = .auto, value: String = "", forceClient: Bool = false) {
+    public init(mode: UserAgentMode = .auto, value: String = "") {
         self.mode = mode
         self.value = value
-        self.forceClient = forceClient
     }
 
-    enum CodingKeys: String, CodingKey { case mode, value, forceClient }
+    enum CodingKeys: String, CodingKey { case mode, value }
 
     public init(from decoder: Decoder) throws {
         let keyed = try decoder.container(keyedBy: CodingKeys.self)
         mode = try keyed.decodeIfPresent(UserAgentMode.self, forKey: .mode) ?? .auto
         value = try keyed.decodeIfPresent(String.self, forKey: .value) ?? ""
-        forceClient = try keyed.decodeIfPresent(Bool.self, forKey: .forceClient) ?? false
         try validate()
     }
 
@@ -91,7 +86,6 @@ public struct UserAgentRule: Codable, Equatable, Sendable, Hashable {
         var keyed = encoder.container(keyedBy: CodingKeys.self)
         try keyed.encode(mode, forKey: .mode)
         if !value.isEmpty { try keyed.encode(value, forKey: .value) }
-        if forceClient { try keyed.encode(forceClient, forKey: .forceClient) }
     }
 
     public func validate() throws {
@@ -144,21 +138,16 @@ public struct UserAgentSettings: Codable, Equatable, Sendable, Hashable {
             do { try rule.validate() }
             catch { throw UserAgentValidationError.invalid("\(name)：\(error.localizedDescription)") }
         }
-        if gemini.forceClient {
-            throw UserAgentValidationError.invalid("Gemini：不支持强制官方客户端身份")
-        }
         return Self(
-            anthropic: UserAgentRule(mode: anthropic.mode, value: anthropic.value.trimmingCharacters(in: .whitespacesAndNewlines), forceClient: anthropic.forceClient),
-            openai: UserAgentRule(mode: openai.mode, value: openai.value.trimmingCharacters(in: .whitespacesAndNewlines), forceClient: openai.forceClient),
+            anthropic: UserAgentRule(mode: anthropic.mode, value: anthropic.value.trimmingCharacters(in: .whitespacesAndNewlines)),
+            openai: UserAgentRule(mode: openai.mode, value: openai.value.trimmingCharacters(in: .whitespacesAndNewlines)),
             gemini: UserAgentRule(mode: gemini.mode, value: gemini.value.trimmingCharacters(in: .whitespacesAndNewlines))
         )
     }
 
     public var summary: String {
-        [("Anthropic", anthropic, "强制 Claude Code"), ("OpenAI", openai, "强制 Codex"), ("Gemini", gemini, "")].map { name, rule, forced in
-            let state = rule.forceClient && !forced.isEmpty
-                ? forced
-                : rule.mode == .forced ? (rule.value.isEmpty ? "强覆盖（默认）" : "强覆盖") : (rule.value.isEmpty ? "默认" : "自动")
+        [("Anthropic", anthropic), ("OpenAI", openai), ("Gemini", gemini)].map { name, rule in
+            let state = rule.mode == .forced ? (rule.value.isEmpty ? "强覆盖（默认）" : "强覆盖") : (rule.value.isEmpty ? "默认" : "自动")
             return "\(name) \(state)"
         }.joined(separator: " · ")
     }

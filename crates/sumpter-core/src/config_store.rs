@@ -1371,27 +1371,6 @@ mod tests {
         );
 
         value["endpoints"][0]["protocol"] = json!("auto");
-        value["endpoints"][0]["userAgent"] = json!({
-            "anthropic": {"forceClient": true},
-            "openai": {"forceClient": true}
-        });
-        assert!(validate_config_wire(&value).is_ok());
-        value["endpoints"][0]["userAgent"] = json!({"anthropic": {"forceClient": "true"}});
-        assert!(
-            validate_config_wire(&value)
-                .unwrap_err()
-                .contains("userAgent 格式无效")
-        );
-        value["endpoints"][0]["userAgent"] = json!({"gemini": {"forceClient": true}});
-        assert!(
-            validate_config_wire(&value)
-                .unwrap_err()
-                .contains("不支持强制官方客户端身份")
-        );
-        value["endpoints"][0]
-            .as_object_mut()
-            .unwrap()
-            .remove("userAgent");
         value["endpoints"][0]["protocols"] = json!(["anthropic"]);
         assert!(
             validate_config_wire(&value)

@@ -1,6 +1,6 @@
 export const USER_AGENT_PROTOCOLS = Object.freeze([
-  { key: 'anthropic', label: 'Anthropic', forceClient: '强制 Claude Code' },
-  { key: 'openai', label: 'OpenAI（Chat / Responses）', forceClient: '强制 Codex（仅 Responses）' },
+  { key: 'anthropic', label: 'Anthropic' },
+  { key: 'openai', label: 'OpenAI（Chat / Responses）' },
   { key: 'gemini', label: 'Gemini' },
 ]);
 
@@ -10,7 +10,7 @@ export function normalizeUserAgentSettings(value) {
     throw new TypeError('User-Agent 配置必须是对象');
   }
   const result = {};
-  for (const { key, label, forceClient: forceLabel } of USER_AGENT_PROTOCOLS) {
+  for (const { key, label } of USER_AGENT_PROTOCOLS) {
     const rule = value[key];
     if (rule === undefined) continue;
     if (!rule || typeof rule !== 'object' || Array.isArray(rule)) {
@@ -22,24 +22,19 @@ export function normalizeUserAgentSettings(value) {
     if (typeof raw !== 'string') throw new TypeError(`${label} UA 必须是字符串`);
     if (new TextEncoder().encode(raw).length > 512) throw new TypeError(`${label} UA 不能超过 512 字节`);
     if (/[\x00-\x1f\x7f]/.test(raw)) throw new TypeError(`${label} UA 不能包含换行或控制字符`);
-    const forceClient = rule.forceClient === undefined ? false : rule.forceClient;
-    if (typeof forceClient !== 'boolean') throw new TypeError(`${label} 强制客户端开关必须是布尔值`);
-    if (forceClient && !forceLabel) throw new TypeError(`${label} 不支持强制官方客户端身份`);
     const text = raw.trim();
-    if (mode === 'override' || text || forceClient) {
-      result[key] = { mode, ...(text ? { value: text } : {}), ...(forceClient ? { forceClient: true } : {}) };
+    if (mode === 'override' || text) {
+      result[key] = { mode, ...(text ? { value: text } : {}) };
     }
   }
   return result;
 }
 
 export function userAgentSummary(settings = {}) {
-  return USER_AGENT_PROTOCOLS.map(({ key, forceClient }) => {
+  return USER_AGENT_PROTOCOLS.map(({ key }) => {
     const rule = settings[key];
     const name = { anthropic: 'Anthropic', openai: 'OpenAI', gemini: 'Gemini' }[key];
-    const status = rule?.forceClient === true && forceClient
-      ? forceClient
-      : rule?.mode === 'override' ? (rule.value ? '强覆盖' : '强覆盖（默认）') : (rule?.value ? '自动' : '默认');
+    const status = rule?.mode === 'override' ? (rule.value ? '强覆盖' : '强覆盖（默认）') : (rule?.value ? '自动' : '默认');
     return `${name} ${status}`;
   }).join(' · ');
 }

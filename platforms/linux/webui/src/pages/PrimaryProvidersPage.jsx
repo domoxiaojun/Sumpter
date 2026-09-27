@@ -1062,8 +1062,8 @@ export function PrimaryProvidersPage() {
     let resolveIP = endpoint?.resolveIP || '';
     let protocol = normalizeEndpointProtocol(endpoint?.protocol, 'auto');
     let userAgent = {
-      anthropic: { mode: endpoint?.userAgent?.anthropic?.mode || 'auto', value: endpoint?.userAgent?.anthropic?.value || '', forceClient: endpoint?.userAgent?.anthropic?.forceClient === true },
-      openai: { mode: endpoint?.userAgent?.openai?.mode || 'auto', value: endpoint?.userAgent?.openai?.value || '', forceClient: endpoint?.userAgent?.openai?.forceClient === true },
+      anthropic: { mode: endpoint?.userAgent?.anthropic?.mode || 'auto', value: endpoint?.userAgent?.anthropic?.value || '' },
+      openai: { mode: endpoint?.userAgent?.openai?.mode || 'auto', value: endpoint?.userAgent?.openai?.value || '' },
       gemini: { mode: endpoint?.userAgent?.gemini?.mode || 'auto', value: endpoint?.userAgent?.gemini?.value || '' },
     };
     let apiKey = '';

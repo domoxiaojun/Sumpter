@@ -18,8 +18,6 @@ struct ProviderAccountEditorSheet: View {
     @State private var stickyGroup: String
     @State private var keepAlive: Bool
     @State private var livePassthrough: Bool
-    @State private var anthropicForceClient: Bool
-    @State private var openaiForceClient: Bool
     @State private var anthropicUA: String
     @State private var openaiUA: String
     @State private var geminiUA: String
@@ -51,8 +49,6 @@ struct ProviderAccountEditorSheet: View {
         // 新入口默认开启；编辑已有入口时保留磁盘中的显式值。
         _keepAlive = State(initialValue: row?.keepAlive ?? true)
         _livePassthrough = State(initialValue: row?.livePassthrough ?? false)
-        _anthropicForceClient = State(initialValue: row?.userAgent.anthropic.forceClient ?? false)
-        _openaiForceClient = State(initialValue: row?.userAgent.openai.forceClient ?? false)
         _anthropicUA = State(initialValue: row?.userAgent.anthropic.value ?? "")
         _openaiUA = State(initialValue: row?.userAgent.openai.value ?? "")
         _geminiUA = State(initialValue: row?.userAgent.gemini.value ?? "")
@@ -132,16 +128,13 @@ struct ProviderAccountEditorSheet: View {
                 }
                 FormLine(title: "上游 User-Agent") {
                     VStack(alignment: .leading, spacing: 6) {
-                        userAgentLine("Anthropic", mode: $anthropicUAMode, value: $anthropicUA, forceClient: $anthropicForceClient, forceLabel: "强制 Claude Code")
-                        userAgentLine("OpenAI（Chat / Responses）", mode: $openaiUAMode, value: $openaiUA, forceClient: $openaiForceClient, forceLabel: "强制 Codex（仅 Responses）")
+                        userAgentLine("Anthropic", mode: $anthropicUAMode, value: $anthropicUA)
+                        userAgentLine("OpenAI（Chat / Responses）", mode: $openaiUAMode, value: $openaiUA)
                         userAgentLine("Gemini", mode: $geminiUAMode, value: $geminiUA)
                         Text("自动保留客户端非空 UA，缺失时补填写值；自动留空沿用现有行为，强覆盖留空使用默认 UA。最多 512 字节，不能包含换行或控制字符。")
                             .font(.caption).foregroundStyle(.secondary)
                         Text("获取模型：固定协议使用对应 UA；自动协议依次尝试不同 UA，总超时 12 秒。")
                             .font(.caption).foregroundStyle(.secondary)
-                        Text("强制 Claude Code：Anthropic 出站对齐 Claude Code 的 UA、鉴权、会话/设备身份、system 前缀、消息块与缓存标记。强制 Codex：仅 Responses 出站对齐 Codex 的 UA、originator、会话头与 store:false。均不伪造工具桩。")
-                            .font(.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 FormLine(title: "优先级") {
@@ -264,8 +257,8 @@ struct ProviderAccountEditorSheet: View {
 
     private var userAgentSettings: UserAgentSettings {
         UserAgentSettings(
-            anthropic: UserAgentRule(mode: anthropicUAMode, value: anthropicUA, forceClient: anthropicForceClient),
-            openai: UserAgentRule(mode: openaiUAMode, value: openaiUA, forceClient: openaiForceClient),
+            anthropic: UserAgentRule(mode: anthropicUAMode, value: anthropicUA),
+            openai: UserAgentRule(mode: openaiUAMode, value: openaiUA),
             gemini: UserAgentRule(mode: geminiUAMode, value: geminiUA)
         )
     }
@@ -274,30 +267,19 @@ struct ProviderAccountEditorSheet: View {
     private func userAgentLine(
         _ label: String,
         mode: Binding<UserAgentMode>,
-        value: Binding<String>,
-        forceClient: Binding<Bool>? = nil,
-        forceLabel: String = ""
+        value: Binding<String>
     ) -> some View {
-        let forced = forceClient?.wrappedValue ?? false
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(label).font(.caption)
                 Spacer(minLength: 4)
-                if let forceClient {
-                    Toggle(forceLabel, isOn: forceClient)
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-                        .font(.caption)
-                }
                 Picker("\(label) UA 模式", selection: mode) {
                     Text("自动").tag(UserAgentMode.auto)
                     Text("强覆盖").tag(UserAgentMode.forced)
                 }.labelsHidden().frame(width: 90)
-                .disabled(forced)
             }
-            TextField(forced ? "已由官方客户端身份决定" : "填写 UA，留空沿用默认行为", text: value)
+            TextField("填写 UA，留空沿用默认行为", text: value)
                 .accessibilityLabel("\(label) User-Agent")
-                .disabled(forced)
         }
     }
 }
