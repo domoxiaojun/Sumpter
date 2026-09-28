@@ -17,6 +17,7 @@ mod http_response;
 pub mod inbound;
 pub mod lifecycle;
 mod payload;
+mod performance;
 mod protocol;
 mod runtime_api;
 mod sessions;

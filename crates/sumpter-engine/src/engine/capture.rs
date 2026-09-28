@@ -518,6 +518,7 @@ impl Engine {
             .iter()
             .map(|header| header.name.len() + header.value.len())
             .sum::<usize>();
+        let _timer = super::performance::StageTimer::new("capture_inbound", body.len());
         let (inbound_body, body_truncated) =
             diagnostic_text(body, remaining.saturating_sub(header_bytes));
         let truncated = headers_truncated || body_truncated;
@@ -599,6 +600,7 @@ impl Engine {
             .iter()
             .map(|header| header.name.len() + header.value.len())
             .sum::<usize>();
+        let _timer = super::performance::StageTimer::new("capture_outbound", request.body.len());
         let (outbound_body, body_truncated) =
             diagnostic_text(&request.body, remaining.saturating_sub(header_bytes));
         let truncated = url_truncated || headers_truncated || body_truncated;

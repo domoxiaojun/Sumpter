@@ -1,6 +1,7 @@
 //! 出站请求构造:header 过滤/强制注入、anthropic body 改写(model/thinking/effort)、
 //! 桥接 body 与路径。纯函数,对齐 Swift `makeOutboundRequest`(docs/architecture.md §3-4)。
 
+use bytes::Bytes;
 use serde_json::{Value, json};
 use sumpter_core::bridge;
 use sumpter_core::bridge_gemini;
@@ -317,10 +318,10 @@ impl PassthroughKind {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct PassthroughRequest<'a> {
     pub kind: PassthroughKind,
-    pub body: &'a [u8],
+    pub body: Bytes,
     pub content_type: Option<&'a str>,
     pub stream: bool,
 }
@@ -370,6 +371,35 @@ pub fn build_outbound(
     // 本会话上一轮真实收到的 Gemini assistant parts(含签名);只在目标是 Gemini
     // 时用得上。
     gemini_replay: Option<&bridge_gemini::GeminiReplay>,
+) -> OutboundBuild {
+    build_outbound_with_json(
+        endpoint,
+        request,
+        inbound_headers,
+        inbound_method,
+        inbound_path_and_query,
+        api_key,
+        purpose,
+        passthrough,
+        gemini_replay,
+        None,
+    )
+}
+
+/// The engine already parsed conversation JSON. Borrow it for model checks
+/// and only clone/encode when an actual rewrite is required.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_outbound_with_json(
+    endpoint: &PlannedEndpoint,
+    request: &RoutingRequest,
+    inbound_headers: &[(String, String)],
+    inbound_method: &str,
+    inbound_path_and_query: &str,
+    api_key: &str,
+    purpose: RequestPurpose,
+    passthrough: Option<PassthroughRequest<'_>>,
+    gemini_replay: Option<&bridge_gemini::GeminiReplay>,
+    parsed_json: Option<&Value>,
 ) -> OutboundBuild {
     let raw_passthrough = passthrough.as_ref().is_some_and(|request| {
         matches!(
@@ -503,9 +533,9 @@ pub fn build_outbound(
         }
         let passthrough_body =
             if passthrough.kind == PassthroughKind::AlphaSearch && !raw_passthrough {
-                sanitize_alpha_search_body(passthrough.body)
+                sanitize_alpha_search_body(&passthrough.body)
             } else {
-                passthrough.body.to_vec()
+                passthrough.body.clone()
             };
         let path_and_query = if passthrough.kind == PassthroughKind::Realtime {
             rewrite_realtime_model_query(
@@ -552,6 +582,7 @@ pub fn build_outbound(
                     &endpoint.upstream_model,
                     passthrough.content_type,
                     passthrough.kind,
+                    parsed_json.filter(|_| passthrough.kind != PassthroughKind::AlphaSearch),
                 ),
                 keep_alive: endpoint.keep_alive,
             },
@@ -591,19 +622,21 @@ pub fn build_outbound(
                     server_retrieval,
                 },
             );
-            (join_paths(&base_path, &messages_path), body)
+            (join_paths(&base_path, &messages_path), Bytes::from(body))
         }
         ProviderProtocol::OpenAI => {
             set_header(&mut headers, "accept", "text/event-stream");
             (
                 openai_suffix_path(&base_path, "/chat/completions"),
-                serde_json::to_vec(&bridge::make_openai_chat_body(
-                    request,
-                    &endpoint.upstream_model,
-                    effort,
-                    server_retrieval,
-                ))
-                .unwrap_or_default(),
+                Bytes::from(
+                    serde_json::to_vec(&bridge::make_openai_chat_body(
+                        request,
+                        &endpoint.upstream_model,
+                        effort,
+                        server_retrieval,
+                    ))
+                    .unwrap_or_default(),
+                ),
             )
         }
         ProviderProtocol::OpenAIResponses => {
@@ -616,7 +649,7 @@ pub fn build_outbound(
             );
             (
                 openai_suffix_path(&base_path, "/responses"),
-                serde_json::to_vec(&body).unwrap_or_default(),
+                Bytes::from(serde_json::to_vec(&body).unwrap_or_default()),
             )
         }
         ProviderProtocol::Gemini => {
@@ -633,7 +666,7 @@ pub fn build_outbound(
                 &format!("/v1beta/models/{model}:streamGenerateContent?alt=sse"),
             );
             let body = bridge_gemini::try_make_gemini_body(request, effort, gemini_replay)
-                .map(|body| serde_json::to_vec(&body).unwrap_or_default())
+                .map(|body| Bytes::from(serde_json::to_vec(&body).unwrap_or_default()))
                 // checker 已用同一份映射校验过这条请求,构建失败在正常路径上不可达。
                 .unwrap_or_default();
             (path, body)
@@ -684,19 +717,21 @@ pub fn apply_user_agent(
 
 /// Codex Alpha Search 的 prompt cache 字段属于 Responses 提交层，CPA 在转发
 /// 独立搜索端点前会移除；保留其它未知字段，避免代理追着客户端版本枚举参数。
-fn sanitize_alpha_search_body(raw: &[u8]) -> Vec<u8> {
+fn sanitize_alpha_search_body(raw: &Bytes) -> Bytes {
     let Ok(mut value) = serde_json::from_slice::<Value>(raw) else {
-        return raw.to_vec();
+        return raw.clone();
     };
     let Some(object) = value.as_object_mut() else {
-        return raw.to_vec();
+        return raw.clone();
     };
     let removed = object.remove("prompt_cache_key").is_some()
         | object.remove("prompt_cache_retention").is_some();
     if !removed {
-        return raw.to_vec();
+        return raw.clone();
     }
-    serde_json::to_vec(&value).unwrap_or_else(|_| raw.to_vec())
+    serde_json::to_vec(&value)
+        .map(Bytes::from)
+        .unwrap_or_else(|_| raw.clone())
 }
 
 /// 透传体只做必要的模型改写(其它字段——tools、reasoning、include、metadata
@@ -704,13 +739,14 @@ fn sanitize_alpha_search_body(raw: &[u8]) -> Vec<u8> {
 /// `session.model`，两者都保持原有 JSON 结构。解析失败则原样发出，让上游自己
 /// 拒绝，不在代理侧擅自造 body。
 fn rewrite_passthrough_model(
-    raw: &[u8],
+    raw: &Bytes,
     upstream_model: &str,
     content_type: Option<&str>,
     kind: PassthroughKind,
-) -> Vec<u8> {
+    parsed_json: Option<&Value>,
+) -> Bytes {
     if upstream_model.is_empty() {
-        return raw.to_vec();
+        return raw.clone();
     }
     // Without an explicit JSON media type the payload is opaque.  In
     // particular, a vendor may send JSON-looking bytes as a signed or
@@ -718,20 +754,45 @@ fn rewrite_passthrough_model(
     // the promised raw relay.  Callers that want model mapping must declare
     // application/json (parameters such as charset are accepted).
     let Some(content_type) = content_type else {
-        return raw.to_vec();
+        return raw.clone();
     };
     if !content_type
         .trim()
         .to_ascii_lowercase()
         .starts_with("application/json")
     {
-        return raw.to_vec();
+        return raw.clone();
     }
-    let Ok(mut value) = serde_json::from_slice::<Value>(raw) else {
-        return raw.to_vec();
+    if matches!(
+        kind,
+        PassthroughKind::Files
+            | PassthroughKind::Videos
+            | PassthroughKind::Models
+            | PassthroughKind::GeminiGenerate
+            | PassthroughKind::GeminiSession
+    ) {
+        return raw.clone();
+    }
+    let original = match parsed_json {
+        Some(value) => std::borrow::Cow::Borrowed(value),
+        None => {
+            let Ok(value) = serde_json::from_slice::<Value>(raw) else {
+                return raw.clone();
+            };
+            std::borrow::Cow::Owned(value)
+        }
     };
+    let model = original.get("model").and_then(Value::as_str).or_else(|| {
+        matches!(kind, PassthroughKind::Raw | PassthroughKind::Realtime)
+            .then(|| original.pointer("/session/model").and_then(Value::as_str))
+            .flatten()
+    });
+    if model == Some(upstream_model) {
+        return raw.clone();
+    }
+    let mut value = original.into_owned();
     let Some(object) = value.as_object_mut() else {
-        return raw.to_vec();
+        return raw.clone();
     };
     match kind {
         // Files requests have no model field; routing uses a configured
@@ -741,7 +802,7 @@ fn rewrite_passthrough_model(
                 if model != upstream_model {
                     object.insert("model".into(), json!(upstream_model));
                 } else {
-                    return raw.to_vec();
+                    return raw.clone();
                 }
             } else if let Some(session) = object.get_mut("session").and_then(Value::as_object_mut)
                 && let Some(model) = session.get("model").and_then(Value::as_str)
@@ -749,17 +810,17 @@ fn rewrite_passthrough_model(
                 if model != upstream_model {
                     session.insert("model".into(), json!(upstream_model));
                 } else {
-                    return raw.to_vec();
+                    return raw.clone();
                 }
             } else {
-                return raw.to_vec();
+                return raw.clone();
             }
         }
         PassthroughKind::Files | PassthroughKind::Videos | PassthroughKind::Models => {
-            return raw.to_vec();
+            return raw.clone();
         }
         // Gemini 的模型在 URL 上,正文里没有可改写字段 —— 原样转发。
-        PassthroughKind::GeminiGenerate | PassthroughKind::GeminiSession => return raw.to_vec(),
+        PassthroughKind::GeminiGenerate | PassthroughKind::GeminiSession => return raw.clone(),
         PassthroughKind::Realtime => {
             let mut changed = false;
             if object.get("model").is_some_and(Value::is_string) {
@@ -782,7 +843,7 @@ fn rewrite_passthrough_model(
                 }
             }
             if !changed {
-                return raw.to_vec();
+                return raw.clone();
             }
         }
         _ => {
@@ -791,12 +852,14 @@ fn rewrite_passthrough_model(
                 .and_then(Value::as_str)
                 .is_some_and(|model| model == upstream_model)
             {
-                return raw.to_vec();
+                return raw.clone();
             }
             object.insert("model".into(), json!(upstream_model));
         }
     }
-    serde_json::to_vec(&value).unwrap_or_else(|_| raw.to_vec())
+    serde_json::to_vec(&value)
+        .map(Bytes::from)
+        .unwrap_or_else(|_| raw.clone())
 }
 
 fn set_header(headers: &mut Vec<(String, String)>, name: &str, value: &str) {
@@ -1419,7 +1482,7 @@ mod tests {
                 RequestPurpose::Standard,
                 Some(PassthroughRequest {
                     kind,
-                    body: b"{}",
+                    body: Bytes::from_static(b"{}"),
                     content_type: Some("application/json"),
                     stream: false,
                 }),
@@ -1476,7 +1539,7 @@ mod tests {
             RequestPurpose::Standard,
             Some(PassthroughRequest {
                 kind: PassthroughKind::Realtime,
-                body: b"v=0\r\n",
+                body: Bytes::from_static(b"v=0\r\n"),
                 content_type: Some("application/sdp"),
                 stream: false,
             }),
@@ -1583,7 +1646,7 @@ mod tests {
                 RequestPurpose::Standard,
                 Some(PassthroughRequest {
                     kind,
-                    body: b"{}",
+                    body: Bytes::from_static(b"{}"),
                     content_type: Some("application/json"),
                     stream: false,
                 }),
@@ -2332,7 +2395,7 @@ mod tests {
             RequestPurpose::Standard,
             Some(PassthroughRequest {
                 kind: PassthroughKind::GeminiGenerate,
-                body,
+                body: Bytes::copy_from_slice(body),
                 content_type: Some("application/json"),
                 stream: true,
             }),
@@ -2342,7 +2405,7 @@ mod tests {
             built.request.path_and_query,
             "/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse"
         );
-        assert_eq!(built.request.body, body);
+        assert_eq!(built.request.body.as_ref(), body);
         assert!(
             built
                 .request
@@ -2376,7 +2439,7 @@ mod tests {
             RequestPurpose::Standard,
             Some(PassthroughRequest {
                 kind: PassthroughKind::Videos,
-                body: &[],
+                body: Bytes::from_static(&[]),
                 content_type: None,
                 stream: false,
             }),
@@ -2388,7 +2451,7 @@ mod tests {
         );
         assert_eq!(header(&build, "accept"), vec!["video/mp4"]);
         assert!(header(&build, "content-type").is_empty());
-        assert_eq!(build.request.body, Vec::<u8>::new());
+        assert_eq!(build.request.body.as_ref(), Vec::<u8>::new());
     }
 
     #[test]
@@ -2411,7 +2474,7 @@ mod tests {
             RequestPurpose::Standard,
             Some(PassthroughRequest {
                 kind: PassthroughKind::Realtime,
-                body: b"v=0\r\n",
+                body: Bytes::from_static(b"v=0\r\n"),
                 content_type: Some("application/sdp"),
                 stream: false,
             }),
@@ -2419,7 +2482,7 @@ mod tests {
         );
         assert_eq!(header(&build, "accept"), vec!["application/sdp"]);
         assert_eq!(header(&build, "content-type"), vec!["application/sdp"]);
-        assert_eq!(build.request.body, b"v=0\r\n");
+        assert_eq!(build.request.body.as_ref(), b"v=0\r\n");
     }
 
     #[test]
@@ -2439,7 +2502,7 @@ mod tests {
             RequestPurpose::Standard,
             Some(PassthroughRequest {
                 kind: PassthroughKind::Realtime,
-                body: br#"{"session":{"model":"gpt-realtime"}}"#,
+                body: Bytes::from_static(br#"{"session":{"model":"gpt-realtime"}}"#),
                 content_type: Some("application/json"),
                 stream: false,
             }),
@@ -2459,7 +2522,7 @@ mod tests {
             RequestPurpose::Standard,
             Some(PassthroughRequest {
                 kind: PassthroughKind::Realtime,
-                body: b"v=0\r\n",
+                body: Bytes::from_static(b"v=0\r\n"),
                 content_type: Some("application/sdp"),
                 stream: false,
             }),
@@ -2528,13 +2591,13 @@ mod tests {
             RequestPurpose::Standard,
             Some(PassthroughRequest {
                 kind: PassthroughKind::Raw,
-                body: raw,
+                body: Bytes::copy_from_slice(raw),
                 content_type: None,
                 stream: false,
             }),
             None,
         );
-        assert_eq!(build.request.body, raw);
+        assert_eq!(build.request.body.as_ref(), raw);
         assert!(header(&build, "content-type").is_empty());
     }
 
@@ -2561,7 +2624,7 @@ mod tests {
             RequestPurpose::Standard,
             Some(PassthroughRequest {
                 kind: PassthroughKind::Raw,
-                body: b"payload",
+                body: Bytes::from_static(b"payload"),
                 content_type: None,
                 stream: false,
             }),

@@ -8,9 +8,7 @@ use sumpter_core::bridge_gemini;
 use sumpter_core::bridge_in;
 use sumpter_core::config::{AppConfig, ProviderProtocol};
 use sumpter_core::events::ClientKind;
-use sumpter_core::routing::{
-    PlannedEndpoint, RequestPurpose, RouteMode, RoutePlanner, RoutingRequest,
-};
+use sumpter_core::routing::{RoutePlanner, RoutingRequest};
 
 use super::context::current_request_context;
 use super::payload::metadata_json_body_hint;
@@ -62,49 +60,23 @@ pub(super) fn required_native_protocol(kind: PassthroughKind) -> Option<Provider
     }
 }
 
-pub(super) fn translation_supported(
+/// Check the source dialect once per request. Target-specific checks are
+/// cached separately by protocol and server-retrieval mode in dispatch.
+pub(super) fn check_source_translation(
     source_format: ProviderProtocol,
-    endpoint: &PlannedEndpoint,
     request: &RoutingRequest,
-    inbound_body: &[u8],
-    purpose: RequestPurpose,
+    inbound_json: Option<&Value>,
 ) -> Result<(), bridge::TranslationError> {
-    if endpoint.route_mode == RouteMode::Native {
+    if source_format == ProviderProtocol::Anthropic {
         return Ok(());
     }
+    let body = inbound_json
+        .ok_or_else(|| bridge::TranslationError::InvalidInput("body is not JSON".into()))?;
     match source_format {
-        ProviderProtocol::Anthropic => bridge::check_anthropic_translation(
-            request,
-            endpoint.protocol,
-            request_build::server_retrieval_enabled(endpoint, request, purpose),
-        ),
-        ProviderProtocol::OpenAI | ProviderProtocol::OpenAIResponses => {
-            let body = serde_json::from_slice::<Value>(inbound_body)
-                .map_err(|_| bridge::TranslationError::InvalidInput("body is not JSON".into()))?;
-            match source_format {
-                ProviderProtocol::OpenAI => bridge_in::check_chat_to_anthropic(&body),
-                ProviderProtocol::OpenAIResponses => bridge_in::check_responses_to_anthropic(&body),
-                ProviderProtocol::Anthropic => unreachable!(),
-                ProviderProtocol::Gemini => unreachable!(),
-            }?;
-            bridge::check_anthropic_translation(
-                request,
-                endpoint.protocol,
-                request_build::server_retrieval_enabled(endpoint, request, purpose),
-            )
-        }
-        ProviderProtocol::Gemini => {
-            // Gemini 会话请求经 `gemini_to_anthropic` 归一化后同样是一份
-            // Anthropic 中间格式,再按目标协议走同一道能力检查。
-            let body = serde_json::from_slice::<Value>(inbound_body)
-                .map_err(|_| bridge::TranslationError::InvalidInput("body is not JSON".into()))?;
-            bridge_gemini::check_gemini_to_anthropic(&body, &request.model)?;
-            bridge::check_anthropic_translation(
-                request,
-                endpoint.protocol,
-                request_build::server_retrieval_enabled(endpoint, request, purpose),
-            )
-        }
+        ProviderProtocol::Anthropic => Ok(()),
+        ProviderProtocol::OpenAI => bridge_in::check_chat_to_anthropic(body),
+        ProviderProtocol::OpenAIResponses => bridge_in::check_responses_to_anthropic(body),
+        ProviderProtocol::Gemini => bridge_gemini::check_gemini_to_anthropic(body, &request.model),
     }
 }
 

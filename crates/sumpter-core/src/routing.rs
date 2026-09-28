@@ -33,6 +33,20 @@ impl RoutingRequest {
     /// 从请求 body 的 JSON 构建;非 object 返回 None(引擎回 400 invalid_request)。
     pub fn from_value(value: &Value) -> Option<Self> {
         let object = value.as_object()?;
+        Self::from_object(object.clone())
+    }
+
+    /// Build a routing request from an owned JSON value.  The original object
+    /// becomes `raw` directly, avoiding a second full-tree clone at the
+    /// boundary where callers have already finished inspecting the value.
+    pub fn from_value_owned(value: Value) -> Option<Self> {
+        match value {
+            Value::Object(object) => Self::from_object(object),
+            _ => None,
+        }
+    }
+
+    fn from_object(mut object: Map<String, Value>) -> Option<Self> {
         let parsed = model_name::parse(object.get("model").and_then(Value::as_str).unwrap_or(""));
         let model = match parsed.effort {
             Some(effort) => format!("{}({})", parsed.base_name, effort.as_str()),
@@ -69,14 +83,13 @@ impl RoutingRequest {
                     .collect()
             })
             .unwrap_or_default();
-        let mut raw = object.clone();
-        raw.insert("model".into(), Value::String(model.clone()));
+        object.insert("model".into(), Value::String(model.clone()));
         Some(Self {
             model,
             system,
             messages,
             tools,
-            raw,
+            raw: object,
         })
     }
 }
@@ -142,6 +155,16 @@ pub mod inspector {
             return text.to_string();
         }
         python_style_json_string(&message.content)
+    }
+
+    pub(super) fn first_user_text_prefix(request: &RoutingRequest, limit: usize) -> String {
+        let Some(message) = request.messages.iter().find(|m| m.role == "user") else {
+            return String::new();
+        };
+        if let Some(text) = message.content.as_str() {
+            return text.chars().take(limit).collect();
+        }
+        python_style_json_prefix(&message.content, limit)
     }
 
     /// 工具类型前缀判定:存在目标前缀工具、且**不存在**客户端自定义工具。
@@ -582,6 +605,145 @@ fn quoted(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
 }
 
+/// Render exactly the existing fingerprint prefix without serializing image
+/// data or message tails that cannot contribute to it. This bounds only the
+/// already-limited fingerprint, never the forwarded request.
+fn python_style_json_prefix(value: &Value, limit: usize) -> String {
+    struct Prefix {
+        text: String,
+        remaining: usize,
+    }
+    impl Prefix {
+        fn append(&mut self, text: &str) {
+            for ch in text.chars().take(self.remaining) {
+                self.text.push(ch);
+                self.remaining -= 1;
+            }
+        }
+
+        fn quoted(&mut self, text: &str) {
+            // Escaping never shortens a string. At most `remaining` source
+            // characters can contribute; any synthetic closing quote after
+            // a shortened string is beyond the output prefix.
+            let prefix: String = text.chars().take(self.remaining).collect();
+            self.append(&quoted(&prefix));
+        }
+
+        fn value(&mut self, value: &Value) {
+            if self.remaining == 0 {
+                return;
+            }
+            match value {
+                Value::String(text) => self.quoted(text),
+                Value::Array(items) => {
+                    self.append("[");
+                    for (index, item) in items.iter().enumerate() {
+                        if self.remaining == 0 {
+                            break;
+                        }
+                        if index > 0 {
+                            self.append(", ");
+                        }
+                        self.value(item);
+                    }
+                    self.append("]");
+                }
+                Value::Object(object) => {
+                    const PREFERRED: [&str; 8] = [
+                        "type",
+                        "text",
+                        "content",
+                        "role",
+                        "id",
+                        "name",
+                        "input",
+                        "tool_use_id",
+                    ];
+                    let preferred = PREFERRED
+                        .iter()
+                        .copied()
+                        .filter(|key| object.contains_key(*key));
+                    let mut rest: Vec<&str> = object
+                        .keys()
+                        .map(String::as_str)
+                        .filter(|key| !PREFERRED.contains(key))
+                        .collect();
+                    rest.sort_unstable();
+                    self.append("{");
+                    for (index, key) in preferred.chain(rest).enumerate() {
+                        if self.remaining == 0 {
+                            break;
+                        }
+                        if index > 0 {
+                            self.append(", ");
+                        }
+                        self.quoted(key);
+                        self.append(": ");
+                        self.value(&object[key]);
+                    }
+                    self.append("}");
+                }
+                _ => self.append(&python_style_json_string(value)),
+            }
+        }
+    }
+    let mut prefix = Prefix {
+        text: String::new(),
+        remaining: limit,
+    };
+    prefix.value(value);
+    prefix.text
+}
+
+#[cfg(test)]
+mod fingerprint_prefix_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn prefix_matches_legacy_serialization_at_every_character_boundary() {
+        for value in [
+            json!([{"z":"尾部", "type":"text", "text":"🙂中文\n\t\r\u{0000}\\\"\u{0008}\u{000c}",
+                "input":{"z":null,"a":[true,false,1,-2,1.5,1e20]}, "a":"first"}]),
+            json!({"role":"user", "content":[], "id":"x", "name":"n", "tool_use_id":"t"}),
+            json!("escaped\n\"text"),
+            json!([]),
+            json!({}),
+            json!(null),
+        ] {
+            let full = python_style_json_string(&value);
+            for limit in 0..=full.chars().count() + 2 {
+                assert_eq!(
+                    python_style_json_prefix(&value, limit),
+                    full.chars().take(limit).collect::<String>()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn image_fingerprint_and_plain_text_keep_the_existing_digest() {
+        use md5::{Digest, Md5};
+        for content in [
+            json!([{"type":"image","source":{"type":"base64","data":"AAAA".repeat(1024*1024)}}]),
+            json!([{"type":"text","text":"🙂word ".repeat(1000)}, {"type":"image","data":"AAAA".repeat(1024*1024)}]),
+            json!("plain中文".repeat(1000)),
+        ] {
+            let request = RoutingRequest::from_value_owned(json!({"model":"test", "system":"system", "messages":[{"role":"user", "content":content}]})).unwrap();
+            let system: String = inspector::system_text(&request)
+                .chars()
+                .take(4000)
+                .collect();
+            let user: String = inspector::first_user_text(&request)
+                .chars()
+                .take(2000)
+                .collect();
+            let expected = format!("{:x}", Md5::digest(format!("{system}|{user}")));
+            assert_eq!(sticky::session_key(&request), expected);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 复合会话粘性键与摘要
 // ---------------------------------------------------------------------------
@@ -740,10 +902,7 @@ pub mod sticky {
             .chars()
             .take(4_000)
             .collect();
-        let first_user: String = inspector::first_user_text(request)
-            .chars()
-            .take(2_000)
-            .collect();
+        let first_user = inspector::first_user_text_prefix(request, 2_000);
         md5_hex(&format!("{system}|{first_user}"))
     }
 

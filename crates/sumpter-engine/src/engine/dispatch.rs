@@ -35,11 +35,13 @@ use super::events::new_event_id;
 use super::failure::FailureInfo;
 use super::http_response::{error_response, proxy_failure_response};
 use super::payload::realtime_client_secret_request_session;
+use super::performance::StageTimer;
 use super::protocol::{
-    RealtimeRouteIntent, classify_realtime_intent, endpoint_supports_codex_live,
-    endpoint_supports_realtime_model, is_codex_live_family_path, is_codex_live_sideband_target,
-    is_live_bootstrap_request, is_realtime_http_path, is_videos_lookup_path, path_without_query,
-    realtime_client_secret_models_match, required_native_protocol, translation_supported,
+    RealtimeRouteIntent, check_source_translation, classify_realtime_intent,
+    endpoint_supports_codex_live, endpoint_supports_realtime_model, is_codex_live_family_path,
+    is_codex_live_sideband_target, is_live_bootstrap_request, is_realtime_http_path,
+    is_videos_lookup_path, path_without_query, realtime_client_secret_models_match,
+    required_native_protocol,
 };
 use super::sessions::realtime_ephemeral_token;
 use super::state::{RoundRobinKey, now_unix};
@@ -820,6 +822,7 @@ impl Engine {
         source_format: ProviderProtocol,
         headers: Vec<(String, String)>,
         inbound_body: Bytes,
+        translation_body: Option<&Value>,
         method: &str,
         path_and_query: &str,
         client_out: Option<ClientOut>,
@@ -827,6 +830,7 @@ impl Engine {
         client_kind: ClientKind,
         codex_metadata: Option<CodexMetadata>,
     ) -> Response {
+        let route_timer = StageTimer::new("route_check", inbound_body.len());
         let observed_session = observe_request_session(client_kind, &headers, &request.raw);
         let purpose = purpose_override.unwrap_or_else(|| inspector::request_purpose(&request));
         // 该形状告警只用于 Claude Code 的 Anthropic 内部辅助请求。
@@ -1290,20 +1294,34 @@ impl Engine {
             // 是两类问题:前者要告诉用户是哪个字段表达不了,否则客户端只看到
             // 「no compatible Provider」,无法判断到底是配置问题还是能力缺口。
             let mut capability_error: Option<bridge::TranslationError> = None;
+            let mut source_check = None;
+            let mut capability_cache: HashMap<
+                (&'static str, bool),
+                Result<(), bridge::TranslationError>,
+            > = HashMap::new();
             plan.endpoints.retain(|endpoint| {
                 if endpoint.route_mode == RouteMode::Native {
                     return true;
                 }
-                match translation_supported(
-                    source_format,
-                    endpoint,
-                    &request,
-                    &inbound_body,
-                    purpose,
-                ) {
+                let server_retrieval =
+                    request_build::server_retrieval_enabled(endpoint, &request, purpose);
+                let key = (endpoint.protocol.token(), server_retrieval);
+                let result = capability_cache.entry(key).or_insert_with(|| {
+                    source_check
+                        .get_or_insert_with(|| {
+                            check_source_translation(source_format, &request, translation_body)
+                        })
+                        .clone()?;
+                    bridge::check_anthropic_translation(
+                        &request,
+                        endpoint.protocol,
+                        server_retrieval,
+                    )
+                });
+                match result {
                     Ok(()) => true,
                     Err(error) => {
-                        capability_error.get_or_insert(error);
+                        capability_error.get_or_insert_with(|| error.clone());
                         false
                     }
                 }
@@ -1346,55 +1364,9 @@ impl Engine {
             plan.feature_rule_id.clone(),
         );
         let session_key = sticky_key.session_key();
-        // 出站桥无法无损表达的请求不能悄悄降级成残缺翻译:把承接不了的入口从候选里
-        // 剔除,failover 仍有机会落到能原生承接的入口;全都承接不了才回 400,并带上
-        // 具体字段名 —— 否则这类失败在客户端侧完全不可诊断(只表现为模型不听话)。
-        // native 入口按字节转发,不过出站桥,所以不参与这道校验。这里刻意从完整
-        // `plan.endpoints` 开始，而不是先套 endpoint/model 冷却；forward 会在首轮和
-        // 每个后续轮次重新应用冷却，避免一个尚在冷却的入口从候选集中永久消失。
-        let mut translation_error: Option<bridge::TranslationError> = None;
-        let candidates: Vec<PlannedEndpoint> = plan
-            .endpoints
-            .clone()
-            .into_iter()
-            .filter(|endpoint| {
-                if endpoint.route_mode != RouteMode::Translated {
-                    return true;
-                }
-                let server_retrieval =
-                    request_build::server_retrieval_enabled(endpoint, &request, purpose);
-                match bridge::check_anthropic_translation(
-                    &request,
-                    endpoint.protocol,
-                    server_retrieval,
-                ) {
-                    Ok(()) => true,
-                    Err(error) => {
-                        translation_error.get_or_insert(error);
-                        false
-                    }
-                }
-            })
-            .collect();
-        if candidates.is_empty() {
-            let message = translation_error
-                .map(|error| error.to_string())
-                .unwrap_or_else(|| "no endpoint can serve this request".into());
-            self.record_rejected_client_with_metadata(
-                400,
-                &message,
-                Some(request.model.clone()),
-                Some(purpose),
-                client_kind,
-                codex_metadata.clone(),
-                ClientDeclaredMetadata::from_headers(&headers),
-                Some(source_format),
-            );
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                &[("error", "unsupported_translation"), ("message", &message)],
-            );
-        }
+        // Conversation candidates have already passed source and target checks
+        // above. Opaque resources are native and need no bridge validation.
+        let candidates = plan.endpoints.clone();
         // A cooldown is accounting/scheduling metadata only. Keep every
         // compatible candidate dispatchable so a request can reach the
         // provider and return its actual response status/body. The proxy must
@@ -1429,6 +1401,7 @@ impl Engine {
             grok_metadata: GrokMetadata::from_headers(&headers),
             request_context: current_request_context(),
         };
+        drop(route_timer);
         self.capture_start(
             &client_event_id,
             method,
@@ -1519,6 +1492,7 @@ impl Engine {
             path_and_query,
             &headers,
             client_out,
+            translation_body,
         )
         .await
     }
@@ -1688,6 +1662,7 @@ impl Engine {
         path_and_query: &str,
         headers: &[(String, String)],
         client_out: Option<ClientOut>,
+        parsed_json: Option<&Value>,
     ) -> Response {
         let retry = &config.retry;
         let request_id = guard.request_id().to_string();
@@ -1907,7 +1882,7 @@ impl Engine {
                         .then(|| {
                             client.passthrough.as_ref().map(|body| PassthroughRequest {
                                 kind: client.passthrough_kind,
-                                body: body.as_ref(),
+                                body: body.clone(),
                                 content_type: client.content_type.as_deref(),
                                 stream: client.stream,
                             })
@@ -1924,7 +1899,8 @@ impl Engine {
                 } else {
                     None
                 };
-                let build = request_build::build_outbound(
+                let mut outbound_timer = StageTimer::new("outbound_build", 0);
+                let build = request_build::build_outbound_with_json(
                     endpoint,
                     request,
                     headers,
@@ -1934,7 +1910,10 @@ impl Engine {
                     guard.meta.purpose,
                     passthrough,
                     gemini_replay.as_ref(),
+                    parsed_json,
                 );
+                outbound_timer.set_bytes(build.request.body.len());
+                drop(outbound_timer);
                 let attempt_started = Instant::now();
                 let capture_attempt_id = self.capture_attempt_started(
                     &request_id,

@@ -147,7 +147,7 @@ impl UpstreamTransport for FakeTransport {
             host: host.clone(),
             path: request.path_and_query.clone(),
             headers: request.headers.clone(),
-            body: request.body.clone(),
+            body: request.body.to_vec(),
         });
         let outcome = {
             let mut script = self.script.lock().unwrap();

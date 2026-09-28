@@ -242,7 +242,7 @@ async fn websocket_paths_keep_http_methods_on_the_engine_fallback() {
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].method, "POST");
     assert_eq!(calls[0].path_and_query, "/v1/live");
-    assert_eq!(calls[0].body, b"v=0\r\n");
+    assert_eq!(calls[0].body.as_ref(), b"v=0\r\n");
     server.abort();
 }
 

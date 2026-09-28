@@ -256,11 +256,10 @@ pub(super) fn raw_body_model_hint(body: &[u8], content_type: Option<&str>) -> Op
         .map(str::to_string)
 }
 
-pub(super) fn native_json_fields(
-    body: &[u8],
+pub(super) fn native_json_value_fields(
+    value: &Value,
     kind: PassthroughKind,
 ) -> Result<NativePassthroughFields, &'static str> {
-    let value: Value = serde_json::from_slice(body).map_err(|_| "body is not JSON")?;
     let object = value.as_object().ok_or("body is not an object")?;
     let default_model = match kind {
         PassthroughKind::ImagesGenerations | PassthroughKind::ImagesEdits => "gpt-image-2",

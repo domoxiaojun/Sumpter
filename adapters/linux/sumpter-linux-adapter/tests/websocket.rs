@@ -667,7 +667,7 @@ async fn websocket_paths_keep_http_methods_on_the_engine_fallback() {
     );
     assert_eq!(calls[1].method, "POST");
     assert_eq!(calls[1].path_and_query, "/v1/realtime/calls");
-    assert_eq!(calls[1].body, b"v=0\r\n");
+    assert_eq!(calls[1].body.as_ref(), b"v=0\r\n");
     assert!(
         calls[1]
             .headers
@@ -897,8 +897,8 @@ async fn realtime_bootstrap_does_not_follow_a_leaked_chat_model() {
         calls[1].path_and_query,
         "/v1/realtime?model=gpt-live-1-codex"
     );
-    assert_eq!(calls[0].body, b"v=0\r\n");
-    assert_eq!(calls[1].body, b"v=0\r\n");
+    assert_eq!(calls[0].body.as_ref(), b"v=0\r\n");
+    assert_eq!(calls[1].body.as_ref(), b"v=0\r\n");
     handle.shutdown().await;
 }
 

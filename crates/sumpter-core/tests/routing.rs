@@ -14,6 +14,37 @@ fn request_from(value: Value) -> RoutingRequest {
     RoutingRequest::from_value(&value).expect("request object")
 }
 
+#[test]
+fn owned_request_preserves_routing_semantics_and_moves_raw_storage() {
+    let value = json!({
+        "model":"claude-opus-5(high)",
+        "system":[{"type":"text", "text":"routing instructions"}],
+        "messages":[{"role":"user", "content":[{"type":"text", "text":"large ".repeat(100_000)}]}],
+        "tools":[{"name":"inspect", "input_schema":{"type":"object"}}],
+        "metadata":{"user_id":"identity"}, "unknown":{"keep":true}
+    });
+    let expected = RoutingRequest::from_value(&value).unwrap();
+    let original_text = value["messages"][0]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .as_ptr();
+    let owned = RoutingRequest::from_value_owned(value).unwrap();
+    assert_eq!(owned, expected);
+    assert_eq!(
+        owned.raw["messages"][0]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .as_ptr(),
+        original_text
+    );
+    assert_eq!(
+        inspector::request_purpose(&owned),
+        inspector::request_purpose(&expected)
+    );
+    assert_eq!(sticky::session_key(&owned), sticky::session_key(&expected));
+    assert!(RoutingRequest::from_value_owned(Value::Null).is_none());
+}
+
 fn endpoint(id: &str, mappings: Vec<ModelMapping>) -> Endpoint {
     Endpoint {
         api_key: "sk-test".into(),

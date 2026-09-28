@@ -23,7 +23,7 @@ use super::payload::apply_realtime_client_secret_session;
 use super::payload::content_type_is_json;
 use super::payload::content_type_is_multipart;
 use super::payload::metadata_json_body_hint;
-use super::payload::native_json_fields;
+use super::payload::native_json_value_fields;
 use super::payload::native_multipart_fields;
 use super::payload::native_multipart_fields_with_default;
 use super::payload::raw_body_model_hint;
@@ -32,6 +32,7 @@ use super::payload::realtime_body_model;
 use super::payload::realtime_body_model_hint;
 use super::payload::rewrite_realtime_multipart_model;
 use super::payload::valid_anthropic_messages_request;
+use super::performance::{StageTimer, measure};
 use super::protocol::RealtimeRouteIntent;
 use super::protocol::body_indicates_codex_live;
 use super::protocol::classify_realtime_intent;
@@ -426,7 +427,7 @@ impl Engine {
             && (!config.listener.has_inbound_auth()
                 || inbound_auth_ok(&headers, &config.listener.auth_token))
         {
-            let decoded = match axum::body::to_bytes(body, MAX_BODY_BYTES).await {
+            let decoded = match read_inbound_body(body).await {
                 Ok(bytes) => {
                     tokio::task::spawn_blocking(move || decode_inference_body(&bytes, &encoding))
                         .await
@@ -765,7 +766,7 @@ impl Engine {
                 &[("error", "inbound_auth_required")],
             );
         }
-        let body = match axum::body::to_bytes(body, MAX_BODY_BYTES).await {
+        let body = match read_inbound_body(body).await {
             Ok(body) => body,
             Err(error) => {
                 let message = error.to_string();
@@ -786,7 +787,9 @@ impl Engine {
             }
         };
 
-        let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
+        let Ok(parsed) = measure("json_parse", body.len(), || {
+            serde_json::from_slice::<Value>(&body)
+        }) else {
             let encoding = header_value(&headers, "content-encoding").unwrap_or("identity");
             let message = if !encoding.eq_ignore_ascii_case("identity") {
                 format!(
@@ -844,8 +847,10 @@ impl Engine {
                 ],
             );
         }
-        let request = RoutingRequest::from_value(&parsed)
-            .expect("validated Anthropic Messages request is a JSON object");
+        let request = measure("routing_request", body.len(), || {
+            RoutingRequest::from_value_owned(parsed)
+        })
+        .expect("validated Anthropic Messages request is a JSON object");
 
         self.handle_planned(
             config,
@@ -853,6 +858,7 @@ impl Engine {
             ProviderProtocol::Anthropic,
             headers,
             body,
+            None,
             method,
             path_and_query,
             None,
@@ -922,7 +928,7 @@ impl Engine {
                 &[("error", "inbound_auth_required")],
             );
         }
-        let body = match axum::body::to_bytes(body, MAX_BODY_BYTES).await {
+        let body = match read_inbound_body(body).await {
             Ok(body) => body,
             Err(error) => {
                 let message = error.to_string();
@@ -942,7 +948,9 @@ impl Engine {
                 );
             }
         };
-        let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
+        let Ok(parsed) = measure("json_parse", body.len(), || {
+            serde_json::from_slice::<Value>(&body)
+        }) else {
             let encoding = header_value(&headers, "content-encoding").unwrap_or("identity");
             let message = if !encoding.eq_ignore_ascii_case("identity") {
                 format!(
@@ -984,6 +992,7 @@ impl Engine {
                 Some(inbound) => inbound.stream,
                 None => bridge_in::client_wants_stream(&parsed),
             };
+        let conversion_timer = StageTimer::new("protocol_conversion", body.len());
         let converted = if compact {
             parsed
                 .get("model")
@@ -997,7 +1006,7 @@ impl Engine {
                 ClientDialect::Responses => bridge_in::responses_to_anthropic(&parsed),
                 // 归一化只服务于路由:模型本来就在路径上,正文在原生路径上按字节
                 // 转发,所以这里不因正文不可转换就拦下整条请求 —— 转换候选会在
-                // `translation_supported` 用真实正文再检一次,并回报具体原因。
+                // `check_source_translation` 用真实正文再检一次,并回报具体原因。
                 ClientDialect::Gemini => match gemini.as_ref() {
                     Some(inbound) => {
                         Ok(bridge_gemini::gemini_to_anthropic(&parsed, &inbound.model)
@@ -1009,6 +1018,7 @@ impl Engine {
                 },
             }
         };
+        drop(conversion_timer);
         let converted = match converted {
             Ok(value) => value,
             Err(reason) => {
@@ -1028,7 +1038,9 @@ impl Engine {
                 );
             }
         };
-        let Some(request) = RoutingRequest::from_value(&converted) else {
+        let Some(request) = measure("routing_request", body.len(), || {
+            RoutingRequest::from_value_owned(converted)
+        }) else {
             self.record_rejected_client_with_metadata(
                 400,
                 message_tokens::BODY_NOT_OBJECT,
@@ -1053,6 +1065,7 @@ impl Engine {
             source_format,
             headers,
             body.clone(),
+            Some(&parsed),
             method,
             path_and_query,
             Some(ClientOut {
@@ -1139,7 +1152,7 @@ impl Engine {
                 );
             }
         }
-        let mut body = match axum::body::to_bytes(body, MAX_BODY_BYTES).await {
+        let mut body = match read_inbound_body(body).await {
             Ok(body) => body,
             Err(error) => {
                 let message = error.to_string();
@@ -1270,6 +1283,7 @@ impl Engine {
             body = normalized_body;
             content_type = Some(normalized_content_type);
         }
+        let mut outbound_json = None;
         let fields = if kind == PassthroughKind::GeminiGenerate {
             let Some(model) = gemini_model_from_path(path_without_query(path_and_query)) else {
                 let reason = "Gemini model is required in the request path";
@@ -1450,7 +1464,17 @@ impl Engine {
                 stream: false,
             }
         } else if content_type.as_deref().is_some_and(content_type_is_json) {
-            match native_json_fields(&body, kind) {
+            outbound_json = metadata_body_before_normalization.or_else(|| {
+                measure("json_parse", body.len(), || {
+                    serde_json::from_slice::<Value>(&body)
+                })
+                .ok()
+            });
+            match outbound_json
+                .as_ref()
+                .ok_or("body is not JSON")
+                .and_then(|value| native_json_value_fields(value, kind))
+            {
                 Ok(fields) => fields,
                 Err(reason) => {
                     self.record_rejected_client_with_metadata(
@@ -1555,6 +1579,7 @@ impl Engine {
             source_format,
             headers,
             body.clone(),
+            outbound_json.as_ref(),
             method,
             path_and_query,
             Some(ClientOut {
@@ -1606,6 +1631,15 @@ fn decode_inference_body(raw: &[u8], encoding: &str) -> Result<Vec<u8>, &'static
         .read_to_end(&mut decoded)
         .map_err(|_| "invalid_compressed_request")?;
     Ok(decoded)
+}
+
+async fn read_inbound_body(body: Body) -> Result<bytes::Bytes, axum::Error> {
+    let mut timer = StageTimer::new("body_read", 0);
+    let result = axum::body::to_bytes(body, MAX_BODY_BYTES).await;
+    if let Ok(bytes) = &result {
+        timer.set_bytes(bytes.len());
+    }
+    result
 }
 
 #[cfg(test)]

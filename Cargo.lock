@@ -1824,7 +1824,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "sumpter-core"
-version = "0.4.27"
+version = "0.4.28"
 dependencies = [
  "md-5",
  "rand 0.9.5",
@@ -1836,7 +1836,7 @@ dependencies = [
 
 [[package]]
 name = "sumpter-engine"
-version = "0.4.27"
+version = "0.4.28"
 dependencies = [
  "argon2",
  "async-trait",
@@ -1863,12 +1863,13 @@ dependencies = [
  "tokio-util",
  "tower-http",
  "tracing",
+ "tracing-subscriber",
  "zstd",
 ]
 
 [[package]]
 name = "sumpter-linux-adapter"
-version = "0.4.27"
+version = "0.4.28"
 dependencies = [
  "argon2",
  "async-trait",
@@ -1897,7 +1898,7 @@ dependencies = [
 
 [[package]]
 name = "sumpter-macos-adapter"
-version = "0.4.27"
+version = "0.4.28"
 dependencies = [
  "async-trait",
  "axum",
@@ -1923,7 +1924,7 @@ dependencies = [
 
 [[package]]
 name = "sumpter-runtime"
-version = "0.4.27"
+version = "0.4.28"
 dependencies = [
  "async-trait",
  "futures-executor",
@@ -1938,7 +1939,7 @@ dependencies = [
 
 [[package]]
 name = "sumpterd-linux"
-version = "0.4.27"
+version = "0.4.28"
 dependencies = [
  "sumpter-core",
  "sumpter-linux-adapter",
@@ -1949,7 +1950,7 @@ dependencies = [
 
 [[package]]
 name = "sumpterd-macos"
-version = "0.4.27"
+version = "0.4.28"
 dependencies = [
  "axum",
  "bytes",

@@ -50,7 +50,7 @@ pub struct OutboundRequest {
     pub path_and_query: String,
     /// 已构造完毕的出站 header(黑名单/强制项由引擎处理)。
     pub headers: Vec<(String, String)>,
-    pub body: Vec<u8>,
+    pub body: Bytes,
     /// 【实验】连接复用(Endpoint.keepAlive):false = 每请求新建连接。
     pub keep_alive: bool,
 }
@@ -395,7 +395,7 @@ mod tests {
                     resolve_ip: "127.0.0.1".into(),
                     path_and_query: "/v1/models".into(),
                     headers: Vec::new(),
-                    body: Vec::new(),
+                    body: Bytes::new(),
                     keep_alive: false,
                 },
                 Some(Duration::from_secs(2)),
