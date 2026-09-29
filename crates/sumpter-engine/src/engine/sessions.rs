@@ -752,8 +752,16 @@ impl Engine {
     /// 键来自 runtime 事件里的 affinity 哈希，不触碰其它会话；返回实际删除数。
     /// 返回成功前同步落盘；失败保留 dirty 位并向调用方报告，不伪报持久成功。
     pub fn clear_session_sticky(&self, keys: &[String]) -> Result<usize, String> {
+        self.clear_session_sticky_timed(keys)
+            .map(|(removed, _)| removed)
+    }
+
+    pub(crate) fn clear_session_sticky_timed(
+        &self,
+        keys: &[String],
+    ) -> Result<(usize, u64), String> {
         if keys.is_empty() {
-            return Ok(0);
+            return Ok((0, 0));
         }
         let mut removed_persistent = false;
         let removed = {
@@ -768,16 +776,24 @@ impl Engine {
             before - state.session_sticky.len()
         };
         // 重复清除也必须重试之前失败的落盘，不能因内存已空就返回成功。
-        if (removed_persistent || self.inner.session_affinity_dirty.load(Ordering::Acquire))
-            && let Err(error) = self.flush_session_affinity()
-        {
-            self.inner
-                .session_affinity_dirty
-                .store(true, Ordering::Release);
-            return Err(format!(
-                "内存归属已清除，但 session_affinity.json 同步失败：{error}"
-            ));
+        let needs_affinity_write =
+            removed_persistent || self.inner.session_affinity_dirty.load(Ordering::Acquire);
+        let affinity_write_started = std::time::Instant::now();
+        if needs_affinity_write {
+            if let Err(error) = self.flush_session_affinity() {
+                self.inner
+                    .session_affinity_dirty
+                    .store(true, Ordering::Release);
+                return Err(format!(
+                    "内存归属已清除，但 session_affinity.json 同步失败：{error}"
+                ));
+            }
         }
-        Ok(removed)
+        let affinity_write_ms = if needs_affinity_write {
+            affinity_write_started.elapsed().as_millis() as u64
+        } else {
+            0
+        };
+        Ok((removed, affinity_write_ms))
     }
 }

@@ -757,9 +757,22 @@ fn sticky_keys_for_session_isolates_conversations_and_collects_all_models() {
     push("a4", "session-a", None, "model-3");
     push("a5", "session-a", Some(""), "model-3");
     push("b1", "session-b", Some("b-model-1"), "model-1");
+    let mut in_flight = event(
+        "a-inflight",
+        KIND_CLIENT,
+        0,
+        RuntimeEventPhase::InFlight,
+        None,
+        event_now(),
+    );
+    in_flight.session_id = Some("session-a".into());
+    in_flight.sticky_key = Some("a-inflight".into());
+    store
+        .enqueue(in_flight, RuntimeCounters::default())
+        .unwrap();
     let mut keys = store.sticky_keys_for_session(" session-a ").unwrap();
     keys.sort();
-    assert_eq!(keys, vec!["a-model-1", "a-model-2"]);
+    assert_eq!(keys, vec!["a-inflight", "a-model-1", "a-model-2"]);
     assert_eq!(
         store.sticky_keys_for_session("session-b").unwrap(),
         vec!["b-model-1"]
@@ -801,6 +814,134 @@ fn sticky_keys_for_session_isolates_conversations_and_collects_all_models() {
             .contains("共享")
     );
     assert!(store.event("a1").unwrap().is_some());
+    drop(store);
+    remove_test_dir(&dir);
+}
+
+#[test]
+fn sticky_queries_use_deduplicated_covering_indexes() {
+    let dir = test_dir("sticky-query-plan");
+    let path = dir.join("runtime.sqlite3");
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    store.flush().unwrap();
+    drop(store);
+    let connection = Connection::open(&path).unwrap();
+    for (sql, expected) in [
+        (
+            "EXPLAIN QUERY PLAN WITH keys AS (
+                 SELECT DISTINCT sticky_key FROM runtime_events
+                 WHERE session_key=?1 AND sticky_key IS NOT NULL AND sticky_key!=''
+             ) SELECT keys.sticky_key, EXISTS (
+                 SELECT 1 FROM runtime_events other
+                 WHERE other.sticky_key=keys.sticky_key AND other.session_key IS NOT ?1
+             ) FROM keys",
+            [
+                "runtime_events_session_sticky_v2",
+                "runtime_events_sticky_session_v2",
+            ],
+        ),
+        (
+            "EXPLAIN QUERY PLAN WITH keys AS (
+                 SELECT DISTINCT sticky_key FROM runtime_events
+                 WHERE project_id=?1 AND sticky_key IS NOT NULL AND sticky_key!=''
+             ) SELECT keys.sticky_key, EXISTS (
+                 SELECT 1 FROM runtime_events other
+                 WHERE other.sticky_key=keys.sticky_key AND other.project_id IS NOT ?1
+             ) FROM keys",
+            [
+                "runtime_events_project_sticky_v2",
+                "runtime_events_sticky_project_v2",
+            ],
+        ),
+    ] {
+        let plan = connection
+            .prepare(sql)
+            .unwrap()
+            .query_map(params!["session-or-project"], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .join("\n");
+        for index in expected {
+            assert!(
+                plan.contains(index),
+                "query plan did not use {index}: {plan}"
+            );
+        }
+    }
+    remove_test_dir(&dir);
+}
+
+#[test]
+fn sticky_indexes_upgrade_without_resetting_projection_state() {
+    let dir = test_dir("sticky-index-upgrade");
+    let path = dir.join("runtime.sqlite3");
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    store
+        .enqueue(
+            event(
+                "sticky-history",
+                KIND_CLIENT,
+                200,
+                RuntimeEventPhase::Completed,
+                Some(RuntimeEventOutcome::Succeeded),
+                event_now(),
+            ),
+            RuntimeCounters::default(),
+        )
+        .unwrap();
+    store.flush().unwrap();
+    drop(store);
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "DROP INDEX runtime_events_session_sticky_v2;
+             DROP INDEX runtime_events_project_sticky_v2;
+             DROP INDEX runtime_events_sticky_session_v2;
+             DROP INDEX runtime_events_sticky_project_v2;
+             UPDATE runtime_meta SET value='1' WHERE key='projection_indexes_ready';",
+        )
+        .unwrap();
+    drop(connection);
+
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    // Maintenance is deliberately incremental; give the worker one idle turn
+    // per index, then flush to ensure its command queue has drained.
+    for _ in 0..8 {
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        store.flush().unwrap();
+    }
+    let connection = Connection::open(&path).unwrap();
+    let missing = connection
+        .query_row(
+            "SELECT COUNT(*) FROM (SELECT name FROM sqlite_master WHERE type='index' AND name IN
+             ('runtime_events_session_sticky_v2','runtime_events_project_sticky_v2',
+              'runtime_events_sticky_session_v2','runtime_events_sticky_project_v2'))",
+            params![],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap();
+    assert_eq!(missing, 4);
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT value FROM runtime_meta WHERE key='projection_indexes_ready'",
+                params![],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "1"
+    );
+    assert!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM runtime_events WHERE event_id='sticky-history'",
+                params![],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap()
+            == 1
+    );
     drop(store);
     remove_test_dir(&dir);
 }

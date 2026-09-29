@@ -5,15 +5,15 @@ use super::{
     RETENTION_IDLE_CHECK_INTERVAL, RETRY_INITIAL, RETRY_MAX, RuntimeChange, RuntimeCleanupMutation,
     RuntimeCleanupPreview, RuntimeCounters, RuntimeEvent, RuntimeEventListItem,
     RuntimePricingMutation, RuntimePricingUpdate, RuntimeRetentionMutation, RuntimeRetentionUpdate,
-    RuntimeSnapshot, RuntimeStorageStatus, RuntimeStore, RuntimeSummary, SessionMutation, Value,
-    WriteMessage, check_existing_schema, cleanup_before_database, cleanup_before_preview_database,
-    commit_pending, database_file_sizes, delete_session_database, export_session_json,
-    harden_database_file, load_snapshot, load_state, meta_i64, mpsc, normalize_startup, now,
-    option_token, params, projection_maintenance_needed, read_connection, recreate_database,
-    refresh_cached_storage, replace_pricing_database, reset_database, rotate_retention_now,
-    run_projection_maintenance, run_retention_maintenance, set_meta, set_retention_database,
-    setup_connection, thread, validate_cleanup_cutoff, validate_pricing_update,
-    validate_retention_update,
+    RuntimeSnapshot, RuntimeStorageStatus, RuntimeStore, RuntimeSummary, SessionMutation,
+    StickyKeysQueryTiming, Value, WriteMessage, check_existing_schema, cleanup_before_database,
+    cleanup_before_preview_database, commit_pending, database_file_sizes, delete_session_database,
+    export_session_json, harden_database_file, load_snapshot, load_state, meta_i64, mpsc,
+    normalize_startup, now, option_token, params, projection_maintenance_needed, read_connection,
+    recreate_database, refresh_cached_storage, replace_pricing_database, reset_database,
+    rotate_retention_now, run_projection_maintenance, run_retention_maintenance, set_meta,
+    set_retention_database, setup_connection, thread, validate_cleanup_cutoff,
+    validate_pricing_update, validate_retention_update,
 };
 
 /// Checkpoint WAL, close the writer, then remove sidecar files left behind.
@@ -699,20 +699,35 @@ impl RuntimeStore {
     /// 清除内存与 session_affinity.json。若现存事件显示键被其他项目共享，
     /// 整次拒绝清除，避免部分成功或删除其他项目仍在使用的归属。
     pub fn sticky_keys_for_project(&self, project_id: &str) -> Result<Vec<String>, String> {
+        Ok(self.sticky_keys_for_project_timed(project_id)?.keys)
+    }
+
+    pub fn sticky_keys_for_project_timed(
+        &self,
+        project_id: &str,
+    ) -> Result<StickyKeysQueryTiming, String> {
         let project_id = project_id.trim();
         if project_id.is_empty() {
             return Err("projectID 不能为空".into());
         }
+        let flush_started = std::time::Instant::now();
         self.flush()?;
+        let flush_ms = flush_started.elapsed().as_millis() as u64;
+        let query_started = std::time::Instant::now();
         let connection = read_connection(&self.inner.path)?;
         let mut statement = connection
             .prepare(
-                "SELECT DISTINCT e.sticky_key, EXISTS (
+                "WITH keys AS (
+                     SELECT DISTINCT sticky_key
+                     FROM runtime_events
+                     WHERE project_id=?1
+                       AND sticky_key IS NOT NULL AND sticky_key!=''
+                   )
+                 SELECT keys.sticky_key, EXISTS (
                      SELECT 1 FROM runtime_events other
-                     WHERE other.sticky_key=e.sticky_key
+                     WHERE other.sticky_key=keys.sticky_key
                        AND other.project_id IS NOT ?1
-                   ) FROM runtime_events e
-                 WHERE e.project_id=?1 AND e.sticky_key IS NOT NULL AND e.sticky_key!=''",
+                   ) FROM keys",
             )
             .map_err(|error| error.to_string())?;
         let keys = statement
@@ -722,29 +737,51 @@ impl RuntimeStore {
             .map_err(|error| error.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| error.to_string())?;
+        let query_ms = query_started.elapsed().as_millis() as u64;
+        let returned_rows = keys.len();
         if keys.iter().any(|(_, shared)| *shared) {
             return Err("该项目存在与其他项目共享的粘性归属，未执行清除".into());
         }
-        Ok(keys.into_iter().map(|(key, _)| key).collect())
+        Ok(StickyKeysQueryTiming {
+            keys: keys.into_iter().map(|(key, _)| key).collect(),
+            flush_ms,
+            query_ms,
+            returned_rows,
+        })
     }
 
     /// 按统计页的完整会话键聚合所有模型的粘性归属，不受页面筛选限制。
     /// 未识别会话是多个对话的合计，不能作为单个对话清除。
     pub fn sticky_keys_for_session(&self, session_id: &str) -> Result<Vec<String>, String> {
+        Ok(self.sticky_keys_for_session_timed(session_id)?.keys)
+    }
+
+    pub fn sticky_keys_for_session_timed(
+        &self,
+        session_id: &str,
+    ) -> Result<StickyKeysQueryTiming, String> {
         let session_id = session_id.trim();
         if session_id.is_empty() || session_id == "unidentified_session" {
             return Err("必须提供已识别会话的完整 sessionID/threadID".into());
         }
+        let flush_started = std::time::Instant::now();
         self.flush()?;
+        let flush_ms = flush_started.elapsed().as_millis() as u64;
+        let query_started = std::time::Instant::now();
         let connection = read_connection(&self.inner.path)?;
         let mut statement = connection
             .prepare(
-                "SELECT DISTINCT e.sticky_key, EXISTS (
+                "WITH keys AS (
+                     SELECT DISTINCT sticky_key
+                     FROM runtime_events
+                     WHERE session_key=?1
+                       AND sticky_key IS NOT NULL AND sticky_key!=''
+                   )
+                 SELECT keys.sticky_key, EXISTS (
                      SELECT 1 FROM runtime_events other
-                     WHERE other.sticky_key=e.sticky_key
+                     WHERE other.sticky_key=keys.sticky_key
                        AND other.session_key IS NOT ?1
-                   ) FROM runtime_events e
-                 WHERE e.session_key=?1 AND e.sticky_key IS NOT NULL AND e.sticky_key!=''",
+                   ) FROM keys",
             )
             .map_err(|error| error.to_string())?;
         let keys = statement
@@ -754,10 +791,17 @@ impl RuntimeStore {
             .map_err(|error| error.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| error.to_string())?;
+        let query_ms = query_started.elapsed().as_millis() as u64;
+        let returned_rows = keys.len();
         if keys.iter().any(|(_, shared)| *shared) {
             return Err("该会话存在与其他会话共享的粘性归属，未执行清除".into());
         }
-        Ok(keys.into_iter().map(|(key, _)| key).collect())
+        Ok(StickyKeysQueryTiming {
+            keys: keys.into_iter().map(|(key, _)| key).collect(),
+            flush_ms,
+            query_ms,
+            returned_rows,
+        })
     }
 
     pub fn counters(&self) -> RuntimeCounters {

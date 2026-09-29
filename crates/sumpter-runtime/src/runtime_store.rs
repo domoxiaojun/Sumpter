@@ -985,6 +985,17 @@ pub struct RuntimeStore {
     _worker: Arc<WorkerLifecycle>,
 }
 
+/// Timing returned by the sticky-clear discovery query. Values contain only
+/// stage durations and row counts; identifiers and event payloads stay inside
+/// the store boundary.
+#[derive(Debug, Clone, Default)]
+pub struct StickyKeysQueryTiming {
+    pub keys: Vec<String>,
+    pub flush_ms: u64,
+    pub query_ms: u64,
+    pub returned_rows: usize,
+}
+
 struct WorkerLifecycle {
     inner: Arc<Inner>,
     thread: Option<thread::JoinHandle<()>>,

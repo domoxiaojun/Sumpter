@@ -1616,12 +1616,22 @@ async fn clear_project_sticky(
             "必须提供 projectID",
         );
     }
-    match engine.clear_project_sticky(&project_id) {
-        Ok(value) => json_ok(&value),
-        Err(message) => error(
+    match tokio::task::spawn_blocking({
+        let engine = engine.clone();
+        move || engine.clear_project_sticky(&project_id)
+    })
+    .await
+    {
+        Ok(Ok(value)) => json_ok(&value),
+        Ok(Err(message)) => error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "sticky_clear_failed",
             &message,
+        ),
+        Err(_) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "sticky_clear_failed",
+            "粘性清除后台任务失败",
         ),
     }
 }
@@ -1654,12 +1664,22 @@ async fn clear_runtime_session_sticky(
             "必须提供已识别会话的完整 sessionID/threadID",
         );
     }
-    match engine.clear_runtime_session_sticky(&session_id) {
-        Ok(value) => json_ok(&value),
-        Err(message) => error(
+    match tokio::task::spawn_blocking({
+        let engine = engine.clone();
+        move || engine.clear_runtime_session_sticky(&session_id)
+    })
+    .await
+    {
+        Ok(Ok(value)) => json_ok(&value),
+        Ok(Err(message)) => error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "sticky_clear_failed",
             &message,
+        ),
+        Err(_) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "sticky_clear_failed",
+            "粘性清除后台任务失败",
         ),
     }
 }

@@ -2,6 +2,7 @@
 //! SQL and worker ownership remain in `sumpter-runtime`.
 
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use serde_json::{Value, json};
 
@@ -299,9 +300,23 @@ impl Engine {
             self.last_error()
                 .unwrap_or_else(|| "runtime.sqlite3 不可用，无法清除会话粘性归属".into())
         })?;
-        let keys = store.sticky_keys_for_project(project_id)?;
-        let removed = self.clear_session_sticky(&keys)?;
-        Ok(json!({"cleared": removed, "matched": keys.len()}))
+        let started = Instant::now();
+        let timing = store.sticky_keys_for_project_timed(project_id)?;
+        let matched = timing.keys.len();
+        let (removed, affinity_write_ms) = self.clear_session_sticky_timed(&timing.keys)?;
+        tracing::debug!(
+            target: "sumpter_engine::sticky_clear",
+            scope = "project",
+            matched,
+            cleared = removed,
+            flush_ms = timing.flush_ms,
+            query_ms = timing.query_ms,
+            affinity_write_ms,
+            total_ms = started.elapsed().as_millis() as u64,
+            returned_rows = timing.returned_rows,
+            "sticky clear completed"
+        );
+        Ok(json!({"cleared": removed, "matched": matched}))
     }
 
     /// 解除选中对话的全部模型绑定，保留运行事件与统计。
@@ -310,9 +325,23 @@ impl Engine {
             self.last_error()
                 .unwrap_or_else(|| "runtime.sqlite3 不可用，无法清除会话粘性归属".into())
         })?;
-        let keys = store.sticky_keys_for_session(session_id)?;
-        let removed = self.clear_session_sticky(&keys)?;
-        Ok(json!({"cleared": removed, "matched": keys.len()}))
+        let started = Instant::now();
+        let timing = store.sticky_keys_for_session_timed(session_id)?;
+        let matched = timing.keys.len();
+        let (removed, affinity_write_ms) = self.clear_session_sticky_timed(&timing.keys)?;
+        tracing::debug!(
+            target: "sumpter_engine::sticky_clear",
+            scope = "session",
+            matched,
+            cleared = removed,
+            flush_ms = timing.flush_ms,
+            query_ms = timing.query_ms,
+            affinity_write_ms,
+            total_ms = started.elapsed().as_millis() as u64,
+            returned_rows = timing.returned_rows,
+            "sticky clear completed"
+        );
+        Ok(json!({"cleared": removed, "matched": matched}))
     }
 
     pub fn runtime_analytics(&self, range: &str) -> Result<Value, String> {

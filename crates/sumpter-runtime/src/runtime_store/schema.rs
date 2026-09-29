@@ -127,6 +127,31 @@ pub(super) fn setup_connection(connection: &mut Connection) -> crate::database::
             create_projection_indexes(connection)?;
         }
     }
+    // Index-only upgrades must also reach databases whose projection was
+    // already marked ready. This only schedules the missing DDL; it never
+    // resets projection data or replays historical payloads.
+    ensure_sticky_index_maintenance(connection)?;
+    Ok(())
+}
+
+fn ensure_sticky_index_maintenance(connection: &Connection) -> crate::database::Result<()> {
+    let mut missing = false;
+    for name in [
+        "runtime_events_session_sticky_v2",
+        "runtime_events_project_sticky_v2",
+        "runtime_events_sticky_session_v2",
+        "runtime_events_sticky_project_v2",
+    ] {
+        let exists = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1)",
+            params![name],
+            |row| row.get::<_, bool>(0),
+        )?;
+        missing |= !exists;
+    }
+    if missing {
+        set_meta(connection, "projection_indexes_ready", 0)?;
+    }
     Ok(())
 }
 
@@ -173,6 +198,14 @@ pub(super) fn create_projection_indexes(connection: &Connection) -> crate::datab
          CREATE INDEX IF NOT EXISTS runtime_events_project_time_v2
              ON runtime_events(project_id,timestamp DESC,seq DESC)
              WHERE is_in_flight=0 AND project_id IS NOT NULL;
+         CREATE INDEX IF NOT EXISTS runtime_events_session_sticky_v2
+             ON runtime_events(session_key,sticky_key);
+         CREATE INDEX IF NOT EXISTS runtime_events_project_sticky_v2
+             ON runtime_events(project_id,sticky_key);
+         CREATE INDEX IF NOT EXISTS runtime_events_sticky_session_v2
+             ON runtime_events(sticky_key,session_key);
+         CREATE INDEX IF NOT EXISTS runtime_events_sticky_project_v2
+             ON runtime_events(sticky_key,project_id);
          CREATE INDEX IF NOT EXISTS runtime_events_endpoint_time_v2
              ON runtime_events(endpoint_id,timestamp DESC,seq DESC)
              WHERE is_in_flight=0 AND endpoint_id IS NOT NULL;
@@ -870,6 +903,22 @@ pub(super) fn advance_projection_indexes(connection: &Connection) -> crate::data
         (
             "runtime_events_project_time_v2",
             "CREATE INDEX runtime_events_project_time_v2 ON runtime_events(project_id,timestamp DESC,seq DESC) WHERE is_in_flight=0 AND project_id IS NOT NULL",
+        ),
+        (
+            "runtime_events_session_sticky_v2",
+            "CREATE INDEX runtime_events_session_sticky_v2 ON runtime_events(session_key,sticky_key)",
+        ),
+        (
+            "runtime_events_project_sticky_v2",
+            "CREATE INDEX runtime_events_project_sticky_v2 ON runtime_events(project_id,sticky_key)",
+        ),
+        (
+            "runtime_events_sticky_session_v2",
+            "CREATE INDEX runtime_events_sticky_session_v2 ON runtime_events(sticky_key,session_key)",
+        ),
+        (
+            "runtime_events_sticky_project_v2",
+            "CREATE INDEX runtime_events_sticky_project_v2 ON runtime_events(sticky_key,project_id)",
         ),
         (
             "runtime_events_endpoint_time_v2",
