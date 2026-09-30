@@ -52,6 +52,61 @@ fn catalog_config() -> AppConfig {
 }
 
 #[test]
+fn codex_catalog_resolves_upstream_templates_without_expanding_authorized_models() {
+    let mut config: AppConfig = serde_json::from_value(json!({
+        "schemaVersion": 7,
+        "endpoints": [{
+            "id": "cpa", "name": "CPA", "baseURL": "https://cpa.invalid",
+            "protocol": "openai", "enabled": true,
+            "catalog": {"models": ["gpt-6.1-sol", "gpt-6-astra"]},
+            "mappings": [
+                {"clientPattern": "coding-alias", "upstreamModel": "codex/gpt-6.1-sol"},
+                {"clientPattern": "gpt-6-astra", "upstreamModel": "gpt-6-astra"}
+            ]
+        }],
+        "modelGroups": [{
+            "id": "allowed", "name": "Allowed", "enabled": true, "priority": 0,
+            "models": ["coding-alias"],
+            "bindings": [{"endpointID": "cpa", "enabled": true, "priority": 0}]
+        }]
+    }))
+    .unwrap();
+    let ordinary = local_models_json(&config, "/v1/models", None, &[]).unwrap();
+    assert_eq!(ordinary["data"].as_array().unwrap().len(), 1);
+    assert_eq!(ordinary["data"][0]["id"], "coding-alias");
+    for path in ["/v1/models", "/backend-api/codex/models"] {
+        let body = local_models_json(&config, path, Some("client_version=0.156.1"), &[]).unwrap();
+        let models = body["models"].as_array().unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["slug"], "coding-alias");
+        assert_eq!(models[0]["context_window"], 272000);
+        assert_eq!(models[0]["max_context_window"], 872000);
+        assert_eq!(models[0]["prefer_websockets"], true);
+        assert!(
+            serde_json::to_vec(&body).unwrap().len()
+                <= crate::model_catalog::MAX_CODEX_CATALOG_BYTES
+        );
+    }
+
+    // A second authorized route must constrain the catalog even though the
+    // first route resolves to an official template.
+    let mut second = config.endpoints[0].clone();
+    second.id = "limited".into();
+    second.mappings[0].upstream_model = "unknown-catalog-regression".into();
+    config.endpoints.push(second);
+    let groups = config.model_groups.as_mut().unwrap();
+    let mut binding = groups[0].bindings[0].clone();
+    binding.endpoint_id = "limited".into();
+    groups[0].bindings.push(binding);
+    let body =
+        local_models_json(&config, "/v1/models", Some("client_version=0.156.1"), &[]).unwrap();
+    assert_eq!(body["models"].as_array().unwrap().len(), 1);
+    assert_eq!(body["models"][0]["context_window"], 128000);
+    assert_eq!(body["models"][0]["max_context_window"], 128000);
+    assert_eq!(body["models"][0]["prefer_websockets"], false);
+}
+
+#[test]
 fn codex_catalog_keeps_dynamic_gemini_within_enabled_model_groups() {
     let config: AppConfig = serde_json::from_value(json!({
         "schemaVersion":7,

@@ -1,5 +1,5 @@
-//! Codex `{models:[...]}` catalog built like CLIProxyAPI: clone official
-//! templates by slug, otherwise clone `gpt-5.5` and only rewrite identity.
+//! Codex `{models:[...]}` catalog using upstream templates before registry
+//! metadata, conservative defaults, and the intersection of effective routes.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -10,7 +10,10 @@ use serde_json::{Value, json};
 use super::LocalModelEntry;
 use super::is_codex_chat_model;
 use super::supports_extended_reasoning_levels;
-use crate::model_catalog::{MAX_CODEX_CATALOG_BYTES, ProviderModelMetadata};
+use crate::model_catalog::{
+    MAX_CODEX_CATALOG_BYTES, MetadataSource, ProviderModelMetadata, complete_metadata,
+    parse_provider_model,
+};
 
 const CODEX_CLIENT_MODELS_JSON: &str = include_str!("codex_client_models.json");
 const DEFAULT_TEMPLATE_SLUG: &str = "gpt-5.5";
@@ -23,9 +26,62 @@ pub(crate) struct CodexClientTemplates {
     max_priority: i64,
 }
 
-fn templates() -> &'static RwLock<CodexClientTemplates> {
+pub(super) fn templates() -> &'static RwLock<CodexClientTemplates> {
     static TEMPLATES: OnceLock<RwLock<CodexClientTemplates>> = OnceLock::new();
     TEMPLATES.get_or_init(|| RwLock::new(load_templates()))
+}
+
+impl CodexClientTemplates {
+    fn lookup(&self, id: &str) -> Option<&Value> {
+        let id = id.trim().to_ascii_lowercase();
+        self.by_slug.get(&id).or_else(|| {
+            id.split_once('/')
+                .and_then(|(_, base)| self.by_slug.get(base))
+        })
+    }
+
+    pub(super) fn resolve_metadata(
+        &self,
+        upstream: &str,
+        mut metadata: ProviderModelMetadata,
+    ) -> ProviderModelMetadata {
+        // Resolve before filling missing registry fields or merging routes:
+        // a synthetic default must never override an official template value.
+        let template = self
+            .lookup(upstream)
+            .or_else(|| self.lookup(&metadata.canonical_id));
+        if let Some(official) = template.and_then(|value| parse_provider_model("codex", value)) {
+            metadata.canonical_id = official.canonical_id;
+            metadata.source = MetadataSource::CodexTemplate;
+            macro_rules! prefer_template {
+                ($($field:ident),+ $(,)?) => {
+                    $(metadata.$field = official.$field.or(metadata.$field);)+
+                };
+            }
+            prefer_template!(
+                display_name,
+                description,
+                context_window,
+                max_context_window,
+                max_output_tokens,
+                reasoning_levels,
+                default_reasoning_level,
+                input_modalities,
+                output_modalities,
+                supports_search_tool,
+                prefer_websockets,
+                service_tiers,
+            );
+        }
+        // A known non-Codex provider cannot acquire Codex transport/tool
+        // capabilities just by using a model ID that also has a template.
+        if !metadata.providers.is_empty() && !is_pure_codex_provider(&metadata) {
+            metadata.supports_search_tool = Some(false);
+            metadata.prefer_websockets = Some(false);
+            metadata.service_tiers = Some(Vec::new());
+        }
+        complete_metadata(upstream, metadata)
+    }
 }
 
 fn load_templates() -> CodexClientTemplates {
@@ -161,16 +217,22 @@ fn build_codex_models(models: &[LocalModelEntry], client_version: &str) -> Vec<V
     let templates = templates()
         .read()
         .expect("Codex client catalog lock poisoned");
+    build_codex_models_with_templates(models, client_version, &templates)
+}
+
+fn build_codex_models_with_templates(
+    models: &[LocalModelEntry],
+    client_version: &str,
+    templates: &CodexClientTemplates,
+) -> Vec<Value> {
     let mut result = Vec::with_capacity(models.len());
     let mut extra_indexes = Vec::new();
     for model in models {
         if model.id.is_empty() || model.id.contains('*') {
             continue;
         }
-        let template = templates
-            .by_slug
-            .get(&model.id)
-            .or_else(|| templates.by_slug.get(&model.metadata.id));
+        // The client alias is not evidence of an upstream model's identity.
+        let template = templates.lookup(&model.metadata.canonical_id);
         let (mut entry, from_template) = if let Some(template) = template {
             (template.clone(), true)
         } else {
@@ -179,12 +241,7 @@ fn build_codex_models(models: &[LocalModelEntry], client_version: &str) -> Vec<V
                 false,
             )
         };
-        apply_metadata_overrides(
-            &mut entry,
-            &model.metadata,
-            from_template,
-            model.metadata_route_count,
-        );
+        apply_metadata_overrides(&mut entry, &model.metadata, from_template);
         if let Some(object) = entry.as_object_mut() {
             object.insert("slug".into(), json!(model.id));
         }
@@ -253,7 +310,6 @@ fn apply_metadata_overrides(
     entry: &mut Value,
     metadata: &ProviderModelMetadata,
     from_template: bool,
-    metadata_route_count: usize,
 ) {
     let Some(object) = entry.as_object_mut() else {
         return;
@@ -267,12 +323,6 @@ fn apply_metadata_overrides(
             "description".into(),
             json!(metadata.description.as_deref().unwrap_or(&metadata.id)),
         );
-        if let Some(context) = metadata.context_window {
-            object.insert("context_window".into(), json!(context));
-        }
-        if let Some(max_context) = metadata.max_context_window {
-            object.insert("max_context_window".into(), json!(max_context));
-        }
     }
     if let Some(context) = metadata.context_window {
         object.insert("context_window".into(), json!(context));
@@ -283,11 +333,19 @@ fn apply_metadata_overrides(
     if let Some(max_output) = metadata.max_output_tokens {
         object.insert("max_tokens".into(), json!(max_output));
     }
-    let apply_route_metadata = !from_template || metadata_route_count > 1;
-    if apply_route_metadata && let Some(levels) = &metadata.reasoning_levels {
+    if let Some(levels) = &metadata.reasoning_levels {
+        // Retain official descriptions for levels that survive aggregation.
+        let template_levels = object
+            .get("supported_reasoning_levels")
+            .and_then(Value::as_array);
         let levels = levels
             .iter()
-            .map(|effort| json!({ "effort": effort, "description": reasoning_description(effort) }))
+            .map(|effort| {
+                template_levels
+                    .and_then(|levels| levels.iter().find(|level| level["effort"] == *effort))
+                    .cloned()
+                    .unwrap_or_else(|| json!({ "effort": effort, "description": reasoning_description(effort) }))
+            })
             .collect::<Vec<_>>();
         if !levels.is_empty() {
             object.insert("supported_reasoning_levels".into(), json!(levels));
@@ -299,7 +357,7 @@ fn apply_metadata_overrides(
             object.insert("default_reasoning_level".into(), json!(default));
         }
     }
-    if apply_route_metadata && let Some(modalities) = &metadata.input_modalities {
+    if let Some(modalities) = &metadata.input_modalities {
         let modalities = modalities
             .iter()
             .map(|modality| modality.to_ascii_lowercase())
@@ -307,15 +365,33 @@ fn apply_metadata_overrides(
             .collect::<Vec<_>>();
         let has_image = modalities.iter().any(|modality| modality == "image");
         object.insert("input_modalities".into(), json!(modalities));
-        if has_image {
-            object.insert("supports_image_detail_original".into(), json!(true));
-        } else {
+        if !has_image {
             object.remove("supports_image_detail_original");
         }
     }
-    let should_clear_capabilities = !from_template
-        || metadata.supports_search_tool != Some(true)
-        || (metadata_route_count > 0 && !is_pure_codex_provider(metadata));
+    let should_clear_capabilities =
+        !from_template || (!metadata.providers.is_empty() && !is_pure_codex_provider(metadata));
+    object.insert(
+        "supports_search_tool".into(),
+        json!(!should_clear_capabilities && metadata.supports_search_tool == Some(true)),
+    );
+    object.insert(
+        "prefer_websockets".into(),
+        json!(!should_clear_capabilities && metadata.prefer_websockets == Some(true)),
+    );
+    if let Some(tiers) = object
+        .get_mut("service_tiers")
+        .and_then(Value::as_array_mut)
+    {
+        tiers.retain(|tier| {
+            !should_clear_capabilities
+                && metadata.service_tiers.as_ref().is_some_and(|allowed| {
+                    tier.get("id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|id| allowed.iter().any(|tier| tier == id))
+                })
+        });
+    }
     if should_clear_capabilities {
         object.insert("supports_search_tool".into(), json!(false));
         object.insert("prefer_websockets".into(), json!(false));
@@ -401,5 +477,148 @@ fn sanitize_reasoning_levels(entry: &mut Value, client_version: &str) {
         && let Some(object) = entry.as_object_mut()
     {
         object.insert("default_reasoning_level".into(), json!(allowed[0]));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model_catalog::{aggregate_metadata, fallback_metadata, parse_provider_metadata};
+    use sumpter_core::capability::ModelCapability;
+
+    fn render(
+        templates: &CodexClientTemplates,
+        id: &str,
+        routes: Vec<ProviderModelMetadata>,
+    ) -> Value {
+        let model = LocalModelEntry {
+            id: id.into(),
+            capabilities: vec![ModelCapability::Text],
+            metadata: aggregate_metadata(id, routes),
+        };
+        build_codex_models_with_templates(&[model], "0.156.1", templates).remove(0)
+    }
+
+    #[test]
+    fn official_template_wins_over_sparse_or_conflicting_registry_fields() {
+        let templates = load_templates();
+        for slug in ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"] {
+            for fields in [
+                json!({"id": slug, "context_length": 272000}),
+                json!({
+                    "id": slug, "context_length": 128000, "max_context_window": 128000,
+                    "thinking": {"levels": ["none"]}, "default_reasoning_level": "none",
+                    "input_modalities": ["text"], "supports_web_search": false,
+                    "prefer_websockets": false, "service_tiers": [],
+                    "max_completion_tokens": 64000
+                }),
+            ] {
+                // The real registry repeats the same sparse model across plans.
+                let index = parse_provider_metadata(&json!({
+                    "codex-team": [fields.clone()], "codex-plus": [fields.clone()], "codex-pro": [fields]
+                })).unwrap();
+                let metadata =
+                    templates.resolve_metadata(slug, index.lookup(slug).unwrap().clone());
+                assert_eq!(metadata.source, MetadataSource::CodexTemplate);
+                let entry = render(&templates, slug, vec![metadata]);
+                let official = &templates.by_slug[slug];
+                for field in [
+                    "context_window",
+                    "max_context_window",
+                    "input_modalities",
+                    "supported_reasoning_levels",
+                    "default_reasoning_level",
+                    "supports_search_tool",
+                    "prefer_websockets",
+                    "service_tiers",
+                    "base_instructions",
+                    "model_messages",
+                    "supports_image_detail_original",
+                ] {
+                    assert_eq!(entry[field], official[field], "{slug}: {field}");
+                }
+                assert_eq!(entry["context_window"], 272000);
+                assert_eq!(entry["max_context_window"], 872000);
+                if index.lookup(slug).unwrap().max_output_tokens.is_some() {
+                    // Registry fields still fill gaps in the official template.
+                    assert_eq!(entry["max_tokens"], 64000);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn upstream_template_survives_client_alias_and_absent_registry() {
+        let templates = load_templates();
+        let upstream = "codex-team/gpt-6.1-sol";
+        let metadata = templates.resolve_metadata(upstream, fallback_metadata(upstream));
+        let entry = render(&templates, "my-coding-model", vec![metadata]);
+        assert_eq!(entry["slug"], "my-coding-model");
+        assert_eq!(entry["display_name"], "GPT-6.1-Sol");
+        assert_eq!(entry["max_context_window"], 872000);
+        assert_eq!(entry["supports_search_tool"], true);
+
+        // A client alias resembling an official model must not select its template.
+        let metadata =
+            templates.resolve_metadata("custom-upstream", fallback_metadata("custom-upstream"));
+        let entry = render(&templates, "gpt-6.1-sol", vec![metadata]);
+        assert_eq!(entry["slug"], "gpt-6.1-sol");
+        assert_eq!(entry["context_window"], 128000);
+        assert_eq!(entry["max_context_window"], 128000);
+        assert_eq!(entry["input_modalities"], json!(["text"]));
+        assert_eq!(entry["supports_search_tool"], false);
+        assert_eq!(entry["prefer_websockets"], false);
+        assert_eq!(entry["service_tiers"], json!([]));
+    }
+
+    #[test]
+    fn routes_intersect_after_template_resolution() {
+        let templates = load_templates();
+        let official = templates.resolve_metadata("gpt-6.1-sol", fallback_metadata("gpt-6.1-sol"));
+        let index = parse_provider_metadata(&json!({"provider-b": [{
+            "id": "limited-upstream", "context_length": 64000,
+            "thinking": {"levels": ["low"]}, "input_modalities": ["text"]
+        }]}))
+        .unwrap();
+        let limited = templates.resolve_metadata(
+            "limited-upstream",
+            index.lookup("limited-upstream").unwrap().clone(),
+        );
+        for routes in [
+            vec![official.clone(), limited.clone()],
+            vec![limited, official],
+        ] {
+            let entry = render(&templates, "gpt-6.1-sol", routes);
+            assert_eq!(entry["context_window"], 64000);
+            assert_eq!(entry["max_context_window"], 64000);
+            assert_eq!(entry["input_modalities"], json!(["text"]));
+            assert_eq!(
+                entry["supported_reasoning_levels"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(entry["default_reasoning_level"], "low");
+            assert_eq!(entry["supports_search_tool"], false);
+            assert_eq!(entry["prefer_websockets"], false);
+            assert_eq!(entry["service_tiers"], json!([]));
+        }
+    }
+
+    #[test]
+    fn non_codex_provider_keeps_template_windows_without_codex_capabilities() {
+        let templates = load_templates();
+        let index =
+            parse_provider_metadata(&json!({"provider-b": [{"id": "gpt-6.1-sol"}]})).unwrap();
+        let metadata =
+            templates.resolve_metadata("gpt-6.1-sol", index.lookup("gpt-6.1-sol").unwrap().clone());
+        let entry = render(&templates, "shared", vec![metadata]);
+        assert_eq!(entry["context_window"], 272000);
+        assert_eq!(entry["max_context_window"], 872000);
+        assert_eq!(entry["supports_search_tool"], false);
+        assert_eq!(entry["prefer_websockets"], false);
+        assert_eq!(entry["service_tiers"], json!([]));
+        assert_eq!(entry.get("apply_patch_tool_type"), Some(&Value::Null));
     }
 }

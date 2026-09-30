@@ -905,13 +905,27 @@ fn sticky_indexes_upgrade_without_resetting_projection_state() {
     drop(connection);
 
     let (store, _) = RuntimeStore::new(&path).unwrap();
-    // Maintenance is deliberately incremental; give the worker one idle turn
-    // per index, then flush to ensure its command queue has drained.
-    for _ in 0..8 {
-        std::thread::sleep(std::time::Duration::from_millis(30));
-        store.flush().unwrap();
-    }
     let connection = Connection::open(&path).unwrap();
+    // Maintenance is incremental and flush only drains the command queue.
+    // Wait for its actual completion, including the final readiness update.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let ready = connection
+            .query_row(
+                "SELECT value FROM runtime_meta WHERE key='projection_indexes_ready'",
+                params![],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        if ready == "1" {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "index maintenance timed out"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(30));
+    }
     let missing = connection
         .query_row(
             "SELECT COUNT(*) FROM (SELECT name FROM sqlite_master WHERE type='index' AND name IN

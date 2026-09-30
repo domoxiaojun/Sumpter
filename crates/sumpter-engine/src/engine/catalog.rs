@@ -81,7 +81,6 @@ pub(super) struct LocalModelEntry {
     pub(super) id: String,
     pub(super) capabilities: Vec<sumpter_core::capability::ModelCapability>,
     pub(super) metadata: ProviderModelMetadata,
-    pub(super) metadata_route_count: usize,
 }
 
 pub(super) fn collect_local_models(
@@ -90,6 +89,9 @@ pub(super) fn collect_local_models(
     requested_id: Option<&str>,
 ) -> Vec<LocalModelEntry> {
     let metadata_index = provider_metadata_snapshot();
+    let templates = codex_client_catalog::templates()
+        .read()
+        .expect("Codex client catalog lock poisoned");
     let mut models = std::collections::BTreeMap::<
         String,
         (
@@ -191,13 +193,6 @@ pub(super) fn collect_local_models(
                             .lookup(&upstream)
                             .cloned()
                             .unwrap_or_else(|| fallback_metadata(&upstream));
-                        if metadata.source == MetadataSource::Fallback {
-                            let client_metadata = metadata_index.lookup(&model).cloned();
-                            if let Some(client_metadata) = client_metadata {
-                                metadata = client_metadata;
-                                metadata.id = upstream.clone();
-                            }
-                        }
                         if metadata.source == MetadataSource::Fallback
                             && endpoint.catalog.as_ref().is_some_and(|catalog| {
                                 catalog.models.iter().any(|model| {
@@ -210,9 +205,7 @@ pub(super) fn collect_local_models(
                         }
                         upstream_candidates
                             .entry(upstream.clone())
-                            .or_insert_with(|| {
-                                crate::model_catalog::complete_metadata(&upstream, metadata)
-                            });
+                            .or_insert_with(|| templates.resolve_metadata(&upstream, metadata));
                     }
                 }
                 entry.1.extend(upstream_candidates.into_values());
@@ -223,21 +216,10 @@ pub(super) fn collect_local_models(
         .into_iter()
         .map(|(id, (mut capabilities, metadata))| {
             capabilities.sort_by_key(|capability| capability.as_str());
-            let mut unique_metadata = std::collections::BTreeMap::new();
-            for candidate in metadata {
-                let key = if candidate.canonical_id.is_empty() {
-                    candidate.id.clone()
-                } else {
-                    candidate.canonical_id.clone()
-                };
-                unique_metadata.entry(key).or_insert(candidate);
-            }
-            let metadata_route_count = unique_metadata.len();
             LocalModelEntry {
-                metadata: aggregate_metadata(&id, unique_metadata.into_values()),
+                metadata: aggregate_metadata(&id, metadata),
                 id,
                 capabilities,
-                metadata_route_count,
             }
         })
         .collect()

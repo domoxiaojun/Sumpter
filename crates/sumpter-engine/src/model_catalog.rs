@@ -65,6 +65,7 @@ pub struct ProviderCatalogSnapshot {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum MetadataSource {
+    CodexTemplate,
     #[default]
     ProviderRegistry,
     EndpointCatalog,
@@ -184,7 +185,7 @@ fn json_string_list(object: &serde_json::Map<String, Value>, keys: &[&str]) -> O
             })
             .map(ToString::to_string)
             .collect::<Vec<_>>();
-        (!values.is_empty()).then_some(values)
+        Some(values)
     })
 }
 
@@ -209,7 +210,7 @@ fn json_reasoning_levels(object: &serde_json::Map<String, Value>) -> Option<Vec<
     (!levels.is_empty()).then_some(levels)
 }
 
-fn parse_provider_model(provider: &str, value: &Value) -> Option<ProviderModelMetadata> {
+pub(crate) fn parse_provider_model(provider: &str, value: &Value) -> Option<ProviderModelMetadata> {
     let object = value.as_object()?;
     let id = json_string(object, &["id", "slug", "name", "model", "model_id"])?;
     let metadata = ProviderModelMetadata {
@@ -224,7 +225,7 @@ fn parse_provider_model(provider: &str, value: &Value) -> Option<ProviderModelMe
         max_context_window: json_positive_u64(object, &["max_context_window"]),
         max_output_tokens: json_positive_u64(
             object,
-            &["max_completion_tokens", "max_output_tokens"],
+            &["max_completion_tokens", "max_output_tokens", "max_tokens"],
         ),
         reasoning_levels: json_reasoning_levels(object),
         default_reasoning_level: json_string(object, &["default_reasoning_level"]),
@@ -237,7 +238,8 @@ fn parse_provider_model(provider: &str, value: &Value) -> Option<ProviderModelMe
             &["supportedOutputModalities", "output_modalities"],
         ),
         supports_search_tool: object
-            .get("supports_web_search")
+            .get("supports_search_tool")
+            .or_else(|| object.get("supports_web_search"))
             .and_then(Value::as_bool)
             .or_else(|| {
                 object
@@ -388,6 +390,13 @@ pub(crate) fn aggregate_metadata(
         aggregate.reasoning_levels = Some(vec!["none".into()]);
         aggregate.default_reasoning_level = Some("none".into());
     }
+    if let (Some(context), Some(max_context)) =
+        (aggregate.context_window, aggregate.max_context_window)
+        && context > max_context
+    {
+        aggregate.context_window = Some(max_context);
+        aggregate.conflicts.push("context_window".into());
+    }
     aggregate
 }
 
@@ -403,10 +412,22 @@ pub(crate) fn complete_metadata(
         metadata.description = defaults.description;
     }
     if metadata.context_window.is_none() {
-        metadata.context_window = defaults.context_window;
+        metadata.context_window = Some(
+            defaults
+                .context_window
+                .unwrap_or(128_000)
+                .min(metadata.max_context_window.unwrap_or(u64::MAX)),
+        );
     }
     if metadata.max_context_window.is_none() {
-        metadata.max_context_window = defaults.max_context_window;
+        metadata.max_context_window = metadata.context_window;
+    }
+    if let (Some(context), Some(max_context)) =
+        (metadata.context_window, metadata.max_context_window)
+        && context > max_context
+    {
+        metadata.context_window = Some(max_context);
+        metadata.conflicts.push("context_window".into());
     }
     if metadata.max_output_tokens.is_none() {
         metadata.max_output_tokens = defaults.max_output_tokens;
@@ -1197,6 +1218,56 @@ mod tests {
             Some(vec!["text".into(), "image".into()])
         );
         assert_eq!(model.supports_search_tool, Some(true));
+    }
+
+    #[test]
+    fn sparse_metadata_fallback_keeps_context_windows_consistent() {
+        for (fields, context, max_context) in [
+            (
+                json!({"id": "custom", "context_length": 272000}),
+                272000,
+                272000,
+            ),
+            (
+                json!({"id": "custom", "max_context_window": 32000}),
+                32000,
+                32000,
+            ),
+            (
+                json!({"id": "custom", "context_length": 272000, "max_context_window": 128000}),
+                128000,
+                128000,
+            ),
+            (json!({"id": "custom"}), 128000, 128000),
+        ] {
+            let metadata =
+                complete_metadata("custom", parse_provider_model("custom", &fields).unwrap());
+            assert_eq!(metadata.context_window, Some(context));
+            assert_eq!(metadata.max_context_window, Some(max_context));
+        }
+    }
+
+    #[test]
+    fn aggregate_metadata_never_emits_an_invalid_context_window_pair() {
+        let left = complete_metadata(
+            "left",
+            parse_provider_model(
+                "provider-a",
+                &json!({"id": "left", "context_length": 272000, "max_context_window": 872000}),
+            )
+            .unwrap(),
+        );
+        let right = complete_metadata(
+            "right",
+            parse_provider_model(
+                "provider-b",
+                &json!({"id": "right", "context_length": 128000, "max_context_window": 64000}),
+            )
+            .unwrap(),
+        );
+        let aggregate = aggregate_metadata("shared", [left, right]);
+        assert_eq!(aggregate.context_window, Some(64000));
+        assert_eq!(aggregate.max_context_window, Some(64000));
     }
 
     #[test]
