@@ -6,6 +6,11 @@ use serde_json::{Value, json};
 
 use sumpter_core::config::AppConfig;
 
+use crate::model_catalog::{
+    MetadataSource, ProviderModelMetadata, aggregate_metadata, fallback_metadata,
+    provider_metadata_snapshot,
+};
+
 use super::context::header_value;
 use super::http_response::{error_response, json_response};
 use super::protocol::decoded_query_value;
@@ -75,6 +80,8 @@ pub(super) fn local_model_id_from_path(path: &str) -> Option<&str> {
 pub(super) struct LocalModelEntry {
     pub(super) id: String,
     pub(super) capabilities: Vec<sumpter_core::capability::ModelCapability>,
+    pub(super) metadata: ProviderModelMetadata,
+    pub(super) metadata_route_count: usize,
 }
 
 pub(super) fn collect_local_models(
@@ -82,8 +89,14 @@ pub(super) fn collect_local_models(
     requested_capability: Option<sumpter_core::capability::ModelCapability>,
     requested_id: Option<&str>,
 ) -> Vec<LocalModelEntry> {
-    let mut models =
-        std::collections::BTreeMap::<String, Vec<sumpter_core::capability::ModelCapability>>::new();
+    let metadata_index = provider_metadata_snapshot();
+    let mut models = std::collections::BTreeMap::<
+        String,
+        (
+            Vec<sumpter_core::capability::ModelCapability>,
+            Vec<ProviderModelMetadata>,
+        ),
+    >::new();
     for scoped in config
         .routing_endpoints()
         .iter()
@@ -158,20 +171,74 @@ pub(super) fn collect_local_models(
                 }
             }
             if !resolved_capabilities.is_empty() {
-                let entry = models.entry(model).or_default();
+                let entry = models.entry(model.clone()).or_default();
                 for capability in resolved_capabilities {
-                    if !entry.contains(&capability) {
-                        entry.push(capability);
+                    if !entry.0.contains(&capability) {
+                        entry.0.push(capability);
                     }
                 }
+                let mut upstream_candidates = std::collections::BTreeMap::new();
+                for wanted in [
+                    sumpter_core::capability::ModelCapability::Text,
+                    sumpter_core::capability::ModelCapability::Image,
+                    sumpter_core::capability::ModelCapability::Video,
+                    sumpter_core::capability::ModelCapability::Live,
+                    sumpter_core::capability::ModelCapability::Files,
+                ] {
+                    if let Some(mapping) = endpoint.mapping_for_capability(&model, wanted) {
+                        let upstream = mapping.upstream_model_for(&model);
+                        let mut metadata = metadata_index
+                            .lookup(&upstream)
+                            .cloned()
+                            .unwrap_or_else(|| fallback_metadata(&upstream));
+                        if metadata.source == MetadataSource::Fallback {
+                            let client_metadata = metadata_index.lookup(&model).cloned();
+                            if let Some(client_metadata) = client_metadata {
+                                metadata = client_metadata;
+                                metadata.id = upstream.clone();
+                            }
+                        }
+                        if metadata.source == MetadataSource::Fallback
+                            && endpoint.catalog.as_ref().is_some_and(|catalog| {
+                                catalog.models.iter().any(|model| {
+                                    sumpter_core::model_name::clean(model)
+                                        == sumpter_core::model_name::clean(&upstream)
+                                })
+                            })
+                        {
+                            metadata.source = MetadataSource::EndpointCatalog;
+                        }
+                        upstream_candidates
+                            .entry(upstream.clone())
+                            .or_insert_with(|| {
+                                crate::model_catalog::complete_metadata(&upstream, metadata)
+                            });
+                    }
+                }
+                entry.1.extend(upstream_candidates.into_values());
             }
         }
     }
     models
         .into_iter()
-        .map(|(id, mut capabilities)| {
+        .map(|(id, (mut capabilities, metadata))| {
             capabilities.sort_by_key(|capability| capability.as_str());
-            LocalModelEntry { id, capabilities }
+            let mut unique_metadata = std::collections::BTreeMap::new();
+            for candidate in metadata {
+                let key = if candidate.canonical_id.is_empty() {
+                    candidate.id.clone()
+                } else {
+                    candidate.canonical_id.clone()
+                };
+                unique_metadata.entry(key).or_insert(candidate);
+            }
+            let metadata_route_count = unique_metadata.len();
+            LocalModelEntry {
+                metadata: aggregate_metadata(&id, unique_metadata.into_values()),
+                id,
+                capabilities,
+                metadata_route_count,
+            }
         })
         .collect()
 }
@@ -262,10 +329,12 @@ pub(super) fn local_models_json(
     if let Some(client_version) =
         query.and_then(|query| decoded_query_value(query, "client_version"))
     {
-        return Ok(codex_client_catalog::codex_models_payload(
-            &models,
-            &client_version,
-        ));
+        let payload = codex_client_catalog::codex_models_payload(&models, &client_version);
+        let bytes = serde_json::to_vec(&payload).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        if bytes.len() > crate::model_catalog::MAX_CODEX_CATALOG_BYTES {
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+        return Ok(payload);
     }
     let user_agent = header_value(headers, "user-agent").unwrap_or("");
     let grok_shell = user_agent.to_ascii_lowercase().contains("grok-shell");

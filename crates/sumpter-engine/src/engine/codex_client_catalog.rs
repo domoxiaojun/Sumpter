@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use super::LocalModelEntry;
 use super::is_codex_chat_model;
 use super::supports_extended_reasoning_levels;
+use crate::model_catalog::{MAX_CODEX_CATALOG_BYTES, ProviderModelMetadata};
 
 const CODEX_CLIENT_MODELS_JSON: &str = include_str!("codex_client_models.json");
 const DEFAULT_TEMPLATE_SLUG: &str = "gpt-5.5";
@@ -119,7 +120,41 @@ pub(crate) fn template_revision() -> u64 {
 }
 
 pub(super) fn codex_models_payload(models: &[LocalModelEntry], client_version: &str) -> Value {
-    json!({ "models": build_codex_models(models, client_version) })
+    let mut entries = build_codex_models(models, client_version);
+    let payload = json!({ "models": entries });
+    if serde_json::to_vec(&payload)
+        .map(|bytes| bytes.len() <= MAX_CODEX_CATALOG_BYTES)
+        .unwrap_or(false)
+    {
+        return payload;
+    }
+    entries = compact_catalog_entries(entries);
+    json!({ "models": entries })
+}
+
+const FALLBACK_INSTRUCTIONS: &str =
+    "You are Codex, a coding agent. You and the user share one workspace.";
+
+fn compact_catalog_entries(mut entries: Vec<Value>) -> Vec<Value> {
+    for entry in &mut entries {
+        let Some(object) = entry.as_object_mut() else {
+            continue;
+        };
+        object.insert("base_instructions".into(), json!(FALLBACK_INSTRUCTIONS));
+        object.insert(
+            "model_messages".into(),
+            json!({
+                "instructions_template": FALLBACK_INSTRUCTIONS,
+                "instructions_variables": null,
+                "approvals": null,
+                "collaboration_modes": null,
+                "auto_review": null,
+                "permissions": null,
+                "multi_agent": null
+            }),
+        );
+    }
+    entries
 }
 
 fn build_codex_models(models: &[LocalModelEntry], client_version: &str) -> Vec<Value> {
@@ -132,16 +167,26 @@ fn build_codex_models(models: &[LocalModelEntry], client_version: &str) -> Vec<V
         if model.id.is_empty() || model.id.contains('*') {
             continue;
         }
-        let (mut entry, from_template) = if let Some(template) = templates.by_slug.get(&model.id) {
+        let template = templates
+            .by_slug
+            .get(&model.id)
+            .or_else(|| templates.by_slug.get(&model.metadata.id));
+        let (mut entry, from_template) = if let Some(template) = template {
             (template.clone(), true)
         } else {
-            (templates.default_template.clone(), false)
+            (
+                compact_fallback_template(&templates.default_template),
+                false,
+            )
         };
-        if !from_template && let Some(object) = entry.as_object_mut() {
+        apply_metadata_overrides(
+            &mut entry,
+            &model.metadata,
+            from_template,
+            model.metadata_route_count,
+        );
+        if let Some(object) = entry.as_object_mut() {
             object.insert("slug".into(), json!(model.id));
-            object.insert("display_name".into(), json!(model.id));
-            object.insert("description".into(), json!(model.id));
-            object.insert("prefer_websockets".into(), json!(false));
         }
         if !is_codex_chat_model(&model.capabilities)
             && let Some(object) = entry.as_object_mut()
@@ -167,6 +212,131 @@ fn build_codex_models(models: &[LocalModelEntry], client_version: &str) -> Vec<V
 
     result.sort_by_key(json_priority);
     result
+}
+
+fn compact_fallback_template(template: &Value) -> Value {
+    let mut entry = template.clone();
+    let Some(object) = entry.as_object_mut() else {
+        return entry;
+    };
+    object.insert("base_instructions".into(), json!(FALLBACK_INSTRUCTIONS));
+    object.insert(
+        "model_messages".into(),
+        json!({
+            "instructions_template": FALLBACK_INSTRUCTIONS,
+            "instructions_variables": null,
+            "approvals": null,
+            "collaboration_modes": null,
+            "auto_review": null,
+            "permissions": null,
+            "multi_agent": null
+        }),
+    );
+    object.insert("supports_search_tool".into(), json!(false));
+    object.insert("prefer_websockets".into(), json!(false));
+    object.insert("service_tiers".into(), json!([]));
+    object.insert("apply_patch_tool_type".into(), Value::Null);
+    object.insert("upgrade".into(), Value::Null);
+    object.insert("availability_nux".into(), Value::Null);
+    entry
+}
+
+fn is_pure_codex_provider(metadata: &ProviderModelMetadata) -> bool {
+    !metadata.providers.is_empty()
+        && metadata
+            .providers
+            .iter()
+            .all(|provider| provider.contains("codex") || provider == "openai")
+}
+
+fn apply_metadata_overrides(
+    entry: &mut Value,
+    metadata: &ProviderModelMetadata,
+    from_template: bool,
+    metadata_route_count: usize,
+) {
+    let Some(object) = entry.as_object_mut() else {
+        return;
+    };
+    if !from_template {
+        object.insert(
+            "display_name".into(),
+            json!(metadata.display_name.as_deref().unwrap_or(&metadata.id)),
+        );
+        object.insert(
+            "description".into(),
+            json!(metadata.description.as_deref().unwrap_or(&metadata.id)),
+        );
+        if let Some(context) = metadata.context_window {
+            object.insert("context_window".into(), json!(context));
+        }
+        if let Some(max_context) = metadata.max_context_window {
+            object.insert("max_context_window".into(), json!(max_context));
+        }
+    }
+    if let Some(context) = metadata.context_window {
+        object.insert("context_window".into(), json!(context));
+    }
+    if let Some(max_context) = metadata.max_context_window {
+        object.insert("max_context_window".into(), json!(max_context));
+    }
+    if let Some(max_output) = metadata.max_output_tokens {
+        object.insert("max_tokens".into(), json!(max_output));
+    }
+    let apply_route_metadata = !from_template || metadata_route_count > 1;
+    if apply_route_metadata && let Some(levels) = &metadata.reasoning_levels {
+        let levels = levels
+            .iter()
+            .map(|effort| json!({ "effort": effort, "description": reasoning_description(effort) }))
+            .collect::<Vec<_>>();
+        if !levels.is_empty() {
+            object.insert("supported_reasoning_levels".into(), json!(levels));
+            let default = metadata
+                .default_reasoning_level
+                .as_deref()
+                .filter(|level| levels.iter().any(|entry| entry["effort"] == *level))
+                .unwrap_or_else(|| levels[0]["effort"].as_str().unwrap_or("none"));
+            object.insert("default_reasoning_level".into(), json!(default));
+        }
+    }
+    if apply_route_metadata && let Some(modalities) = &metadata.input_modalities {
+        let modalities = modalities
+            .iter()
+            .map(|modality| modality.to_ascii_lowercase())
+            .filter(|modality| modality == "text" || modality == "image")
+            .collect::<Vec<_>>();
+        let has_image = modalities.iter().any(|modality| modality == "image");
+        object.insert("input_modalities".into(), json!(modalities));
+        if has_image {
+            object.insert("supports_image_detail_original".into(), json!(true));
+        } else {
+            object.remove("supports_image_detail_original");
+        }
+    }
+    let should_clear_capabilities = !from_template
+        || metadata.supports_search_tool != Some(true)
+        || (metadata_route_count > 0 && !is_pure_codex_provider(metadata));
+    if should_clear_capabilities {
+        object.insert("supports_search_tool".into(), json!(false));
+        object.insert("prefer_websockets".into(), json!(false));
+        object.insert("service_tiers".into(), json!([]));
+        object.insert("apply_patch_tool_type".into(), Value::Null);
+        object.insert("upgrade".into(), Value::Null);
+        object.insert("availability_nux".into(), Value::Null);
+    }
+}
+
+fn reasoning_description(level: &str) -> &'static str {
+    match level {
+        "none" => "No reasoning",
+        "minimal" => "Fastest responses with minimal reasoning",
+        "low" => "Fast responses with lighter reasoning",
+        "medium" => "Balances speed and reasoning depth for everyday tasks",
+        "high" => "Greater reasoning depth for complex problems",
+        "xhigh" => "Extra high reasoning depth for complex problems",
+        "max" => "Maximum available reasoning depth for complex problems",
+        _ => "Reasoning effort supported by this model",
+    }
 }
 
 fn extra_display_name(entry: &Value) -> String {

@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use sumpter_core::config::AppConfig;
 
 use crate::engine::catalog::{local_models_json, supports_extended_reasoning_levels};
+use crate::model_catalog::{aggregate_metadata, parse_provider_metadata};
 
 #[test]
 fn codex_model_reasoning_levels_follow_client_version() {
@@ -17,6 +18,12 @@ fn codex_model_reasoning_levels_follow_client_version() {
 }
 
 fn catalog_config() -> AppConfig {
+    let _ = crate::model_catalog::replace_provider_metadata(&json!({
+        "openai": [
+            {"id":"gpt-5.6-sol","context_length":272000,"max_context_window":872000,"thinking":{"levels":["low","medium","high","xhigh","max","ultra"]},"supportedInputModalities":["text"],"native_capabilities":{"web_search":true}},
+            {"id":"gpt-4o","context_length":128000,"max_context_window":128000,"thinking":{"levels":["low","medium","high","xhigh"]},"supportedInputModalities":["text"]}
+        ]
+    }));
     AppConfig::from_json(
         r#"{
               "schemaVersion": 6,
@@ -73,6 +80,40 @@ fn codex_catalog_keeps_dynamic_gemini_within_enabled_model_groups() {
     let body =
         local_models_json(&disabled, "/v1/models", Some("client_version=0.149.1"), &[]).unwrap();
     assert!(body["models"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn codex_catalog_uses_common_metadata_across_upstream_routes() {
+    let index = parse_provider_metadata(&json!({
+        "provider-a": [{
+            "id": "provider-a/shared-metadata",
+            "context_length": 256000,
+            "max_context_window": 256000,
+            "max_completion_tokens": 64000,
+            "thinking": {"levels": ["low", "high"]},
+            "supportedInputModalities": ["text", "image"],
+            "native_capabilities": {"web_search": true}
+        }],
+        "provider-b": [{
+            "id": "provider-b/shared-metadata",
+            "context_length": 128000,
+            "max_context_window": 128000,
+            "max_completion_tokens": 32000,
+            "thinking": {"levels": ["low"]},
+            "supportedInputModalities": ["text"],
+            "native_capabilities": {"web_search": false}
+        }]
+    }))
+    .expect("metadata index");
+    let first = index.lookup("provider-a/shared-metadata").unwrap().clone();
+    let second = index.lookup("provider-b/shared-metadata").unwrap().clone();
+    let model = aggregate_metadata("shared-metadata", [first, second]);
+    assert_eq!(model.context_window, Some(128000));
+    assert_eq!(model.max_context_window, Some(128000));
+    assert_eq!(model.max_output_tokens, Some(32000));
+    assert_eq!(model.input_modalities, Some(vec!["text".into()]));
+    assert_eq!(model.supports_search_tool, Some(false));
+    assert_eq!(model.reasoning_levels, Some(vec!["low".into()]));
 }
 
 #[test]
@@ -308,4 +349,28 @@ fn local_models_catalog_resolves_each_capability_independently() {
     let image_only = local_models_json(&config, "/v1/models", Some("capability=image"), &[])
         .expect("image catalog");
     assert_eq!(image_only["data"][0]["id"], "gpt-image-2");
+}
+
+#[test]
+fn codex_catalog_stays_within_client_size_limit_for_custom_models() {
+    let custom_models: Vec<String> = (0..80)
+        .map(|index| format!("custom-model-{index}"))
+        .collect();
+    let config: AppConfig = serde_json::from_value(json!({
+        "schemaVersion": 7,
+        "endpoints": [{
+            "id": "custom",
+            "name": "custom",
+            "baseURL": "https://custom.invalid",
+            "protocol": "openai",
+            "enabled": true,
+            "catalog": {"models": custom_models},
+            "mappings": [{"clientPattern": "custom-model-*", "upstreamModel": ""}]
+        }]
+    }))
+    .unwrap();
+    let body = local_models_json(&config, "/v1/models", Some("client_version=0.156.1"), &[])
+        .expect("custom catalog");
+    let bytes = serde_json::to_vec(&body).expect("catalog JSON");
+    assert!(bytes.len() <= crate::model_catalog::MAX_CODEX_CATALOG_BYTES);
 }
