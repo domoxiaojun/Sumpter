@@ -59,6 +59,7 @@ struct RelayState {
     video_session_endpoint_id: Option<String>,
     video_session_model: Option<String>,
     idle_timeout: Option<Duration>,
+    prefetched: Option<(usize, Instant)>,
     guard: CompletionGuard,
     finished: bool,
 }
@@ -143,9 +144,26 @@ impl RelayState {
 }
 
 async fn read_next(state: &mut RelayState) -> Result<Option<Bytes>, StreamReadError> {
+    let prefetched_at = match state.prefetched.as_mut() {
+        Some((remaining, _)) if *remaining > 0 => {
+            *remaining -= 1;
+            return state
+                .upstream
+                .next()
+                .await
+                .transpose()
+                .map_err(StreamReadError::Upstream);
+        }
+        _ => state.prefetched.take().map(|(_, at)| at),
+    };
     let next = state.upstream.next();
     match state.idle_timeout {
-        Some(deadline) => match tokio::time::timeout(deadline, next).await {
+        Some(deadline) => match tokio::time::timeout(
+            prefetched_at.map_or(deadline, |at| deadline.saturating_sub(at.elapsed())),
+            next,
+        )
+        .await
+        {
             Ok(item) => item.transpose().map_err(StreamReadError::Upstream),
             Err(_) => Err(StreamReadError::IdleTimeout(deadline)),
         },
@@ -165,6 +183,8 @@ impl Engine {
         method: &str,
         path_and_query: &str,
         attempt_started: Instant,
+        attempt_ttfb_ms: i64,
+        prefetched: Option<(usize, Instant)>,
         is_failover: bool,
         capture_attempt_id: String,
         request_declared_stop_sequences: bool,
@@ -229,8 +249,7 @@ impl Engine {
                 }),
             },
         ]);
-        // 进到 relay 就代表响应头已到:此刻的 elapsed 即该次尝试的首字节耗时。
-        let attempt_ttfb_ms = attempt_started.elapsed().as_millis() as i64;
+        // 响应头延迟由 dispatch 记录，不包含可选流前奏检查的等待时间。
         let mut in_flight = self.upstream_event(
             endpoint,
             response.status as i64,
@@ -447,6 +466,7 @@ impl Engine {
             video_session_endpoint_id: video_create.then(|| endpoint.endpoint_id.clone()),
             video_session_model: video_create.then(|| endpoint.routed_model.clone()),
             idle_timeout,
+            prefetched,
             guard,
             finished: false,
         };

@@ -232,6 +232,7 @@ pub fn validate_config(config: &AppConfig) -> Result<(), String> {
     if config.retry.max_deferred_rounds < 0
         || config.retry.max_retry_duration_seconds < 0.0
         || config.retry.max_500_retries < 0
+        || config.retry.max_stream_error_retries < 0
         || config.retry.session_sticky_retries < 0
         || config
             .retry

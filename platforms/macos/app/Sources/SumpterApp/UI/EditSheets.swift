@@ -6,6 +6,8 @@ struct RetryPolicySheet: View {
     let onClose: () -> Void
     @State private var responseTimeout: String
     @State private var streamIdle: String
+    @State private var maxStreamErrorRetries: String
+    @State private var failoverOnStreamError: Bool
     @State private var max500Retries: String
     @State private var failoverOn500: Bool
     @State private var retryDelaySeconds: String
@@ -21,6 +23,8 @@ struct RetryPolicySheet: View {
         let retry = model.config.retry
         _responseTimeout = State(initialValue: retry.responseTimeoutSeconds.map { String($0) } ?? "")
         _streamIdle = State(initialValue: retry.streamIdleTimeoutSeconds.map { String($0) } ?? "")
+        _maxStreamErrorRetries = State(initialValue: "\(retry.maxStreamErrorRetries)")
+        _failoverOnStreamError = State(initialValue: retry.failoverOnStreamError)
         _max500Retries = State(initialValue: "\(retry.max500Retries)")
         _failoverOn500 = State(initialValue: retry.failoverOn500)
         _retryDelaySeconds = State(initialValue: retry.retryDelaySeconds.map { String($0) } ?? "")
@@ -105,6 +109,23 @@ struct RetryPolicySheet: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                Text("HTTP 200 流内错误处理")
+                    .font(.headline)
+                    .padding(.top, 4)
+                FormLine(title: "入口内流错误重试") {
+                    TextField("0", text: $maxStreamErrorRetries)
+                        .frame(width: 160)
+                }
+                FormLine(title: "流错误后切换入口") {
+                    Toggle("", isOn: $failoverOnStreamError)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .accessibilityLabel("流内暂时性错误重试耗尽后切换入口")
+                }
+                Text("仅处理 Responses 流在输出前的限流、服务器内部错误和服务暂不可用；已输出正文、推理或工具调用时不重试。0 表示不在当前入口额外重试；切换开关独立控制耗尽后是否尝试下一个入口。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 FormLine(title: "故障重试最大轮数") {
                     TextField("0=不限制轮数", text: $deferredRounds)
                         .frame(width: 160)
@@ -133,6 +154,8 @@ struct RetryPolicySheet: View {
                 try await model.updateRetryPolicyAndSave(
                     responseTimeoutText: responseTimeout,
                     streamIdleTimeoutText: streamIdle,
+                    maxStreamErrorRetriesText: maxStreamErrorRetries,
+                    failoverOnStreamError: failoverOnStreamError,
                     max500RetriesText: max500Retries,
                     failoverOn500: failoverOn500,
                     retryDelaySecondsText: retryDelaySeconds,

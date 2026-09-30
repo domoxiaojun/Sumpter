@@ -872,10 +872,12 @@ test('v6 retry settings preserve HTTP 500 failover and retry delay fields', () =
   const wire = toWireConfig({
     schemaVersion: 7,
     listener: {},
-    retry: { max500Retries: 4, failoverOn500: false, retryDelaySeconds: 2.5 },
+    retry: { max500Retries: 4, failoverOn500: false, retryDelaySeconds: 2.5, maxStreamErrorRetries: 2, failoverOnStreamError: true },
     featureRules: [],
     endpoints: [],
   });
+  assert.equal(wire.retry.maxStreamErrorRetries, 2);
+  assert.equal(wire.retry.failoverOnStreamError, true);
   assert.equal(wire.retry.max500Retries, 4);
   assert.equal(wire.retry.failoverOn500, false);
   assert.equal(wire.retry.retryDelaySeconds, 2.5);

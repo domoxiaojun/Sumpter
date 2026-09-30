@@ -222,6 +222,7 @@ impl AppConfig {
         self.retry.max_retry_duration_seconds = self.retry.max_retry_duration_seconds.max(0.0);
         self.retry.session_sticky_retries = self.retry.session_sticky_retries.max(0);
         self.retry.max_500_retries = self.retry.max_500_retries.max(0);
+        self.retry.max_stream_error_retries = self.retry.max_stream_error_retries.max(0);
         // 非有限值只可能来自手工编辑的 JSON;负数与 NaN 一样收敛到「永不过期」,
         // 与调度层 `ttl_seconds <= 0` 的语义一致。
         if !self.session_sticky_ttl_hours.is_finite() {
@@ -531,6 +532,12 @@ impl Default for ListenerConfig {
 /// - `pass_through_retry_delay`:是否把 `retry_delay` 与 `Retry-After` 透传给客户端；默认开启。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RetryPolicy {
+    /// HTTP 200 Responses SSE 在输出前发生暂时性错误时的入口内额外重试次数。
+    #[serde(rename = "maxStreamErrorRetries", default)]
+    pub max_stream_error_retries: i64,
+    /// 流内暂时性错误重试耗尽后切换入口；默认关闭以保持旧配置行为。
+    #[serde(rename = "failoverOnStreamError", default)]
+    pub failover_on_stream_error: bool,
     #[serde(rename = "max500Retries", default)]
     pub max_500_retries: i64,
     #[serde(
@@ -614,6 +621,8 @@ impl Default for RetryPolicy {
     fn default() -> Self {
         Self {
             max_500_retries: 0,
+            max_stream_error_retries: 0,
+            failover_on_stream_error: false,
             failover_on_500: Self::default_failover_on_500(),
             max_deferred_rounds: 0,
             max_retry_duration_seconds: Self::default_max_retry_duration(),

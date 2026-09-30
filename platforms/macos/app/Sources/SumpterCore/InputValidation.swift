@@ -81,6 +81,8 @@ public enum InputValidation {
     public struct RetryPolicyInput: Equatable, Sendable {
         public var responseTimeoutSeconds: Double?
         public var streamIdleTimeoutSeconds: Double?
+        public var maxStreamErrorRetries: Int
+        public var failoverOnStreamError: Bool
         public var max500Retries: Int
         public var failoverOn500: Bool
         public var retryDelaySeconds: Double?
@@ -92,6 +94,8 @@ public enum InputValidation {
         public init(
             responseTimeoutSeconds: Double?,
             streamIdleTimeoutSeconds: Double?,
+            maxStreamErrorRetries: Int = 0,
+            failoverOnStreamError: Bool = false,
             max500Retries: Int = 0,
             failoverOn500: Bool = true,
             retryDelaySeconds: Double? = nil,
@@ -102,6 +106,8 @@ public enum InputValidation {
         ) {
             self.responseTimeoutSeconds = responseTimeoutSeconds
             self.streamIdleTimeoutSeconds = streamIdleTimeoutSeconds
+            self.maxStreamErrorRetries = maxStreamErrorRetries
+            self.failoverOnStreamError = failoverOnStreamError
             self.max500Retries = max500Retries
             self.failoverOn500 = failoverOn500
             self.retryDelaySeconds = retryDelaySeconds
@@ -116,6 +122,8 @@ public enum InputValidation {
     public static func retryPolicy(
         responseTimeoutText: String,
         streamIdleTimeoutText: String,
+        maxStreamErrorRetriesText: String = "0",
+        failoverOnStreamError: Bool = false,
         max500RetriesText: String = "0",
         failoverOn500: Bool = true,
         retryDelaySecondsText: String = "",
@@ -126,6 +134,10 @@ public enum InputValidation {
     ) throws -> RetryPolicyInput {
         let responseTimeout = try optionalPositiveDouble(responseTimeoutText, field: "首响应截止")
         let streamIdleTimeout = try optionalPositiveDouble(streamIdleTimeoutText, field: "流式空闲截止")
+        guard let maxStreamErrorRetries = Int(maxStreamErrorRetriesText.trimmingCharacters(in: .whitespacesAndNewlines)),
+              maxStreamErrorRetries >= 0 else {
+            throw InputValidationError("入口内流错误重试次数必须为 0 或正整数")
+        }
         guard let max500Retries = Int(max500RetriesText.trimmingCharacters(in: .whitespacesAndNewlines)),
               max500Retries >= 0 else {
             throw InputValidationError("入口内 500 重试次数必须为 0 或正整数")
@@ -147,6 +159,8 @@ public enum InputValidation {
         return RetryPolicyInput(
             responseTimeoutSeconds: responseTimeout,
             streamIdleTimeoutSeconds: streamIdleTimeout,
+            maxStreamErrorRetries: maxStreamErrorRetries,
+            failoverOnStreamError: failoverOnStreamError,
             max500Retries: max500Retries,
             failoverOn500: failoverOn500,
             retryDelaySeconds: retryDelaySeconds,

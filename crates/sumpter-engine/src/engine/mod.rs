@@ -22,6 +22,7 @@ mod protocol;
 mod runtime_api;
 mod sessions;
 mod state;
+mod stream_retry;
 #[cfg(test)]
 mod tests;
 mod websocket;

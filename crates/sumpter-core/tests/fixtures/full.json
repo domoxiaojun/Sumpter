@@ -41,6 +41,8 @@
     ]
   },
   "retry": {
+    "maxStreamErrorRetries": 0,
+    "failoverOnStreamError": false,
     "max500Retries": 0,
     "failoverOn500": true,
     "maxDeferredRounds": 4,

@@ -865,6 +865,8 @@ export function PrimaryProvidersPage() {
     let stickyRetries = retry.sessionStickyRetries ?? 2;
     let maxRounds = retry.maxDeferredRounds ?? retry.crossRoundRetries ?? 3;
     let maxDuration = retry.maxRetryDurationSeconds ?? 0;
+    let maxStreamErrorRetries = retry.maxStreamErrorRetries ?? 0;
+    let failoverOnStreamError = retry.failoverOnStreamError ?? false;
     let max500Retries = retry.max500Retries ?? 0;
     let failoverOn500 = retry.failoverOn500 ?? true;
     let retryDelaySeconds = retry.retryDelaySeconds ?? '';
@@ -875,7 +877,7 @@ export function PrimaryProvidersPage() {
       content: (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
           <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-            这些参数作用于所有 Provider 入口；可分别控制超时、HTTP 500 处理、错误重试轮数，以及是否向客户端透传 retry_delay。
+            这些参数作用于所有 Provider 入口；可分别控制超时、HTTP 500 和流内错误处理、错误重试轮数，以及是否向客户端透传 retry_delay。
           </div>
 
           <div className="grid-2col">
@@ -946,6 +948,34 @@ export function PrimaryProvidersPage() {
             />
           </div>
 
+          <div className="retry-policy-section-title">HTTP 200 流内错误处理</div>
+          <div className="grid-2col">
+            <div className="form-group">
+              <label className="form-label" htmlFor="stream-error-retries">入口内流错误重试</label>
+              <input
+                id="stream-error-retries"
+                type="number"
+                min="0"
+                step="1"
+                className="form-input"
+                defaultValue={maxStreamErrorRetries}
+                onChange={(e) => { maxStreamErrorRetries = Number(e.target.value); }}
+              />
+              <span className="form-hint">仅处理 Responses 流在输出前的限流、服务器内部错误和服务暂不可用；0 表示不在当前入口额外重试。</span>
+            </div>
+            <div className="form-group">
+              <label className="form-label">流错误后切换入口</label>
+              <LocalToggle
+                initial={failoverOnStreamError}
+                label={(checked) => checked ? '已开启' : '已关闭'}
+                title="控制流内暂时性错误重试耗尽后是否切换到下一个入口"
+                ariaLabel="流内暂时性错误重试耗尽后切换入口"
+                onChange={(value) => { failoverOnStreamError = value; }}
+              />
+              <span className="form-hint">开启：重试耗尽后尝试下一个入口。已输出正文、推理或工具调用时不重试或切换。</span>
+            </div>
+          </div>
+
           <div className="grid-2col">
             <div className="form-group">
               <label className="form-label">粘性入口额外重试</label>
@@ -1002,6 +1032,7 @@ export function PrimaryProvidersPage() {
             const stickyRetriesNumber = Number(stickyRetries);
             const maxRoundsNumber = Number(maxRounds);
             const maxDurationNumber = Number(maxDuration);
+            const maxStreamErrorRetriesNumber = Number(maxStreamErrorRetries);
             const max500RetriesNumber = Number(max500Retries);
             const retryDelaySecondsNumber = retryDelaySeconds == null || retryDelaySeconds === '' ? null : Number(retryDelaySeconds);
             if ((responseTimeoutNumber != null && (!Number.isFinite(responseTimeoutNumber) || responseTimeoutNumber <= 0))
@@ -1009,18 +1040,21 @@ export function PrimaryProvidersPage() {
               addToast('首响应截止和流式空闲截止必须留空或填写大于 0 的数字', 'warning');
               return true;
             }
-            if (!Number.isInteger(max500RetriesNumber) || max500RetriesNumber < 0
+            if (!Number.isSafeInteger(maxStreamErrorRetriesNumber) || maxStreamErrorRetriesNumber < 0
+              || !Number.isInteger(max500RetriesNumber) || max500RetriesNumber < 0
               || (retryDelaySecondsNumber != null && (!Number.isFinite(retryDelaySecondsNumber) || retryDelaySecondsNumber <= 0))
               || !Number.isInteger(stickyRetriesNumber) || stickyRetriesNumber < 0
               || !Number.isInteger(maxRoundsNumber) || maxRoundsNumber < 0
               || !Number.isFinite(maxDurationNumber) || maxDurationNumber < 0) {
-              addToast('入口内 500 重试、故障轮数和粘性重试必须是非负整数；retry_delay 秒数和超时必须大于 0', 'warning');
+              addToast('入口内 500／流错误重试、故障轮数和粘性重试必须是非负整数；retry_delay 秒数和超时必须大于 0', 'warning');
               return true;
             }
             const nextConfig = clone(config);
             nextConfig.retry = {
               responseTimeoutSeconds: responseTimeoutNumber,
               streamIdleTimeoutSeconds: streamIdleTimeoutNumber,
+              maxStreamErrorRetries: maxStreamErrorRetriesNumber,
+              failoverOnStreamError,
               max500Retries: max500RetriesNumber,
               failoverOn500,
               retryDelaySeconds: retryDelaySecondsNumber,
@@ -1529,6 +1563,8 @@ export function PrimaryProvidersPage() {
             <div>首响应截止：<strong className="mono-cell">{retry.responseTimeoutSeconds ? `${retry.responseTimeoutSeconds}s` : '由客户端决定'}</strong></div>
             <div>流式空闲截止：<strong className="mono-cell">{retry.streamIdleTimeoutSeconds ? `${retry.streamIdleTimeoutSeconds}s` : '无限空闲'}</strong></div>
             <div>500 失败后切换入口：<strong className="mono-cell">{(retry.failoverOn500 ?? true) ? '开启' : '关闭'}</strong></div>
+            <div>入口内流错误重试：<strong className="mono-cell">{retry.maxStreamErrorRetries ?? 0} 次</strong></div>
+            <div>流错误后切换入口：<strong className="mono-cell">{(retry.failoverOnStreamError ?? false) ? '开启' : '关闭'}</strong></div>
             <div>入口内 500 重试：<strong className="mono-cell">{retry.max500Retries ?? 0} 次</strong></div>
             <div>retry_delay 透传：<strong className="mono-cell">{(retry.passThroughRetryDelay ?? true) ? (retry.retryDelaySeconds ? `${retry.retryDelaySeconds}s` : '未配置') : '关闭'}</strong></div>
             <div>粘性入口重试：<strong className="mono-cell">{retry.sessionStickyRetries ?? 2} 次</strong></div>

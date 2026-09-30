@@ -99,6 +99,8 @@ Linux Admin 是独立监听，默认 `127.0.0.1:57879`，由 CLI 参数或环境
 | --- | --- |
 | `responseTimeoutSeconds` | 首响应总截止；null 由客户端决定 |
 | `streamIdleTimeoutSeconds` | 流式两次输出之间的最长空闲；null 不限制 |
+| `maxStreamErrorRetries` | HTTP 200 Responses SSE 输出前的暂时性错误，当前入口额外重试次数；默认 0 |
+| `failoverOnStreamError` | 上述重试耗尽后是否切换入口；默认 false |
 | `max500Retries` | 当前入口收到 500 后的额外重试次数 |
 | `failoverOn500` | 500 重试耗尽后是否切换入口 |
 | `retryDelaySeconds` | 最终失败响应使用的 retry delay |
@@ -122,3 +124,12 @@ WebUI 保存使用 generation-safe PUT，防止两个页面互相覆盖。手工
 ## 凭据边界
 
 `endpoints[].apiKey` 只发给对应上游；`listener.authToken` 只用于客户端到 Sumpter；Linux `admin-password` 只用于管理页登录；`X-Sumpter-*` 项目归因头只在入站统计使用，转发上游前会剥离。诊断捕获可能含原始正文和 Header，默认关闭，导出前必须自行脱敏。
+
+### HTTP 200 流内暂时性错误
+
+`maxStreamErrorRetries` 与 `failoverOnStreamError` 独立于 HTTP 500、粘性重试和跨轮重试。
+例如次数为 2、切换开启时，当前入口最多请求 3 次，再尝试下一入口；同一请求内每个入口的流错误预算不会因跨轮或粘性重试重置。旧配置默认次数为 0、切换关闭，保持直接转发行为。
+
+仅匹配 Responses SSE 终态中的结构化错误码：`rate_limit_exceeded`、`server_error`、`internal_server_error`、`overloaded_error`、`service_unavailable`。参数错误、鉴权错误、未知错误、`response.incomplete`、断流和超时不进入此策略。
+
+开启后，代理在输出前暂存空的 `response.created` / `response.in_progress` 前奏。收到正文、推理、工具调用或未知事件即开始正常转发，不再重试；暂存最多 64 KiB、1024 块或 5 秒，先达到边界即原样转发，不截断响应。原有流式空闲截止仍生效。后台 Responses、Realtime、非 SSE 和压缩流不参与。所有可用入口耗尽时保留最后实际响应；最终流失败仍是 HTTP 200 和失败终态，不伪造 HTTP 429。每次被重试的失败也保留真实 HTTP 200、错误码及上游请求 ID。

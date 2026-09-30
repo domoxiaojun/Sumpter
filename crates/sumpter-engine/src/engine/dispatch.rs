@@ -1,6 +1,6 @@
 //! Dispatch implementation for the shared engine.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
@@ -20,6 +20,7 @@ use sumpter_core::routing::{
     PlannedEndpoint, RequestPurpose, RouteMode, RoutePlanError, RoutePlanner, RoutingRequest,
     inspector, sticky,
 };
+use sumpter_core::stream_terminal::SseTerminal;
 
 use crate::outbound::{TransportError, UpstreamTransport};
 use crate::request_build::{self, PassthroughKind, PassthroughRequest};
@@ -1665,6 +1666,15 @@ impl Engine {
         parsed_json: Option<&Value>,
     ) -> Response {
         let retry = &config.retry;
+        let stream_retry_enabled = (retry.max_stream_error_retries > 0
+            || retry.failover_on_stream_error)
+            && client_out
+                .as_ref()
+                .and_then(|client| client.passthrough.as_ref())
+                .map_or_else(
+                    || request.raw.get("background").and_then(Value::as_bool) != Some(true),
+                    |body| super::stream_retry::request_allows_retry(body),
+                );
         let request_id = guard.request_id().to_string();
         let client_stream = client_out.as_ref().map_or_else(
             || {
@@ -1755,6 +1765,10 @@ impl Engine {
         let mut round: i64 = 0;
         let mut consecutive_500_endpoint: Option<String> = None;
         let mut consecutive_500_retries = 0_i64;
+        // These budgets span the entire request, including sticky/deferred
+        // passes caused by unrelated HTTP failures on another endpoint.
+        let mut stream_error_retries: HashMap<String, i64> = HashMap::new();
+        let mut exhausted_stream_endpoints = HashSet::new();
         // chat 桥 stop_reason 回映射依据(见 bridge::OpenAiStreamBridge)。
         let declared_stop_sequences = request
             .raw
@@ -1812,6 +1826,9 @@ impl Engine {
                 }
                 let endpoint = &round_ordered[endpoint_index];
                 endpoint_index += 1;
+                if exhausted_stream_endpoints.contains(&endpoint.endpoint_id) {
+                    continue;
+                }
                 // client 完成事件只有一个协议三元组：尚未 accepted 时记录最后一个
                 // 实际进入调度判断的入口；accepted 后 attach_upstream 会覆盖为胜出入口。
                 guard.note_endpoint(endpoint);
@@ -1921,29 +1938,130 @@ impl Engine {
                     &build.request,
                     attempt_started,
                 );
-                let result = send_streaming_with_deadline(
+                let mut result = send_streaming_with_deadline(
                     &self.inner.transport,
                     build.request,
                     response_timeout,
                 )
                 .await;
+                let attempt_ttfb_ms = attempt_started.elapsed().as_millis() as i64;
                 self.capture_attempt_result(&request_id, &capture_attempt_id, &result);
-                let attempt = self.note_attempt(
-                    endpoint,
-                    attempt_started,
-                    is_failover,
-                    guard.meta.purpose,
-                    guard.meta.client_kind,
-                    &request_id,
-                    response_timeout,
-                    result,
-                    realtime_request,
-                    &mut round_state,
-                );
+                let mut prefetched = None;
+                let mut stream_failure = None;
+                if stream_retry_enabled
+                    && !realtime_request
+                    && endpoint.protocol == ProviderProtocol::OpenAIResponses
+                    && result.as_ref().is_ok_and(|response| {
+                        response.status == 200
+                            && response.headers.iter().any(|(name, value)| {
+                                name.eq_ignore_ascii_case("content-type")
+                                    && value.split(';').next().is_some_and(|mime| {
+                                        mime.trim().eq_ignore_ascii_case("text/event-stream")
+                                    })
+                            })
+                            && !response.headers.iter().any(|(name, value)| {
+                                name.eq_ignore_ascii_case("content-encoding")
+                                    && !value.eq_ignore_ascii_case("identity")
+                            })
+                    })
+                {
+                    let probed = super::stream_retry::probe_response(
+                        result.expect("checked successful response"),
+                        retry
+                            .stream_idle_timeout_seconds
+                            .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
+                            .map(Duration::from_secs_f64),
+                    )
+                    .await;
+                    prefetched = Some((probed.prefix.len(), probed.last_read_at));
+                    if let Some(code) = &probed.retry_code {
+                        let mut failure =
+                            FailureInfo::from_protocol_terminal(SseTerminal::Failed {
+                                detail: format!("upstream emitted response.failed ({code})"),
+                            })
+                            .expect("failed terminal");
+                        failure.upstream_status_code = Some(200);
+                        failure.upstream_request_id = upstream_request_id(&probed.response.headers);
+                        failure.retry_after_seconds = retry_after_seconds(&probed.response.headers);
+                        self.note_provider_model_failure(
+                            endpoint,
+                            Some(200),
+                            failure.retry_after_seconds,
+                            now_unix(),
+                        );
+                        let used = stream_error_retries
+                            .entry(endpoint.endpoint_id.clone())
+                            .or_default();
+                        let retry_same = *used < retry.max_stream_error_retries.max(0);
+                        let failover = retry.failover_on_stream_error
+                            && round_ordered[endpoint_index..].iter().any(|next| {
+                                !exhausted_stream_endpoints.contains(&next.endpoint_id)
+                            });
+                        if retry_same || failover {
+                            for chunk in &probed.prefix {
+                                self.capture_upstream_chunk(
+                                    &request_id,
+                                    &capture_attempt_id,
+                                    chunk,
+                                    guard.started.elapsed().as_millis() as i64,
+                                );
+                            }
+                            let mut event = self.upstream_event(
+                                endpoint,
+                                200,
+                                attempt_started.elapsed().as_millis() as i64,
+                                is_failover,
+                                None,
+                                guard.meta.purpose,
+                                guard.meta.client_kind,
+                                &request_id,
+                            );
+                            failure.apply_to(&mut event);
+                            event.ttfb_ms = Some(attempt_ttfb_ms);
+                            self.complete_upstream(event);
+                            round_state.last_failure = Some(failure.clone());
+                            // Cancel/drop the failed body before waiting or
+                            // issuing another POST to this endpoint.
+                            drop(probed);
+                            if retry_same {
+                                *used += 1;
+                                endpoint_index -= 1;
+                                tokio::time::sleep(retry_backoff_delay(
+                                    *used,
+                                    failure.retry_after_seconds,
+                                ))
+                                .await;
+                            } else {
+                                exhausted_stream_endpoints.insert(endpoint.endpoint_id.clone());
+                            }
+                            continue;
+                        }
+                        stream_failure = Some(failure);
+                    }
+                    result = Ok(probed.response);
+                }
+                // The final failed stream is relayed intact; do not mark its
+                // endpoint healthy or bind the session merely because HTTP=200.
+                let attempt = if stream_failure.is_some() {
+                    result.ok()
+                } else {
+                    self.note_attempt(
+                        endpoint,
+                        attempt_started,
+                        is_failover,
+                        guard.meta.purpose,
+                        guard.meta.client_kind,
+                        &request_id,
+                        response_timeout,
+                        result,
+                        realtime_request,
+                        &mut round_state,
+                    )
+                };
 
                 if let Some(response) = attempt {
                     // accepted:头未回写前的重试机会到此为止。
-                    if response.status == 200 {
+                    if response.status == 200 && stream_failure.is_none() {
                         self.touch_session_success(
                             endpoint.scheduling_group(),
                             &session_key,
@@ -1961,6 +2079,8 @@ impl Engine {
                         method,
                         path_and_query,
                         attempt_started,
+                        attempt_ttfb_ms,
+                        prefetched,
                         is_failover,
                         capture_attempt_id,
                         declared_stop_sequences,

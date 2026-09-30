@@ -29,6 +29,80 @@ pub enum SseTerminal {
     Failed { detail: String },
 }
 
+/// 输出前的 Responses SSE 检查。只允许空的生命周期前奏；任何正文、工具、
+/// 未知或畸形事件都会结束检查，不根据错误消息文本猜测可重试性。
+#[derive(Debug, PartialEq, Eq)]
+pub enum StreamRetryDecision {
+    Pending,
+    Forward,
+    Retry(String),
+}
+
+#[derive(Default)]
+pub struct ResponsesRetryProbe {
+    pending: Vec<u8>,
+}
+
+impl ResponsesRetryProbe {
+    pub fn push(&mut self, data: &[u8]) -> StreamRetryDecision {
+        self.pending.extend_from_slice(data);
+        while let Some((end, boundary)) = event_boundary(&self.pending) {
+            let frame = String::from_utf8_lossy(&self.pending[..end])
+                .replace("\r\n", "\n")
+                .replace('\r', "\n");
+            self.pending.drain(..end + boundary);
+            let Some(payload) = data_payload(&frame) else {
+                if frame
+                    .lines()
+                    .all(|line| line.is_empty() || line.starts_with(':'))
+                {
+                    continue;
+                }
+                return StreamRetryDecision::Forward;
+            };
+            let Ok(value) = serde_json::from_str::<Value>(&payload) else {
+                return StreamRetryDecision::Forward;
+            };
+            let output = value.pointer("/response/output");
+            if output.is_some_and(|output| !output.as_array().is_some_and(Vec::is_empty)) {
+                return StreamRetryDecision::Forward;
+            }
+            match value.get("type").and_then(Value::as_str) {
+                Some("response.created" | "response.in_progress") => continue,
+                Some("response.failed" | "error") => {}
+                Some("response.completed")
+                    if value.pointer("/response/status").and_then(Value::as_str)
+                        == Some("failed") => {}
+                _ => return StreamRetryDecision::Forward,
+            }
+            let error = value
+                .pointer("/response/error")
+                .or_else(|| value.get("error"))
+                .unwrap_or(&value);
+            let code = error
+                .get("code")
+                .and_then(Value::as_str)
+                .or_else(|| error.get("type").and_then(Value::as_str));
+            return match code {
+                Some(
+                    code @ ("rate_limit_exceeded"
+                    | "server_error"
+                    | "internal_server_error"
+                    | "overloaded_error"
+                    | "service_unavailable"),
+                ) => StreamRetryDecision::Retry(code.into()),
+                _ => StreamRetryDecision::Forward,
+            };
+        }
+        if self.pending.len() > MAX_PENDING_BYTES {
+            self.pending.clear();
+            StreamRetryDecision::Forward
+        } else {
+            StreamRetryDecision::Pending
+        }
+    }
+}
+
 pub struct SseTerminalTracker {
     dialect: SseDialect,
     pending: Vec<u8>,

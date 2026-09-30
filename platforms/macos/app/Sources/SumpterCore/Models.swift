@@ -319,6 +319,10 @@ public struct RetryPolicy: Codable, Equatable, Sendable {
     public var responseTimeoutSeconds: Double?
     /// 流式响应两次吐字之间的最长间隔;nil = 允许无限空闲。
     public var streamIdleTimeoutSeconds: Double?
+    /// HTTP 200 Responses SSE 输出前暂时性错误的入口内额外重试次数。
+    public var maxStreamErrorRetries: Int
+    /// 流错误重试耗尽后是否切换入口；默认关闭。
+    public var failoverOnStreamError: Bool
     /// 单个入口收到 HTTP 500 后的额外重试次数;0 = 不在该入口重试。
     public var max500Retries: Int
     /// 当前入口 HTTP 500 重试耗尽后是否切换到下一个入口。
@@ -340,6 +344,8 @@ public struct RetryPolicy: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case responseTimeoutSeconds
         case streamIdleTimeoutSeconds
+        case maxStreamErrorRetries
+        case failoverOnStreamError
         case max500Retries
         case failoverOn500
         case retryDelaySeconds
@@ -352,6 +358,8 @@ public struct RetryPolicy: Codable, Equatable, Sendable {
     public init(
         responseTimeoutSeconds: Double? = nil,
         streamIdleTimeoutSeconds: Double? = nil,
+        maxStreamErrorRetries: Int = 0,
+        failoverOnStreamError: Bool = false,
         max500Retries: Int = 0,
         failoverOn500: Bool = true,
         retryDelaySeconds: Double? = nil,
@@ -364,6 +372,8 @@ public struct RetryPolicy: Codable, Equatable, Sendable {
     ) {
         self.responseTimeoutSeconds = responseTimeoutSeconds
         self.streamIdleTimeoutSeconds = streamIdleTimeoutSeconds
+        self.maxStreamErrorRetries = max(0, maxStreamErrorRetries)
+        self.failoverOnStreamError = failoverOnStreamError
         self.max500Retries = max(0, max500Retries)
         self.failoverOn500 = failoverOn500
         self.retryDelaySeconds = retryDelaySeconds
@@ -380,6 +390,8 @@ public struct RetryPolicy: Codable, Equatable, Sendable {
         self.init(
             responseTimeoutSeconds: try keyed.decodeIfPresent(Double.self, forKey: .responseTimeoutSeconds),
             streamIdleTimeoutSeconds: try keyed.decodeIfPresent(Double.self, forKey: .streamIdleTimeoutSeconds),
+            maxStreamErrorRetries: try keyed.decodeIfPresent(Int.self, forKey: .maxStreamErrorRetries) ?? 0,
+            failoverOnStreamError: try keyed.decodeIfPresent(Bool.self, forKey: .failoverOnStreamError) ?? false,
             max500Retries: try keyed.decodeIfPresent(Int.self, forKey: .max500Retries) ?? 0,
             failoverOn500: try keyed.decodeIfPresent(Bool.self, forKey: .failoverOn500) ?? true,
             retryDelaySeconds: try keyed.decodeIfPresent(Double.self, forKey: .retryDelaySeconds),
@@ -395,6 +407,8 @@ public struct RetryPolicy: Codable, Equatable, Sendable {
         // 显式写 null 而不是省略:让「不设截止」在配置文件里是可见的选择。
         try keyed.encode(responseTimeoutSeconds, forKey: .responseTimeoutSeconds)
         try keyed.encode(streamIdleTimeoutSeconds, forKey: .streamIdleTimeoutSeconds)
+        try keyed.encode(maxStreamErrorRetries, forKey: .maxStreamErrorRetries)
+        try keyed.encode(failoverOnStreamError, forKey: .failoverOnStreamError)
         try keyed.encode(max500Retries, forKey: .max500Retries)
         try keyed.encode(failoverOn500, forKey: .failoverOn500)
         try keyed.encode(retryDelaySeconds, forKey: .retryDelaySeconds)

@@ -55,6 +55,8 @@ final class UILogicTests: XCTestCase {
         let parsed = try InputValidation.retryPolicy(
             responseTimeoutText: " 9 ",
             streamIdleTimeoutText: "30",
+            maxStreamErrorRetriesText: "2",
+            failoverOnStreamError: true,
             max500RetriesText: "3",
             failoverOn500: false,
             retryDelaySecondsText: "4.5",
@@ -64,6 +66,8 @@ final class UILogicTests: XCTestCase {
         )
         XCTAssertEqual(parsed.responseTimeoutSeconds, 9)
         XCTAssertEqual(parsed.streamIdleTimeoutSeconds, 30)
+        XCTAssertEqual(parsed.maxStreamErrorRetries, 2)
+        XCTAssertTrue(parsed.failoverOnStreamError)
         XCTAssertEqual(parsed.max500Retries, 3)
         XCTAssertFalse(parsed.failoverOn500)
         XCTAssertEqual(parsed.retryDelaySeconds, 4.5)

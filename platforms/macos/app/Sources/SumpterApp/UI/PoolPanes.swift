@@ -340,6 +340,8 @@ struct ProvidersPane: View {
             ProviderPolicySummaryItem(title: "首响应截止", value: timeoutSummary(retry.responseTimeoutSeconds))
             ProviderPolicySummaryItem(title: "流式空闲截止", value: timeoutSummary(retry.streamIdleTimeoutSeconds))
             ProviderPolicySummaryItem(title: "500 失败后切换入口", value: retry.failoverOn500 ? "开启" : "关闭")
+            ProviderPolicySummaryItem(title: "入口内流错误重试", value: "\(retry.maxStreamErrorRetries) 次")
+            ProviderPolicySummaryItem(title: "流错误后切换入口", value: retry.failoverOnStreamError ? "开启" : "关闭")
             ProviderPolicySummaryItem(title: "入口内 500 重试", value: "\(retry.max500Retries) 次")
             ProviderPolicySummaryItem(
                 title: "retry_delay 透传",

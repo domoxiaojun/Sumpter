@@ -21,6 +21,9 @@ mod disabled_binding_failover;
 #[path = "../../../../tests/contracts/round_robin.rs"]
 mod round_robin;
 
+#[path = "../../../../tests/contracts/stream_error_retry.rs"]
+mod stream_error_retry;
+
 #[path = "../../../../tests/contracts/pi.rs"]
 mod pi;
 

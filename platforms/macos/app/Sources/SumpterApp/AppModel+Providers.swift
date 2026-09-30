@@ -459,6 +459,8 @@ extension AppModel {
     func updateRetryPolicyAndSave(
         responseTimeoutText: String,
         streamIdleTimeoutText: String,
+        maxStreamErrorRetriesText: String,
+        failoverOnStreamError: Bool,
         max500RetriesText: String,
         failoverOn500: Bool = true,
         retryDelaySecondsText: String,
@@ -471,6 +473,8 @@ extension AppModel {
             try InputValidation.retryPolicy(
                 responseTimeoutText: responseTimeoutText,
                 streamIdleTimeoutText: streamIdleTimeoutText,
+                maxStreamErrorRetriesText: maxStreamErrorRetriesText,
+                failoverOnStreamError: failoverOnStreamError,
                 max500RetriesText: max500RetriesText,
                 failoverOn500: failoverOn500,
                 retryDelaySecondsText: retryDelaySecondsText,
@@ -484,6 +488,8 @@ extension AppModel {
             config.retry = RetryPolicy(
                 responseTimeoutSeconds: tuning.responseTimeoutSeconds,
                 streamIdleTimeoutSeconds: tuning.streamIdleTimeoutSeconds,
+                maxStreamErrorRetries: tuning.maxStreamErrorRetries,
+                failoverOnStreamError: tuning.failoverOnStreamError,
                 max500Retries: tuning.max500Retries,
                 failoverOn500: tuning.failoverOn500,
                 retryDelaySeconds: tuning.retryDelaySeconds,

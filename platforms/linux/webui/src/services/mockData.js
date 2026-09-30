@@ -162,6 +162,8 @@ export const mockConfig = {
   retry: {
     responseTimeoutSeconds: 60,
     streamIdleTimeoutSeconds: 30,
+    maxStreamErrorRetries: 0,
+    failoverOnStreamError: false,
     max500Retries: 0,
     failoverOn500: true,
     retryDelaySeconds: null,

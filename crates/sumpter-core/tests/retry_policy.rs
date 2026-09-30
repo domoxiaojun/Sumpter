@@ -26,17 +26,23 @@ fn retry_and_deferred_status_sets_match_runtime_contract() {
 #[test]
 fn retry_policy_new_fields_keep_safe_defaults_and_wire_names() {
     let defaults = RetryPolicy::default();
+    assert_eq!(defaults.max_stream_error_retries, 0);
+    assert!(!defaults.failover_on_stream_error);
     assert_eq!(defaults.max_500_retries, 0);
     assert!(defaults.failover_on_500);
     assert!(defaults.pass_through_retry_delay);
     assert_eq!(defaults.retry_delay_seconds, None);
 
     let mut configured = defaults;
+    configured.max_stream_error_retries = 2;
+    configured.failover_on_stream_error = true;
     configured.max_500_retries = 3;
     configured.failover_on_500 = false;
     configured.pass_through_retry_delay = false;
     configured.retry_delay_seconds = Some(2.5);
     let value = serde_json::to_value(configured).unwrap();
+    assert_eq!(value["maxStreamErrorRetries"], 2);
+    assert_eq!(value["failoverOnStreamError"], true);
     assert_eq!(value["max500Retries"], 3);
     assert_eq!(value["failoverOn500"], false);
     assert_eq!(value["passThroughRetryDelay"], false);
@@ -51,4 +57,6 @@ fn retry_policy_legacy_json_defaults_500_failover_on() {
     }))
     .unwrap();
     assert!(policy.failover_on_500);
+    assert_eq!(policy.max_stream_error_retries, 0);
+    assert!(!policy.failover_on_stream_error);
 }
