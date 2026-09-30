@@ -313,12 +313,10 @@ pub(crate) fn merge_provider_metadata(
         (None, right) => right,
         (left, None) => left.clone(),
     };
-    current.supports_search_tool = match (current.supports_search_tool, next.supports_search_tool) {
-        (left, right) => Some(left.unwrap_or(false) && right.unwrap_or(false)),
-    };
-    current.prefer_websockets = match (current.prefer_websockets, next.prefer_websockets) {
-        (left, right) => Some(left.unwrap_or(false) && right.unwrap_or(false)),
-    };
+    let (left, right) = (current.supports_search_tool, next.supports_search_tool);
+    current.supports_search_tool = Some(left.unwrap_or(false) && right.unwrap_or(false));
+    let (left, right) = (current.prefer_websockets, next.prefer_websockets);
+    current.prefer_websockets = Some(left.unwrap_or(false) && right.unwrap_or(false));
     current.service_tiers = match (&current.service_tiers, next.service_tiers) {
         (Some(left), Some(right)) => Some(intersect_strings(left, &right)),
         (None, right) => right,
