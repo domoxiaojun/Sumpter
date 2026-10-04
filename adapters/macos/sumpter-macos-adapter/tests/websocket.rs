@@ -10,6 +10,9 @@ mod realtime_websocket;
 #[path = "../../../../tests/contracts/source_ip_websocket.rs"]
 mod source_ip_websocket;
 
+#[path = "../../../../tests/contracts/websocket_first_message.rs"]
+mod websocket_first_message;
+
 use std::sync::Arc;
 
 use sumpter_core::config::AppConfig;

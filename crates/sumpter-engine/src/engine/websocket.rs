@@ -39,10 +39,12 @@ use super::websocket_relay::websocket_message_model;
 use super::websocket_relay::websocket_trace;
 use crate::request_build;
 use axum::body::Body;
+use axum::extract::ws::Message as WebSocketMessage;
 use axum::extract::ws::WebSocket;
 use axum::http::HeaderValue;
 use axum::http::StatusCode;
 use axum::response::Response;
+use futures_util::SinkExt;
 use serde_json::json;
 use std::net::IpAddr;
 use std::net::SocketAddr;
@@ -66,6 +68,78 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 /// handshake independently.
 const REALTIME_WEBSOCKET_CONNECT_TIMEOUT_SECS: f64 = 15.0;
 pub(super) const MAX_WEBSOCKET_METADATA_FRAME_BYTES: usize = 64 * 1024;
+
+#[derive(Debug)]
+pub(super) enum FirstWebSocketFrame {
+    Message(WebSocketMessage),
+    Closed(Option<i64>),
+    Interrupted(&'static str),
+    Rejected(&'static str),
+    Shutdown,
+}
+
+pub(super) fn classify_first_frame_error(error: axum::Error) -> FirstWebSocketFrame {
+    use tokio_tungstenite::tungstenite::{Error, error::ProtocolError};
+    let error = error.into_inner();
+    match error.downcast_ref::<Error>() {
+        Some(Error::Protocol(ProtocolError::ResetWithoutClosingHandshake)) => {
+            FirstWebSocketFrame::Interrupted("client_eof_without_close")
+        }
+        Some(Error::Protocol(_) | Error::Utf8(_)) => {
+            FirstWebSocketFrame::Rejected("invalid_websocket_frame")
+        }
+        // Unknown errors stay transport failures; do not blame the request.
+        _ => FirstWebSocketFrame::Interrupted("client_receive_failed"),
+    }
+}
+
+async fn flush_websocket_control(
+    socket: &mut WebSocket,
+    shutdown: &tokio_util::sync::CancellationToken,
+) -> Result<(), FirstWebSocketFrame> {
+    tokio::select! {
+        biased;
+        _ = shutdown.cancelled() => Err(FirstWebSocketFrame::Shutdown),
+        result = socket.flush() => result.map_err(|_| FirstWebSocketFrame::Interrupted("client_control_flush_failed")),
+    }
+}
+
+async fn read_first_websocket_frame(
+    socket: &mut WebSocket,
+    shutdown: &tokio_util::sync::CancellationToken,
+) -> FirstWebSocketFrame {
+    loop {
+        let next = tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => return FirstWebSocketFrame::Shutdown,
+            next = socket.recv() => next,
+        };
+        match next {
+            None => return FirstWebSocketFrame::Interrupted("client_eof_without_close"),
+            Some(Err(error)) => return classify_first_frame_error(error),
+            Some(Ok(WebSocketMessage::Ping(_))) => {
+                // Tungstenite queues the Pong; flush it before waiting again.
+                if let Err(end) = flush_websocket_control(socket, shutdown).await {
+                    return end;
+                }
+            }
+            Some(Ok(WebSocketMessage::Pong(_))) => {}
+            Some(Ok(WebSocketMessage::Close(frame))) => {
+                let code = frame.as_ref().map(|frame| i64::from(frame.code));
+                if let Err(end) = flush_websocket_control(socket, shutdown).await {
+                    return end;
+                }
+                return FirstWebSocketFrame::Closed(code);
+            }
+            Some(Ok(WebSocketMessage::Binary(_))) => {
+                return FirstWebSocketFrame::Rejected("first_message_requires_text");
+            }
+            Some(Ok(message @ WebSocketMessage::Text(_))) => {
+                return FirstWebSocketFrame::Message(message);
+            }
+        }
+    }
+}
 
 async fn connect_upstream_websocket(
     request: tokio_tungstenite::tungstenite::handshake::client::Request,
@@ -343,6 +417,9 @@ impl Engine {
         failure.retry_after_seconds = error.retry_after_seconds;
         let trace = websocket_trace(
             error.status.into(),
+            context.client_upgraded.then_some(101),
+            "upstream_handshake",
+            context.first_message_wait_ms,
             0,
             0,
             0,
@@ -358,7 +435,7 @@ impl Engine {
         let mut client = websocket_client_event(
             context,
             endpoint,
-            status,
+            if context.client_upgraded { 101 } else { status },
             error.attempts > 1,
             Some(trace.clone()),
             Some(&failure),
@@ -414,6 +491,9 @@ impl Engine {
         let status = 101_i64;
         let trace = websocket_trace(
             101,
+            Some(101),
+            "relay",
+            context.first_message_wait_ms,
             metrics.bytes_sent,
             metrics.bytes_received,
             metrics.client_message_count,
@@ -471,7 +551,8 @@ impl Engine {
             Some(trace),
             failure.as_ref(),
         );
-        client.duration_ms = metrics.duration_ms;
+        // Client time includes first-message wait and upstream handshake.
+        client.duration_ms = context.started.elapsed().as_millis().min(i64::MAX as u128) as i64;
         client.ttfb_ms = Some(connection.handshake_ttfb_ms);
         self.complete_client(
             client,
@@ -676,6 +757,84 @@ impl Engine {
         .await;
     }
 
+    pub(super) fn record_websocket_first_frame_event(
+        &self,
+        context: &WebSocketEventContext,
+        end: &FirstWebSocketFrame,
+    ) {
+        let (kind, token, code, side, cancelled) = match end {
+            FirstWebSocketFrame::Closed(code) if matches!(code, None | Some(1000 | 1001)) => (
+                RuntimeFailureKind::ClientCancelled,
+                "client_closed_before_first_message",
+                *code,
+                "client",
+                true,
+            ),
+            FirstWebSocketFrame::Closed(code) => (
+                RuntimeFailureKind::StreamInterrupted,
+                "client_abnormal_close",
+                *code,
+                "client",
+                false,
+            ),
+            FirstWebSocketFrame::Interrupted(token) => (
+                RuntimeFailureKind::StreamInterrupted,
+                *token,
+                None,
+                "client",
+                false,
+            ),
+            FirstWebSocketFrame::Rejected(token) => (
+                RuntimeFailureKind::ClientRequestRejected,
+                *token,
+                None,
+                "client",
+                false,
+            ),
+            FirstWebSocketFrame::Shutdown => (
+                RuntimeFailureKind::StreamInterrupted,
+                "server_shutdown",
+                None,
+                "server",
+                false,
+            ),
+            FirstWebSocketFrame::Message(_) => return,
+        };
+        let wait_ms = context.started.elapsed().as_millis().min(i64::MAX as u128) as i64;
+        let trace = websocket_trace(
+            0,
+            Some(101),
+            "awaiting_first_message",
+            Some(wait_ms),
+            0,
+            0,
+            0,
+            0,
+            code,
+            None,
+            Some(side.into()),
+            Some(token.into()),
+            !cancelled,
+            0,
+        );
+        let failure = FailureInfo {
+            kind,
+            phase: RuntimeFailurePhase::ResponseStream,
+            detail: Some(token.into()),
+            timeout_ms: None,
+            upstream_status_code: None,
+            upstream_request_id: None,
+            retry_after_seconds: None,
+        };
+        let mut event =
+            websocket_client_event(context, None, 101, false, Some(trace), Some(&failure));
+        if cancelled {
+            event.outcome = Some(RuntimeEventOutcome::Cancelled);
+        }
+        event.message = Some(token.into());
+        self.complete_client(event, (!cancelled).then(|| token.into()));
+    }
+
     pub async fn handle_websocket_with_shutdown(
         &self,
         mut socket: WebSocket,
@@ -684,17 +843,26 @@ impl Engine {
         headers: Vec<(String, String)>,
         shutdown: tokio_util::sync::CancellationToken,
     ) {
+        // One ID and monotonic clock span the upgraded connection's whole lifetime.
+        let mut context = websocket_event_context(
+            self.websocket_source_ip(remote, &headers),
+            &path_and_query,
+            &headers,
+            "",
+            RealtimeRouteIntent::StandardRealtime,
+            Instant::now(),
+        );
+        context.client_upgraded = true;
+        self.capture_websocket_start(&context);
         let path = path_without_query(&path_and_query);
         if let Err(error) = validate_realtime_call_target(&path_and_query) {
-            let (status, code, message) = realtime_call_path_error(error);
-            self.record_rejected_websocket(
-                remote,
-                &path_and_query,
-                &headers,
-                status.as_u16(),
-                message,
-            );
-            let _ = send_websocket_json_error(&mut socket, code, message).await;
+            let (_, code, message) = realtime_call_path_error(error);
+            self.record_websocket_first_frame_event(&context, &FirstWebSocketFrame::Rejected(code));
+            tokio::select! {
+                biased;
+                _ = shutdown.cancelled() => {}
+                _ = send_websocket_json_error(&mut socket, code, message) => {}
+            }
             return;
         }
         let mut initial_message = None;
@@ -708,16 +876,20 @@ impl Engine {
             .filter(|model| !model.trim().is_empty());
         let secret_model = self.realtime_client_secret_model(&headers);
         let model = if is_realtime_http_path(path) {
-            let client_kind = detect_client_kind(&headers, true);
             let intent = classify_realtime_intent(
                 "GET",
                 &path_and_query,
                 query_model.as_deref(),
                 sideband_model.as_deref(),
                 secret_model.as_deref(),
-                client_kind,
+                context.client_kind,
                 false,
             );
+            context.route_intent = match intent {
+                RealtimeRouteIntent::CodexLive => "live",
+                RealtimeRouteIntent::StandardRealtime => "realtime",
+            }
+            .into();
             Some(resolve_realtime_route_model(
                 &self.config(),
                 "GET",
@@ -730,138 +902,74 @@ impl Engine {
         } else if query_model.is_some() {
             query_model
         } else if is_responses_websocket_path(path) {
-            // CPA selects a Responses WebSocket from the first
-            // `response.create` frame when the query has no model. Buffer
-            // that frame so it can still be relayed after route planning.
-            let next = tokio::select! {
-                biased;
-                _ = shutdown.cancelled() => {
-                    self.record_rejected_websocket(
-                        remote,
-                        &path_and_query,
-                        &headers,
-                        503,
-                        "proxy stopped before the first websocket frame",
+            match read_first_websocket_frame(&mut socket, &shutdown).await {
+                FirstWebSocketFrame::Message(message) => {
+                    context.first_message_wait_ms =
+                        Some(context.started.elapsed().as_millis().min(i64::MAX as u128) as i64);
+                    let WebSocketMessage::Text(text) = &message else {
+                        unreachable!()
+                    };
+                    if !serde_json::from_str::<serde_json::Value>(text)
+                        .is_ok_and(|value| value.is_object())
+                    {
+                        self.record_websocket_first_frame_event(
+                            &context,
+                            &FirstWebSocketFrame::Rejected("invalid_first_message_json"),
+                        );
+                        tokio::select! {
+                            biased;
+                            _ = shutdown.cancelled() => {}
+                            _ = send_websocket_json_error(&mut socket, "invalid_request",
+                                "first websocket message must be a JSON object") => {}
+                        }
+                        return;
+                    }
+                    context = websocket_context_with_first_frame(
+                        &context,
+                        websocket_message_codex_metadata(&message).as_ref(),
                     );
-                    return;
-                }
-                next = socket.recv() => next,
-            };
-            let frame_model = match next {
-                Some(Ok(message)) => {
                     let model = websocket_message_model(&message);
                     initial_message = Some(message);
-                    model
+                    model.or(sideband_model).or(secret_model)
                 }
-                Some(Err(error)) => {
-                    self.record_rejected_websocket(
-                        remote,
-                        &path_and_query,
-                        &headers,
-                        400,
-                        &format!("invalid websocket frame: {error}"),
-                    );
-                    let _ = send_websocket_json_error(
-                        &mut socket,
-                        "invalid_request",
-                        &format!("invalid websocket frame: {error}"),
-                    )
-                    .await;
+                end => {
+                    self.record_websocket_first_frame_event(&context, &end);
+                    if let FirstWebSocketFrame::Rejected(token) = end {
+                        tokio::select! {
+                            biased;
+                            _ = shutdown.cancelled() => {}
+                            _ = send_websocket_json_error(&mut socket, "invalid_request", token) => {}
+                        }
+                    }
                     return;
                 }
-                None => return,
-            };
-            frame_model.or(sideband_model).or(secret_model)
+            }
         } else {
             None
         };
-        let Some(model) = model else {
-            let frame_metadata = initial_message
-                .as_ref()
-                .and_then(websocket_message_codex_metadata);
-            self.record_rejected_websocket_with_metadata(
-                remote,
-                &path_and_query,
-                &headers,
-                400,
-                "websocket model is required (query model or first response.create frame)",
-                frame_metadata,
-                initial_message.as_ref().and_then(websocket_message_model),
+        let Some(request) =
+            model.and_then(|model| RoutingRequest::from_value(&json!({"model": model})))
+        else {
+            self.record_websocket_first_frame_event(
+                &context,
+                &FirstWebSocketFrame::Rejected("websocket_model_required"),
             );
-            let _ = send_websocket_json_error(
-                &mut socket,
-                "invalid_request",
-                "websocket model is required (query model or first response.create frame)",
-            )
-            .await;
+            tokio::select! {
+                biased;
+                _ = shutdown.cancelled() => {}
+                _ = send_websocket_json_error(&mut socket, "invalid_request",
+                    "websocket model is required (query model or first response.create frame)") => {}
+            }
             return;
         };
-        let request = RoutingRequest::from_value(&json!({"model": model}));
-        let Some(request) = request else {
-            let frame_metadata = initial_message
-                .as_ref()
-                .and_then(websocket_message_codex_metadata);
-            self.record_rejected_websocket_with_metadata(
-                remote,
-                &path_and_query,
-                &headers,
-                400,
-                "invalid websocket model",
-                frame_metadata,
-                initial_message.as_ref().and_then(websocket_message_model),
-            );
-            let _ = send_websocket_json_error(
-                &mut socket,
-                "invalid_request",
-                "invalid websocket model",
-            )
-            .await;
-            return;
-        };
-        let intent = if is_realtime_http_path(path) {
-            classify_realtime_intent(
-                "GET",
-                &path_and_query,
-                Some(&request.model),
-                self.live_session_model(&path_and_query)
-                    .flatten()
-                    .as_deref(),
-                self.realtime_client_secret_model(&headers).as_deref(),
-                detect_client_kind(&headers, true),
-                false,
-            )
-        } else {
-            RealtimeRouteIntent::StandardRealtime
-        };
-        let context = websocket_event_context(
-            self.websocket_source_ip(remote, &headers),
-            &path_and_query,
-            &headers,
-            &request.model,
-            intent,
-            Instant::now(),
-        );
-        // Responses WebSocket clients may put the only Codex identity marker
-        // on the buffered `response.create` frame.  Merge the bounded
-        // metadata before dialing upstream so handshake failures are
-        // attributed the same way as successful relays.
-        let first_frame_metadata = initial_message
-            .as_ref()
-            .and_then(websocket_message_codex_metadata);
-        let context = websocket_context_with_first_frame(&context, first_frame_metadata.as_ref());
+        context.model = request.model.clone();
         let connected = tokio::select! {
             biased;
             _ = shutdown.cancelled() => {
-                // 服务停止打断了上游握手：客户端事件仍须落账，否则该请求永远
-                // 停留在进行中，界面与统计都对不上。
                 let error = WebSocketPrepareError::new(
-                    503,
-                    "server_shutdown",
-                    "proxy stopped before the upstream websocket connected",
+                    0, "server_shutdown", "server_shutdown",
                 );
                 self.record_websocket_prepare_failure(&context, &error);
-                // 停机时只发送关闭帧，不再向客户端推送文本错误帧。
-                let _ = socket.send(axum::extract::ws::Message::Close(None)).await;
                 return;
             }
             result = self.connect_native_websocket(path, &path_and_query, &headers, &request) => result,
@@ -870,8 +978,11 @@ impl Engine {
             Ok(connection) => connection,
             Err(error) => {
                 self.record_websocket_prepare_failure(&context, &error);
-                let _ = send_websocket_json_error(&mut socket, error.error_code(), error.message())
-                    .await;
+                tokio::select! {
+                    biased;
+                    _ = shutdown.cancelled() => {}
+                    _ = send_websocket_json_error(&mut socket, error.error_code(), error.message()) => {}
+                }
                 return;
             }
         };
@@ -881,7 +992,6 @@ impl Engine {
             .expect("connected websocket owns an upstream connection");
         let metrics = relay_native_websocket(socket, upstream, initial_message, shutdown).await;
         self.record_websocket_completion(&context, &connection, &metrics);
-        let _ = remote;
     }
 
     async fn connect_native_websocket(

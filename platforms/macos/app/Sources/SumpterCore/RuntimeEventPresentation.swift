@@ -303,6 +303,23 @@ public enum RuntimeEventPresentation {
     /// 消息词表见 docs/architecture.md §5.1:引擎只发机器可读 token(`"; "` 连接),
     /// 翻译集中在这里。词表变更必须同步 spec、`message_tokens` 常量、引擎测试
     /// `MESSAGE_TOKEN_PREFIXES` 与本文件测试清单——两边清单互钉,漂移即红。
+    public static func websocketSummary(_ trace: WebSocketTrace) -> String {
+        let stages = ["awaiting_first_message": "等待首条业务消息", "upstream_handshake": "上游握手", "relay": "消息转发"]
+        let sides = ["client": "客户端侧连接（可能经过反代）", "upstream": "上游侧连接", "server": "代理服务", "relay_error": "转发过程"]
+        var parts: [String] = []
+        if let stage = trace.stage { parts.append("WebSocket 阶段: \(stages[stage] ?? stage)") }
+        if let status = trace.clientHandshakeStatus { parts.append("客户端握手: HTTP \(status)") }
+        if let status = trace.handshakeStatus { parts.append("上游握手: HTTP \(status)") }
+        if let wait = trace.firstMessageWaitMS { parts.append("首消息等待: \(durationDisplay(wait))") }
+        if let side = trace.closedBy { parts.append("关闭位置: \(sides[side] ?? side)") }
+        if let code = trace.clientCloseCode { parts.append("客户端关闭码: \(code)") }
+        if let code = trace.upstreamCloseCode { parts.append("上游关闭码: \(code)") }
+        if let abnormal = trace.abnormalClose { parts.append(abnormal ? "异常关闭" : "正常关闭") }
+        if let count = trace.attemptCount { parts.append("上游尝试: \(count)") }
+        if let error = trace.relayError { parts.append("关闭记录: \(error)") }
+        return parts.joined(separator: " · ")
+    }
+
     public static func friendlyMessage(
         kind: String,
         statusCode: Int,
@@ -318,7 +335,16 @@ public enum RuntimeEventPresentation {
     ) -> String {
         let effectiveStatusCode = statusCode
         if outcome == .cancelled || failureKind == .clientCancelled {
-            return "客户端断开/取消"
+            if streamTrace?.websocketTrace?.closedBy == "client" {
+                return "客户端侧 WebSocket 连接关闭（可能经过反代）"
+            }
+            return "客户端取消请求"
+        }
+        if let trace = streamTrace?.websocketTrace, trace.stage == "awaiting_first_message", outcome == .failed {
+            if trace.relayError == "server_shutdown" { return "代理停止，WebSocket 连接已结束" }
+            return failureKind == .clientRequestRejected
+                ? "WebSocket 首条业务消息格式错误"
+                : "首条业务消息前 WebSocket 异常断开"
         }
         // The user-facing explanation follows the recorded lifecycle result.
         // Protocol tokens and free-form engine notes stay in the diagnostic

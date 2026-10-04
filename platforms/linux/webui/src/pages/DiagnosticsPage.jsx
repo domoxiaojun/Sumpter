@@ -4,7 +4,7 @@ import { StatusBadge } from '../components/StatusBadge.jsx';
 import { Icon } from '../utils/icons.jsx';
 import { copyWithToast } from '../utils/clipboard.js';
 import { api } from '../services/api.js';
-import { formatDuration, formatTimestamp, formatNumber, clientDeclaredProject, projectSourceLabel } from '../utils/helpers.js';
+import { formatDuration, formatTimestamp, formatNumber, clientDeclaredProject, projectSourceLabel, formatWebSocketTrace } from '../utils/helpers.js';
 
 // 原始 Body/Chunks 可能接近整个捕获容量。详情页首屏不应该为每个折叠块
 // 都创建一份字符串或 DOM；只有用户明确展开某一块时才计算和挂载内容。
@@ -569,6 +569,7 @@ export function DiagnosticsPage() {
                         <div>结果：<strong>{captureDetail.statusCode ?? '进行中'} / {captureDetail.outcome || '-'}</strong></div>
                         <div>用途：<strong>{captureDetail.requestPurpose || '-'}</strong></div>
                         <div>耗时：<strong>{captureDetail.completedAtMS == null ? '进行中' : `${captureDetail.completedAtMS} ms`}</strong></div>
+                        {captureDetail.websocketTrace && <div>{formatWebSocketTrace(captureDetail.websocketTrace)}</div>}
                         <div>项目：<strong>{captureProject ? `${captureProject.label} · ${projectSourceLabel('client_declared')}` : '未声明（Codex 工作区见入站 Body 的 client_metadata）'}</strong></div>
                       </div>
                       {(captureDetail.truncated || captureDetail.inboundBodyTruncated) && <StatusBadge text="达到内存上限，后续内容已截断" kind="warning" />}

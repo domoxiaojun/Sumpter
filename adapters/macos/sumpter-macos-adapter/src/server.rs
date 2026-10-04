@@ -40,6 +40,11 @@ async fn dispatch(
     if request.method() == Method::GET
         && let Ok(upgrade) = upgrade
     {
+        let shutdown = request
+            .extensions()
+            .get::<tokio_util::sync::CancellationToken>()
+            .cloned()
+            .unwrap_or_default();
         let path_and_query = uri
             .path_and_query()
             .map(|value| value.as_str().to_string())
@@ -96,14 +101,14 @@ async fn dispatch(
             let ws_engine = engine.clone();
             return upgrade.on_upgrade(move |socket| async move {
                 ws_engine
-                    .handle_prepared_websocket(socket, remote_ip, prepared)
+                    .handle_prepared_websocket_with_shutdown(socket, remote_ip, prepared, shutdown)
                     .await;
             });
         }
         let ws_engine = engine.clone();
         return upgrade.on_upgrade(move |socket| async move {
             ws_engine
-                .handle_websocket(socket, remote_ip, path_and_query, pairs)
+                .handle_websocket_with_shutdown(socket, remote_ip, path_and_query, pairs, shutdown)
                 .await;
         });
     }
@@ -222,7 +227,13 @@ pub async fn serve_router(
 ) -> std::io::Result<(SocketAddr, tokio::task::JoinHandle<()>)> {
     let listener = tokio::net::TcpListener::bind(address).await?;
     let local = listener.local_addr()?;
+    // Upgraded callbacks outlive axum's listener task. Abort must also wake
+    // first-message waits and active relays instead of leaving orphan sockets.
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let app = app.layer(axum::Extension(shutdown.clone()));
+    let guard = shutdown.drop_guard();
     let handle = tokio::spawn(async move {
+        let _guard = guard;
         let _ = axum::serve(
             listener,
             app.into_make_service_with_connect_info::<SocketAddr>(),

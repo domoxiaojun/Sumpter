@@ -1604,6 +1604,7 @@ public enum AdminWire {
 
     public struct DiagnosticRequestCapture: Codable, Equatable, Identifiable, Sendable {
         public var id: String { requestID }
+        public let websocketTrace: WebSocketTrace?
         public let requestID: String
         public let timestamp: Double
         public let method: String

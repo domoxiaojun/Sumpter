@@ -119,6 +119,9 @@ public struct StreamTrace: Codable, Equatable, Sendable {
 /// payloads are intentionally absent; the Rust engine records only close
 /// codes, side attribution and a safe error token.
 public struct WebSocketTrace: Codable, Equatable, Sendable {
+    public var clientHandshakeStatus: Int?
+    public var stage: String?
+    public var firstMessageWaitMS: Int?
     public var handshakeStatus: Int?
     public var bytesSent: Int?
     public var bytesReceived: Int?
@@ -132,6 +135,9 @@ public struct WebSocketTrace: Codable, Equatable, Sendable {
     public var attemptCount: Int?
 
     public init(
+        clientHandshakeStatus: Int? = nil,
+        stage: String? = nil,
+        firstMessageWaitMS: Int? = nil,
         handshakeStatus: Int? = nil,
         bytesSent: Int? = nil,
         bytesReceived: Int? = nil,
@@ -144,6 +150,9 @@ public struct WebSocketTrace: Codable, Equatable, Sendable {
         abnormalClose: Bool? = nil,
         attemptCount: Int? = nil
     ) {
+        self.clientHandshakeStatus = clientHandshakeStatus
+        self.stage = stage
+        self.firstMessageWaitMS = firstMessageWaitMS
         self.handshakeStatus = handshakeStatus
         self.bytesSent = bytesSent
         self.bytesReceived = bytesReceived

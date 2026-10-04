@@ -214,7 +214,7 @@ final class RuntimeEventPresentationTests: XCTestCase {
                 outcome: .cancelled,
                 failureKind: .clientCancelled
             ),
-            "客户端断开/取消"
+            "客户端取消请求"
         )
         XCTAssertEqual(
             RuntimeEventPresentation.friendlyMessage(

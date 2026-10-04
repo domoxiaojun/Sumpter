@@ -71,6 +71,7 @@ fn record_size(record: &DiagnosticRequestCapture) -> usize {
             .as_ref()
             .map_or(0, client_declared_size)
         + record.failure_detail.as_ref().map_or(0, String::len)
+        + websocket_capture_size(record.websocket_trace.as_ref())
         + record.inbound_body.len()
         + record
             .inbound_headers
@@ -87,6 +88,12 @@ fn record_size(record: &DiagnosticRequestCapture) -> usize {
             .iter()
             .map(|chunk| chunk.data.len())
             .sum::<usize>()
+}
+
+fn websocket_capture_size(trace: Option<&sumpter_core::events::WebSocketTrace>) -> usize {
+    trace.map_or(0, |value| {
+        serde_json::to_vec(value).map_or(0, |bytes| bytes.len())
+    })
 }
 
 fn client_declared_size(declared: &ClientDeclaredMetadata) -> usize {
@@ -153,6 +160,7 @@ fn diagnostic_capture_index_record(record: &DiagnosticRequestCapture) -> Value {
         "statusCode": record.status_code,
         "outcome": record.outcome,
         "failureKind": record.failure_kind,
+        "websocketTrace": record.websocket_trace,
         "truncated": record.truncated,
         "attemptCount": record.attempts.len(),
         "clientChunkCount": record.client_chunks.len(),
@@ -478,6 +486,60 @@ impl Engine {
         }
     }
 
+    /// Start a metadata-only connection record before any application frame arrives.
+    pub(super) fn capture_websocket_start(
+        &self,
+        context: &super::websocket_relay::WebSocketEventContext,
+    ) {
+        let mut capture = self.inner.capture.lock().unwrap();
+        if !capture.enabled {
+            return;
+        }
+        let record = DiagnosticRequestCapture {
+            websocket_trace: Some(sumpter_core::events::WebSocketTrace {
+                client_handshake_status: Some(101),
+                stage: Some("awaiting_first_message".into()),
+                attempt_count: Some(0),
+                ..Default::default()
+            }),
+            request_id: context.request_id.clone(),
+            timestamp: now_unix(),
+            method: "GET".into(),
+            path: context.request_path.clone(),
+            inbound_headers: Vec::new(),
+            inbound_body: String::new(),
+            inbound_body_bytes: 0,
+            inbound_body_truncated: false,
+            client_kind: context.client_kind,
+            request_purpose: sumpter_core::routing::RequestPurpose::Standard,
+            client_model: String::new(),
+            effective_model: String::new(),
+            feature_rule_id: None,
+            client_declared: None,
+            source_format: Some(sumpter_core::config::ProviderProtocol::OpenAI),
+            target_format: None,
+            route_mode: None,
+            attempts: Vec::new(),
+            client_chunks: Vec::new(),
+            completed_at_ms: None,
+            status_code: Some(101),
+            outcome: None,
+            failure_kind: None,
+            failure_detail: None,
+            truncated: false,
+        };
+        let size = record_size(&record);
+        if size > capture.max_bytes.saturating_sub(capture.captured_bytes) {
+            refresh_capture_usage(&mut capture, true);
+        } else {
+            capture.captured_bytes += size;
+            capture.records.insert(0, record);
+            refresh_capture_usage(&mut capture, false);
+        }
+        self.sync_capture_index_window(&capture);
+        self.inner.capture_dirty.store(true, Ordering::Release);
+    }
+
     pub(super) fn capture_start(
         &self,
         request_id: &str,
@@ -523,6 +585,7 @@ impl Engine {
             diagnostic_text(body, remaining.saturating_sub(header_bytes));
         let truncated = headers_truncated || body_truncated;
         let record = DiagnosticRequestCapture {
+            websocket_trace: None,
             request_id: request_id.into(),
             timestamp: now_unix(),
             method: method.into(),
@@ -812,8 +875,27 @@ impl Engine {
             return;
         };
         let mut size_delta: isize = 0;
+        let websocket_trace = event
+            .stream_trace
+            .as_ref()
+            .and_then(|trace| trace.websocket_trace.as_ref());
         let attempt_ids = {
             let record = &mut capture.records[record_index];
+            if capture_enabled && let Some(trace) = websocket_trace {
+                let old_size = websocket_capture_size(record.websocket_trace.as_ref());
+                let new_size = websocket_capture_size(Some(trace));
+                if new_size <= remaining.saturating_add(old_size) {
+                    record.websocket_trace = Some(trace.clone());
+                    size_delta += new_size as isize - old_size as isize;
+                    remaining = remaining.saturating_add(old_size).saturating_sub(new_size);
+                } else {
+                    // Never leave an old in-flight stage on a completed capture.
+                    record.websocket_trace = None;
+                    size_delta -= old_size as isize;
+                    remaining = remaining.saturating_add(old_size);
+                    truncated = true;
+                }
+            }
             let old_failure_detail_size = record.failure_detail.as_ref().map_or(0, String::len);
             let new_failure_detail_size = failure_detail.as_ref().map_or(0, String::len);
             size_delta += new_failure_detail_size as isize - old_failure_detail_size as isize;

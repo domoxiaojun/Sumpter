@@ -1415,6 +1415,10 @@ struct DiagnosticsPane: View {
                                 .font(.caption.monospaced()).textSelection(.enabled)
                             Text(RuntimeEventPresentation.protocolPath(sourceFormat: detail.sourceFormat, targetFormat: detail.targetFormat, routeMode: detail.routeMode))
                                 .font(.caption).foregroundStyle(.secondary)
+                            if let trace = detail.websocketTrace {
+                                Text(RuntimeEventPresentation.websocketSummary(trace))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
                             Text(captureProjectLine(detail.clientDeclared))
                                 .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                             if detail.truncated || detail.inboundBodyTruncated {

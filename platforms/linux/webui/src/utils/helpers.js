@@ -1269,6 +1269,34 @@ export function eventFailureSummaryLabel(event) {
   return '未记录';
 }
 
+export function formatWebSocketTrace(trace) {
+  if (!trace) return null;
+  const parts = [];
+  const stage = trace.stage;
+  const stages = { awaiting_first_message: '等待首条业务消息', upstream_handshake: '上游握手', relay: '消息转发' };
+  if (stage) parts.push(`WebSocket 阶段: ${stages[stage] || stage}`);
+  const handshake = trace.clientHandshakeStatus ?? trace.client_handshake_status;
+  if (handshake != null) parts.push(`客户端握手: HTTP ${handshake}`);
+  const upstreamHandshake = trace.handshakeStatus ?? trace.handshake_status;
+  if (upstreamHandshake != null) parts.push(`上游握手: HTTP ${upstreamHandshake}`);
+  const wait = trace.firstMessageWaitMS ?? trace.first_message_wait_ms;
+  if (wait != null) parts.push(`首消息等待: ${formatDuration(wait)}`);
+  const side = trace.closedBy ?? trace.closed_by;
+  const sides = { client: '客户端侧连接（可能经过反代）', upstream: '上游侧连接', server: '代理服务', relay_error: '转发过程' };
+  if (side) parts.push(`关闭位置: ${sides[side] || side}`);
+  const code = trace.clientCloseCode ?? trace.client_close_code;
+  if (code != null) parts.push(`客户端关闭码: ${code}`);
+  const upstreamCode = trace.upstreamCloseCode ?? trace.upstream_close_code;
+  if (upstreamCode != null) parts.push(`上游关闭码: ${upstreamCode}`);
+  const abnormal = trace.abnormalClose ?? trace.abnormal_close;
+  if (abnormal != null) parts.push(abnormal ? '异常关闭' : '正常关闭');
+  const attempts = trace.attemptCount ?? trace.attempt_count;
+  if (attempts != null) parts.push(`上游尝试: ${attempts}`);
+  const error = trace.relayError ?? trace.relay_error;
+  if (error) parts.push(`关闭记录: ${error}`);
+  return parts.join(' · ');
+}
+
 export function formatStreamTrace(trace, { durationMS = null, inFlight = false } = {}) {
   if (!trace) return null;
   const parts = [];
@@ -1279,6 +1307,8 @@ export function formatStreamTrace(trace, { durationMS = null, inFlight = false }
   const terminalEvent = trace.terminalEvent ?? trace.terminal_event;
   const stopReason = trace.stopReason ?? trace.stop_reason;
   const usage = trace.usage;
+  const websocket = trace.websocketTrace ?? trace.websocket_trace;
+  if (websocket) return formatWebSocketTrace(websocket);
   if (chunkCount != null) parts.push(`接收 Chunk 数: ${chunkCount}`);
   if (bytesReceived != null) parts.push(`累计字节: ${(bytesReceived / 1024).toFixed(1)} KB`);
   if (maxChunkGapMS != null) parts.push(`最大间隔: ${formatDuration(maxChunkGapMS)}`);
@@ -1322,7 +1352,17 @@ export function friendlyEventMessage(event) {
     return eventStreamTrace(event) ? '流式输出中' : '接收响应中';
   }
   if (outcome === 'cancelled') {
-    return '客户端主动断开连接 / 取消请求 (499)';
+    const trace = eventStreamTrace(event)?.websocketTrace ?? eventStreamTrace(event)?.websocket_trace;
+    return (trace?.closedBy ?? trace?.closed_by) === 'client'
+      ? '客户端侧 WebSocket 连接关闭（可能经过反代）'
+      : '客户端取消请求';
+  }
+  const websocket = eventStreamTrace(event)?.websocketTrace ?? eventStreamTrace(event)?.websocket_trace;
+  if (websocket?.stage === 'awaiting_first_message' && outcome === 'failed') {
+    if ((websocket.relayError ?? websocket.relay_error) === 'server_shutdown') return '代理停止，WebSocket 连接已结束';
+    return failureKind === 'client_request_rejected'
+      ? 'WebSocket 首条业务消息格式错误'
+      : '首条业务消息前 WebSocket 异常断开';
   }
   // A successful request is described by its recorded lifecycle result. The
   // engine message may contain routing tokens (passthrough/bridge) or other

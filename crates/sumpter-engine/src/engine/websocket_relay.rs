@@ -46,6 +46,8 @@ use sumpter_core::routing::RequestPurpose;
 
 #[derive(Clone)]
 pub(super) struct WebSocketEventContext {
+    pub(super) client_upgraded: bool,
+    pub(super) first_message_wait_ms: Option<i64>,
     pub(super) source_ip: Option<String>,
     pub(super) request_id: String,
     pub(super) request_path: String,
@@ -457,6 +459,8 @@ pub(super) fn websocket_event_context(
     };
     let client_kind = detect_client_kind(headers, true);
     WebSocketEventContext {
+        client_upgraded: false,
+        first_message_wait_ms: None,
         source_ip,
         request_id: new_event_id(),
         request_path: bounded_request_path(path),
@@ -516,6 +520,9 @@ pub(super) fn websocket_context_with_first_frame(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn websocket_trace(
     handshake_status: i64,
+    client_handshake_status: Option<i64>,
+    stage: &str,
+    first_message_wait_ms: Option<i64>,
     bytes_sent: u64,
     bytes_received: u64,
     client_message_count: u64,
@@ -538,7 +545,10 @@ pub(super) fn websocket_trace(
         usage: None,
         stop_reason: None,
         websocket_trace: Some(WebSocketTrace {
-            handshake_status: Some(handshake_status),
+            client_handshake_status,
+            stage: Some(stage.into()),
+            first_message_wait_ms,
+            handshake_status: (handshake_status > 0).then_some(handshake_status),
             bytes_sent: Some(bytes_sent),
             bytes_received: Some(bytes_received),
             client_message_count: Some(client_message_count),
@@ -576,12 +586,12 @@ pub(super) fn websocket_client_event(
         codex_metadata: context.codex_metadata.clone(),
         client_declared: context.client_declared.clone(),
         grok_metadata: context.grok_metadata.clone(),
-        client_model: Some(context.model.clone()),
+        client_model: (!context.model.is_empty()).then(|| context.model.clone()),
         source_format: Some(ProviderProtocol::OpenAI),
         target_format: endpoint.map(|endpoint| endpoint.protocol),
         route_mode: endpoint.map(|endpoint| endpoint.route_mode),
         duration_ms: context.started.elapsed().as_millis().min(i64::MAX as u128) as i64,
-        effective_model: Some(context.model.clone()),
+        effective_model: (!context.model.is_empty()).then(|| context.model.clone()),
         endpoint_id: endpoint.map(|endpoint| endpoint.endpoint_id.clone()),
         endpoint_name: endpoint.map(|endpoint| endpoint.endpoint_name.clone()),
         model_group_id: None,
@@ -615,11 +625,9 @@ pub(super) fn websocket_client_event(
         stream_trace,
         timeout_ms: None,
         upstream_host: endpoint.and_then(|endpoint| host_of(&endpoint.base_url)),
-        upstream_model: endpoint
-            .map(|endpoint| endpoint.upstream_model.clone())
-            .or_else(|| Some(context.model.clone())),
+        upstream_model: endpoint.map(|endpoint| endpoint.upstream_model.clone()),
         upstream_request_id: None,
-        upstream_status_code: (status > 0).then_some(status),
+        upstream_status_code: endpoint.and_then(|_| (status > 0).then_some(status)),
     };
     if let Some(failure) = failure {
         failure.apply_to(&mut event);

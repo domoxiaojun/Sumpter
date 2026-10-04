@@ -2401,6 +2401,17 @@ pub struct StreamTrace {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct WebSocketTrace {
+    /// Actual downstream HTTP upgrade status; separate from the Provider handshake.
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub client_handshake_status: Option<i64>,
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub stage: Option<String>,
+    #[serde(
+        rename = "firstMessageWaitMS",
+        default,
+        skip_serializing_if = "is_none"
+    )]
+    pub first_message_wait_ms: Option<i64>,
     /// Upstream handshake status (normally 101; an HTTP rejection is kept as
     /// the received status when the connection never became a relay).
     #[serde(default, skip_serializing_if = "is_none")]
@@ -2485,6 +2496,9 @@ pub struct DiagnosticAttemptCapture {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticRequestCapture {
+    /// Metadata-only WebSocket capture. No frame payloads or close reason text.
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub websocket_trace: Option<WebSocketTrace>,
     // ID 结尾字段必须显式 rename:详情端点直接序列化这个结构体,而 WebUI/macOS 读的是
     // 大写口径，与诊断索引的手写 JSON 一致。
     #[serde(rename = "requestID")]

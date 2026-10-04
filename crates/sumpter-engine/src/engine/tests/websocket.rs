@@ -7,6 +7,7 @@ use sumpter_core::events::ClientKind;
 
 use crate::engine::websocket::{websocket_upstream_headers, websocket_url};
 use crate::engine::websocket_relay::websocket_context_with_first_frame;
+use crate::engine::websocket_relay::websocket_trace;
 use crate::engine::websocket_relay::{
     WebSocketEventContext, WebSocketRelayCounters, tungstenite_message_stats,
     websocket_connect_error, websocket_message_codex_metadata, websocket_message_size,
@@ -54,6 +55,31 @@ fn websocket_non_http_connect_error_has_no_upstream_status() {
 }
 
 #[test]
+fn websocket_trace_keeps_client_upgrade_and_first_message_wait_separate() {
+    let trace = websocket_trace(
+        0,
+        Some(101),
+        "awaiting_first_message",
+        Some(37),
+        0,
+        0,
+        0,
+        0,
+        None,
+        None,
+        Some("client".into()),
+        Some("client_eof_without_close".into()),
+        true,
+        0,
+    );
+    let value = serde_json::to_value(trace.websocket_trace.unwrap()).unwrap();
+    assert_eq!(value["clientHandshakeStatus"], 101);
+    assert_eq!(value["stage"], "awaiting_first_message");
+    assert_eq!(value["firstMessageWaitMS"], 37);
+    assert!(value.get("handshakeStatus").is_none());
+}
+
+#[test]
 fn websocket_codex_frame_preserves_workspace_and_canonical_identity() {
     use sumpter_core::events::CodexMetadata;
     let body = serde_json::json!({"originator":"Codex Desktop", "response": {
@@ -70,6 +96,8 @@ fn websocket_codex_frame_preserves_workspace_and_canonical_identity() {
     let frame = WebSocketMessage::Text(body.to_string().into());
     let metadata = websocket_message_codex_metadata(&frame).unwrap();
     let context = WebSocketEventContext {
+        client_upgraded: false,
+        first_message_wait_ms: None,
         source_ip: None,
         request_id: "request".into(),
         request_path: "/v1/responses".into(),
@@ -131,6 +159,8 @@ fn websocket_first_frame_originator_upgrades_generic_attribution() {
     );
     let metadata = websocket_message_codex_metadata(&frame).expect("frame metadata");
     let context = WebSocketEventContext {
+        client_upgraded: false,
+        first_message_wait_ms: None,
         source_ip: None,
         request_id: "request".into(),
         request_path: "/v1/responses".into(),

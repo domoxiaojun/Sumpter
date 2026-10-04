@@ -143,6 +143,7 @@ enum RuntimeEventDisplay {
 
     static func streamTrace(_ event: RuntimeEvent) -> String? {
         guard let trace = event.streamTrace else { return nil }
+        if let websocket = trace.websocketTrace { return RuntimeEventPresentation.websocketSummary(websocket) }
         var parts: [String] = []
         if let count = trace.chunkCount { parts.append("chunks=\(count)") }
         if let bytes = trace.bytesReceived { parts.append("bytes=\(bytes)") }
