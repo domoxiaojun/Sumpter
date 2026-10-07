@@ -489,7 +489,7 @@ impl Engine {
             metrics.first_client_codex_metadata.as_ref(),
         );
         let status = 101_i64;
-        let trace = websocket_trace(
+        let mut trace = websocket_trace(
             101,
             Some(101),
             "relay",
@@ -505,11 +505,30 @@ impl Engine {
             metrics.abnormal_close,
             connection.attempt_count,
         );
-        let failure = metrics.failed.then(|| FailureInfo {
-            kind: RuntimeFailureKind::StreamInterrupted,
+        if let Some(trace) = trace.websocket_trace.as_mut() {
+            trace.transport_error_kind = metrics.transport_error_kind.clone();
+            trace.last_event_type = metrics.last_event_type.clone();
+            trace.idle_timeout_ms = metrics.idle_timeout_ms;
+        }
+        let cancelled = !metrics.failed && metrics.closed_by.as_deref() == Some("client");
+        let failure = (metrics.failed || cancelled).then(|| FailureInfo {
+            kind: if cancelled {
+                RuntimeFailureKind::ClientCancelled
+            } else if metrics.idle_timeout_ms.is_some() {
+                RuntimeFailureKind::StreamIdleTimeout
+            } else {
+                RuntimeFailureKind::StreamInterrupted
+            },
             phase: RuntimeFailurePhase::ResponseStream,
-            detail: Some("websocket relay interrupted".into()),
-            timeout_ms: None,
+            detail: Some(
+                if cancelled {
+                    "client_closed_websocket"
+                } else {
+                    "websocket relay interrupted"
+                }
+                .into(),
+            ),
+            timeout_ms: metrics.idle_timeout_ms,
             upstream_status_code: Some(status),
             upstream_request_id: None,
             retry_after_seconds: None,
@@ -541,6 +560,9 @@ impl Engine {
         } else {
             upstream.outcome = Some(RuntimeEventOutcome::Succeeded);
         }
+        if cancelled {
+            upstream.outcome = Some(RuntimeEventOutcome::Cancelled);
+        }
         self.complete_upstream(upstream);
 
         let mut client = websocket_client_event(
@@ -554,9 +576,19 @@ impl Engine {
         // Client time includes first-message wait and upstream handshake.
         client.duration_ms = context.started.elapsed().as_millis().min(i64::MAX as u128) as i64;
         client.ttfb_ms = Some(connection.handshake_ttfb_ms);
+        client.outcome = Some(if cancelled {
+            RuntimeEventOutcome::Cancelled
+        } else if metrics.failed {
+            RuntimeEventOutcome::Failed
+        } else {
+            RuntimeEventOutcome::Succeeded
+        });
         self.complete_client(
             client,
-            failure.as_ref().and_then(|failure| failure.detail.clone()),
+            failure
+                .as_ref()
+                .filter(|_| !cancelled)
+                .and_then(|failure| failure.detail.clone()),
         );
     }
 
@@ -694,7 +726,14 @@ impl Engine {
             .upstream
             .take()
             .expect("prepared websocket owns an upstream connection");
-        let metrics = relay_native_websocket(socket, upstream, None, shutdown).await;
+        let metrics = relay_native_websocket(
+            socket,
+            upstream,
+            None,
+            shutdown,
+            self.websocket_idle_timeout(),
+        )
+        .await;
         self.record_websocket_completion(&prepared.context, &connection, &metrics);
         let _ = remote;
     }
@@ -990,8 +1029,22 @@ impl Engine {
             .upstream
             .take()
             .expect("connected websocket owns an upstream connection");
-        let metrics = relay_native_websocket(socket, upstream, initial_message, shutdown).await;
+        let metrics = relay_native_websocket(
+            socket,
+            upstream,
+            initial_message,
+            shutdown,
+            self.websocket_idle_timeout(),
+        )
+        .await;
         self.record_websocket_completion(&context, &connection, &metrics);
+    }
+
+    fn websocket_idle_timeout(&self) -> Option<Duration> {
+        self.config()
+            .retry
+            .stream_idle_timeout_seconds
+            .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
     }
 
     async fn connect_native_websocket(

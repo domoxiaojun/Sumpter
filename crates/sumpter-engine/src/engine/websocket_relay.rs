@@ -19,8 +19,8 @@ use super::websocket::MAX_WEBSOCKET_METADATA_FRAME_BYTES;
 use super::websocket::NativeWebSocket;
 use axum::extract::ws::Message as WebSocketMessage;
 use axum::extract::ws::WebSocket;
-use futures_util::SinkExt;
 use futures_util::StreamExt;
+use futures_util::{Sink, SinkExt, Stream};
 use serde_json::Value;
 use serde_json::json;
 use std::sync::Arc;
@@ -28,7 +28,7 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use sumpter_core::config::ProviderProtocol;
 use sumpter_core::events::ClientDeclaredMetadata;
 use sumpter_core::events::ClientKind;
@@ -43,6 +43,8 @@ use sumpter_core::events::WebSocketTrace;
 use sumpter_core::events::unix_to_apple_epoch;
 use sumpter_core::routing::PlannedEndpoint;
 use sumpter_core::routing::RequestPurpose;
+use tokio::sync::{mpsc, oneshot, watch};
+use tokio_tungstenite::tungstenite::Error as WsError;
 
 #[derive(Clone)]
 pub(super) struct WebSocketEventContext {
@@ -69,10 +71,15 @@ pub(super) struct WebSocketRelayCounters {
     pub(super) upstream_message_count: AtomicU64,
     pub(super) failed: AtomicBool,
     pub(super) abnormal_close: AtomicBool,
+    client_closed: AtomicBool,
+    upstream_closed: AtomicBool,
     pub(super) client_close_code: Mutex<Option<i64>>,
     pub(super) upstream_close_code: Mutex<Option<i64>>,
     pub(super) closed_by: Mutex<Option<String>>,
     pub(super) relay_error: Mutex<Option<String>>,
+    pub(super) transport_error_kind: Mutex<Option<String>>,
+    pub(super) last_event_type: Mutex<Option<String>>,
+    pub(super) idle_timeout_ms: Mutex<Option<i64>>,
     pub(super) first_client_text_seen: AtomicBool,
     pub(super) first_client_codex_metadata: Mutex<Option<CodexMetadata>>,
 }
@@ -86,6 +93,9 @@ pub(super) struct WebSocketRelayMetrics {
     pub(super) upstream_close_code: Option<i64>,
     pub(super) closed_by: Option<String>,
     pub(super) relay_error: Option<String>,
+    pub(super) transport_error_kind: Option<String>,
+    pub(super) last_event_type: Option<String>,
+    pub(super) idle_timeout_ms: Option<i64>,
     pub(super) abnormal_close: bool,
     pub(super) failed: bool,
     pub(super) first_client_codex_metadata: Option<CodexMetadata>,
@@ -105,164 +115,382 @@ pub(super) async fn send_websocket_json_error(
     socket.send(WebSocketMessage::Text(payload.into())).await
 }
 
+/// One pending business message per direction; small control queues cannot retain
+/// arbitrary prompt bodies. Close stays in the business queue to preserve ordering.
+#[derive(Clone)]
+struct RelayQueue {
+    data: mpsc::Sender<RelayData>,
+    control: mpsc::Sender<ControlWrite>,
+}
+
+#[derive(Debug)]
+enum RelayData {
+    Frame(WebSocketMessage),
+    End,
+}
+
+enum ControlWrite {
+    Frame(WebSocketMessage),
+    // Tungstenite already queued the Pong/Close reply. Flush, never replace it
+    // with a manually generated Pong (which can overwrite the automatic reply).
+    Flush(Option<oneshot::Sender<()>>),
+}
+
+#[derive(Clone, Copy)]
+enum Peer {
+    Client,
+    Upstream,
+}
+
+impl Peer {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Client => "client",
+            Self::Upstream => "upstream",
+        }
+    }
+    fn read_error(self) -> &'static str {
+        match self {
+            Self::Client => "client_receive_failed",
+            Self::Upstream => "upstream_receive_failed",
+        }
+    }
+    fn write_error(self) -> &'static str {
+        match self {
+            Self::Client => "upstream_to_client_send_failed",
+            Self::Upstream => "client_to_upstream_send_failed",
+        }
+    }
+    fn flush_error(self) -> &'static str {
+        match self {
+            Self::Client => "client_control_flush_failed",
+            Self::Upstream => "upstream_control_flush_failed",
+        }
+    }
+}
+
+pub(super) fn transport_error_kind(error: &WsError) -> &'static str {
+    use std::io::ErrorKind;
+    use tokio_tungstenite::tungstenite::error::ProtocolError;
+    match error {
+        WsError::Io(error) => match error.kind() {
+            ErrorKind::ConnectionReset => "connection_reset",
+            ErrorKind::ConnectionAborted => "connection_aborted",
+            ErrorKind::UnexpectedEof => "unexpected_eof",
+            ErrorKind::BrokenPipe => "broken_pipe",
+            ErrorKind::TimedOut => "timed_out",
+            _ => "io_error",
+        },
+        WsError::Protocol(ProtocolError::ResetWithoutClosingHandshake) => "eof_without_close",
+        WsError::Protocol(_) => "protocol_error",
+        WsError::Utf8(_) => "invalid_utf8",
+        WsError::Tls(_) => "tls_error",
+        WsError::Capacity(_) | WsError::WriteBufferFull(_) => "capacity_error",
+        WsError::ConnectionClosed | WsError::AlreadyClosed => "connection_closed",
+        _ => "transport_error",
+    }
+}
+
+fn axum_transport_error_kind(error: axum::Error) -> &'static str {
+    error
+        .into_inner()
+        .downcast_ref::<WsError>()
+        .map(transport_error_kind)
+        .unwrap_or("transport_error")
+}
+
 pub(super) async fn relay_native_websocket(
     socket: WebSocket,
     upstream: NativeWebSocket,
     initial_message: Option<WebSocketMessage>,
     shutdown: tokio_util::sync::CancellationToken,
+    idle_timeout: Option<Duration>,
 ) -> WebSocketRelayMetrics {
     let started = Instant::now();
     let counters = Arc::new(WebSocketRelayCounters::default());
-    let (mut downstream_tx, mut downstream_rx) = socket.split();
-    let (mut upstream_tx, mut upstream_rx) = upstream.split();
+    let cancellation = tokio_util::sync::CancellationToken::new();
+    let (activity, activity_rx) = watch::channel(
+        initial_message
+            .as_ref()
+            .map(|_| tokio::time::Instant::now()),
+    );
+    let (client_tx, client_rx) = socket.split();
+    let (upstream_tx, upstream_rx) = upstream.split();
+    let (client_data_tx, client_data_rx) = mpsc::channel(1);
+    let (client_control_tx, client_control_rx) = mpsc::channel(8);
+    let (upstream_data_tx, upstream_data_rx) = mpsc::channel(1);
+    let (upstream_control_tx, upstream_control_rx) = mpsc::channel(8);
+    let client_queue = RelayQueue {
+        data: client_data_tx,
+        control: client_control_tx,
+    };
+    let upstream_queue = RelayQueue {
+        data: upstream_data_tx,
+        control: upstream_control_tx,
+    };
+
+    // Seed the first frame before starting readers, but do NOT await its network
+    // write: upstream Ping/Close must remain readable even during this first send.
     if let Some(message) = initial_message {
         counters.observe_first_client_text(&message);
-        let bytes = websocket_message_size(&message);
-        let sent = tokio::select! {
-            biased;
-            _ = shutdown.cancelled() => {
-                counters.record_error("server_shutdown", "server");
-                return counters.snapshot(started);
-            }
-            result = upstream_tx.send(websocket_message_to_tungstenite(message)) => result,
-        };
-        if sent.is_err() {
-            counters.record_error("initial_frame_send_failed", "relay_error");
-            let _ = downstream_tx.close().await;
-            return counters.snapshot(started);
-        }
-        counters.bytes_sent.fetch_add(bytes, Ordering::Relaxed);
-        counters
-            .client_message_count
-            .fetch_add(1, Ordering::Relaxed);
+        upstream_queue
+            .data
+            .try_send(RelayData::Frame(message))
+            .unwrap_or_else(|_| unreachable!("empty relay queue"));
     }
-    let cancellation = tokio_util::sync::CancellationToken::new();
-    let downstream_counters = counters.clone();
-    let downstream_cancel = cancellation.clone();
-    let downstream_to_upstream = async {
-        loop {
-            let next = tokio::select! {
-                _ = downstream_cancel.cancelled() => None,
-                message = downstream_rx.next() => message,
-            };
-            let Some(next) = next else {
-                // A clean WebSocket close frame is surfaced as a message;
-                // EOF without one is an abnormal client-side termination.
-                if !downstream_cancel.is_cancelled() {
-                    downstream_counters.record_error("client_eof_without_close", "client");
-                }
-                break;
-            };
-            let message = match next {
-                Ok(message) => message,
-                Err(_) => {
-                    downstream_counters.record_error("client_receive_failed", "client");
-                    break;
-                }
-            };
-            downstream_counters.observe_first_client_text(&message);
-            let bytes = websocket_message_size(&message);
-            let close_code = axum_close_code(&message);
-            let is_close = matches!(&message, WebSocketMessage::Close(_));
-            let converted = websocket_message_to_tungstenite(message);
-            if upstream_tx.send(converted).await.is_err() {
-                downstream_counters.record_error("client_to_upstream_send_failed", "relay_error");
-                break;
-            }
-            downstream_counters
-                .bytes_sent
-                .fetch_add(bytes, Ordering::Relaxed);
-            downstream_counters
-                .client_message_count
-                .fetch_add(1, Ordering::Relaxed);
-            if is_close {
-                if let Some(code) = close_code {
-                    *downstream_counters.client_close_code.lock().unwrap() = Some(code);
-                }
-                downstream_counters.set_closed_by("client");
-                break;
-            }
-        }
-        let _ = upstream_tx.close().await;
-        downstream_cancel.cancel();
-    };
-    let upstream_counters = counters.clone();
-    let upstream_cancel = cancellation.clone();
-    let upstream_to_downstream = async {
-        loop {
-            let next = tokio::select! {
-                _ = upstream_cancel.cancelled() => None,
-                message = upstream_rx.next() => message,
-            };
-            let Some(next) = next else {
-                if !upstream_cancel.is_cancelled() {
-                    upstream_counters.record_error("upstream_eof_without_close", "upstream");
-                }
-                break;
-            };
-            let message = match next {
-                Ok(message) => message,
-                Err(_) => {
-                    upstream_counters.record_error("upstream_receive_failed", "upstream");
-                    break;
-                }
-            };
-            let (bytes, close_code) = tungstenite_message_stats(&message);
-            let converted = match message {
-                tokio_tungstenite::tungstenite::Message::Text(text) => {
-                    WebSocketMessage::Text(text.to_string().into())
-                }
-                tokio_tungstenite::tungstenite::Message::Binary(bytes) => {
-                    WebSocketMessage::Binary(bytes.to_vec().into())
-                }
-                tokio_tungstenite::tungstenite::Message::Ping(bytes) => {
-                    WebSocketMessage::Ping(bytes.to_vec().into())
-                }
-                tokio_tungstenite::tungstenite::Message::Pong(bytes) => {
-                    WebSocketMessage::Pong(bytes.to_vec().into())
-                }
-                tokio_tungstenite::tungstenite::Message::Close(frame) => {
-                    WebSocketMessage::Close(frame.map(|frame| axum::extract::ws::CloseFrame {
-                        code: frame.code.into(),
-                        reason: frame.reason.to_string().into(),
-                    }))
-                }
-                tokio_tungstenite::tungstenite::Message::Frame(_) => continue,
-            };
-            let is_close = matches!(&converted, WebSocketMessage::Close(_));
-            if is_close {
-                if let Some(code) = close_code {
-                    *upstream_counters.upstream_close_code.lock().unwrap() = Some(code);
-                }
-                upstream_counters.set_closed_by("upstream");
-            }
-            if downstream_tx.send(converted).await.is_err() {
-                upstream_counters.record_error("upstream_to_client_send_failed", "relay_error");
-                break;
-            }
-            upstream_counters
-                .bytes_received
-                .fetch_add(bytes, Ordering::Relaxed);
-            upstream_counters
-                .upstream_message_count
-                .fetch_add(1, Ordering::Relaxed);
-            if is_close {
-                break;
-            }
-        }
-        let _ = downstream_tx.close().await;
-        upstream_cancel.cancel();
-    };
+    let client_reader = relay_reader(
+        client_rx.map(|item| item.map(Some).map_err(axum_transport_error_kind)),
+        Peer::Client,
+        &client_queue,
+        &upstream_queue,
+        &counters,
+        &activity,
+    );
+    let upstream_reader = relay_reader(
+        upstream_rx.map(|item| {
+            item.map(tungstenite_to_axum)
+                .map_err(|error| transport_error_kind(&error))
+        }),
+        Peer::Upstream,
+        &upstream_queue,
+        &client_queue,
+        &counters,
+        &activity,
+    );
+    let client_writer = relay_writer(
+        client_tx.sink_map_err(axum_transport_error_kind),
+        Peer::Client,
+        client_data_rx,
+        client_control_rx,
+        &counters,
+        &activity,
+        &cancellation,
+    );
+    let upstream_writer = relay_writer(
+        upstream_tx
+            .with(|message| {
+                std::future::ready(Ok::<_, WsError>(websocket_message_to_tungstenite(message)))
+            })
+            .sink_map_err(|error| transport_error_kind(&error)),
+        Peer::Upstream,
+        upstream_data_rx,
+        upstream_control_rx,
+        &counters,
+        &activity,
+        &cancellation,
+    );
     tokio::select! {
         biased;
-        _ = shutdown.cancelled() => {
-            // 丢弃两个方向的 future 同时释放四个 split half，即便 send/close 正阻塞
-            // 也不留下后台转发任务；调用方仍能用计数快照完成事件记账。
-            counters.record_error("server_shutdown", "server");
-        }
-        _ = async { tokio::join!(downstream_to_upstream, upstream_to_downstream); } => {}
+        _ = shutdown.cancelled() => counters.record_transport_error("server_shutdown", "server", "server_shutdown"),
+        _ = cancellation.cancelled() => {},
+        _ = wait_for_idle(activity_rx, idle_timeout) => {
+            *counters.idle_timeout_ms.lock().unwrap() = idle_timeout.map(|timeout| timeout.as_millis().min(i64::MAX as u128) as i64);
+            counters.record_transport_error("idle_timeout", "relay_error", "idle_timeout");
+        },
+        _ = async { tokio::join!(client_reader, upstream_reader, client_writer, upstream_writer); } => {},
     }
+    // Dropping all four futures releases sockets even if send/flush is blocked.
     counters.snapshot(started)
+}
+
+fn mark_activity(activity: &watch::Sender<Option<tokio::time::Instant>>, business: bool) {
+    activity.send_modify(|last| {
+        if business || last.is_some() {
+            *last = Some(tokio::time::Instant::now());
+        }
+    });
+}
+
+async fn wait_for_idle(
+    mut activity: watch::Receiver<Option<tokio::time::Instant>>,
+    timeout: Option<Duration>,
+) {
+    let Some(timeout) = timeout else {
+        return std::future::pending().await;
+    };
+    loop {
+        let last = *activity.borrow_and_update();
+        let Some(last) = last else {
+            if activity.changed().await.is_err() {
+                return std::future::pending().await;
+            }
+            continue;
+        };
+        let deadline = last + timeout;
+        tokio::select! {
+            biased;
+            result = activity.changed() => if result.is_err() { return std::future::pending().await; },
+            _ = tokio::time::sleep_until(deadline) => return,
+        }
+    }
+}
+
+async fn relay_reader<R>(
+    mut reader: R,
+    peer: Peer,
+    local: &RelayQueue,
+    remote: &RelayQueue,
+    counters: &WebSocketRelayCounters,
+    activity: &watch::Sender<Option<tokio::time::Instant>>,
+) where
+    R: Stream<Item = Result<Option<WebSocketMessage>, &'static str>> + Unpin,
+{
+    loop {
+        let message = match reader.next().await {
+            Some(Ok(Some(message))) => message,
+            Some(Ok(None)) => continue,
+            next => {
+                let kind = next.and_then(Result::err).unwrap_or("eof_without_close");
+                counters.record_transport_error(peer.read_error(), peer.name(), kind);
+                // Deliver already-read frames before reporting a transport end.
+                // Otherwise a fast EOF can discard the final response chunk.
+                let _ = remote.data.send(RelayData::End).await;
+                return;
+            }
+        };
+        mark_activity(
+            activity,
+            matches!(
+                message,
+                WebSocketMessage::Text(_) | WebSocketMessage::Binary(_)
+            ),
+        );
+        if matches!(peer, Peer::Client) {
+            counters.observe_first_client_text(&message);
+        } else {
+            counters.observe_upstream_event(&message);
+        }
+        if matches!(message, WebSocketMessage::Close(_)) {
+            counters.record_close(peer, axum_close_code(&message));
+            let (done, flushed) = oneshot::channel();
+            if local
+                .control
+                .send(ControlWrite::Flush(Some(done)))
+                .await
+                .is_err()
+            {
+                return;
+            }
+            let _ = flushed.await;
+            // Unlike Ping/Pong, Close must not overtake preceding payloads.
+            let _ = remote.data.send(RelayData::Frame(message)).await;
+            return;
+        }
+        if matches!(message, WebSocketMessage::Ping(_))
+            && local.control.send(ControlWrite::Flush(None)).await.is_err()
+        {
+            return;
+        }
+        let result = if matches!(
+            message,
+            WebSocketMessage::Ping(_) | WebSocketMessage::Pong(_)
+        ) {
+            remote
+                .control
+                .send(ControlWrite::Frame(message))
+                .await
+                .map_err(|_| ())
+        } else {
+            remote
+                .data
+                .send(RelayData::Frame(message))
+                .await
+                .map_err(|_| ())
+        };
+        if result.is_err() {
+            return;
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn relay_writer<S>(
+    mut sink: S,
+    peer: Peer,
+    mut data: mpsc::Receiver<RelayData>,
+    mut control: mpsc::Receiver<ControlWrite>,
+    counters: &WebSocketRelayCounters,
+    activity: &watch::Sender<Option<tokio::time::Instant>>,
+    cancellation: &tokio_util::sync::CancellationToken,
+) where
+    S: Sink<WebSocketMessage, Error = &'static str> + Unpin,
+{
+    loop {
+        let command = tokio::select! {
+            biased;
+            Some(command) = control.recv() => command,
+            Some(message) = data.recv() => match message {
+                RelayData::Frame(message) => ControlWrite::Frame(message),
+                RelayData::End => { cancellation.cancel(); return; }
+            },
+            else => return,
+        };
+        let message = match command {
+            ControlWrite::Flush(done) => {
+                if let Err(kind) = sink.flush().await {
+                    // A completed automatic Close reply is a normal library result.
+                    if kind != "connection_closed" || done.is_none() {
+                        counters.record_transport_error(peer.flush_error(), peer.name(), kind);
+                        cancellation.cancel();
+                        return;
+                    }
+                }
+                if let Some(done) = done {
+                    let _ = done.send(());
+                }
+                continue;
+            }
+            ControlWrite::Frame(message) => message,
+        };
+        let bytes = websocket_message_size(&message);
+        let is_business = matches!(
+            message,
+            WebSocketMessage::Text(_) | WebSocketMessage::Binary(_)
+        );
+        let is_close = matches!(message, WebSocketMessage::Close(_));
+        if counters.peer_closed(peer) {
+            if is_close {
+                cancellation.cancel();
+                return;
+            }
+            continue;
+        }
+        if let Err(kind) = sink.send(message).await {
+            counters.record_transport_error(peer.write_error(), peer.name(), kind);
+            cancellation.cancel();
+            return;
+        }
+        mark_activity(activity, is_business);
+        let (byte_counter, message_counter) = match peer {
+            Peer::Client => (&counters.bytes_received, &counters.upstream_message_count),
+            Peer::Upstream => (&counters.bytes_sent, &counters.client_message_count),
+        };
+        byte_counter.fetch_add(bytes, Ordering::Relaxed);
+        message_counter.fetch_add(1, Ordering::Relaxed);
+        if is_close {
+            cancellation.cancel();
+            return;
+        }
+    }
+}
+
+fn tungstenite_to_axum(
+    message: tokio_tungstenite::tungstenite::Message,
+) -> Option<WebSocketMessage> {
+    use tokio_tungstenite::tungstenite::Message;
+    Some(match message {
+        Message::Text(text) => WebSocketMessage::Text(text.to_string().into()),
+        Message::Binary(bytes) => WebSocketMessage::Binary(bytes),
+        Message::Ping(bytes) => WebSocketMessage::Ping(bytes),
+        Message::Pong(bytes) => WebSocketMessage::Pong(bytes),
+        Message::Close(frame) => {
+            WebSocketMessage::Close(frame.map(|frame| axum::extract::ws::CloseFrame {
+                code: frame.code.into(),
+                reason: frame.reason.to_string().into(),
+            }))
+        }
+        Message::Frame(_) => return None,
+    })
 }
 
 impl WebSocketRelayCounters {
@@ -276,6 +504,90 @@ impl WebSocketRelayCounters {
             return;
         };
         *self.first_client_codex_metadata.lock().unwrap() = Some(metadata);
+    }
+
+    fn peer_closed(&self, peer: Peer) -> bool {
+        match peer {
+            Peer::Client => &self.client_closed,
+            Peer::Upstream => &self.upstream_closed,
+        }
+        .load(Ordering::Acquire)
+    }
+
+    fn record_close(&self, peer: Peer, code: Option<i64>) {
+        match peer {
+            Peer::Client => &self.client_closed,
+            Peer::Upstream => &self.upstream_closed,
+        }
+        .store(true, Ordering::Release);
+        let target = match peer {
+            Peer::Client => &self.client_close_code,
+            Peer::Upstream => &self.upstream_close_code,
+        };
+        *target.lock().unwrap() = code;
+        self.set_closed_by(peer.name());
+        if !matches!(code, None | Some(1000 | 1001)) {
+            self.record_transport_error("abnormal_close", peer.name(), "abnormal_close");
+        }
+    }
+
+    fn observe_upstream_event(&self, message: &WebSocketMessage) {
+        if matches!(
+            message,
+            WebSocketMessage::Ping(_) | WebSocketMessage::Pong(_) | WebSocketMessage::Close(_)
+        ) {
+            return;
+        }
+        *self.last_event_type.lock().unwrap() = None;
+        let WebSocketMessage::Text(text) = message else {
+            return;
+        };
+        if text.len() > MAX_WEBSOCKET_METADATA_FRAME_BYTES {
+            return;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(text) else {
+            return;
+        };
+        // Never store arbitrary type strings: a peer could place prompt/secret
+        // text there. Unknown/oversize events clear the previous type.
+        let event = value
+            .get("type")
+            .and_then(Value::as_str)
+            .and_then(|kind| match kind {
+                "response.created"
+                | "response.in_progress"
+                | "response.completed"
+                | "response.done"
+                | "response.failed"
+                | "response.incomplete"
+                | "response.output_item.added"
+                | "response.output_item.done"
+                | "response.output_text.delta"
+                | "response.output_text.done"
+                | "response.content_part.added"
+                | "response.content_part.done"
+                | "response.function_call_arguments.delta"
+                | "response.function_call_arguments.done"
+                | "response.reasoning_summary_text.delta"
+                | "response.reasoning_summary_text.done"
+                | "response.steer.accepted"
+                | "response.steer.failed"
+                | "response.steer.pending"
+                | "response.interrupted"
+                | "codex.response.metadata"
+                | "codex.rate_limits"
+                | "error" => Some(kind.to_string()),
+                _ => None,
+            });
+        *self.last_event_type.lock().unwrap() = event;
+    }
+
+    pub(super) fn record_transport_error(&self, detail: &str, side: &str, kind: &str) {
+        self.record_error(detail, side);
+        let mut target = self.transport_error_kind.lock().unwrap();
+        if target.is_none() {
+            *target = Some(kind.into());
+        }
     }
 
     pub(super) fn set_closed_by(&self, side: &str) {
@@ -305,6 +617,9 @@ impl WebSocketRelayCounters {
             upstream_close_code: *self.upstream_close_code.lock().unwrap(),
             closed_by: self.closed_by.lock().unwrap().clone(),
             relay_error: self.relay_error.lock().unwrap().clone(),
+            transport_error_kind: self.transport_error_kind.lock().unwrap().clone(),
+            last_event_type: self.last_event_type.lock().unwrap().clone(),
+            idle_timeout_ms: *self.idle_timeout_ms.lock().unwrap(),
             abnormal_close: self.abnormal_close.load(Ordering::Acquire),
             failed: self.failed.load(Ordering::Acquire),
             first_client_codex_metadata: self.first_client_codex_metadata.lock().unwrap().clone(),
@@ -355,6 +670,7 @@ pub(super) fn websocket_message_codex_metadata(
     merge_codex_metadata(direct, nested)
 }
 
+#[cfg(test)]
 pub(super) fn tungstenite_message_stats(
     message: &tokio_tungstenite::tungstenite::Message,
 ) -> (u64, Option<i64>) {
@@ -559,6 +875,7 @@ pub(super) fn websocket_trace(
             relay_error,
             abnormal_close: Some(abnormal_close),
             attempt_count: Some(attempt_count),
+            ..Default::default()
         }),
     }
 }
@@ -681,6 +998,192 @@ pub(super) fn websocket_message_to_tungstenite(
                 },
             );
             tokio_tungstenite::tungstenite::Message::Close(frame)
+        }
+    }
+}
+
+#[cfg(test)]
+mod relay_tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn idle_deadline_is_optional_waits_for_business_and_resets_on_control_activity() {
+        let (activity, rx) = watch::channel(None);
+        let deadline = wait_for_idle(rx.clone(), Some(Duration::from_secs(10)));
+        tokio::pin!(deadline);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(100), &mut deadline)
+                .await
+                .is_err()
+        );
+        mark_activity(&activity, false);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(100), &mut deadline)
+                .await
+                .is_err()
+        );
+        mark_activity(&activity, true);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(9), &mut deadline)
+                .await
+                .is_err()
+        );
+        mark_activity(&activity, false);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(9), &mut deadline)
+                .await
+                .is_err()
+        );
+        tokio::time::timeout(Duration::from_secs(2), deadline)
+            .await
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(3600), wait_for_idle(rx, None))
+                .await
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn event_observer_does_not_store_untrusted_types_or_stale_large_frame_metadata() {
+        let counters = WebSocketRelayCounters::default();
+        for text in [
+            r#"{"type":"response.completed","secret":"PRIVATE"}"#.to_string(),
+            r#"{"type":"PRIVATE_EVENT"}"#.to_string(),
+            format!(
+                r#"{{"type":"response.completed","secret":"{}"}}"#,
+                "PRIVATE".repeat(20_000)
+            ),
+            "PRIVATE_INVALID_JSON".into(),
+        ] {
+            counters.observe_upstream_event(&WebSocketMessage::Text(text.into()));
+            assert!(!format!("{:?}", counters.last_event_type.lock().unwrap()).contains("PRIVATE"));
+        }
+        assert!(counters.last_event_type.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn transport_categories_use_typed_errors_and_trace_remains_backward_compatible() {
+        use tokio_tungstenite::tungstenite::error::ProtocolError;
+        for (error, expected) in [
+            (
+                WsError::Io(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionReset,
+                    "PRIVATE",
+                )),
+                "connection_reset",
+            ),
+            (
+                WsError::Protocol(ProtocolError::ResetWithoutClosingHandshake),
+                "eof_without_close",
+            ),
+            (WsError::Utf8("PRIVATE".into()), "invalid_utf8"),
+        ] {
+            assert_eq!(transport_error_kind(&error), expected);
+        }
+        let old: WebSocketTrace =
+            serde_json::from_str(r#"{"stage":"relay","handshakeStatus":101}"#).unwrap();
+        assert!(
+            old.transport_error_kind.is_none()
+                && old.last_event_type.is_none()
+                && old.idle_timeout_ms.is_none()
+        );
+        let encoded = serde_json::to_value(&old).unwrap();
+        assert!(encoded.get("transportErrorKind").is_none());
+        let trace = WebSocketTrace {
+            transport_error_kind: Some("connection_reset".into()),
+            last_event_type: Some("response.completed".into()),
+            idle_timeout_ms: Some(20),
+            ..old
+        };
+        assert_eq!(
+            serde_json::from_value::<WebSocketTrace>(serde_json::to_value(&trace).unwrap())
+                .unwrap(),
+            trace
+        );
+    }
+
+    // A controllable sink separates actual write failures from automatic
+    // control flush failures, which are not reproducible reliably with TCP RST.
+    struct FailedSink;
+    impl Sink<WebSocketMessage> for FailedSink {
+        type Error = &'static str;
+        fn poll_ready(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+        fn start_send(
+            self: std::pin::Pin<&mut Self>,
+            _: WebSocketMessage,
+        ) -> Result<(), Self::Error> {
+            Err("broken_pipe")
+        }
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            std::task::Poll::Ready(Err("connection_reset"))
+        }
+        fn poll_close(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn priority_control_flush_and_payload_write_failures_keep_the_peer_and_category() {
+        for peer in [Peer::Client, Peer::Upstream] {
+            for control_failure in [true, false] {
+                let (data, data_rx) = mpsc::channel(1);
+                let (control, control_rx) = mpsc::channel(1);
+                // Both are ready: control flush must win over payload writes.
+                data.send(RelayData::Frame(WebSocketMessage::Text("PRIVATE".into())))
+                    .await
+                    .unwrap();
+                if control_failure {
+                    control.send(ControlWrite::Flush(None)).await.ok().unwrap();
+                }
+                let counters = WebSocketRelayCounters::default();
+                let cancellation = tokio_util::sync::CancellationToken::new();
+                let (activity, _) = watch::channel(None);
+                relay_writer(
+                    FailedSink,
+                    peer,
+                    data_rx,
+                    control_rx,
+                    &counters,
+                    &activity,
+                    &cancellation,
+                )
+                .await;
+                assert!(cancellation.is_cancelled());
+                assert_eq!(
+                    counters.closed_by.lock().unwrap().as_deref(),
+                    Some(peer.name())
+                );
+                assert_eq!(
+                    counters.relay_error.lock().unwrap().as_deref(),
+                    Some(if control_failure {
+                        peer.flush_error()
+                    } else {
+                        peer.write_error()
+                    })
+                );
+                assert_eq!(
+                    counters.transport_error_kind.lock().unwrap().as_deref(),
+                    Some(if control_failure {
+                        "connection_reset"
+                    } else {
+                        "broken_pipe"
+                    })
+                );
+                assert_eq!(counters.bytes_sent.load(Ordering::Relaxed), 0);
+                assert_eq!(counters.bytes_received.load(Ordering::Relaxed), 0);
+            }
         }
     }
 }

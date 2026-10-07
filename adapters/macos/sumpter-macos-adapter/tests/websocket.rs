@@ -1,3 +1,6 @@
+#[path = "../../../../tests/contracts/websocket_relay.rs"]
+mod websocket_relay;
+
 #[path = "../../../../tests/contracts/pi_websocket.rs"]
 mod pi_websocket;
 

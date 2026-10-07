@@ -317,6 +317,9 @@ public enum RuntimeEventPresentation {
         if let abnormal = trace.abnormalClose { parts.append(abnormal ? "异常关闭" : "正常关闭") }
         if let count = trace.attemptCount { parts.append("上游尝试: \(count)") }
         if let error = trace.relayError { parts.append("关闭记录: \(error)") }
+        if let error = trace.transportErrorKind { parts.append("传输错误类型: \(error)") }
+        if let event = trace.lastEventType { parts.append("最近上游事件: \(event)") }
+        if let timeout = trace.idleTimeoutMS { parts.append("空闲截止: \(durationDisplay(timeout))") }
         return parts.joined(separator: " · ")
     }
 
@@ -338,13 +341,19 @@ public enum RuntimeEventPresentation {
             if streamTrace?.websocketTrace?.closedBy == "client" {
                 return "客户端侧 WebSocket 连接关闭（可能经过反代）"
             }
-            return "客户端取消请求"
+            return "客户端断开或取消请求"
         }
         if let trace = streamTrace?.websocketTrace, trace.stage == "awaiting_first_message", outcome == .failed {
             if trace.relayError == "server_shutdown" { return "代理停止，WebSocket 连接已结束" }
             return failureKind == .clientRequestRejected
                 ? "WebSocket 首条业务消息格式错误"
                 : "首条业务消息前 WebSocket 异常断开"
+        }
+        if let trace = streamTrace?.websocketTrace, trace.stage == "relay" {
+            if trace.relayError == "server_shutdown" { return "代理停止，WebSocket 连接已结束" }
+            if failureKind == .streamIdleTimeout { return "WebSocket 双向帧空闲超时" }
+            if outcome == .failed { return "WebSocket 连接异常结束（不代表每次响应均失败）" }
+            if outcome == .succeeded { return "WebSocket 连接正常结束" }
         }
         // The user-facing explanation follows the recorded lifecycle result.
         // Protocol tokens and free-form engine notes stay in the diagnostic
@@ -748,7 +757,7 @@ public enum RuntimeEventPresentation {
         case .upstreamResponseIncomplete: "上游响应未完整"
         case .upstreamResponseFailed: "上游响应失败"
         case .endpointsExhausted: "入口耗尽"
-        case .clientCancelled: "客户端取消"
+        case .clientCancelled: "客户端断开或取消"
         case .clientRequestRejected: "客户端请求被拒绝"
         }
     }

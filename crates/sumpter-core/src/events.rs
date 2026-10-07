@@ -2437,6 +2437,15 @@ pub struct WebSocketTrace {
     /// text is never persisted.
     #[serde(default, skip_serializing_if = "is_none")]
     pub relay_error: Option<String>,
+    /// Allowlisted underlying transport error category; relay_error identifies the operation.
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub transport_error_kind: Option<String>,
+    /// Last bounded upstream Responses event type observed before failure.
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub last_event_type: Option<String>,
+    /// Configured post-handshake idle timeout when it terminated the relay.
+    #[serde(rename = "idleTimeoutMS", default, skip_serializing_if = "is_none")]
+    pub idle_timeout_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "is_none")]
     pub abnormal_close: Option<bool>,
     #[serde(default, skip_serializing_if = "is_none")]

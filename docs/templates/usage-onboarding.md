@@ -187,7 +187,7 @@ bash setup-client-attribution.sh restore pi
 通常先保留默认值，确认上游可用后再按实际需求调整。
 
 - `responseTimeoutSeconds` 限制等待首响应的时间；映射级 `failoverTimeoutSeconds` 可进一步缩短某模型的等待时间，两者取较小值。
-- `streamIdleTimeoutSeconds` 限制流式响应连续无数据的时间。首响应和流式空闲是不同阶段。
+- `streamIdleTimeoutSeconds` 限制 HTTP 流连续无数据的时间，以及 WebSocket 首条业务消息后的双向帧空闲时间（含 Ping/Pong 活动）。null 不限制，等待首条业务消息不计入；它不是请求总时长。
 - `maxStreamErrorRetries` 控制 HTTP 200 Responses 流输出前的暂时性错误重试（限流、服务器错误等）；`failoverOnStreamError` 控制耗尽后切换入口。默认 0 次且关闭切换；已输出正文、推理或工具调用时不重放。
 - `max500Retries` 控制当前入口收到 500 后的额外重试；`failoverOn500` 决定耗尽后是否切换入口。
 - `sessionStickyRetries` 控制当前粘性调度组遇到非 500 可重试故障后的额外尝试。
@@ -207,7 +207,7 @@ bash setup-client-attribution.sh restore pi
 | Messages / Chat Completions / Responses | 上游支持客户端实际发送的 API |
 | Gemini | 上游支持 Developer API 原生模型路径 |
 | 图片、文件、视频 | 上游实现对应资源接口；异步资源后续请求依赖原入口绑定 |
-| WebSocket | 上游完成真实握手后才建立客户端连接 |
+| WebSocket | Responses 通常先升级客户端、收到首条业务消息后再连接上游；Realtime 先完成上游握手 |
 | Codex Live | 入口声明 `capabilities: ["live"]`；`/v1/live` / Quicksilver 原样透传，不要求私有模型出现在 mapping 或模型目录 |
 | 标准 Realtime | 同一入口级 `live` 能力承接；保留客户端公开模型名，由 CPA 内部选择 Codex OAuth 凭据 |
 

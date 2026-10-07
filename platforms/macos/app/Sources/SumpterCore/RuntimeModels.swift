@@ -131,6 +131,9 @@ public struct WebSocketTrace: Codable, Equatable, Sendable {
     public var upstreamCloseCode: Int?
     public var closedBy: String?
     public var relayError: String?
+    public var transportErrorKind: String?
+    public var lastEventType: String?
+    public var idleTimeoutMS: Int?
     public var abnormalClose: Bool?
     public var attemptCount: Int?
 
@@ -147,6 +150,9 @@ public struct WebSocketTrace: Codable, Equatable, Sendable {
         upstreamCloseCode: Int? = nil,
         closedBy: String? = nil,
         relayError: String? = nil,
+        transportErrorKind: String? = nil,
+        lastEventType: String? = nil,
+        idleTimeoutMS: Int? = nil,
         abnormalClose: Bool? = nil,
         attemptCount: Int? = nil
     ) {
@@ -162,6 +168,9 @@ public struct WebSocketTrace: Codable, Equatable, Sendable {
         self.upstreamCloseCode = upstreamCloseCode
         self.closedBy = closedBy
         self.relayError = relayError
+        self.transportErrorKind = transportErrorKind
+        self.lastEventType = lastEventType
+        self.idleTimeoutMS = idleTimeoutMS
         self.abnormalClose = abnormalClose
         self.attemptCount = attemptCount
     }

@@ -3,6 +3,23 @@ import XCTest
 
 /// 覆盖运行事件展示逻辑:断开判定、消息友好化、池/状态/耗时文案。
 final class RuntimeEventPresentationTests: XCTestCase {
+    func testWebSocketTransportEvidenceAndConnectionOutcomes() throws {
+        let old = try JSONDecoder().decode(WebSocketTrace.self, from: Data(#"{"stage":"relay","handshakeStatus":101}"#.utf8))
+        XCTAssertNil(old.transportErrorKind)
+        XCTAssertNil(old.lastEventType)
+        XCTAssertNil(old.idleTimeoutMS)
+        XCTAssertEqual(RuntimeEventPresentation.websocketSummary(old), "WebSocket 阶段: 消息转发 · 上游握手: HTTP 101")
+        let trace = WebSocketTrace(stage: "relay", handshakeStatus: 101, closedBy: "upstream", transportErrorKind: "connection_reset", lastEventType: "response.completed", idleTimeoutMS: 200)
+        let decoded = try JSONDecoder().decode(WebSocketTrace.self, from: JSONEncoder().encode(trace))
+        XCTAssertEqual(decoded, trace)
+        let summary = RuntimeEventPresentation.websocketSummary(trace)
+        XCTAssertTrue(summary.contains("传输错误类型: connection_reset"))
+        XCTAssertTrue(summary.contains("最近上游事件: response.completed"))
+        XCTAssertTrue(summary.contains("空闲截止:"))
+        XCTAssertEqual(RuntimeEventPresentation.friendlyMessage(kind: "client", statusCode: 101, failover: false, message: nil, outcome: .failed, streamTrace: StreamTrace(websocketTrace: trace)), "WebSocket 连接异常结束（不代表每次响应均失败）")
+        XCTAssertEqual(RuntimeEventPresentation.friendlyMessage(kind: "client", statusCode: 101, failover: false, message: nil, outcome: .succeeded, streamTrace: StreamTrace(websocketTrace: old)), "WebSocket 连接正常结束")
+    }
+
     func testProjectAttributionDoesNotAssignNotificationsOrUpstreamAttempts() throws {
         XCTAssertEqual(
             RuntimeEventPresentation.projectAttribution(eventKind: "client", metadata: nil),
@@ -214,7 +231,7 @@ final class RuntimeEventPresentationTests: XCTestCase {
                 outcome: .cancelled,
                 failureKind: .clientCancelled
             ),
-            "客户端取消请求"
+            "客户端断开或取消请求"
         )
         XCTAssertEqual(
             RuntimeEventPresentation.friendlyMessage(

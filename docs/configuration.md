@@ -95,10 +95,13 @@ Linux Admin 是独立监听，默认 `127.0.0.1:57879`，由 CLI 参数或环境
 
 ## retry
 
+WebSocket 在 relay 阶段收到首条 Text/Binary 业务消息后开始空闲计时；收发任一方向的帧（包括 Ping/Pong）会重置计时，等待首条业务消息不受此配置限制。显式超时会关闭连接并记为 `stream_idle_timeout`；该设置不是推理总时长或写入截止。未配置时不新增默认截止，也不会主动注入心跳。大帧已进入 TCP 写入后不能被控制帧穿插；持续慢读仍受到网络背压约束。
+
+
 | 字段 | 说明 |
 | --- | --- |
 | `responseTimeoutSeconds` | 首响应总截止；null 由客户端决定 |
-| `streamIdleTimeoutSeconds` | 流式两次输出之间的最长空闲；null 不限制 |
+| `streamIdleTimeoutSeconds` | HTTP 流两次输出之间、WebSocket 首条业务消息后的双向帧活动之间的最长空闲；null 不限制 |
 | `maxStreamErrorRetries` | HTTP 200 Responses SSE 输出前的暂时性错误，当前入口额外重试次数；默认 0 |
 | `failoverOnStreamError` | 上述重试耗尽后是否切换入口；默认 false |
 | `max500Retries` | 当前入口收到 500 后的额外重试次数 |

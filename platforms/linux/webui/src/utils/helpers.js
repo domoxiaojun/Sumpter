@@ -1146,7 +1146,7 @@ export function failureKindLabel(kind) {
     upstream_response_incomplete: '上游响应流未完整结束',
     upstream_response_failed: '上游响应协议失败',
     endpoints_exhausted: '所有可用入口全部耗尽',
-    client_cancelled: '客户端主动取消 (Client Cancelled)',
+    client_cancelled: '客户端断开或取消 (Client Cancelled)',
     client_request_rejected: '客户端请求被代理拒绝',
   };
   return map[kind] || cleanText(kind) || '-';
@@ -1203,7 +1203,7 @@ export function eventOutcomeLabel(event) {
   const outcome = eventOutcome(event);
   if (eventIsInFlight(event)) return '待定 (Pending)';
   if (outcome === 'succeeded') return '成功 (Succeeded)';
-  if (outcome === 'cancelled') return '客户端主动取消 (Cancelled)';
+  if (outcome === 'cancelled') return '客户端断开或取消 (Cancelled)';
   if (outcome === 'failed') return '最终结果失败 (Failed)';
   return '未上报 (Unknown)';
 }
@@ -1294,6 +1294,12 @@ export function formatWebSocketTrace(trace) {
   if (attempts != null) parts.push(`上游尝试: ${attempts}`);
   const error = trace.relayError ?? trace.relay_error;
   if (error) parts.push(`关闭记录: ${error}`);
+  const transportError = trace.transportErrorKind ?? trace.transport_error_kind;
+  if (transportError) parts.push(`传输错误类型: ${transportError}`);
+  const lastEvent = trace.lastEventType ?? trace.last_event_type;
+  if (lastEvent) parts.push(`最近上游事件: ${lastEvent}`);
+  const idleTimeout = trace.idleTimeoutMS ?? trace.idle_timeout_ms;
+  if (idleTimeout != null) parts.push(`空闲截止: ${formatDuration(idleTimeout)}`);
   return parts.join(' · ');
 }
 
@@ -1355,7 +1361,7 @@ export function friendlyEventMessage(event) {
     const trace = eventStreamTrace(event)?.websocketTrace ?? eventStreamTrace(event)?.websocket_trace;
     return (trace?.closedBy ?? trace?.closed_by) === 'client'
       ? '客户端侧 WebSocket 连接关闭（可能经过反代）'
-      : '客户端取消请求';
+      : '客户端断开或取消请求';
   }
   const websocket = eventStreamTrace(event)?.websocketTrace ?? eventStreamTrace(event)?.websocket_trace;
   if (websocket?.stage === 'awaiting_first_message' && outcome === 'failed') {
@@ -1363,6 +1369,12 @@ export function friendlyEventMessage(event) {
     return failureKind === 'client_request_rejected'
       ? 'WebSocket 首条业务消息格式错误'
       : '首条业务消息前 WebSocket 异常断开';
+  }
+  if (websocket?.stage === 'relay') {
+    if ((websocket.relayError ?? websocket.relay_error) === 'server_shutdown') return '代理停止，WebSocket 连接已结束';
+    if (failureKind === 'stream_idle_timeout') return 'WebSocket 双向帧空闲超时';
+    if (outcome === 'failed') return 'WebSocket 连接异常结束（不代表每次响应均失败）';
+    if (outcome === 'succeeded') return 'WebSocket 连接正常结束';
   }
   // A successful request is described by its recorded lifecycle result. The
   // engine message may contain routing tokens (passthrough/bridge) or other

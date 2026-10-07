@@ -77,3 +77,11 @@ curl --noproxy '*' -i http://127.0.0.1:57879/healthz
 ```
 
 在 WebUI「诊断」中按需开启捕获，复现后立即关闭并导出脱敏副本。诊断捕获默认可能包含 Header、Body 和上游响应，未经检查不要分享。
+
+### Codex 流式断开与客户端取消
+
+先区分 HTTP/SSE 请求和可复用的 Responses WebSocket 连接。HTTP 200、WebSocket 101 都不代表最终业务成功；`client_cancelled` 表示客户端侧断开或取消，不能仅凭它断言 Codex 主动停止，也可能涉及反代。WebSocket 的正常 Close 与异常断开分别记录；正常客户端 Close 记取消，正常上游 Close 记连接成功，异常 Close、EOF/RST 仍记失败。
+
+WebSocket 诊断保留 `stage`、`firstMessageWaitMS`、`attemptCount` 与两侧握手状态；`relayError` 标明读写/控制 flush 位置，`transportErrorKind` 标明安全错误类型。`lastEventType` 只观察不超过 64 KiB 的上游业务帧中已知的事件类型；未知、过大或无效业务帧后留空。它不是响应完成的证明，更不能把复用连接最后一次异常算成此前每个响应均失败。`idleTimeoutMS` 只在配置的双向帧空闲截止触发时记录。
+
+本地回归覆盖两端 adapter、大帧期间的心跳、协议帧透明转发、关闭和空闲超时；不证明真实 CPA/网络已修复。线上归因仍需同一请求与同时间的客户端、Sumpter、CPA 和反代日志。近月差异与剩余边界见 [Codex 流式兼容性审计](codex-streaming-audit.md)。
