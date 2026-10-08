@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useApp } from '../context/AppContext.jsx';
 import { MetricCard } from '../components/MetricCard.jsx';
+import { ResponsesConnectionsPanel } from '../components/ResponsesConnectionsPanel.jsx';
 import { LiveSurfaceLight } from '../components/LiveSurfaceLight.jsx';
 import { StatusBadge } from '../components/StatusBadge.jsx';
 import { DataTable } from '../components/DataTable.jsx';
@@ -309,6 +310,7 @@ function MobileEventList({ events, selectedEventID, onSelect, loading, live = fa
 export function RunPage() {
   const {
     status, runtime, runtimeEventDetail, config, secretStatus, toggleProxy,
+    connectionsObservation, autoRefresh,
     loadRuntimeEvent, addToast,
   } = useApp();
   const [eventFilter, setEventFilter] = useState('client'); // 'client' | 'upstream' | 'all'
@@ -607,6 +609,8 @@ export function RunPage() {
           accent="var(--primary)"
         />
       </div>
+
+      <ResponsesConnectionsPanel observation={connectionsObservation} autoRefresh={autoRefresh} />
 
       {/* Real-time Streaming Telemetry Event Log */}
       <div className="glass-panel run-events-panel">

@@ -175,6 +175,7 @@ extension AppModel {
         refreshRequestGeneration &+= 1
         let generation = refreshRequestGeneration
         guard sidecar.isRunning, let admin else {
+            responsesConnectionsObservation.fail("引擎已停止，无法刷新连接数据")
             if isProxyRunning { isProxyRunning = false }
             if case .crashed = sidecarState {
                 // 崩溃态由 onUnexpectedExit 设置,这里不覆盖。
@@ -196,12 +197,14 @@ extension AppModel {
             // Only the liveness request controls the unreachable state.
             if sidecarState != .unreachable { sidecarState = .unreachable }
             if statusText != "引擎无响应" { statusText = "引擎无响应" }
+            responsesConnectionsObservation.fail("引擎无响应")
             let evaluated = ProxyHealthEvaluator.evaluate(events: runtime.recentEvents, isRunning: false)
             if evaluated != health { health = evaluated }
             return
         }
         guard generation == refreshRequestGeneration else { return }
         guard status.runtimeApiVersion == nil || status.runtimeApiVersion == Self.runtimeAPIVersion else {
+            responsesConnectionsObservation.fail("运行统计 API 版本不匹配")
             lastError = "daemon 运行统计 API 版本为 v\(status.runtimeApiVersion ?? -1)，App 需要 v\(Self.runtimeAPIVersion)。请同步升级。"
             return
         }
@@ -215,10 +218,13 @@ extension AppModel {
                 )
             }
             summary = value
+            guard generation == refreshRequestGeneration else { return }
+            responsesConnectionsObservation.receive(value.responsesWebSocketConnections)
             runtimeSummaryError = nil
         } catch {
             guard generation == refreshRequestGeneration else { return }
             runtimeSummaryError = "\(error)"
+            responsesConnectionsObservation.fail("\(error)")
         }
 
         var page: AdminWire.RuntimeEventPage?

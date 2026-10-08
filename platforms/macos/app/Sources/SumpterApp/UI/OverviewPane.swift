@@ -8,6 +8,7 @@ struct OverviewPane: View {
     // AppModel 的后台轮询(菜单栏健康点)仍在更新模型,不冻结的话表格会自己跳动,开关就形同虚设。
     @State private var frozenRuntime: RuntimeSnapshot?
     @State private var frozenHealth: ProxyHealthSummary?
+    @State private var frozenConnections: ResponsesConnectionsObservation?
 
     var body: some View {
         // The run dashboard is a wide, data-heavy view.  Let it use the
@@ -16,6 +17,7 @@ struct OverviewPane: View {
         SettingsPage(title: SettingsSection.run.title, subtitle: SettingsSection.run.subtitle, maxWidth: 1480) {
             statusPanel
             metrics
+            responsesConnectionsPanel
             RecentEventsPanel(
                 events: runPersistedEvents,
                 liveEvents: runLiveEvents,
@@ -68,11 +70,13 @@ struct OverviewPane: View {
             guard model.autoRefreshEnabled else {
                 frozenRuntime = model.runtime
                 frozenHealth = model.health
+                frozenConnections = model.responsesConnectionsObservation
                 model.refreshRunHistory(resetSnapshot: model.runHistoryPage == nil)
                 return
             }
             frozenRuntime = nil
             frozenHealth = nil
+            frozenConnections = nil
             model.refresh()
             model.refreshRunHistory(resetSnapshot: model.runHistoryPage == nil)
         }
@@ -85,6 +89,41 @@ struct OverviewPane: View {
 
     private var displayRuntime: RuntimeSnapshot { frozenRuntime ?? model.runtime }
     private var displayHealth: ProxyHealthSummary { frozenHealth ?? model.health }
+
+    private var responsesConnectionsPanel: some View {
+        let observation = model.responsesConnectionsObservation.displayed(autoRefresh: model.autoRefreshEnabled, frozen: frozenConnections)
+        return SectionPanel(title: "当前 Responses WebSocket") {
+            VStack(alignment: .leading, spacing: 12) {
+                if !model.autoRefreshEnabled {
+                    Text("已暂停刷新").font(.caption).foregroundStyle(.secondary)
+                }
+                if let error = observation.errorMessage {
+                    Text(error).font(.caption).foregroundStyle(palette.warning)
+                }
+                if let value = observation.value {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), alignment: .leading)], alignment: .leading, spacing: 12) {
+                        connectionMetric("当前连接", "\(value.total)")
+                        connectionMetric("等待首条业务消息", "\(value.awaitingFirstMessage)")
+                        connectionMetric("其中 Guardian", "\(value.guardianAwaitingFirstMessage)")
+                        connectionMetric("连接上游中", "\(value.connectingUpstream)")
+                        connectionMetric("已进入转发", "\(value.relaying)")
+                        connectionMetric("最长首消息等待", value.oldestFirstMessageWaitMS.map { RuntimeEventPresentation.durationDisplay($0) } ?? "—")
+                    }
+                } else if let message = observation.emptyMessage {
+                    Text(message).foregroundStyle(.secondary)
+                }
+                Text("当前进程内的连接快照；已进入转发不代表模型正在生成。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func connectionMetric(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.headline).monospacedDigit()
+        }
+    }
 
     /// 稳定历史页只包含已落盘事件；实时进行中的请求另行作为 overlay，
     /// 因此不会挤占服务端分页的名额，也不会让 totalCount 与行数失配。

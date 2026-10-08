@@ -80,7 +80,13 @@ curl --noproxy '*' -i http://127.0.0.1:57879/healthz
 
 ### Codex 流式断开与客户端取消
 
-先区分 HTTP/SSE 请求和可复用的 Responses WebSocket 连接。HTTP 200、WebSocket 101 都不代表最终业务成功；`client_cancelled` 表示客户端侧断开或取消，不能仅凭它断言 Codex 主动停止，也可能涉及反代。WebSocket 的正常 Close 与异常断开分别记录；正常客户端 Close 记取消，正常上游 Close 记连接成功，异常 Close、EOF/RST 仍记失败。
+运行页的“当前 Responses WebSocket”显示当前进程内存中的连接快照：等待首条业务消息（含明确 Guardian 子集）、连接上游中、已进入转发，以及最长首消息等待。三个阶段之和为当前连接总数；没有等待连接时最长等待显示“—”。进入转发只表示上游连接已建立，不代表模型正在生成；带 query model 的连接直接进入上游准备阶段。等待首消息时 Ping/Pong 不改变阶段，`generate:false` 则是业务消息。此快照独立于历史事件，不写入数据库，清空统计不清除存活连接，重启后重新计数；不增加主动心跳、回收或连接数量限制。
+
+两端运行汇总 API v1 增量返回可选对象 `responsesWebSocketConnections`，包含 `total`、`awaitingFirstMessage`、`guardianAwaitingFirstMessage`、`connectingUpstream`、`relaying`、`oldestFirstMessageWaitMS`；无人等待时时长为 `null`。运行页沿用刷新间隔，即使没有新事件也更新；关闭自动刷新会冻结连接区域。旧 daemon 缺少字段时显示“当前版本未提供”；读取失败保留上次值并提示“更新失败”，不能把历史事件条数或读取失败解释成实时零连接。
+
+先区分 HTTP/SSE 请求和可复用的 Responses WebSocket 连接。HTTP 200、WebSocket 101 都不代表最终业务成功；`client_cancelled` 表示客户端侧断开或取消，不能仅凭它断言 Codex 主动停止，也可能涉及反代。WebSocket 的正常 Close 与异常断开分别记录；正常客户端 Close 记取消，正常上游 Close 记连接成功，异常 Close、EOF/RST 原则上仍记失败。
+
+Guardian 未使用预热连接是一个窄范围例外：仅在 Responses 客户端已升级、有明确且无冲突的 Guardian 标记、尚未收到首条业务消息且未连接上游时，正常 Close 或无 Close 的 EOF 记为 `cancelled`，消息为 `websocket_unused_guardian_connection_closed`。Linux/macOS 显示“Guardian 未使用连接已关闭（预热阶段，未发送业务请求）”；保留连接记录与请求总数，不增加成功或失败计数、不触发失败通知。EOF 仍保留 `abnormalClose=true`、`relayError=client_eof_without_close` 和 `transportErrorKind=eof_without_close`，不能据此断定客户端主动回收或网络正常。RST、异常 Close、无效首帧、服务停止、普通非 Guardian 连接及已发送业务帧后的断流仍保留原分类；`generate:false` 也是业务帧，不属于未使用连接。旧记录不追溯改写。
 
 WebSocket 诊断保留 `stage`、`firstMessageWaitMS`、`attemptCount` 与两侧握手状态；`relayError` 标明读写/控制 flush 位置，`transportErrorKind` 标明安全错误类型。`lastEventType` 只观察不超过 64 KiB 的上游业务帧中已知的事件类型；未知、过大或无效业务帧后留空。它不是响应完成的证明，更不能把复用连接最后一次异常算成此前每个响应均失败。`idleTimeoutMS` 只在配置的双向帧空闲截止触发时记录。
 

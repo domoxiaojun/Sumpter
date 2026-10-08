@@ -21,3 +21,14 @@ test('connection outcomes do not imply every response failed or deliberate user 
   assert.doesNotMatch(eventOutcomeLabel({ outcome: 'cancelled' }), /主动/);
   assert.doesNotMatch(failureKindLabel('client_cancelled'), /主动/);
 });
+
+test('unused Guardian sockets keep transport evidence without claiming a failed inference', () => {
+  const trace = { stage: 'awaiting_first_message', closedBy: 'client', attemptCount: 0, abnormalClose: true, relayError: 'client_eof_without_close', transportErrorKind: 'eof_without_close' };
+  const event = { kind: 'client', statusCode: 101, phase: 'completed', outcome: 'cancelled', message: 'websocket_unused_guardian_connection_closed', streamTrace: { websocketTrace: trace } };
+  assert.equal(friendlyEventMessage(event), 'Guardian 未使用连接已关闭（预热阶段，未发送业务请求）');
+  assert.match(formatWebSocketTrace(trace), /异常关闭/);
+  assert.match(formatWebSocketTrace(trace), /eof_without_close/);
+  assert.equal(friendlyEventMessage({ ...event, message: 'client_closed_before_first_message' }), '客户端侧 WebSocket 连接关闭（可能经过反代）');
+  assert.equal(friendlyEventMessage({ ...event, outcome: 'failed' }), '首条业务消息前 WebSocket 异常断开');
+  assert.equal(friendlyEventMessage({ ...event, streamTrace: { websocketTrace: { ...trace, stage: 'relay' } } }), '客户端侧 WebSocket 连接关闭（可能经过反代）');
+});

@@ -54,6 +54,7 @@ pub(super) struct EngineState {
 }
 
 pub struct EngineInner {
+    pub(super) responses_websocket_connections: super::websocket_connections::ConnectionRegistry,
     pub(super) config: RwLock<Arc<AppConfig>>,
     pub(super) generation: RwLock<String>,
     pub(super) transport: Arc<dyn UpstreamTransport>,
@@ -234,6 +235,7 @@ impl Engine {
         let (notices, _) = tokio::sync::broadcast::channel(512);
         let engine = Self {
             inner: Arc::new(EngineInner {
+                responses_websocket_connections: Mutex::new(HashMap::new()),
                 config: RwLock::new(Arc::new(config)),
                 generation: RwLock::new(generation),
                 transport: services.transport,

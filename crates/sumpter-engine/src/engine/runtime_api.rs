@@ -30,6 +30,7 @@ impl Engine {
     }
 
     pub fn runtime_summary_value(&self) -> Value {
+        let connections = self.responses_websocket_connections();
         let (counters, latest_event, recent_event_count) = {
             let state = self.inner.state.lock().unwrap();
             (
@@ -42,7 +43,9 @@ impl Engine {
             let mut summary = store.summary();
             // Store 计数合并持久化值与有界待提交增量，保留实时性且不复活已轮换计数。
             summary.latest_event = latest_event;
-            return serde_json::to_value(summary).unwrap_or(Value::Null);
+            let mut value = serde_json::to_value(summary).unwrap_or(Value::Null);
+            value["responsesWebSocketConnections"] = json!(connections);
+            return value;
         }
         json!({
             "apiVersion": 1,
@@ -60,6 +63,7 @@ impl Engine {
             "startupIssue": self.runtime_database_issue(),
             "counters": counters,
             "latestEvent": latest_event,
+            "responsesWebSocketConnections": connections,
         })
     }
 

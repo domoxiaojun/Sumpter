@@ -264,6 +264,7 @@ final class AppModel: ObservableObject {
     @Published var endpointCount = 0
     @Published var runtime = RuntimeSnapshot()
     @Published var runtimeSummary: AdminWire.RuntimeSummary?
+    @Published var responsesConnectionsObservation = ResponsesConnectionsObservation()
     @Published var runtimeAnalytics: AdminWire.RuntimeAnalytics?
     /// Lightweight picker snapshot; unlike `runtimeAnalytics` it contains
     /// only the lightweight filter facets and is safe to refresh on the statistics

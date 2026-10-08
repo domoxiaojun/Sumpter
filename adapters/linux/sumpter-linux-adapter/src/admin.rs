@@ -1632,6 +1632,13 @@ mod tests {
         let summary: Value = serde_json::from_slice(&summary.bytes().await.unwrap()).unwrap();
         assert_eq!(summary["apiVersion"], 1);
         assert_eq!(summary["storage"]["backend"], "sqlite");
+        assert_eq!(
+            summary["responsesWebSocketConnections"],
+            json!({
+                "total": 0, "awaitingFirstMessage": 0, "guardianAwaitingFirstMessage": 0,
+                "connectingUpstream": 0, "relaying": 0, "oldestFirstMessageWaitMS": null,
+            })
+        );
 
         let events = client
             .get(format!(

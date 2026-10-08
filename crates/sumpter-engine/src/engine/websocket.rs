@@ -24,6 +24,7 @@ use super::protocol::resolve_realtime_route_model;
 use super::protocol::validate_realtime_call_target;
 use super::sessions::realtime_ephemeral_token;
 use super::state::now_unix;
+use super::websocket_connections::{ConnectionStage, is_explicit_guardian};
 use super::websocket_relay::WebSocketEventContext;
 use super::websocket_relay::WebSocketRelayMetrics;
 use super::websocket_relay::relay_native_websocket;
@@ -801,7 +802,7 @@ impl Engine {
         context: &WebSocketEventContext,
         end: &FirstWebSocketFrame,
     ) {
-        let (kind, token, code, side, cancelled) = match end {
+        let (mut kind, token, code, side, mut cancelled) = match end {
             FirstWebSocketFrame::Closed(code) if matches!(code, None | Some(1000 | 1001)) => (
                 RuntimeFailureKind::ClientCancelled,
                 "client_closed_before_first_message",
@@ -839,8 +840,25 @@ impl Engine {
             ),
             FirstWebSocketFrame::Message(_) => return,
         };
+        // Guardian pools may drop sockets that never carried a request. This is
+        // an unused connection, not a failed inference. Keep the abnormal EOF
+        // evidence independently: neither the header nor EOF proves intent.
+        let normal_close = cancelled;
+        let unused_guardian = context.client_upgraded
+            && context.route_intent == "responses_websocket"
+            && context.model.is_empty()
+            && context.first_message_wait_ms.is_none()
+            && is_explicit_guardian(context)
+            && (normal_close || token == "client_eof_without_close");
+        let detail = if unused_guardian {
+            kind = RuntimeFailureKind::ClientCancelled;
+            cancelled = true;
+            "websocket_unused_guardian_connection_closed"
+        } else {
+            token
+        };
         let wait_ms = context.started.elapsed().as_millis().min(i64::MAX as u128) as i64;
-        let trace = websocket_trace(
+        let mut trace = websocket_trace(
             0,
             Some(101),
             "awaiting_first_message",
@@ -853,13 +871,17 @@ impl Engine {
             None,
             Some(side.into()),
             Some(token.into()),
-            !cancelled,
+            !normal_close,
             0,
         );
+        if token == "client_eof_without_close" {
+            trace.websocket_trace.as_mut().unwrap().transport_error_kind =
+                Some("eof_without_close".into());
+        }
         let failure = FailureInfo {
             kind,
             phase: RuntimeFailurePhase::ResponseStream,
-            detail: Some(token.into()),
+            detail: Some(detail.into()),
             timeout_ms: None,
             upstream_status_code: None,
             upstream_request_id: None,
@@ -870,7 +892,7 @@ impl Engine {
         if cancelled {
             event.outcome = Some(RuntimeEventOutcome::Cancelled);
         }
-        event.message = Some(token.into());
+        event.message = Some(detail.into());
         self.complete_client(event, (!cancelled).then(|| token.into()));
     }
 
@@ -892,6 +914,21 @@ impl Engine {
             Instant::now(),
         );
         context.client_upgraded = true;
+        let query_model = path_and_query
+            .split_once('?')
+            .and_then(|(_, query)| decoded_query_value(query, "model"))
+            .filter(|model| !model.trim().is_empty());
+        let connection_guard = is_responses_websocket_path(path_without_query(&path_and_query))
+            .then(|| {
+                self.track_responses_connection(
+                    &context,
+                    if query_model.is_some() {
+                        ConnectionStage::ConnectingUpstream
+                    } else {
+                        ConnectionStage::AwaitingFirstMessage
+                    },
+                )
+            });
         self.capture_websocket_start(&context);
         let path = path_without_query(&path_and_query);
         if let Err(error) = validate_realtime_call_target(&path_and_query) {
@@ -905,10 +942,6 @@ impl Engine {
             return;
         }
         let mut initial_message = None;
-        let query_model = path_and_query
-            .split_once('?')
-            .and_then(|(_, query)| decoded_query_value(query, "model"))
-            .filter(|model| !model.trim().is_empty());
         let sideband_model = self
             .live_session_model(&path_and_query)
             .flatten()
@@ -1002,6 +1035,9 @@ impl Engine {
             return;
         };
         context.model = request.model.clone();
+        if let Some(guard) = &connection_guard {
+            guard.set_stage(ConnectionStage::ConnectingUpstream);
+        }
         let connected = tokio::select! {
             biased;
             _ = shutdown.cancelled() => {
@@ -1029,6 +1065,9 @@ impl Engine {
             .upstream
             .take()
             .expect("connected websocket owns an upstream connection");
+        if let Some(guard) = &connection_guard {
+            guard.set_stage(ConnectionStage::Relaying);
+        }
         let metrics = relay_native_websocket(
             socket,
             upstream,

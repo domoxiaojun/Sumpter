@@ -338,6 +338,10 @@ public enum RuntimeEventPresentation {
     ) -> String {
         let effectiveStatusCode = statusCode
         if outcome == .cancelled || failureKind == .clientCancelled {
+            if streamTrace?.websocketTrace?.stage == "awaiting_first_message",
+               message == "websocket_unused_guardian_connection_closed" {
+                return "Guardian 未使用连接已关闭（预热阶段，未发送业务请求）"
+            }
             if streamTrace?.websocketTrace?.closedBy == "client" {
                 return "客户端侧 WebSocket 连接关闭（可能经过反代）"
             }

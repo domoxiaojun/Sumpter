@@ -63,7 +63,7 @@ async fn public_realtime_21_model_is_preserved_to_the_upstream() {
     });
 
     let engine = pi_test_engine(realtime_config(upstream_address));
-    let (address, handle) = server::serve(engine, "127.0.0.1:0".parse().unwrap())
+    let (address, handle) = server::serve(engine.clone(), "127.0.0.1:0".parse().unwrap())
         .await
         .unwrap();
     let mut request = format!("ws://{address}/v1/realtime?model=gpt-realtime-2.1")
@@ -73,6 +73,10 @@ async fn public_realtime_21_model_is_preserved_to_the_upstream() {
         .headers_mut()
         .insert("authorization", "Bearer listener-secret".parse().unwrap());
     let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    assert_eq!(
+        engine.runtime_summary_value()["responsesWebSocketConnections"]["total"],
+        0
+    );
 
     assert_eq!(
         target_rx.await.unwrap(),

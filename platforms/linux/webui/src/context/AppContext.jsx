@@ -1,9 +1,10 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { api, getAuthState, openEventStream, subscribeAuth } from '../services/api.js';
 import { upsertRuntimeEvent, mergeRuntimeEvent } from '../utils/runtimeEvents.js';
-import { fetchRuntimeChanges, mergeRuntimeListItems, RUNTIME_API_VERSION } from '../utils/runtimeSync.js';
+import { fetchRuntimeChanges, mergeRuntimeListItems, runtimeSummaryRevision, RUNTIME_API_VERSION } from '../utils/runtimeSync.js';
 import { clone } from '../utils/helpers.js';
 import { configDraftWrite, requireDraftGeneration } from '../utils/configDraft.js';
+import { initialConnectionsObservation, receiveConnectionsSummary, failConnectionsSummary } from '../utils/responsesConnections.js';
 
 const AppContext = createContext(null);
 
@@ -51,38 +52,6 @@ function persistRefreshInterval(key, value) {
   }
 }
 
-// Cheap change detector for the statistics workspace. Only fields that can
-// change the visible result participate; object identity and SQLite internals
-// must not turn a quiet polling tick into a React tree update.
-function runtimeSummaryRevision(summary) {
-  const storage = summary?.storage || {};
-  const latest = summary?.latestEvent || {};
-  return JSON.stringify({
-    resetGeneration: summary?.resetGeneration ?? 0,
-    historyGeneration: summary?.historyGeneration ?? storage?.historyGeneration ?? 0,
-    counters: summary?.counters || {},
-    latestEvent: {
-      id: latest.id || null,
-      seq: latest.seq ?? null,
-      changeSeq: latest.changeSeq ?? null,
-      phase: latest.phase || null,
-      outcome: latest.outcome || null,
-      statusCode: latest.statusCode ?? null,
-      timestamp: latest.timestamp ?? null,
-    },
-    storage: {
-      state: storage.state || null,
-      eventCount: storage.eventCount ?? storage.event_count ?? null,
-      completedEventCount: storage.completedEventCount ?? storage.completed_event_count ?? null,
-      inFlightEventCount: storage.inFlightEventCount ?? storage.in_flight_event_count ?? null,
-      pendingEvents: storage.pendingEvents ?? storage.pending_events ?? null,
-      pendingBytes: storage.pendingBytes ?? storage.pending_bytes ?? null,
-      lastError: storage.lastError ?? storage.last_error ?? null,
-      startupIssue: summary?.startupIssue || null,
-    },
-  });
-}
-
 function sameJSON(left, right) {
   if (left === right) return true;
   try { return JSON.stringify(left) === JSON.stringify(right); } catch { return false; }
@@ -110,6 +79,7 @@ export function AppProvider({ children }) {
   const [configDoc, setConfigDoc] = useState(null);
   const [status, setStatus] = useState(null);
   const [runtime, setRuntime] = useState(null);
+  const [connectionsObservation, setConnectionsObservation] = useState(initialConnectionsObservation);
   const [runtimeAnalytics, setRuntimeAnalytics] = useState(null);
   const [runtimeFacets, setRuntimeFacets] = useState(null);
   // Incremented after a successful statistics snapshot refresh.  The
@@ -354,6 +324,7 @@ export function AppProvider({ children }) {
       if (refreshGenerationRef.current !== refreshGeneration) return;
       requireStatusRuntimeApiV1(statusRes);
       requireRuntimeApiV1(summaryRes);
+      setConnectionsObservation(receiveConnectionsSummary(summaryRes));
       const nextAnalyticsRevision = runtimeSummaryRevision(summaryRes);
       analyticsSnapshotChanged = analyticsSummaryRevisionRef.current !== nextAnalyticsRevision;
       analyticsSummaryRevisionRef.current = nextAnalyticsRevision;
@@ -400,6 +371,7 @@ export function AppProvider({ children }) {
         ? '核心数据读取超时（10 秒），请检查 Admin 服务是否可用'
         : (err.message || '加载核心数据失败');
       setLastError(message);
+      setConnectionsObservation((previous) => failConnectionsSummary(previous, message));
       addToast(message, 'error');
       if (shouldLoadAnalytics && analyticsGenerationRef.current === analyticsGeneration) {
         setAnalyticsLoading(false);
@@ -422,6 +394,7 @@ export function AppProvider({ children }) {
       const summaryRes = await api.getRuntimeSummary();
       if (refreshGenerationRef.current !== refreshGeneration) return false;
       requireRuntimeApiV1(summaryRes);
+      setConnectionsObservation(receiveConnectionsSummary(summaryRes));
       const nextResetGeneration = Number(summaryRes?.resetGeneration || 0);
       if (nextResetGeneration !== resetGenerationRef.current) {
         await refreshCore();
@@ -450,6 +423,7 @@ export function AppProvider({ children }) {
     } catch (error) {
       if (refreshGenerationRef.current !== refreshGeneration) return false;
       const message = error?.message || '刷新运行统计失败';
+      setConnectionsObservation((previous) => failConnectionsSummary(previous, message));
       if (shouldLoadAnalytics && analyticsGenerationRef.current === analyticsGeneration) {
         setAnalyticsError(message);
         setAnalyticsStale(true);
@@ -712,7 +686,9 @@ export function AppProvider({ children }) {
           .then((result) => result === 'core' ? null : refreshRuntimeAggregates())
           .catch(() => refreshCore());
       } else if (streamConnected) {
-        reconcileRuntimeChanges().catch(() => refreshCore());
+        reconcileRuntimeChanges()
+          .then((result) => result === 'core' || currentRoute !== 'run' ? null : refreshRuntimeAggregates())
+          .catch(() => refreshCore());
       } else {
         refreshCore();
       }
@@ -800,6 +776,7 @@ export function AppProvider({ children }) {
     await api.logout();
     eventDetailCacheRef.current.clear();
     setConfigDoc(null); setStatus(null); setRuntime(null); setRuntimeEventDetail(null); setDiagnostics(null);
+    setConnectionsObservation(initialConnectionsObservation);
   }, []);
 
   const value = {
@@ -812,6 +789,7 @@ export function AppProvider({ children }) {
     secretStatus: configDoc?.secretStatus,
     status,
     runtime,
+    connectionsObservation,
     runtimeAnalytics,
     runtimeFacets,
     analyticsRefreshSignal,

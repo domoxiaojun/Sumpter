@@ -384,6 +384,20 @@ input[type="checkbox"]:not(.switch-input):disabled { opacity: 0.45; cursor: not-
   .model-group-tab, .model-family-card, .group-actions-menu > summary { min-height: 44px; }
 }
 
+.responses-connections-panel {
+  padding: 16px 18px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  background: var(--bg-card);
+}
+.responses-connections-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.responses-connections-heading > span, .responses-connections-panel p { color: var(--text-secondary); font-size: 12px; }
+.responses-connections-panel p { margin: 10px 0 0; }
+.responses-connections-heading .responses-connections-error { color: var(--status-warning); }
+.responses-connections-values { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin: 14px 0 0; }
+.responses-connections-values dt { font-size: 12px; color: var(--text-secondary); }
+.responses-connections-values dd { margin: 4px 0 0; font-size: 18px; font-variant-numeric: tabular-nums; }
+
 /* Compact desktop controls retain larger targets on touch devices. */
 @media (pointer: coarse) {
   .run-events-panel .btn, .run-events-panel .form-input,

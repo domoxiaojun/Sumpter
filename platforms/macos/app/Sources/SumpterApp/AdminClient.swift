@@ -696,6 +696,7 @@ public enum AdminWire {
     }
 
     public struct RuntimeSummary: Decodable, Equatable, Sendable {
+        public let responsesWebSocketConnections: ResponsesWebSocketConnections?
         public let apiVersion: Int
         public let storage: RuntimeStorage
         public let resetGeneration: Int

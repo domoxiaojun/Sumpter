@@ -554,6 +554,10 @@ class ApiService {
         resetGeneration: this.mockState.runtimeResetGeneration,
         counters,
         latestEvent: this.mockState.runtime.recentEvents[0] || null,
+        responsesWebSocketConnections: {
+          total: 0, awaitingFirstMessage: 0, guardianAwaitingFirstMessage: 0,
+          connectingUpstream: 0, relaying: 0, oldestFirstMessageWaitMS: null,
+        },
       };
     }
     if (path.startsWith('/runtime/request-chain') && method === 'GET') {

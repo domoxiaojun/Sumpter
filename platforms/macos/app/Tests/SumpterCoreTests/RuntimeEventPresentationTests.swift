@@ -3,6 +3,17 @@ import XCTest
 
 /// 覆盖运行事件展示逻辑:断开判定、消息友好化、池/状态/耗时文案。
 final class RuntimeEventPresentationTests: XCTestCase {
+    func testUnusedGuardianConnectionRetainsAbnormalTransportEvidence() {
+        let trace = WebSocketTrace(stage: "awaiting_first_message", closedBy: "client", relayError: "client_eof_without_close", transportErrorKind: "eof_without_close", abnormalClose: true, attemptCount: 0)
+        let stream = StreamTrace(websocketTrace: trace)
+        let message = "websocket_unused_guardian_connection_closed"
+        XCTAssertEqual(RuntimeEventPresentation.friendlyMessage(kind: "client", statusCode: 101, failover: false, message: message, outcome: .cancelled, streamTrace: stream), "Guardian 未使用连接已关闭（预热阶段，未发送业务请求）")
+        XCTAssertTrue(RuntimeEventPresentation.websocketSummary(trace).contains("异常关闭"))
+        XCTAssertTrue(RuntimeEventPresentation.websocketSummary(trace).contains("eof_without_close"))
+        XCTAssertEqual(RuntimeEventPresentation.friendlyMessage(kind: "client", statusCode: 101, failover: false, message: nil, outcome: .cancelled, streamTrace: stream), "客户端侧 WebSocket 连接关闭（可能经过反代）")
+        XCTAssertEqual(RuntimeEventPresentation.friendlyMessage(kind: "client", statusCode: 101, failover: false, message: message, outcome: .failed, streamTrace: stream), "首条业务消息前 WebSocket 异常断开")
+    }
+
     func testWebSocketTransportEvidenceAndConnectionOutcomes() throws {
         let old = try JSONDecoder().decode(WebSocketTrace.self, from: Data(#"{"stage":"relay","handshakeStatus":101}"#.utf8))
         XCTAssertNil(old.transportErrorKind)
