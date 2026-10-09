@@ -22,6 +22,8 @@ POST /admin/api/auth/logout      退出
 
 未登录返回 401，CSRF 缺失或错误返回 403，JSON 缺失返回 415，参数或配置无效返回 400。Admin 不提供浏览器 Basic Auth challenge。
 
+密码校验与凭据更新共用最多 2 个后台工作名额；占满时返回 HTTP 429、`error=auth_busy` 和 `Retry-After: 1`，请稍后重试。该响应不区分用户名或密码是否正确。
+
 ## 服务和配置
 
 ```text
@@ -30,16 +32,20 @@ GET  /admin/api/config                 脱敏配置与 generation
 PUT  /admin/api/config                 generation-safe 保存配置
 POST /admin/api/reload                 从磁盘重载 config.json
 POST /admin/api/provider-models        从入口获取模型目录
-GET  /admin/api/endpoint-secret        读取当前会话允许的入口密钥摘要
+GET  /admin/api/endpoint-secret        已认证 Admin 会话按需读取指定入口的明文 Provider API Key
 GET  /admin/api/diagnostics            诊断摘要
 GET  /admin/api/autostart               systemd 自启动状态
 PUT  /admin/api/autostart               设置 user scope 自启动
 PUT  /admin/api/auth/credentials        修改 Admin 用户名 / 密码
 ```
 
-保存配置的请求结构为 `expectedGeneration`、`config` 和可选 `secretUpdates`。`config.schemaVersion` 必须为 7；服务器校验入口、模型组、featureRules 和监听字段后才写盘。generation 不匹配时拒绝覆盖，请重新读取再保存。响应不会回传完整 API Key。
+保存配置的请求结构为 `expectedGeneration`、`config` 和可选 `secretUpdates`。`config.schemaVersion` 必须为 7；服务器校验入口、模型组、featureRules 和监听字段后才写盘。generation 不匹配时拒绝覆盖，请重新读取再保存。保存配置的响应不会回传完整 API Key。
 
-`POST /reload` 请求体即使为空也发送 `{}`。重载只影响 `config.json`；Admin 监听、密码文件和 systemd drop-in 变化需要重启进程。
+`GET /admin/api/endpoint-secret` 是例外：它返回指定入口的完整明文 Provider API Key，仅限已认证 Admin 会话，响应使用 `Cache-Control: no-store`。前端只在编辑指定入口时按需读取，不应写入 localStorage、日志或共享缓存；Admin 密码和入站 Token 不通过此接口返回。
+
+`POST /admin/api/reload` 请求体即使为空也发送 `{}`。重载只影响 `config.json`；Admin 监听、密码文件和 systemd drop-in 变化需要重启进程。
+
+模型目录状态的 `providerCatalog.staleEndpoints` 列出本轮因入口参数变化而丢弃结果的入口 ID；`lastError` 仅记录当前入口的获取或保存失败。过期结果不会改写已保存目录。
 
 ## 运行事件和统计
 

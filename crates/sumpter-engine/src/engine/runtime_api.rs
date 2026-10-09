@@ -125,7 +125,7 @@ impl Engine {
         )
     }
 
-    fn runtime_query_path(&self) -> Result<&std::path::Path, RuntimeQueryError> {
+    pub(super) fn runtime_query_path(&self) -> Result<&std::path::Path, RuntimeQueryError> {
         self.inner
             .runtime_store
             .get()
@@ -133,7 +133,9 @@ impl Engine {
             .ok_or_else(|| RuntimeQueryError::NotFound("runtime.sqlite3 不可用".into()))
     }
 
-    fn runtime_query_value<T: serde::Serialize>(value: T) -> Result<Value, RuntimeQueryError> {
+    pub(super) fn runtime_query_value<T: serde::Serialize>(
+        value: T,
+    ) -> Result<Value, RuntimeQueryError> {
         serde_json::to_value(value)
             .map_err(|error| RuntimeQueryError::InvalidInput(error.to_string()))
     }

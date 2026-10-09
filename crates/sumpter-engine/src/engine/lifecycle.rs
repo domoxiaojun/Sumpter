@@ -43,8 +43,8 @@ impl EngineCapabilities for Engine {
         })
     }
 
-    fn reload_config(&self) -> Result<ConfigReplacement, String> {
-        Engine::reload_config(self)
+    async fn reload_config(&self) -> Result<ConfigReplacement, String> {
+        Engine::reload_config(self).await
     }
 
     fn record_platform_event(&self, event: RuntimeEvent) {
@@ -73,22 +73,31 @@ impl Engine {
             .await;
     }
 
-    pub fn apply_provider_catalog_snapshot(
+    /// All live configuration writers, including adapter listener transactions,
+    /// hold this guard through disk commit, activation and any rollback.
+    pub async fn config_transaction(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        self.inner.config_persistence.clone().lock_owned().await
+    }
+
+    pub async fn apply_provider_catalog_snapshot(
         &self,
         snapshot: &ProviderCatalogSnapshot,
-    ) -> Result<bool, String> {
-        for _attempt in 0..2 {
-            let _guard = self.inner.config_persistence.lock().unwrap();
-            let expected_generation = self.generation();
-            let current = self.config();
+    ) -> Result<crate::model_catalog::CatalogApplyOutcome, String> {
+        let guard = self.config_transaction().await;
+        let engine = self.clone();
+        let snapshot = snapshot.clone();
+        tokio::task::spawn_blocking(move || {
+            let _guard = guard;
+            use crate::model_catalog::{CatalogApplyOutcome, endpoint_fingerprint};
+            let current = engine.config();
             let Some(endpoint) = current.endpoint(&snapshot.endpoint_id) else {
-                return Ok(false);
+                return Ok(CatalogApplyOutcome::Stale);
             };
-            let mut next = current.as_ref().clone();
-            let target = next
-                .endpoint_mut(&snapshot.endpoint_id)
-                .ok_or_else(|| "模型目录入口已不存在".to_string())?;
-            let mut catalog = target.catalog.clone().unwrap_or_default();
+            if !endpoint.enabled || endpoint_fingerprint(endpoint) != snapshot.endpoint_fingerprint
+            {
+                return Ok(CatalogApplyOutcome::Stale);
+            }
+            let mut catalog = endpoint.catalog.clone().unwrap_or_default();
             catalog.attempted_at = snapshot.attempted_at.clone();
             if let Some(error) = &snapshot.error {
                 catalog.status = "获取失败".into();
@@ -101,32 +110,33 @@ impl Engine {
                 catalog.updated_at = snapshot.updated_at.clone();
             }
             if endpoint.catalog.as_ref() == Some(&catalog) {
-                return Ok(false);
+                return Ok(CatalogApplyOutcome::Unchanged);
             }
-            if self.generation() != expected_generation {
-                continue;
-            }
-            target.catalog = Some(catalog);
+            let model_count = catalog.models.len();
+            let mut next = current.as_ref().clone();
+            next.endpoint_mut(&snapshot.endpoint_id)
+                .expect("checked endpoint")
+                .catalog = Some(catalog);
             next = next.normalized();
-            if let Some(dir) = &self.inner.dir {
-                let _ = dir
+            if let Some(dir) = &engine.inner.dir {
+                let outcome = dir
                     .save_config(&next)
                     .map_err(|error| format!("模型目录配置写盘失败: {error}"))?;
+                engine.set_last_error(outcome.durability_warning());
             }
-            let (generation, _) = self.replace_config(next);
-            let model_count = self
-                .config()
-                .endpoint(&snapshot.endpoint_id)
-                .and_then(|endpoint| endpoint.catalog.as_ref())
-                .map_or(0, |catalog| catalog.models.len());
-            let _ = self.inner.notices.send(EngineNotice::ModelCatalogUpdated {
-                endpoint_id: snapshot.endpoint_id.clone(),
-                model_count,
-                generation,
-            });
-            return Ok(true);
-        }
-        Err("配置在目录刷新期间连续变化，本次目录结果未写入".into())
+            let (generation, _) = engine.replace_config(next);
+            let _ = engine
+                .inner
+                .notices
+                .send(EngineNotice::ModelCatalogUpdated {
+                    endpoint_id: snapshot.endpoint_id,
+                    model_count,
+                    generation,
+                });
+            Ok(CatalogApplyOutcome::Applied)
+        })
+        .await
+        .map_err(|error| format!("模型目录写入任务失败: {error}"))?
     }
 
     /// session affinity 的后台防抖任务。SQLite 自己的专用 worker 已按
@@ -180,21 +190,28 @@ impl Engine {
     /// Reload a validated schema-v7 configuration from the configured
     /// directory.  The old in-memory configuration remains active when
     /// loading, validation, or migration verification fails.
-    pub fn reload_config(&self) -> Result<ConfigReplacement, String> {
-        let Some(dir) = &self.inner.dir else {
-            return Err("no_reload_handler".into());
-        };
-        let loaded = dir
-            .load_config_with_notice()
-            .map_err(|error| error.to_string())?;
-        loaded.config.validate_resolve_ips()?;
-        let (generation, warnings) = self.replace_config(loaded.config.normalized());
-        if let Some(notice) = loaded.migration_notice {
-            self.publish_platform_notice(PlatformNotice::Migration(notice));
-        }
-        Ok(ConfigReplacement {
-            generation,
-            warnings,
+    pub async fn reload_config(&self) -> Result<ConfigReplacement, String> {
+        let guard = self.config_transaction().await;
+        let engine = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let _guard = guard;
+            let Some(dir) = &engine.inner.dir else {
+                return Err("no_reload_handler".into());
+            };
+            let loaded = dir
+                .load_config_with_notice()
+                .map_err(|error| error.to_string())?;
+            loaded.config.validate_resolve_ips()?;
+            let (generation, warnings) = engine.replace_config(loaded.config.normalized());
+            if let Some(notice) = loaded.migration_notice {
+                engine.publish_platform_notice(PlatformNotice::Migration(notice));
+            }
+            Ok(ConfigReplacement {
+                generation,
+                warnings,
+            })
         })
+        .await
+        .map_err(|error| format!("配置重载任务失败: {error}"))?
     }
 }

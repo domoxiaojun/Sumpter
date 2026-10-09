@@ -88,6 +88,7 @@ pub struct ConfigReplacement {
 }
 
 /// Narrow capability view handed to a platform control handler.
+#[async_trait]
 pub trait EngineCapabilities: Send + Sync {
     fn runtime_snapshot(&self) -> RuntimeSnapshot;
     fn replace_config(&self, config: AppConfig) -> Result<ConfigReplacement, String>;
@@ -95,7 +96,7 @@ pub trait EngineCapabilities: Send + Sync {
     /// directory.  The daemon implementation overrides it; a platform
     /// action can therefore return a precise `reload_not_supported` error
     /// without gaining access to filesystem details.
-    fn reload_config(&self) -> Result<ConfigReplacement, String> {
+    async fn reload_config(&self) -> Result<ConfigReplacement, String> {
         Err("reload_not_supported".into())
     }
     fn record_platform_event(&self, event: RuntimeEvent);

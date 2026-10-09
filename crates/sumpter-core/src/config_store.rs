@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
@@ -159,6 +160,7 @@ pub fn default_config_dir() -> Option<PathBuf> {
 #[derive(Debug, Clone)]
 pub struct ConfigDir {
     pub root: PathBuf,
+    writes: Arc<Mutex<()>>,
 }
 
 /// 原子写的提交结果。`Err(io::Error)` 只可能发生在 rename 提交点之前；
@@ -184,7 +186,10 @@ impl PersistOutcome {
 
 impl ConfigDir {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            writes: Arc::new(Mutex::new(())),
+        }
     }
 
     pub fn config_path(&self) -> PathBuf {
@@ -508,6 +513,10 @@ impl ConfigDir {
     }
 
     pub fn save_config(&self, config: &AppConfig) -> io::Result<PersistOutcome> {
+        let _write = self
+            .writes
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         config
             .validate_user_agents()
             .map_err(|message| io::Error::new(io::ErrorKind::InvalidInput, message))?;
@@ -1106,16 +1115,22 @@ fn atomic_write(path: &Path, data: &[u8]) -> io::Result<PersistOutcome> {
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("sumpter-data");
-    let tmp = path.with_file_name(format!(".{file_name}.{}.tmp", std::process::id()));
+    let tmp = path.with_file_name(format!(
+        ".{file_name}.{}.{:032x}.tmp",
+        std::process::id(),
+        rand::random::<u128>()
+    ));
+    // Only remove a temporary file after this writer has successfully created it.
+    // create_new also rejects symlinks and never truncates another writer's inode.
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&tmp)?;
     let prepare_result = (|| {
-        let mut options = OpenOptions::new();
-        options.create(true).truncate(true).write(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options.open(&tmp)?;
         set_owner_only(&tmp)?;
         file.write_all(data)?;
         file.sync_all()?;
@@ -1166,6 +1181,43 @@ mod tests {
             std::env::temp_dir().join(format!("sumpter-linux-test-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         ConfigDir::new(root)
+    }
+
+    #[test]
+    fn concurrent_atomic_writers_never_share_a_temporary_inode() {
+        let dir = temp_dir("concurrent-writes");
+        dir.ensure_exists().unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+        let writers = (0..4)
+            .map(|index| {
+                // Independent handles exercise atomic-write uniqueness in addition to clone locking.
+                let dir = ConfigDir::new(dir.root.clone());
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let mut config = AppConfig::bootstrap().normalized();
+                    config.listener.auth_token =
+                        format!("synthetic-{index}-{}", "x".repeat(16384 * (index + 1)));
+                    for _ in 0..20 {
+                        barrier.wait();
+                        let outcome = dir.save_config(&config).unwrap();
+                        assert!(outcome.durability_warning().is_none());
+                        let bytes = std::fs::read(dir.config_path()).unwrap();
+                        let _: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        assert!(std::fs::read_dir(&dir.root).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        }));
+        std::fs::remove_dir_all(&dir.root).unwrap();
     }
 
     #[test]

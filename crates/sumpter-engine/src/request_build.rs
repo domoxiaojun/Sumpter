@@ -419,10 +419,14 @@ pub(crate) fn build_outbound_with_json(
     let protocol = endpoint.protocol;
     // 1. 透传非黑名单 header。旧桥接路径会在这里去重；Raw 路径随后从
     // 原始 header 对重建，保留可转发字段的顺序与重复值。
+    let connection_fields = crate::http_headers::connection_fields(inbound_headers);
     let mut headers: Vec<(String, String)> = Vec::new();
     for (name, value) in inbound_headers {
         let lower = name.to_lowercase();
-        if is_private_inbound_header(&lower) || HEADER_BLOCKLIST.contains(&lower.as_str()) {
+        if connection_fields.contains(&lower)
+            || is_private_inbound_header(&lower)
+            || HEADER_BLOCKLIST.contains(&lower.as_str())
+        {
             continue;
         }
         set_header(&mut headers, &lower, value);
@@ -449,7 +453,8 @@ pub(crate) fn build_outbound_with_json(
         headers.clear();
         for (name, value) in inbound_headers {
             let lower = name.to_ascii_lowercase();
-            if is_private_inbound_header(&lower)
+            if connection_fields.contains(&lower)
+                || is_private_inbound_header(&lower)
                 || (HEADER_BLOCKLIST.contains(&lower.as_str())
                     && !matches!(lower.as_str(), "content-type" | "accept-encoding"))
             {
@@ -2612,6 +2617,9 @@ mod tests {
             &ep,
             &request("m"),
             &[
+                ("Connection".into(), "X-Hop-Secret, x-other".into()),
+                ("x-hop-secret".into(), "synthetic-hop-only".into()),
+                ("X-Other".into(), "synthetic-other".into()),
                 ("Accept".into(), "application/vnd.one".into()),
                 ("accept".into(), "application/vnd.two".into()),
                 ("X-Vendor-Signature".into(), "sig-a".into()),
@@ -2636,6 +2644,14 @@ mod tests {
         );
         assert_eq!(header(&build, "x-vendor-signature"), vec!["sig-a", "sig-b"]);
         assert!(header(&build, "host").is_empty());
+        assert!(
+            !build.request.headers.iter().any(|(name, _)| [
+                "x-hop-secret",
+                "x-other",
+                "connection"
+            ]
+            .contains(&name.as_str()))
+        );
     }
 
     #[test]

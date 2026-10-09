@@ -252,6 +252,7 @@ impl Deref for Engine {
     }
 }
 
+#[async_trait::async_trait]
 impl EngineCapabilities for Engine {
     fn runtime_snapshot(&self) -> RuntimeSnapshot {
         self.inner.runtime_snapshot()
@@ -261,8 +262,8 @@ impl EngineCapabilities for Engine {
         EngineCapabilities::replace_config(&self.inner, config)
     }
 
-    fn reload_config(&self) -> Result<ConfigReplacement, String> {
-        EngineCapabilities::reload_config(&self.inner)
+    async fn reload_config(&self) -> Result<ConfigReplacement, String> {
+        EngineCapabilities::reload_config(&self.inner).await
     }
 
     fn record_platform_event(&self, event: RuntimeEvent) {

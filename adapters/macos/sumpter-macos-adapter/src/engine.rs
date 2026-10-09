@@ -89,9 +89,10 @@ impl Engine {
         *self.migration_notice.write().unwrap() = Some(notice);
     }
 
-    pub fn reload_config(&self) -> Result<(String, Vec<String>), String> {
+    pub async fn reload_config(&self) -> Result<(String, Vec<String>), String> {
         self.inner
             .reload_config()
+            .await
             .map(|replacement| (replacement.generation, replacement.warnings))
     }
 
@@ -128,6 +129,7 @@ impl Deref for Engine {
     }
 }
 
+#[async_trait::async_trait]
 impl EngineCapabilities for Engine {
     fn runtime_snapshot(&self) -> RuntimeSnapshot {
         self.inner.runtime_snapshot()
@@ -137,8 +139,8 @@ impl EngineCapabilities for Engine {
         EngineCapabilities::replace_config(&self.inner, config)
     }
 
-    fn reload_config(&self) -> Result<ConfigReplacement, String> {
-        EngineCapabilities::reload_config(&self.inner)
+    async fn reload_config(&self) -> Result<ConfigReplacement, String> {
+        EngineCapabilities::reload_config(&self.inner).await
     }
 
     fn record_platform_event(&self, event: RuntimeEvent) {

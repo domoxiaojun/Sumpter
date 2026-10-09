@@ -2065,3 +2065,6 @@ pub use trends_queries::*;
 #[cfg(test)]
 #[path = "runtime_query/tests.rs"]
 mod tests;
+
+/// Async callers must use these entry points rather than the synchronous SQL helpers.
+pub mod asynchronous;

@@ -29,6 +29,7 @@ pub struct AdminAuth {
 }
 
 struct AdminAuthInner {
+    workers: Arc<tokio::sync::Semaphore>,
     credentials: RwLock<AdminCredentials>,
     credential_updates: Mutex<()>,
     sessions: Mutex<HashMap<String, StoredSession>>,
@@ -177,6 +178,7 @@ impl AdminAuth {
     fn new(credentials: AdminCredentials, credential_path: Option<PathBuf>) -> Self {
         Self {
             inner: Arc::new(AdminAuthInner {
+                workers: Arc::new(tokio::sync::Semaphore::new(2)),
                 credentials: RwLock::new(credentials),
                 credential_updates: Mutex::new(()),
                 sessions: Mutex::new(HashMap::new()),
@@ -187,6 +189,27 @@ impl AdminAuth {
 
     pub const fn mode(&self) -> &'static str {
         "session-cookie"
+    }
+
+    /// Reject excess work before hashing. The permit belongs to the blocking
+    /// closure, so cancelling its HTTP waiter cannot exceed the CPU bound.
+    pub(crate) async fn run_password_work<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(AdminAuth) -> T + Send + 'static,
+    ) -> Result<T, PasswordWorkError> {
+        let permit = self
+            .inner
+            .workers
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| PasswordWorkError::Busy)?;
+        let auth = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            work(auth)
+        })
+        .await
+        .map_err(|_| PasswordWorkError::Failed)
     }
 
     pub fn username(&self) -> String {
@@ -351,6 +374,12 @@ impl AdminAuth {
             .unwrap_or_else(|lock| lock.into_inner())
             .clone()
     }
+}
+
+#[derive(Debug)]
+pub(crate) enum PasswordWorkError {
+    Busy,
+    Failed,
 }
 
 fn legacy_credentials(bytes: &[u8], path: &Path) -> Result<AdminCredentials, String> {
@@ -538,6 +567,66 @@ mod tests {
             std::process::id(),
             rand::random::<u64>()
         ))
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn password_workers_are_bounded_and_survive_waiter_cancellation() {
+        let auth = AdminAuth::password(b"synthetic-password").unwrap();
+        let mut releases = Vec::new();
+        let mut jobs = Vec::new();
+        for _ in 0..2 {
+            let (release, wait) = std::sync::mpsc::channel();
+            let (started, ready) = tokio::sync::oneshot::channel();
+            let auth = auth.clone();
+            jobs.push(tokio::spawn(async move {
+                auth.run_password_work(move |_| {
+                    let _ = started.send(());
+                    wait.recv().unwrap();
+                })
+                .await
+            }));
+            tokio::time::timeout(std::time::Duration::from_secs(2), ready)
+                .await
+                .unwrap()
+                .unwrap();
+            releases.push(release);
+        }
+        // Progress on a single-thread runtime while both password workers are busy.
+        tokio::time::timeout(std::time::Duration::from_secs(1), tokio::task::yield_now())
+            .await
+            .unwrap();
+        assert!(matches!(
+            auth.run_password_work(|_| panic!("must not run")).await,
+            Err(PasswordWorkError::Busy)
+        ));
+        jobs[0].abort();
+        assert!(matches!(
+            auth.run_password_work(|_| ()).await,
+            Err(PasswordWorkError::Busy)
+        ));
+        for release in releases {
+            release.send(()).unwrap();
+        }
+        for job in jobs {
+            let _ = job.await;
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while auth.inner.workers.available_permits() != 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            auth.run_password_work(|auth| auth.login(
+                DEFAULT_ADMIN_USERNAME,
+                "synthetic-password",
+                false
+            ))
+            .await
+            .unwrap()
+            .is_some()
+        );
     }
 
     #[test]

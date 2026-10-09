@@ -417,20 +417,6 @@ pub(super) fn observe_request_session(
     observed
 }
 
-pub(super) fn is_hop_by_hop(name: &str) -> bool {
-    matches!(
-        name,
-        "connection"
-            | "keep-alive"
-            | "proxy-authenticate"
-            | "proxy-authorization"
-            | "te"
-            | "trailer"
-            | "transfer-encoding"
-            | "upgrade"
-    )
-}
-
 #[cfg(test)]
 mod session_observation_tests {
     use super::*;

@@ -404,7 +404,6 @@ pub(crate) struct AdminInner {
     engine: Engine,
     proxy: ProxySupervisor,
     config_dir: ConfigDir,
-    transaction: tokio::sync::Mutex<()>,
     web_root: Option<PathBuf>,
     systemd_scope: SystemdScope,
     admin_listen: AdminListen,
@@ -453,7 +452,6 @@ impl AdminState {
                 engine,
                 proxy,
                 config_dir,
-                transaction: tokio::sync::Mutex::new(()),
                 web_root,
                 systemd_scope,
                 admin_listen,
@@ -487,7 +485,14 @@ impl AdminState {
 
     /// Admin reload 与 SIGHUP 共用此入口。失败时旧 Engine/listener 不变。
     pub async fn reload_from_disk(&self) -> Result<ConfigApplyResult, String> {
-        let _transaction = self.inner.transaction.lock().await;
+        let state = self.clone();
+        tokio::spawn(async move { state.reload_from_disk_transaction().await })
+            .await
+            .map_err(|error| format!("配置重载任务失败: {error}"))?
+    }
+
+    async fn reload_from_disk_transaction(&self) -> Result<ConfigApplyResult, String> {
+        let _transaction = self.inner.engine.config_transaction().await;
         let loaded = self
             .inner
             .config_dir
@@ -517,7 +522,14 @@ impl AdminState {
     }
 
     async fn put_config(&self, body: PutConfigBody) -> Result<Value, ApiFailure> {
-        let _transaction = self.inner.transaction.lock().await;
+        let state = self.clone();
+        tokio::spawn(async move { state.put_config_transaction(body).await })
+            .await
+            .map_err(|error| ApiFailure::internal("config_write_failed", error.to_string()))?
+    }
+
+    async fn put_config_transaction(&self, body: PutConfigBody) -> Result<Value, ApiFailure> {
+        let _transaction = self.inner.engine.config_transaction().await;
         let old_config = self.inner.engine.config().as_ref().clone();
         let current_generation = self.inner.engine.generation();
         if body.expected_generation != current_generation {
@@ -1051,6 +1063,91 @@ mod tests {
         );
         assert!(hinted.contains("不走代理"), "提示要被拼上: {hinted}");
         assert!(!hinted.contains("/p5"), "提示不应打乱截断: {hinted}");
+    }
+
+    #[tokio::test]
+    async fn admin_save_waits_for_catalog_transaction_and_rejects_stale_generation() {
+        use sumpter_engine::model_catalog::{
+            CatalogApplyOutcome, ProviderCatalogSnapshot, endpoint_fingerprint,
+        };
+        let dir = ConfigDir::new(
+            std::env::temp_dir().join(format!("sumpter-config-race-{}", rand::random::<u64>())),
+        );
+        let config: AppConfig = serde_json::from_value(json!({"schemaVersion":7,"endpoints":[{
+            "id":"a","enabled":true,"baseURL":"https://synthetic.invalid","protocol":"auto","mappings":[{"clientPattern":"synthetic-model"}]
+        }]})).unwrap();
+        let config = config.normalized();
+        let engine = Engine::new(
+            config.clone(),
+            Some(dir.clone()),
+            Arc::new(crate::outbound::ReqwestTransport::new()),
+        );
+        let state = AdminState::new(
+            engine.clone(),
+            ProxySupervisor::new(engine.clone()),
+            dir.clone(),
+            None,
+            AdminListen::default(),
+            AdminAuth::password(b"synthetic-password").unwrap(),
+        );
+        let expected_generation = engine.generation();
+        let held = engine.config_transaction().await;
+        let mut edited = config.clone();
+        edited.endpoints[0].name = "edited-name".into();
+        let writer = tokio::spawn({
+            let state = state.clone();
+            async move {
+                state
+                    .put_config(PutConfigBody {
+                        expected_generation,
+                        config: edited,
+                        secret_updates: Default::default(),
+                    })
+                    .await
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(!writer.is_finished());
+        drop(held);
+        assert!(writer.await.unwrap().is_ok());
+        let snapshot = ProviderCatalogSnapshot {
+            endpoint_id: "a".into(),
+            endpoint_fingerprint: endpoint_fingerprint(&config.endpoints[0]),
+            models: vec!["synthetic-model".into()],
+            source: "synthetic".into(),
+            attempted_at: "1".into(),
+            updated_at: "1".into(),
+            error: None,
+        };
+        let old_generation = engine.generation();
+        assert_eq!(
+            engine
+                .apply_provider_catalog_snapshot(&snapshot)
+                .await
+                .unwrap(),
+            CatalogApplyOutcome::Applied
+        );
+        let conflict = state
+            .put_config(PutConfigBody {
+                expected_generation: old_generation,
+                config,
+                secret_updates: Default::default(),
+            })
+            .await;
+        assert!(conflict.is_err());
+        assert_eq!(engine.config().endpoints[0].name, "edited-name");
+        assert_eq!(
+            engine.config().endpoints[0]
+                .catalog
+                .as_ref()
+                .unwrap()
+                .models,
+            ["synthetic-model"]
+        );
+        assert_eq!(dir.load_config().unwrap(), *engine.config());
+        drop(state);
+        drop(engine);
+        std::fs::remove_dir_all(dir.root).unwrap();
     }
 
     #[tokio::test]

@@ -66,3 +66,15 @@ test('macOS build paths select a complete Xcode toolchain', () => {
     assert.match(text(workflow), /select-xcode\.sh/);
   }
 });
+
+test('admin secret and reload documentation matches the protected wire contract', () => {
+  const docs = text('platforms/linux/specs/admin-api.md');
+  assert.match(docs, /endpoint-secret[^\n]*明文 Provider API Key/);
+  assert.match(docs, /Cache-Control: no-store/);
+  assert.ok(!docs.includes('入口密钥摘要'));
+  assert.ok(docs.includes('`POST /admin/api/reload`'));
+  assert.ok(!docs.includes('`POST /reload`'));
+  const source = text('adapters/linux/sumpter-linux-adapter/src/admin_config.rs');
+  assert.match(source, /"apiKey": endpoint.api_key/);
+  assert.match(source, /HeaderValue::from_static\("no-store"\)/);
+});

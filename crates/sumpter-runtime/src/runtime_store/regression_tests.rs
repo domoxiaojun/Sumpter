@@ -324,3 +324,69 @@ fn completion_watermark_migration_preserves_current_database_rows() {
     drop(db);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn async_history_snapshot_and_export_cancel_preserve_contract() {
+    use crate::runtime_query::asynchronous as queries;
+    let (dir, store) = fixture("async-query-contract");
+    for index in 0..12 {
+        store
+            .enqueue(
+                sample(&format!("async-{index}"), false, event_now()),
+                counts(index + 1),
+            )
+            .unwrap();
+    }
+    store.flush().unwrap();
+    let page = queries::events_page(store.path().to_path_buf(), EventPageQuery::default())
+        .await
+        .unwrap();
+    let expected =
+        crate::runtime_query::events_page(store.path(), &EventPageQuery::default()).unwrap();
+    assert_eq!(
+        serde_json::to_value(&page).unwrap(),
+        serde_json::to_value(expected).unwrap()
+    );
+    let query = ExportQuery {
+        scope: ExportScope::Events,
+        format: ExportFormat::Jsonl,
+        privacy: ExportPrivacy::Redacted,
+        confirm_stored: false,
+        snapshot_seq: Some(page.snapshot_seq),
+        snapshot_change_seq: Some(page.snapshot_change_seq),
+        history_generation: Some(page.history_generation),
+        filter: RuntimeFilter::default(),
+    };
+    let estimate = queries::export_estimate(store.path().to_path_buf(), query.clone())
+        .await
+        .unwrap();
+    assert_eq!(estimate.row_count, 12);
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+    let path = store.path().to_path_buf();
+    let export = tokio::spawn(async move {
+        queries::stream_export(path, query, move |bytes| {
+            sender
+                .blocking_send(bytes)
+                .map_err(|_| "disconnected".into())
+        })
+        .await
+    });
+    assert!(receiver.recv().await.is_some());
+    drop(receiver);
+    let result = tokio::time::timeout(Duration::from_secs(2), export)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(result.is_err());
+    // A stopped cursor cannot retain a read transaction preventing later maintenance.
+    assert!(store.reset_async().await.is_ok());
+    assert_eq!(
+        queries::events_page(store.path().to_path_buf(), EventPageQuery::default())
+            .await
+            .unwrap()
+            .total_count,
+        0
+    );
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -4,6 +4,18 @@ import Foundation
 import XCTest
 
 final class RuntimeV2WireContractTests: XCTestCase {
+    func testConfigSaveUsesAuthenticatedDaemonTransaction() throws {
+        let request = try AdminClient(port: 12345, token: "synthetic-control").configSaveRequest(.bootstrap, expectedGeneration: "generation-1")
+        XCTAssertEqual(request.url?.path, "/admin/config")
+        XCTAssertEqual(request.httpMethod, "PUT")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "X-Control-Token"), "synthetic-control")
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(request.httpBody)) as? [String: Any])
+        XCTAssertEqual(body["expectedGeneration"] as? String, "generation-1")
+        XCTAssertEqual((body["config"] as? [String: Any])?["schemaVersion"] as? Int, 7)
+        let ack = try JSONDecoder().decode(AdminWire.ReloadAck.self, from: Data(#"{"generation":"generation-2","warnings":[]}"#.utf8))
+        XCTAssertEqual(ack.generation, "generation-2")
+    }
+
     func testStickyKeyRoundTripsAndOmitsWhenAbsent() throws {
         // Rust 事件 wire 的 stickyKey 是会话粘性归属键(affinity 哈希)。
         // 带:解码并回写;不带(早期拒绝/旧事件):保持 nil 且编码省略。

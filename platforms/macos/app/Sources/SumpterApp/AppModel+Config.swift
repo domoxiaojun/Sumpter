@@ -54,11 +54,15 @@ extension AppModel {
         let store = self.store ?? ConfigStore(url: url)
         self.store = store
         configPath = url.path
+        if sidecar.isRunning, let admin {
+            let ack = try await admin.reload()
+            engineGeneration = ack.generation
+        }
         let result = try store.loadWithMigration()
         presentMigrationNoticeIfNeeded(result.migrationNotice)
         let raw = result.config
         let loaded = raw.normalizedBuiltInFeatureRules()
-        if loaded != raw {
+        if loaded != raw && !sidecar.isRunning {
             try store.save(loaded)
         }
         config = loaded

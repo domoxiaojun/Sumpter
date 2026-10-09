@@ -86,13 +86,21 @@ extension AppModel {
                 self.configPath = url.path
             }
             self.config.normalizeBuiltInFeatureRules()
-            if let store = self.store {
-                let snapshot = self.config
-                // 磁盘写挪出 MainActor,避免保存时界面卡顿。
+            let snapshot = self.config
+            if self.sidecar.isRunning {
+                guard let admin = self.admin, let generation = self.engineGeneration else {
+                    throw ConfigSaveError(code: "engine_unavailable", reason: "引擎尚未就绪，请稍后保存。")
+                }
                 do {
-                    try await Task.detached(priority: .utility) {
-                        try store.save(snapshot)
-                    }.value
+                    let ack = try await admin.saveConfig(snapshot, expectedGeneration: generation)
+                    self.engineGeneration = ack.generation
+                } catch {
+                    let adminError = error as? AdminClient.AdminError
+                    throw ConfigSaveError(code: adminError?.serverCode ?? "config_write_failed", reason: error.localizedDescription)
+                }
+            } else if let store = self.store {
+                do {
+                    try await Task.detached(priority: .utility) { try store.save(snapshot) }.value
                 } catch {
                     throw ConfigSaveError(code: "config_write_failed", reason: error.localizedDescription)
                 }

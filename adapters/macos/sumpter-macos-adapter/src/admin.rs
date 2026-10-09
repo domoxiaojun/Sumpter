@@ -105,6 +105,7 @@ pub fn admin_router(engine: Engine) -> Router {
         .route("/admin/runtime/reset", post(reset_runtime))
         .route("/admin/runtime/recreate", post(recreate_runtime))
         .route("/admin/reload", post(reload))
+        .route("/admin/config", axum::routing::put(save_config))
         .route(
             "/admin/provider-models",
             get(provider_models_get).post(provider_models),
@@ -226,8 +227,90 @@ async fn runtime_summary(State(engine): State<Engine>) -> Response {
     json_ok(&engine.runtime_summary_value())
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveConfigBody {
+    expected_generation: String,
+    config: sumpter_core::config::AppConfig,
+}
+
+/// Running Apps save through the daemon so catalog refresh and UI edits share
+/// one transaction. Offline App saves remain local, before a sidecar exists.
+async fn save_config(State(engine): State<Engine>, Json(body): Json<SaveConfigBody>) -> Response {
+    let guard = engine.config_transaction().await;
+    let result = tokio::task::spawn_blocking(move || {
+        let _guard = guard;
+        if body.expected_generation != engine.generation() {
+            return Err((
+                StatusCode::CONFLICT,
+                "generation_conflict",
+                "配置已变化，请重新加载后保存".to_string(),
+            ));
+        }
+        let config = body.config;
+        let invalid = |message| (StatusCode::BAD_REQUEST, "invalid_config", message);
+        if config.schema_version != sumpter_core::config::SCHEMA_VERSION {
+            return Err(invalid("不支持的配置版本".into()));
+        }
+        config.validate_model_groups().map_err(invalid)?;
+        config.listener.validate_cidr_lists().map_err(invalid)?;
+        if !(1..=65535).contains(&config.listener.port) {
+            return Err(invalid("代理端口必须在 1...65535".into()));
+        }
+        for endpoint in &config.endpoints {
+            let url = reqwest::Url::parse(&endpoint.base_url)
+                .map_err(|_| invalid("入口地址无效".into()))?;
+            if !matches!(url.scheme(), "http" | "https")
+                || url.host_str().is_none()
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || url.query().is_some()
+                || url.fragment().is_some()
+            {
+                return Err(invalid(
+                    "入口地址必须是无凭据、query 和 fragment 的 HTTP(S) 地址".into(),
+                ));
+            }
+        }
+        config
+            .validate_resolve_ips()
+            .and_then(|_| config.validate_user_agents())
+            .map_err(|message| (StatusCode::BAD_REQUEST, "invalid_config", message))?;
+        let dir = engine.config_dir().ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "no_config_dir",
+                "配置目录不可用".into(),
+            )
+        })?;
+        let config = config.normalized();
+        let outcome = dir.save_config(&config).map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "config_write_failed",
+                error.to_string(),
+            )
+        })?;
+        let (generation, mut warnings) = engine.replace_config(config);
+        if let Some(warning) = outcome.durability_warning() {
+            warnings.push(warning);
+        }
+        Ok(json!({"reloaded": true, "generation": generation, "warnings": warnings}))
+    })
+    .await;
+    match result {
+        Ok(Ok(value)) => json_ok(&value),
+        Ok(Err((status, code, message))) => error(status, code, &message),
+        Err(join) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "config_write_failed",
+            &join.to_string(),
+        ),
+    }
+}
+
 async fn reload(State(engine): State<Engine>) -> Response {
-    match engine.reload_config() {
+    match engine.reload_config().await {
         Ok((generation, warnings)) => json_ok(&json!({
             "generation": generation,
             "warnings": warnings,
@@ -635,7 +718,7 @@ async fn runtime_events(
             history_generation: query.history_generation,
             filter: runtime_filter_from_events_query(&query),
         };
-        return match engine.runtime_events_page(&request) {
+        return match engine.runtime_events_page_async(&request).await {
             Ok(value) => json_ok(&value),
             Err(error) => runtime_query_error_response(error),
         };
@@ -647,16 +730,19 @@ async fn runtime_events(
             "view 只支持 page",
         );
     }
-    match engine.runtime_events(
-        query.before_seq,
-        query.after_change_seq,
-        query.limit.unwrap_or(10),
-        query.kind.as_deref(),
-        query.request_id.as_deref(),
-        query.outcome.as_deref(),
-        query.from,
-        query.to,
-    ) {
+    match engine
+        .runtime_events_async(
+            query.before_seq,
+            query.after_change_seq,
+            query.limit.unwrap_or(10),
+            query.kind.as_deref(),
+            query.request_id.as_deref(),
+            query.outcome.as_deref(),
+            query.from,
+            query.to,
+        )
+        .await
+    {
         Ok(value) => json_ok(&value),
         Err(message) => error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -692,7 +778,7 @@ fn runtime_filter_from_events_query(query: &RuntimeEventsQuery) -> RuntimeFilter
 }
 
 async fn runtime_event_detail(State(engine): State<Engine>, Path(id): Path<String>) -> Response {
-    match engine.runtime_event(&id) {
+    match engine.runtime_event_async(&id).await {
         Ok(Some(value)) => json_ok(&value),
         Ok(None) => error(
             StatusCode::NOT_FOUND,
@@ -729,7 +815,7 @@ async fn runtime_request_chain(
             "必须提供 requestID",
         );
     };
-    match engine.runtime_request_chain(request_id) {
+    match engine.runtime_request_chain_async(request_id).await {
         Ok(value) => json_ok(&value),
         Err(error) => runtime_query_error_response(error),
     }
@@ -856,7 +942,7 @@ async fn runtime_facets(
     let mut filter: RuntimeFilter = query.filters.into();
     filter.from = crate::runtime_query::merge_range_lower_bound(range, filter.from, range_from);
     filter.to = Some(filter.to.map_or(now, |value| value.min(now)));
-    match engine.runtime_facets(&filter) {
+    match engine.runtime_facets_async(&filter).await {
         Ok(value) => json_ok(&value),
         Err(error) => runtime_query_error_response(error),
     }
@@ -906,7 +992,7 @@ async fn runtime_trends(
         history_generation: query.history_generation,
         filter: filters,
     };
-    match engine.runtime_trends(&request) {
+    match engine.runtime_trends_async(&request).await {
         Ok(value) => json_ok(&value),
         Err(error) => runtime_query_error_response(error),
     }
@@ -940,7 +1026,7 @@ async fn runtime_errors(
         history_generation: query.history_generation,
         filter: query.filters.into(),
     };
-    match engine.runtime_error_groups(&request) {
+    match engine.runtime_error_groups_async(&request).await {
         Ok(value) => json_ok(&value),
         Err(error) => runtime_query_error_response(error),
     }
@@ -950,14 +1036,14 @@ async fn runtime_projects(
     State(engine): State<Engine>,
     Query(query): Query<RuntimePagedQuery>,
 ) -> Response {
-    runtime_dimension_response(engine, DimensionKind::Project, query)
+    runtime_dimension_response(engine, DimensionKind::Project, query).await
 }
 
 async fn runtime_sessions(
     State(engine): State<Engine>,
     Query(query): Query<RuntimePagedQuery>,
 ) -> Response {
-    runtime_dimension_response(engine, DimensionKind::Session, query)
+    runtime_dimension_response(engine, DimensionKind::Session, query).await
 }
 
 async fn runtime_dimensions(
@@ -973,7 +1059,7 @@ async fn runtime_dimensions(
     };
     let mut query = query;
     query.filters.kind = None;
-    runtime_dimension_response(engine, kind, query)
+    runtime_dimension_response(engine, kind, query).await
 }
 
 fn parse_dimension_kind(value: Option<&str>) -> Option<DimensionKind> {
@@ -998,7 +1084,7 @@ fn parse_dimension_kind(value: Option<&str>) -> Option<DimensionKind> {
     }
 }
 
-fn runtime_dimension_response(
+async fn runtime_dimension_response(
     engine: Engine,
     kind: DimensionKind,
     query: RuntimePagedQuery,
@@ -1045,21 +1131,21 @@ fn runtime_dimension_response(
         history_generation: query.history_generation,
         filter: query.filters.into(),
     };
-    match engine.runtime_dimension_page(kind, &request) {
+    match engine.runtime_dimension_page_async(kind, &request).await {
         Ok(value) => json_ok(&value),
         Err(error) => runtime_query_error_response(error),
     }
 }
 
 async fn runtime_storage(State(engine): State<Engine>) -> Response {
-    match engine.runtime_storage_details() {
+    match engine.runtime_storage_details_async().await {
         Ok(value) => json_ok(&value),
         Err(error) => runtime_query_error_response(error),
     }
 }
 
 async fn runtime_retention(State(engine): State<Engine>) -> Response {
-    match engine.runtime_storage_details() {
+    match engine.runtime_storage_details_async().await {
         Ok(value) => json_ok(&value["retention"]),
         Err(error) => runtime_query_error_response(error),
     }
@@ -1089,7 +1175,10 @@ async fn runtime_cleanup_preview(
         Ok(payload) => payload,
         Err(response) => return response,
     };
-    match engine.runtime_cleanup_preview(payload.older_than) {
+    match engine
+        .runtime_cleanup_preview_async(payload.older_than)
+        .await
+    {
         Ok(value) => json_ok(&value),
         Err(message) if message.contains("olderThan") => {
             error(StatusCode::BAD_REQUEST, "invalid_cleanup", &message)
@@ -1106,7 +1195,7 @@ async fn runtime_cleanup(
         Ok(payload) => payload,
         Err(response) => return response,
     };
-    match engine.runtime_cleanup(payload.older_than) {
+    match engine.runtime_cleanup_async(payload.older_than).await {
         Ok(value) => json_ok(&value),
         Err(message) if message.contains("olderThan") => {
             error(StatusCode::BAD_REQUEST, "invalid_cleanup", &message)
@@ -1123,11 +1212,14 @@ async fn runtime_retention_update(
         Ok(payload) => payload,
         Err(response) => return response,
     };
-    match engine.runtime_set_retention(RuntimeRetentionUpdate {
-        expected_revision: payload.expected_revision,
-        max_age_days: payload.max_age_days,
-        storage_limit_bytes: payload.storage_limit_bytes,
-    }) {
+    match engine
+        .runtime_set_retention_async(RuntimeRetentionUpdate {
+            expected_revision: payload.expected_revision,
+            max_age_days: payload.max_age_days,
+            storage_limit_bytes: payload.storage_limit_bytes,
+        })
+        .await
+    {
         Ok(value) => json_ok(&value),
         Err(message) if message.contains("revision") => {
             error(StatusCode::CONFLICT, "runtime_revision_conflict", &message)
@@ -1144,7 +1236,7 @@ async fn runtime_retention_update(
 }
 
 async fn runtime_pricing(State(engine): State<Engine>) -> Response {
-    match engine.runtime_pricing() {
+    match engine.runtime_pricing_async().await {
         Ok(value) => json_ok(&value),
         Err(error) => runtime_query_error_response(error),
     }
@@ -1193,11 +1285,14 @@ async fn runtime_pricing_update(
             cache_creation_per_million_micros: price.cache_creation_per_million_micros,
         })
         .collect();
-    match engine.runtime_replace_pricing(RuntimePricingUpdate {
-        expected_revision: payload.expected_revision,
-        currency: payload.currency,
-        prices,
-    }) {
+    match engine
+        .runtime_replace_pricing_async(RuntimePricingUpdate {
+            expected_revision: payload.expected_revision,
+            currency: payload.currency,
+            prices,
+        })
+        .await
+    {
         Ok(value) => json_ok(&value),
         Err(message) if message.contains("revision") => {
             error(StatusCode::CONFLICT, "runtime_revision_conflict", &message)
@@ -1285,7 +1380,7 @@ async fn runtime_export_estimate(
         Ok(query) => query,
         Err(response) => return response,
     };
-    match engine.runtime_export_estimate(&query) {
+    match engine.runtime_export_estimate_async(&query).await {
         Ok(value) => json_ok(&value),
         Err(error) => runtime_query_error_response(error),
     }
@@ -1309,7 +1404,7 @@ async fn runtime_export(
     // Resolve and validate the exact snapshot before response headers are
     // committed. The streaming worker reuses these values, so estimate and
     // export cannot drift to a newer history window.
-    let estimate = match engine.runtime_export_estimate(&query) {
+    let estimate = match engine.runtime_export_estimate_async(&query).await {
         Ok(value) => value,
         Err(error) => return runtime_query_error_response(error),
     };
@@ -1324,15 +1419,20 @@ async fn runtime_export(
 
     let (sender, receiver) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(8);
     let engine = engine.clone();
-    tokio::task::spawn_blocking(move || {
+    tokio::spawn(async move {
         let worker_sender = sender.clone();
-        let result = engine.runtime_stream_export(&stream_query, |chunk| {
-            worker_sender
-                .blocking_send(Ok(Bytes::from(chunk)))
-                .map_err(|_| "export client disconnected".to_string())
-        });
+        let result = tokio::select! {
+            biased;
+            _ = sender.closed() => return,
+            result = engine.runtime_stream_export_async(&stream_query, move |chunk| {
+                worker_sender.blocking_send(Ok(Bytes::from(chunk)))
+                    .map_err(|_| "export client disconnected".to_string())
+            }) => result,
+        };
         if let Err(error) = result {
-            let _ = sender.blocking_send(Err(std::io::Error::other(error.to_string())));
+            let _ = sender
+                .send(Err(std::io::Error::other(error.to_string())))
+                .await;
         }
     });
     let stream = futures_util::stream::unfold(receiver, |mut receiver| async move {
@@ -1535,7 +1635,10 @@ async fn runtime_analytics(
             .or_else(|| (range == "today").then(|| utc_today_start(admin_apple_timestamp()))),
         to: query.to,
     };
-    match engine.runtime_analytics_filtered(range, &filter) {
+    match engine
+        .runtime_analytics_filtered_async(range, &filter)
+        .await
+    {
         Ok(value) => json_ok(&value),
         Err(message) => error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1571,7 +1674,11 @@ async fn delete_runtime_session(
         );
     };
     match engine
-        .delete_runtime_session_confirmed(&session_id, query.confirm_unidentified == Some(true))
+        .delete_runtime_session_confirmed_async(
+            &session_id,
+            query.confirm_unidentified == Some(true),
+        )
+        .await
     {
         Ok(value) => json_ok(&value),
         Err(message) if message.contains("不能删除未识别会话") => {
@@ -1616,9 +1723,9 @@ async fn clear_project_sticky(
             "必须提供 projectID",
         );
     }
-    match tokio::task::spawn_blocking({
+    match tokio::spawn({
         let engine = engine.clone();
-        move || engine.clear_project_sticky(&project_id)
+        async move { engine.clear_project_sticky_async(&project_id).await }
     })
     .await
     {
@@ -1664,9 +1771,9 @@ async fn clear_runtime_session_sticky(
             "必须提供已识别会话的完整 sessionID/threadID",
         );
     }
-    match tokio::task::spawn_blocking({
+    match tokio::spawn({
         let engine = engine.clone();
-        move || engine.clear_runtime_session_sticky(&session_id)
+        async move { engine.clear_runtime_session_sticky_async(&session_id).await }
     })
     .await
     {
@@ -1695,7 +1802,7 @@ async fn export_runtime_session(
             "必须提供完整 sessionID",
         );
     };
-    match engine.export_runtime_session(&session_id) {
+    match engine.export_runtime_session_async(&session_id).await {
         Ok(value) => json_ok(&value),
         Err(message) if message.contains("会话不存在") => {
             error(StatusCode::NOT_FOUND, "session_not_found", "会话不存在")
@@ -1709,7 +1816,7 @@ async fn export_runtime_session(
 }
 
 async fn reset_runtime(State(engine): State<Engine>) -> Response {
-    match engine.reset_runtime() {
+    match engine.reset_runtime_async().await {
         Ok(_) => json_ok(
             &json!({"reset": true, "resetGeneration": engine.runtime_summary_value()["resetGeneration"]}),
         ),
@@ -1718,7 +1825,7 @@ async fn reset_runtime(State(engine): State<Engine>) -> Response {
 }
 
 async fn recreate_runtime(State(engine): State<Engine>) -> Response {
-    match engine.recreate_runtime() {
+    match engine.recreate_runtime_async().await {
         Ok(generation) => json_ok(&json!({
             "reset": true,
             "recreated": true,
@@ -2378,6 +2485,73 @@ mod tests {
             Arc::new(crate::outbound::ReqwestTransport::new()),
             "test-control-token".into(),
         )
+    }
+
+    #[tokio::test]
+    async fn config_save_requires_control_token_and_current_generation() {
+        let root = std::env::temp_dir().join(format!(
+            "sumpter-macos-config-save-{}",
+            rand::random::<u64>()
+        ));
+        let dir = ConfigDir::new(root.clone());
+        let config = AppConfig::bootstrap().normalized();
+        let _ = dir.save_config(&config).unwrap();
+        let engine = Engine::new(
+            config.clone(),
+            Some(dir.clone()),
+            Arc::new(crate::outbound::ReqwestTransport::new()),
+            "synthetic-control-token".into(),
+        );
+        let generation = engine.generation();
+        let (address, server) = crate::server::serve_router(
+            admin_router(engine.clone()),
+            "127.0.0.1:0".parse().unwrap(),
+        )
+        .await
+        .unwrap();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let mut changed = config.clone();
+        changed.retry.max_500_retries = 2;
+        let body = json!({"expectedGeneration":generation,"config":changed}).to_string();
+        let url = format!("http://{address}/admin/config");
+        assert_eq!(
+            client
+                .put(&url)
+                .header("content-type", "application/json")
+                .body(body.clone())
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(dir.load_config().unwrap(), config);
+        let response = client
+            .put(&url)
+            .header("content-type", "application/json")
+            .header("x-control-token", "synthetic-control-token")
+            .body(body.clone())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let ack: Value = serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
+        assert_eq!(ack["generation"], engine.generation());
+        assert_eq!(dir.load_config().unwrap(), changed);
+        let conflict = client
+            .put(&url)
+            .header("content-type", "application/json")
+            .header("x-control-token", "synthetic-control-token")
+            .body(body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(conflict.status(), StatusCode::CONFLICT);
+        assert_eq!(dir.load_config().unwrap(), changed);
+        server.abort();
+        let _ = server.await;
+        drop(engine);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

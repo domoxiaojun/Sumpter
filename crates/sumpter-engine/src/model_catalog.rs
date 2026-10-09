@@ -25,6 +25,8 @@ pub struct ModelCatalogStatus {
     pub last_run_at: String,
     pub next_run_at: String,
     pub last_error: String,
+    /// Results discarded because the queried endpoint changed while fetching.
+    pub stale_endpoints: Vec<String>,
     pub remote_metadata: RemoteMetadataStatus,
 }
 
@@ -56,11 +58,35 @@ pub const MODEL_CATALOG_TIMEOUT: Duration = Duration::from_secs(12);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderCatalogSnapshot {
     pub endpoint_id: String,
+    pub endpoint_fingerprint: String,
     pub models: Vec<String>,
     pub source: String,
     pub attempted_at: String,
     pub updated_at: String,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CatalogApplyOutcome {
+    Applied,
+    Unchanged,
+    Stale,
+}
+
+/// A non-persisted digest of the exact discovery inputs, including credentials.
+/// Debug/status output must never contain the original API key.
+pub fn endpoint_fingerprint(endpoint: &Endpoint) -> String {
+    use sha2::{Digest, Sha256};
+    let input = serde_json::json!([
+        endpoint.id,
+        endpoint.base_url,
+        endpoint.resolve_ip,
+        endpoint.protocol,
+        endpoint.enabled,
+        endpoint.api_key,
+        endpoint.user_agent
+    ]);
+    format!("{:x}", Sha256::digest(input.to_string().as_bytes()))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -586,12 +612,16 @@ impl ModelCatalogScheduler {
         .buffer_unordered(4);
 
         let mut failures = Vec::new();
+        let mut stale_endpoints = Vec::new();
         while let Some(snapshot) = tasks.next().await {
-            if let Some(error) = snapshot.error.as_deref() {
-                failures.push(format!("{}: {error}", snapshot.endpoint_id));
-            }
-            if let Err(error) = self.engine.apply_provider_catalog_snapshot(&snapshot) {
-                failures.push(format!("{}: 保存失败: {error}", snapshot.endpoint_id));
+            match self.engine.apply_provider_catalog_snapshot(&snapshot).await {
+                Ok(CatalogApplyOutcome::Stale) => stale_endpoints.push(snapshot.endpoint_id),
+                Ok(_) => {
+                    if let Some(error) = snapshot.error.as_deref() {
+                        failures.push(format!("{}: {error}", snapshot.endpoint_id));
+                    }
+                }
+                Err(error) => failures.push(format!("{}: 保存失败: {error}", snapshot.endpoint_id)),
             }
         }
         let previous_metadata = self
@@ -606,6 +636,7 @@ impl ModelCatalogScheduler {
             .expect("model catalog status lock poisoned");
         status.running = false;
         status.last_error = failures.join("；");
+        status.stale_endpoints = stale_endpoints;
         let minutes = self.engine.config().model_catalog.refresh_interval_minutes;
         status.next_run_at = unix_timestamp_after(minutes.saturating_mul(60));
         if let Some(metadata) = metadata {
@@ -895,6 +926,7 @@ impl ProviderCatalogFetcher {
         match tokio::time::timeout(MODEL_CATALOG_TIMEOUT, fetch_inner(endpoint)).await {
             Ok(Ok((models, source))) => ProviderCatalogSnapshot {
                 endpoint_id: endpoint.id.clone(),
+                endpoint_fingerprint: endpoint_fingerprint(endpoint),
                 models,
                 source,
                 attempted_at: attempted_at.clone(),
@@ -903,6 +935,7 @@ impl ProviderCatalogFetcher {
             },
             Ok(Err(error)) => ProviderCatalogSnapshot {
                 endpoint_id: endpoint.id.clone(),
+                endpoint_fingerprint: endpoint_fingerprint(endpoint),
                 models: Vec::new(),
                 source: String::new(),
                 attempted_at,
@@ -911,6 +944,7 @@ impl ProviderCatalogFetcher {
             },
             Err(_) => ProviderCatalogSnapshot {
                 endpoint_id: endpoint.id.clone(),
+                endpoint_fingerprint: endpoint_fingerprint(endpoint),
                 models: Vec::new(),
                 source: String::new(),
                 attempted_at,

@@ -6837,7 +6837,7 @@ async fn endpoint_reorder_reload_routes_new_session_for_default_group_and_flat()
         config.endpoints.swap(0, 1);
         // 模拟保存旧 bindings + 新 endpoints，真实 reload 负责归一化。
         let _ = dir.save_config(&config).unwrap();
-        engine.reload_config().unwrap();
+        engine.reload_config().await.unwrap();
         fake.push("b.example.com", sse_ok(&["data: {}\n\n"]));
         assert_eq!(
             call(
@@ -7075,3 +7075,6 @@ async fn clear_runtime_session_sticky_preserves_other_conversations_and_reroutes
     drop(engine);
     let _ = std::fs::remove_dir_all(dir.root);
 }
+
+#[path = "../../../../tests/contracts/review_fixes.rs"]
+mod review_fixes;

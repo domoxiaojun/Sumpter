@@ -22,7 +22,7 @@ use crate::request_build::PassthroughKind;
 
 use super::Engine;
 use super::completion::{CompletionGuard, UpstreamAttempt};
-use super::context::{ClientOut, is_hop_by_hop, upstream_request_id};
+use super::context::{ClientOut, upstream_request_id};
 use super::dispatch::{effective_stream_idle_timeout_for_request, retry_after_seconds};
 use super::events::{new_event_id, protocol_token};
 use super::failure::StreamReadError;
@@ -31,6 +31,7 @@ use super::protocol::{
     is_live_bootstrap_request, is_videos_create_request, live_call_id_from_headers,
     live_call_id_from_payload, video_id_from_headers, video_id_from_payload,
 };
+use crate::http_headers::{connection_fields, is_hop_by_hop};
 
 struct RelayState {
     upstream: BoxStream<'static, Result<Bytes, TransportError>>,
@@ -679,8 +680,12 @@ impl Engine {
         } else {
             builder =
                 builder.status(StatusCode::from_u16(response.status).unwrap_or(StatusCode::OK));
+            let connection_fields = connection_fields(&response.headers);
             for (name, value) in &response.headers {
-                if is_hop_by_hop(name) || name == "content-length" || name == "x-sumpter-request-id"
+                if connection_fields.contains(&name.to_ascii_lowercase())
+                    || is_hop_by_hop(name)
+                    || name.eq_ignore_ascii_case("content-length")
+                    || name.eq_ignore_ascii_case("x-sumpter-request-id")
                 {
                     continue;
                 }

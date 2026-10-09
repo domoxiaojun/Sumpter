@@ -331,7 +331,7 @@ impl Platform {
         if !self.query_token_ok(query) {
             return forbidden_response();
         }
-        match engine.reload_config() {
+        match engine.reload_config().await {
             Ok(replacement) => sumpter_engine::engine::json_response(
                 StatusCode::OK,
                 &json!({

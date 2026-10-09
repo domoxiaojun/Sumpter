@@ -22,13 +22,13 @@ HTTP、SSE 和 WebSocket 在上游响应或真实握手后才算成功。一个�
 
 ## 配置与调度
 
-`AppConfig` 的 v7 JSON 是跨平台合同。入口保存地址、Key、协议标签和 mapping；模型组保存开放模型、绑定和调度策略；featureRules 负责独立子请求。配置保存使用 generation 检查，避免两个 Admin 页面互相覆盖。
+`AppConfig` 的 v7 JSON 是跨平台合同。入口保存地址、Key、协议标签和 mapping；模型组保存开放模型、绑定和调度策略；featureRules 负责独立子请求。配置保存使用 generation 检查，避免两个 Admin 页面互相覆盖。运行期 Admin 保存、磁盘重载与模型目录写入共用 daemon 配置事务；临时文件使用独立随机名称。macOS App 在 sidecar 运行时经 loopback/control-token 保护的 `PUT /admin/config` 提交 `expectedGeneration` 与 `config`，收到 generation/warnings 回执后按原流程处理监听变更；sidecar 停止时才直接离线保存。
 
 会话粘性优先于新会话调度。`priority` 按数字和数组顺序排序；`randomSticky` 和 `roundRobinSticky` 只决定新会话首选，故障仍遵循重试与后备链。资源绑定文件保存 Live / Video 等后续请求的入口归属。
 
 ## 运行时存储
 
-`sumpter-runtime` 使用 bundled SQLite、WAL 和有界后台写入。内存快照让请求热路径不等待每次数据库写入；存储退化和 backpressure 通过 Admin 状态暴露。运行统计、会话删除、清理、重置和重建是不同操作，文档不得混用。
+`sumpter-runtime` 使用 bundled SQLite、WAL 和有界后台写入。内存快照让请求热路径不等待每次数据库写入；Admin 通过 runtime 层异步查询 API 等待结果，最多 4 个专用查询工作器执行同步 SQLite 操作，不占用代理 Tokio 工作线程；客户端取消会停止查询/导出游标，已接纳的写操作完成提交与内存对账后才释放名额。存储退化和 backpressure 通过 Admin 状态暴露。运行统计、会话删除、清理、重置和重建是不同操作，文档不得混用。
 
 统计只从客户端完成事件的上游 usage 聚合，pending 单独计数；缓存 Token 按协议口径保留原始值。存储计数按事件状态变更维护，并叠加有界待提交增量；保留策略删去的计数不会被旧 Engine 累计快照写回。诊断捕获独立于统计，默认关闭，可能包含未脱敏正文和凭据。
 

@@ -48,7 +48,7 @@ async fn model_scope_reload_revokes_sticky_and_failover_candidates() {
         // astra from a. New requests must use only b after config reload.
         config.endpoints[0].mappings[0].client_pattern = "claude-fable-5-1".into();
         let _ = dir.save_config(&config).unwrap();
-        engine.reload_config().unwrap();
+        engine.reload_config().await.unwrap();
         fake.push(
             "b.example.com",
             Outcome::Status {

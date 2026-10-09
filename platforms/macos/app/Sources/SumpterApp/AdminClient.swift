@@ -168,6 +168,19 @@ public struct AdminClient: Sendable {
         return try await send(request("/admin/runtime/analytics", query: query), as: AdminWire.RuntimeAnalytics.self)
     }
 
+    public func saveConfig(_ config: AppConfig, expectedGeneration: String) async throws -> AdminWire.ReloadAck {
+        try await send(configSaveRequest(config, expectedGeneration: expectedGeneration), as: AdminWire.ReloadAck.self)
+    }
+
+    func configSaveRequest(_ config: AppConfig, expectedGeneration: String) throws -> URLRequest {
+        let configData = try JSONEncoder().encode(config)
+        let body: [String: Any] = [
+            "expectedGeneration": expectedGeneration,
+            "config": try JSONSerialization.jsonObject(with: configData)
+        ]
+        return try jsonRequest("/admin/config", method: "PUT", body: body)
+    }
+
     public func reload() async throws -> AdminWire.ReloadAck {
         try await send(request("/admin/reload", method: "POST"), as: AdminWire.ReloadAck.self)
     }

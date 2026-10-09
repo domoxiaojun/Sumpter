@@ -1,5 +1,6 @@
 use crate::admin::{AdminState, JsonPayload, api_error, json_ok, require_json};
 use crate::admin_auth::AdminAuth;
+use crate::admin_auth::PasswordWorkError;
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, Method, Request, StatusCode, header};
@@ -148,11 +149,16 @@ pub(crate) async fn auth_login(
         );
     }
     let secure_cookie = request_uses_https(&headers);
-    let Some(grant) = state
+    let grant = match state
         .inner
         .admin_auth
-        .login(&body.username, &body.password, secure_cookie)
-    else {
+        .run_password_work(move |auth| auth.login(&body.username, &body.password, secure_cookie))
+        .await
+    {
+        Ok(grant) => grant,
+        Err(error) => return password_work_error(error),
+    };
+    let Some(grant) = grant else {
         tokio::time::sleep(Duration::from_millis(250)).await;
         return api_error(
             StatusCode::UNAUTHORIZED,
@@ -187,12 +193,23 @@ pub(crate) async fn change_admin_credentials(
         Err(response) => return response,
     };
     let secure_cookie = request_uses_https(&headers);
-    match state.inner.admin_auth.change_credentials(
-        &body.current_password,
-        &body.username,
-        &body.new_password,
-        secure_cookie,
-    ) {
+    let result = match state
+        .inner
+        .admin_auth
+        .run_password_work(move |auth| {
+            auth.change_credentials(
+                &body.current_password,
+                &body.username,
+                &body.new_password,
+                secure_cookie,
+            )
+        })
+        .await
+    {
+        Ok(result) => result,
+        Err(error) => return password_work_error(error),
+    };
+    match result {
         Ok(update) => {
             let mut response = auth_session_response(
                 &update.grant.session.username,
@@ -224,6 +241,27 @@ pub(crate) async fn change_admin_credentials(
             StatusCode::INTERNAL_SERVER_ERROR,
             "credentials_write_failed",
             &message,
+        ),
+    }
+}
+
+fn password_work_error(error: PasswordWorkError) -> Response {
+    match error {
+        PasswordWorkError::Busy => {
+            let mut response = api_error(
+                StatusCode::TOO_MANY_REQUESTS,
+                "auth_busy",
+                "认证繁忙，请稍后重试",
+            );
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, header::HeaderValue::from_static("1"));
+            response
+        }
+        PasswordWorkError::Failed => api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "auth_failed",
+            "认证任务失败，请重试",
         ),
     }
 }

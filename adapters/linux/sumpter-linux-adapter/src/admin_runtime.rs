@@ -185,7 +185,7 @@ pub(crate) async fn runtime_events(
             history_generation: query.history_generation,
             filter: runtime_filter_from_events_query(&query),
         };
-        return match state.inner.engine.runtime_events_page(&request) {
+        return match state.inner.engine.runtime_events_page_async(&request).await {
             Ok(value) => json_ok(&value),
             Err(error) => runtime_query_error_response(error),
         };
@@ -197,16 +197,21 @@ pub(crate) async fn runtime_events(
             "view 只支持 page",
         );
     }
-    match state.inner.engine.runtime_events(
-        query.before_seq,
-        query.after_change_seq,
-        query.limit.unwrap_or(10),
-        query.kind.as_deref(),
-        query.request_id.as_deref(),
-        query.outcome.as_deref(),
-        query.from,
-        query.to,
-    ) {
+    match state
+        .inner
+        .engine
+        .runtime_events_async(
+            query.before_seq,
+            query.after_change_seq,
+            query.limit.unwrap_or(10),
+            query.kind.as_deref(),
+            query.request_id.as_deref(),
+            query.outcome.as_deref(),
+            query.from,
+            query.to,
+        )
+        .await
+    {
         Ok(value) => json_ok(&value),
         Err(message) => api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -245,7 +250,7 @@ pub(crate) async fn runtime_event_detail(
     State(state): State<AdminState>,
     Path(id): Path<String>,
 ) -> Response {
-    match state.inner.engine.runtime_event(&id) {
+    match state.inner.engine.runtime_event_async(&id).await {
         Ok(Some(value)) => json_ok(&value),
         Ok(None) => api_error(
             StatusCode::NOT_FOUND,
@@ -282,7 +287,12 @@ pub(crate) async fn runtime_request_chain(
             "必须提供 requestID",
         );
     };
-    match state.inner.engine.runtime_request_chain(request_id) {
+    match state
+        .inner
+        .engine
+        .runtime_request_chain_async(request_id)
+        .await
+    {
         Ok(value) => json_ok(&value),
         Err(error) => runtime_query_error_response(error),
     }
@@ -409,7 +419,7 @@ pub(crate) async fn runtime_facets(
     let mut filter: RuntimeFilter = query.filters.into();
     filter.from = crate::runtime_query::merge_range_lower_bound(range, filter.from, range_from);
     filter.to = Some(filter.to.map_or(now, |value| value.min(now)));
-    match state.inner.engine.runtime_facets(&filter) {
+    match state.inner.engine.runtime_facets_async(&filter).await {
         Ok(value) => json_ok(&value),
         Err(error) => runtime_query_error_response(error),
     }
@@ -459,7 +469,7 @@ pub(crate) async fn runtime_trends(
         history_generation: query.history_generation,
         filter: filters,
     };
-    match state.inner.engine.runtime_trends(&request) {
+    match state.inner.engine.runtime_trends_async(&request).await {
         Ok(value) => json_ok(&value),
         Err(error) => runtime_query_error_response(error),
     }
@@ -493,7 +503,12 @@ pub(crate) async fn runtime_errors(
         history_generation: query.history_generation,
         filter: query.filters.into(),
     };
-    match state.inner.engine.runtime_error_groups(&request) {
+    match state
+        .inner
+        .engine
+        .runtime_error_groups_async(&request)
+        .await
+    {
         Ok(value) => json_ok(&value),
         Err(error) => runtime_query_error_response(error),
     }
@@ -503,14 +518,14 @@ pub(crate) async fn runtime_projects(
     State(state): State<AdminState>,
     Query(query): Query<RuntimePagedQuery>,
 ) -> Response {
-    runtime_dimension_response(state, DimensionKind::Project, query)
+    runtime_dimension_response(state, DimensionKind::Project, query).await
 }
 
 pub(crate) async fn runtime_sessions(
     State(state): State<AdminState>,
     Query(query): Query<RuntimePagedQuery>,
 ) -> Response {
-    runtime_dimension_response(state, DimensionKind::Session, query)
+    runtime_dimension_response(state, DimensionKind::Session, query).await
 }
 
 pub(crate) async fn runtime_dimensions(
@@ -526,7 +541,7 @@ pub(crate) async fn runtime_dimensions(
     };
     let mut query = query;
     query.filters.kind = None;
-    runtime_dimension_response(state, kind, query)
+    runtime_dimension_response(state, kind, query).await
 }
 
 pub(crate) fn parse_dimension_kind(value: Option<&str>) -> Option<DimensionKind> {
@@ -551,7 +566,7 @@ pub(crate) fn parse_dimension_kind(value: Option<&str>) -> Option<DimensionKind>
     }
 }
 
-pub(crate) fn runtime_dimension_response(
+pub(crate) async fn runtime_dimension_response(
     state: AdminState,
     kind: DimensionKind,
     query: RuntimePagedQuery,
@@ -598,21 +613,26 @@ pub(crate) fn runtime_dimension_response(
         history_generation: query.history_generation,
         filter: query.filters.into(),
     };
-    match state.inner.engine.runtime_dimension_page(kind, &request) {
+    match state
+        .inner
+        .engine
+        .runtime_dimension_page_async(kind, &request)
+        .await
+    {
         Ok(value) => json_ok(&value),
         Err(error) => runtime_query_error_response(error),
     }
 }
 
 pub(crate) async fn runtime_storage(State(state): State<AdminState>) -> Response {
-    match state.inner.engine.runtime_storage_details() {
+    match state.inner.engine.runtime_storage_details_async().await {
         Ok(value) => json_ok(&value),
         Err(error) => runtime_query_error_response(error),
     }
 }
 
 pub(crate) async fn runtime_retention(State(state): State<AdminState>) -> Response {
-    match state.inner.engine.runtime_storage_details() {
+    match state.inner.engine.runtime_storage_details_async().await {
         Ok(value) => json_ok(&value["retention"]),
         Err(error) => runtime_query_error_response(error),
     }
@@ -647,7 +667,8 @@ pub(crate) async fn runtime_cleanup_preview(
     match state
         .inner
         .engine
-        .runtime_cleanup_preview(payload.older_than)
+        .runtime_cleanup_preview_async(payload.older_than)
+        .await
     {
         Ok(value) => json_ok(&value),
         Err(message) if message.contains("olderThan") => {
@@ -665,7 +686,12 @@ pub(crate) async fn runtime_cleanup(
         Ok(payload) => payload,
         Err(response) => return response,
     };
-    match state.inner.engine.runtime_cleanup(payload.older_than) {
+    match state
+        .inner
+        .engine
+        .runtime_cleanup_async(payload.older_than)
+        .await
+    {
         Ok(value) => json_ok(&value),
         Err(message) if message.contains("olderThan") => {
             api_error(StatusCode::BAD_REQUEST, "invalid_cleanup", &message)
@@ -685,11 +711,13 @@ pub(crate) async fn runtime_retention_update(
     match state
         .inner
         .engine
-        .runtime_set_retention(RuntimeRetentionUpdate {
+        .runtime_set_retention_async(RuntimeRetentionUpdate {
             expected_revision: payload.expected_revision,
             max_age_days: payload.max_age_days,
             storage_limit_bytes: payload.storage_limit_bytes,
-        }) {
+        })
+        .await
+    {
         Ok(value) => json_ok(&value),
         Err(message) if message.contains("revision") => {
             api_error(StatusCode::CONFLICT, "runtime_revision_conflict", &message)
@@ -706,7 +734,7 @@ pub(crate) async fn runtime_retention_update(
 }
 
 pub(crate) async fn runtime_pricing(State(state): State<AdminState>) -> Response {
-    match state.inner.engine.runtime_pricing() {
+    match state.inner.engine.runtime_pricing_async().await {
         Ok(value) => json_ok(&value),
         Err(error) => runtime_query_error_response(error),
     }
@@ -758,11 +786,13 @@ pub(crate) async fn runtime_pricing_update(
     match state
         .inner
         .engine
-        .runtime_replace_pricing(RuntimePricingUpdate {
+        .runtime_replace_pricing_async(RuntimePricingUpdate {
             expected_revision: payload.expected_revision,
             currency: payload.currency,
             prices,
-        }) {
+        })
+        .await
+    {
         Ok(value) => json_ok(&value),
         Err(message) if message.contains("revision") => {
             api_error(StatusCode::CONFLICT, "runtime_revision_conflict", &message)
@@ -852,7 +882,12 @@ pub(crate) async fn runtime_export_estimate(
         Ok(query) => query,
         Err(response) => return response,
     };
-    match state.inner.engine.runtime_export_estimate(&query) {
+    match state
+        .inner
+        .engine
+        .runtime_export_estimate_async(&query)
+        .await
+    {
         Ok(value) => json_ok(&value),
         Err(error) => runtime_query_error_response(error),
     }
@@ -876,7 +911,12 @@ pub(crate) async fn runtime_export(
     // Resolve and validate the exact snapshot before response headers are
     // committed. The streaming worker reuses these values, so estimate and
     // export cannot drift to a newer history window.
-    let estimate = match state.inner.engine.runtime_export_estimate(&query) {
+    let estimate = match state
+        .inner
+        .engine
+        .runtime_export_estimate_async(&query)
+        .await
+    {
         Ok(value) => value,
         Err(error) => return runtime_query_error_response(error),
     };
@@ -891,15 +931,20 @@ pub(crate) async fn runtime_export(
 
     let (sender, receiver) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(8);
     let engine = state.inner.engine.clone();
-    tokio::task::spawn_blocking(move || {
+    tokio::spawn(async move {
         let worker_sender = sender.clone();
-        let result = engine.runtime_stream_export(&stream_query, |chunk| {
-            worker_sender
-                .blocking_send(Ok(Bytes::from(chunk)))
-                .map_err(|_| "export client disconnected".to_string())
-        });
+        let result = tokio::select! {
+            biased;
+            _ = sender.closed() => return,
+            result = engine.runtime_stream_export_async(&stream_query, move |chunk| {
+                worker_sender.blocking_send(Ok(Bytes::from(chunk)))
+                    .map_err(|_| "export client disconnected".to_string())
+            }) => result,
+        };
         if let Err(error) = result {
-            let _ = sender.blocking_send(Err(std::io::Error::other(error.to_string())));
+            let _ = sender
+                .send(Err(std::io::Error::other(error.to_string())))
+                .await;
         }
     });
     let stream = futures_util::stream::unfold(receiver, |mut receiver| async move {
@@ -1105,7 +1150,8 @@ pub(crate) async fn runtime_analytics(
     match state
         .inner
         .engine
-        .runtime_analytics_filtered(range, &filter)
+        .runtime_analytics_filtered_async(range, &filter)
+        .await
     {
         Ok(value) => json_ok(&value),
         Err(message) => api_error(
@@ -1138,7 +1184,11 @@ pub(crate) async fn delete_runtime_session(
     match state
         .inner
         .engine
-        .delete_runtime_session_confirmed(&session_id, query.confirm_unidentified == Some(true))
+        .delete_runtime_session_confirmed_async(
+            &session_id,
+            query.confirm_unidentified == Some(true),
+        )
+        .await
     {
         Ok(value) => json_ok(&value),
         Err(message) if message.contains("不能删除未识别会话") => {
@@ -1166,7 +1216,12 @@ pub(crate) async fn export_runtime_session(
             "必须提供完整 sessionID",
         );
     };
-    match state.inner.engine.export_runtime_session(&session_id) {
+    match state
+        .inner
+        .engine
+        .export_runtime_session_async(&session_id)
+        .await
+    {
         Ok(value) => json_ok(&value),
         Err(message) if message.contains("会话不存在") => {
             api_error(StatusCode::NOT_FOUND, "session_not_found", "会话不存在")
@@ -1202,7 +1257,7 @@ pub(crate) async fn clear_project_sticky(
         );
     }
     let engine = state.inner.engine.clone();
-    match tokio::task::spawn_blocking(move || engine.clear_project_sticky(&project_id)).await {
+    match tokio::spawn(async move { engine.clear_project_sticky_async(&project_id).await }).await {
         Ok(Ok(value)) => json_ok(&value),
         Ok(Err(message)) => api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1240,7 +1295,7 @@ pub(crate) async fn clear_runtime_session_sticky(
         );
     }
     let engine = state.inner.engine.clone();
-    match tokio::task::spawn_blocking(move || engine.clear_runtime_session_sticky(&session_id))
+    match tokio::spawn(async move { engine.clear_runtime_session_sticky_async(&session_id).await })
         .await
     {
         Ok(Ok(value)) => json_ok(&value),
@@ -1258,7 +1313,7 @@ pub(crate) async fn clear_runtime_session_sticky(
 }
 
 pub(crate) async fn reset_runtime(State(state): State<AdminState>) -> Response {
-    match state.inner.engine.reset_runtime() {
+    match state.inner.engine.reset_runtime_async().await {
         Ok(_) => json_ok(
             &json!({"reset": true, "resetGeneration": state.inner.engine.runtime_summary_value()["resetGeneration"]}),
         ),
@@ -1274,7 +1329,7 @@ pub(crate) async fn reset_runtime(State(state): State<AdminState>) -> Response {
 }
 
 pub(crate) async fn recreate_runtime(State(state): State<AdminState>) -> Response {
-    match state.inner.engine.recreate_runtime() {
+    match state.inner.engine.recreate_runtime_async().await {
         Ok(generation) => json_ok(&json!({
             "reset": true,
             "recreated": true,

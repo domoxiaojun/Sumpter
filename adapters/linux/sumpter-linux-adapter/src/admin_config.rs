@@ -18,6 +18,7 @@ use sumpter_core::config::{AppConfig, Endpoint, SCHEMA_VERSION};
 use sumpter_core::config_store::validate_config_wire;
 
 pub(crate) async fn get_config(State(state): State<AdminState>) -> Response {
+    let _transaction = state.inner.engine.config_transaction().await;
     let generation = state.inner.engine.generation();
     let migration_notice = state
         .migration_notice()

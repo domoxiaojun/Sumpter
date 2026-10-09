@@ -96,9 +96,27 @@ fn run<T: Send + 'static>(
     // These futures are polled synchronously outside the caller's Tokio
     // scheduler. Its cooperative budget cannot be replenished until we
     // return, so inherited budget exhaustion would otherwise deadlock.
-    futures_executor::block_on(tokio::task::unconstrained(executor()?.spawn(future)))
-        .map_err(|error| Error::InvalidParameterName(format!("ORM executor: {error}")))?
-        .map_err(Error::from)
+    let mut cancelled = crate::query_executor::cancellation();
+    let mut task = executor()?.spawn(future);
+    futures_executor::block_on(tokio::task::unconstrained(async move {
+        if let Some(ref mut receiver) = cancelled {
+            tokio::select! {
+                biased;
+                _ = async {
+                    if !*receiver.borrow() { let _ = receiver.changed().await; }
+                } => {
+                    task.abort();
+                    let _ = task.await;
+                    Ok(Err(DbErr::Custom("runtime query cancelled".into())))
+                }
+                result = &mut task => result,
+            }
+        } else {
+            task.await
+        }
+    }))
+    .map_err(|error| Error::InvalidParameterName(format!("ORM executor: {error}")))?
+    .map_err(Error::from)
 }
 
 pub(crate) enum Session {
@@ -290,11 +308,13 @@ impl Drop for Connection {
             .take()
             .and_then(|session| Arc::try_unwrap(session).ok())
         {
-            let _ = run(async move {
-                match session {
-                    Session::Connection(db) => db.close().await,
-                    Session::Transaction(db) => db.rollback().await,
-                }
+            let _ = crate::query_executor::without_cancellation(|| {
+                run(async move {
+                    match session {
+                        Session::Connection(db) => db.close().await,
+                        Session::Transaction(db) => db.rollback().await,
+                    }
+                })
             });
         }
     }
@@ -400,8 +420,21 @@ pub struct Rows {
 }
 impl Rows {
     pub fn next(&mut self) -> Result<Option<&Row>> {
-        self.current = futures_executor::block_on(tokio::task::unconstrained(self.receiver.recv()))
-            .transpose()?;
+        let mut cancelled = crate::query_executor::cancellation();
+        self.current = futures_executor::block_on(tokio::task::unconstrained(async {
+            if let Some(ref mut receiver) = cancelled {
+                tokio::select! {
+                    biased;
+                    _ = async { if !*receiver.borrow() { let _ = receiver.changed().await; } } => {
+                        Some(Err(Error::Database(DbErr::Custom("runtime query cancelled".into()))))
+                    }
+                    row = self.receiver.recv() => row,
+                }
+            } else {
+                self.receiver.recv().await
+            }
+        }))
+        .transpose()?;
         if self.current.is_none() {
             if let Some(task) = self.task.take() {
                 futures_executor::block_on(tokio::task::unconstrained(task))
