@@ -11,6 +11,7 @@ pub mod config;
 pub mod config_store;
 pub mod events;
 pub mod model_name;
+pub mod responses_observation;
 pub mod routing;
 pub mod scheduler;
 pub mod stream_terminal;

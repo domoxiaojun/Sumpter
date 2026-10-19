@@ -99,6 +99,7 @@ fn parse_templates(payload: &Value) -> Result<CodexClientTemplates, String> {
         return Err("models 必须是非空数组".into());
     }
     let mut by_slug = HashMap::new();
+    let mut default_template = None;
     let mut max_priority = 0_i64;
     for model in models {
         let slug = model
@@ -143,12 +144,12 @@ fn parse_templates(payload: &Value) -> Result<CodexClientTemplates, String> {
             return Err(format!("{slug} default_reasoning_level 不在支持列表中"));
         }
         max_priority = max_priority.max(json_priority(model));
+        if default_template.is_none() || slug == DEFAULT_TEMPLATE_SLUG {
+            default_template = Some(model.clone());
+        }
         by_slug.insert(slug.to_string(), model.clone());
     }
-    let default_template = by_slug
-        .get(DEFAULT_TEMPLATE_SLUG)
-        .cloned()
-        .ok_or_else(|| "必须包含 gpt-5.5".to_string())?;
+    let default_template = default_template.expect("validated nonempty models");
     Ok(CodexClientTemplates {
         by_slug,
         default_template,
@@ -159,7 +160,7 @@ fn parse_templates(payload: &Value) -> Result<CodexClientTemplates, String> {
 pub(crate) fn replace_templates(payload: &Value) -> Result<u64, String> {
     let next = parse_templates(payload)?;
     let current = templates().read().map_err(|_| "模板锁已损坏".to_string())?;
-    if current.by_slug == next.by_slug {
+    if current.by_slug == next.by_slug && current.default_template == next.default_template {
         return Ok(template_revision());
     }
     drop(current);
@@ -244,6 +245,13 @@ fn build_codex_models_with_templates(
         apply_metadata_overrides(&mut entry, &model.metadata, from_template);
         if let Some(object) = entry.as_object_mut() {
             object.insert("slug".into(), json!(model.id));
+            object.remove("cpa_capabilities");
+            if client_version == "cpa" {
+                object.insert(
+                    "cpa_capabilities".into(),
+                    json!({"web_search": model.metadata.supports_web_search == Some(true)}),
+                );
+            }
         }
         if !is_codex_chat_model(&model.capabilities)
             && let Some(object) = entry.as_object_mut()
@@ -290,12 +298,24 @@ fn compact_fallback_template(template: &Value) -> Value {
         }),
     );
     object.insert("supports_search_tool".into(), json!(false));
+    clear_model_specific_capabilities(object);
     object.insert("prefer_websockets".into(), json!(false));
     object.insert("service_tiers".into(), json!([]));
     object.insert("apply_patch_tool_type".into(), Value::Null);
     object.insert("upgrade".into(), Value::Null);
     object.insert("availability_nux".into(), Value::Null);
     entry
+}
+
+fn clear_model_specific_capabilities(object: &mut serde_json::Map<String, Value>) {
+    object.insert("use_responses_lite".into(), json!(false));
+    object.insert("supports_experimental_context".into(), json!(false));
+    object.insert("supports_reasoning_effort_updates".into(), json!(false));
+    object.insert("experimental_supported_tools".into(), json!([]));
+    object.insert("web_search_tool_type".into(), json!("text"));
+    object.insert("tool_mode".into(), json!("direct"));
+    object.insert("additional_speed_tiers".into(), json!([]));
+    object.insert("default_service_tier".into(), Value::Null);
 }
 
 fn is_pure_codex_provider(metadata: &ProviderModelMetadata) -> bool {
@@ -373,29 +393,20 @@ fn apply_metadata_overrides(
         !from_template || (!metadata.providers.is_empty() && !is_pure_codex_provider(metadata));
     object.insert(
         "supports_search_tool".into(),
-        json!(!should_clear_capabilities && metadata.supports_search_tool == Some(true)),
+        json!(metadata.supports_search_tool == Some(true)),
     );
     object.insert(
         "prefer_websockets".into(),
-        json!(!should_clear_capabilities && metadata.prefer_websockets == Some(true)),
+        json!(metadata.prefer_websockets == Some(true)),
     );
-    if let Some(tiers) = object
-        .get_mut("service_tiers")
-        .and_then(Value::as_array_mut)
-    {
-        tiers.retain(|tier| {
-            !should_clear_capabilities
-                && metadata.service_tiers.as_ref().is_some_and(|allowed| {
-                    tier.get("id")
-                        .and_then(Value::as_str)
-                        .is_some_and(|id| allowed.iter().any(|tier| tier == id))
-                })
-        });
-    }
+    let tiers = metadata.service_tiers.as_deref().unwrap_or_default().iter().map(|id| {
+        object.get("service_tiers").and_then(Value::as_array)
+            .and_then(|tiers| tiers.iter().find(|tier| tier["id"] == *id)).cloned()
+            .unwrap_or_else(|| json!({"id": id, "name": id, "description": "Service tier supported by the configured routes"}))
+    }).collect::<Vec<_>>();
+    object.insert("service_tiers".into(), json!(tiers));
     if should_clear_capabilities {
-        object.insert("supports_search_tool".into(), json!(false));
-        object.insert("prefer_websockets".into(), json!(false));
-        object.insert("service_tiers".into(), json!([]));
+        clear_model_specific_capabilities(object);
         object.insert("apply_patch_tool_type".into(), Value::Null);
         object.insert("upgrade".into(), Value::Null);
         object.insert("availability_nux".into(), Value::Null);
@@ -537,7 +548,14 @@ mod tests {
                 ] {
                     assert_eq!(entry[field], official[field], "{slug}: {field}");
                 }
-                assert_eq!(entry["context_window"], 272000);
+                assert_eq!(
+                    entry["context_window"],
+                    if slug == "gpt-6.1-sol" {
+                        500000
+                    } else {
+                        272000
+                    }
+                );
                 assert_eq!(entry["max_context_window"], 872000);
                 if index.lookup(slug).unwrap().max_output_tokens.is_some() {
                     // Registry fields still fill gaps in the official template.
@@ -614,11 +632,62 @@ mod tests {
         let metadata =
             templates.resolve_metadata("gpt-6.1-sol", index.lookup("gpt-6.1-sol").unwrap().clone());
         let entry = render(&templates, "shared", vec![metadata]);
-        assert_eq!(entry["context_window"], 272000);
+        assert_eq!(entry["context_window"], 500000);
         assert_eq!(entry["max_context_window"], 872000);
         assert_eq!(entry["supports_search_tool"], false);
         assert_eq!(entry["prefer_websockets"], false);
         assert_eq!(entry["service_tiers"], json!([]));
         assert_eq!(entry.get("apply_patch_tool_type"), Some(&Value::Null));
+    }
+
+    #[test]
+    fn templates_without_legacy_default_use_payload_order_and_clear_fallback_capabilities() {
+        let mut payload: Value = serde_json::from_str(CODEX_CLIENT_MODELS_JSON).unwrap();
+        payload["models"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|model| model["slug"] != DEFAULT_TEMPLATE_SLUG);
+        crate::model_catalog::validate_codex_metadata(&payload).unwrap();
+        let templates = parse_templates(&payload).unwrap();
+        assert_eq!(
+            templates.default_template["slug"],
+            payload["models"][0]["slug"]
+        );
+        let metadata = templates.resolve_metadata("custom", fallback_metadata("custom"));
+        let entry = render(&templates, "custom", vec![metadata]);
+        for field in [
+            "use_responses_lite",
+            "supports_experimental_context",
+            "supports_search_tool",
+            "prefer_websockets",
+            "supports_reasoning_effort_updates",
+        ] {
+            assert_eq!(entry[field], false, "{field}");
+        }
+        assert_eq!(entry["experimental_supported_tools"], json!([]));
+        assert_eq!(entry["additional_speed_tiers"], json!([]));
+        assert_eq!(entry["tool_mode"], "direct");
+
+        let mut legacy = payload["models"][1].clone();
+        legacy["slug"] = json!(DEFAULT_TEMPLATE_SLUG);
+        payload["models"].as_array_mut().unwrap().push(legacy);
+        assert_eq!(
+            parse_templates(&payload).unwrap().default_template["slug"],
+            DEFAULT_TEMPLATE_SLUG
+        );
+    }
+
+    #[test]
+    fn invalid_template_update_preserves_active_templates_and_revision() {
+        let before = templates().read().unwrap().by_slug.clone();
+        let revision = template_revision();
+        for payload in [
+            json!({"models": []}),
+            json!({"models": [{"slug":"broken"}]}),
+        ] {
+            assert!(replace_templates(&payload).is_err());
+            assert_eq!(templates().read().unwrap().by_slug, before);
+            assert_eq!(template_revision(), revision);
+        }
     }
 }

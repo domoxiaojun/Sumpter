@@ -580,9 +580,18 @@ pub struct RuntimeFacetSnapshot {
     pub facets: AnalyticsFacets,
 }
 
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexRequestStatistics {
+    pub counts: BTreeMap<String, i64>,
+    pub unobserved_websocket_connections: i64,
+    pub unobserved_frames: i64,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalyticsSummary {
+    pub codex_requests: CodexRequestStatistics,
     pub cache_read: sumpter_core::cache_read::CacheReadStatistics,
     pub upstream_cache_read: sumpter_core::cache_read::CacheReadStatistics,
     pub api_version: u8,

@@ -606,6 +606,7 @@ pub fn canonical_json(value: &Value) -> String {
 pub enum BridgeTerminal {
     Pending,
     Completed,
+    Incomplete(String),
     Failed(String),
 }
 
@@ -1450,7 +1451,9 @@ impl OpenAiStreamBridge {
         // SSE block 之后调用这里,提前置位会让真正完成时直接返回空,非流式客户端
         // 拿到 0 字节响应。
         let rendered = match &self.terminal {
-            BridgeTerminal::Failed(detail) => canonical_json(&error_json(detail)).into_bytes(),
+            BridgeTerminal::Failed(detail) | BridgeTerminal::Incomplete(detail) => {
+                canonical_json(&error_json(detail)).into_bytes()
+            }
             BridgeTerminal::Completed => canonical_json(&json!({
                 "id": self.message_id,
                 "type": "message",
@@ -1927,7 +1930,9 @@ impl ResponsesStreamBridge {
         }
         // 同 chat 桥:terminal 未定型时不置位 json_emitted,否则完成时会渲染成空。
         let rendered = match &self.terminal {
-            BridgeTerminal::Failed(detail) => canonical_json(&error_json(detail)).into_bytes(),
+            BridgeTerminal::Failed(detail) | BridgeTerminal::Incomplete(detail) => {
+                canonical_json(&error_json(detail)).into_bytes()
+            }
             BridgeTerminal::Completed => canonical_json(&json!({
                 "id": self.message_id,
                 "type": "message",

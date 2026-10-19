@@ -66,7 +66,7 @@ const PROVIDER_MODEL_COOLDOWN_INITIAL_SECS: f64 = 5.0;
 const PROVIDER_MODEL_COOLDOWN_FACTOR: f64 = 2.0;
 const PROVIDER_MODEL_COOLDOWN_MAX_SECS: f64 = 60.0;
 const MAX_PROVIDER_MODEL_HEALTH: usize = 4096;
-pub(super) const MAX_RETRY_AFTER_SECS: f64 = 30.0;
+pub(super) const MAX_RETRY_AFTER_SECS: f64 = 300.0;
 
 type EndpointGroupOrder = (String, usize, i64, usize);
 
@@ -737,8 +737,12 @@ pub(super) fn retry_backoff_delay(round: i64, retry_after_seconds: Option<f64>) 
     let retry_after = retry_after_seconds
         .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
         .unwrap_or(0.0)
-        .min(RETRY_BACKOFF_MAX_SECS);
+        .min(MAX_RETRY_AFTER_SECS);
     Duration::from_secs_f64(exponential.max(retry_after))
+}
+
+fn retry_fits_budget(started: tokio::time::Instant, limit: f64, delay: Duration) -> bool {
+    limit <= 0.0 || started.elapsed().as_secs_f64() + delay.as_secs_f64() < limit
 }
 impl Engine {
     pub(super) fn note_provider_model_success(&self, endpoint: &PlannedEndpoint) {
@@ -1291,6 +1295,47 @@ impl Engine {
             .as_ref()
             .is_none_or(|client| client.dialect.is_some())
         {
+            if source_format == ProviderProtocol::OpenAIResponses
+                && let Some(body) = translation_body
+                && let Err(bridge::TranslationError::UnsupportedField(field)) =
+                    sumpter_core::bridge_in::check_responses_native_only(body)
+            {
+                let target = plan
+                    .endpoints
+                    .first()
+                    .map(|endpoint| endpoint.protocol.token())
+                    .unwrap_or("unknown");
+                if !plan
+                    .endpoints
+                    .iter()
+                    .any(|endpoint| endpoint.route_mode == RouteMode::Native)
+                {
+                    let message = format!(
+                        "unsupported_field {field} ({} -> {target})",
+                        source_format.token()
+                    );
+                    self.record_rejected_client_with_metadata(
+                        400,
+                        &message,
+                        Some(request.model.clone()),
+                        Some(purpose),
+                        client_kind,
+                        None,
+                        ClientDeclaredMetadata::from_headers(&headers),
+                        Some(source_format),
+                    );
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        &[
+                            ("error", "unsupported_field"),
+                            ("field", &field),
+                            ("sourceFormat", source_format.token()),
+                            ("targetFormat", target),
+                            ("message", &message),
+                        ],
+                    );
+                }
+            }
             // 候选被剔除时保留**第一条**具体原因。转换失败与「没有入口承接这个模型」
             // 是两类问题:前者要告诉用户是哪个字段表达不了,否则客户端只看到
             // 「no compatible Provider」,无法判断到底是配置问题还是能力缺口。
@@ -1760,7 +1805,7 @@ impl Engine {
             } else {
                 0
             };
-        let forward_started = Instant::now();
+        let forward_started = tokio::time::Instant::now();
         let mut last_attempt_endpoint: Option<String> = None;
         let mut round: i64 = 0;
         let mut consecutive_500_endpoint: Option<String> = None;
@@ -1810,6 +1855,15 @@ impl Engine {
             let mut sticky_retry_number = 0i64;
             let mut sticky_pass_checkpoint = round_state.sticky_retryable_failures;
             while endpoint_index < round_ordered.len() {
+                if last_attempt_endpoint.is_some()
+                    && !retry_fits_budget(
+                        forward_started,
+                        retry.max_retry_duration_seconds,
+                        Duration::ZERO,
+                    )
+                {
+                    break;
+                }
                 // 即使组内某个候选因桥能力被跳过，也要在进入其它组前执行边界判断。
                 if round_sticky_endpoint_count > 0
                     && endpoint_index == round_sticky_endpoint_count
@@ -1819,6 +1873,10 @@ impl Engine {
                     sticky_retry_number += 1;
                     let delay =
                         retry_backoff_delay(sticky_retry_number, round_state.retry_after_seconds);
+                    if !retry_fits_budget(forward_started, retry.max_retry_duration_seconds, delay)
+                    {
+                        break;
+                    }
                     tokio::time::sleep(delay).await;
                     sticky_pass_checkpoint = round_state.sticky_retryable_failures;
                     endpoint_index = 0;
@@ -1974,7 +2032,8 @@ impl Engine {
                     )
                     .await;
                     prefetched = Some((probed.prefix.len(), probed.last_read_at));
-                    if let Some(code) = &probed.retry_code {
+                    if let Some(error) = &probed.retry_error {
+                        let code = &error.code;
                         let mut failure =
                             FailureInfo::from_protocol_terminal(SseTerminal::Failed {
                                 detail: format!("upstream emitted response.failed ({code})"),
@@ -1982,7 +2041,15 @@ impl Engine {
                             .expect("failed terminal");
                         failure.upstream_status_code = Some(200);
                         failure.upstream_request_id = upstream_request_id(&probed.response.headers);
-                        failure.retry_after_seconds = retry_after_seconds(&probed.response.headers);
+                        let event_headers = error
+                            .retry_after
+                            .iter()
+                            .map(|value| ("retry-after".into(), value.clone()))
+                            .collect::<Vec<_>>();
+                        failure.retry_after_seconds = retry_after_seconds(&probed.response.headers)
+                            .into_iter()
+                            .chain(retry_after_seconds(&event_headers))
+                            .reduce(f64::max);
                         self.note_provider_model_failure(
                             endpoint,
                             Some(200),
@@ -1992,8 +2059,19 @@ impl Engine {
                         let used = stream_error_retries
                             .entry(endpoint.endpoint_id.clone())
                             .or_default();
-                        let retry_same = *used < retry.max_stream_error_retries.max(0);
+                        let delay = retry_backoff_delay(*used + 1, failure.retry_after_seconds);
+                        let retry_same = *used < retry.max_stream_error_retries.max(0)
+                            && retry_fits_budget(
+                                forward_started,
+                                retry.max_retry_duration_seconds,
+                                delay,
+                            );
                         let failover = retry.failover_on_stream_error
+                            && retry_fits_budget(
+                                forward_started,
+                                retry.max_retry_duration_seconds,
+                                Duration::ZERO,
+                            )
                             && round_ordered[endpoint_index..].iter().any(|next| {
                                 !exhausted_stream_endpoints.contains(&next.endpoint_id)
                             });
@@ -2026,11 +2104,7 @@ impl Engine {
                             if retry_same {
                                 *used += 1;
                                 endpoint_index -= 1;
-                                tokio::time::sleep(retry_backoff_delay(
-                                    *used,
-                                    failure.retry_after_seconds,
-                                ))
-                                .await;
+                                tokio::time::sleep(delay).await;
                             } else {
                                 exhausted_stream_endpoints.insert(endpoint.endpoint_id.clone());
                             }
@@ -2114,6 +2188,13 @@ impl Engine {
                             consecutive_500_retries,
                             round_state.retry_after_seconds,
                         );
+                        if !retry_fits_budget(
+                            forward_started,
+                            retry.max_retry_duration_seconds,
+                            delay,
+                        ) {
+                            break;
+                        }
                         tokio::time::sleep(delay).await;
                         continue;
                     }
@@ -2134,6 +2215,10 @@ impl Engine {
                     sticky_retry_number += 1;
                     let delay =
                         retry_backoff_delay(sticky_retry_number, round_state.retry_after_seconds);
+                    if !retry_fits_budget(forward_started, retry.max_retry_duration_seconds, delay)
+                    {
+                        break;
+                    }
                     // 复用跨轮退避，避免原入口故障时瞬间轰击；sleep 可随客户端取消。
                     tokio::time::sleep(delay).await;
                     sticky_pass_checkpoint = round_state.sticky_retryable_failures;
@@ -2155,9 +2240,8 @@ impl Engine {
                     || forward_started.elapsed().as_secs_f64() < retry.max_retry_duration_seconds);
             if retry_allowed {
                 let delay = retry_backoff_delay(round, round_state.retry_after_seconds);
-                let fits_time_cap = retry.max_retry_duration_seconds <= 0.0
-                    || forward_started.elapsed().as_secs_f64() + delay.as_secs_f64()
-                        < retry.max_retry_duration_seconds;
+                let fits_time_cap =
+                    retry_fits_budget(forward_started, retry.max_retry_duration_seconds, delay);
                 if fits_time_cap {
                     tokio::time::sleep(delay).await;
                     continue;

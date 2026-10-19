@@ -27,6 +27,8 @@ pub(super) fn setup_connection(connection: &mut Connection) -> crate::database::
     }
     ensure_completion_watermark(connection)?;
     crate::storage_metrics::ensure(connection)?;
+    crate::codex_observation::ensure(connection)?;
+    refresh_codex_roles(connection)?;
     let hourly_rollup_meta_exists = meta_i64(connection, "hourly_rollup_complete")?.is_some();
     let unprojected_exists = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM runtime_events
@@ -989,6 +991,36 @@ pub(super) fn run_projection_maintenance(
         set_meta(connection, "hourly_rollup_complete", 1)?;
     }
     Ok(false)
+}
+
+// Role-only correction for the current schema/projection. Older schemas retain
+// their existing compatibility boundary; no migration or deletion is performed.
+fn refresh_codex_roles(connection: &mut Connection) -> crate::database::Result<()> {
+    if meta_i64(connection, "codex_role_revision")? == Some(2) {
+        return Ok(());
+    }
+    let transaction = connection.transaction()?;
+    let mut cursor = 0i64;
+    loop {
+        let rows = transaction.prepare("SELECT seq,payload_json FROM runtime_events WHERE seq>?1 AND (codex_metadata_present=1 OR client_kind='codex') ORDER BY seq LIMIT 256")?
+            .query_map([cursor], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        if rows.is_empty() {
+            break;
+        }
+        for (seq, payload) in rows {
+            cursor = seq;
+            let Ok(event) = serde_json::from_str::<RuntimeEvent>(&payload) else {
+                continue;
+            };
+            crate::codex_observation::write(&transaction, seq, &event)?;
+            let role = event.derived_agent_role();
+            transaction.execute("UPDATE runtime_events SET agent_role=?2,payload_json=json_set(payload_json,'$.agentRole',?2),payload_bytes=length(CAST(json_set(payload_json,'$.agentRole',?2) AS BLOB)) WHERE seq=?1 AND (agent_role IS NULL OR agent_role<>?2)", params![seq, role])?;
+        }
+    }
+    set_meta(&transaction, "codex_role_revision", 2)?;
+    transaction.commit()?;
+    Ok(())
 }
 
 pub(super) fn database_issue_on(

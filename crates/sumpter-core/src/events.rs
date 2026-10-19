@@ -744,7 +744,7 @@ fn grok_user_agent_is_relevant(user_agent: &str, has_grok_fields: bool) -> bool 
         || lower.contains("grok-desktop")
 }
 
-/// Codex 0.148 Responses 的安全观测形状。
+/// Codex Responses 的有界安全观测形状。
 ///
 /// canonical 来源是请求体 `client_metadata["x-codex-turn-metadata"]`；flat body 与
 /// HTTP header 只作兼容回退。结构不保存鉴权、prompt、turn state 或 tracing 原值；
@@ -779,6 +779,12 @@ pub struct CodexMetadata {
     pub context_window_id: Option<String>,
     #[serde(default, skip_serializing_if = "is_none")]
     pub request_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub history_initialization: Option<String>,
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub analytics_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub mcp_attribution: Option<CodexMcpAttribution>,
     #[serde(
         rename = "forkedFromThreadID",
         default,
@@ -887,6 +893,9 @@ struct CodexMetadataCandidate {
     window_number: Option<u64>,
     context_window_id: Option<String>,
     request_kind: Option<String>,
+    history_initialization: Option<String>,
+    analytics_enabled: Option<bool>,
+    mcp_attribution: Option<CodexMcpAttribution>,
     forked_from_thread_id: Option<String>,
     forked_from_ordinal_exclusive: Option<u64>,
     parent_thread_id: Option<String>,
@@ -1022,12 +1031,20 @@ impl CodexMetadata {
             return None;
         }
 
-        let is_subagent = merged.subagent_header.is_some()
-            || merged.subagent_kind.is_some()
-            || merged.thread_source.as_deref().is_some_and(|source| {
-                source.eq_ignore_ascii_case("subagent")
-                    || source.eq_ignore_ascii_case("memory_consolidation")
-            });
+        let internal = matches!(
+            merged.thread_source.as_deref(),
+            Some("guardian_review" | "memory_consolidation")
+        ) || matches!(
+            merged
+                .subagent_kind
+                .as_deref()
+                .or(merged.subagent_header.as_deref()),
+            Some("guardian" | "memory_consolidation")
+        );
+        let is_subagent = !internal
+            && (merged.subagent_header.is_some()
+                || merged.subagent_kind.is_some()
+                || merged.thread_source.as_deref() == Some("subagent"));
         // A fork records inherited history, not an explicit parent-task relationship.
         let parent_thread_id = merged.parent_thread_id;
 
@@ -1042,6 +1059,9 @@ impl CodexMetadata {
             window_number: merged.window_number,
             context_window_id: merged.context_window_id,
             request_kind: merged.request_kind,
+            history_initialization: merged.history_initialization,
+            analytics_enabled: merged.analytics_enabled,
+            mcp_attribution: merged.mcp_attribution,
             forked_from_thread_id: merged.forked_from_thread_id,
             forked_from_ordinal_exclusive: merged.forked_from_ordinal_exclusive,
             parent_thread_id,
@@ -1145,6 +1165,57 @@ impl CodexThreadClass {
     }
 }
 
+/// Shared role projection; explicit internal origins are not spawned agents.
+pub fn codex_agent_role(metadata: &CodexMetadata) -> &'static str {
+    match codex_thread_class(Some(metadata)) {
+        CodexThreadClass::GuardianReview => return "guardian",
+        CodexThreadClass::MemoryConsolidation => return "memory",
+        CodexThreadClass::AutomatedReview => return "review",
+        CodexThreadClass::Title => return "title",
+        CodexThreadClass::Automation => return "automation",
+        CodexThreadClass::System => return "system",
+        CodexThreadClass::Ambient => return "ambient",
+        _ => {}
+    }
+    match metadata
+        .subagent_kind
+        .as_deref()
+        .or(metadata.subagent_header.as_deref())
+    {
+        Some("thread_spawn" | "collab_spawn" | "compact" | "subagent") => "subagent",
+        Some(_) => "unknown",
+        None if metadata.thread_source.as_deref() == Some("subagent") => "subagent",
+        None if matches!(
+            metadata.thread_source.as_deref(),
+            Some("cli" | "tui" | "vscode" | "desktop" | "user")
+        ) =>
+        {
+            "root"
+        }
+        _ => "unknown",
+    }
+}
+
+/// Bounded request-purpose dimension, independent of routing RequestPurpose.
+pub fn codex_request_kind(metadata: Option<&CodexMetadata>) -> &'static str {
+    match metadata.and_then(|m| m.request_kind.as_deref()) {
+        Some("prewarm") => "prewarm",
+        Some("turn") => "turn",
+        Some("compaction") => "compaction",
+        Some("memory") => "memory",
+        _ => "unknown",
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexMcpAttribution {
+    pub status: String,
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub error_reason: Option<String>,
+    pub source_count: u64,
+}
+
 /// Whether an event can be safely attributed to a project dimension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1187,7 +1258,9 @@ pub fn codex_thread_class(metadata: Option<&CodexMetadata>) -> CodexThreadClass 
             Some("memory_consolidation") => CodexThreadClass::MemoryConsolidation,
             Some("review") => CodexThreadClass::AutomatedReview,
             Some("thread_spawn" | "collab_spawn" | "compact") => CodexThreadClass::Subagent,
-            _ if metadata.request_kind.as_deref() == Some("memory") => {
+            _ if metadata.request_kind.as_deref() == Some("memory")
+                || metadata.memgen_request.as_deref() == Some("true") =>
+            {
                 CodexThreadClass::MemoryConsolidation
             }
             _ => CodexThreadClass::Unknown,
@@ -1365,6 +1438,13 @@ fn parse_metadata_object(
         ),
         node_repl_disabled: object_bool(object, "node_repl_disabled", state),
         history_ingest_requested: object_bool(object, "history_ingest_requested", state),
+        history_initialization: object_string(
+            object,
+            "history_initialization",
+            CODEX_METADATA_MAX_LABEL_BYTES,
+            state,
+        ),
+        analytics_enabled: object_bool(object, "analytics_enabled", state),
         turn_started_at_unix_ms: object_i64(object, "turn_started_at_unix_ms", state),
         workspaces: object
             .get("workspaces")
@@ -1417,6 +1497,9 @@ fn parse_flat_client_metadata(
     state: &mut CodexMetadataParseState,
 ) -> CodexMetadataCandidate {
     let mut metadata = CodexMetadataCandidate {
+        mcp_attribution: object
+            .get("mcp_attribution")
+            .and_then(|value| parse_mcp_attribution(value, state)),
         installation_id: object_installation_id(object, "x-codex-installation-id", state),
         source_installation_id: object_source_string(
             object,
@@ -1624,6 +1707,9 @@ fn merge_candidate(
     merge!(window_number, "windowNumber");
     merge!(context_window_id, "contextWindowID");
     merge!(request_kind, "requestKind");
+    merge!(history_initialization, "historyInitialization");
+    merge!(analytics_enabled, "analyticsEnabled");
+    merge!(mcp_attribution, "mcpAttribution");
     merge!(forked_from_thread_id, "forkedFromThreadID");
     merge!(forked_from_ordinal_exclusive, "forkedFromOrdinalExclusive");
     merge!(parent_thread_id, "parentThreadID");
@@ -1969,6 +2055,58 @@ fn parse_tool_source(
     })
 }
 
+fn parse_mcp_attribution(
+    value: &Value,
+    state: &mut CodexMetadataParseState,
+) -> Option<CodexMcpAttribution> {
+    let raw = value.as_str()?;
+    if raw.len() > 16 * 1024 {
+        state.truncated = true;
+        return None;
+    }
+    let parsed: Value = match serde_json::from_str(raw) {
+        Ok(value) => value,
+        Err(_) => {
+            state.malformed = true;
+            return None;
+        }
+    };
+    let status = match parsed.get("status").and_then(Value::as_str) {
+        Some(value @ ("none" | "complete" | "attribution_error")) => value,
+        _ => {
+            state.malformed = true;
+            return None;
+        }
+    };
+    let error_reason = parsed
+        .get("error_reason")
+        .and_then(Value::as_str)
+        .map(|reason| {
+            match reason {
+                "history_missing_checkpoint"
+                | "checkpoint_invalid"
+                | "checkpoint_source_conflict"
+                | "source_invalid"
+                | "recorder_poisoned"
+                | "restored_error_unknown"
+                | "payload_too_large"
+                | "serialization_failed" => reason,
+                _ => "unknown",
+            }
+            .to_owned()
+        });
+    // Count provenance records; never retain connector/tool names or source payloads.
+    let source_count = parsed
+        .get("sources")
+        .and_then(Value::as_array)
+        .map_or(0, |sources| sources.len() as u64);
+    Some(CodexMcpAttribution {
+        status: status.into(),
+        error_reason,
+        source_count,
+    })
+}
+
 fn parse_compaction(
     value: &Value,
     state: &mut CodexMetadataParseState,
@@ -2266,6 +2404,8 @@ fn is_known_canonical_key(key: &str) -> bool {
             | "window_number"
             | "context_window_id"
             | "request_kind"
+            | "history_initialization"
+            | "analytics_enabled"
             | "forked_from_thread_id"
             | "forked_from_ordinal_exclusive"
             | "parent_thread_id"
@@ -2401,6 +2541,9 @@ pub struct StreamTrace {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct WebSocketTrace {
+    /// Logical create requests, separate from the single connection event.
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub requests: Option<crate::responses_observation::ResponsesRequestSummary>,
     /// Actual downstream HTTP upgrade status; separate from the Provider handshake.
     #[serde(default, skip_serializing_if = "is_none")]
     pub client_handshake_status: Option<i64>,
@@ -2777,49 +2920,23 @@ impl RuntimeEvent {
 
     /// Return a normalized root/subagent/internal role.
     pub fn derived_agent_role(&self) -> &'static str {
-        if let Some(value) = self.agent_role.as_deref().or_else(|| {
-            self.codex_metadata
-                .is_none()
-                .then(|| {
-                    self.client_declared
-                        .as_ref()
-                        .and_then(|m| m.agent_role.as_deref())
-                })
-                .flatten()
+        if let Some(metadata) = &self.codex_metadata {
+            return codex_agent_role(metadata);
+        }
+        match self.agent_role.as_deref().or_else(|| {
+            self.client_declared
+                .as_ref()
+                .and_then(|m| m.agent_role.as_deref())
         }) {
-            return match value {
-                "root" => "root",
-                "subagent" => "subagent",
-                "guardian" => "guardian",
-                "review" => "review",
-                "memory" => "memory",
-                "title" => "title",
-                "automation" => "automation",
-                "system" => "system",
-                "ambient" => "ambient",
-                _ => "unknown",
-            };
-        }
-        let Some(metadata) = self.codex_metadata.as_ref() else {
-            return "unknown";
-        };
-        if let Some(kind) = metadata.subagent_kind.as_deref() {
-            return match kind {
-                "guardian" => "guardian",
-                "review" | "automated_review" => "review",
-                "memory_consolidation" => "memory",
-                "thread_spawn" | "collab_spawn" | "compact" | "subagent" => "subagent",
-                _ => "unknown",
-            };
-        }
-        match metadata.thread_source.as_deref() {
-            Some("system") => "system",
-            Some("thread_title" | "title") => "title",
+            Some("root") => "root",
+            Some("subagent") => "subagent",
+            Some("guardian") => "guardian",
+            Some("review") => "review",
+            Some("memory") => "memory",
+            Some("title") => "title",
             Some("automation") => "automation",
-            Some(value) if value.starts_with("ambient") => "ambient",
-            _ if metadata.is_subagent => "subagent",
-            Some("cli" | "tui" | "vscode" | "desktop" | "user") => "root",
-            _ if matches!(metadata.agent_name.as_deref(), Some("root" | "/root")) => "root",
+            Some("system") => "system",
+            Some("ambient") => "ambient",
             _ => "unknown",
         }
     }
@@ -3855,7 +3972,7 @@ mod tests {
     fn codex_guardian_header_is_internal_without_fabricating_project_or_thread_source() {
         let headers = vec![("x-openai-subagent".into(), "guardian".into())];
         let mut metadata = CodexMetadata::from_request(&headers, None).unwrap();
-        assert!(metadata.is_subagent);
+        assert!(!metadata.is_subagent);
         assert_eq!(metadata.thread_source, None);
         assert_eq!(
             codex_thread_class(Some(&metadata)),

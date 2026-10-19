@@ -35,7 +35,15 @@ pub enum SseTerminal {
 pub enum StreamRetryDecision {
     Pending,
     Forward,
-    Retry(String),
+    Retry(StreamRetryError),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct StreamRetryError {
+    pub code: String,
+    /// Only Retry-After values; the engine validates numeric/date hints using
+    /// the same parser and bounds as HTTP headers. No other headers are retained.
+    pub retry_after: Vec<String>,
 }
 
 #[derive(Default)]
@@ -89,8 +97,28 @@ impl ResponsesRetryProbe {
                     | "server_error"
                     | "internal_server_error"
                     | "overloaded_error"
-                    | "service_unavailable"),
-                ) => StreamRetryDecision::Retry(code.into()),
+                    | "service_unavailable"
+                    | "slow_down"
+                    | "server_is_overloaded"),
+                ) => {
+                    let retry_after = [error.get("headers"), value.get("headers")]
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_object)
+                        .flat_map(|headers| headers.iter())
+                        .filter(|(name, _)| name.eq_ignore_ascii_case("retry-after"))
+                        .filter_map(|(_, value)| {
+                            value
+                                .as_str()
+                                .map(ToString::to_string)
+                                .or_else(|| value.as_number().map(ToString::to_string))
+                        })
+                        .collect();
+                    StreamRetryDecision::Retry(StreamRetryError {
+                        code: code.into(),
+                        retry_after,
+                    })
+                }
                 _ => StreamRetryDecision::Forward,
             };
         }

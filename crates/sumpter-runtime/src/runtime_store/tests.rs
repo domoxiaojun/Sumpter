@@ -2882,6 +2882,98 @@ fn old_event_projection_requires_recreation_without_backfill() {
 }
 
 #[test]
+fn codex_roles_refresh_current_storage_without_deleting_history_or_double_counting() {
+    let dir = test_dir("codex-role-refresh");
+    let path = dir.join("runtime.sqlite3");
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    let mut value = event(
+        "memory-role",
+        KIND_CLIENT,
+        200,
+        RuntimeEventPhase::Completed,
+        Some(RuntimeEventOutcome::Succeeded),
+        event_now(),
+    );
+    value.client_kind = Some(ClientKind::Codex);
+    value.codex_metadata = CodexMetadata::from_request(
+        &[("x-openai-subagent".into(), "memory_consolidation".into())],
+        None,
+    );
+    value.agent_role = Some("subagent".into());
+    store
+        .enqueue(value.clone(), RuntimeCounters::default())
+        .unwrap();
+    value.id = "ws-counts".into();
+    value.stream_trace = Some(serde_json::from_value(json!({"websocketTrace":{"requests":{"counts":{"prewarm":1,"turn":2,"compaction":1},"controls":{"response.interrupt":1},"recent":[],"dropped":0,"unobservedFrames":0,"unassociatedEvents":0}}})).unwrap());
+    store
+        .enqueue(value.clone(), RuntimeCounters::default())
+        .unwrap();
+    value.id = "ws-old".into();
+    value.stream_trace =
+        Some(serde_json::from_value(json!({"websocketTrace":{"stage":"relay"}})).unwrap());
+    store.enqueue(value, RuntimeCounters::default()).unwrap();
+    store.flush().unwrap();
+    drop(store);
+    let connection = Connection::open(&path).unwrap();
+    connection.execute_batch("DELETE FROM runtime_meta WHERE key='codex_role_revision'; UPDATE runtime_events SET agent_role='subagent',payload_json=json_set(payload_json,'$.agentRole','subagent');").unwrap();
+    drop(connection);
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    let analytics = store.analytics("all").unwrap();
+    assert_eq!(analytics["clientRequests"], 3);
+    assert_eq!(analytics["codexRequests"]["counts"]["prewarm"], 1);
+    assert_eq!(analytics["codexRequests"]["counts"]["turn"], 2);
+    assert_eq!(analytics["codexRequests"]["counts"]["compaction"], 1);
+    assert_eq!(analytics["codexRequests"]["counts"]["unknown"], 1);
+    assert_eq!(
+        analytics["codexRequests"]["unobservedWebsocketConnections"],
+        1
+    );
+    assert_eq!(
+        analytics["agentRoles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["name"] == "memory")
+            .unwrap()["attempts"],
+        3
+    );
+    let connection = Connection::open(&path).unwrap();
+    let (role,payload_role):(String,String) = connection.query_row("SELECT agent_role,json_extract(payload_json,'$.agentRole') FROM runtime_events WHERE event_id='memory-role'",crate::database::params![],|row|Ok((row.get(0)?,row.get(1)?))).unwrap();
+    assert_eq!((role.as_str(), payload_role.as_str()), ("memory", "memory"));
+    assert_eq!(store.summary().storage.event_count, 3);
+    connection
+        .execute(
+            "DELETE FROM runtime_events WHERE event_id='ws-counts'",
+            crate::database::params![],
+        )
+        .unwrap();
+    let remaining: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM runtime_codex_requests",
+            crate::database::params![],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(remaining, 2);
+    drop(connection);
+    drop(store);
+    // Missing auxiliary data is recoverable without resetting event history.
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch("DROP TABLE runtime_codex_requests;")
+        .unwrap();
+    drop(connection);
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    assert_eq!(store.summary().storage.event_count, 2);
+    assert_eq!(
+        store.analytics("all").unwrap()["codexRequests"]["unobservedWebsocketConnections"],
+        1
+    );
+    drop(store);
+    remove_test_dir(&dir);
+}
+
+#[test]
 fn resource_requests_are_not_attributed_to_unidentified_project() {
     let mut value = event(
         "wire-resource",

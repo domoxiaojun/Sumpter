@@ -519,13 +519,13 @@ test('stream trace includes terminal state and completed idle time', () => {
 
 test('Codex metadata summary and full JSON tolerate legacy wire forms', () => {
   const event = { id: 'codex', codexMetadata: { isSubagent: true, subagentKind: 'thread_spawn', agentName: '/root/worker', threadID: 'thr-1', parentThreadID: 'parent-1', turnID: 'turn-2', requestKind: 'turn', workspaces: { '/w': { kind: 'local' } } } };
-  assert.equal(codexMetadataSummary(event), '子代理 thread_spawn · 代理路径 /root/worker · 请求 turn · 线程 thr-1 · 回合 turn-2');
+  assert.equal(codexMetadataSummary(event), '子代理 thread_spawn · 代理路径 /root/worker · 正式回合 · 线程 thr-1 · 回合 turn-2');
   assert.equal(codexAgentRoleLabel(event), '子代理 · thread_spawn');
   assert.equal(codexAgentPath(event), '/root/worker');
   assert.equal(eventCodexMetadata({ codex_metadata: { thread_id: 'legacy' } }).thread_id, 'legacy');
   assert.match(codexMetadataJSON(event), /"workspaces"/);
   assert.doesNotThrow(() => codexMetadataSummary({ id: 'old' }));
-  assert.equal(codexMetadataSummary({ id: 'old', codex_metadata: { thread_id: 'legacy' } }), '主代理 · 线程 legacy');
+  assert.equal(codexMetadataSummary({ id: 'old', codex_metadata: { thread_id: 'legacy' } }), '未发现子代理证据 · 线程 legacy');
 });
 
 test('Grok metadata summary exposes sampling headers and empty Codex OTel is not identity', () => {
@@ -581,7 +581,7 @@ test('Codex workspace context prefers local project names and keeps remote as se
     },
   ]);
   assert.equal(codexWorkspaceSummary(metadata), 'automode-proxy · 有未提交改动 · 提交 12345678；local-only · 工作区干净');
-  assert.equal(codexAgentRoleLabel(metadata), '主代理');
+  assert.equal(codexAgentRoleLabel(metadata), '未发现子代理证据');
 });
 
 test('runtime event UI keeps HTTP 200 separate from a failed final outcome', () => {
@@ -837,7 +837,7 @@ test('runtime mock covers main and subagent Codex metadata with nested wire fiel
   const subagent = (await api.getRuntimeEvent(subagentItem.id)).event;
   assert.equal(main.codexMetadata.isSubagent, false);
   assert.equal(main.codexMetadata.agentName, '/root');
-  assert.equal(codexMetadataSummary(main), '主代理 · 代理路径 /root · 请求 turn · 线程 thread-main-0001 · 回合 turn-main-0041');
+  assert.equal(codexMetadataSummary(main), '未发现子代理证据 · 代理路径 /root · 正式回合 · 线程 thread-main-0001 · 回合 turn-main-0041');
   assert.equal(subagent.codexMetadata.isSubagent, true);
   assert.equal(subagent.codexMetadata.agentName, '/root/linux_final_tests');
   assert.equal(subagent.codexMetadata.originator, 'codex_cli_rs');

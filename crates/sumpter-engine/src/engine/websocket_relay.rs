@@ -80,8 +80,7 @@ pub(super) struct WebSocketRelayCounters {
     pub(super) transport_error_kind: Mutex<Option<String>>,
     pub(super) last_event_type: Mutex<Option<String>>,
     pub(super) idle_timeout_ms: Mutex<Option<i64>>,
-    pub(super) first_client_text_seen: AtomicBool,
-    pub(super) first_client_codex_metadata: Mutex<Option<CodexMetadata>>,
+    pub(super) requests: Mutex<sumpter_core::responses_observation::ResponsesRequestObserver>,
 }
 
 pub(super) struct WebSocketRelayMetrics {
@@ -98,20 +97,34 @@ pub(super) struct WebSocketRelayMetrics {
     pub(super) idle_timeout_ms: Option<i64>,
     pub(super) abnormal_close: bool,
     pub(super) failed: bool,
-    pub(super) first_client_codex_metadata: Option<CodexMetadata>,
+    pub(super) latest_client_codex_metadata: Option<CodexMetadata>,
+    pub(super) requests: sumpter_core::responses_observation::ResponsesRequestSummary,
     pub(super) duration_ms: i64,
 }
 
 pub(super) async fn send_websocket_json_error(
     socket: &mut WebSocket,
+    status: u16,
     error_type: &str,
     message: &str,
+    retry_after_seconds: Option<f64>,
 ) -> Result<(), axum::Error> {
-    let payload = serde_json::to_string(&json!({
+    let status = http::StatusCode::from_u16(status)
+        .ok()
+        .filter(|status| status.is_client_error() || status.is_server_error())
+        .unwrap_or(http::StatusCode::BAD_GATEWAY);
+    let mut event = json!({
         "type": "error",
-        "error": {"type": error_type, "message": message}
-    }))
-    .unwrap_or_else(|_| "{\"type\":\"error\",\"error\":{\"type\":\"server_error\"}}".into());
+        "status": status.as_u16(),
+        "error": {"type": error_type, "code": error_type, "message": message}
+    });
+    if let Some(seconds) =
+        retry_after_seconds.filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+    {
+        let delay = seconds.ceil().min(super::dispatch::MAX_RETRY_AFTER_SECS) as u64;
+        event["error"]["headers"] = json!({"retry-after": delay.to_string()});
+    }
+    let payload = serde_json::to_string(&event).expect("serializable websocket error");
     socket.send(WebSocketMessage::Text(payload.into())).await
 }
 
@@ -232,7 +245,7 @@ pub(super) async fn relay_native_websocket(
     // Seed the first frame before starting readers, but do NOT await its network
     // write: upstream Ping/Close must remain readable even during this first send.
     if let Some(message) = initial_message {
-        counters.observe_first_client_text(&message);
+        counters.observe_client_request(&message);
         upstream_queue
             .data
             .try_send(RelayData::Frame(message))
@@ -356,7 +369,7 @@ async fn relay_reader<R>(
             ),
         );
         if matches!(peer, Peer::Client) {
-            counters.observe_first_client_text(&message);
+            counters.observe_client_request(&message);
         } else {
             counters.observe_upstream_event(&message);
         }
@@ -466,7 +479,11 @@ async fn relay_writer<S>(
             Peer::Upstream => (&counters.bytes_sent, &counters.client_message_count),
         };
         byte_counter.fetch_add(bytes, Ordering::Relaxed);
-        message_counter.fetch_add(1, Ordering::Relaxed);
+        // Control heartbeats are transport activity, not business messages.
+        // Retain the existing Close accounting contract.
+        if is_business || is_close {
+            message_counter.fetch_add(1, Ordering::Relaxed);
+        }
         if is_close {
             cancellation.cancel();
             return;
@@ -494,16 +511,20 @@ fn tungstenite_to_axum(
 }
 
 impl WebSocketRelayCounters {
-    pub(super) fn observe_first_client_text(&self, message: &WebSocketMessage) {
-        if !matches!(message, WebSocketMessage::Text(_))
-            || self.first_client_text_seen.swap(true, Ordering::AcqRel)
-        {
-            return;
-        }
-        let Some(metadata) = websocket_message_codex_metadata(message) else {
+    pub(super) fn observe_client_request(&self, message: &WebSocketMessage) {
+        let WebSocketMessage::Text(text) = message else {
             return;
         };
-        *self.first_client_codex_metadata.lock().unwrap() = Some(metadata);
+        let mut requests = self.requests.lock().unwrap();
+        if text.len() > MAX_WEBSOCKET_METADATA_FRAME_BYTES {
+            requests.unobserved();
+            return;
+        }
+        if let Ok(value) = serde_json::from_str::<Value>(text) {
+            requests.client(&value, websocket_message_codex_metadata(message));
+        } else {
+            requests.unobserved();
+        }
     }
 
     fn peer_closed(&self, peer: Peer) -> bool {
@@ -548,6 +569,7 @@ impl WebSocketRelayCounters {
         let Ok(value) = serde_json::from_str::<Value>(text) else {
             return;
         };
+        self.requests.lock().unwrap().upstream(&value);
         // Never store arbitrary type strings: a peer could place prompt/secret
         // text there. Unknown/oversize events clear the previous type.
         let event = value
@@ -608,6 +630,7 @@ impl WebSocketRelayCounters {
     }
 
     pub(super) fn snapshot(&self, started: Instant) -> WebSocketRelayMetrics {
+        let requests = self.requests.lock().unwrap();
         WebSocketRelayMetrics {
             bytes_sent: self.bytes_sent.load(Ordering::Relaxed),
             bytes_received: self.bytes_received.load(Ordering::Relaxed),
@@ -622,7 +645,8 @@ impl WebSocketRelayCounters {
             idle_timeout_ms: *self.idle_timeout_ms.lock().unwrap(),
             abnormal_close: self.abnormal_close.load(Ordering::Acquire),
             failed: self.failed.load(Ordering::Acquire),
-            first_client_codex_metadata: self.first_client_codex_metadata.lock().unwrap().clone(),
+            latest_client_codex_metadata: requests.latest_metadata.clone(),
+            requests: requests.summary(),
             duration_ms: started.elapsed().as_millis().min(i64::MAX as u128) as i64,
         }
     }

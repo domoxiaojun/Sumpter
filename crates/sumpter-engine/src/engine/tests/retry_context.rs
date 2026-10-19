@@ -65,10 +65,32 @@ fn retry_backoff_is_exponential_and_capped_with_retry_after() {
     assert_seconds(retry_backoff_delay(2, None), 0.85);
     assert_seconds(retry_backoff_delay(3, None), 1.445);
     assert_seconds(retry_backoff_delay(1, Some(7.0)), 7.0);
-    assert_seconds(retry_backoff_delay(1, Some(45.0)), 30.0);
+    assert_seconds(retry_backoff_delay(1, Some(30.0)), 30.0);
+    assert_seconds(retry_backoff_delay(1, Some(45.0)), 45.0);
+    assert_seconds(retry_backoff_delay(1, Some(300.0)), 300.0);
+    assert_seconds(retry_backoff_delay(1, Some(600.0)), 300.0);
     assert_seconds(retry_backoff_delay(100, None), 30.0);
     assert_seconds(retry_backoff_delay(1, Some(-1.0)), 0.5);
     assert_seconds(retry_backoff_delay(1, Some(f64::NAN)), 0.5);
+}
+
+#[test]
+fn retry_after_numeric_and_dates_share_the_five_minute_bound() {
+    for (value, expected) in [("30", 30.0), ("300", 300.0), ("1000000", 300.0)] {
+        assert_eq!(
+            retry_after_seconds(&[("retry-after".into(), value.into())]),
+            Some(expected)
+        );
+    }
+    let future = httpdate::fmt_http_date(std::time::SystemTime::now() + Duration::from_secs(900));
+    assert_eq!(
+        retry_after_seconds(&[("Retry-After".into(), future)]),
+        Some(300.0)
+    );
+    assert_eq!(
+        retry_after_seconds(&[("Retry-After".into(), "NaN".into())]),
+        None
+    );
 }
 
 #[test]

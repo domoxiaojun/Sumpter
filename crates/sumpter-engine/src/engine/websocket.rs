@@ -485,10 +485,34 @@ impl Engine {
         connection: &ConnectedWebSocket,
         metrics: &WebSocketRelayMetrics,
     ) {
-        let context = websocket_context_with_first_frame(
-            context,
-            metrics.first_client_codex_metadata.as_ref(),
+        let mut connection_context = context.clone();
+        if !metrics.requests.counts.is_empty() {
+            connection_context.codex_metadata =
+                context
+                    .codex_metadata
+                    .as_ref()
+                    .map(|m| sumpter_core::events::CodexMetadata {
+                        originator: m.originator.clone(),
+                        installation_id: m.installation_id.clone(),
+                        source_installation_id: m.source_installation_id.clone(),
+                        subagent_header: m.subagent_header.clone(),
+                        ..Default::default()
+                    });
+        }
+        let mut context = websocket_context_with_first_frame(
+            &connection_context,
+            metrics.latest_client_codex_metadata.as_ref(),
         );
+        // Handshake/first-frame metadata is connection context, never a fallback
+        // for a later logical request's purpose or turn identity.
+        if !metrics.requests.counts.is_empty()
+            && let Some(metadata) = context.codex_metadata.as_mut()
+        {
+            let latest = metrics.latest_client_codex_metadata.as_ref();
+            metadata.request_kind = latest.and_then(|m| m.request_kind.clone());
+            metadata.turn_id = latest.and_then(|m| m.turn_id.clone());
+            metadata.compaction = latest.and_then(|m| m.compaction.clone());
+        }
         let status = 101_i64;
         let mut trace = websocket_trace(
             101,
@@ -510,6 +534,9 @@ impl Engine {
             trace.transport_error_kind = metrics.transport_error_kind.clone();
             trace.last_event_type = metrics.last_event_type.clone();
             trace.idle_timeout_ms = metrics.idle_timeout_ms;
+            if context.route_intent == "responses_websocket" {
+                trace.requests = Some(metrics.requests.clone());
+            }
         }
         let cancelled = !metrics.failed && metrics.closed_by.as_deref() == Some("client");
         let failure = (metrics.failed || cancelled).then(|| FailureInfo {
@@ -691,8 +718,11 @@ impl Engine {
                 connection,
                 context,
             }),
-            Err(error) => {
+            Err(mut error) => {
                 self.record_websocket_prepare_failure(&context, &error);
+                if !self.config().retry.pass_through_retry_delay {
+                    error.retry_after_seconds = None;
+                }
                 Err(error)
             }
         }
@@ -848,12 +878,17 @@ impl Engine {
             && context.route_intent == "responses_websocket"
             && context.model.is_empty()
             && context.first_message_wait_ms.is_none()
-            && is_explicit_guardian(context)
+            && (is_explicit_guardian(context)
+                || super::websocket_connections::is_explicit_prewarm(context))
             && (normal_close || token == "client_eof_without_close");
         let detail = if unused_guardian {
             kind = RuntimeFailureKind::ClientCancelled;
             cancelled = true;
-            "websocket_unused_guardian_connection_closed"
+            if is_explicit_guardian(context) {
+                "websocket_unused_guardian_connection_closed"
+            } else {
+                "websocket_unused_prewarm_connection_closed"
+            }
         } else {
             token
         };
@@ -932,12 +967,12 @@ impl Engine {
         self.capture_websocket_start(&context);
         let path = path_without_query(&path_and_query);
         if let Err(error) = validate_realtime_call_target(&path_and_query) {
-            let (_, code, message) = realtime_call_path_error(error);
+            let (status, code, message) = realtime_call_path_error(error);
             self.record_websocket_first_frame_event(&context, &FirstWebSocketFrame::Rejected(code));
             tokio::select! {
                 biased;
                 _ = shutdown.cancelled() => {}
-                _ = send_websocket_json_error(&mut socket, code, message) => {}
+                _ = send_websocket_json_error(&mut socket, status.as_u16(), code, message, None) => {}
             }
             return;
         }
@@ -991,8 +1026,8 @@ impl Engine {
                         tokio::select! {
                             biased;
                             _ = shutdown.cancelled() => {}
-                            _ = send_websocket_json_error(&mut socket, "invalid_request",
-                                "first websocket message must be a JSON object") => {}
+                            _ = send_websocket_json_error(&mut socket, 400, "invalid_request",
+                                "first websocket message must be a JSON object", None) => {}
                         }
                         return;
                     }
@@ -1010,7 +1045,7 @@ impl Engine {
                         tokio::select! {
                             biased;
                             _ = shutdown.cancelled() => {}
-                            _ = send_websocket_json_error(&mut socket, "invalid_request", token) => {}
+                            _ = send_websocket_json_error(&mut socket, 400, "invalid_request", token, None) => {}
                         }
                     }
                     return;
@@ -1029,8 +1064,8 @@ impl Engine {
             tokio::select! {
                 biased;
                 _ = shutdown.cancelled() => {}
-                _ = send_websocket_json_error(&mut socket, "invalid_request",
-                    "websocket model is required (query model or first response.create frame)") => {}
+                _ = send_websocket_json_error(&mut socket, 400, "invalid_request",
+                    "websocket model is required (query model or first response.create frame)", None) => {}
             }
             return;
         };
@@ -1056,7 +1091,8 @@ impl Engine {
                 tokio::select! {
                     biased;
                     _ = shutdown.cancelled() => {}
-                    _ = send_websocket_json_error(&mut socket, error.error_code(), error.message()) => {}
+                    _ = send_websocket_json_error(&mut socket, error.status_code(), error.error_code(), error.message(),
+                        self.config().retry.pass_through_retry_delay.then_some(error.retry_after_seconds).flatten()) => {}
                 }
                 return;
             }

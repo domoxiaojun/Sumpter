@@ -13,7 +13,85 @@ fn snapshot(endpoint: &Endpoint) -> ProviderCatalogSnapshot {
         attempted_at: "1".into(),
         updated_at: "1".into(),
         error: None,
+        route_capabilities: Default::default(),
     }
+}
+
+#[tokio::test]
+async fn route_capability_snapshots_are_isolated_and_invalidated_by_endpoint_changes() {
+    use sumpter_engine::model_catalog::RouteCapabilities;
+    let mut config = two_endpoint_config();
+    config.endpoints.truncate(1);
+    config.endpoints[0].protocol = EndpointProtocolMode::OpenAIResponses;
+    config.endpoints[0].mappings[0].client_pattern = "claude-opus-5".into();
+    let config = config.normalized();
+    let engine = engine_with(config.clone(), FakeTransport::new());
+    let mut discovery = snapshot(&config.endpoints[0]);
+    let mapping = config.endpoints[0].mapping_for("claude-opus-5").unwrap();
+    discovery.route_capabilities.insert(
+        mapping.upstream_model_for("claude-opus-5"),
+        RouteCapabilities {
+            supports_search_tool: Some(true),
+            supports_web_search: Some(true),
+            prefer_websockets: Some(true),
+            service_tiers: Some(vec![]),
+        },
+    );
+    engine
+        .apply_provider_catalog_snapshot(&discovery)
+        .await
+        .unwrap();
+    let render = |engine: Engine| async move {
+        let response = engine
+            .handle_request(
+                loopback(),
+                "GET",
+                "/v1/models?client_version=cpa",
+                vec![],
+                Bytes::new(),
+            )
+            .await;
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice::<Value>(&bytes).unwrap()["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|model| model["slug"] == "claude-opus-5")
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(render(engine.clone()).await["supports_search_tool"], true);
+    let isolated = engine_with(config.clone(), FakeTransport::new());
+    assert_eq!(render(isolated).await["supports_search_tool"], false);
+    let mut failed = discovery.clone();
+    failed.error = Some("synthetic discovery failure".into());
+    engine
+        .apply_provider_catalog_snapshot(&failed)
+        .await
+        .unwrap();
+    assert_eq!(render(engine.clone()).await["supports_search_tool"], false);
+    engine
+        .apply_provider_catalog_snapshot(&discovery)
+        .await
+        .unwrap();
+    assert_eq!(render(engine.clone()).await["supports_search_tool"], true);
+    let mut changed = config.clone();
+    changed.endpoints[0].api_key = "rotated-synthetic".into();
+    engine.replace_config(changed);
+    assert_eq!(render(engine.clone()).await["supports_search_tool"], false);
+    assert_eq!(
+        engine
+            .apply_provider_catalog_snapshot(&discovery)
+            .await
+            .unwrap(),
+        CatalogApplyOutcome::Stale
+    );
+    assert_eq!(
+        render(engine.clone()).await["cpa_capabilities"]["web_search"],
+        false
+    );
 }
 
 #[tokio::test]

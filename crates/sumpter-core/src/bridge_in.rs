@@ -421,6 +421,7 @@ pub fn check_chat_to_anthropic(body: &Value) -> Result<(), TranslationError> {
 /// `parallel_tool_calls` 放行;带正文或签名的历史 reasoning、`include`、专用工具
 /// 类型等无法保真的项拒绝,不静默丢弃。
 pub fn check_responses_to_anthropic(body: &Value) -> Result<(), TranslationError> {
+    check_responses_native_only(body)?;
     let object = body
         .as_object()
         .ok_or_else(|| TranslationError::InvalidInput("body is not an object".into()))?;
@@ -584,6 +585,87 @@ pub fn check_responses_to_anthropic(body: &Value) -> Result<(), TranslationError
             .ok_or_else(|| TranslationError::InvalidInput("include must be an array".into()))?;
         if !items.is_empty() {
             return Err(TranslationError::UnsupportedField("include".into()));
+        }
+    }
+    Ok(())
+}
+
+/// Check only protocol control fields, never descend into user text, tool
+/// arguments or schemas. Returned paths are fixed field names plus indices.
+pub fn check_responses_native_only(body: &Value) -> Result<(), TranslationError> {
+    for field in [
+        "client_metadata",
+        "compaction_trigger",
+        "incremental_tools",
+        "context_management",
+        "generate",
+        "stream_id",
+        "previous_response_id",
+        "conversation",
+    ] {
+        if body.get(field).is_some_and(|value| !value.is_null()) {
+            return Err(TranslationError::UnsupportedField(field.into()));
+        }
+    }
+    if body.get("background").and_then(Value::as_bool) == Some(true) {
+        return Err(TranslationError::UnsupportedField("background".into()));
+    }
+    if body.get("include").is_some_and(|value| {
+        !value.is_null() && value.as_array().is_none_or(|values| !values.is_empty())
+    }) {
+        return Err(TranslationError::UnsupportedField("include".into()));
+    }
+    if body
+        .get("encrypted_content")
+        .is_some_and(|value| !value.is_null())
+    {
+        return Err(TranslationError::UnsupportedField(
+            "encrypted_content".into(),
+        ));
+    }
+    if let Some(items) = body.get("input").and_then(Value::as_array) {
+        for (index, item) in items.iter().enumerate() {
+            if let Some(
+                kind @ ("compaction_trigger"
+                | "compaction"
+                | "tool_addition"
+                | "tool_removal"
+                | "instructions_update"),
+            ) = item.get("type").and_then(Value::as_str)
+            {
+                return Err(TranslationError::UnsupportedField(format!(
+                    "input[{index}].{kind}"
+                )));
+            }
+            if let Some(encrypted) = item
+                .get("encrypted_content")
+                .filter(|value| !value.is_null())
+            {
+                let own_reasoning = item.get("type").and_then(Value::as_str) == Some("reasoning")
+                    && encrypted
+                        .as_str()
+                        .and_then(decode_reasoning_envelope)
+                        .is_some();
+                if !own_reasoning {
+                    return Err(TranslationError::UnsupportedField(format!(
+                        "input[{index}].encrypted_content"
+                    )));
+                }
+            }
+            for field in ["content", "output"] {
+                if let Some(parts) = item.get(field).and_then(Value::as_array) {
+                    for (part, content) in parts.iter().enumerate() {
+                        if content
+                            .get("encrypted_content")
+                            .is_some_and(|value| !value.is_null())
+                        {
+                            return Err(TranslationError::UnsupportedField(format!(
+                                "input[{index}].{field}[{part}].encrypted_content"
+                            )));
+                        }
+                    }
+                }
+            }
         }
     }
     Ok(())
@@ -1711,6 +1793,9 @@ impl ResponsesClientBridge {
             "model": self.model,
             "output": output,
         });
+        if status == "incomplete" {
+            response["incomplete_details"] = json!({"reason": "max_output_tokens"});
+        }
         if with_usage {
             response["usage"] = json!({
                 "input_tokens": self.input_tokens,
@@ -2020,7 +2105,11 @@ impl ResponsesClientBridge {
                 }
             }
             "message_stop" => {
-                self.terminal = BridgeTerminal::Completed;
+                self.terminal = if self.stop_reason == "max_tokens" {
+                    BridgeTerminal::Incomplete("max_output_tokens".into())
+                } else {
+                    BridgeTerminal::Completed
+                };
                 out.extend(self.emit_tail());
             }
             _ => {}
@@ -2028,7 +2117,7 @@ impl ResponsesClientBridge {
         out
     }
 
-    /// 收尾:stream 出 response.completed;非流式出完整 response JSON。
+    /// 收尾:stream 出与状态一致的 Responses 终态;非流式出完整 response JSON。
     fn emit_tail(&mut self) -> Vec<u8> {
         if self.finished {
             return Vec::new();
@@ -2048,7 +2137,7 @@ impl ResponsesClientBridge {
         let response = self.response_json(status, output, true);
         if self.stream {
             responses_frame(&json!({
-                "type": "response.completed",
+                "type": if status == "incomplete" { "response.incomplete" } else { "response.completed" },
                 "response": response,
             }))
         } else {

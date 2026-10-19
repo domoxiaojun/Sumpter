@@ -7,6 +7,7 @@ pub mod query_executor;
 pub mod runtime_query;
 pub mod runtime_store;
 
+mod codex_observation;
 mod database;
 mod entities;
 mod storage_metrics;

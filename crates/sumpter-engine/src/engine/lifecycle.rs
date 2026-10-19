@@ -110,6 +110,7 @@ impl Engine {
                 catalog.updated_at = snapshot.updated_at.clone();
             }
             if endpoint.catalog.as_ref() == Some(&catalog) {
+                engine.publish_endpoint_capabilities(&snapshot);
                 return Ok(CatalogApplyOutcome::Unchanged);
             }
             let model_count = catalog.models.len();
@@ -125,6 +126,7 @@ impl Engine {
                 engine.set_last_error(outcome.durability_warning());
             }
             let (generation, _) = engine.replace_config(next);
+            engine.publish_endpoint_capabilities(&snapshot);
             let _ = engine
                 .inner
                 .notices
@@ -137,6 +139,38 @@ impl Engine {
         })
         .await
         .map_err(|error| format!("模型目录写入任务失败: {error}"))?
+    }
+
+    pub fn publish_endpoint_capabilities(&self, snapshot: &ProviderCatalogSnapshot) {
+        let config = self.config();
+        if !config
+            .endpoint(&snapshot.endpoint_id)
+            .is_some_and(|endpoint| {
+                endpoint.enabled
+                    && crate::model_catalog::endpoint_fingerprint(endpoint)
+                        == snapshot.endpoint_fingerprint
+            })
+        {
+            return;
+        }
+        let mut ledger = self.inner.endpoint_capabilities.write().unwrap();
+        ledger.retain(|id, (fingerprint, _)| {
+            config.endpoint(id).is_some_and(|endpoint| {
+                endpoint.enabled
+                    && crate::model_catalog::endpoint_fingerprint(endpoint) == *fingerprint
+            })
+        });
+        ledger.insert(
+            snapshot.endpoint_id.clone(),
+            (
+                snapshot.endpoint_fingerprint.clone(),
+                if snapshot.error.is_none() {
+                    snapshot.route_capabilities.clone()
+                } else {
+                    Default::default()
+                },
+            ),
+        );
     }
 
     /// session affinity 的后台防抖任务。SQLite 自己的专用 worker 已按

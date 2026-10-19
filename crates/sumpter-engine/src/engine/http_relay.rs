@@ -686,6 +686,7 @@ impl Engine {
                     || is_hop_by_hop(name)
                     || name.eq_ignore_ascii_case("content-length")
                     || name.eq_ignore_ascii_case("x-sumpter-request-id")
+                    || name.eq_ignore_ascii_case("retry-after")
                 {
                     continue;
                 }
@@ -695,6 +696,11 @@ impl Engine {
                 ) {
                     builder = builder.header(n, v);
                 }
+            }
+            if config.retry.pass_through_retry_delay
+                && let Some(seconds) = response_retry_after
+            {
+                builder = builder.header("retry-after", (seconds.ceil() as u64).to_string());
             }
         }
         builder

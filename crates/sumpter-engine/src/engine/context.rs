@@ -81,6 +81,9 @@ pub(super) fn merge_codex_metadata(
     fill!(window_number);
     fill!(context_window_id);
     fill!(request_kind);
+    fill!(history_initialization);
+    fill!(analytics_enabled);
+    fill!(mcp_attribution);
     fill!(forked_from_thread_id);
     fill!(forked_from_ordinal_exclusive);
     fill!(parent_thread_id);

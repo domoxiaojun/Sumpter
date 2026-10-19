@@ -17,6 +17,125 @@ fn codex_model_reasoning_levels_follow_client_version() {
     assert!(supports_extended_reasoning_levels("0"));
 }
 
+#[test]
+fn route_capability_ledger_uses_effective_routes_and_never_template_guesses() {
+    use crate::engine::catalog::local_models_json_with_capabilities;
+    use crate::model_catalog::{EndpointCapabilities, RouteCapabilities, endpoint_fingerprint};
+    let mut config: AppConfig = serde_json::from_value(json!({"schemaVersion":7, "endpoints":[
+        {"id":"codex","name":"Codex","baseURL":"https://codex.invalid","protocol":"openai-responses","enabled":true,
+         "mappings":[{"clientPattern":"public", "upstreamModel":"gpt-6.1-sol"}]},
+        {"id":"compatible","name":"Compatible","baseURL":"https://compat.invalid","protocol":"openai-responses","enabled":true,
+         "mappings":[{"clientPattern":"public", "upstreamModel":"gpt-6.1-sol"}]}
+    ]})).unwrap();
+    config = config.normalized();
+    let mut ledger = EndpointCapabilities::new();
+    let caps = RouteCapabilities {
+        supports_search_tool: Some(true),
+        supports_web_search: Some(false),
+        prefer_websockets: Some(true),
+        service_tiers: Some(vec!["priority".into()]),
+    };
+    let render = |config: &AppConfig, ledger: &EndpointCapabilities, version: &str| {
+        local_models_json_with_capabilities(
+            config,
+            "/v1/models",
+            Some(&format!("client_version={version}")),
+            &[],
+            ledger,
+        )
+        .unwrap()["models"][0]
+            .clone()
+    };
+    ledger.insert(
+        "codex".into(),
+        (
+            endpoint_fingerprint(&config.endpoints[0]),
+            [("gpt-6.1-sol".into(), caps.clone())].into(),
+        ),
+    );
+    let unknown = render(&config, &ledger, "cpa");
+    assert_eq!(unknown["supports_search_tool"], false);
+    assert_eq!(unknown["prefer_websockets"], false);
+    assert_eq!(unknown["service_tiers"], json!([]));
+    ledger.insert(
+        "compatible".into(),
+        (
+            endpoint_fingerprint(&config.endpoints[1]),
+            [("gpt-6.1-sol".into(), caps.clone())].into(),
+        ),
+    );
+    let known = render(&config, &ledger, "cpa");
+    assert_eq!(known["supports_search_tool"], true);
+    assert_eq!(known["prefer_websockets"], true);
+    assert_eq!(known["cpa_capabilities"]["web_search"], false);
+    assert_eq!(known["service_tiers"][0]["id"], "priority");
+    assert!(
+        render(&config, &ledger, "0.163.0")
+            .get("cpa_capabilities")
+            .is_none()
+    );
+    for (_, models) in ledger.values_mut() {
+        let caps = models.get_mut("gpt-6.1-sol").unwrap();
+        caps.supports_search_tool = Some(false);
+        caps.supports_web_search = Some(true);
+    }
+    let web = render(&config, &ledger, "cpa");
+    assert_eq!(web["supports_search_tool"], false);
+    assert_eq!(web["cpa_capabilities"]["web_search"], true);
+    // A translated endpoint is not a failover candidate while a native one
+    // exists. A disabled endpoint likewise cannot dilute the native claims.
+    let mut translated = config.clone();
+    translated.endpoints[1].protocol = sumpter_core::config::EndpointProtocolMode::Anthropic;
+    assert_eq!(
+        render(&translated, &ledger, "cpa")["cpa_capabilities"]["web_search"],
+        true
+    );
+    translated.endpoints[0].enabled = false;
+    assert_eq!(
+        render(&translated, &ledger, "cpa")["cpa_capabilities"]["web_search"],
+        false
+    );
+    let mut single = config.clone();
+    single.endpoints.truncate(1);
+    // Explicitly discovered service tiers also work for custom models without
+    // a matching official template.
+    single.endpoints[0].mappings[0].upstream_model = "synthetic-custom".into();
+    ledger
+        .get_mut("codex")
+        .unwrap()
+        .1
+        .insert("synthetic-custom".into(), caps);
+    assert_eq!(
+        render(&single, &ledger, "cpa")["service_tiers"][0]["id"],
+        "priority"
+    );
+    for (protocol, supported) in [
+        (sumpter_core::config::EndpointProtocolMode::Auto, true),
+        (
+            sumpter_core::config::EndpointProtocolMode::OpenAIResponses,
+            true,
+        ),
+        (sumpter_core::config::EndpointProtocolMode::OpenAI, false),
+    ] {
+        single.endpoints[0].protocol = protocol;
+        ledger.get_mut("codex").unwrap().0 = endpoint_fingerprint(&single.endpoints[0]);
+        assert_eq!(
+            render(&single, &ledger, "cpa")["supports_search_tool"],
+            supported
+        );
+    }
+    config.endpoints[1].api_key = "rotated-synthetic".into();
+    assert_eq!(
+        render(&config, &ledger, "cpa")["cpa_capabilities"]["web_search"],
+        false
+    );
+    let ordinary =
+        local_models_json_with_capabilities(&config, "/v1/models", None, &[], &ledger).unwrap();
+    assert_eq!(ordinary["data"].as_array().unwrap().len(), 1);
+    assert!(ordinary["data"][0].get("cpa_capabilities").is_none());
+    assert!(ordinary["data"][0].get("supports_search_tool").is_none());
+}
+
 fn catalog_config() -> AppConfig {
     let _ = crate::model_catalog::replace_provider_metadata(&json!({
         "openai": [
@@ -79,9 +198,9 @@ fn codex_catalog_resolves_upstream_templates_without_expanding_authorized_models
         let models = body["models"].as_array().unwrap();
         assert_eq!(models.len(), 1);
         assert_eq!(models[0]["slug"], "coding-alias");
-        assert_eq!(models[0]["context_window"], 272000);
+        assert_eq!(models[0]["context_window"], 500000);
         assert_eq!(models[0]["max_context_window"], 872000);
-        assert_eq!(models[0]["prefer_websockets"], true);
+        assert_eq!(models[0]["prefer_websockets"], false);
         assert!(
             serde_json::to_vec(&body).unwrap().len()
                 <= crate::model_catalog::MAX_CODEX_CATALOG_BYTES

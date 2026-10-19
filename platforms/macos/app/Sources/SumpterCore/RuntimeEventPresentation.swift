@@ -249,19 +249,26 @@ public enum RuntimeEventPresentation {
     /// Compact list label, retaining authoritative evidence for subagent rows.
     public static func codexSummary(_ metadata: CodexMetadata?) -> String? {
         guard let metadata, metadata.hasRequestIdentity else { return nil }
-        if metadata.threadSource == "guardian_review"
-            || metadata.subagentKind == "guardian" || metadata.subagentHeader == "guardian" {
-            return ["Codex · Guardian 安全审查", metadata.agentName].compactMap { $0 }.joined(separator: " · ")
-        }
-        if metadata.isSubagent || metadata.subagentKind != nil || metadata.subagentHeader != nil {
-            let kind = metadata.subagentKind ?? metadata.subagentHeader ?? "subagent"
-            return ["Codex · 子代理(\(kind))", metadata.agentName]
-                .compactMap { $0 }
-                .joined(separator: " · ")
-        }
-        return ["Codex · 未发现子代理证据", metadata.agentName]
-            .compactMap { $0 }
-            .joined(separator: " · ")
+        var parts = ["Codex · " + codexRole(metadata)]
+        if let name = metadata.agentName { parts.append(name) }
+        if let kind = metadata.requestKind { parts.append(codexRequestKind(kind)) }
+        if let history = metadata.historyInitialization ?? metadata.extras["history_initialization"] { parts.append("历史初始化 \(history)") }
+        if let enabled = metadata.analyticsEnabled { parts.append("客户端分析 " + (enabled ? "开启" : "关闭")) }
+        if let mcp = metadata.mcpAttribution { parts.append("MCP 归因 \(mcp.status) · 来源 \(mcp.sourceCount)") }
+        return parts.joined(separator: " · ")
+    }
+
+    public static func codexRequestKind(_ kind: String) -> String {
+        ["prewarm": "连接预热", "turn": "正式回合", "compaction": "上下文压缩", "memory": "记忆提取"][kind] ?? "用途未确定"
+    }
+
+    public static func codexRole(_ metadata: CodexMetadata) -> String {
+        let kind = metadata.subagentKind ?? metadata.subagentHeader
+        if metadata.threadSource == "guardian_review" || kind == "guardian" { return "Guardian 安全审查" }
+        if metadata.threadSource == "memory_consolidation" || kind == "memory_consolidation" || metadata.requestKind == "memory" || metadata.memgenRequest == "true" { return "记忆任务" }
+        if metadata.threadSource == "automated_review" || kind == "review" { return "自动审查" }
+        if metadata.isSubagent || kind != nil || metadata.threadSource == "subagent" { return "子代理" + (kind.map { "(\($0))" } ?? "") }
+        return metadata.threadSource == "user" ? "主代理" : "未发现子代理证据"
     }
 
     public static func codexJSON(_ metadata: CodexMetadata?) -> String? {
@@ -320,6 +327,11 @@ public enum RuntimeEventPresentation {
         if let error = trace.transportErrorKind { parts.append("传输错误类型: \(error)") }
         if let event = trace.lastEventType { parts.append("最近上游事件: \(event)") }
         if let timeout = trace.idleTimeoutMS { parts.append("空闲截止: \(durationDisplay(timeout))") }
+        if let requests = trace.requests {
+            parts.append("逻辑请求: " + requests.counts.keys.sorted().map { "\(codexRequestKind($0)) \(requests.counts[$0] ?? 0)" }.joined(separator: " / "))
+            parts.append("明细省略 \(requests.dropped) · 未观测帧 \(requests.unobservedFrames) · 未关联事件 \(requests.unassociatedEvents)")
+            parts.append(contentsOf: requests.recent.map { "#\($0.sequence) \(codexRequestKind($0.kind)) · turn=\($0.turnId ?? "—") · response=\($0.responseId ?? "—") · \($0.terminal ?? "未观察到终态")" })
+        }
         return parts.joined(separator: " · ")
     }
 
@@ -338,6 +350,9 @@ public enum RuntimeEventPresentation {
     ) -> String {
         let effectiveStatusCode = statusCode
         if outcome == .cancelled || failureKind == .clientCancelled {
+            if streamTrace?.websocketTrace?.stage == "awaiting_first_message", message == "websocket_unused_prewarm_connection_closed" {
+                return "预热连接已关闭（未发送业务请求）"
+            }
             if streamTrace?.websocketTrace?.stage == "awaiting_first_message",
                message == "websocket_unused_guardian_connection_closed" {
                 return "Guardian 未使用连接已关闭（预热阶段，未发送业务请求）"

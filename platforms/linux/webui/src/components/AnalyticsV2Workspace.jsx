@@ -529,6 +529,11 @@ function AdvancedDiagnosticsPanel({ analytics, loading, error, onRetry }) {
       {error && <PanelMessage error={error} onRetry={onRetry} />}
       {loading && !analytics ? <LoadingLine text="正在读取结构化诊断…" /> : analytics ? (
         <>
+          {analytics.codexRequests && <div className="runtime-v2-diagnostic-summary">
+            <strong>Codex 逻辑请求（独立于连接计数）</strong>
+            <span>{Object.entries(analytics.codexRequests.counts).map(([kind, count]) => `${({prewarm:'连接预热',turn:'正式回合',compaction:'上下文压缩',memory:'记忆提取',unknown:'用途未确定'})[kind] || kind} ${count}`).join(' · ')}</span>
+            <small>WS 在连接结束后汇总；未观测连接 {analytics.codexRequests.unobservedWebsocketConnections} · 未观测帧 {analytics.codexRequests.unobservedFrames}</small>
+          </div>}
           <div className="runtime-v2-diagnostic-summary-grid">
             {dimensions.map(([key, label]) => {
               const rows = diagnosticRows(analytics, key);

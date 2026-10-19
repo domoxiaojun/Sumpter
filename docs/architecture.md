@@ -20,6 +20,8 @@ Sumpter 的核心边界是“客户端请求进入一个地址，代理按配置
 
 HTTP、SSE 和 WebSocket 在上游响应或真实握手后才算成功。一个客户端请求可包含多次上游尝试，RuntimeEvent 用同一 request ID 关联它们，界面分别展示客户端最终结果和上游尝试链。
 
+Responses WebSocket 的连接事件与逻辑 create 请求分别观测：`websocketTrace.requests` 提供有界的用途计数、控制操作和最近 64 条 turn/response 关联；未知或无法唯一关联的事件不猜归属。`runtime_codex_requests` 是按事件序号维护的内部计数投影，与原事件同事务更新并随删除清理，避免聚合时解析大 JSON。兼容库首次初始化时修正已有 Codex 角色并建立投影，不清空事件、不提升 schema/projection 版本；旧的不兼容库规则保持不变。新 token `websocket_unused_prewarm_connection_closed` 与已有 Guardian token 一样，仅适用于有显式证据的首业务帧前未使用连接，保留传输异常分类。
+
 ## 配置与调度
 
 `AppConfig` 的 v7 JSON 是跨平台合同。入口保存地址、Key、协议标签和 mapping；模型组保存开放模型、绑定和调度策略；featureRules 负责独立子请求。配置保存使用 generation 检查，避免两个 Admin 页面互相覆盖。运行期 Admin 保存、磁盘重载与模型目录写入共用 daemon 配置事务；临时文件使用独立随机名称。macOS App 在 sidecar 运行时经 loopback/control-token 保护的 `PUT /admin/config` 提交 `expectedGeneration` 与 `config`，收到 generation/warnings 回执后按原流程处理监听变更；sidecar 停止时才直接离线保存。

@@ -337,6 +337,7 @@ pub(super) fn update_event_projection(
             .await
             .map(|_| ())
     })?;
+    crate::codex_observation::write(connection, seq, event)?;
     Ok(())
 }
 

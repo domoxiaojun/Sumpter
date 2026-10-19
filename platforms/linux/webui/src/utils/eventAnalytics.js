@@ -47,6 +47,7 @@ export function codexDimensionValues(metadata, dimension) {
       const kind = value('subagentKind', 'subagent_kind') || value('subagentHeader', 'subagent_header');
       const isSubagent = Boolean(value('isSubagent', 'is_subagent'));
       if (kind === 'guardian' || value('threadSource', 'thread_source') === 'guardian_review') return ['Guardian 安全审查'];
+      if (kind === 'memory_consolidation' || value('threadSource', 'thread_source') === 'memory_consolidation' || value('requestKind', 'request_kind') === 'memory') return ['记忆任务'];
       return [kind || (isSubagent ? '子代理（类型未记录）' : '未发现子代理证据')];
     }
     case 'threadSource': return [value('threadSource', 'thread_source') || '未记录线程来源'];

@@ -118,7 +118,32 @@ public struct StreamTrace: Codable, Equatable, Sendable {
 /// Bounded, protocol-level WebSocket relay metrics.  Close reasons and frame
 /// payloads are intentionally absent; the Rust engine records only close
 /// codes, side attribution and a safe error token.
+public struct ResponsesRequestObservation: Codable, Equatable, Sendable {
+    public var sequence: Int
+    public var kind: String
+    public var turnId: String?
+    public var responseId: String?
+    public var generate: Bool?
+    public var terminal: String?
+}
+
+public struct ResponsesRequestSummary: Codable, Equatable, Sendable {
+    public var counts: [String: Int]
+    public var controls: [String: Int]
+    public var recent: [ResponsesRequestObservation]
+    public var dropped: Int
+    public var unobservedFrames: Int
+    public var unassociatedEvents: Int
+}
+
+public struct CodexMcpAttribution: Codable, Equatable, Sendable {
+    public var status: String
+    public var errorReason: String?
+    public var sourceCount: Int
+}
+
 public struct WebSocketTrace: Codable, Equatable, Sendable {
+    public var requests: ResponsesRequestSummary? = nil
     public var clientHandshakeStatus: Int?
     public var stage: String?
     public var firstMessageWaitMS: Int?
@@ -375,6 +400,9 @@ public struct CodexMetadata: Codable, Equatable, Sendable {
     public var windowNumber: UInt64?
     public var contextWindowID: String?
     public var requestKind: String?
+    public var historyInitialization: String?
+    public var analyticsEnabled: Bool?
+    public var mcpAttribution: CodexMcpAttribution?
     public var forkedFromThreadID: String?
     public var parentThreadID: String?
     public var parentTurnID: String?
@@ -411,7 +439,7 @@ public struct CodexMetadata: Codable, Equatable, Sendable {
     public var isSubagent: Bool
 
     private enum CodingKeys: String, CodingKey {
-        case installationID, sourceInstallationID, sessionID, threadID, agentName, turnID, windowID, windowNumber, contextWindowID, requestKind
+        case installationID, sourceInstallationID, sessionID, threadID, agentName, turnID, windowID, windowNumber, contextWindowID, requestKind, historyInitialization, analyticsEnabled, mcpAttribution
         case forkedFromThreadID, forkedFromOrdinalExclusive, parentThreadID, parentTurnID, rootTurnID
         case subagentHeader, subagentKind, threadSource, turnTrigger, sandbox, sandboxMode
         case autoReviewEnabled, nodeReplAutoReviewRequired, nodeReplDisabled, historyIngestRequested
@@ -433,6 +461,9 @@ public struct CodexMetadata: Codable, Equatable, Sendable {
         windowNumber = try c.decodeIfPresent(UInt64.self, forKey: .windowNumber)
         contextWindowID = try c.decodeIfPresent(String.self, forKey: .contextWindowID)
         requestKind = try c.decodeIfPresent(String.self, forKey: .requestKind)
+        historyInitialization = try c.decodeIfPresent(String.self, forKey: .historyInitialization)
+        analyticsEnabled = try c.decodeIfPresent(Bool.self, forKey: .analyticsEnabled)
+        mcpAttribution = try c.decodeIfPresent(CodexMcpAttribution.self, forKey: .mcpAttribution)
         forkedFromThreadID = try c.decodeIfPresent(String.self, forKey: .forkedFromThreadID)
         forkedFromOrdinalExclusive = try c.decodeIfPresent(UInt64.self, forKey: .forkedFromOrdinalExclusive)
         parentThreadID = try c.decodeIfPresent(String.self, forKey: .parentThreadID)
@@ -480,6 +511,9 @@ public struct CodexMetadata: Codable, Equatable, Sendable {
         try c.encodeIfPresent(windowNumber, forKey: .windowNumber)
         try c.encodeIfPresent(contextWindowID, forKey: .contextWindowID)
         try c.encodeIfPresent(requestKind, forKey: .requestKind)
+        try c.encodeIfPresent(historyInitialization, forKey: .historyInitialization)
+        try c.encodeIfPresent(analyticsEnabled, forKey: .analyticsEnabled)
+        try c.encodeIfPresent(mcpAttribution, forKey: .mcpAttribution)
         try c.encodeIfPresent(forkedFromThreadID, forKey: .forkedFromThreadID)
         try c.encodeIfPresent(forkedFromOrdinalExclusive, forKey: .forkedFromOrdinalExclusive)
         try c.encodeIfPresent(parentThreadID, forKey: .parentThreadID)
@@ -525,6 +559,7 @@ public struct CodexMetadata: Codable, Equatable, Sendable {
             && parentThreadID == nil && parentTurnID == nil && rootTurnID == nil
             && subagentHeader == nil && subagentKind == nil && threadSource == nil
             && turnTrigger == nil && historyIngestRequested == nil
+            && historyInitialization == nil && analyticsEnabled == nil && mcpAttribution == nil
             && sandbox == nil && sandboxMode == nil && autoReviewEnabled == nil
             && nodeReplAutoReviewRequired == nil && nodeReplDisabled == nil
             && turnStartedAtUnixMS == nil && workspaces.isEmpty && sourceWorkspacePaths.isEmpty
@@ -543,7 +578,7 @@ public struct CodexMetadata: Codable, Equatable, Sendable {
             || parentTurnID != nil || rootTurnID != nil || subagentHeader != nil
             || subagentKind != nil || threadSource != nil || sandbox != nil
             || sandboxMode != nil || !workspaces.isEmpty || originator != nil
-            || isSubagent
+            || memgenRequest != nil || historyInitialization != nil || analyticsEnabled != nil || mcpAttribution != nil || isSubagent
     }
 }
 

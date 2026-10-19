@@ -3222,6 +3222,12 @@ struct UsagePane: View {
                     )
                 }
 
+                if let requests = analytics?.codexRequests {
+                    Text("Codex 逻辑请求（独立于连接计数）").font(.headline)
+                    Text(requests.counts.keys.sorted().map { "\(RuntimeEventPresentation.codexRequestKind($0)) \(requests.counts[$0] ?? 0)" }.joined(separator: " · "))
+                    Text("WS 在连接结束后汇总；未观测连接 \(requests.unobservedWebsocketConnections) · 未观测帧 \(requests.unobservedFrames)").font(.caption).foregroundStyle(.secondary)
+                }
+
                 HStack(spacing: 12) {
                     Picker("诊断维度", selection: $diagnosticDimension) {
                         ForEach(DiagnosticDimension.allCases) { dimension in

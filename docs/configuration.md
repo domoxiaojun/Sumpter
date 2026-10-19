@@ -85,6 +85,12 @@ Linux Admin 是独立监听，默认 `127.0.0.1:57879`，由 CLI 参数或环境
 
 「获取模型」按明确的目录协议身份探测，在总期限和数量上限内合并去重；OpenAI/Responses 默认不附带 Anthropic 目录头。Anthropic 入口另尝试通用目录，避免 CPA 的 Claude 专用别名遮住 Gemini 原始 ID。显式 UA 设置仍被保留。刷新目录不会修改 mapping 或模型组，旧目录缓存需重新获取。
 
+Auto/OpenAI/Responses 入口在目录成功后，还会以相同身份和凭据尝试 `client_version=cpa` 能力目录。此可选请求最多 3 秒，并受剩余目录探测时间约束；失败不丢弃已取得的模型 ID，也不从扩展结果新增模型。明确的不支持不能被另一份目录的支持声明覆盖。
+
+工具搜索、网页搜索、Responses WebSocket 和服务等级按当前 Responses 路由候选取交集：任一有效路由未知或不支持，就不声明全局支持。原生候选优先；只有转换候选时，这些原生能力不声明支持。能力账本仅在进程内保存，目录刷新失败、入口连接信息或凭据改变后失效，重启后需重新发现。Codex 目录的 `supports_search_tool` 只表示工具搜索；`client_version=cpa` 额外返回 `cpa_capabilities.web_search`。普通 `/v1/models` 保持原有结构。能力发现不修改模型组授权，也不因入口支持 Live/Files 而虚构模型。
+
+同协议的 Responses 请求保留原始正文、SSE 数据和 WebSocket 业务帧，包括未知字段。跨协议必须通过严格转换检查：`client_metadata`、`compaction_trigger`、非标准 `incremental_tools`、Lite 控制项和外部 `encrypted_content` 等无目标等价物时，返回 HTTP 400 `unsupported_field`，附 `field`、`sourceFormat`、`targetFormat`，不请求上游。拒绝事件只记录字段路径和协议方向。Sumpter 自有 reasoning envelope 仍可按既有校验还原；不把外部密文当作自有推理回放。
+
 ## modelGroups
 
 模型组把模型范围与入口绑定分开管理。组 `priority` 决定组顺序，绑定 `priority` 决定组内入口顺序。绑定的 `models` 省略或为 null 表示承接入口已添加的全部组内模型，空数组表示不承接，填写数组则进一步收紧范围。
@@ -114,6 +120,16 @@ WebSocket 在 relay 阶段收到首条 Text/Binary 业务消息后开始空闲�
 
 客户端断开会取消上游请求和等待。有限的轮数或总时长通常比两个值都为 0 更容易排障。代理尽量返回最终实际的上游状态和错误内容；尚未产生上游响应时，才会返回本地访问、路由、配置或连接错误。
 
+HTTP 头、Responses SSE 结构化错误和 WebSocket 握手错误共用 `Retry-After` 解析，支持数字和 HTTP-date，单次上限为 300 秒；无上游提示时的指数退避仍最多 30 秒。若一次等待不能完整落在 `maxRetryDurationSeconds` 内，结束重试并保留最终实际响应，不缩短等待后提前请求上游；每次后续尝试前也检查预算。该预算不截断已经开始的正常响应。
+
+`passThroughRetryDelay` 开启时，对外 HTTP `Retry-After` 和本地错误中的退避值同样最多 300 秒；关闭只隐藏这些提示，内部退避仍生效。原生 SSE/WebSocket 的业务错误正文保持原样，不为截断或隐藏退避信息重写业务帧。Ping/Pong 刷新 WebSocket 活动时间，但不计入业务消息数。
+
+## Codex 请求观测
+
+Codex 归因使用独立的观测字段，不改变 featureRules 或出站请求构造。统计中的代理角色区分 Guardian、记忆任务和普通子代理；`request_kind` 区分预热、生成回合、上下文压缩和记忆提取，`turn` 也可能属于内部任务，需与角色一起看。
+
+WebSocket 仍按连接记录原有请求数；连接关闭后，详情展示逻辑 create 数和最近 64 条 turn/response 关联。统计页的 Codex 逻辑请求数独立计算，不能与连接数相加。超过观测大小、明细淘汰、关联不明和旧连接缺少证据均明确标记，不猜测未记录的回合。`historyInitialization`、`analyticsEnabled` 和 MCP 来源数量只用于诊断，不参与授权、计费或路由。
+
 ## featureRules
 
 内建规则 ID 为 `websearch`、`webfetch`、`classifier`，默认关闭。启用后可指定目标模型、协议、入口和 reasoning effort。规则识别 Claude Code 的独立子请求，不扫描主会话的全部历史。`endpointID` 固定入口时会绕过普通映射筛选；入口不可用时才回到候选序列。
@@ -133,6 +149,6 @@ WebUI 保存使用 generation-safe PUT，防止两个页面互相覆盖。手工
 `maxStreamErrorRetries` 与 `failoverOnStreamError` 独立于 HTTP 500、粘性重试和跨轮重试。
 例如次数为 2、切换开启时，当前入口最多请求 3 次，再尝试下一入口；同一请求内每个入口的流错误预算不会因跨轮或粘性重试重置。旧配置默认次数为 0、切换关闭，保持直接转发行为。
 
-仅匹配 Responses SSE 终态中的结构化错误码：`rate_limit_exceeded`、`server_error`、`internal_server_error`、`overloaded_error`、`service_unavailable`。参数错误、鉴权错误、未知错误、`response.incomplete`、断流和超时不进入此策略。
+仅匹配 Responses SSE 终态中的结构化错误码：`rate_limit_exceeded`、`server_error`、`internal_server_error`、`overloaded_error`、`service_unavailable`、`slow_down`、`server_is_overloaded`。参数错误、鉴权错误、余额或组织/项目额度耗尽、未知错误、`response.incomplete`、断流和超时不进入此策略。
 
 开启后，代理在输出前暂存空的 `response.created` / `response.in_progress` 前奏。收到正文、推理、工具调用或未知事件即开始正常转发，不再重试；暂存最多 64 KiB、1024 块或 5 秒，先达到边界即原样转发，不截断响应。原有流式空闲截止仍生效。后台 Responses、Realtime、非 SSE 和压缩流不参与。所有可用入口耗尽时保留最后实际响应；最终流失败仍是 HTTP 200 和失败终态，不伪造 HTTP 429。每次被重试的失败也保留真实 HTTP 200、错误码及上游请求 ID。

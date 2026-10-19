@@ -1230,11 +1230,13 @@ impl GeminiStreamBridge {
             return Vec::new();
         }
         let rendered = match &self.terminal {
-            BridgeTerminal::Failed(detail) => crate::bridge::canonical_json(&json!({
-                "type": "error",
-                "error": {"type": "api_error", "message": detail},
-            }))
-            .into_bytes(),
+            BridgeTerminal::Failed(detail) | BridgeTerminal::Incomplete(detail) => {
+                crate::bridge::canonical_json(&json!({
+                    "type": "error",
+                    "error": {"type": "api_error", "message": detail},
+                }))
+                .into_bytes()
+            }
             BridgeTerminal::Completed => {
                 let mut content: Vec<Value> = Vec::new();
                 if !self.text.is_empty() {

@@ -81,18 +81,7 @@ enum RuntimeEventDisplay {
     }
 
     static func codexAgentRole(_ metadata: CodexMetadata) -> String {
-        if metadata.threadSource == "guardian_review"
-            || metadata.subagentKind == "guardian" || metadata.subagentHeader == "guardian" {
-            return "Guardian 安全审查"
-        }
-        if metadata.isSubagent || metadata.subagentKind != nil || metadata.subagentHeader != nil
-            || metadata.threadSource == "subagent" || metadata.threadSource == "memory_consolidation" {
-            return "子代理" + ((metadata.subagentKind ?? metadata.subagentHeader).map { " · \($0)" } ?? "")
-        }
-        if metadata.agentName != nil || metadata.threadID != nil || metadata.turnID != nil {
-            return "未发现子代理证据"
-        }
-        return "代理身份未确定"
+        RuntimeEventPresentation.codexRole(metadata)
     }
 
     static func codexWorkspaceSummary(_ metadata: CodexMetadata) -> String {

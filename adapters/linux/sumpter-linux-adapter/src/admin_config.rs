@@ -332,7 +332,12 @@ pub(crate) async fn provider_models(
             &body.endpoint_id,
         );
     };
-    match fetch_provider_models(&endpoint).await {
+    let snapshot = sumpter_engine::model_catalog::ProviderCatalogFetcher::fetch(&endpoint).await;
+    state.inner.engine.publish_endpoint_capabilities(&snapshot);
+    match snapshot
+        .error
+        .map_or_else(|| Ok((snapshot.models, snapshot.source)), Err)
+    {
         Ok((models, source)) => json_ok(&json!({
             "endpointID": endpoint.id,
             "models": models,
@@ -343,16 +348,6 @@ pub(crate) async fn provider_models(
                 .unwrap_or_default(),
         })),
         Err(message) => api_error(StatusCode::BAD_GATEWAY, "models_fetch_failed", &message),
-    }
-}
-
-pub(crate) async fn fetch_provider_models(
-    endpoint: &Endpoint,
-) -> Result<(Vec<String>, String), String> {
-    let snapshot = sumpter_engine::model_catalog::ProviderCatalogFetcher::fetch(endpoint).await;
-    match snapshot.error {
-        Some(error) => Err(error),
-        None => Ok((snapshot.models, snapshot.source)),
     }
 }
 

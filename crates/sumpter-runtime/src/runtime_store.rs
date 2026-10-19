@@ -322,10 +322,7 @@ impl EventProjection {
                 .client_variant
                 .clone()
                 .or_else(|| Some(event.derived_client_variant().into())),
-            agent_role: event
-                .agent_role
-                .clone()
-                .or_else(|| Some(event.derived_agent_role().into())),
+            agent_role: Some(event.derived_agent_role().into()),
             agent_name: event.agent_name.clone().or_else(|| {
                 event
                     .codex_metadata
@@ -640,7 +637,7 @@ impl RuntimeEventListItem {
                 .client_variant
                 .clone()
                 .or(Some(derived_client_variant)),
-            agent_role: event.agent_role.clone().or(Some(derived_agent_role)),
+            agent_role: Some(derived_agent_role),
             agent_name: event.agent_name.clone().or_else(|| {
                 event
                     .codex_metadata

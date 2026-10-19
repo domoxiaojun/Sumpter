@@ -50,6 +50,16 @@ pub(super) fn is_explicit_guardian(context: &WebSocketEventContext) -> bool {
         })
 }
 
+pub(super) fn is_explicit_prewarm(context: &WebSocketEventContext) -> bool {
+    context.client_kind == sumpter_core::events::ClientKind::Codex
+        && context.codex_metadata.as_ref().is_some_and(|metadata| {
+            !metadata.malformed
+                && !metadata.truncated
+                && !metadata.has_conflicts
+                && metadata.request_kind.as_deref() == Some("prewarm")
+        })
+}
+
 /// Owns exactly one upgraded connection, including cancellation/early returns.
 pub(super) struct ConnectionGuard {
     engine: Engine,

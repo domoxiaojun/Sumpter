@@ -83,10 +83,11 @@ pub(super) struct LocalModelEntry {
     pub(super) metadata: ProviderModelMetadata,
 }
 
-pub(super) fn collect_local_models(
+fn collect_local_models(
     config: &AppConfig,
     requested_capability: Option<sumpter_core::capability::ModelCapability>,
     requested_id: Option<&str>,
+    ledger: &crate::model_catalog::EndpointCapabilities,
 ) -> Vec<LocalModelEntry> {
     let metadata_index = provider_metadata_snapshot();
     let templates = codex_client_catalog::templates()
@@ -216,8 +217,39 @@ pub(super) fn collect_local_models(
         .into_iter()
         .map(|(id, (mut capabilities, metadata))| {
             capabilities.sort_by_key(|capability| capability.as_str());
+            let mut metadata = aggregate_metadata(&id, metadata);
+            // Use the same native-first candidate set as Responses dispatch.
+            // Templates describe model semantics; only endpoint discovery can
+            // assert transport/tool capabilities of an actual route.
+            let request =
+                sumpter_core::routing::RoutingRequest::from_value(&json!({"model": id})).unwrap();
+            let mut effective: Option<crate::model_catalog::RouteCapabilities> = None;
+            if let Ok(plan) = sumpter_core::routing::RoutePlanner::plan_for_source(
+                &request,
+                config,
+                sumpter_core::config::ProviderProtocol::OpenAIResponses,
+            ) {
+                for route in plan.endpoints {
+                    let caps = config
+                        .endpoint(&route.endpoint_id)
+                        .and_then(|endpoint| {
+                            ledger.get(&endpoint.id).filter(|(fingerprint, _)| {
+                                *fingerprint == crate::model_catalog::endpoint_fingerprint(endpoint)
+                            })
+                        })
+                        .and_then(|(_, models)| models.get(&route.upstream_model))
+                        .filter(|_| route.route_mode == sumpter_core::routing::RouteMode::Native)
+                        .cloned()
+                        .unwrap_or_default();
+                    match &mut effective {
+                        Some(current) => current.intersect(&caps),
+                        None => effective = Some(caps),
+                    }
+                }
+            }
+            effective.unwrap_or_default().apply(&mut metadata);
             LocalModelEntry {
-                metadata: aggregate_metadata(&id, metadata),
+                metadata,
                 id,
                 capabilities,
             }
@@ -284,11 +316,22 @@ pub(super) fn anthropic_model_object(model: &LocalModelEntry) -> Value {
     })
 }
 
+#[cfg(test)]
 pub(super) fn local_models_json(
     config: &AppConfig,
     path: &str,
     query: Option<&str>,
     headers: &[(String, String)],
+) -> Result<Value, StatusCode> {
+    local_models_json_with_capabilities(config, path, query, headers, &Default::default())
+}
+
+pub(super) fn local_models_json_with_capabilities(
+    config: &AppConfig,
+    path: &str,
+    query: Option<&str>,
+    headers: &[(String, String)],
+    ledger: &crate::model_catalog::EndpointCapabilities,
 ) -> Result<Value, StatusCode> {
     let requested_capability = query
         .and_then(|query| decoded_query_value(query, "capability"))
@@ -301,7 +344,7 @@ pub(super) fn local_models_json(
             _ => None,
         });
     let requested_id = local_model_id_from_path(path);
-    let models = collect_local_models(config, requested_capability, requested_id);
+    let models = collect_local_models(config, requested_capability, requested_id, ledger);
     if let Some(id) = requested_id {
         let Some(model) = models.iter().find(|model| model.id == id) else {
             return Err(StatusCode::NOT_FOUND);
@@ -353,8 +396,9 @@ pub(super) fn local_models_response(
     path: &str,
     query: Option<&str>,
     headers: &[(String, String)],
+    ledger: &crate::model_catalog::EndpointCapabilities,
 ) -> Response {
-    match local_models_json(config, path, query, headers) {
+    match local_models_json_with_capabilities(config, path, query, headers, ledger) {
         Ok(body) => json_response(StatusCode::OK, &body),
         Err(StatusCode::NOT_FOUND) => {
             error_response(StatusCode::NOT_FOUND, &[("error", "model_not_found")])

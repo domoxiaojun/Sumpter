@@ -578,7 +578,8 @@ pub(super) fn rebuild_schema(connection: &mut Connection) -> crate::database::Re
         .flatten()
         .unwrap_or(0);
     connection.execute_batch(
-        "DROP TABLE IF EXISTS runtime_events;
+        "DROP TABLE IF EXISTS runtime_codex_requests;
+         DROP TABLE IF EXISTS runtime_events;
          DROP TABLE IF EXISTS runtime_storage_metrics;
          DROP TABLE IF EXISTS runtime_hourly_rollup_dirty;
          DROP TABLE IF EXISTS runtime_hourly_rollups;

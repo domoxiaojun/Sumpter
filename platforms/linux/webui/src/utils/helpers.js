@@ -857,6 +857,21 @@ function codexIsGuardian(metadata) {
     || codexMetadataField(metadata, 'threadSource', 'thread_source') === 'guardian_review';
 }
 
+function codexInternalRole(metadata) {
+  const source = codexMetadataField(metadata, 'threadSource', 'thread_source');
+  const kind = codexSubagentKind(metadata);
+  if (codexIsGuardian(metadata)) return 'Guardian 安全审查';
+  if (source === 'memory_consolidation' || kind === 'memory_consolidation'
+    || codexMetadataField(metadata, 'requestKind', 'request_kind') === 'memory'
+    || codexMetadataField(metadata, 'memgenRequest', 'memgen_request') === 'true') return '记忆任务';
+  if (source === 'automated_review' || kind === 'review') return '自动审查';
+  return null;
+}
+
+export function codexRequestKindLabel(kind) {
+  return ({prewarm:'连接预热',turn:'正式回合',compaction:'上下文压缩',memory:'记忆提取',unknown:'用途未确定'})[kind] || '用途未确定';
+}
+
 function codexHasSubagentEvidence(metadata) {
   const kind = codexSubagentKind(metadata);
   const header = cleanText(codexMetadataField(metadata, 'subagentHeader', 'subagent_header'));
@@ -915,18 +930,18 @@ export function codexAgentRoleLabel(metadataOrEvent) {
   const metadata = codexMetadataValue(metadataOrEvent);
   if (!metadata || typeof metadata !== 'object') return '未记录代理身份';
   const kind = codexSubagentKind(metadata);
-  if (codexIsGuardian(metadata)) return 'Guardian 安全审查';
+  if (codexInternalRole(metadata)) return codexInternalRole(metadata);
   if (codexHasSubagentEvidence(metadata)) return `子代理${kind ? ` · ${kind}` : ''}`;
   if (codexMetadataField(metadata, 'agentName', 'agent_name')
     || codexMetadataField(metadata, 'threadID', 'thread_id')
     || codexMetadataField(metadata, 'turnID', 'turn_id')) {
-    return '主代理';
+    return codexMetadataField(metadata, 'threadSource', 'thread_source') === 'user' ? '主代理' : '未发现子代理证据';
   }
   return '代理身份未确定';
 }
 
 function codexAgentRoleSummary(metadata) {
-  if (codexIsGuardian(metadata)) return 'Guardian 安全审查';
+  if (codexInternalRole(metadata)) return codexInternalRole(metadata);
   if (codexHasSubagentEvidence(metadata)) {
     const kind = codexSubagentKind(metadata);
     return `子代理${kind ? ` ${kind}` : ''}`;
@@ -934,7 +949,7 @@ function codexAgentRoleSummary(metadata) {
   return codexMetadataField(metadata, 'agentName', 'agent_name')
     || codexMetadataField(metadata, 'threadID', 'thread_id')
     || codexMetadataField(metadata, 'turnID', 'turn_id')
-    ? '主代理'
+    ? (codexMetadataField(metadata, 'threadSource', 'thread_source') === 'user' ? '主代理' : '未发现子代理证据')
     : '未发现子代理证据';
 }
 
@@ -948,7 +963,11 @@ export function codexMetadataSummary(metadataOrEvent) {
   const parts = [];
   parts.push(codexAgentRoleSummary(metadata));
   if (agentName) parts.push(`代理路径 ${agentName}`);
-  if (requestKind) parts.push(`请求 ${requestKind}`);
+  if (requestKind) parts.push(codexRequestKindLabel(requestKind));
+  const history = metadata.historyInitialization ?? metadata.extras?.history_initialization;
+  if (history) parts.push(`历史初始化 ${history}`);
+  if (typeof metadata.analyticsEnabled === 'boolean') parts.push(`客户端分析 ${metadata.analyticsEnabled ? '开启' : '关闭'}`);
+  if (metadata.mcpAttribution) parts.push(`MCP 归因 ${metadata.mcpAttribution.status} · 来源 ${metadata.mcpAttribution.sourceCount}`);
   if (threadID) parts.push(`线程 ${threadID}`);
   if (turnID) parts.push(`回合 ${turnID}`);
   return parts.join(' · ') || 'Codex 元数据';
@@ -1300,6 +1319,13 @@ export function formatWebSocketTrace(trace) {
   if (lastEvent) parts.push(`最近上游事件: ${lastEvent}`);
   const idleTimeout = trace.idleTimeoutMS ?? trace.idle_timeout_ms;
   if (idleTimeout != null) parts.push(`空闲截止: ${formatDuration(idleTimeout)}`);
+  const requests = trace.requests;
+  if (requests) {
+    parts.push('逻辑请求: ' + Object.entries(requests.counts || {}).map(([kind,count]) => `${codexRequestKindLabel(kind)} ${count}`).join(' / '));
+    parts.push(`明细省略 ${requests.dropped} · 未观测帧 ${requests.unobservedFrames} · 未关联事件 ${requests.unassociatedEvents}`);
+    parts.push(...(requests.recent || []).map(r => `#${r.sequence} ${codexRequestKindLabel(r.kind)} · turn=${r.turnId || '—'} · response=${r.responseId || '—'} · ${r.terminal || '未观察到终态'}`));
+  }
+
   return parts.join(' · ');
 }
 
@@ -1359,6 +1385,7 @@ export function friendlyEventMessage(event) {
   }
   if (outcome === 'cancelled') {
     const trace = eventStreamTrace(event)?.websocketTrace ?? eventStreamTrace(event)?.websocket_trace;
+    if (trace?.stage === 'awaiting_first_message' && message === 'websocket_unused_prewarm_connection_closed') return '预热连接已关闭（未发送业务请求）';
     if (trace?.stage === 'awaiting_first_message' && message === 'websocket_unused_guardian_connection_closed') {
       return 'Guardian 未使用连接已关闭（预热阶段，未发送业务请求）';
     }

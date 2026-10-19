@@ -1111,6 +1111,7 @@ mod tests {
         drop(held);
         assert!(writer.await.unwrap().is_ok());
         let snapshot = ProviderCatalogSnapshot {
+            route_capabilities: Default::default(),
             endpoint_id: "a".into(),
             endpoint_fingerprint: endpoint_fingerprint(&config.endpoints[0]),
             models: vec!["synthetic-model".into()],

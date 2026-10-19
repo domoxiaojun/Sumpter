@@ -122,6 +122,7 @@ pub fn analytics_on(
             ))
         },
     )?;
+    let codex_requests = codex_request_statistics(&transaction, &client_builder)?;
     let token_usage = analytics_token_metrics(&transaction, &client_builder)?;
     let cache_read = cache_read_statistics(&transaction, &client_builder)?;
     let upstream_cache_read = cache_read_statistics(&transaction, &upstream_builder)?;
@@ -244,6 +245,7 @@ pub fn analytics_on(
         .saturating_add(client_failures)
         .saturating_add(client_cancelled);
     Ok(AnalyticsSummary {
+        codex_requests,
         cache_read,
         upstream_cache_read,
         api_version: API_VERSION,
@@ -801,4 +803,46 @@ fn utc_today_start(now: f64) -> f64 {
     const DAY_SECS: f64 = 86_400.0;
     let unix = now + APPLE_EPOCH_OFFSET_SECS;
     unix - unix.rem_euclid(DAY_SECS) - APPLE_EPOCH_OFFSET_SECS
+}
+
+// Aggregate the fixed-width projection, not potentially large event JSON.
+fn codex_request_statistics(
+    connection: &Connection,
+    builder: &SqlFilter,
+) -> QueryResult<super::CodexRequestStatistics> {
+    let exists: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='runtime_codex_requests' AND type='table')", crate::database::params![], |row| row.get(0))?;
+    if !exists {
+        return Ok(Default::default());
+    }
+    let fields = [
+        "prewarm",
+        "turn",
+        "compaction",
+        "memory",
+        "unknown",
+        "unobserved_connections",
+        "unobserved_frames",
+    ]
+    .map(|field| format!("COALESCE(SUM(observed.{field}),0)"));
+    let sql = format!(
+        "SELECT {} FROM runtime_events JOIN runtime_codex_requests AS observed ON observed.event_seq=runtime_events.seq{}",
+        fields.join(","),
+        builder.where_sql()
+    );
+    connection
+        .query_row(&sql, params_from_iter(builder.values.iter()), |row| {
+            let mut counts = BTreeMap::new();
+            for (index, kind) in ["prewarm", "turn", "compaction", "memory", "unknown"]
+                .iter()
+                .enumerate()
+            {
+                counts.insert((*kind).into(), row.get(index)?);
+            }
+            Ok(super::CodexRequestStatistics {
+                counts,
+                unobserved_websocket_connections: row.get(5)?,
+                unobserved_frames: row.get(6)?,
+            })
+        })
+        .map_err(Into::into)
 }

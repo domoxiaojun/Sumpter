@@ -194,13 +194,17 @@ bash setup-client-attribution.sh restore pi
 - `maxDeferredRounds` 与 `maxRetryDurationSeconds` 都为 `0` 时，可重试故障没有轮数和总时长上限；客户端断开会取消等待。希望请求尽快结束时，应设置有限上限。
 - `passThroughRetryDelay` 控制失败响应中的 `Retry-After` / `retry_delay` 是否继续传给客户端；它不是入口冷却时间开关。
 
+上游 `Retry-After` 的单次上限为 300 秒，显式设置的 `maxRetryDurationSeconds` 优先：若剩余预算容纳不下等待，就返回最终响应。HTTP 头和本地产生的错误提示也使用此上限；原生 SSE/WebSocket 业务帧保持原样。没有上游提示时，指数退避仍最多 30 秒。
+
 收到上游错误后，代理按重试策略处理并尽量保留最终上游状态和错误内容。尚未发往上游的认证、路由、存储或连接问题仍可能产生本地错误。
 
 ## 8. 理解协议和高级能力
 
 会话请求按协议择路:入口协议与客户端一致时保留客户端实际请求路径、查询和其余负载,按入口基础路径规则组合最终 URL;不一致时在该模型的映射范围内把请求转成入口协议,响应再转回客户端协议。Anthropic Messages、OpenAI Chat Completions、OpenAI Responses 与 Gemini `generateContent`/`streamGenerateContent` 之间两两可转;Compact、countTokens、embedContent、图片生成与 Realtime 等没有会话语义的接口不参与转换。
 
-转换不是全功能兼容:历史推理内容不会回放,服务端工具、provider 文件引用以及目标协议没有等价参数的项会被明确拒绝并说明字段,不会静默丢弃。
+转换不是全功能兼容：Sumpter 自有 reasoning envelope 可按既有校验还原，外部密文不能跨协议回放。`client_metadata`、`compaction_trigger`、非标准 `incremental_tools` 和 Lite 专属控制项等无等价物时，在发往上游前返回 `unsupported_field` 并说明字段和协议方向；同协议请求继续原样转发。
+
+Codex 目录中的工具搜索、网页搜索、WebSocket 和服务等级按实际有效路由取交集，未知能力不声明支持。网页搜索不会开启工具搜索。能力账本随目录刷新建立，重启后重新发现；获取模型和能力不自动开放模型授权。
 
 | 请求 | 使用要求 |
 | --- | --- |

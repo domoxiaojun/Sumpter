@@ -1432,6 +1432,12 @@ public enum AdminWire {
         }
 
         public let range: String
+        public struct CodexRequests: Decodable, Equatable, Sendable {
+            public let counts: [String: Int]
+            public let unobservedWebsocketConnections: Int
+            public let unobservedFrames: Int
+        }
+        public let codexRequests: CodexRequests?
         public let clientRequests: Int
         public let clientSuccesses: Int
         public let clientFailures: Int

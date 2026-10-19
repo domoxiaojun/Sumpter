@@ -86,7 +86,8 @@ pub(super) fn proxy_failure_response(
             })
             .flatten()
         })
-        .flatten();
+        .flatten()
+        .map(|seconds| seconds.min(super::dispatch::MAX_RETRY_AFTER_SECS));
     if let Some(seconds) = retry_delay_seconds {
         body.insert(
             "retry_delay".into(),

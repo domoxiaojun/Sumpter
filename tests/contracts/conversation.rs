@@ -230,6 +230,56 @@ async fn run_direction(client: Wire, upstream: Wire) {
 
 const WIRES: [Wire; 4] = [Wire::Anthropic, Wire::Chat, Wire::Responses, Wire::Gemini];
 
+#[tokio::test]
+async fn responses_native_only_controls_are_preserved_or_rejected_before_dispatch() {
+    let fields = [
+        json!({"client_metadata":{"opaque":"PRIVATE_CONTROL"}}),
+        json!({"incremental_tools":{"opaque":"PRIVATE_CONTROL"}}),
+        json!({"compaction_trigger":{"opaque":"PRIVATE_CONTROL"}}),
+        json!({"context_management":[{"type":"compaction"}]}),
+        json!({"include":["output.encrypted_content"]}),
+        json!({"input":[{"role":"user","content":"hi"},{"type":"compaction_trigger"}]}),
+        json!({"input":[{"type":"compaction_trigger"}]}),
+        json!({"input":[{"type":"reasoning","encrypted_content":"PRIVATE_CONTROL"}]}),
+        json!({"input":[{"role":"assistant","content":[{"type":"output_text","text":"hi","encrypted_content":"PRIVATE_CONTROL"}]}]}),
+        json!({"input":[{"role":"user","content":"hi"},{"type":"reasoning","encrypted_content":"PRIVATE_CONTROL"}]}),
+    ];
+    for extra in fields {
+        let mut input = Wire::Responses.body();
+        input
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        for wire in WIRES {
+            let fake = FakeTransport::new();
+            let reply = Wire::Responses.upstream_stream();
+            if wire == Wire::Responses {
+                fake.push("a.example.com", sse_ok(&[&reply]));
+            }
+            let engine = engine_with(single_wire_config(wire), fake.clone());
+            let body = Bytes::from(serde_json::to_vec(&input).unwrap());
+            let (status, bytes) =
+                call(&engine, loopback(), "/v1/responses", vec![], body.clone()).await;
+            if wire == Wire::Responses {
+                assert_eq!(status, 200);
+                assert_eq!(fake.requests()[0].body, body);
+                assert_eq!(&bytes[..], reply.as_bytes());
+            } else {
+                assert_eq!(status, 400, "{wire:?}: {}", String::from_utf8_lossy(&bytes));
+                let error: Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(error["error"], "unsupported_field");
+                assert_eq!(error["sourceFormat"], "openai-responses");
+                assert!(error["field"].as_str().is_some());
+                assert!(fake.requests().is_empty());
+                let events =
+                    serde_json::to_string(&runtime_of(&engine).await.recent_events).unwrap();
+                assert!(!events.contains("PRIVATE_CONTROL"));
+                assert!(!error.to_string().contains("PRIVATE_CONTROL"));
+            }
+        }
+    }
+}
+
 /// 4 条原生路径:同协议进同协议出,走原生面(字节级保真由各协议的原生契约测试覆盖)。
 #[tokio::test]
 async fn native_directions_stay_on_the_native_surface() {

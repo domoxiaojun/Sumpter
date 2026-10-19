@@ -53,3 +53,71 @@ fn catalog_extracts_codex_slugs_and_gemini_resource_names() {
         ["models/gemini-dynamic-review"]
     );
 }
+
+#[tokio::test]
+async fn cpa_capability_discovery_does_not_expand_model_membership() {
+    let router = Router::new().route("/v1/models", get(|uri: axum::http::Uri| async move {
+        if uri.query() == Some("client_version=cpa") {
+            Json(json!({"models":[
+                {"slug":"synthetic", "supports_search_tool":true,"prefer_websockets":true,"service_tiers":[{"id":"priority"}],"cpa_capabilities":{"web_search":false}},
+                {"slug":"hidden-extra", "supports_search_tool":true},
+                {"slug":"denied", "supports_search_tool":true,"prefer_websockets":true,"service_tiers":[{"id":"priority"}],"cpa_capabilities":{"web_search":true}}
+            ]}))
+        } else { Json(json!({"data":[{"id":"synthetic"}, {"id":"denied","supports_search_tool":false,"prefer_websockets":false,"service_tiers":[],"supports_web_search":false}]})) }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let config: AppConfig = serde_json::from_value(json!({"schemaVersion":7,"endpoints":[{
+        "id":"cpa","name":"CPA","baseURL":format!("http://{address}"),"protocol":"openai-responses","enabled":true,
+        "mappings":[{"clientPattern":"synthetic"}]
+    }]})).unwrap();
+    let snapshot =
+        sumpter_engine::model_catalog::ProviderCatalogFetcher::fetch(&config.endpoints[0]).await;
+    task.abort();
+    assert_eq!(snapshot.error, None);
+    assert_eq!(snapshot.models, ["denied", "synthetic"]);
+    assert_eq!(snapshot.route_capabilities.len(), 2);
+    let caps = &snapshot.route_capabilities["synthetic"];
+    assert_eq!(caps.supports_search_tool, Some(true));
+    assert_eq!(caps.supports_web_search, Some(false));
+    assert_eq!(caps.prefer_websockets, Some(true));
+    assert_eq!(caps.service_tiers, Some(vec!["priority".into()]));
+    let denied = &snapshot.route_capabilities["denied"];
+    assert_eq!(denied.supports_search_tool, Some(false));
+    assert_eq!(denied.supports_web_search, Some(false));
+    assert_eq!(denied.prefer_websockets, Some(false));
+    assert_eq!(denied.service_tiers, Some(vec![]));
+}
+
+#[tokio::test]
+async fn optional_capability_timeout_keeps_successful_model_discovery() {
+    let router = Router::new().route(
+        "/v1/models",
+        get(|uri: axum::http::Uri| async move {
+            if uri.query().is_some() {
+                std::future::pending::<()>().await;
+            }
+            Json(json!({"data":[{"id":"synthetic"}]}))
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let config: AppConfig = serde_json::from_value(json!({"schemaVersion":7,"endpoints":[{
+        "id":"cpa","baseURL":format!("http://{address}"),"protocol":"openai-responses","enabled":true
+    }]})).unwrap();
+    let snapshot =
+        sumpter_engine::model_catalog::ProviderCatalogFetcher::fetch(&config.endpoints[0]).await;
+    task.abort();
+    assert_eq!(snapshot.error, None);
+    assert_eq!(snapshot.models, ["synthetic"]);
+    assert_eq!(
+        snapshot.route_capabilities["synthetic"].supports_search_tool,
+        None
+    );
+}

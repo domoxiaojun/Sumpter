@@ -371,7 +371,12 @@ async fn provider_models_for_endpoint(engine: Engine, endpoint_id: String) -> Re
     let Some(endpoint) = config.endpoint(&endpoint_id).cloned() else {
         return error(StatusCode::NOT_FOUND, "endpoint_not_found", &endpoint_id);
     };
-    match fetch_provider_models(&endpoint).await {
+    let snapshot = sumpter_engine::model_catalog::ProviderCatalogFetcher::fetch(&endpoint).await;
+    engine.publish_endpoint_capabilities(&snapshot);
+    match snapshot
+        .error
+        .map_or_else(|| Ok((snapshot.models, snapshot.source)), Err)
+    {
         Ok((models, source)) => json_ok(&json!({
             "endpointID": endpoint.id,
             "models": models,
@@ -382,16 +387,6 @@ async fn provider_models_for_endpoint(engine: Engine, endpoint_id: String) -> Re
                 .unwrap_or_default(),
         })),
         Err(message) => error(StatusCode::BAD_GATEWAY, "models_fetch_failed", &message),
-    }
-}
-
-async fn fetch_provider_models(
-    endpoint: &sumpter_core::config::Endpoint,
-) -> Result<(Vec<String>, String), String> {
-    let snapshot = sumpter_engine::model_catalog::ProviderCatalogFetcher::fetch(endpoint).await;
-    match snapshot.error {
-        Some(error) => Err(error),
-        None => Ok((snapshot.models, snapshot.source)),
     }
 }
 

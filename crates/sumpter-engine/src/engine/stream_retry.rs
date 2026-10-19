@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use futures_util::{StreamExt, stream};
-use sumpter_core::stream_terminal::{ResponsesRetryProbe, StreamRetryDecision};
+use sumpter_core::stream_terminal::{ResponsesRetryProbe, StreamRetryDecision, StreamRetryError};
 
 use crate::outbound::UpstreamResponse;
 
@@ -24,7 +24,7 @@ pub(super) fn request_allows_retry(body: &[u8]) -> bool {
 
 pub(super) struct ProbedResponse {
     pub response: UpstreamResponse,
-    pub retry_code: Option<String>,
+    pub retry_error: Option<StreamRetryError>,
     pub prefix: Vec<Bytes>,
     pub last_read_at: Instant,
 }
@@ -37,7 +37,7 @@ pub(super) async fn probe_response(
     let mut buffered = Vec::new();
     let mut prefix = Vec::new();
     let mut bytes = 0;
-    let mut retry_code = None;
+    let mut retry_error = None;
     let started = Instant::now();
     let mut last_read_at = started;
     loop {
@@ -70,8 +70,8 @@ pub(super) async fn probe_response(
         match decision {
             StreamRetryDecision::Pending => {}
             StreamRetryDecision::Forward => break,
-            StreamRetryDecision::Retry(code) => {
-                retry_code = Some(code);
+            StreamRetryDecision::Retry(error) => {
+                retry_error = Some(error);
                 break;
             }
         }
@@ -81,7 +81,7 @@ pub(super) async fn probe_response(
     response.stream = stream::iter(buffered).chain(response.stream).boxed();
     ProbedResponse {
         response,
-        retry_code,
+        retry_error,
         prefix,
         last_read_at,
     }
@@ -110,7 +110,7 @@ mod tests {
             chunks.push(error.clone());
             let original = chunks.concat();
             let probed = probe_response(response(chunks), None).await;
-            assert_eq!(probed.retry_code, None);
+            assert_eq!(probed.retry_error, None);
             let restored = probed
                 .response
                 .stream
@@ -132,7 +132,7 @@ mod tests {
         .boxed();
         let started = tokio::time::Instant::now();
         let mut probed = probe_response(response, None).await;
-        assert_eq!(probed.retry_code, None);
+        assert_eq!(probed.retry_error, None);
         assert!(started.elapsed() >= MAX_PREFIX_WAIT);
         assert!(started.elapsed() < MAX_PREFIX_WAIT + Duration::from_millis(100));
         assert_eq!(
@@ -147,7 +147,7 @@ mod tests {
         response.stream =
             stream::iter([Err(TransportError::ConnectionFailed("reset".into()))]).boxed();
         let mut probed = probe_response(response, None).await;
-        assert_eq!(probed.retry_code, None);
+        assert_eq!(probed.retry_error, None);
         assert!(matches!(
             probed.response.stream.next().await,
             Some(Err(TransportError::ConnectionFailed(_)))

@@ -56,6 +56,93 @@ async fn completed(notices: &mut tokio::sync::broadcast::Receiver<EngineNotice>)
 }
 
 #[tokio::test]
+async fn prewarm_then_turns_preserve_frames_and_record_distinct_requests() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut config = super::config();
+    config.endpoints[0].base_url = format!("http://{}", listener.local_addr().unwrap());
+    config.migrate_model_groups();
+    let frames = ["prewarm","turn","compaction","memory"].iter().enumerate().map(|(i,kind)| {
+        serde_json::json!({"type":"response.create","model":"gpt-4o","generate":i!=0,"input":"PRIVATE_BODY", "client_metadata":{"x-codex-turn-metadata":serde_json::json!({"request_kind":kind,"turn_id":format!("turn-{i}"),"thread_source":"user"}).to_string()}}).to_string()
+    }).collect::<Vec<_>>();
+    let expected = frames.clone();
+    let upstream = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        for (i, frame) in expected.iter().enumerate() {
+            assert_eq!(
+                socket.next().await.unwrap().unwrap(),
+                Message::Text(frame.clone().into())
+            );
+            for kind in ["response.created", "response.completed"] {
+                socket
+                    .send(Message::Text(
+                        serde_json::json!({"type":kind,"response":{"id":format!("resp-{i}")}})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+        }
+        socket
+            .send(Message::Close(Some(CloseFrame {
+                code: 1000.into(),
+                reason: "".into(),
+            })))
+            .await
+            .unwrap();
+        let _ = socket.next().await;
+    });
+    let engine = pi_test_engine(config);
+    let mut notices = engine.subscribe();
+    let (address, handle) = server::serve(engine.clone(), "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let mut socket = connect(address, "").await;
+    for frame in frames {
+        socket.send(Message::Text(frame.into())).await.unwrap();
+        for _ in 0..2 {
+            assert!(matches!(
+                socket.next().await.unwrap().unwrap(),
+                Message::Text(_)
+            ));
+        }
+    }
+    let _ = socket.next().await;
+    let event = completed(&mut notices).await;
+    let metadata = event.codex_metadata.as_ref().unwrap();
+    assert_eq!(metadata.request_kind.as_deref(), Some("memory"));
+    assert_eq!(metadata.turn_id.as_deref(), Some("turn-3"));
+    assert!(!metadata.has_conflicts);
+    let requests = event
+        .stream_trace
+        .as_ref()
+        .unwrap()
+        .websocket_trace
+        .as_ref()
+        .unwrap()
+        .requests
+        .as_ref()
+        .unwrap();
+    for kind in ["prewarm", "turn", "compaction", "memory"] {
+        assert_eq!(requests.counts[kind], 1);
+    }
+    assert_eq!(requests.recent[3].response_id.as_deref(), Some("resp-3"));
+    assert_eq!(
+        requests.recent[3].terminal.as_deref(),
+        Some("response.completed")
+    );
+    assert!(
+        !serde_json::to_string(&event)
+            .unwrap()
+            .contains("PRIVATE_BODY")
+    );
+    assert_eq!(engine.runtime_snapshot().client_requests, 1);
+    upstream.await.unwrap();
+    pi_test_shutdown(handle).await;
+}
+
+#[tokio::test]
 async fn responses_frames_and_close_remain_ordered_and_exact() {
     let frames = vec![
         FIRST,
@@ -63,6 +150,7 @@ async fn responses_frames_and_close_remain_ordered_and_exact() {
         r#"{"type":"response.append","input":[{"type":"function_call_output","call_id":"call-1","output":"PRIVATE_OUTPUT"}]}"#,
         r#"{"type":"response.steer","previous_response_id":"resp-2","input":[{"role":"user","content":"PRIVATE_PROMPT"}]}"#,
         r#"{"type":"response.interrupt","response_id":"resp-2","mode":"discard_partial_items","future_flag":true}"#,
+        r#"{"type":"response.create","previous_response_id":"resp-2","include":["reasoning.encrypted_content","output.encrypted_content"],"client_metadata":{"turn_id":"synthetic"},"input":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"opaque","encrypted_content":"OPAQUE_REPLAY","metadata":{"source":"synthetic"}}]},{"type":"compaction_trigger"}],"background":false}"#,
     ];
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let mut config = super::config();
@@ -394,6 +482,88 @@ async fn idle_limit_starts_after_business_and_counts_activity_in_both_directions
         assert_eq!(trace.transport_error_kind.as_deref(), Some("idle_timeout"));
         assert_eq!(trace.stage.as_deref(), Some("relay"));
         assert_eq!(trace.handshake_status, Some(101));
+        upstream.await.unwrap();
+        pi_test_shutdown(handle).await;
+    }
+}
+
+#[tokio::test]
+async fn ping_pong_activity_keeps_idle_connections_alive_without_business_counts() {
+    const IDLE: Duration = Duration::from_millis(300);
+    for pong_only in [false, true] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut config = super::config();
+        config.endpoints[0].base_url = format!("http://{}", listener.local_addr().unwrap());
+        config.retry.stream_idle_timeout_seconds = Some(IDLE.as_secs_f64());
+        config.migrate_model_groups();
+        let upstream = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            assert_eq!(
+                socket.next().await.unwrap().unwrap(),
+                Message::Text(FIRST.into())
+            );
+            socket.send(Message::Text(TERMINAL.into())).await.unwrap();
+            for _ in 0..8 {
+                tokio::time::sleep(IDLE / 4).await;
+                socket
+                    .send(if pong_only {
+                        Message::Pong(b"heartbeat".as_slice().into())
+                    } else {
+                        Message::Ping(b"heartbeat".as_slice().into())
+                    })
+                    .await
+                    .unwrap();
+                if !pong_only {
+                    loop {
+                        if matches!(socket.next().await.unwrap().unwrap(), Message::Pong(_)) {
+                            break;
+                        }
+                    }
+                }
+            }
+            socket.send(Message::Text(TERMINAL.into())).await.unwrap();
+            while let Some(Ok(message)) = socket.next().await {
+                if matches!(message, Message::Ping(_)) {
+                    socket.flush().await.unwrap();
+                }
+            }
+        });
+        let engine = pi_test_engine(config);
+        let mut notices = engine.subscribe();
+        let (address, handle) = server::serve(engine.clone(), "127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap();
+        let mut client = connect(address, "").await;
+        client.send(Message::Text(FIRST.into())).await.unwrap();
+        let mut terminals = 0;
+        tokio::time::timeout(Duration::from_secs(4), async {
+            while terminals < 2 {
+                match client.next().await.unwrap().unwrap() {
+                    Message::Text(text) => {
+                        assert_eq!(text.as_str(), TERMINAL);
+                        terminals += 1;
+                    }
+                    Message::Ping(_) => client.flush().await.unwrap(),
+                    Message::Pong(_) => {}
+                    message => panic!("unexpected {message:?}"),
+                }
+            }
+        })
+        .await
+        .unwrap();
+        let event = completed(&mut notices).await;
+        assert_eq!(
+            event.failure_kind,
+            Some(RuntimeFailureKind::StreamIdleTimeout)
+        );
+        assert!(event.upstream_host.is_some());
+        let trace = event.stream_trace.unwrap().websocket_trace.unwrap();
+        assert_eq!(trace.client_message_count, Some(1));
+        assert_eq!(trace.upstream_message_count, Some(2));
+        assert_eq!(trace.attempt_count, Some(1));
+        assert_eq!(trace.last_event_type.as_deref(), Some("response.completed"));
+        assert_eq!(trace.transport_error_kind.as_deref(), Some("idle_timeout"));
         upstream.await.unwrap();
         pi_test_shutdown(handle).await;
     }

@@ -532,6 +532,45 @@ data: {"type":"message_stop"}"#,
     .join("")
 }
 
+#[test]
+fn responses_output_limit_is_incomplete_in_stream_json_and_bridge_state() {
+    use sumpter_core::bridge::BridgeTerminal;
+    for stream in [false, true] {
+        let input = anthropic_sse_with_late_input_usage().replace("end_turn", "max_tokens");
+        let mut bridge = ResponsesClientBridge::new("limit".into(), "fallback".into(), stream);
+        let mut out = Vec::new();
+        for chunk in input.as_bytes().chunks(7) {
+            out.extend(bridge.feed(chunk));
+        }
+        out.extend(bridge.finish());
+        assert_eq!(
+            bridge.terminal(),
+            BridgeTerminal::Incomplete("max_output_tokens".into())
+        );
+        let rendered = String::from_utf8(out).unwrap();
+        let response = if stream {
+            let terminal: Value = rendered
+                .split("\n\n")
+                .filter_map(|block| block.lines().find_map(|line| line.strip_prefix("data: ")))
+                .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+                .find(|event| event["type"] == "response.incomplete")
+                .expect("incomplete event");
+            assert!(!rendered.contains("response.completed"));
+            terminal["response"].clone()
+        } else {
+            serde_json::from_str(&rendered).unwrap()
+        };
+        assert_eq!(response["status"], "incomplete");
+        assert_eq!(
+            response["incomplete_details"]["reason"],
+            "max_output_tokens"
+        );
+        assert!(response["usage"]["input_tokens"].as_u64().unwrap() > 0);
+        assert!(response["usage"]["output_tokens"].as_u64().unwrap() > 0);
+        assert!(!response["output"].as_array().unwrap().is_empty());
+    }
+}
+
 /// 按奇数步长分片投喂,验证跨 chunk 拼装。
 fn feed_in_pieces(bridge: &mut dyn SseBridge, raw: &str, step: usize) -> String {
     let bytes = raw.as_bytes();

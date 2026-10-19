@@ -108,6 +108,8 @@ async fn first_message_close_eof_and_invalid_requests_have_distinct_outcomes() {
         "abnormal",
         "eof",
         "eof_plain",
+        "eof_prewarm",
+        "eof_prewarm_malformed",
         "eof_subagent",
         "eof_conflicting",
         "eof_malformed",
@@ -125,6 +127,11 @@ async fn first_message_close_eof_and_invalid_requests_have_distinct_outcomes() {
             .unwrap();
         let (role, canonical) = match case {
             "eof_plain" => (None, None),
+            "eof_prewarm" => (
+                None,
+                Some(r#"{"request_kind":"prewarm","thread_source":"user"}"#),
+            ),
+            "eof_prewarm_malformed" => (None, Some("INVALID_METADATA")),
             "eof_subagent" => (Some("collab_spawn"), None),
             "eof_conflicting" => (
                 Some("guardian"),
@@ -150,10 +157,15 @@ async fn first_message_close_eof_and_invalid_requests_have_distinct_outcomes() {
         let normal = matches!(case, "normal" | "going_away" | "no_code");
         let guardian = !matches!(
             case,
-            "eof_plain" | "eof_subagent" | "eof_conflicting" | "eof_malformed"
+            "eof_plain"
+                | "eof_subagent"
+                | "eof_conflicting"
+                | "eof_malformed"
+                | "eof_prewarm"
+                | "eof_prewarm_malformed"
         );
         live_connections(&engine, 1, u64::from(guardian), 0, 0).await;
-        let unused = normal || case == "eof";
+        let unused = normal || case == "eof" || case == "eof_prewarm";
         let rejected = matches!(case, "binary" | "json" | "model");
         let mut handle = Some(handle);
         match case {
@@ -178,7 +190,13 @@ async fn first_message_close_eof_and_invalid_requests_have_distinct_outcomes() {
                     Some(Ok(Message::Close(_)))
                 ));
             }
-            "eof" | "eof_plain" | "eof_subagent" | "eof_conflicting" | "eof_malformed" => {
+            "eof"
+            | "eof_plain"
+            | "eof_subagent"
+            | "eof_conflicting"
+            | "eof_malformed"
+            | "eof_prewarm"
+            | "eof_prewarm_malformed" => {
                 drop(client);
             }
             "reset" => {
@@ -265,7 +283,11 @@ async fn first_message_close_eof_and_invalid_requests_have_distinct_outcomes() {
         if unused {
             assert_eq!(
                 event.message.as_deref(),
-                Some("websocket_unused_guardian_connection_closed")
+                Some(if case == "eof_prewarm" {
+                    "websocket_unused_prewarm_connection_closed"
+                } else {
+                    "websocket_unused_guardian_connection_closed"
+                })
             );
         } else {
             assert_ne!(
@@ -621,4 +643,99 @@ async fn live_connections_cover_upstream_setup_query_models_and_prepare_failure(
     live_connections(&engine, 0, 0, 0, 0).await;
     upstream.await.unwrap();
     pi_test_shutdown(handle).await;
+}
+
+#[tokio::test]
+async fn websocket_errors_preserve_status_code_and_retry_visibility() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    for status in [400, 429, 503] {
+        for visible in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let mut config = super::config();
+            config.endpoints[0].base_url = format!("http://{}", listener.local_addr().unwrap());
+            config.retry.pass_through_retry_delay = visible;
+            config.migrate_model_groups();
+            let upstream = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut headers = Vec::new();
+                while !headers.ends_with(b"\r\n\r\n") {
+                    headers.push(stream.read_u8().await.unwrap());
+                }
+                stream.write_all(format!("HTTP/1.1 {status} Synthetic\r\nRetry-After: 900\r\nX-Private: DO_NOT_FORWARD\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+            });
+            let engine = pi_test_engine(config);
+            let mut notices = engine.subscribe();
+            let (address, handle) = server::serve(engine.clone(), "127.0.0.1:0".parse().unwrap())
+                .await
+                .unwrap();
+            let mut client = connect(address).await;
+            client
+                .send(Message::Text(
+                    r#"{"type":"response.create","model":"gpt-4o","input":[]}"#.into(),
+                ))
+                .await
+                .unwrap();
+            let message = tokio::time::timeout(Duration::from_secs(3), client.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let event: serde_json::Value =
+                serde_json::from_str(message.to_text().unwrap()).unwrap();
+            assert_eq!(event["type"], "error");
+            assert_eq!(event["status"], status);
+            assert_eq!(event["error"]["code"], "upstream_error");
+            assert_eq!(event["error"]["type"], "upstream_error");
+            if visible {
+                assert_eq!(event["error"]["headers"]["retry-after"], "300");
+            } else {
+                assert!(event["error"].get("headers").is_none());
+            }
+            assert!(!event.to_string().contains("DO_NOT_FORWARD"));
+            assert_eq!(
+                completed(&mut notices).await.outcome,
+                Some(RuntimeEventOutcome::Failed)
+            );
+            upstream.await.unwrap();
+            pi_test_shutdown(handle).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn websocket_preupgrade_errors_honor_the_same_retry_visibility() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    for visible in [false, true] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut config = super::config();
+        config.endpoints[0].base_url = format!("http://{}", listener.local_addr().unwrap());
+        config.retry.pass_through_retry_delay = visible;
+        config.migrate_model_groups();
+        let upstream = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut headers = Vec::new();
+            while !headers.ends_with(b"\r\n\r\n") {
+                headers.push(stream.read_u8().await.unwrap());
+            }
+            stream.write_all(b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 2.5\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+        });
+        let engine = pi_test_engine(config);
+        let result = engine
+            .prepare_realtime_websocket(None, "/v1/realtime?model=gpt-4o", &[])
+            .await;
+        let error = match result {
+            Ok(_) => panic!("expected rejected handshake"),
+            Err(error) => error,
+        };
+        let response = sumpter_engine::engine::websocket_prepare_error_response(&error);
+        assert_eq!(response.status().as_u16(), 429);
+        assert_eq!(
+            response
+                .headers()
+                .get("retry-after")
+                .map(|value| value.to_str().unwrap()),
+            visible.then_some("3")
+        );
+        upstream.await.unwrap();
+    }
 }

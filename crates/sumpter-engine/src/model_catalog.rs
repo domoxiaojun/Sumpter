@@ -64,6 +64,96 @@ pub struct ProviderCatalogSnapshot {
     pub attempted_at: String,
     pub updated_at: String,
     pub error: Option<String>,
+    /// Runtime-only claims from this endpoint's discovery response.
+    pub route_capabilities: BTreeMap<String, RouteCapabilities>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RouteCapabilities {
+    pub supports_search_tool: Option<bool>,
+    pub supports_web_search: Option<bool>,
+    pub prefer_websockets: Option<bool>,
+    pub service_tiers: Option<Vec<String>>,
+}
+
+pub(crate) type EndpointCapabilities =
+    std::collections::HashMap<String, (String, BTreeMap<String, RouteCapabilities>)>;
+
+impl RouteCapabilities {
+    /// A richer representation of the same discovery response may fill unknown
+    /// claims, but it cannot override an explicit denial in the basic catalog.
+    fn supplement(&mut self, other: &Self) {
+        fn claim(left: Option<bool>, right: Option<bool>) -> Option<bool> {
+            match (left, right) {
+                (Some(left), Some(right)) => Some(left && right),
+                _ => left.or(right),
+            }
+        }
+        self.supports_search_tool = claim(self.supports_search_tool, other.supports_search_tool);
+        self.supports_web_search = claim(self.supports_web_search, other.supports_web_search);
+        self.prefer_websockets = claim(self.prefer_websockets, other.prefer_websockets);
+        self.service_tiers = match (&self.service_tiers, &other.service_tiers) {
+            (Some(left), Some(right)) => Some(intersect_strings(left, right)),
+            (left, right) => left.as_ref().or(right.as_ref()).cloned(),
+        };
+    }
+
+    pub(crate) fn intersect(&mut self, other: &Self) {
+        self.supports_search_tool = Some(
+            self.supports_search_tool == Some(true) && other.supports_search_tool == Some(true),
+        );
+        self.supports_web_search =
+            Some(self.supports_web_search == Some(true) && other.supports_web_search == Some(true));
+        self.prefer_websockets =
+            Some(self.prefer_websockets == Some(true) && other.prefer_websockets == Some(true));
+        self.service_tiers = Some(intersect_strings(
+            self.service_tiers.as_deref().unwrap_or_default(),
+            other.service_tiers.as_deref().unwrap_or_default(),
+        ));
+    }
+
+    pub(crate) fn apply(&self, metadata: &mut ProviderModelMetadata) {
+        metadata.supports_search_tool = Some(self.supports_search_tool == Some(true));
+        metadata.supports_web_search = Some(self.supports_web_search == Some(true));
+        metadata.prefer_websockets = Some(self.prefer_websockets == Some(true));
+        metadata.service_tiers = Some(self.service_tiers.clone().unwrap_or_default());
+    }
+}
+
+fn extract_route_capabilities(value: &Value) -> BTreeMap<String, RouteCapabilities> {
+    fn visit(value: &Value, output: &mut BTreeMap<String, RouteCapabilities>, depth: usize) {
+        if depth > 8 || output.len() >= MAX_MODEL_CATALOG_ITEMS {
+            return;
+        }
+        if let Some(values) = value.as_array() {
+            for value in values {
+                visit(value, output, depth + 1);
+            }
+        } else if let Some(object) = value.as_object() {
+            let mut nested = false;
+            for key in ["data", "models", "result", "items", "results"] {
+                if let Some(value) = object.get(key) {
+                    nested = true;
+                    visit(value, output, depth + 1);
+                }
+            }
+            if !nested && let Some(metadata) = parse_provider_model("endpoint", value) {
+                let caps = RouteCapabilities {
+                    supports_search_tool: metadata.supports_search_tool,
+                    supports_web_search: metadata.supports_web_search,
+                    prefer_websockets: metadata.prefer_websockets,
+                    service_tiers: metadata.service_tiers,
+                };
+                output
+                    .entry(metadata.id)
+                    .and_modify(|prior| prior.intersect(&caps))
+                    .or_insert(caps);
+            }
+        }
+    }
+    let mut result = BTreeMap::new();
+    visit(value, &mut result, 0);
+    result
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +205,7 @@ pub(crate) struct ProviderModelMetadata {
     pub(crate) input_modalities: Option<Vec<String>>,
     pub(crate) output_modalities: Option<Vec<String>>,
     pub(crate) supports_search_tool: Option<bool>,
+    pub(crate) supports_web_search: Option<bool>,
     pub(crate) prefer_websockets: Option<bool>,
     pub(crate) service_tiers: Option<Vec<String>>,
     pub(crate) conflicts: Vec<String>,
@@ -263,14 +354,19 @@ pub(crate) fn parse_provider_model(provider: &str, value: &Value) -> Option<Prov
             object,
             &["supportedOutputModalities", "output_modalities"],
         ),
-        supports_search_tool: object
-            .get("supports_search_tool")
-            .or_else(|| object.get("supports_web_search"))
+        supports_search_tool: object.get("supports_search_tool").and_then(Value::as_bool),
+        supports_web_search: object
+            .get("supports_web_search")
             .and_then(Value::as_bool)
             .or_else(|| {
                 object
                     .get("native_capabilities")
                     .and_then(|v| v.get("web_search"))
+                    .and_then(Value::as_bool)
+            })
+            .or_else(|| {
+                value
+                    .pointer("/cpa_capabilities/web_search")
                     .and_then(Value::as_bool)
             }),
         prefer_websockets: object.get("prefer_websockets").and_then(Value::as_bool),
@@ -343,12 +439,13 @@ pub(crate) fn merge_provider_metadata(
     };
     let (left, right) = (current.supports_search_tool, next.supports_search_tool);
     current.supports_search_tool = Some(left.unwrap_or(false) && right.unwrap_or(false));
+    let (left, right) = (current.supports_web_search, next.supports_web_search);
+    current.supports_web_search = Some(left.unwrap_or(false) && right.unwrap_or(false));
     let (left, right) = (current.prefer_websockets, next.prefer_websockets);
     current.prefer_websockets = Some(left.unwrap_or(false) && right.unwrap_or(false));
     current.service_tiers = match (&current.service_tiers, next.service_tiers) {
         (Some(left), Some(right)) => Some(intersect_strings(left, &right)),
-        (None, right) => right,
-        (left, None) => left.clone(),
+        _ => Some(Vec::new()),
     };
     if let Some(levels) = &current.reasoning_levels {
         let default = current
@@ -389,6 +486,7 @@ pub(crate) fn fallback_metadata(id: &str) -> ProviderModelMetadata {
         input_modalities: Some(vec!["text".into()]),
         output_modalities: Some(vec!["text".into()]),
         supports_search_tool: Some(false),
+        supports_web_search: Some(false),
         prefer_websockets: Some(false),
         service_tiers: Some(Vec::new()),
         conflicts: Vec::new(),
@@ -472,6 +570,9 @@ pub(crate) fn complete_metadata(
     }
     if metadata.supports_search_tool.is_none() {
         metadata.supports_search_tool = defaults.supports_search_tool;
+    }
+    if metadata.supports_web_search.is_none() {
+        metadata.supports_web_search = defaults.supports_web_search;
     }
     if metadata.prefer_websockets.is_none() {
         metadata.prefer_websockets = defaults.prefer_websockets;
@@ -843,7 +944,7 @@ fn validate_json_strings(value: &Value, count: usize) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_codex_metadata(value: &Value) -> Result<(), String> {
+pub(crate) fn validate_codex_metadata(value: &Value) -> Result<(), String> {
     let models = value
         .get("models")
         .and_then(Value::as_array)
@@ -894,9 +995,6 @@ fn validate_codex_metadata(value: &Value) -> Result<(), String> {
             return Err(format!("{slug} default_reasoning_level 无效"));
         }
     }
-    if !slugs.contains("gpt-5.5") {
-        return Err("必须包含唯一的 gpt-5.5".into());
-    }
     validate_json_strings(value, 0)?;
     Ok(())
 }
@@ -924,7 +1022,7 @@ impl ProviderCatalogFetcher {
     pub async fn fetch(endpoint: &Endpoint) -> ProviderCatalogSnapshot {
         let attempted_at = unix_timestamp();
         match tokio::time::timeout(MODEL_CATALOG_TIMEOUT, fetch_inner(endpoint)).await {
-            Ok(Ok((models, source))) => ProviderCatalogSnapshot {
+            Ok(Ok((models, source, route_capabilities))) => ProviderCatalogSnapshot {
                 endpoint_id: endpoint.id.clone(),
                 endpoint_fingerprint: endpoint_fingerprint(endpoint),
                 models,
@@ -932,6 +1030,7 @@ impl ProviderCatalogFetcher {
                 attempted_at: attempted_at.clone(),
                 updated_at: attempted_at,
                 error: None,
+                route_capabilities,
             },
             Ok(Err(error)) => ProviderCatalogSnapshot {
                 endpoint_id: endpoint.id.clone(),
@@ -941,6 +1040,7 @@ impl ProviderCatalogFetcher {
                 attempted_at,
                 updated_at: String::new(),
                 error: Some(error),
+                route_capabilities: BTreeMap::new(),
             },
             Err(_) => ProviderCatalogSnapshot {
                 endpoint_id: endpoint.id.clone(),
@@ -950,12 +1050,15 @@ impl ProviderCatalogFetcher {
                 attempted_at,
                 updated_at: String::new(),
                 error: Some("获取模型整体超时（12 秒）".into()),
+                route_capabilities: BTreeMap::new(),
             },
         }
     }
 }
 
-async fn fetch_inner(endpoint: &Endpoint) -> Result<(Vec<String>, String), String> {
+async fn fetch_inner(
+    endpoint: &Endpoint,
+) -> Result<(Vec<String>, String, BTreeMap<String, RouteCapabilities>), String> {
     let key = endpoint.api_key.trim();
     let base = reqwest::Url::parse(endpoint.base_url.trim_end_matches('/'))
         .map_err(|_| "baseURL 无效".to_string())?;
@@ -998,6 +1101,7 @@ async fn fetch_inner(endpoint: &Endpoint) -> Result<(Vec<String>, String), Strin
     let deadline = Instant::now() + Duration::from_millis(11_500);
     let mut errors = Vec::new();
     let mut discovered = BTreeSet::new();
+    let mut route_capabilities = BTreeMap::<String, RouteCapabilities>::new();
     let mut source = None;
 
     'probes: for (index, probe) in probes.iter().enumerate() {
@@ -1041,7 +1145,38 @@ async fn fetch_inner(endpoint: &Endpoint) -> Result<(Vec<String>, String), Strin
                                     let models = extract_models(&value);
                                     if !models.is_empty() {
                                         source.get_or_insert_with(|| url.to_string());
+                                        let mut claims = extract_route_capabilities(&value);
+                                        for model in &models {
+                                            claims.entry(model.clone()).or_default();
+                                        }
+                                        // CPA exposes route-level claims through this optional
+                                        // catalog. It never expands the discovered/authorized IDs.
+                                        if matches!(endpoint.protocol, sumpter_core::config::EndpointProtocolMode::Auto | sumpter_core::config::EndpointProtocolMode::OpenAIResponses | sumpter_core::config::EndpointProtocolMode::OpenAI) {
+                                            let mut capability_url = url.clone();
+                                            capability_url.set_query(Some("client_version=cpa"));
+                                            let budget = probe_deadline.saturating_duration_since(Instant::now()).min(Duration::from_secs(3));
+                                            let mut request = client.get(capability_url).timeout(budget);
+                                            for (header, value) in crate::request_build::model_catalog_probe_headers(probe) { request = request.header(header, value); }
+                                            for (header, value) in &auth { request = request.header(*header, value.as_str()); }
+                                            let enrichment = async {
+                                                let response = request.send().await.ok()?;
+                                                if response.status() != StatusCode::OK { return None; }
+                                                let bytes = read_body(response).await.ok()?;
+                                                serde_json::from_slice::<Value>(&bytes).ok()
+                                            };
+                                            if let Ok(Some(value)) = tokio::time::timeout(budget, enrichment).await {
+                                                for (id, extra) in extract_route_capabilities(&value) {
+                                                    if let Some(claim) = claims.get_mut(&id) { claim.supplement(&extra); }
+                                                }
+                                            }
+                                        }
                                         discovered.extend(models);
+                                        for (id, claim) in claims {
+                                            route_capabilities
+                                                .entry(id)
+                                                .and_modify(|prior| prior.intersect(&claim))
+                                                .or_insert(claim);
+                                        }
                                         continue 'probes;
                                     }
                                     errors.push(format!("{}: 响应中没有模型", url.path()));
@@ -1067,6 +1202,7 @@ async fn fetch_inner(endpoint: &Endpoint) -> Result<(Vec<String>, String), Strin
                 .take(MAX_MODEL_CATALOG_ITEMS)
                 .collect(),
             source,
+            route_capabilities,
         ));
     }
     errors.dedup();
@@ -1251,7 +1387,8 @@ mod tests {
             model.input_modalities,
             Some(vec!["text".into(), "image".into()])
         );
-        assert_eq!(model.supports_search_tool, Some(true));
+        assert_eq!(model.supports_search_tool, None);
+        assert_eq!(model.supports_web_search, Some(true));
     }
 
     #[test]
@@ -1278,6 +1415,36 @@ mod tests {
                 complete_metadata("custom", parse_provider_model("custom", &fields).unwrap());
             assert_eq!(metadata.context_window, Some(context));
             assert_eq!(metadata.max_context_window, Some(max_context));
+        }
+    }
+
+    #[test]
+    fn web_search_never_implies_tool_search_and_routes_intersect_independently() {
+        for fields in [
+            json!({"id":"custom", "supports_web_search":true}),
+            json!({"id":"custom", "native_capabilities":{"web_search":true}}),
+            json!({"id":"custom", "cpa_capabilities":{"web_search":true}}),
+        ] {
+            let web = complete_metadata("custom", parse_provider_model("custom", &fields).unwrap());
+            assert_eq!(web.supports_web_search, Some(true));
+            assert_eq!(web.supports_search_tool, Some(false));
+            let tool = complete_metadata(
+                "custom",
+                parse_provider_model(
+                    "custom",
+                    &json!({
+                        "id":"custom", "supports_search_tool":true, "supports_web_search":false
+                    }),
+                )
+                .unwrap(),
+            );
+            assert_eq!(tool.supports_search_tool, Some(true));
+            assert_eq!(tool.supports_web_search, Some(false));
+            for routes in [vec![web.clone(), tool.clone()], vec![tool, web]] {
+                let merged = aggregate_metadata("custom", routes);
+                assert_eq!(merged.supports_search_tool, Some(false));
+                assert_eq!(merged.supports_web_search, Some(false));
+            }
         }
     }
 

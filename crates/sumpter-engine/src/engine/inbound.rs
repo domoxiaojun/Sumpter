@@ -404,7 +404,13 @@ impl Engine {
                 );
                 return method_not_allowed_response("GET");
             }
-            return local_models_response(&config, path, query, &headers);
+            return local_models_response(
+                &config,
+                path,
+                query,
+                &headers,
+                &self.inner.endpoint_capabilities.read().unwrap(),
+            );
         }
 
         // Decode only the JSON inference routes that must inspect the model.
@@ -1003,7 +1009,21 @@ impl Engine {
         } else {
             match dialect {
                 ClientDialect::Chat => bridge_in::chat_to_anthropic(&parsed),
-                ClientDialect::Responses => bridge_in::responses_to_anthropic(&parsed),
+                ClientDialect::Responses => {
+                    bridge_in::responses_to_anthropic(&parsed).or_else(|error| {
+                        // Native control-only requests need no convertible message.
+                        // The strict checker still guards every translated route.
+                        if bridge_in::check_responses_native_only(&parsed).is_ok() {
+                            return Err(error);
+                        }
+                        parsed
+                            .get("model")
+                            .and_then(Value::as_str)
+                            .filter(|model| !model.trim().is_empty())
+                            .map(|model| json!({"model": model, "stream": client_stream}))
+                            .ok_or(error)
+                    })
+                }
                 // 归一化只服务于路由:模型本来就在路径上,正文在原生路径上按字节
                 // 转发,所以这里不因正文不可转换就拦下整条请求 —— 转换候选会在
                 // `check_source_translation` 用真实正文再检一次,并回报具体原因。
