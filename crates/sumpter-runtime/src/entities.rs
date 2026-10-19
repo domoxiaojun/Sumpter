@@ -8,6 +8,7 @@ pub(crate) mod runtime_meta;
 pub(crate) mod runtime_model_prices;
 pub(crate) mod runtime_pricing_meta;
 pub(crate) mod runtime_retention;
+pub(crate) mod runtime_storage_metrics;
 
 /// Create the current model directly. Legacy databases are rejected before
 /// this function; entity changes never silently alter an existing table.

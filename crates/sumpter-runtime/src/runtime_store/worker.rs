@@ -221,31 +221,7 @@ pub(super) fn set_retention_max_age_meta(
 pub(super) fn load_cached_storage(
     connection: &Connection,
 ) -> crate::database::Result<CachedStorageMetrics> {
-    let (
-        event_count,
-        completed_event_count,
-        in_flight_event_count,
-        oldest_event_at,
-        newest_event_at,
-        payload_bytes,
-    ) = connection.query_row(
-        "SELECT COUNT(*),
-                COALESCE(SUM(CASE WHEN is_in_flight=0 THEN 1 ELSE 0 END),0),
-                COALESCE(SUM(CASE WHEN is_in_flight=1 THEN 1 ELSE 0 END),0),
-                MIN(timestamp),MAX(timestamp),COALESCE(SUM(payload_bytes),0)
-         FROM runtime_events",
-        crate::database::params![],
-        |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, Option<f64>>(3)?,
-                row.get::<_, Option<f64>>(4)?,
-                row.get::<_, i64>(5)?,
-            ))
-        },
-    )?;
+    let metrics = crate::storage_metrics::read(connection)?;
     let page_size =
         connection.query_row("PRAGMA page_size", crate::database::params![], |row| {
             row.get::<_, i64>(0)
@@ -267,13 +243,13 @@ pub(super) fn load_cached_storage(
     let page_count = page_count.max(0) as u64;
     let freelist_count = freelist_count.max(0) as u64;
     Ok(CachedStorageMetrics {
-        event_count,
-        completed_event_count,
-        in_flight_event_count,
-        oldest_event_at,
-        newest_event_at,
+        event_count: metrics.event_count,
+        completed_event_count: metrics.completed_events,
+        in_flight_event_count: metrics.in_flight_events,
+        oldest_event_at: metrics.earliest_timestamp,
+        newest_event_at: metrics.latest_timestamp,
         retained_from_seq: meta_i64(connection, "retained_from_seq")?.unwrap_or(1),
-        payload_bytes: payload_bytes.max(0) as u64,
+        payload_bytes: metrics.payload_bytes.max(0) as u64,
         live_bytes: page_count
             .saturating_sub(freelist_count)
             .saturating_mul(page_size),

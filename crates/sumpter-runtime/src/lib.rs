@@ -9,6 +9,7 @@ pub mod runtime_store;
 
 mod database;
 mod entities;
+mod storage_metrics;
 
 pub use runtime_query::*;
 pub use runtime_store::*;

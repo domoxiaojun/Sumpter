@@ -26,6 +26,7 @@ pub(super) fn setup_connection(connection: &mut Connection) -> crate::database::
         )));
     }
     ensure_completion_watermark(connection)?;
+    crate::storage_metrics::ensure(connection)?;
     let hourly_rollup_meta_exists = meta_i64(connection, "hourly_rollup_complete")?.is_some();
     let unprojected_exists = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM runtime_events
@@ -33,11 +34,7 @@ pub(super) fn setup_connection(connection: &mut Connection) -> crate::database::
         params![PROJECTION_VERSION],
         |row| row.get::<_, bool>(0),
     )?;
-    let retained_event_count = connection.query_row(
-        "SELECT COUNT(*) FROM runtime_events",
-        crate::database::params![],
-        |row| row.get::<_, i64>(0),
-    )?;
+    let retained_event_count = crate::storage_metrics::read(connection)?.event_count;
     let retained_from_seq = connection.query_row(
         "SELECT COALESCE(MIN(seq), COALESCE((SELECT CAST(value AS INTEGER) FROM runtime_meta WHERE key='next_seq'), 1)) FROM runtime_events", crate::database::params![],
         |row| row.get::<_, i64>(0),

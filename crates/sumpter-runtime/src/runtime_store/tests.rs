@@ -336,6 +336,7 @@ fn schema_bootstrap_is_private_and_integral() {
         "ok"
     );
     for table in [
+        "runtime_storage_metrics",
         "runtime_hourly_rollups",
         "runtime_hourly_rollup_dirty",
         "runtime_retention",
@@ -1328,6 +1329,9 @@ fn storage_limit_rotates_oldest_completed_request_groups_and_preserves_in_flight
     assert!(store.event("rotation-in-flight").unwrap().is_some());
     let summary = store.summary();
     assert_eq!(summary.storage.in_flight_event_count, 1);
+    let connection = Connection::open(&path).unwrap();
+    crate::storage_metrics::tests::assert_matches_scan(&connection);
+    drop(connection);
     assert_eq!(summary.counters.client_requests, 1);
     assert_eq!(summary.counters.client_successes, 1);
 

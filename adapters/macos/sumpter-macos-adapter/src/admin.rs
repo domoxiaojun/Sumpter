@@ -3063,6 +3063,17 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(response.status(), StatusCode::OK, "{path}");
+            if path == "/admin/runtime/storage" {
+                let storage: Value =
+                    serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
+                assert_eq!(storage["schemaVersion"], 5);
+                assert_eq!(storage["retainedEvents"], 0);
+                assert_eq!(storage["completedEvents"], 0);
+                assert_eq!(storage["inFlightEvents"], 0);
+                assert_eq!(storage["payloadBytes"], 0);
+                assert!(storage["minSeq"].is_null());
+                assert!(storage["earliestTimestamp"].is_null());
+            }
         }
 
         let retention_update = client

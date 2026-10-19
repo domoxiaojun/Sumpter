@@ -38,6 +38,156 @@ fn counts(n: i64) -> RuntimeCounters {
     }
 }
 
+fn assert_storage_metrics(store: &RuntimeStore) -> crate::storage_metrics::StorageMetrics {
+    store.flush().unwrap();
+    let mut connection = Connection::open(store.path()).unwrap();
+    let transaction = connection.transaction().unwrap();
+    let metrics = crate::storage_metrics::tests::assert_matches_scan(&transaction);
+    let cached = load_cached_storage(&transaction).unwrap();
+    assert_eq!(cached.event_count, metrics.event_count);
+    assert_eq!(cached.completed_event_count, metrics.completed_events);
+    assert_eq!(cached.in_flight_event_count, metrics.in_flight_events);
+    assert_eq!(cached.payload_bytes, metrics.payload_bytes as u64);
+    transaction.commit().unwrap();
+    let probe = crate::runtime_query::storage_details(store.path()).unwrap();
+    assert_eq!(probe.retained_events, metrics.event_count);
+    assert_eq!(probe.completed_events, metrics.completed_events);
+    assert_eq!(probe.in_flight_events, metrics.in_flight_events);
+    assert_eq!(probe.payload_bytes, metrics.payload_bytes);
+    assert_eq!(probe.min_seq, metrics.min_seq);
+    assert_eq!(probe.max_seq, metrics.max_seq);
+    assert_eq!(probe.earliest_timestamp, metrics.earliest_timestamp);
+    assert_eq!(probe.latest_timestamp, metrics.latest_timestamp);
+    metrics
+}
+
+#[test]
+fn storage_metrics_upgrade_preserves_history_retention_and_versions() {
+    let (dir, store) = fixture("storage-metrics-upgrade");
+    let mut event = sample("retained", false, event_now());
+    event.message = Some("historical payload".into());
+    store.enqueue(event, counts(1)).unwrap();
+    store
+        .set_retention(RuntimeRetentionUpdate {
+            expected_revision: 1,
+            max_age_days: Some(30),
+            storage_limit_bytes: Some(32 * 1_048_576),
+        })
+        .unwrap();
+    let baseline = assert_storage_metrics(&store);
+    let payload = serde_json::to_value(store.event("retained").unwrap().unwrap().event).unwrap();
+    let snapshot = store.snapshot().unwrap();
+    drop(store);
+    let path = dir.join("runtime.sqlite3");
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "DROP TRIGGER runtime_storage_metrics_insert_v1;
+         DROP TRIGGER runtime_storage_metrics_update_v1;
+         DROP TRIGGER runtime_storage_metrics_delete_v1;
+         DROP TABLE runtime_storage_metrics;",
+        )
+        .unwrap();
+    drop(connection);
+    let (store, reopened) = RuntimeStore::new(&path).unwrap();
+    assert_eq!(reopened, snapshot);
+    assert_eq!(assert_storage_metrics(&store), baseline);
+    assert_eq!(
+        serde_json::to_value(store.event("retained").unwrap().unwrap().event).unwrap(),
+        payload
+    );
+    let probe = crate::runtime_query::storage_details(&path).unwrap();
+    assert_eq!(probe.schema_version, SCHEMA_VERSION);
+    assert_eq!(probe.projection_version, PROJECTION_VERSION);
+    assert_eq!(probe.retention.revision, 2);
+    assert_eq!(probe.retention.max_age_days, Some(30));
+    assert_eq!(probe.retention.storage_limit_bytes, Some(32 * 1_048_576));
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn storage_metrics_follow_restart_retention_cleanup_session_reset_and_recreate() {
+    let (dir, store) = fixture("storage-metrics-lifecycle");
+    let timestamp = event_now();
+    for event in [
+        sample("old", false, timestamp - 3.0 * 86_400.0),
+        sample("fresh", false, timestamp),
+        sample("no-headers", true, timestamp),
+    ] {
+        store.enqueue(event, counts(1)).unwrap();
+    }
+    let mut headers = sample("headers", true, timestamp);
+    headers.status_code = 200;
+    store.enqueue(headers, counts(1)).unwrap();
+    assert_eq!(assert_storage_metrics(&store).in_flight_events, 2);
+    drop(store);
+    let (store, _) = RuntimeStore::new(dir.join("runtime.sqlite3")).unwrap();
+    let metrics = assert_storage_metrics(&store);
+    assert_eq!(metrics.event_count, 3);
+    assert_eq!(metrics.in_flight_events, 0);
+    store
+        .set_retention(RuntimeRetentionUpdate {
+            expected_revision: 1,
+            max_age_days: Some(1),
+            storage_limit_bytes: None,
+        })
+        .unwrap();
+    assert_eq!(assert_storage_metrics(&store).event_count, 2);
+    store.delete_session("session-fresh").unwrap();
+    assert_eq!(assert_storage_metrics(&store).event_count, 1);
+    // Explicit cleanup removes the remaining completed request.
+    store.cleanup_before(timestamp + 1.0).unwrap();
+    assert_eq!(assert_storage_metrics(&store).event_count, 0);
+    store
+        .enqueue(sample("before-reset", false, timestamp), counts(1))
+        .unwrap();
+    store.reset().unwrap();
+    assert_eq!(assert_storage_metrics(&store).event_count, 0);
+    store
+        .enqueue(sample("before-recreate", false, timestamp), counts(1))
+        .unwrap();
+    store.recreate().unwrap();
+    assert_eq!(assert_storage_metrics(&store).event_count, 0);
+    store
+        .enqueue(sample("after-recreate", false, timestamp), counts(1))
+        .unwrap();
+    assert_eq!(assert_storage_metrics(&store).event_count, 1);
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn storage_metrics_read_transaction_keeps_totals_and_boundaries_together() {
+    let (dir, store) = fixture("storage-metrics-snapshot");
+    store
+        .enqueue(sample("first", true, 100.0), counts(0))
+        .unwrap();
+    let before = assert_storage_metrics(&store);
+    let mut reader = Connection::open(store.path()).unwrap();
+    let transaction = reader.transaction().unwrap();
+    assert_eq!(crate::storage_metrics::read(&transaction).unwrap(), before);
+    store
+        .enqueue(sample("second", false, 200.0), counts(1))
+        .unwrap();
+    store
+        .enqueue(sample("first", false, 300.0), counts(2))
+        .unwrap();
+    store.flush().unwrap();
+    assert_eq!(
+        crate::storage_metrics::tests::assert_matches_scan(&transaction),
+        before
+    );
+    transaction.commit().unwrap();
+    assert_eq!(
+        crate::storage_metrics::tests::assert_matches_scan(&reader).latest_timestamp,
+        Some(300.0)
+    );
+    drop(reader);
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn analytics_filter_conversion_keeps_every_agent_dimension() {
     let filter = AnalyticsFilter {

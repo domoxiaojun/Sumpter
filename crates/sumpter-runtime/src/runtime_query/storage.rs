@@ -44,36 +44,7 @@ pub fn storage_details_on(
         "runtime_events_failure_time_v2",
     ];
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
-    let (
-        retained_events,
-        completed_events,
-        in_flight_events,
-        min_seq,
-        max_seq,
-        earliest_timestamp,
-        latest_timestamp,
-        payload_bytes,
-    ) = transaction.query_row(
-        "SELECT COUNT(*),\
-                COALESCE(SUM(CASE WHEN is_in_flight=0 THEN 1 ELSE 0 END),0),\
-                COALESCE(SUM(CASE WHEN is_in_flight=1 THEN 1 ELSE 0 END),0),\
-                MIN(seq),MAX(seq),MIN(timestamp),MAX(timestamp),\
-                COALESCE(SUM(payload_bytes),0) \
-         FROM runtime_events",
-        crate::database::params![],
-        |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, Option<i64>>(3)?,
-                row.get::<_, Option<i64>>(4)?,
-                row.get::<_, Option<f64>>(5)?,
-                row.get::<_, Option<f64>>(6)?,
-                row.get::<_, i64>(7)?,
-            ))
-        },
-    )?;
+    let metrics = crate::storage_metrics::read(&transaction)?;
     let max_age_days = meta_i64(&transaction, "retention_max_age_days")?;
     let storage_limit_bytes = meta_i64(&transaction, "storage_limit_bytes")?;
     let reset_generation = meta_i64(&transaction, "reset_generation")?.unwrap_or(0);
@@ -151,19 +122,19 @@ pub fn storage_details_on(
         .unwrap_or(0),
         hourly_rollup_failed: meta_i64(&transaction, "hourly_rollup_failed")?.unwrap_or(0) == 1,
         hourly_rollup_dirty_buckets,
-        retained_events,
-        completed_events,
-        in_flight_events,
-        min_seq,
-        max_seq,
-        earliest_timestamp,
-        latest_timestamp,
+        retained_events: metrics.event_count,
+        completed_events: metrics.completed_events,
+        in_flight_events: metrics.in_flight_events,
+        min_seq: metrics.min_seq,
+        max_seq: metrics.max_seq,
+        earliest_timestamp: metrics.earliest_timestamp,
+        latest_timestamp: metrics.latest_timestamp,
         retained_from_seq: meta_i64(&transaction, "retained_from_seq")?.unwrap_or(0),
         history_generation: meta_i64(&transaction, "history_generation")?.unwrap_or(0),
         reset_generation,
         user_deleted_events: meta_i64(&transaction, "user_deleted_events")?.unwrap_or(0),
         user_deleted_requests: meta_i64(&transaction, "user_deleted_requests")?.unwrap_or(0),
-        payload_bytes,
+        payload_bytes: metrics.payload_bytes,
         database_bytes,
         live_bytes,
         allocated_bytes,

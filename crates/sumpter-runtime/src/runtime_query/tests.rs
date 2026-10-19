@@ -322,6 +322,7 @@ fn projected_queries_are_bounded_on_100k_rows() {
     assert_eq!(sessions.total_count, 500);
     assert_eq!(sessions.rows.len(), 25);
 
+    crate::storage_metrics::ensure(&mut connection).unwrap();
     let storage = storage_details_on(&mut connection, None).expect("probe runtime storage");
     assert_eq!(storage.retained_events, 100_000);
     assert!(storage.projection_indexes_ready);
