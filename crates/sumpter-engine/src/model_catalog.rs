@@ -156,6 +156,37 @@ fn extract_route_capabilities(value: &Value) -> BTreeMap<String, RouteCapabiliti
     result
 }
 
+/// CPA 的 Claude 目录会把非 Claude 模型编码成
+/// `claude-fable-5-dd-` 加字符倒序的别名。这个别名只属于 Claude
+/// 目录协议，不是一个新的上游模型；目录合并前恢复成真实 ID，避免
+/// auto 探测同时收录 OpenAI 原名和 Anthropic 编码名。
+pub fn canonicalize_provider_model_id(id: &str) -> String {
+    const CPA_CLAUDE_ALIAS_PREFIX: &str = "claude-fable-5-dd-";
+    let Some(encoded) = id.strip_prefix(CPA_CLAUDE_ALIAS_PREFIX) else {
+        return id.to_string();
+    };
+    if encoded.is_empty() {
+        return id.to_string();
+    }
+    let mut chars: Vec<char> = encoded.chars().collect();
+    chars.reverse();
+    chars.into_iter().collect()
+}
+
+fn canonicalize_route_capabilities(
+    capabilities: BTreeMap<String, RouteCapabilities>,
+) -> BTreeMap<String, RouteCapabilities> {
+    let mut canonical = BTreeMap::new();
+    for (id, claims) in capabilities {
+        let id = canonicalize_provider_model_id(&id);
+        canonical
+            .entry(id)
+            .and_modify(|prior: &mut RouteCapabilities| prior.intersect(&claims))
+            .or_insert(claims);
+    }
+    canonical
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CatalogApplyOutcome {
     Applied,
@@ -1142,13 +1173,17 @@ async fn fetch_inner(
                         match read_body(response).await {
                             Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
                                 Ok(value) => {
-                                    let models = extract_models(&value);
+                                    let models = extract_models(&value)
+                                        .into_iter()
+                                        .map(|id| canonicalize_provider_model_id(&id))
+                                        .collect::<BTreeSet<_>>();
                                     if !models.is_empty() {
                                         source.get_or_insert_with(|| url.to_string());
                                         let mut claims = extract_route_capabilities(&value);
                                         for model in &models {
                                             claims.entry(model.clone()).or_default();
                                         }
+                                        let mut claims = canonicalize_route_capabilities(claims);
                                         // CPA exposes route-level claims through this optional
                                         // catalog. It never expands the discovered/authorized IDs.
                                         if matches!(endpoint.protocol, sumpter_core::config::EndpointProtocolMode::Auto | sumpter_core::config::EndpointProtocolMode::OpenAIResponses | sumpter_core::config::EndpointProtocolMode::OpenAI) {
@@ -1166,6 +1201,7 @@ async fn fetch_inner(
                                             };
                                             if let Ok(Some(value)) = tokio::time::timeout(budget, enrichment).await {
                                                 for (id, extra) in extract_route_capabilities(&value) {
+                                                    let id = canonicalize_provider_model_id(&id);
                                                     if let Some(claim) = claims.get_mut(&id) { claim.supplement(&extra); }
                                                 }
                                             }
@@ -1346,6 +1382,18 @@ mod tests {
         assert_eq!(
             extract_models(&json!({"models": {"m3": {}, "m4": {}}})),
             vec!["m3", "m4"]
+        );
+    }
+
+    #[test]
+    fn canonicalizes_cpa_reversed_claude_aliases() {
+        assert_eq!(
+            canonicalize_provider_model_id("claude-fable-5-dd-los-1.6-tpg"),
+            "gpt-6.1-sol"
+        );
+        assert_eq!(
+            canonicalize_provider_model_id("claude-fable-5"),
+            "claude-fable-5"
         );
     }
 

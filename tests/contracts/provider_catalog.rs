@@ -55,6 +55,37 @@ fn catalog_extracts_codex_slugs_and_gemini_resource_names() {
 }
 
 #[tokio::test]
+async fn cpa_reversed_aliases_do_not_double_model_count() {
+    let router = Router::new().route(
+        "/v1/models",
+        get(|headers: HeaderMap| async move {
+            let claude = headers.contains_key("anthropic-version");
+            if claude {
+                Json(json!({"data":[{"id":"claude-fable-5-dd-los-1.6-tpg"}]}))
+            } else {
+                Json(json!({"data":[{"id":"gpt-6.1-sol"}]}))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let config: AppConfig = serde_json::from_value(json!({
+        "schemaVersion":7,
+        "endpoints":[{"id":"cpa","name":"CPA","baseURL":format!("http://{address}"),
+            "apiKey":"synthetic-catalog-key","protocol":"auto","enabled":true}]
+    }))
+    .unwrap();
+    let snapshot =
+        sumpter_engine::model_catalog::ProviderCatalogFetcher::fetch(&config.endpoints[0]).await;
+    task.abort();
+    assert_eq!(snapshot.error, None);
+    assert_eq!(snapshot.models, ["gpt-6.1-sol"]);
+}
+
+#[tokio::test]
 async fn cpa_capability_discovery_does_not_expand_model_membership() {
     let router = Router::new().route("/v1/models", get(|uri: axum::http::Uri| async move {
         if uri.query() == Some("client_version=cpa") {

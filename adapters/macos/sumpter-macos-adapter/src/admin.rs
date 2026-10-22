@@ -475,7 +475,10 @@ async fn fetch_provider_models_inner(
                             Err(message) => errors.push(format!("{}: {message}", url.path())),
                             Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
                                 Ok(value) => {
-                                    let models = extract_models(&value);
+                                    let models = extract_models(&value)
+                                        .into_iter()
+                                        .map(|model| sumpter_engine::model_catalog::canonicalize_provider_model_id(&model))
+                                        .collect::<std::collections::BTreeSet<_>>();
                                     if !models.is_empty() {
                                         source.get_or_insert_with(|| url.to_string());
                                         for model in models {
