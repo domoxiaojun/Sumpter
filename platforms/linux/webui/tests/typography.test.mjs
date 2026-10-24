@@ -23,7 +23,7 @@ test('font stacks lead with the bundled variable families and end with a CJK fal
 });
 
 test('no stylesheet references a font family that is not bundled or a system fallback', async () => {
-  const files = ['base.css', 'components.css', 'workspace.css', 'animations.css'];
+  const files = ['base.css', 'components.css', 'workspace.css', 'animations.css', 'system.css'];
   for (const file of files) {
     const css = await readFile(new URL(`../src/styles/${file}`, import.meta.url), 'utf8');
     assert.doesNotMatch(css, /Plus Jakarta Sans|'Inter'|"Inter"|'JetBrains Mono'(?! Variable)/, `${file} 引用了未打包的字体`);

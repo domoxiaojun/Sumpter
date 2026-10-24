@@ -517,56 +517,58 @@ export function RunPage() {
       <div className="run-hero-grid run-hero-grid-single">
         {/* Status Hero */}
         <div className="glass-panel run-hero-panel">
-          <div className="panel-toolbar">
-            <span className="run-hero-kicker">
-              服务监听状态
-            </span>
-            <span className="mono-cell run-hero-version">
-              v{status?.version || '0.2.0'} · Generation: {status?.generation || '-'}
-            </span>
-          </div>
-
-          <div className="run-listener-row">
-            <div className="mono-cell run-listener-address">
-              {status?.listener ? `${status.listener.host}:${status.listener.port}` : '127.0.0.1:57878'}
+          <div className="run-hero-head">
+            <div className="run-hero-heading">
+              <span className="run-hero-kicker">服务监听状态</span>
+              <p className="run-hero-description">
+                {status?.health?.headline || (isRunning ? '代理服务正常响应客户端请求' : '服务当前处于休眠停止状态')}
+              </p>
             </div>
-            <button
-              type="button"
-              className="btn btn-ghost run-copy-address"
-              onClick={() => copyText(`http://${status?.listener?.host || '127.0.0.1'}:${status?.listener?.port || 57878}`, '监听地址')}
-            >
-              <Icon name="copy" size={14} />
-              <span>复制地址</span>
-            </button>
+            <span className="mono-cell run-hero-version">
+              v{status?.version || '0.2.0'} · {status?.generation || '-'}
+            </span>
           </div>
-
-          <p className="run-hero-description">
-            {status?.health?.headline || (isRunning ? '代理服务正常响应客户端请求' : '服务当前处于休眠停止状态')}
-          </p>
 
           {/* Detailed Info Matrix matching macOS */}
-          <div className="run-detail-grid">
-            <div>
-              <span>配置版本：</span>
-              <strong>v{config?.schemaVersion || 7}</strong>
+          <dl className="run-detail-grid">
+            <div className="run-detail-listener">
+              <dt>监听地址</dt>
+              <dd className="run-listener-row">
+                <span className="mono-cell run-listener-address">
+                  {status?.listener ? `${status.listener.host}:${status.listener.port}` : '127.0.0.1:57878'}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-compact run-copy-address"
+                  onClick={() => copyText(`http://${status?.listener?.host || '127.0.0.1'}:${status?.listener?.port || 57878}`, '监听地址')}
+                  title="复制监听地址"
+                >
+                  <Icon name="copy" size={14} />
+                  <span>复制</span>
+                </button>
+              </dd>
             </div>
             <div>
-              <span>认证状态：</span>
-              <strong className={secretStatus?.inboundAuthToken?.configured ? 'run-detail-good' : undefined}>
-                {secretStatus?.inboundAuthToken?.configured ? `已启用 (尾号 ${secretStatus.inboundAuthToken.last4})` : '未启用 (本机免密)'}
-              </strong>
+              <dt>配置版本</dt>
+              <dd>v{config?.schemaVersion || 7}</dd>
             </div>
             <div>
-              <span>运行时长：</span>
-              <strong className="mono-cell">
+              <dt>认证状态</dt>
+              <dd className={secretStatus?.inboundAuthToken?.configured ? 'run-detail-good' : undefined}>
+                {secretStatus?.inboundAuthToken?.configured ? `已启用 · 尾号 ${secretStatus.inboundAuthToken.last4}` : '未启用 · 本机免密'}
+              </dd>
+            </div>
+            <div>
+              <dt>运行时长</dt>
+              <dd className="mono-cell">
                 {status?.uptimeSeconds ? formatDuration(status.uptimeSeconds * 1000) : '-'}
-              </strong>
+              </dd>
             </div>
             <div>
-              <span>调度策略：</span>
-              <strong>优先级 + 会话粘性绑定</strong>
+              <dt>调度策略</dt>
+              <dd>优先级 + 会话粘性绑定</dd>
             </div>
-          </div>
+          </dl>
         </div>
 
       </div>

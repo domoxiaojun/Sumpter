@@ -1586,6 +1586,11 @@ class ApiService {
       if (!body.username || !body.password) {
         const error = new Error('请输入用户名和密码'); error.status = 401; throw error;
       }
+      this.mockState.session = {
+        authenticated: true,
+        username: String(body.username),
+        expiresAt: Math.floor(Date.now() / 1000) + 86400,
+      };
       return this.mockState.session;
     }
     if (path === '/auth/logout' && method === 'POST') {

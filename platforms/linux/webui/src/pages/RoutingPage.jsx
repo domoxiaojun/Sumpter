@@ -83,7 +83,7 @@ export function RoutingPage() {
       title: '分流 Provider 与模型',
       minWidth: '360px',
       render: (row) => (
-        <span className="mono-cell" style={{ color: 'var(--primary)', fontWeight: 600 }}>
+        <span className="routing-target-summary">
           {formatTargetSummary(row.target)}
         </span>
       ),

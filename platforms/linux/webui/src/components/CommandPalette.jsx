@@ -64,19 +64,17 @@ export function CommandPalette() {
     <div className="modal-overlay" onClick={() => setIsCommandOpen(false)}>
       <div
         className="modal-dialog command-palette-dialog"
-        style={{ maxWidth: '620px', borderRadius: 'var(--radius-lg)' }}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-label="命令面板"
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '16px 20px', borderBottom: '1px solid var(--border-subtle)' }}>
-          <Icon name="search" size={20} className="text-muted" />
+        <div className="command-palette-header">
+          <Icon name="search" size={18} className="text-muted" />
           <input
             ref={inputRef}
             type="text"
-            className="form-input"
-            style={{ border: 'none', background: 'transparent', fontSize: '1.05rem', padding: 0, boxShadow: 'none' }}
+            className="form-input command-palette-input"
             placeholder="输入指令或搜索页面 (如: 运行、Provider、启动代理)..."
             value={query}
             onChange={(e) => {
@@ -88,9 +86,9 @@ export function CommandPalette() {
           <kbd className="kbd-badge">ESC</kbd>
         </div>
 
-        <div style={{ maxHeight: '380px', overflowY: 'auto', padding: '8px' }}>
+        <div className="command-palette-list">
           {filtered.length === 0 ? (
-            <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--text-muted)' }}>
+            <div className="command-palette-empty">
               未找到匹配的指令或页面
             </div>
           ) : (
@@ -99,38 +97,18 @@ export function CommandPalette() {
               return (
                 <div
                   key={item.id}
+                  className={`command-palette-item${isSelected ? ' is-selected' : ''}`}
                   onClick={() => executeItem(item)}
                   onMouseEnter={() => setSelectedIndex(idx)}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '12px',
-                    padding: '10px 14px',
-                    borderRadius: 'var(--radius-md)',
-                    background: isSelected ? 'var(--bg-active)' : 'transparent',
-                    color: isSelected ? 'var(--primary)' : 'var(--text-primary)',
-                    cursor: 'pointer',
-                    transition: 'all var(--ease-fast)',
-                  }}
                 >
-                  <div
-                    style={{
-                      width: '32px',
-                      height: '32px',
-                      borderRadius: 'var(--radius-sm)',
-                      background: 'var(--bg-surface-elevated)',
-                      border: '1px solid var(--border-subtle)',
-                      display: 'grid',
-                      placeItems: 'center',
-                    }}
-                  >
-                    <Icon name={item.icon} size={16} />
+                  <div className="command-palette-icon">
+                    <Icon name={item.icon} size={15} />
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', flex: 1 }}>
-                    <span style={{ fontSize: '0.92rem', fontWeight: 600 }}>{item.title}</span>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{item.category}</span>
+                  <div className="command-palette-copy">
+                    <span className="command-palette-title">{item.title}</span>
+                    <span className="command-palette-category">{item.category}</span>
                   </div>
-                  {isSelected && <Icon name="chevron" size={16} />}
+                  {isSelected && <Icon name="chevron" size={15} />}
                 </div>
               );
             })

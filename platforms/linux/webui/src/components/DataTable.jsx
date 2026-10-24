@@ -52,17 +52,7 @@ export function DataTable({
   const hasData = Boolean(data && data.length > 0);
 
   const emptyState = (
-    <div
-      style={{
-        padding: '40px 20px',
-        textAlign: 'center',
-        color: 'var(--text-muted)',
-        fontSize: '0.9rem',
-        background: 'var(--bg-surface-glass)',
-        borderRadius: 'var(--radius-lg)',
-        border: '1px dashed var(--border-medium)',
-      }}
-    >
+    <div className="data-table-empty">
       {emptyText}
     </div>
   );

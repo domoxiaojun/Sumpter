@@ -15,8 +15,8 @@
   --leading-snug: 1.4;
   --leading-normal: 1.55;
   --leading-relaxed: 1.65;
-  --tracking-tight: -0.018em;
-  --tracking-display: -0.024em;
+  --tracking-tight: -0.016em;
+  --tracking-display: -0.022em;
 
   /* Spacing Scale */
   --space-1: 4px;
@@ -25,36 +25,38 @@
   --space-4: 16px;
   --space-5: 20px;
   --space-6: 24px;
+  --space-7: 28px;
   --space-8: 32px;
   --space-10: 40px;
 
-  /* Radius Scale */
+  /* Radius Scale — continuous macOS-inspired curvature */
   --radius-xs: 4px;
   --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-  --radius-xl: 20px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
   --radius-full: 9999px;
 
   /* Cross-platform surface rhythm.  macOS SectionPanel/MetricTile use the
      same semantic layers and radii so screenshots remain comparable without
      forcing SwiftUI to imitate browser controls. */
-  --panel-radius: 16px;
+  --panel-radius: 12px;
   --panel-padding: 20px;
-  --metric-radius: 14px;
+  --metric-radius: 12px;
   --metric-padding: 16px;
-  --control-height: 40px;
+  --control-height: 34px;
+  --control-height-sm: 28px;
   --control-height-touch: 44px;
 
   /* Fluid layout contract. Breakpoints still change information structure
      (for example a dense table becoming summary cards), while ordinary
      resizing uses these continuous values instead of page-specific pixels. */
-  --page-gutter: clamp(16px, 2.1vw, 28px);
-  --page-bottom-space: clamp(24px, 4vw, 40px);
-  --page-stack-gap: clamp(16px, 1.75vw, 24px);
+  --page-gutter: clamp(16px, 2.2vw, 28px);
+  --page-bottom-space: clamp(24px, 4vw, 44px);
+  --page-stack-gap: clamp(16px, 1.75vw, 22px);
   --panel-gap: 16px;
   --metric-gap: 12px;
-  --content-max-width: 1240px;
+  --content-max-width: 1280px;
   --readable-measure: 72ch;
 
   /* Transitions */
@@ -64,14 +66,14 @@
    * animation-delay, which made the shared modal appear to flash before it
    * entered. Animation timing is split into primitives below.
    */
-  --duration-fast: 150ms;
-  --duration-normal: 240ms;
-  --duration-spring: 300ms;
-  --timing-standard: cubic-bezier(0.4, 0, 0.2, 1);
-  --timing-spring: cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  --duration-fast: 140ms;
+  --duration-normal: 220ms;
+  --duration-spring: 280ms;
+  --timing-standard: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --timing-spring: cubic-bezier(0.22, 1, 0.36, 1);
   --motion-overlay-duration: 160ms;
-  --motion-modal-duration: 220ms;
-  --motion-command-duration: 180ms;
+  --motion-modal-duration: 210ms;
+  --motion-command-duration: 170ms;
   --motion-ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
   --motion-ease-exit: cubic-bezier(0.7, 0, 0.84, 0);
 
@@ -80,157 +82,175 @@
   --ease-spring: var(--duration-spring) var(--timing-spring);
 }
 
-/* Dark Theme (Default Cyber-Slate Mode) */
+/* Dark Theme — neutral graphite. 单一强调色、无渐变与发光,层次只靠明度差与细边框。 */
 html[data-theme="dark"],
 :root:not([data-theme="light"]) {
-  /* Surfaces & Backgrounds */
-  --bg-page: #080c14;
-  --bg-page-gradient: radial-gradient(circle at 50% 0%, rgba(30, 58, 138, 0.15) 0%, rgba(8, 12, 20, 0.8) 70%), #080c14;
-  /* Keep shell surfaces opaque enough to match macOS SectionPanel/MetricTile.
-     Blur remains reserved for transient overlays; static scroll surfaces do
-     not need translucency and therefore stay cheap to repaint. */
-  --bg-surface: rgba(15, 23, 42, 0.90);
-  --bg-surface-elevated: rgba(22, 33, 58, 0.96);
-  /* Match macOS Palette.inset. Static tables and nested panels use this
-     semantic surface; keep it opaque enough that scrolling does not repaint
-     a translucent gradient underneath every row. */
-  --bg-surface-glass: rgba(13, 20, 36, 0.90);
-  --bg-sidebar: rgba(10, 15, 26, 0.96);
-  --bg-topbar: rgba(8, 12, 20, 0.96);
-  --bg-card: rgba(16, 24, 40, 0.94);
-  --bg-hover: rgba(255, 255, 255, 0.06);
-  --bg-active: rgba(56, 189, 248, 0.12);
+  /* Surfaces */
+  --bg-page: #0b0b0d;
+  --bg-page-gradient: #0b0b0d;
+  --bg-surface: #131316;
+  --bg-surface-elevated: #1b1b1f;
+  --bg-surface-glass: #0f0f12;
+  --bg-sidebar: #0f0f12;
+  --bg-topbar: rgba(11, 11, 13, 0.86);
+  --bg-card: #131316;
+  --bg-hover: rgba(255, 255, 255, 0.045);
+  --bg-active: rgba(255, 255, 255, 0.075);
 
-  /* Typography & Inks */
-  --text-primary: #f8fafc;
-  --text-secondary: #94a3b8;
-  --text-muted: #8290a5;
-  --text-inverse: #0f172a;
+  /* Inks */
+  --text-primary: #ededef;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+  --text-inverse: #0b0b0d;
 
-  /* Borders & Dividers */
+  /* Borders */
   --border-subtle: rgba(255, 255, 255, 0.07);
-  --border-medium: rgba(255, 255, 255, 0.12);
-  --border-strong: rgba(255, 255, 255, 0.2);
-  --border-glow: rgba(56, 189, 248, 0.4);
+  --border-medium: rgba(255, 255, 255, 0.11);
+  --border-strong: rgba(255, 255, 255, 0.17);
+  --border-glow: rgba(76, 141, 255, 0.4);
 
-  /* Brand & Accent Lights */
-  --primary: #38bdf8;
-  --primary-hover: #0ea5e9;
-  --primary-action-start: #0369a1;
-  --primary-action-end: #1d4ed8;
-  --primary-action-hover: var(--primary-hover);
-  --selection-border: var(--primary);
-  --primary-glow: rgba(56, 189, 248, 0.35);
-  --accent-cyan: #06b6d4;
-  --accent-indigo: #6366f1;
-  --accent-purple: #a855f7;
+  /* Accent — 单一蓝色,按钮实色填充 */
+  --primary: #4c8dff;
+  --primary-hover: #6ea2ff;
+  --primary-action-start: #2f6fed;
+  --primary-action-end: #2f6fed;
+  --primary-action-hover: #3d7bf5;
+  --selection-border: rgba(76, 141, 255, 0.45);
+  --primary-glow: rgba(76, 141, 255, 0.22);
+  --accent-cyan: #4c8dff;
+  --accent-indigo: #8b8cf8;
+  --accent-purple: #b48cf2;
 
-  /* Semantic Status Colors with Neon Glows */
-  --status-good: #10b981;
-  --status-good-bg: rgba(16, 185, 129, 0.12);
-  --status-good-border: rgba(16, 185, 129, 0.3);
-  --status-good-glow: rgba(16, 185, 129, 0.4);
+  /* Semantic Status */
+  --status-good: #3fb950;
+  --status-good-bg: rgba(63, 185, 80, 0.1);
+  --status-good-border: rgba(63, 185, 80, 0.22);
+  --status-good-glow: rgba(63, 185, 80, 0.18);
 
-  --status-warning: #f59e0b;
-  --status-warning-bg: rgba(245, 158, 11, 0.12);
-  --status-warning-border: rgba(245, 158, 11, 0.3);
-  --status-warning-glow: rgba(245, 158, 11, 0.4);
+  --status-warning: #d29922;
+  --status-warning-bg: rgba(210, 153, 34, 0.1);
+  --status-warning-border: rgba(210, 153, 34, 0.24);
+  --status-warning-glow: rgba(210, 153, 34, 0.18);
 
-  --status-critical: #f43f5e;
-  --status-critical-bg: rgba(244, 63, 94, 0.12);
-  --status-critical-border: rgba(244, 63, 94, 0.3);
-  --status-critical-glow: rgba(244, 63, 94, 0.4);
+  --status-critical: #f0605a;
+  --status-critical-bg: rgba(240, 96, 90, 0.1);
+  --status-critical-border: rgba(240, 96, 90, 0.24);
+  --status-critical-glow: rgba(240, 96, 90, 0.18);
 
-  --status-live: #06b6d4;
-  --status-live-bg: rgba(6, 182, 212, 0.12);
-  --status-live-border: rgba(6, 182, 212, 0.3);
+  --status-live: #4c8dff;
+  --status-live-bg: rgba(76, 141, 255, 0.1);
+  --status-live-border: rgba(76, 141, 255, 0.24);
 
-  --status-muted: #8290a5;
-  --status-muted-bg: rgba(100, 116, 139, 0.12);
-  --status-muted-border: rgba(100, 116, 139, 0.25);
+  --status-muted: #a1a1aa;
+  --status-muted-bg: rgba(161, 161, 170, 0.08);
+  --status-muted-border: rgba(161, 161, 170, 0.16);
 
-  /* Shadows & Glass Elevation */
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 12px 36px rgba(0, 0, 0, 0.55);
-  --shadow-glow-cyan: 0 0 24px rgba(56, 189, 248, 0.25);
-  --shadow-glow-emerald: 0 0 24px rgba(16, 185, 129, 0.25);
+  /* Elevation — 暗色下不用阴影堆叠层次 */
+  --surface-specular: inset 0 0 0 0 transparent;
+  --surface-specular-strong: inset 0 0 0 0 transparent;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 6px 16px -4px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 24px 48px -12px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --panel-shadow: none;
+  --card-shadow: none;
+  --control-shadow: none;
+  --input-shadow: none;
+  --shadow-glow-cyan: none;
+  --shadow-glow-emerald: none;
 
-  /* Glass Filter */
-  --backdrop-blur: blur(16px) saturate(180%);
+  /* Segmented Controls & Tabs */
+  --segmented-track-bg: #0f0f12;
+  --segmented-thumb-bg: #26262b;
+  --segmented-thumb-border: rgba(255, 255, 255, 0.08);
+  --segmented-thumb-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+
+  --backdrop-blur: blur(12px) saturate(140%);
 }
 
-/* Light Theme (Luminous Porcelain & Slate Mode) */
+/* Light Theme — neutral paper. */
 html[data-theme="light"] {
-  /* Surfaces & Backgrounds */
-  --bg-page: #f6f8fc;
-  --bg-page-gradient: radial-gradient(circle at 50% 0%, rgba(219, 234, 254, 0.4) 0%, rgba(246, 248, 252, 1) 70%), #f6f8fc;
-  --bg-surface: rgba(255, 255, 255, 0.92);
-  --bg-surface-elevated: rgba(255, 255, 255, 0.98);
-  /* macOS Palette.inset is the same porcelain surface without a second
-     translucent layer. */
-  --bg-surface-glass: #f8fafc;
-  --bg-sidebar: rgba(248, 250, 252, 0.98);
-  --bg-topbar: rgba(246, 248, 252, 0.96);
-  --bg-card: rgba(255, 255, 255, 0.96);
-  --bg-hover: rgba(0, 0, 0, 0.04);
-  --bg-active: rgba(2, 132, 199, 0.08);
+  /* Surfaces */
+  --bg-page: #f7f7f8;
+  --bg-page-gradient: #f7f7f8;
+  --bg-surface: #ffffff;
+  --bg-surface-elevated: #ffffff;
+  --bg-surface-glass: #f7f7f8;
+  --bg-sidebar: #f2f2f4;
+  --bg-topbar: rgba(247, 247, 248, 0.88);
+  --bg-card: #ffffff;
+  --bg-hover: rgba(9, 9, 11, 0.04);
+  --bg-active: rgba(9, 9, 11, 0.065);
 
-  /* Typography & Inks */
-  --text-primary: #0f172a;
-  --text-secondary: #475569;
-  --text-muted: #5f6f84;
-  --text-inverse: #f8fafc;
+  /* Inks */
+  --text-primary: #18181b;
+  --text-secondary: #52525b;
+  --text-muted: #71717a;
+  --text-inverse: #ffffff;
 
-  /* Borders & Dividers */
-  --border-subtle: rgba(0, 0, 0, 0.06);
-  --border-medium: rgba(0, 0, 0, 0.11);
-  --border-strong: rgba(0, 0, 0, 0.2);
-  --border-glow: rgba(2, 132, 199, 0.4);
+  /* Borders */
+  --border-subtle: #e9e9ec;
+  --border-medium: #dcdce0;
+  --border-strong: #c4c4ca;
+  --border-glow: rgba(37, 99, 235, 0.35);
 
-  /* Brand & Accent Lights */
-  --primary: #0284c7;
-  --primary-hover: #0369a1;
-  --primary-action-start: #0369a1;
-  --primary-action-end: #1d4ed8;
-  --primary-action-hover: var(--primary-hover);
-  --selection-border: var(--primary);
-  --primary-glow: rgba(2, 132, 199, 0.2);
-  --accent-cyan: #0e7490;
+  /* Accent */
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --primary-action-start: #2563eb;
+  --primary-action-end: #2563eb;
+  --primary-action-hover: #1d4ed8;
+  --selection-border: rgba(37, 99, 235, 0.4);
+  --primary-glow: rgba(37, 99, 235, 0.16);
+  --accent-cyan: #2563eb;
   --accent-indigo: #4f46e5;
-  --accent-purple: #9333ea;
+  --accent-purple: #7c3aed;
 
-  /* Semantic Status Colors */
-  --status-good: #047857;
-  --status-good-bg: rgba(5, 150, 105, 0.1);
-  --status-good-border: rgba(5, 150, 105, 0.25);
-  --status-good-glow: rgba(5, 150, 105, 0.2);
+  /* Semantic Status */
+  --status-good: #1a7f37;
+  --status-good-bg: rgba(26, 127, 55, 0.07);
+  --status-good-border: rgba(26, 127, 55, 0.2);
+  --status-good-glow: rgba(26, 127, 55, 0.14);
 
-  --status-warning: #b45309;
-  --status-warning-bg: rgba(217, 119, 6, 0.1);
-  --status-warning-border: rgba(217, 119, 6, 0.25);
-  --status-warning-glow: rgba(217, 119, 6, 0.2);
+  --status-warning: #9a6700;
+  --status-warning-bg: rgba(191, 135, 0, 0.08);
+  --status-warning-border: rgba(191, 135, 0, 0.24);
+  --status-warning-glow: rgba(191, 135, 0, 0.14);
 
-  --status-critical: #be123c;
-  --status-critical-bg: rgba(225, 29, 72, 0.1);
-  --status-critical-border: rgba(225, 29, 72, 0.25);
-  --status-critical-glow: rgba(225, 29, 72, 0.2);
+  --status-critical: #cf222e;
+  --status-critical-bg: rgba(207, 34, 46, 0.06);
+  --status-critical-border: rgba(207, 34, 46, 0.2);
+  --status-critical-glow: rgba(207, 34, 46, 0.14);
 
-  --status-live: #0e7490;
-  --status-live-bg: rgba(8, 145, 178, 0.1);
-  --status-live-border: rgba(8, 145, 178, 0.25);
+  --status-live: #2563eb;
+  --status-live-bg: rgba(37, 99, 235, 0.07);
+  --status-live-border: rgba(37, 99, 235, 0.2);
 
-  --status-muted: #5f6f84;
-  --status-muted-bg: rgba(100, 116, 139, 0.08);
-  --status-muted-border: rgba(100, 116, 139, 0.2);
+  --status-muted: #52525b;
+  --status-muted-bg: rgba(82, 82, 91, 0.06);
+  --status-muted-border: rgba(82, 82, 91, 0.16);
 
-  /* Shadows & Glass Elevation */
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.03);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.06), 0 2px 4px rgba(0, 0, 0, 0.03);
-  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.08), 0 4px 8px rgba(0, 0, 0, 0.04);
-  --shadow-glow-cyan: 0 0 18px rgba(2, 132, 199, 0.15);
-  --shadow-glow-emerald: 0 0 18px rgba(5, 150, 105, 0.15);
+  /* Elevation */
+  --surface-specular: inset 0 0 0 0 transparent;
+  --surface-specular-strong: inset 0 0 0 0 transparent;
+  --shadow-sm: 0 1px 2px rgba(9, 9, 11, 0.05);
+  --shadow-md: 0 6px 16px -4px rgba(9, 9, 11, 0.08), 0 2px 4px -1px rgba(9, 9, 11, 0.04);
+  --shadow-lg: 0 20px 40px -12px rgba(9, 9, 11, 0.18), 0 0 0 1px rgba(9, 9, 11, 0.06);
+  --panel-shadow: 0 1px 2px rgba(9, 9, 11, 0.03);
+  --card-shadow: 0 1px 2px rgba(9, 9, 11, 0.03);
+  --control-shadow: 0 1px 2px rgba(9, 9, 11, 0.04);
+  --input-shadow: none;
+  --shadow-glow-cyan: none;
+  --shadow-glow-emerald: none;
 
-  /* Glass Filter */
-  --backdrop-blur: blur(16px) saturate(160%);
+  /* Segmented Controls & Tabs */
+  --segmented-track-bg: #f0f0f2;
+  --segmented-thumb-bg: #ffffff;
+  --segmented-thumb-border: rgba(9, 9, 11, 0.08);
+  --segmented-thumb-shadow: 0 1px 2px rgba(9, 9, 11, 0.08);
+
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2352525b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+
+  --backdrop-blur: blur(12px) saturate(140%);
 }

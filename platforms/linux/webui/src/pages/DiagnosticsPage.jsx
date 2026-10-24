@@ -616,34 +616,34 @@ export function DiagnosticsPage() {
 
         <div className="grid-3col diagnostics-matrix-grid">
           <div>
-            <span style={{ color: 'var(--text-muted)' }}>Daemon 版本：</span>
-            <strong className="mono-cell" style={{ color: 'var(--text-primary)' }}>{diag?.version || '0.2.0'}</strong>
+            <span>Daemon 版本</span>
+            <strong className="mono-cell">{diag?.version || '0.2.0'}</strong>
           </div>
           <div>
-            <span style={{ color: 'var(--text-muted)' }}>配置代数 (Generation)：</span>
-            <strong className="mono-cell" style={{ color: 'var(--primary)' }}>{diag?.generation || '-'}</strong>
+            <span>配置代数 (Generation)</span>
+            <strong className="mono-cell">{diag?.generation || '-'}</strong>
           </div>
           <div>
-            <span style={{ color: 'var(--text-muted)' }}>运行时长：</span>
-            <strong className="mono-cell" style={{ color: 'var(--text-primary)' }}>{diag?.uptimeSeconds ? formatDuration(diag.uptimeSeconds * 1000) : '-'}</strong>
+            <span>运行时长</span>
+            <strong className="mono-cell">{diag?.uptimeSeconds ? formatDuration(diag.uptimeSeconds * 1000) : '-'}</strong>
           </div>
           <div>
-            <span style={{ color: 'var(--text-muted)' }}>Admin 管理监听：</span>
-            <strong className="mono-cell" style={{ color: 'var(--text-primary)' }}>{formatListenerAddress(diag?.adminListener, '127.0.0.1:57879')}</strong>
+            <span>Admin 管理监听</span>
+            <strong className="mono-cell">{formatListenerAddress(diag?.adminListener, '127.0.0.1:57879')}</strong>
           </div>
           <div>
-            <span style={{ color: 'var(--text-muted)' }}>代理转发监听：</span>
-            <strong className="mono-cell" style={{ color: 'var(--text-primary)' }}>{formatListenerAddress(diag?.proxyListener, '127.0.0.1:57878')}</strong>
+            <span>代理转发监听</span>
+            <strong className="mono-cell">{formatListenerAddress(diag?.proxyListener, '127.0.0.1:57878')}</strong>
           </div>
           <div>
-            <span style={{ color: 'var(--text-muted)' }}>统计文件可写性：</span>
+            <span>统计文件可写性</span>
             <StatusBadge text={diag?.statsWritable ? '可正常写入' : '不可写'} kind={diag?.statsWritable ? 'good' : 'critical'} />
           </div>
         </div>
 
         <div className="diagnostics-paths">
-          <div><span style={{ color: 'var(--text-muted)' }}>配置文件路径：</span><span className="mono-cell" style={{ color: 'var(--text-primary)' }}>{diag?.configPath || '~/.config/sumpter/config.json'}</span></div>
-          <div><span style={{ color: 'var(--text-muted)' }}>WebUI 静态根目录：</span><span className="mono-cell" style={{ color: 'var(--text-primary)' }}>{diag?.webRoot || '~/.local/share/sumpter/web'}</span></div>
+          <div><span>配置文件路径</span><code className="mono-cell">{diag?.configPath || '~/.config/sumpter/config.json'}</code></div>
+          <div><span>WebUI 静态根目录</span><code className="mono-cell">{diag?.webRoot || '~/.local/share/sumpter/web'}</code></div>
         </div>
       </div>
 

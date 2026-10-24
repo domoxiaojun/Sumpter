@@ -13,6 +13,7 @@ import './styles/base.css';
 import './styles/components.css';
 import './styles/workspace.css';
 import './styles/animations.css';
+import './styles/system.css';
 
 const container = document.getElementById('root');
 const root = createRoot(container);

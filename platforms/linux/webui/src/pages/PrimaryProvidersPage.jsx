@@ -194,27 +194,18 @@ function CatalogModelPicker({ models, onChange }) {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+    <div className="catalog-picker">
+      <div className="catalog-picker-header">
         <span className="form-hint">选择目录中尚未映射的模型；默认全选。共 {models.length} 个。</span>
         <button type="button" className="btn btn-secondary btn-compact" onClick={toggleAll}>
           {selected.size === models.length ? '取消全选' : '全选'}
         </button>
       </div>
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))',
-          gap: '8px',
-          maxHeight: '300px',
-          overflowY: 'auto',
-          padding: '4px',
-        }}
-      >
+      <div className="catalog-picker-grid">
         {models.map((model) => (
           <label
             key={model}
-            style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)', cursor: 'pointer' }}
+            className="catalog-picker-option"
           >
             <input type="checkbox" checked={selected.has(model)} onChange={() => toggle(model)} />
             <span className="mono-cell" style={{ overflowWrap: 'anywhere', fontSize: '0.8rem' }}>{model}</span>
@@ -1528,11 +1519,11 @@ export function PrimaryProvidersPage() {
       </div>
 
       {/* Top Overview Cards */}
-      <div className="grid-2col">
+      <div className="grid-2col provider-overview-grid">
         {/* Explicit Mapping Card */}
-        <div className="glass-panel panel-padded-stack">
+        <div className="glass-panel panel-padded-stack provider-overview-card">
           <div className="panel-toolbar">
-            <span style={{ fontSize: '0.82rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+            <span className="panel-title">
               入口模型映射与入口概览
             </span>
             <StatusBadge text="按入口生效" kind="good" />
@@ -1552,37 +1543,37 @@ export function PrimaryProvidersPage() {
         </div>
 
         {/* Global Retry Policy Card */}
-        <div className="glass-panel panel-padded-stack">
+        <div className="glass-panel panel-padded-stack provider-overview-card">
           <div className="panel-toolbar">
-            <span style={{ fontSize: '0.82rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+            <span className="panel-title">
               全局超时与重试参数摘要
             </span>
             <StatusBadge text="生效中" kind="good" />
           </div>
-          <div className="grid-2col summary-grid">
-            <div>首响应截止：<strong className="mono-cell">{retry.responseTimeoutSeconds ? `${retry.responseTimeoutSeconds}s` : '由客户端决定'}</strong></div>
-            <div>流式空闲截止：<strong className="mono-cell">{retry.streamIdleTimeoutSeconds ? `${retry.streamIdleTimeoutSeconds}s` : '无限空闲'}</strong></div>
-            <div>500 失败后切换入口：<strong className="mono-cell">{(retry.failoverOn500 ?? true) ? '开启' : '关闭'}</strong></div>
-            <div>入口内流错误重试：<strong className="mono-cell">{retry.maxStreamErrorRetries ?? 0} 次</strong></div>
-            <div>流错误后切换入口：<strong className="mono-cell">{(retry.failoverOnStreamError ?? false) ? '开启' : '关闭'}</strong></div>
-            <div>入口内 500 重试：<strong className="mono-cell">{retry.max500Retries ?? 0} 次</strong></div>
-            <div>retry_delay 透传：<strong className="mono-cell">{(retry.passThroughRetryDelay ?? true) ? (retry.retryDelaySeconds ? `${retry.retryDelaySeconds}s` : '未配置') : '关闭'}</strong></div>
-            <div>粘性入口重试：<strong className="mono-cell">{retry.sessionStickyRetries ?? 2} 次</strong></div>
-            <div>会话粘性时长：<strong className="mono-cell">{stickyTTLEffective > 0 ? `${stickyTTLEffective}h` : '永不过期'}</strong></div>
-            <div>故障重试最大轮数：<strong className="mono-cell">{retry.maxDeferredRounds ?? retry.crossRoundRetries ?? 3} 轮</strong></div>
-            <div>跨轮最长时长：<strong className="mono-cell">{retry.maxRetryDurationSeconds ? `${retry.maxRetryDurationSeconds}s` : '不限时长'}</strong></div>
+          <div className="grid-2col summary-grid provider-retry-grid">
+            <div><span>首响应截止</span><strong className="mono-cell">{retry.responseTimeoutSeconds ? `${retry.responseTimeoutSeconds}s` : '由客户端决定'}</strong></div>
+            <div><span>流式空闲截止</span><strong className="mono-cell">{retry.streamIdleTimeoutSeconds ? `${retry.streamIdleTimeoutSeconds}s` : '无限空闲'}</strong></div>
+            <div><span>500 失败后切换入口</span><strong className="mono-cell">{(retry.failoverOn500 ?? true) ? '开启' : '关闭'}</strong></div>
+            <div><span>入口内流错误重试</span><strong className="mono-cell">{retry.maxStreamErrorRetries ?? 0} 次</strong></div>
+            <div><span>流错误后切换入口</span><strong className="mono-cell">{(retry.failoverOnStreamError ?? false) ? '开启' : '关闭'}</strong></div>
+            <div><span>入口内 500 重试</span><strong className="mono-cell">{retry.max500Retries ?? 0} 次</strong></div>
+            <div><span>retry_delay 透传</span><strong className="mono-cell">{(retry.passThroughRetryDelay ?? true) ? (retry.retryDelaySeconds ? `${retry.retryDelaySeconds}s` : '未配置') : '关闭'}</strong></div>
+            <div><span>粘性入口重试</span><strong className="mono-cell">{retry.sessionStickyRetries ?? 2} 次</strong></div>
+            <div><span>会话粘性时长</span><strong className="mono-cell">{stickyTTLEffective > 0 ? `${stickyTTLEffective}h` : '永不过期'}</strong></div>
+            <div><span>故障重试最大轮数</span><strong className="mono-cell">{retry.maxDeferredRounds ?? retry.crossRoundRetries ?? 3} 轮</strong></div>
+            <div><span>跨轮最长时长</span><strong className="mono-cell">{retry.maxRetryDurationSeconds ? `${retry.maxRetryDurationSeconds}s` : '不限时长'}</strong></div>
           </div>
         </div>
 
-        <div className="glass-panel panel-padded-stack">
+        <div className="glass-panel panel-padded-stack provider-overview-card provider-catalog-card">
           <div className="panel-toolbar">
-            <span style={{ fontSize: '0.82rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+            <span className="panel-title">
               自动模型目录
             </span>
             <StatusBadge text={modelCatalog.autoRefresh === false ? '已停用' : '已启用'} kind={modelCatalog.autoRefresh === false ? 'muted' : 'good'} />
           </div>
-          <div className="grid-2col summary-grid">
-            <label>
+          <div className="summary-grid provider-catalog-controls">
+            <label className="provider-catalog-row">
               <span>Provider 自动刷新</span>
               <QuickToggle
                 checked={modelCatalog.autoRefresh !== false}
@@ -1591,7 +1582,7 @@ export function PrimaryProvidersPage() {
                 ariaLabel="切换 Provider 模型目录自动刷新"
               />
             </label>
-            <label>
+            <label className="provider-catalog-row">
               <span>启动时刷新</span>
               <QuickToggle
                 checked={modelCatalog.refreshOnStartup !== false}
@@ -1600,7 +1591,7 @@ export function PrimaryProvidersPage() {
                 ariaLabel="切换启动时刷新模型目录"
               />
             </label>
-            <label>
+            <label className="provider-catalog-row">
               <span>公共元数据</span>
               <QuickToggle
                 checked={modelCatalog.remoteMetadataEnabled !== false}
@@ -1609,10 +1600,10 @@ export function PrimaryProvidersPage() {
                 ariaLabel="切换公共模型元数据刷新"
               />
             </label>
-            <label>
+            <label className="provider-catalog-row">
               <span>刷新周期（分钟）</span>
               <input
-                className="form-input"
+                className="form-input provider-catalog-interval"
                 type="number"
                 min="15"
                 max="1440"
@@ -1627,7 +1618,7 @@ export function PrimaryProvidersPage() {
               />
             </label>
           </div>
-          <button type="button" className="btn btn-secondary" disabled={catalogRefreshing} onClick={() => void refreshModelCatalog()}>
+          <button type="button" className="btn btn-secondary provider-catalog-refresh-btn" disabled={catalogRefreshing} onClick={() => void refreshModelCatalog()}>
             <Icon name="refresh" size={14} />
             <span>{catalogRefreshing ? '刷新中…' : '立即刷新目录'}</span>
           </button>
@@ -1641,15 +1632,14 @@ export function PrimaryProvidersPage() {
             <div className="panel-title">上游通道入口列表 ({endpoints.length})</div>
             <span className="panel-hint">调度优先按 Priority 数值（小者优先），同级按列表顺序。点击行查看详细映射；拖动整行可调整入口顺序，目标行上/下半区会显示插入位置。</span>
           </div>
-          <div className="panel-header-actions" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            <label htmlFor="provider-sticky-ttl" style={{ fontSize: '0.8rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }} title="同一会话粘在同一入口组的时长；超时后新请求按入口库顺序重新选择。0 表示永不过期。">会话粘性时长</label>
+          <div className="panel-header-actions provider-sticky-toolbar">
+            <label htmlFor="provider-sticky-ttl" title="同一会话粘在同一入口组的时长；超时后新请求按入口库顺序重新选择。0 表示永不过期。">会话粘性时长</label>
             <input
               id="provider-sticky-ttl"
-              className="form-input"
+              className="form-input provider-sticky-input"
               type="number"
               min="0"
               step="1"
-              style={{ width: '90px' }}
               value={stickyTTLDraft}
               disabled={savingStickyTTL}
               onChange={(event) => setStickyTTLDraft(event.target.value)}
@@ -1657,7 +1647,7 @@ export function PrimaryProvidersPage() {
               onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } }}
               aria-label="会话粘性时长（小时）"
             />
-            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>h</span>
+            <span>h</span>
           </div>
         </div>
         <div className="panel-body panel-body-flush">
@@ -1836,19 +1826,19 @@ export function PrimaryProvidersPage() {
           </div>
 
           <div className="grid-4col endpoint-detail-grid">
-            <div><span style={{ color: 'var(--text-muted)' }}>入口 ID：</span><span className="mono-cell">{selectedEndpoint.id}</span></div>
-            <div><span style={{ color: 'var(--text-muted)' }}>API 地址：</span><span className="mono-cell">{selectedEndpoint.baseURL}</span></div>
-            <div><span style={{ color: 'var(--text-muted)' }}>指定解析 IP：</span><span className="mono-cell">{selectedEndpoint.resolveIP || '系统 DNS'}</span></div>
-            <div><span style={{ color: 'var(--text-muted)' }}>API Key：</span><span className={secretStatus?.endpoints?.[selectedEndpoint.id]?.configured ? 'provider-secret-configured' : 'provider-secret-missing'}>{secretStatus?.endpoints?.[selectedEndpoint.id]?.configured ? `已配置 · 尾号 ${secretStatus.endpoints[selectedEndpoint.id].last4 || '****'}` : '未配置'}</span></div>
-            <div><span style={{ color: 'var(--text-muted)' }}>入口协议：</span><span className="mono-cell">{endpointProtocolLabel(selectedEndpoint.protocol)}</span></div>
-            <div><span style={{ color: 'var(--text-muted)' }}>粘性分组：</span><span className="mono-cell">{selectedEndpoint.stickyGroup || '独立分组'}</span></div>
-            <div><span style={{ color: 'var(--text-muted)' }}>连接复用：</span><span className="mono-cell">{selectedEndpoint.keepAlive ? '开启' : '关闭'}</span></div>
-            <div><span style={{ color: 'var(--text-muted)' }}>UA：</span><span>{userAgentSummary(selectedEndpoint.userAgent)}</span></div>
+            <div><span>入口 ID</span><span className="mono-cell">{selectedEndpoint.id}</span></div>
+            <div><span>API 地址</span><span className="mono-cell">{selectedEndpoint.baseURL}</span></div>
+            <div><span>指定解析 IP</span><span className="mono-cell">{selectedEndpoint.resolveIP || '系统 DNS'}</span></div>
+            <div><span>API Key</span><span className={secretStatus?.endpoints?.[selectedEndpoint.id]?.configured ? 'provider-secret-configured' : 'provider-secret-missing'}>{secretStatus?.endpoints?.[selectedEndpoint.id]?.configured ? `已配置 · 尾号 ${secretStatus.endpoints[selectedEndpoint.id].last4 || '****'}` : '未配置'}</span></div>
+            <div><span>入口协议</span><span className="mono-cell">{endpointProtocolLabel(selectedEndpoint.protocol)}</span></div>
+            <div><span>粘性分组</span><span className="mono-cell">{selectedEndpoint.stickyGroup || '独立分组'}</span></div>
+            <div><span>连接复用</span><span className="mono-cell">{selectedEndpoint.keepAlive ? '开启' : '关闭'}</span></div>
+            <div><span>UA</span><span>{userAgentSummary(selectedEndpoint.userAgent)}</span></div>
           </div>
 
-          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', padding: '12px 14px', borderRadius: 'var(--radius-md)', background: 'var(--bg-surface-glass)', border: '1px solid var(--border-subtle)' }}>
-            <div style={{ minWidth: 0, flex: '1 1 420px' }}>
-              <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+          <div className="endpoint-catalog-card">
+            <div className="endpoint-catalog-info">
+              <div className="endpoint-catalog-heading">
                 模型目录 · {catalogModels(selectedEndpoint).length} 个
                 {selectedEndpoint.catalog?.status ? <span style={{ marginLeft: '8px', color: selectedEndpoint.catalog.status === '获取失败' ? 'var(--status-critical)' : 'var(--status-good)' }}>{selectedEndpoint.catalog.status}</span> : null}
               </div>
@@ -1858,9 +1848,9 @@ export function PrimaryProvidersPage() {
               </div>
               {selectedEndpoint.catalog?.error && <div role="alert" style={{ marginTop: '6px', color: 'var(--status-critical)', fontSize: '0.78rem', overflowWrap: 'anywhere' }}>{selectedEndpoint.catalog.error}</div>}
               {catalogModels(selectedEndpoint).length > 0 && (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', maxHeight: '132px', overflowY: 'auto', marginTop: '10px', paddingRight: '4px' }}>
+                <div className="endpoint-catalog-tags">
                   {catalogModels(selectedEndpoint).map((model) => (
-                    <span key={model} className="mono-cell" style={{ padding: '3px 7px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)', color: 'var(--text-secondary)', fontSize: '0.72rem', overflowWrap: 'anywhere' }}>
+                    <span key={model} className="mono-cell endpoint-catalog-tag">
                       {readableCatalogModel(model)}
                     </span>
                   ))}
@@ -1868,7 +1858,7 @@ export function PrimaryProvidersPage() {
               )}
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', flexShrink: 0 }}>
-              <button type="button" className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: '0.78rem' }} disabled={!catalogModels(selectedEndpoint).length} onClick={() => openCatalogMappingEditor(selectedEndpoint)}>
+              <button type="button" className="btn btn-secondary btn-compact" disabled={!catalogModels(selectedEndpoint).length} onClick={() => openCatalogMappingEditor(selectedEndpoint)}>
                 <Icon name="plus" size={13} />
                 <span>从已知模型添加</span>
               </button>
