@@ -176,7 +176,10 @@ test('Run page places input/output Token cards before the routing counters', asy
   assert.equal((metrics.match(/<MetricCard/g) || []).length, 5, 'match the five native overview metrics');
   assert.doesNotMatch(metrics, /Endpoints 上游入口|label="Provider 候选"/);
   assert.doesNotMatch(runPageSource, /grid-4col run-metric-grid/, 'avoid the generic mobile single-column override');
-  assert.match(runPageSource, /function recentTokenTotals\(events\)/);
+  assert.match(runPageSource, /function todayTokenTotals\(series\)/);
+  assert.match(runPageSource, /今天累计/);
+  assert.match(runPageSource, /getRuntimeTrends\(\{ range: 'today'/);
+  assert.doesNotMatch(runPageSource, /最近事件内累计/);
   assert.match(runPageSource, /暂无可用用量/);
   for (const label of ['近 5 次成功率', '当前进行中', '近 5 次首响应', '近 5 次平均耗时']) {
     assert.doesNotMatch(runPageSource, new RegExp(label));

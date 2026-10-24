@@ -28,14 +28,22 @@ test('usage distinguishes pending, missing, zero and partial reports', () => {
 
   const zero = { phase: 'inFlight', usageSummary: { inputTokens: 0 }, cacheRead: { state: 'miss', readTokens: 0, finality: 'confirmed' } };
   assert.equal(eventHasObservedUsage(zero), true);
-  assert.equal(eventUsageLabel(zero), '输入 0 · 输出 —');
+  assert.equal(eventUsageLabel(zero), '输入 0 · 输出 — · —');
   assert.equal(eventCacheLabel(zero), '缓存读取 0');
 
   const partial = { phase: 'inFlight', streamTrace: { usage: { inputTokens: 33, outputTokens: 3 } }, cacheRead: { state: 'hit', readTokens: 222950, finality: 'provisional' } };
   assert.equal(eventHasObservedUsage(partial), true);
-  assert.equal(eventUsageLabel(partial), '输入 33 · 输出 3');
+  assert.equal(eventUsageLabel(partial), '输入 33 · 输出 3 · —');
   assert.equal(eventCacheLabel(partial), '缓存读取 222,950');
   assert.equal(partial.cacheRead.finality, 'provisional');
+
+  const rated = {
+    phase: 'completed',
+    kind: 'client',
+    usageSummary: { inputTokens: 100, outputTokens: 50 },
+    outputTokensPerSecond: 12.34,
+  };
+  assert.equal(eventUsageLabel(rated), '输入 100 · 输出 50 · 12.3 tok/s');
 });
 
 test('in-flight status distinguishes waiting for headers from receiving and streaming', () => {

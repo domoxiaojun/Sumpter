@@ -11,26 +11,35 @@ import { Icon } from '../utils/icons.jsx';
 import { orderRuntimeEvents, mergeRuntimeEvent } from '../utils/runtimeEvents.js';
 import { EventInspector } from '../components/EventInspector.jsx';
 import { CacheHitRate } from '../components/CacheHitRate.jsx';
-import { eventAgentLabel, eventCacheLabel, eventHasObservedUsage, eventUsageLabel, eventUsage } from '../utils/eventPresentation.js';
+import { eventAgentLabel, eventCacheLabel, eventHasObservedUsage, eventUsageLabel } from '../utils/eventPresentation.js';
 import { copyWithToast } from '../utils/clipboard.js';
 import { api } from '../services/api.js';
 import {
-  eventEndpointName, formatNumber, formatTokenCount, formatDuration, formatTimestamp, eventLogicalModel, eventEndpoint, statusKind, eventDurationText, friendlyEventMessage, eventPurposeLabel, eventClientKindLabel, eventKindLabel, getRequestChain, eventOutcomeLabel, eventPhaseLabel, eventHttpStatusLabel, eventHTTPStatusCode, eventRequestID, eventTTFBMS, eventOutcome, eventFailover, eventField, eventIsInFlight, eventFailureSummaryLabel, eventResultKind, eventProjectContext, eventToolCalls
+  eventEndpointName, formatNumber, formatTokenCount, formatDuration, formatTimestamp, eventLogicalModel, eventEndpoint, statusKind, eventDurationText, friendlyEventMessage, eventPurposeLabel, eventClientKindLabel, eventKindLabel, getRequestChain, eventOutcomeLabel, eventPhaseLabel, eventHttpStatusLabel, eventHTTPStatusCode, eventRequestID, eventTTFBMS, eventOutcome, eventFailover, eventField, eventIsInFlight, eventFailureSummaryLabel, eventProjectContext, eventToolCalls
 } from '../utils/helpers.js';
 
-function recentTokenTotals(events) {
-  const usages = events
-    .filter((event) => event.kind === 'client' && !eventIsInFlight(event) && eventResultKind(event) !== 'cancelled')
-    .map(eventUsage)
-    .filter((usage) => usage && typeof usage === 'object');
-  const sum = (field, snakeField) => {
-    const values = usages
-      .map((usage) => usage[field] ?? usage[snakeField])
-      .map(Number)
-      .filter((value) => Number.isFinite(value) && value >= 0);
-    return values.length ? values.reduce((total, value) => total + value, 0) : null;
+function todayTokenTotals(series) {
+  const tokens = series?.totals?.tokens;
+  if (!tokens || typeof tokens !== 'object') return null;
+  const observed = Number(tokens.observedRequests ?? tokens.observed_requests);
+  if (!Number.isFinite(observed) || observed < 0) return null;
+  const number = (value) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
   };
-  return { input: sum('inputTokens', 'input_tokens'), output: sum('outputTokens', 'output_tokens'), observed: usages.length };
+  return {
+    input: number(tokens.inputTokens ?? tokens.input_tokens),
+    output: number(tokens.outputTokens ?? tokens.output_tokens),
+    observed,
+  };
+}
+
+function todayTokenDetail(totals) {
+  if (!totals) return '正在读取今天的用量';
+  if (totals.status === 'error') return '今天用量暂不可用';
+  return totals.observed > 0
+    ? `今天累计 · ${formatNumber(totals.observed)} 个请求有用量`
+    : '暂无可用用量';
 }
 
 // macOS 的最近事件行把请求归属和 Codex 上下文收敛成一条可换行摘要，
@@ -310,7 +319,7 @@ function MobileEventList({ events, selectedEventID, onSelect, loading, live = fa
 export function RunPage() {
   const {
     status, runtime, runtimeEventDetail, config, secretStatus, toggleProxy,
-    connectionsObservation, autoRefresh,
+    connectionsObservation, autoRefresh, runRefreshInterval,
     loadRuntimeEvent, addToast,
   } = useApp();
   const [eventFilter, setEventFilter] = useState('client'); // 'client' | 'upstream' | 'all'
@@ -324,7 +333,7 @@ export function RunPage() {
 
   const isRunning = status?.running;
   const recentEvents = runtime?.recentEvents || [];
-  const tokenTotals = useMemo(() => recentTokenTotals(recentEvents), [recentEvents]);
+  const [todayTokens, setTodayTokens] = useState(null);
   const notifySnapshotRecovered = useCallback((message) => addToast(message, 'info'), [addToast]);
   const eventHistory = useRuntimeEventPage({
     recentEvents,
@@ -340,6 +349,29 @@ export function RunPage() {
     const timer = window.setTimeout(() => setEventPageDirection('none'), 280);
     return () => window.clearTimeout(timer);
   }, [eventHistory.loading, eventPageDirection]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      if (document.hidden) return;
+      api.getRuntimeTrends({ range: 'today', granularity: 'hour' }).then((series) => {
+        if (cancelled) return;
+        const totals = todayTokenTotals(series);
+        setTodayTokens(totals ? { status: 'ready', ...totals } : { status: 'error', input: null, output: null, observed: 0 });
+      }).catch(() => {
+        if (!cancelled) {
+          setTodayTokens((current) => current?.status === 'ready' ? current : { status: 'error', input: null, output: null, observed: 0 });
+        }
+      });
+    };
+    load();
+    if (!autoRefresh) return () => { cancelled = true; };
+    const timer = window.setInterval(load, Math.max(15, Number(runRefreshInterval) || 15) * 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [autoRefresh, runRefreshInterval, runtime?.resetGeneration]);
 
   useEffect(() => {
     if (!recentEvents.some((event) => eventIsInFlight(event))) return undefined;
@@ -577,15 +609,15 @@ export function RunPage() {
       <div className="run-metric-grid">
         <MetricCard
           label="输入 Token"
-          value={tokenTotals.input == null ? '—' : formatTokenCount(tokenTotals.input)}
-          detail={tokenTotals.observed ? `最近事件内累计 · ${formatNumber(tokenTotals.observed)} 个请求有用量` : '暂无可用用量'}
+          value={todayTokens?.status === 'ready' && todayTokens.observed > 0 && todayTokens.input != null ? formatTokenCount(todayTokens.input) : '—'}
+          detail={todayTokenDetail(todayTokens)}
           icon="file-down"
           accent="var(--primary)"
         />
         <MetricCard
           label="输出 Token"
-          value={tokenTotals.output == null ? '—' : formatTokenCount(tokenTotals.output)}
-          detail={tokenTotals.observed ? `最近事件内累计 · ${formatNumber(tokenTotals.observed)} 个请求有用量` : '暂无可用用量'}
+          value={todayTokens?.status === 'ready' && todayTokens.observed > 0 && todayTokens.output != null ? formatTokenCount(todayTokens.output) : '—'}
+          detail={todayTokenDetail(todayTokens)}
           icon="file-up"
           accent="var(--status-warning)"
         />

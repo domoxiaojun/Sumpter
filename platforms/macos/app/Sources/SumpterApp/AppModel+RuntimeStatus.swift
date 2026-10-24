@@ -183,6 +183,10 @@ extension AppModel {
         refreshRequestGeneration &+= 1
         let generation = refreshRequestGeneration
         guard sidecar.isRunning, let admin else {
+            todayInputTokens = nil
+            todayOutputTokens = nil
+            todayTokenObservedRequests = nil
+            todayTokenTotalsFailed = false
             responsesConnectionsObservation.fail("引擎已停止，无法刷新连接数据")
             if isProxyRunning { isProxyRunning = false }
             if case .crashed = sidecarState {
@@ -297,6 +301,41 @@ extension AppModel {
 
         if reconcileEvents && autoRefreshEnabled && !loadLatestEvents {
             await reconcileRuntimeChanges(using: admin)
+        }
+        refreshTodayTokenUsageIfDue()
+    }
+
+    /// The run overview must not sum the visible event page. Trends already
+    /// aggregate the local calendar day, and the hourly rollup keeps that
+    /// read bounded. Statistics uses its own filtered snapshot.
+    func refreshTodayTokenUsageIfDue(force: Bool = false) {
+        guard sidecar.isRunning, admin != nil, !statisticsVisible else { return }
+        let due = lastTodayTokenRefreshAt.map { Date().timeIntervalSince($0) >= 15 } ?? true
+        guard force || due else { return }
+        todayTokenRequestGeneration &+= 1
+        let generation = todayTokenRequestGeneration
+        let from = Calendar.autoupdatingCurrent.startOfDay(for: Date()).timeIntervalSinceReferenceDate
+        lastTodayTokenRefreshAt = Date()
+        Task { [weak self] in
+            guard let self, let admin = self.admin else { return }
+            do {
+                let series = try await admin.runtimeTrends(
+                    range: "today",
+                    granularity: "hour",
+                    filter: AdminWire.RuntimeFilter(from: from)
+                )
+                guard generation == self.todayTokenRequestGeneration else { return }
+                let tokens = series.totals.tokens
+                self.todayInputTokens = tokens.inputTokens
+                self.todayOutputTokens = tokens.outputTokens
+                self.todayTokenObservedRequests = tokens.observedRequests
+                self.todayTokenTotalsFailed = false
+            } catch {
+                guard generation == self.todayTokenRequestGeneration else { return }
+                if self.todayTokenObservedRequests == nil {
+                    self.todayTokenTotalsFailed = true
+                }
+            }
         }
     }
 

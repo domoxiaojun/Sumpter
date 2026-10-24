@@ -71,6 +71,7 @@ struct OverviewPane: View {
                 frozenRuntime = model.runtime
                 frozenHealth = model.health
                 frozenConnections = model.responsesConnectionsObservation
+                model.refreshTodayTokenUsageIfDue(force: true)
                 model.refreshRunHistory(resetSnapshot: model.runHistoryPage == nil)
                 return
             }
@@ -300,17 +301,17 @@ struct OverviewPane: View {
 
     @ViewBuilder
     private var metricTiles: some View {
-        let tokenTotals = recentTokenTotals
+        let observed = model.todayTokenObservedRequests
             MetricTile(
                 title: "输入 Token",
-                value: RuntimeEventPresentation.tokenCountDisplay(tokenTotals.input),
-                detail: tokenTotals.observed > 0 ? "最近事件内累计 · \(tokenTotals.observed) 个请求有用量" : "暂无可用用量",
+                value: todayTokenValue(model.todayInputTokens, observed: observed),
+                detail: todayTokenDetail(observed: observed),
                 systemImage: "arrow.down.doc", minimumHeight: 112
             )
             MetricTile(
                 title: "输出 Token",
-                value: RuntimeEventPresentation.tokenCountDisplay(tokenTotals.output),
-                detail: tokenTotals.observed > 0 ? "最近事件内累计 · \(tokenTotals.observed) 个请求有用量" : "暂无可用用量",
+                value: todayTokenValue(model.todayOutputTokens, observed: observed),
+                detail: todayTokenDetail(observed: observed),
                 systemImage: "arrow.up.doc", minimumHeight: 112
             )
             // `Provider 候选` and `Endpoints` are the same count in the flat
@@ -322,19 +323,17 @@ struct OverviewPane: View {
             MetricTile(title: "上游尝试", value: "\(displayRuntime.upstreamAttempts)", detail: "含重试 · 故障转移 \(displayRuntime.failovers)", systemImage: "point.3.connected.trianglepath.dotted", minimumHeight: 112)
     }
 
-    /// 运行快照没有独立的 Token 累计计数；这里按客户端事件里的 usage 汇总，
-    /// 并明确标注为「最近事件内」，避免把有界快照误读成 SQLite 全量统计。
-    private var recentTokenTotals: (input: Int?, output: Int?, observed: Int) {
-        let usages = displayRuntime.recentEvents
-            .filter { $0.kind == "client" && !$0.isInFlight && !$0.isCancelled }
-            .compactMap { $0.streamTrace?.usage }
-        let inputs = usages.compactMap(\.inputTokens)
-        let outputs = usages.compactMap(\.outputTokens)
-        return (
-            inputs.isEmpty ? nil : inputs.reduce(0, +),
-            outputs.isEmpty ? nil : outputs.reduce(0, +),
-            usages.count
-        )
+    /// 运行页卡片使用当地日历日的趋势汇总，不把当前事件页误当成全量。
+    private func todayTokenValue(_ value: Int?, observed: Int?) -> String {
+        guard let observed, observed > 0 else { return "—" }
+        return RuntimeEventPresentation.tokenCountDisplay(value)
+    }
+
+    private func todayTokenDetail(observed: Int?) -> String {
+        if let observed {
+            return observed > 0 ? "今天累计 · \(observed) 个请求有用量" : "暂无可用用量"
+        }
+        return model.todayTokenTotalsFailed ? "今天用量暂不可用" : "正在读取今天的用量"
     }
 
 }

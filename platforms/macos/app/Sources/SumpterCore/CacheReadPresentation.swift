@@ -72,7 +72,8 @@ public extension RuntimeEvent {
         guard hasObservedUsage else { return isInFlight ? "等待用量" : "未报告用量" }
         let input = observedUsage?.inputTokens.flatMap { $0 >= 0 ? $0.formatted() : nil } ?? "—"
         let output = observedUsage?.outputTokens.flatMap { $0 >= 0 ? $0.formatted() : nil } ?? "—"
-        return "输入 \(input) · 输出 \(output)"
+        let speed = RuntimeEventPresentation.outputSpeedDisplay(outputTokensPerSecond)
+        return "输入 \(input) · 输出 \(output) · \(speed)"
     }
     var cacheReadHitRateLabel: String {
         guard let ratio = cacheReadTokenRatio else { return "命中率 —" }

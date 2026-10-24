@@ -85,7 +85,7 @@ final class RuntimeEventObservationTests: XCTestCase {
             "cacheRead": ["state": "miss", "readTokens": 0, "finality": "confirmed"]
         ]))
         XCTAssertTrue(zero.hasObservedUsage)
-        XCTAssertEqual(zero.usageSummaryLabel, "输入 0 · 输出 —")
+        XCTAssertEqual(zero.usageSummaryLabel, "输入 0 · 输出 — · —")
         XCTAssertEqual(zero.cacheReadLabel, "缓存读取 0")
 
         let partial = try JSONDecoder().decode(RuntimeEvent.self, from: data([
@@ -93,9 +93,16 @@ final class RuntimeEventObservationTests: XCTestCase {
             "cacheRead": ["state": "hit", "readTokens": 222950, "finality": "provisional"]
         ]))
         XCTAssertTrue(partial.hasObservedUsage)
-        XCTAssertEqual(partial.usageSummaryLabel, "输入 33 · 输出 3")
+        XCTAssertEqual(partial.usageSummaryLabel, "输入 33 · 输出 3 · —")
         XCTAssertEqual(partial.cacheReadLabel, "缓存读取 222,950")
         XCTAssertEqual(partial.cacheRead?.finality, "provisional")
+
+        let rated = try JSONDecoder().decode(RuntimeEvent.self, from: data([
+            "kind": "client", "phase": "completed",
+            "usageSummary": ["inputTokens": 100, "outputTokens": 50],
+            "outputTokensPerSecond": 12.34,
+        ]))
+        XCTAssertEqual(rated.usageSummaryLabel, "输入 100 · 输出 50 · 12.3 tok/s")
     }
 
     func testInlineCacheHitRateUsesTokenShareAndPreservesUnknownEvidence() throws {

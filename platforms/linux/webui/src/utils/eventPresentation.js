@@ -1,4 +1,5 @@
 import { eventField, eventIsInFlight, eventStreamTrace, formatTokenCount } from './helpers.js';
+import { formatOutputTokensPerSecond } from './outputSpeed.js';
 
 export const eventDetailGroups = [
   ['routing', '路由与重试'], ['usage', '用量与缓存'], ['identity', '会话与代理'],
@@ -48,7 +49,8 @@ export function eventUsageLabel(event) {
   if (!eventHasObservedUsage(event)) return eventIsInFlight(event) ? '等待用量' : '未报告用量';
   const usage = eventUsage(event);
   const count = (value) => isObservedCount(value) ? formatTokenCount(value) : '—';
-  return `输入 ${count(usage?.inputTokens)} · 输出 ${count(usage?.outputTokens)}`;
+  const speed = formatOutputTokensPerSecond(event?.outputTokensPerSecond ?? event?.output_tokens_per_second);
+  return `输入 ${count(usage?.inputTokens)} · 输出 ${count(usage?.outputTokens)} · ${speed}`;
 }
 
 export function eventCacheTokenRatio(event) {
