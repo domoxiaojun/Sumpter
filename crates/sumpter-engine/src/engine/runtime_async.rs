@@ -110,7 +110,11 @@ impl Engine {
     pub async fn runtime_event_async(&self, id: &str) -> Result<Option<Value>, String> {
         if let Some(store) = self.inner.runtime_store.get() {
             return store.event_async(id.to_owned()).await.map(|change| {
-                change.map(|value| serde_json::to_value(value).unwrap_or(Value::Null))
+                change.map(|value| {
+                    let mut value = serde_json::to_value(value).unwrap_or(Value::Null);
+                    sumpter_runtime::runtime_query::decorate_runtime_change_value(&mut value);
+                    value
+                })
             });
         }
         self.runtime_event(id)

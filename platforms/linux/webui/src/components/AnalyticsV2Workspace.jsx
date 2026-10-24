@@ -38,6 +38,7 @@ import {
   runtimeRatePercent,
   runtimeV2ErrorMessage,
 } from '../utils/runtimeAnalyticsV2.js';
+import { formatOutputTokensPerSecond, outputSpeedDetail } from '../utils/outputSpeed.js';
 
 const SECTIONS = [
   { id: 'overview', label: '概览' },
@@ -52,6 +53,7 @@ const TREND_METRICS = [
   ['failureRate', '失败率', 'percent'],
   ['ttfbAverage', '平均首字节', 'duration'],
   ['durationAverage', '平均完成耗时', 'duration'],
+  ['outputSpeed', '输出速度', 'speed'],
   ['outputTokens', '输出 Token', 'count'],
   ['cacheTokenRate', '缓存读取命中率', 'percent'],
   ['failovers', '故障转移请求', 'count'],
@@ -387,6 +389,10 @@ function trendMetricValue(point, metric) {
     case 'failureRate': return completed > 0 ? (safeNumber(point?.clientFailures) / completed) * 100 : null;
     case 'ttfbAverage': return latencyAverage(point?.ttfbMS);
     case 'durationAverage': return latencyAverage(point?.durationMS);
+    case 'outputSpeed': {
+      const value = point?.outputTokensPerSecond ?? point?.output_tokens_per_second;
+      return value == null || !Number.isFinite(Number(value)) ? null : Number(value);
+    }
     case 'outputTokens': return safeNumber(point?.tokens?.outputTokens ?? point?.tokenUsage?.outputTokens);
     case 'cacheTokenRate': {
       const tokens = point?.tokens || point?.tokenUsage || {};
@@ -413,6 +419,7 @@ function formatTrendValue(value, metric) {
   const unit = trendMetricUnit(metric);
   if (unit === 'percent') return `${Number(value).toFixed(1)}%`;
   if (unit === 'duration') return formatDuration(value);
+  if (unit === 'speed') return formatOutputTokensPerSecond(value);
   if (unit === 'money') return formatMoney(Number(value) * 1_000_000);
   return numberWithComma(value);
 }
@@ -609,6 +616,7 @@ function ProjectOverviewTable({ page, loading, onPageChange, onPageSizeChange, o
     { title: '失败', key: 'failures', type: 'number', width: '95px', sortable: true, render: (row) => <span className="mono-cell">{numberWithComma(row.failures)}</span> },
     { title: '输入 Token', key: 'input_tokens', type: 'number', width: '132px', sortable: true, render: (row) => <span className="mono-cell">{dimensionTokenValue(row, 'inputTokens')}</span> },
     { title: '输出 Token', key: 'output_tokens', type: 'number', width: '132px', sortable: true, render: (row) => <span className="mono-cell">{dimensionTokenValue(row, 'outputTokens')}</span> },
+    { title: '输出速度', key: 'output_tokens_per_second', type: 'number', width: '132px', sortable: true, render: (row) => <span className="mono-cell">{formatOutputTokensPerSecond(row.outputTokensPerSecond)}</span> },
     {
       title: '缓存读取', key: 'cache_read', type: 'number', width: '150px', sortable: true,
       render: (row) => <div className="runtime-v2-usage-cell"><span className="mono-cell">{dimensionTokenValue(row, 'cacheReadInputTokens')}</span><small>Token 读占比 {percent(runtimeCacheRate(row, 'token'))}</small></div>,
@@ -674,6 +682,7 @@ function DimensionTable({ page, loading, onPageChange, onPageSizeChange, onSearc
     { title: '失败', key: 'failures', type: 'number', width: '100px', sortable: true, render: (row) => <span className="mono-cell">{numberWithComma(row.failures)}</span> },
     { title: '输入 Token', key: 'input_tokens', type: 'number', width: '132px', sortable: true, render: (row) => <span className="mono-cell">{dimensionTokenValue(row, 'inputTokens')}</span> },
     { title: '输出 Token', key: 'output_tokens', type: 'number', width: '132px', sortable: true, render: (row) => <span className="mono-cell">{dimensionTokenValue(row, 'outputTokens')}</span> },
+    { title: '输出速度', key: 'output_tokens_per_second', type: 'number', width: '132px', sortable: true, render: (row) => <span className="mono-cell">{formatOutputTokensPerSecond(row.outputTokensPerSecond)}</span> },
     { title: '缓存读取', key: 'cache_read', type: 'number', width: '150px', sortable: true, render: (row) => <div className="runtime-v2-usage-cell"><span className="mono-cell">{dimensionTokenValue(row, 'cacheReadInputTokens')}</span><small>Token 读占比 {percent(runtimeCacheRate(row, 'token'))}</small></div> },
     { title: '缓存写入', key: 'cache_write', type: 'number', width: '132px', sortable: true, render: (row) => <span className="mono-cell">{dimensionTokenValue(row, 'cacheCreationInputTokens')}</span> },
     { title: '平均耗时', key: 'average_duration', type: 'time', width: '128px', sortable: true, render: (row) => <span className="mono-cell">{formatDuration(row.averageDurationMS)}</span> },
@@ -1006,6 +1015,7 @@ function TrendPanel({ trend, legacyAnalytics, loading, error, onRetry }) {
             <Metric label="客户端请求" value={numberWithComma(totals.clientRequests)} detail={`完成 ${numberWithComma(completed)} · 成功率 ${percentFromCount(totals.clientSuccesses, completed)}`} accent="var(--primary)" />
             <Metric label="平均完成耗时" value={formatDuration(latencyAverage(duration))} detail="请求完成平均耗时" accent="var(--accent-indigo)" />
             <Metric label="平均首字节" value={formatDuration(latencyAverage(ttfb))} detail="首次响应平均耗时" accent="var(--accent-cyan)" />
+            <Metric label="输出速度" value={formatOutputTokensPerSecond(totals.outputTokensPerSecond)} detail={outputSpeedDetail(totals.outputSpeedRequests)} accent="var(--accent-indigo)" />
             <Metric label="故障转移" value={numberWithComma(totals.failovers)} detail={failoverDetail} tone="runtime-v2-warning" accent="var(--status-warning)" />
             <Metric label="上游尝试" value={numberWithComma(totals.upstreamAttempts)} detail={`成功 ${numberWithComma(totals.upstreamSuccesses)} · 失败 ${numberWithComma(totals.upstreamFailures)}`} accent="var(--accent-indigo)" />
             <Metric label="慢请求" value={optionalNumberWithComma(thresholdExceeded(duration, thresholds.durationMS?.[0]))} detail={thresholds.durationMS?.[0] ? `完成耗时 > ${formatDuration(thresholds.durationMS[0])}` : '未提供阈值'} accent="var(--status-warning)" />
@@ -1125,6 +1135,7 @@ function OverviewPanel({
               <Metric label="成功率" value={percentFromCount(totals.clientSuccesses, completed)} detail={`成功 ${numberWithComma(totals.clientSuccesses)} · 失败 ${numberWithComma(totals.clientFailures)} · 取消 ${numberWithComma(totals.clientCancelled)}`} accent="var(--status-good)" />
               <Metric label="平均首字节" value={formatDuration(latencyAverage(ttfb))} detail="首次响应平均耗时" accent="var(--accent-cyan)" />
               <Metric label="平均完成耗时" value={formatDuration(latencyAverage(duration))} detail="请求完成平均耗时" accent="var(--accent-indigo)" />
+              <Metric label="输出速度" value={formatOutputTokensPerSecond(totals.outputTokensPerSecond)} detail={outputSpeedDetail(totals.outputSpeedRequests)} accent="var(--accent-indigo)" />
               <Metric label="故障转移" value={optionalNumberWithComma(failoverRequests)} detail="发生入口切换的请求" tone="runtime-v2-warning" accent="var(--status-warning)" />
             </div>
           </div>

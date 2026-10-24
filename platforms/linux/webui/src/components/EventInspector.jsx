@@ -8,6 +8,7 @@ import {
   eventIsInFlight, eventOutcome, statusKind, eventUpstreamRequestID, codexMetadataSummary,
 } from '../utils/helpers.js';
 import { eventDetailGroups, eventAgentLabel, eventCacheLabel, eventCacheRead, eventCacheStatusLabel, eventCacheTokenRatio, eventCacheReason, eventUsage, eventUsageLabel, eventHttpTone } from '../utils/eventPresentation.js';
+import { formatOutputTokensPerSecond } from '../utils/outputSpeed.js';
 
 function Field({ label, value, color }) {
   return <div className="event-inspector-field"><dt>{label}</dt><dd style={color ? { color } : undefined}>{value ?? '—'}</dd></div>;
@@ -99,6 +100,7 @@ export function EventInspector({ event, chain = [], requestSummary, onSelect, ex
       ['缓存读计数', ({ confirmed: '已确认', provisional: '暂定，可能增加', unknown: '未知' })[cache.finality] || '未知'],
       ['缓存读占比', cacheRatio == null ? '—' : `${(cacheRatio * 100).toFixed(1)}%`],
       ['输入 token', usage?.inputTokens], ['输出 token', usage?.outputTokens],
+      ['输出速度', formatOutputTokensPerSecond(event.outputTokensPerSecond)],
       ['缓存读 token', usage?.cacheReadInputTokens], ['缓存写 token', usage?.cacheCreationInputTokens],
       ['推理 token（输出子集）', usage?.reasoningTokens],
     ]);

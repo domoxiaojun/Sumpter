@@ -240,6 +240,9 @@ pub fn dimension_page_on(
         DimensionSort::CacheWriteTokens => "cache_creation_input_tokens",
         DimensionSort::Tokens => "processed_total_tokens",
         DimensionSort::AverageDuration => "average_duration_ms",
+        DimensionSort::OutputTokensPerSecond => {
+            "output_generation_tokens * 1000.0 / NULLIF(output_generation_ms, 0)"
+        }
         DimensionSort::LastSeen => "last_seen",
     };
     let order = match request.order {
@@ -248,7 +251,9 @@ pub fn dimension_page_on(
     };
     let nulls_last = matches!(
         request.sort,
-        DimensionSort::SuccessRate | DimensionSort::AverageDuration
+        DimensionSort::SuccessRate
+            | DimensionSort::AverageDuration
+            | DimensionSort::OutputTokensPerSecond
     );
     let order_by = if nulls_last {
         format!("{sort_column} IS NULL ASC, {sort_column} {order}")
@@ -326,7 +331,10 @@ pub fn dimension_page_on(
                       AVG(CASE WHEN ttfb_ms >= 0 THEN ttfb_ms END) AS average_ttfb_ms,
                       COUNT(DISTINCT {related_expression}) AS related_count,
                       {workspace_expr} AS workspace_paths_json,
-                      GROUP_CONCAT(DISTINCT COALESCE(client_kind,'unrecorded_client')) AS client_kinds
+                      GROUP_CONCAT(DISTINCT COALESCE(client_kind,'unrecorded_client')) AS client_kinds,
+                      SUM(CASE WHEN kind='client' AND is_in_flight=0 AND (request_purpose IS NULL OR request_purpose!='token_count') AND output_tokens IS NOT NULL AND output_tokens>=0 AND duration_ms IS NOT NULL AND duration_ms>=0 AND ttfb_ms IS NOT NULL AND ttfb_ms>=0 AND duration_ms>ttfb_ms THEN output_tokens ELSE 0 END) AS output_generation_tokens,
+                      SUM(CASE WHEN kind='client' AND is_in_flight=0 AND (request_purpose IS NULL OR request_purpose!='token_count') AND output_tokens IS NOT NULL AND output_tokens>=0 AND duration_ms IS NOT NULL AND duration_ms>=0 AND ttfb_ms IS NOT NULL AND ttfb_ms>=0 AND duration_ms>ttfb_ms THEN duration_ms - ttfb_ms ELSE 0 END) AS output_generation_ms,
+                      SUM(CASE WHEN kind='client' AND is_in_flight=0 AND (request_purpose IS NULL OR request_purpose!='token_count') AND output_tokens IS NOT NULL AND output_tokens>=0 AND duration_ms IS NOT NULL AND duration_ms>=0 AND ttfb_ms IS NOT NULL AND ttfb_ms>=0 AND duration_ms>ttfb_ms THEN 1 ELSE 0 END) AS output_speed_requests
                FROM runtime_events{where_sql}
               GROUP BY {group_columns}
               ORDER BY {order_by}, key ASC
@@ -375,6 +383,8 @@ pub fn dimension_page_on(
                     last_seen: row.get(25)?,
                     average_duration_ms: row.get(26)?,
                     average_ttfb_ms: row.get(27)?,
+                    output_tokens_per_second: super::output_speed_rate(row.get(31)?, row.get(32)?),
+                    output_speed_requests: row.get(33)?,
                     related_count: row.get(28)?,
                     workspace_paths: Vec::new(),
                     client_kinds,

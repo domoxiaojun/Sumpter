@@ -460,6 +460,8 @@ pub struct TrendPoint {
     pub upstream_successes: i64,
     pub upstream_failures: i64,
     pub tokens: TokenMetrics,
+    pub output_tokens_per_second: Option<f64>,
+    pub output_speed_requests: i64,
     #[serde(rename = "ttfbMS")]
     pub ttfb_ms: LatencyMetrics,
     #[serde(rename = "durationMS")]
@@ -515,6 +517,8 @@ pub struct AnalyticsDimensionRow {
     pub cache_read_token_unknown_requests: i64,
     pub cache_read_token_rate: Option<f64>,
     pub cache_read_request_rate: Option<f64>,
+    pub output_tokens_per_second: Option<f64>,
+    pub output_speed_requests: i64,
     /// Project attribution is populated for project rows; session rows also
     /// expose the related project/client labels. These values come from
     /// normalized projection columns, never from payload_json.
@@ -612,6 +616,8 @@ pub struct AnalyticsSummary {
     pub average_duration_ms: Option<f64>,
     #[serde(rename = "averageTTFBMS")]
     pub average_ttfb_ms: Option<f64>,
+    pub output_tokens_per_second: Option<f64>,
+    pub output_speed_requests: i64,
     pub latency_buckets: BTreeMap<String, i64>,
     pub token_usage: TokenMetrics,
     pub endpoints: Vec<AnalyticsDimensionRow>,
@@ -745,6 +751,7 @@ pub enum DimensionSort {
     CacheWriteTokens,
     Tokens,
     AverageDuration,
+    OutputTokensPerSecond,
     #[default]
     LastSeen,
 }
@@ -821,6 +828,8 @@ pub struct DimensionRow {
     pub average_duration_ms: Option<f64>,
     #[serde(rename = "averageTTFBMS")]
     pub average_ttfb_ms: Option<f64>,
+    pub output_tokens_per_second: Option<f64>,
+    pub output_speed_requests: i64,
     pub related_count: i64,
     pub workspace_paths: Vec<String>,
     /// Distinct inbound clients represented by this grouped row. Project
@@ -1165,6 +1174,7 @@ struct TrendAccumulator {
     upstream_successes: i64,
     upstream_failures: i64,
     tokens: TokenAccumulator,
+    output_speed: OutputSpeedTotals,
     ttfb: LatencyAccumulator,
     duration: LatencyAccumulator,
     cost: CostAccumulator,
@@ -1214,6 +1224,14 @@ impl TrendAccumulator {
         self.duration
             .add(row.duration_ms, DURATION_SLOW_MS, DURATION_CRITICAL_MS);
         self.tokens.add(row);
+        self.output_speed.observe(output_generation_sample(
+            "client",
+            false,
+            row.request_purpose.as_deref(),
+            row.output_tokens,
+            row.duration_ms,
+            row.ttfb_ms,
+        ));
         self.cost.add(row, prices);
     }
 
@@ -1241,6 +1259,8 @@ impl TrendAccumulator {
             upstream_successes: self.upstream_successes,
             upstream_failures: self.upstream_failures,
             tokens: self.tokens.finish(),
+            output_tokens_per_second: self.output_speed.rate(),
+            output_speed_requests: self.output_speed.requests,
             ttfb_ms: self.ttfb.finish(TTFB_SLOW_MS, TTFB_CRITICAL_MS),
             duration_ms: self.duration.finish(DURATION_SLOW_MS, DURATION_CRITICAL_MS),
             cost: self.cost.finish(prices),
@@ -1415,6 +1435,14 @@ fn event_list_item_from_projection(row: EventListProjection) -> RuntimeEventList
         reasoning_tokens: tokens(row.reasoning_tokens),
     };
     let usage_present = usage != sumpter_core::events::ResponseUsage::default();
+    let output_tokens_per_second = output_tokens_per_second(
+        &row.kind,
+        row.phase.as_deref() == Some("inFlight"),
+        row.request_purpose.as_deref(),
+        row.output_tokens,
+        Some(row.duration_ms),
+        row.ttfb_ms,
+    );
     RuntimeEventListItem {
         source_ip: row.source_ip,
         details_omitted: true,
@@ -1489,6 +1517,7 @@ fn event_list_item_from_projection(row: EventListProjection) -> RuntimeEventList
         upstream_request_id: None,
         duration_ms: row.duration_ms,
         ttfb_ms: row.ttfb_ms,
+        output_tokens_per_second,
         failover: row.failover != 0,
     }
 }
@@ -2044,6 +2073,14 @@ fn history_snapshot(
         retained_from_seq,
     })
 }
+
+#[path = "runtime_query/output_speed.rs"]
+mod output_speed;
+pub use output_speed::decorate_runtime_change_value;
+pub(crate) use output_speed::{
+    OUTPUT_SPEED_PREDICATE, OutputSpeedTotals, output_generation_sample, output_speed_rate,
+    output_tokens_per_second, output_tokens_per_second_for_event,
+};
 
 #[path = "runtime_query/analytics.rs"]
 mod analytics_queries;

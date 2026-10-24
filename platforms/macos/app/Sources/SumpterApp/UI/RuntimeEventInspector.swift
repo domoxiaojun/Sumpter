@@ -102,6 +102,7 @@ struct RuntimeEventInspector: View {
             rows([("缓存读占比", event.cacheReadTokenRatio.map { $0.formatted(.percent.precision(.fractionLength(1))) }), ("缓存读状态", event.cacheRead?.statusLabel), ("缓存证据", event.cacheRead?.reasonLabel),
                   ("缓存读计数", ["confirmed": "已确认", "provisional": "暂定，可能增加", "unknown": "未知"][event.cacheRead?.finality ?? "unknown"]),
                   ("输入 token", usage?.inputTokens.map(String.init)), ("输出 token", usage?.outputTokens.map(String.init)),
+                  ("输出速度", RuntimeEventPresentation.outputSpeedDisplay(event.outputTokensPerSecond)),
                   ("缓存读 token", usage?.cacheReadInputTokens.map(String.init)), ("缓存写 token", usage?.cacheCreationInputTokens.map(String.init)),
                   ("推理 token（输出子集）", usage?.reasoningTokens.map(String.init))])
         case "identity":

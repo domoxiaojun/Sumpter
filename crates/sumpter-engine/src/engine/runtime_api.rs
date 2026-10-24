@@ -256,7 +256,11 @@ impl Engine {
     pub fn runtime_event(&self, id: &str) -> Result<Option<Value>, String> {
         if let Some(store) = self.inner.runtime_store.get() {
             return store.event(id).map(|change| {
-                change.map(|value| serde_json::to_value(value).unwrap_or(Value::Null))
+                change.map(|value| {
+                    let mut value = serde_json::to_value(value).unwrap_or(Value::Null);
+                    sumpter_runtime::runtime_query::decorate_runtime_change_value(&mut value);
+                    value
+                })
             });
         }
         Ok(self
@@ -264,7 +268,11 @@ impl Engine {
             .recent_events
             .into_iter()
             .find(|event| event.id == id)
-            .map(|event| json!({"seq": 0, "changeSeq": 0, "event": event})))
+            .map(|event| {
+                let mut value = json!({"seq": 0, "changeSeq": 0, "event": event});
+                sumpter_runtime::runtime_query::decorate_runtime_change_value(&mut value);
+                value
+            }))
     }
 
     pub fn delete_runtime_session(&self, session_id: &str) -> Result<Value, String> {

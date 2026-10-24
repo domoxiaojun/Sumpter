@@ -18,6 +18,7 @@ private extension AdminWire.RuntimeDimensionRow {
     /// ascending sort while preserving the server's numeric ordering for
     /// observed values.
     var averageDurationForSorting: Double { averageDurationMS ?? -1 }
+    var outputSpeedForSorting: Double { outputTokensPerSecond ?? -1 }
 }
 
 private struct RecreateDatabaseButton: View {
@@ -1152,13 +1153,13 @@ struct UsagePane: View {
             TableColumn("失败", value: \.failures) { row in Text(tokenNumber(row.failures)).monospacedDigit() }.width(min: 76, ideal: 88)
             TableColumn("输入 Token", value: \.inputTokens) { row in Text(dimensionTokenText(row.inputTokens, related: row.requests)).monospacedDigit() }.width(min: 108, ideal: 126)
             TableColumn("输出 Token", value: \.outputTokens) { row in Text(dimensionTokenText(row.outputTokens, related: row.requests)).monospacedDigit() }.width(min: 108, ideal: 126)
+            TableColumn("输出速度", value: \.outputSpeedForSorting) { row in Text(RuntimeEventPresentation.outputSpeedDisplay(row.outputTokensPerSecond)).monospacedDigit() }.width(min: 108, ideal: 126)
             TableColumn("缓存读取", value: \.cacheReadInputTokens) { row in
                 VStack(alignment: .leading, spacing: 2) {
                     Text(dimensionTokenText(row.cacheReadInputTokens, related: row.requests)).monospacedDigit()
                     Text("Token 读占比 " + rateText(dimensionCacheTokenRate(row))).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                 }
             }.width(min: 114, ideal: 136)
-            TableColumn("缓存写入", value: \.cacheCreationInputTokens) { row in Text(dimensionTokenText(row.cacheCreationInputTokens, related: row.requests)).monospacedDigit() }.width(min: 108, ideal: 126)
             TableColumn("平均耗时", value: \.averageDurationForSorting) { row in Text(row.averageDurationMS.map { RuntimeEventPresentation.durationDisplay(Int($0.rounded())) } ?? "—").monospacedDigit() }.width(min: 108, ideal: 126)
             TableColumn("最近活动", value: \.lastSeen) { row in Text(RuntimeEventDisplay.dateTime(Date(timeIntervalSinceReferenceDate: row.lastSeen))).font(.caption.monospacedDigit()) }.width(min: 150, ideal: 174)
         }
@@ -1399,6 +1400,7 @@ struct UsagePane: View {
                     MetricTile(title: "成功率", value: completed > 0 ? String(format: "%.1f%%", Double(total.clientSuccesses) * 100 / Double(completed)) : "—", detail: "成功 \(tokenNumber(total.clientSuccesses)) · 失败 \(tokenNumber(total.clientFailures)) · 取消 \(tokenNumber(total.clientCancelled))", systemImage: "checkmark.circle", minimumHeight: overviewMetricMinimumHeight)
                     MetricTile(title: "平均首字节", value: latencyAverage(total.ttfbMS), detail: "首次响应平均耗时", systemImage: "timer", minimumHeight: overviewMetricMinimumHeight)
                     MetricTile(title: "平均完成耗时", value: latencyAverage(total.durationMS), detail: "请求完成平均耗时", systemImage: "clock", minimumHeight: overviewMetricMinimumHeight)
+                    MetricTile(title: "输出速度", value: RuntimeEventPresentation.outputSpeedDisplay(total.outputTokensPerSecond), detail: outputSpeedDetail(total.outputSpeedRequests), systemImage: "speedometer", minimumHeight: overviewMetricMinimumHeight)
                     MetricTile(title: "故障转移", value: tokenNumber(total.failovers), detail: "恢复 \(tokenNumber(total.failoverRecoveredRequests)) · 最终失败 \(tokenNumber(total.failoverTerminalRequests))", systemImage: "arrow.triangle.2.circlepath", minimumHeight: overviewMetricMinimumHeight)
                     MetricTile(title: "上游尝试", value: tokenNumber(total.upstreamAttempts), detail: "成功 \(tokenNumber(total.upstreamSuccesses)) · 失败 \(tokenNumber(total.upstreamFailures))", systemImage: "server.rack", minimumHeight: overviewMetricMinimumHeight)
                 }
@@ -2254,6 +2256,7 @@ struct UsagePane: View {
                     MetricTile(title: "Token", value: tokenNumber(total.tokens.processedTotalTokens), detail: "输入/输出按协议去重", systemImage: "number")
                     MetricTile(title: "平均首字节", value: latencyAverage(total.ttfbMS), detail: "首次响应平均耗时", systemImage: "timer")
                     MetricTile(title: "平均完成耗时", value: latencyAverage(total.durationMS), detail: "请求完成平均耗时", systemImage: "clock")
+                    MetricTile(title: "输出速度", value: RuntimeEventPresentation.outputSpeedDisplay(total.outputTokensPerSecond), detail: outputSpeedDetail(total.outputSpeedRequests), systemImage: "speedometer")
                     MetricTile(title: "成本", value: costText(total.cost.estimatedCostMicros, currency: total.cost.currency), detail: total.cost.complete ? "价目完整" : "部分请求未定价", systemImage: "yensign.circle")
                 }
                 if !trend.points.isEmpty {
@@ -2278,6 +2281,11 @@ struct UsagePane: View {
         } else if model.runtimeV2Loading {
             HStack { ProgressView().controlSize(.small); Text("正在计算趋势…").font(.caption).foregroundStyle(.secondary) }
         }
+    }
+
+    private func outputSpeedDetail(_ requests: Int?) -> String {
+        guard let requests else { return "首字之后的生成速度" }
+        return "基于 \(tokenNumber(requests)) 个可计速请求"
     }
 
     private func latencyAverage(_ metrics: AdminWire.RuntimeLatencyMetrics) -> String {
@@ -2438,6 +2446,10 @@ struct UsagePane: View {
                         Text(dimensionTokenText(row.outputTokens, related: row.requests)).monospacedDigit()
                     }
                     .width(min: 108, ideal: 126)
+                    TableColumn("输出速度", value: \.outputSpeedForSorting) { row in
+                        Text(RuntimeEventPresentation.outputSpeedDisplay(row.outputTokensPerSecond)).monospacedDigit()
+                    }
+                    .width(min: 108, ideal: 126)
                     TableColumn("缓存读取", value: \.cacheReadInputTokens) { row in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(dimensionTokenText(row.cacheReadInputTokens, related: row.requests)).monospacedDigit()
@@ -2447,10 +2459,6 @@ struct UsagePane: View {
                         }
                     }
                     .width(min: 118, ideal: 142)
-                    TableColumn("缓存写入", value: \.cacheCreationInputTokens) { row in
-                        Text(dimensionTokenText(row.cacheCreationInputTokens, related: row.requests)).monospacedDigit()
-                    }
-                    .width(min: 108, ideal: 126)
                     TableColumn("平均耗时", value: \.averageDurationForSorting) { row in
                         Text(row.averageDurationMS.map { RuntimeEventPresentation.durationDisplay(Int($0.rounded())) } ?? "—").monospacedDigit()
                     }
@@ -2573,6 +2581,7 @@ struct UsagePane: View {
         if keyPath == \.cacheReadInputTokens { return "cache_read" }
         if keyPath == \.cacheCreationInputTokens { return "cache_write" }
         if keyPath == \.averageDurationForSorting { return "average_duration" }
+        if keyPath == \.outputSpeedForSorting { return "output_tokens_per_second" }
         if keyPath == \.lastSeen { return "last_seen" }
         return model.runtimeDimensionSort
     }
@@ -2592,6 +2601,7 @@ struct UsagePane: View {
         case "cache_read": return KeyPathComparator(\.cacheReadInputTokens, order: direction)
         case "cache_write": return KeyPathComparator(\.cacheCreationInputTokens, order: direction)
         case "average_duration": return KeyPathComparator(\.averageDurationForSorting, order: direction)
+        case "output_tokens_per_second": return KeyPathComparator(\.outputSpeedForSorting, order: direction)
         default: return KeyPathComparator(\.lastSeen, order: direction)
         }
     }

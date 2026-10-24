@@ -982,4 +982,20 @@ final class RuntimeEventPresentationTests: XCTestCase {
         // 进行中不预判失败(status 还是 0/200)。
         XCTAssertEqual(severity(status: 0, inFlight: true), .none)
     }
+
+    func testOutputSpeedDisplayAndLegacyEventDecode() throws {
+        XCTAssertEqual(RuntimeEventPresentation.outputSpeedDisplay(12.34), "12.3 tok/s")
+        XCTAssertEqual(RuntimeEventPresentation.outputSpeedDisplay(0), "0.0 tok/s")
+        XCTAssertEqual(RuntimeEventPresentation.outputSpeedDisplay(nil), "—")
+        let legacy = try JSONDecoder().decode(
+            RuntimeEvent.self,
+            from: Data(#"{"id":"legacy","timestamp":0,"kind":"client","statusCode":200,"durationMS":1000,"failover":false}"#.utf8)
+        )
+        XCTAssertNil(legacy.outputTokensPerSecond)
+        let current = try JSONDecoder().decode(
+            RuntimeEvent.self,
+            from: Data(#"{"id":"current","timestamp":0,"kind":"client","statusCode":200,"durationMS":2000,"ttfbMS":1000,"failover":false,"outputTokensPerSecond":12.5}"#.utf8)
+        )
+        XCTAssertEqual(current.outputTokensPerSecond, 12.5)
+    }
 }

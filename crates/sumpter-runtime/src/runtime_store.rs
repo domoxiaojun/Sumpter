@@ -26,7 +26,7 @@ use sumpter_core::events::{
 };
 use sumpter_core::routing::{RESOURCE_ROUTING_MODEL, RequestPurpose, RouteMode};
 
-pub(crate) const SCHEMA_VERSION: i64 = 5;
+pub(crate) const SCHEMA_VERSION: i64 = 6;
 pub(crate) const PROJECTION_VERSION: i64 = 10;
 const PROJECTION_BACKFILL_BATCH: usize = 500;
 const BATCH_EVENTS: usize = 64;
@@ -589,6 +589,8 @@ pub struct RuntimeEventListItem {
     pub duration_ms: i64,
     #[serde(rename = "ttfbMS")]
     pub ttfb_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_tokens_per_second: Option<f64>,
     pub failover: bool,
 }
 
@@ -600,6 +602,8 @@ impl RuntimeEventListItem {
     /// is intentionally public at the crate boundary rather than duplicated
     /// in each platform facade.
     pub fn from_change(seq: i64, change_seq: i64, event: RuntimeEvent) -> Self {
+        let output_tokens_per_second =
+            crate::runtime_query::output_tokens_per_second_for_event(&event);
         let cache_read = event.observed_cache_read();
         let usage_summary = event
             .stream_trace
@@ -703,6 +707,7 @@ impl RuntimeEventListItem {
             upstream_request_id: event.upstream_request_id,
             duration_ms: event.duration_ms,
             ttfb_ms: event.ttfb_ms,
+            output_tokens_per_second,
             failover: event.failover,
         }
     }

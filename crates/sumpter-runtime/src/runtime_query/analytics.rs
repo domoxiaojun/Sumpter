@@ -123,6 +123,7 @@ pub fn analytics_on(
         },
     )?;
     let codex_requests = codex_request_statistics(&transaction, &client_builder)?;
+    let output_speed = output_speed_totals(&transaction, &client_builder)?;
     let token_usage = analytics_token_metrics(&transaction, &client_builder)?;
     let cache_read = cache_read_statistics(&transaction, &client_builder)?;
     let upstream_cache_read = cache_read_statistics(&transaction, &upstream_builder)?;
@@ -267,6 +268,8 @@ pub fn analytics_on(
         failovers,
         average_duration_ms,
         average_ttfb_ms,
+        output_tokens_per_second: output_speed.rate(),
+        output_speed_requests: output_speed.requests,
         latency_buckets: BTreeMap::from([
             ("under1s".into(), latency_under_1s),
             ("from1sTo3s".into(), latency_1s_to_3s),
@@ -435,6 +438,7 @@ struct EndpointAccumulator {
     cancelled: i64,
     failovers: i64,
     tokens: TokenAccumulator,
+    output_speed: super::OutputSpeedTotals,
 }
 
 impl EndpointAccumulator {
@@ -472,6 +476,14 @@ impl EndpointAccumulator {
             token_accounting_semantics: row.token_accounting_semantics.clone(),
             token_accounting_quality: row.token_accounting_quality.clone(),
         });
+        self.output_speed.observe(super::output_generation_sample(
+            "client",
+            false,
+            row.request_purpose.as_deref(),
+            row.output_tokens,
+            row.duration_ms,
+            row.ttfb_ms,
+        ));
     }
 
     fn into_row(self, name: String) -> AnalyticsDimensionRow {
@@ -501,6 +513,8 @@ impl EndpointAccumulator {
             cache_read_token_unknown_requests: metrics.cache_read_token_unknown_requests,
             cache_read_token_rate: metrics.cache_read_token_rate,
             cache_read_request_rate: metrics.cache_read_request_rate,
+            output_tokens_per_second: self.output_speed.rate(),
+            output_speed_requests: self.output_speed.requests,
             project_source: None,
             workspace_paths: Vec::new(),
             projects: Vec::new(),
@@ -592,6 +606,33 @@ fn endpoint_dimensions(
     Ok(rows)
 }
 
+fn output_speed_totals(
+    transaction: &Transaction<'_>,
+    base: &SqlFilter,
+) -> QueryResult<super::OutputSpeedTotals> {
+    let sql = format!(
+        "SELECT COALESCE(SUM(CASE WHEN {pred} THEN output_tokens ELSE 0 END),0),\
+                COALESCE(SUM(CASE WHEN {pred} THEN duration_ms - ttfb_ms ELSE 0 END),0),\
+                COALESCE(SUM(CASE WHEN {pred} THEN 1 ELSE 0 END),0)\
+         FROM runtime_events{}",
+        base.where_sql(),
+        pred = super::OUTPUT_SPEED_PREDICATE,
+    );
+    let (tokens, generation_ms, requests) =
+        transaction.query_row(&sql, params_from_iter(base.values.iter()), |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+    Ok(super::OutputSpeedTotals {
+        tokens,
+        generation_ms,
+        requests,
+    })
+}
+
 fn analytics_dimension(
     transaction: &Transaction<'_>,
     base: &SqlFilter,
@@ -665,7 +706,10 @@ fn analytics_dimension(
                       MAX(project_source),
                       MAX(workspace_paths_json),
                       GROUP_CONCAT(DISTINCT COALESCE(project_name,project_id,'unidentified_project')),
-                      GROUP_CONCAT(DISTINCT COALESCE(client_kind,'unrecorded_client'))
+                      GROUP_CONCAT(DISTINCT COALESCE(client_kind,'unrecorded_client')),
+                      SUM(CASE WHEN kind='client' AND is_in_flight=0 AND (request_purpose IS NULL OR request_purpose!='token_count') AND output_tokens IS NOT NULL AND output_tokens>=0 AND duration_ms IS NOT NULL AND duration_ms>=0 AND ttfb_ms IS NOT NULL AND ttfb_ms>=0 AND duration_ms>ttfb_ms THEN output_tokens ELSE 0 END),
+                      SUM(CASE WHEN kind='client' AND is_in_flight=0 AND (request_purpose IS NULL OR request_purpose!='token_count') AND output_tokens IS NOT NULL AND output_tokens>=0 AND duration_ms IS NOT NULL AND duration_ms>=0 AND ttfb_ms IS NOT NULL AND ttfb_ms>=0 AND duration_ms>ttfb_ms THEN duration_ms - ttfb_ms ELSE 0 END),
+                      SUM(CASE WHEN kind='client' AND is_in_flight=0 AND (request_purpose IS NULL OR request_purpose!='token_count') AND output_tokens IS NOT NULL AND output_tokens>=0 AND duration_ms IS NOT NULL AND duration_ms>=0 AND ttfb_ms IS NOT NULL AND ttfb_ms>=0 AND duration_ms>ttfb_ms THEN 1 ELSE 0 END)
                FROM runtime_events{where_sql}
               GROUP BY name
               ORDER BY COUNT(*) DESC, name ASC
@@ -711,6 +755,8 @@ fn analytics_dimension(
                 .unwrap_or_default(),
             projects: csv_values(row.get(23)?),
             client_kinds: csv_values(row.get(24)?),
+            output_tokens_per_second: super::output_speed_rate(row.get(25)?, row.get(26)?),
+            output_speed_requests: row.get(27)?,
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)

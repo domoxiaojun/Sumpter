@@ -859,6 +859,11 @@ public enum RuntimeEventPresentation {
     /// ——而不是「这次输出比较长」。只用于染色提示，不参与任何超时/失败判定。
     public static let slowTTFBThresholdMS = 15_000
 
+    public static func outputSpeedDisplay(_ tokensPerSecond: Double?) -> String {
+        guard let tokensPerSecond, tokensPerSecond.isFinite else { return "—" }
+        return String(format: "%.1f tok/s", locale: Locale(identifier: "en_US_POSIX"), tokensPerSecond)
+    }
+
     public static func isSlowTTFB(_ ttfbMS: Int?) -> Bool {
         guard let ttfbMS else {
             return false

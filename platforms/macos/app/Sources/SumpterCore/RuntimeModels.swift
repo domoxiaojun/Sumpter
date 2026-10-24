@@ -652,6 +652,8 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
     /// upstream 事件只是该次尝试自身的响应头延迟。看错口径会把「换过一次入口」
     /// 误读成「这个入口很慢」。
     public var ttfbMS: Int?
+    /// 已完成客户端请求的生成速度。缺 TTFB、进行中、上游尝试或 token_count 时为 nil。
+    public var outputTokensPerSecond: Double?
     /// 实际生效的首响应/流空闲阈值。
     public var timeoutMS: Int?
     /// 真正从上游响应头收到的状态；连接前失败为 nil。
@@ -684,7 +686,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         case message, toolCalls, streamTrace, outcome, phase, featureRuleID
         case failureDetail, failureKind, failurePhase, requestPurpose, requestID
         case requestMethod, requestPath, routeIntent, sourceIP
-        case sessionID, stickyKey, ttfbMS, timeoutMS, upstreamStatusCode, upstreamRequestID
+        case sessionID, stickyKey, ttfbMS, outputTokensPerSecond, timeoutMS, upstreamStatusCode, upstreamRequestID
         case codexMetadata, clientDeclared, grokMetadata, projectName, projectSource, localUser, codexThreadClass, attributionScope
     }
 
@@ -748,6 +750,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         sessionID = try c.decodeIfPresent(String.self, forKey: .sessionID)
         stickyKey = try c.decodeIfPresent(String.self, forKey: .stickyKey)
         ttfbMS = try c.decodeIfPresent(Int.self, forKey: .ttfbMS)
+        outputTokensPerSecond = try c.decodeIfPresent(Double.self, forKey: .outputTokensPerSecond)
         timeoutMS = try c.decodeIfPresent(Int.self, forKey: .timeoutMS)
         upstreamStatusCode = try c.decodeIfPresent(Int.self, forKey: .upstreamStatusCode)
         upstreamRequestID = try c.decodeIfPresent(String.self, forKey: .upstreamRequestID)
@@ -810,6 +813,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         try c.encodeIfPresent(sessionID, forKey: .sessionID)
         try c.encodeIfPresent(stickyKey, forKey: .stickyKey)
         try c.encodeIfPresent(ttfbMS, forKey: .ttfbMS)
+        try c.encodeIfPresent(outputTokensPerSecond, forKey: .outputTokensPerSecond)
         try c.encodeIfPresent(timeoutMS, forKey: .timeoutMS)
         try c.encodeIfPresent(upstreamStatusCode, forKey: .upstreamStatusCode)
         try c.encodeIfPresent(upstreamRequestID, forKey: .upstreamRequestID)
@@ -884,7 +888,8 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         projectSource: String? = nil,
         localUser: String? = nil,
         codexThreadClass: String? = nil,
-        attributionScope: String? = nil
+        attributionScope: String? = nil,
+        outputTokensPerSecond: Double? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -927,6 +932,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         self.localUser = localUser
         self.codexThreadClass = codexThreadClass
         self.attributionScope = attributionScope
+        self.outputTokensPerSecond = outputTokensPerSecond
         self.codexMetadata = codexMetadata
         self.clientDeclared = clientDeclared
         self.grokMetadata = grokMetadata

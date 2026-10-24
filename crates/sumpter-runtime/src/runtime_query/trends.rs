@@ -294,6 +294,9 @@ struct HourlyRollup {
     cost_unpriced_requests: i64,
     cost_unknown_requests: i64,
     cost_price_revision: Option<i64>,
+    output_generation_tokens: i64,
+    output_generation_ms: i64,
+    output_generation_requests: i64,
 }
 
 impl HourlyRollup {
@@ -333,6 +336,11 @@ impl HourlyRollup {
             upstream_successes: self.upstream_successes,
             upstream_failures: self.upstream_failures,
             tokens,
+            output_tokens_per_second: super::output_speed_rate(
+                self.output_generation_tokens,
+                self.output_generation_ms,
+            ),
+            output_speed_requests: self.output_generation_requests,
             ttfb_ms: LatencyMetrics {
                 observed_requests: self.ttfb_count,
                 sum_ms: self.ttfb_ms_sum,
@@ -401,7 +409,8 @@ fn load_hourly_rollups(
                 cache_creation_input_tokens_present,reasoning_tokens_present,\
                 cost_accounting_complete_requests,cost_unknown_accounting_requests,\
                 cost_numerator,cost_priced_requests,cost_unpriced_requests,cost_unknown_requests,\
-                cost_price_revision \
+                cost_price_revision,output_generation_tokens,output_generation_ms,\
+                output_generation_requests \
          FROM runtime_hourly_rollups WHERE bucket_start>=?1 AND bucket_end<=?2 \
          ORDER BY bucket_start ASC",
     )?;
@@ -467,6 +476,9 @@ fn load_hourly_rollups(
             cost_unpriced_requests: row.get(48)?,
             cost_unknown_requests: row.get(49)?,
             cost_price_revision: row.get(50)?,
+            output_generation_tokens: row.get(51)?,
+            output_generation_ms: row.get(52)?,
+            output_generation_requests: row.get(53)?,
         })
     })?;
     let rows = rows.collect::<Result<Vec<_>, _>>()?;
@@ -517,6 +529,9 @@ fn merge_rollup_points(
     let mut cost_numerator = 0_i128;
     let mut cost_priced = 0_i64;
     let mut cost_unpriced = 0_i64;
+    let mut output_generation_tokens = 0_i64;
+    let mut output_generation_ms = 0_i64;
+    let mut output_generation_requests = 0_i64;
     for row in rows {
         merge_accounting_label(
             &mut semantics_label,
@@ -597,6 +612,11 @@ fn merge_rollup_points(
             row.cost_unknown_requests
                 .max(row.cost_unknown_accounting_requests),
         );
+        output_generation_tokens =
+            output_generation_tokens.saturating_add(row.output_generation_tokens);
+        output_generation_ms = output_generation_ms.saturating_add(row.output_generation_ms);
+        output_generation_requests =
+            output_generation_requests.saturating_add(row.output_generation_requests);
     }
     tokens.cache_read_token_rate = ratio(cache_numerator, cache_denominator);
     tokens.cache_read_request_rate = ratio(
@@ -628,6 +648,11 @@ fn merge_rollup_points(
         upstream_successes,
         upstream_failures,
         tokens,
+        output_tokens_per_second: super::output_speed_rate(
+            output_generation_tokens,
+            output_generation_ms,
+        ),
+        output_speed_requests: output_generation_requests,
         ttfb_ms: LatencyMetrics {
             observed_requests: ttfb_count,
             sum_ms: ttfb_sum,

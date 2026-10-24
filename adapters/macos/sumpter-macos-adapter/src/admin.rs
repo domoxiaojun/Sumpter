@@ -1098,12 +1098,15 @@ async fn runtime_dimension_response(
         "cache_write" | "cacheWrite" => DimensionSort::CacheWriteTokens,
         "tokens" => DimensionSort::Tokens,
         "average_duration" | "averageDuration" => DimensionSort::AverageDuration,
+        "output_tokens_per_second" | "outputTokensPerSecond" => {
+            DimensionSort::OutputTokensPerSecond
+        }
         "last_seen" | "lastSeen" => DimensionSort::LastSeen,
         _ => {
             return error(
                 StatusCode::BAD_REQUEST,
                 "invalid_sort",
-                "sort 必须是 name、requests、success_rate、failures、input_tokens、output_tokens、cache_read、cache_write、tokens、average_duration 或 last_seen",
+                "sort 必须是 name、requests、success_rate、failures、input_tokens、output_tokens、cache_read、cache_write、tokens、average_duration、output_tokens_per_second 或 last_seen",
             );
         }
     };

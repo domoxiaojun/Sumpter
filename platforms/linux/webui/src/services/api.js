@@ -1177,6 +1177,8 @@ class ApiService {
           firstSeen: ((Date.now() / 1000) - 978_307_200) - (index + 1) * 86_400,
           lastSeen: ((Date.now() / 1000) - 978_307_200) - index * 3_600,
           averageDurationMS: Number(template.averageDurationMS || 0), averageTTFBMS: Number(template.averageTTFBMS || 0),
+          outputTokensPerSecond: template.outputTokensPerSecond ?? 12.5,
+          outputSpeedRequests: Number(template.outputSpeedRequests || requests),
           relatedCount: kind === 'project' ? 2 + (index % 8) : 1 + (index % 3),
           workspacePaths: kind === 'project' ? (template.workspacePaths || [`.../.claude/${name}`]) : [],
           clientKinds: Array.isArray(template.clientKinds) ? template.clientKinds : [],
@@ -1198,6 +1200,7 @@ class ApiService {
         cache_write: (row) => row.cacheCreationInputTokens,
         tokens: (row) => row.processedTotalTokens,
         average_duration: (row) => row.averageDurationMS,
+        output_tokens_per_second: (row) => row.outputTokensPerSecond == null ? Number.NEGATIVE_INFINITY : row.outputTokensPerSecond,
         last_seen: (row) => row.lastSeen,
       };
       const pick = sortValues[sort] || sortValues.last_seen;

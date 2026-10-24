@@ -19,6 +19,7 @@ pub(super) fn setup_connection(connection: &mut Connection) -> crate::database::
          PRAGMA cache_size = -2048;",
     )?;
     crate::entities::create_schema(connection)?;
+    ensure_output_generation_columns(connection)?;
     let previous_version = meta_i64(connection, "schema_version")?.unwrap_or(0);
     if previous_version > SCHEMA_VERSION {
         return Err(crate::database::Error::InvalidParameterName(format!(
@@ -130,6 +131,32 @@ pub(super) fn setup_connection(connection: &mut Connection) -> crate::database::
     // already marked ready. This only schedules the missing DDL; it never
     // resets projection data or replays historical payloads.
     ensure_sticky_index_maintenance(connection)?;
+    Ok(())
+}
+
+fn ensure_output_generation_columns(connection: &Connection) -> crate::database::Result<()> {
+    let columns = connection
+        .prepare("PRAGMA table_info(runtime_hourly_rollups)")?
+        .query_map(crate::database::params![], |row| row.get::<_, String>(1))?
+        .collect::<Result<HashSet<_>, _>>()?;
+    for (name, ddl) in [
+        (
+            "output_generation_tokens",
+            "ALTER TABLE runtime_hourly_rollups ADD COLUMN output_generation_tokens INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "output_generation_ms",
+            "ALTER TABLE runtime_hourly_rollups ADD COLUMN output_generation_ms INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "output_generation_requests",
+            "ALTER TABLE runtime_hourly_rollups ADD COLUMN output_generation_requests INTEGER NOT NULL DEFAULT 0",
+        ),
+    ] {
+        if !columns.contains(name) {
+            connection.execute_batch(ddl)?;
+        }
+    }
     Ok(())
 }
 
@@ -310,6 +337,9 @@ pub(super) struct HourlyRollupAccumulator {
     cost_priced_requests: i64,
     cost_unpriced_requests: i64,
     cost_unknown_requests: i64,
+    output_generation_tokens: i64,
+    output_generation_ms: i64,
+    output_generation_requests: i64,
 }
 
 #[derive(Clone)]
@@ -570,6 +600,23 @@ pub(super) fn rebuild_hourly_rollup_bucket(
             let usage_present = row.get::<_, Option<i64>>(7)?.unwrap_or(0) != 0;
             let input = row.get::<_, Option<i64>>(8)?;
             let output = row.get::<_, Option<i64>>(9)?;
+            if let Some(sample) = crate::runtime_query::output_generation_sample(
+                "client",
+                false,
+                row.get::<_, Option<String>>(6)?.as_deref(),
+                output,
+                row.get(4)?,
+                row.get(5)?,
+            ) {
+                accumulator.output_generation_tokens = accumulator
+                    .output_generation_tokens
+                    .saturating_add(sample.output_tokens);
+                accumulator.output_generation_ms = accumulator
+                    .output_generation_ms
+                    .saturating_add(sample.generation_ms);
+                accumulator.output_generation_requests =
+                    accumulator.output_generation_requests.saturating_add(1);
+            }
             let cache_read = row.get::<_, Option<i64>>(10)?;
             let cache_creation = row.get::<_, Option<i64>>(11)?;
             let reasoning = row.get::<_, Option<i64>>(12)?;
@@ -714,12 +761,13 @@ pub(super) fn rebuild_hourly_rollup_bucket(
                 cache_creation_input_tokens_present,reasoning_tokens_present,
                 cost_accounting_complete_requests,cost_unknown_accounting_requests,
                 cost_numerator,cost_priced_requests,cost_unpriced_requests,cost_unknown_requests,
-                cost_price_revision,updated_at
+                cost_price_revision,output_generation_tokens,output_generation_ms,
+                output_generation_requests,updated_at
              ) VALUES(
                 ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,
                 ?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,
                 ?33,?34,?35,?36,?37,?38,?39,?40,?41,?42,?43,?44,?45,?46,?47,
-                ?48,?49,?50,?51,?52)",
+                ?48,?49,?50,?51,?52,?53,?54,?55)",
             params![
                 bucket_start,
                 bucket_end,
@@ -774,6 +822,9 @@ pub(super) fn rebuild_hourly_rollup_bucket(
                 accumulator.cost_unpriced_requests,
                 accumulator.cost_unknown_requests,
                 price_revision,
+                accumulator.output_generation_tokens,
+                accumulator.output_generation_ms,
+                accumulator.output_generation_requests,
                 now(),
             ],
         )?;

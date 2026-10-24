@@ -1013,6 +1013,8 @@ public enum AdminWire {
         public let upstreamSuccesses: Int
         public let upstreamFailures: Int
         public let tokens: RuntimeTokenMetrics
+        public let outputTokensPerSecond: Double?
+        public let outputSpeedRequests: Int?
         public let ttfbMS: RuntimeLatencyMetrics
         public let durationMS: RuntimeLatencyMetrics
         public let cost: RuntimeCostCoverage
@@ -1110,6 +1112,8 @@ public enum AdminWire {
         public let lastSeen: Double
         public let averageDurationMS: Double?
         public let averageTTFBMS: Double?
+        public let outputTokensPerSecond: Double?
+        public let outputSpeedRequests: Int?
         public let relatedCount: Int
         public let workspacePaths: [String]
         /// Distinct inbound clients represented by this grouped row. The
@@ -1450,6 +1454,8 @@ public enum AdminWire {
         public let failovers: Int
         public let averageDurationMS: Double?
         public let averageTTFBMS: Double?
+        public let outputTokensPerSecond: Double?
+        public let outputSpeedRequests: Int?
         public let tokenUsage: TokenUsage?
         public let latencyBuckets: LatencyBuckets?
         public let endpoints: [DimensionRow]?

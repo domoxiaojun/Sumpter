@@ -3093,3 +3093,225 @@ fn cache_projection_detail_statistics_and_gemini_export_agree() {
     drop(store);
     remove_test_dir(&dir);
 }
+
+#[test]
+fn output_generation_speed_matches_across_raw_scan_and_hourly_rollup() {
+    use crate::runtime_query::{
+        DimensionKind, DimensionPageQuery, DimensionSort, SortOrder, TrendGranularity, TrendRequest,
+    };
+    use sumpter_core::routing::RequestPurpose;
+
+    let dir = test_dir("output-generation-speed");
+    let path = dir.join("runtime.sqlite3");
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    let bucket = 1_700_000_000_i64 / 3_600 * 3_600;
+    let timestamp = bucket as f64 + 30.0;
+
+    let mut fast = event(
+        "speed-fast",
+        KIND_CLIENT,
+        200,
+        RuntimeEventPhase::Completed,
+        Some(RuntimeEventOutcome::Succeeded),
+        timestamp,
+    );
+    fast.duration_ms = 1_100;
+    fast.ttfb_ms = Some(100);
+    fast.effective_model = Some("speed-model".into());
+    fast.request_purpose = Some(RequestPurpose::Standard);
+    fast.stream_trace = serde_json::from_value(json!({
+        "usage": {"inputTokens": 10, "outputTokens": 100}
+    }))
+    .ok();
+
+    let mut slow = event(
+        "speed-slow",
+        KIND_CLIENT,
+        200,
+        RuntimeEventPhase::Completed,
+        Some(RuntimeEventOutcome::Succeeded),
+        timestamp + 1.0,
+    );
+    slow.duration_ms = 9_100;
+    slow.ttfb_ms = Some(100);
+    slow.effective_model = Some("speed-model".into());
+    slow.stream_trace = serde_json::from_value(json!({
+        "usage": {"outputTokens": 100}
+    }))
+    .ok();
+
+    let mut zero = event(
+        "speed-zero",
+        KIND_CLIENT,
+        200,
+        RuntimeEventPhase::Completed,
+        Some(RuntimeEventOutcome::Succeeded),
+        timestamp + 2.0,
+    );
+    zero.duration_ms = 2_100;
+    zero.ttfb_ms = Some(100);
+    zero.effective_model = Some("speed-model".into());
+    zero.stream_trace = serde_json::from_value(json!({
+        "usage": {"outputTokens": 0}
+    }))
+    .ok();
+
+    let mut probe = event(
+        "speed-probe",
+        KIND_CLIENT,
+        200,
+        RuntimeEventPhase::Completed,
+        Some(RuntimeEventOutcome::Succeeded),
+        timestamp + 3.0,
+    );
+    probe.duration_ms = 2_000;
+    probe.ttfb_ms = Some(100);
+    probe.effective_model = Some("speed-model".into());
+    probe.request_purpose = Some(RequestPurpose::TokenCount);
+    probe.stream_trace = serde_json::from_value(json!({
+        "usage": {"outputTokens": 9000}
+    }))
+    .ok();
+
+    let mut upstream = event(
+        "speed-upstream",
+        KIND_UPSTREAM,
+        200,
+        RuntimeEventPhase::Completed,
+        Some(RuntimeEventOutcome::Succeeded),
+        timestamp + 4.0,
+    );
+    upstream.duration_ms = 2_000;
+    upstream.ttfb_ms = Some(100);
+    upstream.effective_model = Some("speed-model".into());
+    upstream.stream_trace = serde_json::from_value(json!({
+        "usage": {"outputTokens": 9000}
+    }))
+    .ok();
+
+    let mut missing_ttfb = event(
+        "speed-no-ttfb",
+        KIND_CLIENT,
+        200,
+        RuntimeEventPhase::Completed,
+        Some(RuntimeEventOutcome::Succeeded),
+        timestamp + 5.0,
+    );
+    missing_ttfb.duration_ms = 5_000;
+    missing_ttfb.effective_model = Some("speed-model".into());
+    missing_ttfb.stream_trace = serde_json::from_value(json!({
+        "usage": {"outputTokens": 40}
+    }))
+    .ok();
+
+    for value in [fast, slow, zero, probe, upstream, missing_ttfb] {
+        store.enqueue(value, RuntimeCounters::default()).unwrap();
+    }
+    store.flush().unwrap();
+    for _ in 0..200 {
+        let connection = Connection::open(&path).unwrap();
+        if meta_i64(&connection, "hourly_rollup_complete").unwrap() == Some(1) {
+            break;
+        }
+        drop(connection);
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    let stored = store.event("speed-fast").unwrap().unwrap();
+    let payload = serde_json::to_value(&stored.event).unwrap();
+    assert!(payload.get("outputTokensPerSecond").is_none());
+    let mut detail = serde_json::to_value(&stored).unwrap();
+    crate::runtime_query::decorate_runtime_change_value(&mut detail);
+    assert!((detail["event"]["outputTokensPerSecond"].as_f64().unwrap() - 100.0).abs() < 1e-9);
+
+    let page =
+        crate::runtime_query::events_page(&path, &crate::runtime_query::EventPageQuery::default())
+            .unwrap();
+    let listed = page
+        .events
+        .iter()
+        .find(|event| event.id == "speed-fast")
+        .unwrap();
+    assert!((listed.output_tokens_per_second.unwrap() - 100.0).abs() < 1e-9);
+    assert!(
+        page.events
+            .iter()
+            .find(|event| event.id == "speed-no-ttfb")
+            .unwrap()
+            .output_tokens_per_second
+            .is_none()
+    );
+
+    let mut unfiltered = TrendRequest {
+        from: bucket as f64,
+        to: bucket as f64 + 3_600.0,
+        granularity: TrendGranularity::Hour,
+        snapshot_seq: None,
+        snapshot_change_seq: None,
+        history_generation: None,
+        filter: crate::runtime_query::RuntimeFilter::default(),
+    };
+    let rollup = crate::runtime_query::trends(&path, &unfiltered).unwrap();
+    assert!(
+        rollup.rollup_used,
+        "hour-aligned unfiltered trend should use rollups"
+    );
+    unfiltered.filter.model = Some("speed-model".into());
+    let raw = crate::runtime_query::trends(&path, &unfiltered).unwrap();
+    assert!(!raw.rollup_used);
+    assert_eq!(rollup.totals.output_speed_requests, 3);
+    assert_eq!(
+        raw.totals.output_speed_requests,
+        rollup.totals.output_speed_requests
+    );
+    let rollup_rate = rollup.totals.output_tokens_per_second.unwrap();
+    let raw_rate = raw.totals.output_tokens_per_second.unwrap();
+    // 200 output tokens over 1s + 9s + 2s.
+    assert!((rollup_rate - (200.0 / 12.0)).abs() < 1e-9);
+    assert!((raw_rate - rollup_rate).abs() < 1e-9);
+
+    let mut other = event(
+        "speed-other-model",
+        KIND_CLIENT,
+        200,
+        RuntimeEventPhase::Completed,
+        Some(RuntimeEventOutcome::Succeeded),
+        timestamp + 6.0,
+    );
+    other.duration_ms = 1_100;
+    other.ttfb_ms = Some(100);
+    other.effective_model = Some("other-model".into());
+    other.stream_trace = serde_json::from_value(json!({
+        "usage": {"outputTokens": 10}
+    }))
+    .ok();
+    store.enqueue(other, RuntimeCounters::default()).unwrap();
+    store.flush().unwrap();
+    for _ in 0..200 {
+        let connection = Connection::open(&path).unwrap();
+        if meta_i64(&connection, "hourly_rollup_complete").unwrap() == Some(1) {
+            break;
+        }
+        drop(connection);
+        thread::sleep(Duration::from_millis(10));
+    }
+    let page = crate::runtime_query::dimension_page(
+        &path,
+        DimensionKind::Model,
+        &DimensionPageQuery {
+            page: 1,
+            page_size: 10,
+            sort: DimensionSort::OutputTokensPerSecond,
+            order: SortOrder::Desc,
+            ..DimensionPageQuery::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(page.rows[0].name, "speed-model");
+    assert!(
+        page.rows[0].output_tokens_per_second.unwrap()
+            > page.rows[1].output_tokens_per_second.unwrap()
+    );
+    drop(store);
+    remove_test_dir(&dir);
+}

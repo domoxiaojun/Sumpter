@@ -106,6 +106,12 @@ pub struct Model {
     pub cost_unknown_requests: i64,
     #[sea_orm(column_type = "Integer")]
     pub cost_price_revision: Option<i64>,
+    #[sea_orm(column_type = "Integer", default_value = 0)]
+    pub output_generation_tokens: i64,
+    #[sea_orm(column_type = "Integer", default_value = 0)]
+    pub output_generation_ms: i64,
+    #[sea_orm(column_type = "Integer", default_value = 0)]
+    pub output_generation_requests: i64,
     #[sea_orm(column_type = "Double", default_value = 0)]
     pub updated_at: f64,
 }
