@@ -26,7 +26,7 @@ use sumpter_core::events::{
 };
 use sumpter_core::routing::{RESOURCE_ROUTING_MODEL, RequestPurpose, RouteMode};
 
-pub(crate) const SCHEMA_VERSION: i64 = 6;
+pub(crate) const SCHEMA_VERSION: i64 = 5;
 pub(crate) const PROJECTION_VERSION: i64 = 10;
 const PROJECTION_BACKFILL_BATCH: usize = 500;
 const BATCH_EVENTS: usize = 64;

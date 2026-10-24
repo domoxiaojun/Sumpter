@@ -21,7 +21,7 @@ pub(super) fn setup_connection(connection: &mut Connection) -> crate::database::
     crate::entities::create_schema(connection)?;
     ensure_output_generation_columns(connection)?;
     let previous_version = meta_i64(connection, "schema_version")?.unwrap_or(0);
-    if previous_version > SCHEMA_VERSION {
+    if previous_version > SCHEMA_VERSION && !runtime_schema_supported(previous_version) {
         return Err(crate::database::Error::InvalidParameterName(format!(
             "runtime schema {previous_version} is newer than supported {SCHEMA_VERSION}"
         )));
@@ -31,6 +31,9 @@ pub(super) fn setup_connection(connection: &mut Connection) -> crate::database::
     crate::codex_observation::ensure(connection)?;
     refresh_codex_roles(connection)?;
     let hourly_rollup_meta_exists = meta_i64(connection, "hourly_rollup_complete")?.is_some();
+    // Schema stays at 5. The three output-speed columns are added in place;
+    // rebuild derived hourly buckets once so historical rates match raw scans.
+    let output_generation_ready = meta_i64(connection, "output_generation_rollup")? == Some(1);
     let unprojected_exists = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM runtime_events
                        WHERE projection_version>=0 AND projection_version<>?1 LIMIT 1)",
@@ -93,7 +96,7 @@ pub(super) fn setup_connection(connection: &mut Connection) -> crate::database::
          VALUES(1,1,'USD',?1) ON CONFLICT(id) DO NOTHING",
         params![now()],
     )?;
-    if previous_version < SCHEMA_VERSION || !hourly_rollup_meta_exists {
+    if previous_version < SCHEMA_VERSION || !hourly_rollup_meta_exists || !output_generation_ready {
         // Rollup columns and threshold semantics changed in v3. Rebuild all
         // retained buckets from projection columns; never read payload_json
         // for analytics.
@@ -120,6 +123,7 @@ pub(super) fn setup_connection(connection: &mut Connection) -> crate::database::
         )?;
     }
     set_meta(connection, "schema_version", SCHEMA_VERSION)?;
+    set_meta(connection, "output_generation_rollup", 1)?;
     set_meta(connection, "projection_version", PROJECTION_VERSION)?;
     if !unprojected_exists {
         set_meta(connection, "projection_backfill_complete", 1)?;
@@ -132,6 +136,12 @@ pub(super) fn setup_connection(connection: &mut Connection) -> crate::database::
     // resets projection data or replays historical payloads.
     ensure_sticky_index_maintenance(connection)?;
     Ok(())
+}
+
+/// Schema 5 is current. Schema 6 was the temporary output-speed bump and uses
+/// the same tables; it is normalized back to 5 instead of blocking startup.
+fn runtime_schema_supported(version: i64) -> bool {
+    version == SCHEMA_VERSION || version == 6
 }
 
 fn ensure_output_generation_columns(connection: &Connection) -> crate::database::Result<()> {
@@ -1095,9 +1105,9 @@ pub(super) fn database_issue_on(
         } else {
             None
         };
-        let newer =
-            version > SCHEMA_VERSION || projection.is_some_and(|value| value > PROJECTION_VERSION);
-        let mut incompatible = version != SCHEMA_VERSION
+        let newer = (version > SCHEMA_VERSION && !runtime_schema_supported(version))
+            || projection.is_some_and(|value| value > PROJECTION_VERSION);
+        let mut incompatible = !runtime_schema_supported(version)
             || projection != Some(PROJECTION_VERSION)
             || !tables.contains("runtime_events");
         if !incompatible && tables.contains("runtime_events") {

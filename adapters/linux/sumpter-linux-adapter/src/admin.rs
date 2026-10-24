@@ -1807,7 +1807,7 @@ mod tests {
             .unwrap();
         assert_eq!(storage.status(), StatusCode::OK);
         let storage: Value = serde_json::from_slice(&storage.bytes().await.unwrap()).unwrap();
-        assert_eq!(storage["schemaVersion"], 6);
+        assert_eq!(storage["schemaVersion"], 5);
         assert_eq!(storage["retainedEvents"], 0);
         assert_eq!(storage["completedEvents"], 0);
         assert_eq!(storage["inFlightEvents"], 0);

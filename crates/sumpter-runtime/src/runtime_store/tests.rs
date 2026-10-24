@@ -2582,6 +2582,78 @@ fn newer_schema_is_rejected_before_writes() {
 }
 
 #[test]
+fn schema_five_keeps_events_when_output_speed_columns_are_added() {
+    let dir = test_dir("schema-five-output-speed");
+    let path = dir.join("runtime.sqlite3");
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    store
+        .enqueue(
+            event(
+                "keep-me",
+                KIND_CLIENT,
+                200,
+                RuntimeEventPhase::Completed,
+                Some(RuntimeEventOutcome::Succeeded),
+                event_now(),
+            ),
+            RuntimeCounters::default(),
+        )
+        .unwrap();
+    store.flush().unwrap();
+    drop(store);
+
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "ALTER TABLE runtime_hourly_rollups DROP COLUMN output_generation_tokens;
+             ALTER TABLE runtime_hourly_rollups DROP COLUMN output_generation_ms;
+             ALTER TABLE runtime_hourly_rollups DROP COLUMN output_generation_requests;
+             DELETE FROM runtime_meta WHERE key='output_generation_rollup';
+             UPDATE runtime_meta SET value='5' WHERE key='schema_version';",
+        )
+        .unwrap();
+    drop(connection);
+
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    assert!(store.event("keep-me").unwrap().is_some());
+    assert_eq!(store.summary().storage.schema_version, 5);
+    drop(store);
+
+    let connection = Connection::open(&path).unwrap();
+    let columns = connection
+        .prepare("PRAGMA table_info(runtime_hourly_rollups)")
+        .unwrap()
+        .query_map(crate::database::params![], |row| row.get::<_, String>(1))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    for name in [
+        "output_generation_tokens",
+        "output_generation_ms",
+        "output_generation_requests",
+    ] {
+        assert!(columns.iter().any(|column| column == name), "{name}");
+    }
+    assert_eq!(meta_i64(&connection, "schema_version").unwrap(), Some(5));
+    connection
+        .execute(
+            "UPDATE runtime_meta SET value='6' WHERE key='schema_version'",
+            crate::database::params![],
+        )
+        .unwrap();
+    drop(connection);
+
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    assert!(store.event("keep-me").unwrap().is_some());
+    assert_eq!(store.summary().storage.schema_version, 5);
+    drop(store);
+    let connection = Connection::open(&path).unwrap();
+    assert_eq!(meta_i64(&connection, "schema_version").unwrap(), Some(5));
+    drop(connection);
+    remove_test_dir(&dir);
+}
+
+#[test]
 fn successful_commit_clears_degraded_and_backpressure_state() {
     let dir = test_dir("recovery");
     let path = dir.join("runtime.sqlite3");
