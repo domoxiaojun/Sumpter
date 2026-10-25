@@ -929,12 +929,7 @@ pub(super) fn body_indicates_codex_live(body: &[u8], content_type: Option<&str>)
             .and_then(Value::as_object)
             .and_then(|metadata| json_object_value(metadata, "originator"))
             .and_then(Value::as_str)
-            .is_some_and(|value| {
-                let value = value.to_ascii_lowercase();
-                value.contains("codex desktop")
-                    || value.contains("codex_cli_rs")
-                    || value.contains("codex-tui")
-            })
+            .is_some_and(sumpter_core::events::is_codex_originator)
 }
 
 pub(super) fn json_object_value<'a>(

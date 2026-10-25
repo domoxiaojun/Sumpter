@@ -1,7 +1,7 @@
 //! Cache-read facts derived from upstream evidence, independently of HTTP/outcome.
 use serde::{Deserialize, Serialize};
 
-use crate::events::{KIND_NOTIFY, RuntimeEvent};
+use crate::events::{ClientKind, KIND_NOTIFY, RuntimeEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -96,7 +96,23 @@ impl RuntimeEvent {
     /// Refresh the API projection at the event boundary, never trust a stored
     /// boolean or infer a cache miss from HTTP success / a missing usage field.
     pub fn refresh_cache_read(&mut self) {
-        if self.client_variant.is_none() {
+        let attributed_client_kind = self.attributed_client_kind();
+        if matches!(
+            self.client_kind,
+            Some(ClientKind::OpenaiCompat | ClientKind::Unknown) | None
+        ) && attributed_client_kind == Some(ClientKind::Codex)
+        {
+            self.client_kind = attributed_client_kind;
+        }
+        if self.client_variant.is_none()
+            || (attributed_client_kind == Some(ClientKind::Codex)
+                && self
+                    .codex_metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.originator.as_deref())
+                    .and_then(crate::events::codex_originator_variant)
+                    .is_some())
+        {
             self.client_variant = Some(self.derived_client_variant().to_owned());
         }
         // Preserve raw metadata separately; these existing top-level fields are

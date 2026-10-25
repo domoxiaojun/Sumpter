@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+## [0.4.47] - 2026-10-25
+
+### 修复
+
+- 补全 Codex 与 ChatGPT 侧客户端归因，覆盖 Codex Work、VS Code、Desktop、TUI、SDK、Exec、MCP、app-server、ChatGPT 远程端及 `Codex ...` 客户端名；Claude Code 的 `claude-code` User-Agent 也纳入识别。
+- HTTP、Responses WebSocket、Realtime 路径共用受边界约束的客户端识别，避免把普通 `notcodex-*` 兼容客户端误判为 Codex。
+- 运行时 projection 升级到 11，历史事件从保存的 metadata 回填 `clientKind`、`clientVariant` 和规范化 payload，修复旧记录中的 Codex `unknown` / `openai_compat`。
+
+### 验证
+
+- core 136 项、engine 130 项、runtime 88 项测试通过；runtime 1 项既有性能夹具按默认忽略。
+
 ## [0.4.46] - 2026-10-24
 
 ### 优化

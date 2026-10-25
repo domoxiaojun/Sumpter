@@ -179,7 +179,7 @@ fn insert_100k(connection: &Connection) {
                    'endpoint-a',CASE WHEN seq%10=0 THEN 'upstream_http_status' END,0,
                    CASE WHEN seq>99975 THEN '{\"id\":\"page-event\",\"kind\":\"client\"}'
                         ELSE '{not-json' END,
-                   10,80,printf('session-%03d',seq%500),'header',printf('project-%03d',seq%100),
+                   11,80,printf('session-%03d',seq%500),'header',printf('project-%03d',seq%100),
                    printf('Project %03d',seq%100),'workspace_local','[\".../projects/test\"]',
                    'Endpoint A','gpt-test',CASE WHEN seq%10=0 THEN 'response' END,
                    'openai-responses','openai-responses','native',
@@ -788,7 +788,7 @@ fn attribution_filters_match_variant_and_parent_chain_fields() {
     let mut connection = test_connection();
     connection.execute(
         "INSERT INTO runtime_events(seq,change_seq,event_id,timestamp,kind,phase,outcome,status_code,is_in_flight,payload_json,projection_version,client_variant,agent_role,agent_name,parent_thread_id,parent_turn_id,root_turn_id)
-         VALUES(1,1,'attrib',1.0,'client','completed','succeeded',200,0,'{}',8,'tui','subagent','worker','thread-1','turn-2','turn-0')", crate::database::params![],
+         VALUES(1,1,'attrib',1.0,'client','completed','succeeded',200,0,'{}',11,'tui','subagent','worker','thread-1','turn-2','turn-0')", crate::database::params![],
     ).unwrap();
     let filter = RuntimeFilter {
         client_variant: Some("tui".into()),

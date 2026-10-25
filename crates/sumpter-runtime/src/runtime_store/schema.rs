@@ -909,8 +909,15 @@ pub(super) fn backfill_projection_batch(
     for (seq, payload) in &rows {
         cursor = cursor.max(*seq);
         match serde_json::from_str::<RuntimeEvent>(payload) {
-            Ok(event) => {
-                update_event_projection(&transaction, *seq, &event, payload)?;
+            Ok(mut event) => {
+                event.refresh_cache_read();
+                let normalized_payload = serde_json::to_string(&event)
+                    .map_err(|error| crate::database::Error::Conversion(Box::new(error)))?;
+                transaction.execute(
+                    "UPDATE runtime_events SET payload_json=?2 WHERE seq=?1",
+                    params![seq, normalized_payload],
+                )?;
+                update_event_projection(&transaction, *seq, &event, &normalized_payload)?;
                 mark_event_hourly_rollup_dirty(&transaction, &event)?;
             }
             Err(_) => {

@@ -27,7 +27,9 @@ use sumpter_core::events::{
 use sumpter_core::routing::{RESOURCE_ROUTING_MODEL, RequestPurpose, RouteMode};
 
 pub(crate) const SCHEMA_VERSION: i64 = 5;
-pub(crate) const PROJECTION_VERSION: i64 = 10;
+// Attribution projections are recomputed from the retained event payload so
+// newly recognized Codex/Claude client identities also repair existing rows.
+pub(crate) const PROJECTION_VERSION: i64 = 11;
 const PROJECTION_BACKFILL_BATCH: usize = 500;
 const BATCH_EVENTS: usize = 64;
 const BATCH_BYTES: usize = 256 * 1024;
@@ -149,6 +151,7 @@ impl AnalyticsFilter {
 /// queries use these columns and never need to deserialize every retained row.
 #[derive(Debug, Clone)]
 struct EventProjection {
+    client_kind: Option<String>,
     payload_bytes: i64,
     session_key: String,
     session_source: &'static str,
@@ -250,6 +253,9 @@ impl EventProjection {
         };
         let (session_key, session_source) = event_session_projection(event);
         Self {
+            client_kind: event
+                .attributed_client_kind()
+                .map(|value| value.as_str().to_owned()),
             payload_bytes: payload_bytes.min(i64::MAX as usize) as i64,
             session_key,
             session_source,

@@ -185,6 +185,52 @@ fn websocket_first_frame_originator_upgrades_generic_attribution() {
 }
 
 #[test]
+fn websocket_first_frame_current_codex_originators_upgrade_generic_attribution() {
+    for originator in [
+        "codex_work_web",
+        "codex_work_mobile",
+        "codex_work_cca",
+        "chatgpt_cca",
+        "codex_vscode",
+        "codex_exec",
+        "codex_sdk_ts",
+        "codex_atlas",
+        "codex_chatgpt_desktop",
+        "codex_chatgpt_android_remote",
+        "codex_chatgpt_ios_remote",
+        "codex_app_server_daemon",
+        "codex-backend",
+    ] {
+        let frame = WebSocketMessage::Text(
+            format!(r#"{{"type":"response.create","model":"gpt-4o","originator":"{originator}"}}"#)
+                .into(),
+        );
+        let metadata = websocket_message_codex_metadata(&frame).expect("frame metadata");
+        let context = WebSocketEventContext {
+            client_upgraded: false,
+            first_message_wait_ms: None,
+            source_ip: None,
+            request_id: "request".into(),
+            request_path: "/v1/responses".into(),
+            route_intent: "responses_websocket".into(),
+            client_kind: ClientKind::OpenaiCompat,
+            model: "gpt-4o".into(),
+            codex_metadata: None,
+            client_declared: None,
+            grok_metadata: None,
+            session_id: None,
+            started: Instant::now(),
+        };
+        let merged = websocket_context_with_first_frame(&context, Some(&metadata));
+        assert_eq!(
+            merged.client_kind,
+            ClientKind::Codex,
+            "originator {originator}"
+        );
+    }
+}
+
+#[test]
 fn realtime_websocket_does_not_forward_listener_or_project_headers() {
     let forwarded = websocket_upstream_headers(&[
         ("authorization".into(), "Bearer listener-secret".into()),

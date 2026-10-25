@@ -78,6 +78,52 @@ fn body_only_codex_originator_is_used_without_content_type() {
 }
 
 #[test]
+fn body_only_current_codex_originators_are_attributed() {
+    for originator in [
+        "codex_work_web",
+        "codex_work_mobile",
+        "codex_work_cca",
+        "chatgpt_cca",
+        "codex_vscode",
+        "codex_exec",
+        "codex_sdk_ts",
+        "codex_atlas",
+        "codex_chatgpt_desktop",
+        "codex_chatgpt_android_remote",
+        "codex_chatgpt_ios_remote",
+        "codex_app_server_daemon",
+        "codex-backend",
+    ] {
+        let body = serde_json::json!({"client_metadata": {"originator": originator}});
+        let metadata = CodexMetadata::from_request(&[], Some(&body)).expect("metadata");
+        assert_eq!(metadata.originator.as_deref(), Some(originator));
+        assert_eq!(
+            ClientKind::detect_with_originator(
+                Some("Mozilla/5.0"),
+                metadata.originator.as_deref(),
+                true,
+            ),
+            ClientKind::Codex,
+            "originator {originator}"
+        );
+    }
+}
+
+#[test]
+fn malformed_codex_metadata_keeps_generic_attribution_unknown() {
+    let body = serde_json::json!({
+        "client_metadata": {"x-codex-turn-metadata": "{not-json"}
+    });
+    let metadata = CodexMetadata::from_request(&[], Some(&body)).expect("observed metadata");
+    assert!(metadata.malformed);
+    assert_eq!(metadata.originator, None);
+    assert_eq!(
+        ClientKind::detect_with_originator(Some("Mozilla/5.0"), None, true),
+        ClientKind::OpenaiCompat
+    );
+}
+
+#[test]
 fn live_path_uses_the_same_strict_call_target_validator() {
     let target = validate_realtime_call_target("/v1/live/rtc_1").expect("valid target");
     assert_eq!(target.unwrap().call_id, "rtc_1");

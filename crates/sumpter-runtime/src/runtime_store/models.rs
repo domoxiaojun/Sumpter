@@ -156,6 +156,7 @@ impl EventProjection {
     pub(super) fn active_model(&self) -> runtime_events::ActiveModel {
         runtime_events::ActiveModel {
             projection_version: Set(PROJECTION_VERSION),
+            client_kind: Set(self.client_kind.as_ref().map(|value| value.to_string())),
             payload_bytes: Set(self.payload_bytes),
             session_key: Set(Some(self.session_key.to_owned())),
             session_source: Set(Some(self.session_source.to_owned())),

@@ -200,6 +200,8 @@ impl ClientKind {
         originator: Option<&str>,
         openai_inbound: bool,
     ) -> Self {
+        // Pi's explicit marker is the protocol-independent identity contract;
+        // preserve it even when a gateway adds a generic/foreign User-Agent.
         if originator.is_some_and(|value| value.trim().eq_ignore_ascii_case("pi")) {
             return Self::Pi;
         }
@@ -214,11 +216,14 @@ impl ClientKind {
             {
                 return Self::Pi;
             }
-            if ua.starts_with("claude-cli/") {
+            let lower = ua.to_ascii_lowercase();
+            if lower.starts_with("claude-cli/")
+                || lower.starts_with("claude-code/")
+                || lower.starts_with("claude-user (claude-code/")
+            {
                 return Self::ClaudeCode;
             }
-            let lower = ua.to_ascii_lowercase();
-            if lower.contains("codex") {
+            if is_codex_user_agent(&lower) {
                 return Self::Codex;
             }
             if lower.starts_with("geminicli/")
@@ -235,16 +240,7 @@ impl ClientKind {
             }
         }
         if let Some(originator) = originator {
-            let lower = originator.trim().to_ascii_lowercase();
-            // CPA accepts both the desktop product spelling and the CLI/TUI
-            // originators.  Match a token boundary-ish substring so versioned
-            // values such as `Codex Desktop/1.2` continue to work, while not
-            // treating an arbitrary OpenAI originator as Codex.
-            if lower.contains("codex desktop")
-                || lower.contains("codex_work_desktop")
-                || lower.contains("codex_cli_rs")
-                || lower.contains("codex-tui")
-            {
+            if is_codex_originator(originator) {
                 return Self::Codex;
             }
         }
@@ -254,6 +250,73 @@ impl ClientKind {
             Self::Unknown
         }
     }
+}
+
+/// Recognize the first-party Codex User-Agent prefix without treating an
+/// arbitrary product name such as `notcodex-proxy` as Codex.
+fn is_codex_user_agent(value: &str) -> bool {
+    value.starts_with("codex/")
+        || value.starts_with("codex ")
+        || value.starts_with("codex_")
+        || value.starts_with("codex-")
+}
+
+/// Return whether an originator is one of the first-party Codex values sent
+/// by the CLI, TUI, VS Code, Codex Work, ChatGPT remote clients, or the local
+/// app-server bridge.
+///
+/// The value is an attribution hint only. Keep this list explicit rather
+/// than accepting every `codex_*` string so an arbitrary OpenAI-compatible
+/// client cannot relabel itself as Codex. A slash or whitespace suffix is
+/// accepted for versioned product values such as `Codex Desktop/1.2`; the
+/// upstream app-server contract also permits the explicit `Codex ...` form.
+pub fn is_codex_originator(value: &str) -> bool {
+    codex_originator_variant(value).is_some()
+}
+
+/// Map a first-party Codex originator to the stable analytics variant.
+pub fn codex_originator_variant(value: &str) -> Option<&'static str> {
+    let value = value.trim().to_ascii_lowercase();
+    let matches = |token: &str| {
+        value == token
+            || value
+                .strip_prefix(token)
+                .is_some_and(|suffix| suffix.starts_with('/') || suffix.starts_with(' '))
+    };
+    [
+        ("codex_work_desktop", "work_desktop"),
+        ("codex_work_web", "work_web"),
+        ("codex_work_mobile", "work_mobile"),
+        ("codex_work_cca", "work_cca"),
+        ("chatgpt_cca", "chatgpt_cca"),
+        ("codex_desktop", "desktop"),
+        ("codex_atlas", "chatgpt_atlas"),
+        ("codex_chatgpt_desktop", "chatgpt_desktop"),
+        ("codex_chatgpt_android_remote", "chatgpt_android_remote"),
+        ("codex_chatgpt_ios_remote", "chatgpt_ios_remote"),
+        ("codex_app_server_daemon", "app_server"),
+        ("codex-app-server", "app_server"),
+        ("codex-app-server-sdk", "app_server_sdk"),
+        ("codex_mcp_server", "mcp_server"),
+        ("codex_exec", "exec"),
+        ("codex-cli", "cli"),
+        ("codex_sdk_ts", "sdk"),
+        ("codex_tui", "tui"),
+        ("codex_cli", "cli"),
+        ("codex-backend", "backend"),
+        ("codex_vscode", "vscode"),
+        ("codex-tui", "tui"),
+        ("codex desktop", "desktop"),
+        ("codex_cli_rs", "cli"),
+    ]
+    .into_iter()
+    .find_map(|(token, variant)| matches(token).then_some(variant))
+    .or_else(|| {
+        value
+            .strip_prefix("codex ")
+            .filter(|suffix| !suffix.is_empty())
+            .map(|_| "cli")
+    })
 }
 
 /// 失败发生在哪个边界，用于区分“尚未收到响应头”和“200 已发出后断流”。
@@ -2881,37 +2944,72 @@ pub struct RuntimeEvent {
 }
 
 impl RuntimeEvent {
+    /// Return the best bounded client attribution available on the event.
+    ///
+    /// Older stored events may have been written as `openai_compat` before a
+    /// Codex originator was added to the recognized first-party set. Upgrade
+    /// only when the retained metadata contains a known Codex originator;
+    /// generic or malformed metadata remains unchanged.
+    pub fn attributed_client_kind(&self) -> Option<ClientKind> {
+        if matches!(
+            self.client_kind,
+            Some(ClientKind::OpenaiCompat | ClientKind::Unknown) | None
+        ) && self
+            .codex_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.originator.as_deref())
+            .is_some_and(is_codex_originator)
+        {
+            Some(ClientKind::Codex)
+        } else {
+            self.client_kind
+        }
+    }
+
     /// Return a stable client variant for attribution and analytics.
     pub fn derived_client_variant(&self) -> &'static str {
+        let attributed_client_kind = self.attributed_client_kind();
+        let codex_originator_variant = (attributed_client_kind == Some(ClientKind::Codex))
+            .then(|| {
+                self.codex_metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.originator.as_deref())
+                    .and_then(codex_originator_variant)
+            })
+            .flatten();
         if let Some(value) = self.client_variant.as_deref() {
+            if attributed_client_kind == Some(ClientKind::Codex)
+                && matches!(value, "cli" | "unknown")
+                && let Some(variant) = codex_originator_variant
+            {
+                return variant;
+            }
             return match value {
                 "cli" => "cli",
                 "tui" => "tui",
                 "desktop" => "desktop",
                 "work_desktop" => "work_desktop",
+                "work_web" => "work_web",
+                "work_mobile" => "work_mobile",
+                "work_cca" => "work_cca",
+                "chatgpt_cca" => "chatgpt_cca",
+                "chatgpt_atlas" => "chatgpt_atlas",
+                "chatgpt_desktop" => "chatgpt_desktop",
+                "chatgpt_android_remote" => "chatgpt_android_remote",
+                "chatgpt_ios_remote" => "chatgpt_ios_remote",
+                "app_server" => "app_server",
+                "app_server_sdk" => "app_server_sdk",
+                "mcp_server" => "mcp_server",
+                "exec" => "exec",
+                "backend" => "backend",
+                "vscode" => "vscode",
                 "sdk" => "sdk",
                 "web" => "web",
                 _ => "unknown",
             };
         }
-        match self.client_kind {
-            Some(ClientKind::Codex) => {
-                let originator = self
-                    .codex_metadata
-                    .as_ref()
-                    .and_then(|m| m.originator.as_deref())
-                    .unwrap_or_default()
-                    .to_ascii_lowercase();
-                if originator.contains("codex_work_desktop") {
-                    "work_desktop"
-                } else if originator.contains("codex desktop") {
-                    "desktop"
-                } else if originator.contains("codex-tui") {
-                    "tui"
-                } else {
-                    "cli"
-                }
-            }
+        match attributed_client_kind {
+            Some(ClientKind::Codex) => codex_originator_variant.unwrap_or("cli"),
             Some(ClientKind::ClaudeCode) => "cli",
             Some(ClientKind::GeminiCli | ClientKind::GrokBuild | ClientKind::Pi) => "cli",
             Some(ClientKind::OpenaiCompat | ClientKind::Unknown) | None => "unknown",
@@ -3347,6 +3445,17 @@ mod tests {
             ClientKind::detect(Some("claude-cli/2.1.220 (external, cli)"), false),
             ClientKind::ClaudeCode
         );
+        assert_eq!(
+            ClientKind::detect(Some("claude-code/2.1.220 (cli)"), false),
+            ClientKind::ClaudeCode
+        );
+        assert_eq!(
+            ClientKind::detect(
+                Some("Claude-User (claude-code/2.1.220; +https://support.anthropic.com/)"),
+                false
+            ),
+            ClientKind::ClaudeCode
+        );
         // 即使经兼容层入站,UA 说是 CC 就是 CC。
         assert_eq!(
             ClientKind::detect(Some("claude-cli/1.0.0"), true),
@@ -3367,6 +3476,10 @@ mod tests {
         assert_eq!(
             ClientKind::detect(Some("Codex/151.0 Desktop"), false),
             ClientKind::Codex
+        );
+        assert_eq!(
+            ClientKind::detect(Some("notcodex-proxy/1.0"), true),
+            ClientKind::OpenaiCompat
         );
         // Grok Build 对外仍使用 grok-shell 产品名；pager 形态也会保留该段。
         assert_eq!(
@@ -3395,18 +3508,40 @@ mod tests {
 
     #[test]
     fn client_kind_detects_codex_originator_when_user_agent_is_generic_or_missing() {
-        assert_eq!(
-            ClientKind::detect_with_originator(Some("Mozilla/5.0"), Some("Codex Desktop"), true,),
-            ClientKind::Codex
-        );
-        assert_eq!(
-            ClientKind::detect_with_originator(None, Some("Codex Desktop/1.2"), true),
-            ClientKind::Codex
-        );
-        assert_eq!(
-            ClientKind::detect_with_originator(None, Some("codex_work_desktop"), true),
-            ClientKind::Codex
-        );
+        for originator in [
+            "Codex Desktop",
+            "Codex Desktop/1.2",
+            "codex_cli_rs",
+            "codex-tui",
+            "codex_vscode",
+            "codex_work_desktop",
+            "codex_work_web",
+            "codex_work_mobile",
+            "codex_work_cca",
+            "chatgpt_cca",
+            "codex_desktop",
+            "codex_atlas",
+            "codex_chatgpt_desktop",
+            "codex_chatgpt_android_remote",
+            "codex_chatgpt_ios_remote",
+            "codex_app_server_daemon",
+            "codex-app-server",
+            "codex-app-server-sdk",
+            "codex_mcp_server",
+            "codex_exec",
+            "codex-cli",
+            "codex_sdk_ts",
+            "codex_tui",
+            "codex_cli",
+            "codex-backend",
+            "Codex Something Else",
+        ] {
+            assert_eq!(
+                ClientKind::detect_with_originator(Some("Mozilla/5.0"), Some(originator), true,),
+                ClientKind::Codex,
+                "originator {originator}"
+            );
+        }
         assert_eq!(
             ClientKind::detect_with_originator(Some("codex_cli_rs/1.0"), Some("other"), true,),
             ClientKind::Codex
@@ -3421,6 +3556,12 @@ mod tests {
             ),
             ClientKind::ClaudeCode
         );
+        assert_eq!(
+            ClientKind::detect_with_originator(None, Some("codex_work_web_extra"), true),
+            ClientKind::OpenaiCompat
+        );
+        assert!(!is_codex_originator("codex_work_web_extra"));
+        assert_eq!(codex_originator_variant("codex_work_web_extra"), None);
     }
 
     #[test]
@@ -4062,6 +4203,60 @@ mod tests {
         };
         assert_eq!(event.derived_client_variant(), "tui");
         assert_eq!(event.derived_agent_role(), "subagent");
+    }
+
+    #[test]
+    fn runtime_event_derives_current_codex_originator_variants() {
+        for (originator, expected) in [
+            ("codex_work_desktop", "work_desktop"),
+            ("codex_work_web", "work_web"),
+            ("codex_work_mobile", "work_mobile"),
+            ("codex_work_cca", "work_cca"),
+            ("chatgpt_cca", "chatgpt_cca"),
+            ("codex_desktop", "desktop"),
+            ("codex_atlas", "chatgpt_atlas"),
+            ("codex_chatgpt_desktop", "chatgpt_desktop"),
+            ("codex_chatgpt_android_remote", "chatgpt_android_remote"),
+            ("codex_chatgpt_ios_remote", "chatgpt_ios_remote"),
+            ("codex_app_server_daemon", "app_server"),
+            ("codex-app-server", "app_server"),
+            ("codex-app-server-sdk", "app_server_sdk"),
+            ("codex_mcp_server", "mcp_server"),
+            ("codex_exec", "exec"),
+            ("codex-cli", "cli"),
+            ("codex_sdk_ts", "sdk"),
+            ("codex_tui", "tui"),
+            ("codex_cli", "cli"),
+            ("codex-backend", "backend"),
+            ("Codex Something Else", "cli"),
+            ("codex_vscode", "vscode"),
+            ("codex_cli_rs", "cli"),
+            ("codex-tui", "tui"),
+            ("Codex Desktop/1.2", "desktop"),
+        ] {
+            let event = RuntimeEvent {
+                client_kind: Some(ClientKind::Codex),
+                codex_metadata: Some(CodexMetadata {
+                    originator: Some(originator.into()),
+                    ..Default::default()
+                }),
+                ..event(originator, KIND_CLIENT, 0.0)
+            };
+            assert_eq!(
+                event.derived_client_variant(),
+                expected,
+                "originator {originator}"
+            );
+        }
+        let ambiguous = RuntimeEvent {
+            client_kind: Some(ClientKind::Codex),
+            codex_metadata: Some(CodexMetadata {
+                originator: Some("codex_work_web_extra".into()),
+                ..Default::default()
+            }),
+            ..event("ambiguous", KIND_CLIENT, 0.0)
+        };
+        assert_eq!(ambiguous.derived_client_variant(), "cli");
     }
 
     #[test]
