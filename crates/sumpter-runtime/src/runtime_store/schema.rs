@@ -4,6 +4,12 @@ use super::{
     TTFB_CRITICAL_MS, TTFB_SLOW_MS, meta_i64, now, params, set_meta, update_event_projection,
 };
 
+/// Projection 11 only adds attribution values that can be recomputed from
+/// retained event payloads.  Keep projection 10 as an online-upgrade source;
+/// older projections may have incompatible columns/semantics and retain the
+/// explicit recreate boundary.
+const COMPATIBLE_PREVIOUS_PROJECTION_VERSION: i64 = 10;
+
 pub(super) fn setup_connection(connection: &mut Connection) -> crate::database::Result<()> {
     if let Some(issue) =
         database_issue_on(connection).map_err(crate::database::Error::InvalidParameterName)?
@@ -142,6 +148,10 @@ pub(super) fn setup_connection(connection: &mut Connection) -> crate::database::
 /// the same tables; it is normalized back to 5 instead of blocking startup.
 fn runtime_schema_supported(version: i64) -> bool {
     version == SCHEMA_VERSION || version == 6
+}
+
+fn runtime_projection_supported(version: i64) -> bool {
+    version == PROJECTION_VERSION || version == COMPATIBLE_PREVIOUS_PROJECTION_VERSION
 }
 
 fn ensure_output_generation_columns(connection: &Connection) -> crate::database::Result<()> {
@@ -1115,7 +1125,8 @@ pub(super) fn database_issue_on(
         let newer = (version > SCHEMA_VERSION && !runtime_schema_supported(version))
             || projection.is_some_and(|value| value > PROJECTION_VERSION);
         let mut incompatible = !runtime_schema_supported(version)
-            || projection != Some(PROJECTION_VERSION)
+            || projection.is_none()
+            || projection.is_some_and(|value| !runtime_projection_supported(value))
             || !tables.contains("runtime_events");
         if !incompatible && tables.contains("runtime_events") {
             let columns = connection
@@ -1140,8 +1151,13 @@ pub(super) fn database_issue_on(
         }
         if !incompatible {
             incompatible = connection.query_row(
-                "SELECT EXISTS(SELECT 1 FROM runtime_events WHERE projection_version != ?1 LIMIT 1)",
-                [PROJECTION_VERSION], |row| row.get::<_, bool>(0),
+                "SELECT EXISTS(
+                   SELECT 1 FROM runtime_events
+                   WHERE projection_version NOT IN (?1,?2)
+                   LIMIT 1
+                 )",
+                params![PROJECTION_VERSION, COMPATIBLE_PREVIOUS_PROJECTION_VERSION],
+                |row| row.get::<_, bool>(0),
             )?;
         }
         if !incompatible && !newer {

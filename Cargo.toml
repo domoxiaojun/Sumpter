@@ -12,7 +12,7 @@ members = [
 
 [workspace.package]
 edition = "2024"
-version = "0.4.47"
+version = "0.4.48"
 license = "MIT"
 rust-version = "1.88"
 repository = "https://github.com/domoxiaojun/sumpter"

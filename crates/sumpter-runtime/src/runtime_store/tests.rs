@@ -2654,6 +2654,73 @@ fn schema_five_keeps_events_when_output_speed_columns_are_added() {
 }
 
 #[test]
+fn previous_projection_upgrades_in_place_and_repairs_attribution() {
+    let dir = test_dir("projection-ten-attribution-upgrade");
+    let path = dir.join("runtime.sqlite3");
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    let mut retained = event(
+        "projection-ten-codex",
+        KIND_CLIENT,
+        200,
+        RuntimeEventPhase::Completed,
+        Some(RuntimeEventOutcome::Succeeded),
+        event_now(),
+    );
+    retained.client_kind = Some(ClientKind::Unknown);
+    retained.codex_metadata =
+        CodexMetadata::from_request(&[("originator".into(), "codex_work_web".into())], None);
+    store.enqueue(retained, RuntimeCounters::default()).unwrap();
+    store.flush().unwrap();
+    drop(store);
+
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "UPDATE runtime_meta SET value='10' WHERE key='projection_version';
+             UPDATE runtime_events SET projection_version=10,client_kind='unknown';
+             PRAGMA wal_checkpoint(TRUNCATE);",
+        )
+        .unwrap();
+    drop(connection);
+
+    assert!(RuntimeStore::database_issue(&path).unwrap().is_none());
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    assert!(store.event("projection-ten-codex").unwrap().is_some());
+    store.flush().unwrap();
+    for _ in 0..100 {
+        let connection = Connection::open(&path).unwrap();
+        let projection: i64 = connection
+            .query_row(
+                "SELECT projection_version FROM runtime_events WHERE event_id='projection-ten-codex'",
+                crate::database::params![],
+                |row| row.get(0),
+            )
+            .unwrap();
+        if projection == 11 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    drop(store);
+
+    let connection = Connection::open(&path).unwrap();
+    let projection: (i64, String, String) = connection
+        .query_row(
+            "SELECT projection_version,client_kind,client_variant FROM runtime_events WHERE event_id='projection-ten-codex'",
+            crate::database::params![],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(projection, (11, "codex".into(), "work_web".into()));
+    assert_eq!(
+        meta_i64(&connection, "projection_version").unwrap(),
+        Some(11)
+    );
+    drop(connection);
+    remove_test_dir(&dir);
+}
+
+#[test]
 fn successful_commit_clears_degraded_and_backpressure_state() {
     let dir = test_dir("recovery");
     let path = dir.join("runtime.sqlite3");
