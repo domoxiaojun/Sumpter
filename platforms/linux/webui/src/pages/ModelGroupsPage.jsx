@@ -97,7 +97,7 @@ export function ModelGroupsPage() {
       <div className="page-actions">
         <button type="button" className="btn btn-secondary" disabled={saving} onClick={() => {
           try {
-            const group = newModelGroup();
+            const group = newModelGroup(catalog);
             change((list) => list.push(group));
             setSelected(group.id);
             setEditorTab('models');
@@ -148,15 +148,15 @@ export function ModelGroupsPage() {
           </nav>
           {editorTab === 'models' && <>
           <div className="model-group-selection-toolbar"><strong>已选 {current.models.length - unlistedModels.length} 个模型</strong><span /><button className="btn btn-ghost" onClick={() => updateGroup(current.id, (g) => { g.models = [...new Set([...g.models, ...catalog])]; })}>全选已添加</button><button className="btn btn-ghost" onClick={() => updateGroup(current.id, (g) => { g.models = []; pruneGroupReferences({ endpoints, modelGroups: [g] }); })}>清空</button></div>
-          <p className="form-hint">仅汇总入口库已添加的模型；点击模型整行即可勾选。</p>
+          <p className="form-hint">新组默认勾选入口库已添加的模型；已绑定入口新增模型时自动勾选，仍可手动取消。</p>
           <CategoryPicker categories={categories} selected={current.models} onChange={(models) => updateGroup(current.id, (g) => { g.models = models; pruneGroupReferences({ endpoints, modelGroups: [g] }); })} />
           {!!unlistedModels.length && <div className="model-unavailable"><p className="form-hint">{unlistedModels.length} 项历史选择未在入口库添加，已从列表隐藏。</p><button type="button" className="btn btn-ghost" onClick={() => updateGroup(current.id, (g) => { g.models = g.models.filter((model) => catalog.includes(model)); pruneGroupReferences({ endpoints, modelGroups: [g] }); })}>清理历史选择</button></div>}
           {current.models.some((m) => !current.bindings.some((b) => b.enabled && endpoints.some((e) => e.id === b.endpointID && e.enabled !== false && (e.modelMappings || e.mappings || []).some((mapping) => modelMatches(mapping.from ?? mapping.clientPattern, m))) && (b.models == null || b.models.some((p) => modelMatches(p, m))))) && <p role="status" className="form-hint">部分模型尚未配置启用的承接入口；请求会继续检查其他组。</p>}
           </>}
           {editorTab === 'bindings' && <section className="model-group-bindings-panel">
-            {current.id === 'default' && <p className="form-hint" role="note">默认组已绑定入口的顺序与优先级跟随入口库，请到入口库调整。新入口不会自动加入任何模型组，请在此手动添加并选择承接范围。</p>}
+            {current.id === 'default' && <p className="form-hint" role="note">默认组已绑定入口的顺序与优先级跟随入口库，请到入口库调整。新入口不会自动加入任何模型组，请在此手动添加；新绑定默认承接全部可用模型。</p>}
             <div className="model-group-binding-toolbar">
-              <label>从入口库添加<select className="form-select" value="" onChange={(e) => { const id = e.target.value; if (id) updateGroup(current.id, (g) => g.bindings.push({ endpointID: id, enabled: true, priority: 0, models: [], overrides: [] })); }}><option value="">选择入口…</option>{endpoints.filter((e) => !current.bindings.some((b) => b.endpointID === e.id)).map((e) => <option key={e.id} value={e.id}>{e.name || e.id}{e.enabled === false ? '（入口已停用）' : ''}</option>)}</select></label>
+              <label>从入口库添加<select className="form-select" value="" onChange={(e) => { const id = e.target.value; if (id) updateGroup(current.id, (g) => g.bindings.push({ endpointID: id, enabled: true, priority: 0, models: null, overrides: [] })); }}><option value="">选择入口…</option>{endpoints.filter((e) => !current.bindings.some((b) => b.endpointID === e.id)).map((e) => <option key={e.id} value={e.id}>{e.name || e.id}{e.enabled === false ? '（入口已停用）' : ''}</option>)}</select></label>
               <span className="form-hint">点击入口整行展开编辑</span>
             </div>
             {!current.bindings.length && <p className="form-hint">添加入口后，可从该入口支持的模型中选择承接范围。</p>}

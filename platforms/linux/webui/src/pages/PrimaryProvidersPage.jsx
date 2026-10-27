@@ -8,7 +8,7 @@ import { Icon } from '../utils/icons.jsx';
 import { api, isValidResolveIP, normalizeResolveIP } from '../services/api.js';
 import { UserAgentEditor } from '../components/UserAgentEditor.jsx';
 import { normalizeUserAgentSettings, userAgentSummary } from '../utils/userAgent.js';
-import { addEndpointToLibrary } from '../utils/modelGroups.js';
+import { addEndpointModelsToGroups, addEndpointToLibrary } from '../utils/modelGroups.js';
 import { clone, formatTimestamp } from '../utils/helpers.js';
 import { ENDPOINT_PROTOCOL_MODES, endpointProtocolLabel, normalizeEndpointProtocol } from '../utils/protocols.js';
 
@@ -338,8 +338,11 @@ function EndpointMappingTable({ endpoint, configDoc, saveConfig, addToast }) {
       const saved = await saveConfig((latestConfig) => {
         const target = latestConfig.endpoints?.find((item) => item.id === endpoint.id);
         if (!target) throw new Error('入口已不存在，请刷新页面');
+        const existingKeys = new Set(endpointMappings(target).map((mapping) => modelKey(mappingClient(mapping))));
         target.modelMappings = mappings;
         delete target.mappings;
+        addEndpointModelsToGroups(latestConfig, endpoint.id,
+          mappings.filter((mapping) => !existingKeys.has(modelKey(mappingClient(mapping)))).map(mappingClient));
         return latestConfig;
       }, {}, draftSource.current);
       draftSource.current = saved;
@@ -687,6 +690,8 @@ export function PrimaryProvidersPage() {
               });
               existing.add(key);
             }
+            addEndpointModelsToGroups(nextConfig, endpoint.id,
+              target.modelMappings.slice(existingMappings.length).map(mappingClient));
             await saveConfig(nextConfig, {}, configDoc);
             addToast(`已添加 ${target.modelMappings.length - existingMappings.length} 条模型映射`, 'success');
             return false;

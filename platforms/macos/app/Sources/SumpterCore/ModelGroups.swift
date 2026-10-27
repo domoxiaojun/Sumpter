@@ -56,7 +56,7 @@ public struct ModelGroupBinding: Codable, Equatable, Sendable, Identifiable {
     /// nil = all group models supported by the endpoint; [] = none.
     public var models: [String]?
     public var overrides: [ModelGroupModelOverride]
-    public init(endpointID: String, enabled: Bool = true, priority: Int = 0, models: [String]? = [],
+    public init(endpointID: String, enabled: Bool = true, priority: Int = 0, models: [String]? = nil,
                 overrides: [ModelGroupModelOverride] = []) {
         self.endpointID = endpointID; self.enabled = enabled; self.priority = priority
         self.models = models; self.overrides = overrides
@@ -89,6 +89,28 @@ public struct ModelGroupModelOverride: Codable, Equatable, Sendable, Identifiabl
 }
 
 public extension AppConfig {
+    /// 自动勾选已绑定入口的新映射；保留已有模型选择与显式绑定范围。
+    mutating func selectNewEndpointModels(previous: AppConfig) {
+        // Legacy configs are materialized after the edit so the newly added
+        // mapping is included in the initial default group selection.
+        guard var groups = modelGroups else {
+            migrateModelGroups()
+            return
+        }
+        for endpoint in endpoints {
+            let existing = Set((previous.endpoint(id: endpoint.id)?.mappings ?? [])
+                .map { ModelName.clean($0.clientPattern.rawValue) })
+            let added = endpoint.mappings.map { ModelName.clean($0.clientPattern.rawValue) }
+                .filter { !$0.isEmpty && !existing.contains($0) }
+            for index in groups.indices where groups[index].bindings.contains(where: { $0.endpointID == endpoint.id }) {
+                for name in added where !groups[index].models.contains(where: { ModelName.matches(name, pattern: $0) }) {
+                    groups[index].models.append(name)
+                }
+            }
+        }
+        modelGroups = groups
+    }
+
     mutating func addEndpointToLibrary(_ endpoint: Endpoint) {
         // Freeze legacy membership before insertion. New entries require an
         // explicit binding even when the next save migrates a legacy config.

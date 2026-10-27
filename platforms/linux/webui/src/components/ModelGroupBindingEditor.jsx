@@ -34,6 +34,7 @@ export function ModelGroupBindingEditor({ binding, models, endpoint, edit, follo
     </div>
     {endpoint?.enabled === false && <p className="binding-notice is-warning">入口库已停用，此处设置保留，启用入口后才会参与调度。</p>}
     {all && <p className="binding-notice">仅承接本入口已添加的组内模型；新增可用模型会自动纳入，移除入口模型后立即停止承接新请求。</p>}
+    {!all && <p className="binding-notice">指定模型是手动白名单；入口新增模型不会自动加入承接范围。</p>}
     <section className="binding-model-section" aria-label="模型与覆盖">
       <div className="binding-model-toolbar">
         <div><div className="binding-model-title"><strong>模型与覆盖</strong><span>{summary}</span></div><p className="form-hint">覆盖留空时继承入口设置。</p></div>

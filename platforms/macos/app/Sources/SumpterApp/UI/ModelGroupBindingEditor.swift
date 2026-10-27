@@ -111,6 +111,9 @@ struct ModelGroupBindingEditor: View {
             if binding.models == nil {
                 Label("仅承接本入口已添加的组内模型；新增可用模型会自动纳入，移除入口模型后立即停止承接新请求。", systemImage: "info.circle")
                     .font(.caption).foregroundStyle(palette.textSecondary)
+            } else {
+                Label("指定模型是手动白名单；入口新增模型不会自动加入承接范围。", systemImage: "info.circle")
+                    .font(.caption).foregroundStyle(palette.textSecondary)
             }
 
             VStack(alignment: .leading, spacing: 6) {

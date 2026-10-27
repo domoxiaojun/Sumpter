@@ -592,6 +592,7 @@ extension AppModel {
         let wasRunning = sidecar.isRunning
         var draft = previous
         try body(&draft)
+        draft.selectNewEndpointModels(previous: previous)
         draft.pruneDanglingEndpointReferences()
         // 默认组绑定跟随入口库顺序/优先级(对齐 Rust normalized()),任何入口
         // 增删、排序或改优先级后默认组都保持同步,入口库即唯一事实来源。

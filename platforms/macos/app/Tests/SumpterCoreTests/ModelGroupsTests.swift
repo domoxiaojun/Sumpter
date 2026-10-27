@@ -3,6 +3,39 @@ import XCTest
 @testable import SumpterCore
 
 final class ModelGroupsTests: XCTestCase {
+    func testNewMappingsAreSelectedInBoundGroupsAndRespectExplicitScopes() throws {
+        var c = config()
+        c.endpoints[0].mappings = [ModelMapping(clientPattern: "gpt-unchecked")]
+        c.modelGroups = [
+            ModelGroup(id: "all", models: ["gpt-old"], bindings: [ModelGroupBinding(endpointID: "a")]),
+            ModelGroup(id: "selected", models: ["gpt-old"], bindings: [ModelGroupBinding(endpointID: "a", models: ["gpt-old"])]),
+            ModelGroup(id: "unbound")
+        ]
+        let previous = c
+        c.endpoints[0].mappings.append(ModelMapping(clientPattern: "gpt-new"))
+        c.selectNewEndpointModels(previous: previous)
+        XCTAssertEqual(c.modelGroups?.map(\.models), [["gpt-old", "gpt-new"], ["gpt-old", "gpt-new"], []])
+        XCTAssertNil(c.modelGroups?[0].bindings[0].models)
+        XCTAssertEqual(c.modelGroups?[1].bindings[0].models, ["gpt-old"])
+        XCTAssertEqual(c.routingEndpoints(for: "gpt-new")
+            .filter { $0.preferredMapping(for: "gpt-new") != nil }.map(\.modelGroupID), ["all"])
+        let saved = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(c))
+        XCTAssertEqual(saved.modelGroups, c.modelGroups)
+        c.modelGroups?[0].models = []
+        c.selectNewEndpointModels(previous: saved)
+        XCTAssertEqual(c.modelGroups?[0].models, [], "普通保存不会恢复手动取消的模型")
+    }
+
+    func testNewMappingCoveredByGroupWildcardIsNotDuplicated() {
+        var c = config()
+        c.modelGroups = [ModelGroup(id: "wildcard", models: ["gpt-*"], bindings: [ModelGroupBinding(endpointID: "a")])]
+        let previous = c
+        c.endpoints[0].mappings.append(ModelMapping(clientPattern: "gpt-new"))
+        c.endpoints[0].mappings.append(ModelMapping(clientPattern: "claude-new"))
+        c.selectNewEndpointModels(previous: previous)
+        XCTAssertEqual(c.modelGroups?[0].models, ["gpt-*", "claude-new"])
+    }
+
     private func config() -> AppConfig {
         AppConfig(endpoints: ["a", "b"].map { id in Endpoint(id: id, name: id,
             baseURL: URL(string: "https://\(id).invalid")!,

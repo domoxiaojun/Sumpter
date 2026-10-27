@@ -115,7 +115,8 @@ struct ModelGroupsWorkspace: View {
     private var actions: some View {
         HStack(spacing: 8) {
             Button("新建模型组", systemImage: "plus") {
-                let group = ModelGroup(); groups.append(group); selectedID = group.id; tab = "models"
+                let group = ModelGroup(models: ModelGroupCatalog.categories(endpoints: endpoints).flatMap(\.models))
+                groups.append(group); selectedID = group.id; tab = "models"
             }
             if dirty { Button("撤销更改", action: revert) }
             Button(saving ? "保存中…" : "保存更改", action: save)
@@ -202,7 +203,7 @@ struct ModelGroupEditor: View {
                 Button("全选已添加") { group.models = Array(Set(group.models + categories.flatMap(\.models))).sorted() }
                 Button("清空") { group.models.removeAll(); prune() }
             }
-            Text("仅汇总入口库已添加的模型；点击模型整行即可勾选。")
+            Text("新组默认勾选入口库已添加的模型；已绑定入口新增模型时自动勾选，仍可手动取消。")
                 .font(.system(size: 12)).foregroundStyle(palette.textSecondary)
             ModelCategoryPicker(categories: categories, selected: Binding(
                 get: { Set(group.models) }, set: { group.models = Array($0).sorted(); prune() }
@@ -226,7 +227,7 @@ struct ModelGroupEditor: View {
     private var bindingsPanel: some View {
         VStack(alignment: .leading, spacing: 8) {
             if group.id == "default" {
-                Label("默认组已绑定入口的顺序与优先级跟随入口库，请到入口库调整。新入口不会自动加入任何模型组，请在此手动添加并选择承接范围。", systemImage: "arrow.triangle.2.circlepath")
+                Label("默认组已绑定入口的顺序与优先级跟随入口库，请到入口库调整。新入口不会自动加入任何模型组，请在此手动添加；新绑定默认承接全部可用模型。", systemImage: "arrow.triangle.2.circlepath")
                     .font(.system(size: 12)).foregroundStyle(palette.textSecondary)
             }
             HStack {

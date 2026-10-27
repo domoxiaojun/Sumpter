@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createLocalID } from '../src/utils/helpers.js';
-import { hasRoutableModel, endpointGroupModels, groupModels, groupRoutePreview, modelCatalogCategories, modelGroupPrefix, newModelGroup, pruneGroupReferences } from '../src/utils/modelGroups.js';
+import { addEndpointModelsToGroups, hasRoutableModel, endpointGroupModels, groupModels, groupRoutePreview, modelCatalogCategories, modelGroupPrefix, newModelGroup, pruneGroupReferences } from '../src/utils/modelGroups.js';
 import { createRouteCatalogLoader, routeModelChoices, routeCatalogKey, saveFeatureRule } from '../src/utils/featureRoutes.js';
 
 globalThis.window = { location: { search: '?mock=1' } };
@@ -74,6 +74,38 @@ const config = () => ({ schemaVersion: 7, endpoints: ['a', 'b'].map((id) => ({
   id, name: id, enabled: true, protocol: 'auto', baseURL: `https://${id}.invalid`,
   mappings: [{ clientPattern: 'gpt-*', upstreamModel: '', thinking: 'adaptive', effort: 'high' }],
 })), retry: { maxDeferredRounds: 0, max500Retries: 2, responseTimeoutSeconds: null }, featureRules: [] });
+
+test('new groups select existing models without binding endpoints', () => {
+  const group = newModelGroup([' gpt-x ', 'gpt-x', 'claude-y']);
+  assert.deepEqual(group.models, ['gpt-x', 'claude-y']);
+  assert.deepEqual(group.bindings, []);
+});
+
+test('new endpoint models are selected only in bound groups and respect explicit binding scopes', () => {
+  const c = config();
+  c.endpoints[0].mappings = [{ clientPattern: 'gpt-new' }, { clientPattern: 'gpt-unchecked' }];
+  c.modelGroups = [
+    { id: 'all', models: ['gpt-old'], bindings: [{ endpointID: 'a', models: null }] },
+    { id: 'selected', models: ['gpt-old'], bindings: [{ endpointID: 'a', models: ['gpt-old'] }] },
+    { id: 'unbound', models: [], bindings: [] },
+  ];
+  addEndpointModelsToGroups(c, 'a', [' gpt-new ', 'gpt-new']);
+  assert.deepEqual(c.modelGroups.map((group) => group.models), [
+    ['gpt-old', 'gpt-new'], ['gpt-old', 'gpt-new'], [],
+  ]);
+  assert.deepEqual(c.modelGroups[1].bindings[0].models, ['gpt-old']);
+  assert.deepEqual(groupRoutePreview(c, c.modelGroups, 'gpt-new').map((row) => row.groupID), ['all']);
+  c.modelGroups[0].models = [];
+  addEndpointModelsToGroups(c, 'a', []);
+  assert.deepEqual(c.modelGroups[0].models, [], 'unrelated saves do not restore unchecked models');
+});
+
+test('new endpoint models covered by a group wildcard are not duplicated', () => {
+  const c = config();
+  c.modelGroups = [{ id: 'wildcard', models: ['gpt-*'], bindings: [{ endpointID: 'a', models: null }] }];
+  addEndpointModelsToGroups(c, 'a', ['gpt-new', 'claude-new']);
+  assert.deepEqual(c.modelGroups[0].models, ['gpt-*', 'claude-new']);
+});
 
 test('legacy group materialization preserves wildcards and leaves retries intact', () => {
   const c = config(); const before = structuredClone(c);

@@ -53,14 +53,14 @@ export function modelMatches(pattern, model) {
     || (pattern.endsWith('*') && model.startsWith(pattern.slice(0, -1))));
 }
 
-export function newModelGroup() {
+export function newModelGroup(models = []) {
   return {
     id: createLocalID('group'),
     name: '新模型组',
     enabled: true,
     priority: 0,
     schedulingStrategy: 'priority',
-    models: [],
+    models: [...new Set(models.map(cleanGroupModel).filter(Boolean))],
     bindings: [],
   };
 }
@@ -90,6 +90,22 @@ export function groupModels(config) {
 export function addEndpointToLibrary(config, endpoint) {
   if (config.modelGroups == null) config.modelGroups = groupModels(config);
   config.endpoints = [...(config.endpoints || []), endpoint];
+}
+
+// Newly added endpoint mappings are enrolled in groups that already bind the
+// endpoint. Keep explicit binding scopes intact; a null scope already accepts
+// future models automatically, while a selected scope is an intentional
+// allowlist.
+export function addEndpointModelsToGroups(config, endpointID, models = []) {
+  const names = [...new Set(models.map(cleanGroupModel).filter(Boolean))];
+  if (!names.length) return config;
+  if (config.modelGroups == null) config.modelGroups = groupModels(config);
+  for (const group of config.modelGroups || []) {
+    if (!(group.bindings || []).some((binding) => binding.endpointID === endpointID)) continue;
+    const covered = names.filter((name) => !(group.models || []).some((pattern) => modelMatches(pattern, name)));
+    group.models = [...new Set([...(group.models || []), ...covered])];
+  }
+  return config;
 }
 
 export function hasRoutableModel(config) {
