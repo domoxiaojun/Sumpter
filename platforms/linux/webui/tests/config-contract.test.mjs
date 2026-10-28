@@ -82,6 +82,20 @@ const componentStyles = await readFile(
   new URL('../src/styles/components.css', import.meta.url),
   'utf8',
 );
+const appContextSource = await readFile(
+  new URL('../src/context/AppContext.jsx', import.meta.url),
+  'utf8',
+);
+
+test('完整刷新与统计摘要刷新使用独立 generation，后台摘要请求可取消', () => {
+  assert.match(appContextSource, /const coreRefreshGenerationRef = useRef\(0\);/);
+  assert.match(appContextSource, /const aggregateRefreshGenerationRef = useRef\(0\);/);
+  assert.match(appContextSource, /const refreshGeneration = \+\+coreRefreshGenerationRef\.current;/);
+  assert.match(appContextSource, /const refreshGeneration = \+\+aggregateRefreshGenerationRef\.current;/);
+  assert.match(appContextSource, /aggregateAbortRef\.current\?\.abort\(\);/);
+  assert.match(appContextSource, /api\.getRuntimeSummary\(\{ signal: controller\.signal \}\)/);
+  assert.doesNotMatch(appContextSource, /\brefreshGenerationRef\b/);
+});
 
 test('mock routing config mirrors all built-in Claude Code rules', () => {
   assert.deepEqual(

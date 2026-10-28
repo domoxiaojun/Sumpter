@@ -110,13 +110,18 @@ export function AppProvider({ children }) {
   const resetGenerationRef = useRef(0);
   const runtimeRefreshTimerRef = useRef(null);
   const coreAbortRef = useRef(null);
+  const aggregateAbortRef = useRef(null);
   const analyticsFacetAbortRef = useRef(null);
   const migrationNoticesRef = useRef(new Set());
   // These refs keep data requests independent from React render identity. In
   // particular, changing analytics filters must not recreate the SSE effect.
   const analyticsRangeRef = useRef(analyticsRange);
   const analyticsFiltersRef = useRef(analyticsFilters);
-  const refreshGenerationRef = useRef(0);
+  // Complete core refreshes and lightweight aggregate refreshes have
+  // independent lifecycles. A slow config/status read must not be discarded
+  // just because an SSE heartbeat started a summary read in the meantime.
+  const coreRefreshGenerationRef = useRef(0);
+  const aggregateRefreshGenerationRef = useRef(0);
   const analyticsGenerationRef = useRef(0);
   const analyticsSummaryRevisionRef = useRef('');
   const analyticsFacetsRevisionRef = useRef('');
@@ -293,12 +298,13 @@ export function AppProvider({ children }) {
   // Fetch Core Data
   const refreshCore = useCallback(async () => {
     if (!auth.authenticated) return;
-    const refreshGeneration = ++refreshGenerationRef.current;
-    const analyticsGeneration = ++analyticsGenerationRef.current;
+    const refreshGeneration = ++coreRefreshGenerationRef.current;
     const shouldLoadAnalytics = currentRoute === 'statistics';
     const shouldLoadEvents = currentRoute === 'run';
     let analyticsSnapshotChanged = false;
     coreAbortRef.current?.abort();
+    aggregateAbortRef.current?.abort();
+    ++aggregateRefreshGenerationRef.current;
     const controller = new AbortController();
     coreAbortRef.current = controller;
     const timeout = window.setTimeout(() => controller.abort(), 10_000);
@@ -321,7 +327,7 @@ export function AppProvider({ children }) {
           ? api.getRuntimeEvents({ limit: 10, signal: controller.signal })
           : Promise.resolve({ events: [] }),
       ]);
-      if (refreshGenerationRef.current !== refreshGeneration) return;
+      if (coreRefreshGenerationRef.current !== refreshGeneration) return;
       requireStatusRuntimeApiV1(statusRes);
       requireRuntimeApiV1(summaryRes);
       setConnectionsObservation(receiveConnectionsSummary(summaryRes));
@@ -357,23 +363,24 @@ export function AppProvider({ children }) {
         ...(eventsRes?.events || []).map((item) => Number(item?.changeSeq || 0)),
       );
       const facetsNeedRefresh = analyticsSnapshotChanged || analyticsFacetsRevisionRef.current === '';
-      if (shouldLoadAnalytics && facetsNeedRefresh && analyticsGenerationRef.current === analyticsGeneration) {
+      if (shouldLoadAnalytics && facetsNeedRefresh) {
         // Start facets after the first paint; do not await them in the core
         // Promise.all above. The visible board is driven by the summary
         // revision immediately; a slow GROUP BY for picker options must not
         // hold back trend/table replacement.
+        const analyticsGeneration = ++analyticsGenerationRef.current;
         void fetchAnalyticsFacets(analyticsGeneration, controller, { notifyWorkspace: false });
         if (analyticsSnapshotChanged) setAnalyticsRefreshSignal((current) => current + 1);
       }
     } catch (err) {
-      if (refreshGenerationRef.current !== refreshGeneration) return;
+      if (coreRefreshGenerationRef.current !== refreshGeneration) return;
       const message = err?.name === 'AbortError'
         ? '核心数据读取超时（10 秒），请检查 Admin 服务是否可用'
         : (err.message || '加载核心数据失败');
       setLastError(message);
       setConnectionsObservation((previous) => failConnectionsSummary(previous, message));
       addToast(message, 'error');
-      if (shouldLoadAnalytics && analyticsGenerationRef.current === analyticsGeneration) {
+      if (shouldLoadAnalytics) {
         setAnalyticsLoading(false);
         setAnalyticsError(message);
         setAnalyticsStale(true);
@@ -381,18 +388,21 @@ export function AppProvider({ children }) {
     } finally {
       window.clearTimeout(timeout);
       if (coreAbortRef.current === controller) coreAbortRef.current = null;
-      if (refreshGenerationRef.current === refreshGeneration) setIsLoading(false);
+      if (coreRefreshGenerationRef.current === refreshGeneration) setIsLoading(false);
     }
   }, [addToast, auth.authenticated, currentRoute, fetchAnalyticsFacets, requireRuntimeApiV1, requireStatusRuntimeApiV1, showMigrationNotice]);
 
   const refreshRuntimeAggregates = useCallback(async () => {
     if (!auth.authenticated) return false;
-    const refreshGeneration = ++refreshGenerationRef.current;
-    const analyticsGeneration = ++analyticsGenerationRef.current;
+    const refreshGeneration = ++aggregateRefreshGenerationRef.current;
+    aggregateAbortRef.current?.abort();
+    const controller = new AbortController();
+    aggregateAbortRef.current = controller;
+    const timeout = window.setTimeout(() => controller.abort(), 10_000);
     const shouldLoadAnalytics = currentRoute === 'statistics';
     try {
-      const summaryRes = await api.getRuntimeSummary();
-      if (refreshGenerationRef.current !== refreshGeneration) return false;
+      const summaryRes = await api.getRuntimeSummary({ signal: controller.signal });
+      if (aggregateRefreshGenerationRef.current !== refreshGeneration) return false;
       requireRuntimeApiV1(summaryRes);
       setConnectionsObservation(receiveConnectionsSummary(summaryRes));
       const nextResetGeneration = Number(summaryRes?.resetGeneration || 0);
@@ -415,21 +425,25 @@ export function AppProvider({ children }) {
           return sameJSON(previous, next) ? previous : next;
         });
       }
-      if (shouldLoadAnalytics && analyticsGenerationRef.current === analyticsGeneration && analyticsSnapshotChanged) {
-        void fetchAnalyticsFacets(analyticsGeneration, null, { notifyWorkspace: false });
+      if (shouldLoadAnalytics && analyticsSnapshotChanged) {
+        const analyticsGeneration = ++analyticsGenerationRef.current;
+        void fetchAnalyticsFacets(analyticsGeneration, controller, { notifyWorkspace: false });
         setAnalyticsRefreshSignal((current) => current + 1);
       }
       return Number(summaryRes?.storage?.pendingEvents || 0) > 0;
     } catch (error) {
-      if (refreshGenerationRef.current !== refreshGeneration) return false;
+      if (aggregateRefreshGenerationRef.current !== refreshGeneration) return false;
+      if (error?.name === 'AbortError') return false;
       const message = error?.message || '刷新运行统计失败';
       setConnectionsObservation((previous) => failConnectionsSummary(previous, message));
-      if (shouldLoadAnalytics && analyticsGenerationRef.current === analyticsGeneration) {
+      if (shouldLoadAnalytics) {
         setAnalyticsError(message);
         setAnalyticsStale(true);
       }
       return false;
     } finally {
+      window.clearTimeout(timeout);
+      if (aggregateAbortRef.current === controller) aggregateAbortRef.current = null;
     }
   }, [auth.authenticated, currentRoute, fetchAnalyticsFacets, refreshCore, requireRuntimeApiV1]);
 
@@ -663,6 +677,8 @@ export function AppProvider({ children }) {
       streamRef.current = null;
       coreAbortRef.current?.abort();
       coreAbortRef.current = null;
+      aggregateAbortRef.current?.abort();
+      aggregateAbortRef.current = null;
       analyticsFacetAbortRef.current?.abort();
       analyticsFacetAbortRef.current = null;
     };

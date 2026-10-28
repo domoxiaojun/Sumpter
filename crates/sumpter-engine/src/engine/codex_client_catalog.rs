@@ -285,6 +285,11 @@ fn build_codex_models_with_templates(
 /// display names make the client picker show two indistinguishable choices and
 /// can send a request to a model the user did not intend to select.
 fn disambiguate_display_names(entries: &mut [Value]) {
+    let original_names = entries
+        .iter()
+        .filter_map(|entry| entry.get("display_name").and_then(Value::as_str))
+        .map(|name| name.to_ascii_lowercase())
+        .collect::<std::collections::HashSet<_>>();
     let mut seen = std::collections::HashSet::new();
     for entry in entries {
         let Some(object) = entry.as_object_mut() else {
@@ -296,17 +301,29 @@ fn disambiguate_display_names(entries: &mut [Value]) {
         if seen.insert(display_name.to_ascii_lowercase()) {
             continue;
         }
-        let Some(slug) = object
+        let slug = object
             .get("slug")
             .and_then(Value::as_str)
-            .map(ToString::to_string)
-        else {
-            continue;
-        };
-        let fallback = slug.clone();
-        object.insert("display_name".into(), json!(fallback.clone()));
-        object.insert("description".into(), json!(fallback));
-        seen.insert(slug.to_ascii_lowercase());
+            .filter(|slug| !slug.trim().is_empty())
+            .map(ToString::to_string);
+        let display_name = display_name.to_string();
+        let mut suffix = 1;
+        let mut fallback = slug
+            .as_deref()
+            .map(|slug| slug.to_string())
+            .unwrap_or_else(|| format!("{display_name} #2"));
+        let mut normalized = fallback.to_ascii_lowercase();
+        while seen.contains(&normalized) || original_names.contains(&normalized) {
+            fallback = match slug.as_deref() {
+                Some(slug) if suffix == 1 => format!("{display_name} ({slug})"),
+                Some(slug) => format!("{display_name} ({slug}) #{suffix}"),
+                None => format!("{display_name} #{suffix}"),
+            };
+            normalized = fallback.to_ascii_lowercase();
+            suffix += 1;
+        }
+        object.insert("display_name".into(), json!(fallback));
+        seen.insert(normalized);
     }
 }
 
@@ -650,6 +667,30 @@ mod tests {
         assert_eq!(entries[0]["display_name"], "GPT-6.1-Sol");
         assert_eq!(entries[1]["display_name"], "gpt-5.5");
         assert_ne!(entries[0]["display_name"], entries[1]["display_name"]);
+    }
+
+    #[test]
+    fn display_name_disambiguation_keeps_names_unique_and_descriptions_intact() {
+        let mut entries = vec![
+            json!({"display_name": "Model", "description": "first", "slug": "first"}),
+            json!({"display_name": "Model", "description": "second", "slug": "other"}),
+            json!({"display_name": "Model", "description": "third", "slug": "other"}),
+            json!({"display_name": "other", "description": "fourth", "slug": "fourth"}),
+        ];
+
+        disambiguate_display_names(&mut entries);
+
+        let names = entries
+            .iter()
+            .map(|entry| entry["display_name"].as_str().unwrap().to_ascii_lowercase())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(names.len(), entries.len());
+        assert_eq!(entries[0]["display_name"], "Model");
+        assert_eq!(entries[1]["display_name"], "Model (other)");
+        assert_eq!(entries[2]["display_name"], "Model (other) #2");
+        assert_eq!(entries[3]["display_name"], "other");
+        assert_eq!(entries[1]["description"], "second");
+        assert_eq!(entries[2]["description"], "third");
     }
 
     #[test]

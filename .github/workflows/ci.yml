@@ -67,6 +67,9 @@ jobs:
       - name: Test unified client attribution and packaged copies
         run: node --test scripts/tests/client-attribution.test.mjs
 
+      - name: Test Codex attribution and packaged copies
+        run: node --test scripts/tests/codex-attribution.test.mjs
+
       - name: Verify generated WebUI is synchronized
         run: |
           set -euo pipefail
