@@ -276,7 +276,38 @@ fn build_codex_models_with_templates(
     }
 
     result.sort_by_key(json_priority);
+    disambiguate_display_names(&mut result);
     result
+}
+
+/// A remote template can retain a stale display name while its slug has been
+/// changed or added as an alias. The slug is the routing identity, so duplicate
+/// display names make the client picker show two indistinguishable choices and
+/// can send a request to a model the user did not intend to select.
+fn disambiguate_display_names(entries: &mut [Value]) {
+    let mut seen = std::collections::HashSet::new();
+    for entry in entries {
+        let Some(object) = entry.as_object_mut() else {
+            continue;
+        };
+        let Some(display_name) = object.get("display_name").and_then(Value::as_str) else {
+            continue;
+        };
+        if seen.insert(display_name.to_ascii_lowercase()) {
+            continue;
+        }
+        let Some(slug) = object
+            .get("slug")
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+        else {
+            continue;
+        };
+        let fallback = slug.clone();
+        object.insert("display_name".into(), json!(fallback.clone()));
+        object.insert("description".into(), json!(fallback));
+        seen.insert(slug.to_ascii_lowercase());
+    }
 }
 
 fn compact_fallback_template(template: &Value) -> Value {
@@ -587,6 +618,38 @@ mod tests {
         assert_eq!(entry["supports_search_tool"], false);
         assert_eq!(entry["prefer_websockets"], false);
         assert_eq!(entry["service_tiers"], json!([]));
+    }
+
+    #[test]
+    fn duplicate_template_display_names_use_their_real_slugs() {
+        let mut payload: Value = serde_json::from_str(CODEX_CLIENT_MODELS_JSON).unwrap();
+        let models = payload["models"].as_array_mut().unwrap();
+        let mut stale = models[0].clone();
+        stale["slug"] = json!("gpt-5.5");
+        models.push(stale);
+        let templates = parse_templates(&payload).unwrap();
+        let entries = build_codex_models_with_templates(
+            &[
+                LocalModelEntry {
+                    id: "gpt-6.1-sol".into(),
+                    capabilities: vec![ModelCapability::Text],
+                    metadata: aggregate_metadata(
+                        "gpt-6.1-sol",
+                        vec![fallback_metadata("gpt-6.1-sol")],
+                    ),
+                },
+                LocalModelEntry {
+                    id: "gpt-5.5".into(),
+                    capabilities: vec![ModelCapability::Text],
+                    metadata: aggregate_metadata("gpt-5.5", vec![fallback_metadata("gpt-5.5")]),
+                },
+            ],
+            "0.156.1",
+            &templates,
+        );
+        assert_eq!(entries[0]["display_name"], "GPT-6.1-Sol");
+        assert_eq!(entries[1]["display_name"], "gpt-5.5");
+        assert_ne!(entries[0]["display_name"], entries[1]["display_name"]);
     }
 
     #[test]
