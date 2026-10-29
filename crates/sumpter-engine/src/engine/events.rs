@@ -230,6 +230,7 @@ impl Engine {
                 event.source_format = event.source_format.or(client.source_format);
                 event.target_format = event.target_format.or(client.target_format);
                 event.route_mode = event.route_mode.or(client.route_mode);
+                event.transport = event.transport.or(client.transport);
                 event.effective_model = event.effective_model.or(client.effective_model);
                 event.feature_rule_id = event.feature_rule_id.or(client.feature_rule_id);
                 event.session_id = event.session_id.or(client.session_id);
@@ -365,6 +366,7 @@ impl Engine {
             source_format,
             target_format: None,
             route_mode: None,
+            transport: None,
             duration_ms: 0,
             effective_model: None,
             endpoint_id: None,
@@ -505,6 +507,7 @@ impl Engine {
             source_format: Some(endpoint.source_format),
             target_format: Some(endpoint.protocol),
             route_mode: Some(endpoint.route_mode),
+            transport: None,
             duration_ms,
             effective_model: Some(endpoint.routed_model.clone()),
             endpoint_id: Some(endpoint.endpoint_id.clone()),

@@ -635,6 +635,15 @@ public enum RuntimeEventPresentation {
         }
     }
 
+    public static func transportDisplay(_ transport: RuntimeTransport?) -> String {
+        switch transport {
+        case .http: return "HTTP"
+        case .sse: return "SSE"
+        case .websocket: return "WebSocket"
+        case nil: return "未记录"
+        }
+    }
+
     /// 事件摘要用的协议路径。只依据事件中的真实字段，不从入口配置或自由文本推断。
     public static func protocolPath(
         sourceFormat: ProviderProtocol?,

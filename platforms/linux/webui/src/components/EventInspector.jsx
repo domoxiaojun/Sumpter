@@ -5,7 +5,7 @@ import {
   eventHttpStatusLabel, eventOutcomeLabel, eventDurationText, friendlyEventMessage, eventFailureSummaryLabel,
   eventRequestID, eventSessionID, eventToolCalls, eventStreamTrace, formatTimestamp, formatDuration,
   eventTTFBMS, eventUpstreamStatusLabel, eventFailureDetail, eventPurposeLabel, eventProtocolRouteLabel,
-  eventIsInFlight, eventOutcome, statusKind, eventUpstreamRequestID, codexMetadataSummary,
+  eventTransportLabel, eventIsInFlight, eventOutcome, statusKind, eventUpstreamRequestID, codexMetadataSummary,
 } from '../utils/helpers.js';
 import { eventDetailGroups, eventAgentLabel, eventCacheLabel, eventCacheRead, eventCacheStatusLabel, eventCacheTokenRatio, eventCacheReason, eventUsage, eventUsageLabel, eventHttpTone } from '../utils/eventPresentation.js';
 import { formatOutputTokensPerSecond } from '../utils/outputSpeed.js';
@@ -113,7 +113,7 @@ export function EventInspector({ event, chain = [], requestSummary, onSelect, ex
       ['项目来源', eventProjectContext(event).source], ['工作区', event.clientDeclared?.workspace],
     ]);
     if (key === 'response') return fields([
-      ['方法', event.requestMethod], ['路径', event.requestPath], ['协议', eventProtocolRouteLabel(event)],
+      ['方法', event.requestMethod], ['路径', event.requestPath], ['传输', eventTransportLabel(event)], ['协议', eventProtocolRouteLabel(event)],
       ['本层 HTTP', eventHttpStatusLabel(event)], ['直接上游 HTTP', eventUpstreamStatusLabel(event)],
       ['最终结果', eventOutcomeLabel(event)], ['失败类型 / 阶段', eventFailureSummaryLabel(event)],
       ['停止原因', eventStreamTrace(event)?.stopReason], ['超时阈值', event.timeoutMS == null ? '—' : formatDuration(event.timeoutMS)],

@@ -251,6 +251,7 @@ impl Platform {
             source_format: None,
             target_format: None,
             route_mode: None,
+            transport: None,
             duration_ms: 0,
             effective_model: None,
             endpoint_id: None,

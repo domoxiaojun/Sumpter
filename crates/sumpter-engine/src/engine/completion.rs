@@ -348,6 +348,7 @@ impl CompletionGuard {
             route_mode: endpoint
                 .map(|endpoint| endpoint.route_mode)
                 .or(self.meta.route_mode),
+            transport: self.meta.transport,
             duration_ms: self.started.elapsed().as_millis() as i64,
             effective_model: Some(self.meta.effective_model.clone()),
             endpoint_id: endpoint.map(|endpoint| endpoint.endpoint_id.clone()),
@@ -435,6 +436,7 @@ impl CompletionGuard {
         );
         event.id = attempt.event_id;
         event.phase = Some(RuntimeEventPhase::Completed);
+        event.transport = self.meta.transport;
         event.ttfb_ms = Some(attempt.ttfb_ms);
         if let Some(failure) = failure {
             failure.apply_to(&mut event);
@@ -641,6 +643,7 @@ mod tests {
                 source_format: ProviderProtocol::Anthropic,
                 target_format: None,
                 route_mode: None,
+                transport: None,
                 client_model: "test-model".into(),
                 effective_model: "test-model".into(),
                 feature_rule_id: None,

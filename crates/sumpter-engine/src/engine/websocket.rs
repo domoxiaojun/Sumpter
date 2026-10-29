@@ -471,6 +471,7 @@ impl Engine {
             upstream.route_intent = Some(context.route_intent.clone());
             upstream.source_ip = context.source_ip.clone();
             upstream.client_model = Some(context.model.clone());
+            upstream.transport = Some(sumpter_core::events::RuntimeTransport::Websocket);
             upstream.effective_model = Some(context.model.clone());
             upstream.ttfb_ms = error.ttfb_ms;
             upstream.stream_trace = Some(trace);
@@ -580,6 +581,7 @@ impl Engine {
         upstream.route_intent = Some(context.route_intent.clone());
         upstream.source_ip = context.source_ip.clone();
         upstream.client_model = Some(context.model.clone());
+        upstream.transport = Some(sumpter_core::events::RuntimeTransport::Websocket);
         upstream.effective_model = Some(context.model.clone());
         upstream.ttfb_ms = Some(connection.handshake_ttfb_ms);
         upstream.stream_trace = Some(trace.clone());

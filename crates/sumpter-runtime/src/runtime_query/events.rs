@@ -73,7 +73,9 @@ pub fn events_page_on(
                 request_id,session_key,session_source,client_kind,request_purpose,\
                 endpoint_id,endpoint_name,feature_rule_id,client_model,\
                 effective_model,upstream_model,failure_kind,failure_phase,\
-                source_format,target_format,route_mode,upstream_status_code,\
+                source_format,target_format,route_mode,\
+                CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.transport') END AS transport,\
+                upstream_status_code,\
                 COALESCE(duration_ms,0) AS duration_ms,ttfb_ms,COALESCE(failover,0) AS failover,project_name,project_source,local_user,\
                 codex_thread_class,attribution_scope \
                 ,request_method,request_path,route_intent,model_group_id,model_group_name, \

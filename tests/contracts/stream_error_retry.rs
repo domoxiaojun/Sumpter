@@ -289,6 +289,58 @@ async fn stream_errors_retry_then_recover_with_true_attempt_outcomes() {
 }
 
 #[tokio::test]
+async fn stream_ends_before_first_output_retries_before_committing_200_sse() {
+    let fake = FakeTransport::new();
+    fake.push(
+        "a.example.com",
+        Outcome::Status {
+            status: 200,
+            headers: vec![("content-type".into(), "text/event-stream".into())],
+            chunks: vec![],
+        },
+    );
+    fake.push("a.example.com", sse_ok(&[COMPLETED]));
+    let engine = engine_with(config(1, false), fake.clone());
+    let (status, bytes) = invoke(&engine).await;
+    assert_eq!(status, 200);
+    assert_eq!(bytes, COMPLETED.as_bytes());
+    assert_eq!(fake.requests().len(), 2);
+    let runtime = runtime_of(&engine).await;
+    assert_eq!(runtime.client_successes, 1);
+    assert_eq!(runtime.client_failures, 0);
+    assert_eq!(runtime.upstream_failures, 1);
+    assert_eq!(runtime.upstream_successes, 1);
+}
+
+#[tokio::test]
+async fn stream_prelude_exhaustion_returns_proxy_error_instead_of_broken_sse() {
+    let fake = FakeTransport::new();
+    for _ in 0..2 {
+        fake.push(
+            "a.example.com",
+            Outcome::Status {
+                status: 200,
+                headers: vec![("content-type".into(), "text/event-stream".into())],
+                chunks: vec![],
+            },
+        );
+    }
+    let engine = engine_with(config(1, false), fake.clone());
+    let (status, body) = call(
+        &engine,
+        loopback(),
+        "/v1/responses",
+        vec![],
+        codex_responses_body(),
+    )
+    .await;
+    assert_eq!(status, 502);
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "upstream_unavailable");
+    assert_eq!(fake.requests().len(), 2);
+}
+
+#[tokio::test]
 async fn stream_errors_exhaust_finite_budget_and_preserve_last_failure() {
     for (retries, failover, expected) in [(0, false, 1), (1, false, 2), (0, true, 2), (1, true, 4)]
     {

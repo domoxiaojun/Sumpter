@@ -52,6 +52,12 @@ pub struct ResponsesRetryProbe {
 }
 
 impl ResponsesRetryProbe {
+    /// A partial SSE frame is not evidence that the prefix contained only
+    /// lifecycle events; it may be a truncated tool call or unknown event.
+    pub fn at_event_boundary(&self) -> bool {
+        self.pending.is_empty()
+    }
+
     pub fn push(&mut self, data: &[u8]) -> StreamRetryDecision {
         self.pending.extend_from_slice(data);
         while let Some((end, boundary)) = event_boundary(&self.pending) {

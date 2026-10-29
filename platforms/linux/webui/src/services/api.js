@@ -228,6 +228,7 @@ function runtimeEventListItem(event, sequence) {
     sourceFormat: event.sourceFormat,
     targetFormat: event.targetFormat,
     routeMode: event.routeMode,
+    transport: event.transport,
     effectiveModel: event.effectiveModel,
     upstreamModel: event.upstreamModel,
     failureKind: event.failureKind,

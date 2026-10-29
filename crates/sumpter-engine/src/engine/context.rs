@@ -12,6 +12,7 @@ use sumpter_core::events::GrokMetadata;
 use sumpter_core::events::KIND_CLIENT;
 use sumpter_core::events::KIND_UPSTREAM;
 use sumpter_core::events::RuntimeEvent;
+use sumpter_core::events::RuntimeTransport;
 use sumpter_core::routing::RequestPurpose;
 use sumpter_core::routing::RouteMode;
 use sumpter_core::stream_terminal::SseDialect;
@@ -166,6 +167,7 @@ pub(super) struct ClientMeta {
     pub(super) source_format: ProviderProtocol,
     pub(super) target_format: Option<ProviderProtocol>,
     pub(super) route_mode: Option<RouteMode>,
+    pub(super) transport: Option<RuntimeTransport>,
     pub(super) client_model: String,
     pub(super) effective_model: String,
     pub(super) feature_rule_id: Option<String>,

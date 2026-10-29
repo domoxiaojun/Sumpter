@@ -11,6 +11,12 @@ public enum RuntimeEventPhase: String, Codable, Sendable {
     case completed
 }
 
+public enum RuntimeTransport: String, Codable, Sendable {
+    case http
+    case sse
+    case websocket
+}
+
 /// 最终结果独立于 HTTP 状态：响应头已经是 200 后仍可能断流失败。
 public enum RuntimeEventOutcome: String, Codable, Sendable {
     case succeeded
@@ -611,6 +617,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
     public var targetFormat: ProviderProtocol?
     /// 本次请求走原生适配还是协议桥接。
     public var routeMode: RouteMode?
+    public var transport: RuntimeTransport?
     public var upstreamModel: String?
     /// 路由定型后的逻辑模型。与 `upstreamModel` 分开，后者是实际发给上游的模型名。
     /// Rust 事件一直写入该字段；旧 macOS 壳此前漏解码，导致模型映射在界面上不可见。
@@ -681,7 +688,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         case parentTurnID = "parentTurnId"
         case rootTurnID = "rootTurnId"
         case id, timestamp, kind, endpointID, endpointName, upstreamHost, modelGroupID, modelGroupName
-        case clientModel, clientKind, sourceFormat, targetFormat, routeMode
+        case clientModel, clientKind, sourceFormat, targetFormat, routeMode, transport
         case upstreamModel, effectiveModel, statusCode, durationMS, failover
         case message, toolCalls, streamTrace, outcome, phase, featureRuleID
         case failureDetail, failureKind, failurePhase, requestPurpose, requestID
@@ -727,6 +734,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         sourceFormat = try c.decodeIfPresent(ProviderProtocol.self, forKey: .sourceFormat)
         targetFormat = try c.decodeIfPresent(ProviderProtocol.self, forKey: .targetFormat)
         routeMode = try c.decodeIfPresent(RouteMode.self, forKey: .routeMode)
+        transport = try c.decodeIfPresent(RuntimeTransport.self, forKey: .transport)
         upstreamModel = try c.decodeIfPresent(String.self, forKey: .upstreamModel)
         effectiveModel = try c.decodeIfPresent(String.self, forKey: .effectiveModel)
         statusCode = try c.decode(Int.self, forKey: .statusCode)
@@ -790,6 +798,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         try c.encodeIfPresent(sourceFormat, forKey: .sourceFormat)
         try c.encodeIfPresent(targetFormat, forKey: .targetFormat)
         try c.encodeIfPresent(routeMode, forKey: .routeMode)
+        try c.encodeIfPresent(transport, forKey: .transport)
         try c.encodeIfPresent(upstreamModel, forKey: .upstreamModel)
         try c.encodeIfPresent(effectiveModel, forKey: .effectiveModel)
         try c.encode(statusCode, forKey: .statusCode)
@@ -856,6 +865,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         sourceFormat: ProviderProtocol? = nil,
         targetFormat: ProviderProtocol? = nil,
         routeMode: RouteMode? = nil,
+        transport: RuntimeTransport? = nil,
         upstreamModel: String? = nil,
         effectiveModel: String? = nil,
         statusCode: Int,
@@ -902,6 +912,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         self.sourceFormat = sourceFormat
         self.targetFormat = targetFormat
         self.routeMode = routeMode
+        self.transport = transport
         self.upstreamModel = upstreamModel
         self.effectiveModel = effectiveModel
         self.statusCode = statusCode

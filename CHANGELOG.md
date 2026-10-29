@@ -6,6 +6,24 @@
 
 ## [Unreleased]
 
+## [0.4.51] - 2026-10-29
+
+### 修复
+
+- Responses SSE 在首个有效业务输出前遇到 EOF、连接错误或配置的流空闲超时时，按现有流错误重试预算重试；预算耗尽后返回明确的代理错误，避免客户端只看到流断开。
+- 已输出正文、推理或工具调用后不重放请求；客户端断开仍立即取消上游请求。
+
+### 可观测性
+
+- 运行事件新增 `transport` 字段，区分 `HTTP`、`SSE` 和 `WebSocket`，Linux WebUI 与 macOS 详情页同步显示。
+- SQLite 列表投影和旧事件保持兼容；Responses WebSocket 本版增加传输类型记录，自动重连仍未启用。
+
+### 验证
+
+- Rust 1.88 workspace check、fmt、workspace tests、Clippy 通过；Linux/macOS SSE 合同测试通过。
+- Linux WebUI 测试与构建、macOS Swift 测试、文档同步检查通过。
+
+
 ## [0.4.50] - 2026-10-28
 
 ### 修复

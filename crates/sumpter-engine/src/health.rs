@@ -103,6 +103,7 @@ mod tests {
             source_format: None,
             target_format: None,
             route_mode: None,
+            transport: None,
             duration_ms: 1,
             effective_model: None,
             endpoint_id: None,

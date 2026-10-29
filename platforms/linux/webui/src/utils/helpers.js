@@ -1274,6 +1274,14 @@ export function eventProtocolRouteLabel(event) {
   return `${source ? sourceFormatLabel(source) : '未记录'} → ${target ? sourceFormatLabel(target) : '未记录'} · ${mode ? routeModeLabel(mode) : '未记录'}`;
 }
 
+export function eventTransportLabel(event) {
+  const transport = String(eventField(event, 'transport') || '').toLowerCase();
+  if (transport === 'sse') return 'SSE';
+  if (transport === 'websocket' || transport === 'web_socket') return 'WebSocket';
+  if (transport === 'http') return 'HTTP';
+  return '未记录';
+}
+
 export function eventFailureSummaryLabel(event) {
   const kind = eventFailureKind(event);
   const phase = eventFailurePhase(event);

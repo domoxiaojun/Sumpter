@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { formatWebSocketTrace, friendlyEventMessage, eventOutcomeLabel, failureKindLabel } from '../src/utils/helpers.js';
+import { formatWebSocketTrace, friendlyEventMessage, eventOutcomeLabel, failureKindLabel, eventTransportLabel } from '../src/utils/helpers.js';
+
+test('transport labels use explicit evidence and leave old events unrecorded', () => {
+  assert.equal(eventTransportLabel({ transport: 'sse' }), 'SSE');
+  assert.equal(eventTransportLabel({ transport: 'websocket' }), 'WebSocket');
+  assert.equal(eventTransportLabel({ transport: 'http' }), 'HTTP');
+  assert.equal(eventTransportLabel({}), '未记录');
+});
 
 test('WebSocket trace accepts old records and presents optional transport evidence', () => {
   const old = { stage: 'relay', handshakeStatus: 101 };

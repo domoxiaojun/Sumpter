@@ -113,6 +113,7 @@ struct RuntimeEventInspector: View {
                   ("Grok agent ID", event.grokMetadata?.agentID), ("项目来源", event.projectSource), ("工作区", event.clientDeclared?.workspace)])
         case "response":
             rows([("方法", event.requestMethod), ("路径", event.requestPath),
+                  ("传输", RuntimeEventPresentation.transportDisplay(event.transport)),
                   ("协议", RuntimeEventPresentation.protocolPath(sourceFormat: event.sourceFormat, targetFormat: event.targetFormat, routeMode: event.routeMode)),
                   ("本层 HTTP", RuntimeEventDisplay.httpStatus(event)), ("直接上游 HTTP", event.upstreamStatusCode.map { "HTTP \($0)" }),
                   ("最终结果", RuntimeEventDisplay.outcome(event)), ("失败类型 / 阶段", failureSummary),

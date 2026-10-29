@@ -765,6 +765,7 @@ public enum AdminWire {
         public var sourceFormat: ProviderProtocol? { payload.sourceFormat }
         public var targetFormat: ProviderProtocol? { payload.targetFormat }
         public var routeMode: RouteMode? { payload.routeMode }
+        public var transport: RuntimeTransport? { payload.transport }
         public var effectiveModel: String? { payload.effectiveModel }
         public var upstreamModel: String? { payload.upstreamModel }
         public var failureKind: RuntimeFailureKind? { payload.failureKind }

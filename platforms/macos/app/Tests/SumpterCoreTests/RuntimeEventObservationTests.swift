@@ -3,6 +3,17 @@ import XCTest
 @testable import SumpterApp
 
 final class RuntimeEventObservationTests: XCTestCase {
+    func testTransportSurvivesProjectionAndOldEventsRemainUnknown() throws {
+        for (token, label) in [("sse", "SSE"), ("websocket", "WebSocket"), ("http", "HTTP")] {
+            let item = try JSONDecoder().decode(AdminWire.RuntimeEventListItem.self, from: data([
+                "seq": 1, "changeSeq": 2, "transport": token
+            ]))
+            XCTAssertEqual(RuntimeEventPresentation.transportDisplay(item.transport), label)
+            let encoded = try JSONEncoder().encode(item.runtimeEvent)
+            XCTAssertEqual(try JSONDecoder().decode(RuntimeEvent.self, from: encoded).transport, item.transport)
+        }
+        XCTAssertNil(try JSONDecoder().decode(RuntimeEvent.self, from: data()).transport)
+    }
     func testSourceIPSurvivesListDetailAndJSONRoundTrip() throws {
         for ip in ["192.0.2.25", "2001:db8::25"] {
             let item = try JSONDecoder().decode(AdminWire.RuntimeEventListItem.self, from: data([

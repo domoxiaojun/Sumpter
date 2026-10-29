@@ -14,7 +14,7 @@ use sumpter_core::bridge;
 use sumpter_core::config::{AppConfig, ProviderProtocol, RetryPolicy};
 use sumpter_core::events::{
     ClientDeclaredMetadata, ClientKind, CodexMetadata, GrokMetadata, KIND_CLIENT, RuntimeEvent,
-    RuntimeEventPhase, RuntimeFailureKind, message_tokens, unix_to_apple_epoch,
+    RuntimeEventPhase, RuntimeFailureKind, RuntimeTransport, message_tokens, unix_to_apple_epoch,
 };
 use sumpter_core::routing::{
     PlannedEndpoint, RequestPurpose, RouteMode, RoutePlanError, RoutePlanner, RoutingRequest,
@@ -1435,6 +1435,22 @@ impl Engine {
             source_format,
             target_format: preferred_endpoint.map(|endpoint| endpoint.protocol),
             route_mode: preferred_endpoint.map(|endpoint| endpoint.route_mode),
+            transport: Some(
+                if client_out.as_ref().map_or_else(
+                    || {
+                        request
+                            .raw
+                            .get("stream")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false)
+                    },
+                    |client| client.stream,
+                ) {
+                    RuntimeTransport::Sse
+                } else {
+                    RuntimeTransport::Http
+                },
+            ),
             client_model: plan.client_model.clone(),
             effective_model: plan.effective_model.clone(),
             feature_rule_id: plan.feature_rule_id.clone(),
@@ -1472,6 +1488,7 @@ impl Engine {
             source_format: Some(source_format),
             target_format: preferred_endpoint.map(|endpoint| endpoint.protocol),
             route_mode: preferred_endpoint.map(|endpoint| endpoint.route_mode),
+            transport: client_meta.transport,
             duration_ms: 0,
             effective_model: Some(plan.effective_model.clone()),
             endpoint_id: None,
@@ -2112,6 +2129,91 @@ impl Engine {
                         }
                         stream_failure = Some(failure);
                     }
+                    if probed.retry_error.is_none()
+                        && let Some(error) = &probed.prelude_error
+                    {
+                        // A transport failure while the probe still contains
+                        // only lifecycle frames has not committed anything to
+                        // the client. It is safe to replay the request under
+                        // the same stream-error budget.
+                        let stream_error = if error.code
+                            == "stream_idle_timeout_before_first_output"
+                        {
+                            super::failure::StreamReadError::IdleTimeout(Duration::from_secs_f64(
+                                retry.stream_idle_timeout_seconds.unwrap(),
+                            ))
+                        } else {
+                            super::failure::StreamReadError::Upstream(
+                                TransportError::ConnectionFailed(error.code.clone()),
+                            )
+                        };
+                        let mut failure = FailureInfo::from_stream(&stream_error);
+                        failure.upstream_status_code = Some(200);
+                        failure.upstream_request_id = upstream_request_id(&probed.response.headers);
+                        failure.retry_after_seconds = retry_after_seconds(&probed.response.headers);
+                        self.note_provider_model_failure(
+                            endpoint,
+                            Some(200),
+                            failure.retry_after_seconds,
+                            now_unix(),
+                        );
+                        let used = stream_error_retries
+                            .entry(endpoint.endpoint_id.clone())
+                            .or_default();
+                        let delay = retry_backoff_delay(*used + 1, failure.retry_after_seconds);
+                        let retry_same = *used < retry.max_stream_error_retries.max(0)
+                            && retry_fits_budget(
+                                forward_started,
+                                retry.max_retry_duration_seconds,
+                                delay,
+                            );
+                        let failover = retry.failover_on_stream_error
+                            && retry_fits_budget(
+                                forward_started,
+                                retry.max_retry_duration_seconds,
+                                Duration::ZERO,
+                            )
+                            && round_ordered[endpoint_index..].iter().any(|next| {
+                                !exhausted_stream_endpoints.contains(&next.endpoint_id)
+                            });
+                        for chunk in &probed.prefix {
+                            self.capture_upstream_chunk(
+                                &request_id,
+                                &capture_attempt_id,
+                                chunk,
+                                guard.started.elapsed().as_millis() as i64,
+                            );
+                        }
+                        let mut event = self.upstream_event(
+                            endpoint,
+                            200,
+                            attempt_started.elapsed().as_millis() as i64,
+                            is_failover,
+                            None,
+                            guard.meta.purpose,
+                            guard.meta.client_kind,
+                            &request_id,
+                        );
+                        failure.apply_to(&mut event);
+                        event.upstream_status_code = Some(200);
+                        event.ttfb_ms = Some(attempt_ttfb_ms);
+                        self.complete_upstream(event);
+                        round_state.last_failure = Some(failure);
+                        drop(probed);
+                        if retry_same {
+                            *used += 1;
+                            endpoint_index -= 1;
+                            tokio::time::sleep(delay).await;
+                        } else if failover {
+                            exhausted_stream_endpoints.insert(endpoint.endpoint_id.clone());
+                        } else {
+                            // No response bytes were committed, so return a
+                            // normal proxy error instead of a broken 200 SSE
+                            // body that makes the client report a disconnect.
+                            endpoint_index = round_ordered.len();
+                        }
+                        continue;
+                    }
                     result = Ok(probed.response);
                 }
                 // The final failed stream is relayed intact; do not mark its
@@ -2257,7 +2359,10 @@ impl Engine {
             if failure.retry_after_seconds.is_none() {
                 failure.retry_after_seconds = round_state.retry_after_seconds;
             }
-            let (status, error, message) = match failure.upstream_status_code {
+            let (status, error, message) = match failure
+                .upstream_status_code
+                .filter(|status| RetryPolicy::is_endpoint_retryable_status(*status as u16))
+            {
                 Some(upstream_status) => (
                     StatusCode::from_u16(upstream_status as u16).unwrap_or(StatusCode::BAD_GATEWAY),
                     message_tokens::UPSTREAM_RETRYABLE_STATUS,

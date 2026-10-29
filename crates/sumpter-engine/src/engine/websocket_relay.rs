@@ -38,6 +38,7 @@ use sumpter_core::events::KIND_CLIENT;
 use sumpter_core::events::RuntimeEvent;
 use sumpter_core::events::RuntimeEventOutcome;
 use sumpter_core::events::RuntimeEventPhase;
+use sumpter_core::events::RuntimeTransport;
 use sumpter_core::events::StreamTrace;
 use sumpter_core::events::WebSocketTrace;
 use sumpter_core::events::unix_to_apple_epoch;
@@ -931,6 +932,7 @@ pub(super) fn websocket_client_event(
         source_format: Some(ProviderProtocol::OpenAI),
         target_format: endpoint.map(|endpoint| endpoint.protocol),
         route_mode: endpoint.map(|endpoint| endpoint.route_mode),
+        transport: Some(RuntimeTransport::Websocket),
         duration_ms: context.started.elapsed().as_millis().min(i64::MAX as u128) as i64,
         effective_model: (!context.model.is_empty()).then(|| context.model.clone()),
         endpoint_id: endpoint.map(|endpoint| endpoint.endpoint_id.clone()),

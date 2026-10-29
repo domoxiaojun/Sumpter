@@ -224,6 +224,29 @@ fn event_page_projects_tool_calls_without_payload() {
 }
 
 #[test]
+fn event_page_projects_explicit_transport_and_preserves_legacy_unknown() {
+    let mut connection = test_connection();
+    insert_100k(&connection);
+    connection
+        .execute_batch(
+            "UPDATE runtime_events SET payload_json='{\"transport\":\"sse\"}' WHERE seq=100000;
+             UPDATE runtime_events SET payload_json='{\"transport\":\"websocket\"}' WHERE seq=99999;
+             UPDATE runtime_events SET payload_json='{}' WHERE seq=99998;",
+        )
+        .unwrap();
+    let page = events_page_on(&mut connection, &EventPageRequest::default()).unwrap();
+    assert_eq!(
+        page.events[0].transport,
+        Some(sumpter_core::events::RuntimeTransport::Sse)
+    );
+    assert_eq!(
+        page.events[1].transport,
+        Some(sumpter_core::events::RuntimeTransport::Websocket)
+    );
+    assert_eq!(page.events[2].transport, None);
+}
+
+#[test]
 fn projected_queries_are_bounded_on_100k_rows() {
     let mut connection = test_connection();
     insert_100k(&connection);

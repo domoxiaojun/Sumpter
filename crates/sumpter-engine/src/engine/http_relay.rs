@@ -263,6 +263,7 @@ impl Engine {
         );
         in_flight.id = upstream_event_id.clone();
         in_flight.phase = Some(RuntimeEventPhase::InFlight);
+        in_flight.transport = guard.meta.transport;
         in_flight.outcome = None;
         in_flight.ttfb_ms = Some(attempt_ttfb_ms);
         in_flight.upstream_status_code = Some(response.status as i64);

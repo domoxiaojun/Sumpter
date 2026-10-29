@@ -36,6 +36,26 @@ pub const MAX_RECENT_EVENTS_PER_KIND: usize = 200;
 /// 客户端取消的记账状态码:不计成功也不计失败。
 pub const STATUS_CLIENT_DISCONNECTED: i64 = 499;
 
+/// 入站请求使用的传输形态。旧事件没有该字段时保持 `None`，避免把历史
+/// HTTP 请求误判成 SSE 或 WebSocket。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RuntimeTransport {
+    Http,
+    Sse,
+    Websocket,
+}
+
+impl RuntimeTransport {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Http => "http",
+            Self::Sse => "sse",
+            Self::Websocket => "websocket",
+        }
+    }
+}
+
 /// 事件消息词表(docs/architecture.md §5.1)。
 ///
 /// `RuntimeEvent.message` 只放机器可读 token(或「token: 原因」形状),多 token 用 `"; "`
@@ -2840,6 +2860,9 @@ pub struct RuntimeEvent {
     /// 本次请求走原生适配还是协议桥接。
     #[serde(rename = "routeMode", default, skip_serializing_if = "is_none")]
     pub route_mode: Option<RouteMode>,
+    /// HTTP、SSE 或 WebSocket；旧事件没有该字段。
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub transport: Option<RuntimeTransport>,
     #[serde(rename = "durationMS", default)]
     pub duration_ms: i64,
     /// 路由定型后的**逻辑模型**(分流规则 target.model / 映射前的客户端模型),
@@ -3239,6 +3262,7 @@ mod tests {
             source_format: None,
             target_format: None,
             route_mode: None,
+            transport: None,
             duration_ms: 0,
             effective_model: None,
             endpoint_id: None,

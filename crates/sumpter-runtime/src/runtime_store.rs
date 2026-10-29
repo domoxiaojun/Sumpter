@@ -548,6 +548,7 @@ pub struct RuntimeEventListItem {
     pub target_format: Option<ProviderProtocol>,
     #[serde(rename = "routeMode")]
     pub route_mode: Option<RouteMode>,
+    pub transport: Option<sumpter_core::events::RuntimeTransport>,
     pub phase: Option<RuntimeEventPhase>,
     pub outcome: Option<RuntimeEventOutcome>,
     pub status_code: i64,
@@ -684,6 +685,7 @@ impl RuntimeEventListItem {
             source_format: event.source_format,
             target_format: event.target_format,
             route_mode: event.route_mode,
+            transport: event.transport,
             phase: event.phase,
             outcome: event.outcome,
             status_code: event.status_code,

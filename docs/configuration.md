@@ -149,6 +149,8 @@ WebUI 保存使用 generation-safe PUT，防止两个页面互相覆盖。手工
 `maxStreamErrorRetries` 与 `failoverOnStreamError` 独立于 HTTP 500、粘性重试和跨轮重试。
 例如次数为 2、切换开启时，当前入口最多请求 3 次，再尝试下一入口；同一请求内每个入口的流错误预算不会因跨轮或粘性重试重置。旧配置默认次数为 0、切换关闭，保持直接转发行为。
 
-仅匹配 Responses SSE 终态中的结构化错误码：`rate_limit_exceeded`、`server_error`、`internal_server_error`、`overloaded_error`、`service_unavailable`、`slow_down`、`server_is_overloaded`。参数错误、鉴权错误、余额或组织/项目额度耗尽、未知错误、`response.incomplete`、断流和超时不进入此策略。
+匹配 Responses SSE 终态中的结构化错误码：`rate_limit_exceeded`、`server_error`、`internal_server_error`、`overloaded_error`、`service_unavailable`、`slow_down`、`server_is_overloaded`。在输出前的前奏检查期间，上游 EOF、传输错误或配置的流空闲超时也进入该策略。参数错误、鉴权错误、余额或组织/项目额度耗尽、未知错误与 `response.incomplete` 不进入此策略。
 
-开启后，代理在输出前暂存空的 `response.created` / `response.in_progress` 前奏。收到正文、推理、工具调用或未知事件即开始正常转发，不再重试；暂存最多 64 KiB、1024 块或 5 秒，先达到边界即原样转发，不截断响应。原有流式空闲截止仍生效。后台 Responses、Realtime、非 SSE 和压缩流不参与。所有可用入口耗尽时保留最后实际响应；最终流失败仍是 HTTP 200 和失败终态，不伪造 HTTP 429。每次被重试的失败也保留真实 HTTP 200、错误码及上游请求 ID。
+开启后，代理在输出前暂存空的 `response.created` / `response.in_progress` 前奏。收到正文、推理、工具调用或未知事件即开始正常转发，不再重试；暂存最多 64 KiB、1024 块或 5 秒，先达到边界即原样转发，不截断响应。无法确定内容的未完成事件不会被重放。客户端断开会取消等待和上游请求。后台 Responses、Realtime、非 SSE 和压缩流不参与。结构化错误耗尽后保留最后实际响应；前奏期间传输中断耗尽后返回明确的代理错误。每次失败保留真实上游状态及请求 ID。
+
+例如可设置 `maxStreamErrorRetries: 2`、`failoverOnStreamError: true` 和 `maxRetryDurationSeconds: 60`。默认次数 0 且切换关闭，流错误重试关闭；0 不表示无限次数。
