@@ -854,7 +854,12 @@ struct RecentEventsPanel: View {
             if event.kind == "notify" {
                 Text("通知事件").font(.subheadline)
             } else {
-            RuntimeEventStatusSummary(event: event, includeUsage: false)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(RuntimeEventPresentation.transportDisplay(event.transport))
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    RuntimeEventStatusSummary(event: event, includeUsage: false)
+                }
             }
         }
         .frame(maxWidth: .infinity, minHeight: eventRowHeight - 6, alignment: .leading)

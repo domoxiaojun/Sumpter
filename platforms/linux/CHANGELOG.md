@@ -6,6 +6,22 @@
 
 ## [Unreleased]
 
+## [0.4.52] - 2026-10-29
+
+### 修复
+
+- Responses SSE 启用流错误重试后由代理缓存到协议终态；上游在已产生文本、推理或工具事件后断流时，丢弃半截尝试并在客户端可见前重跑，避免 Codex 先收到断流再自行重连。
+- 运行页结果列和请求链直接显示 `HTTP`、`SSE` 或 `WebSocket`，无需展开详情判断传输形态。
+
+### 边界
+
+- 重试仍受 `maxStreamErrorRetries`、`failoverOnStreamError` 和 `maxRetryDurationSeconds` 控制；`maxStreamErrorRetries: 0` 仍关闭重试。单次 Responses 缓存上限为 16 MiB，超过后恢复实时透传。
+
+### 验证
+
+- Rust 1.88 workspace Clippy、Linux/macOS 流重试合同测试和 WebUI 定向测试通过。
+
+
 ## [0.4.51] - 2026-10-29
 
 ### 修复

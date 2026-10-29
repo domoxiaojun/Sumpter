@@ -188,7 +188,7 @@ bash setup-client-attribution.sh restore pi
 
 - `responseTimeoutSeconds` 限制等待首响应的时间；映射级 `failoverTimeoutSeconds` 可进一步缩短某模型的等待时间，两者取较小值。
 - `streamIdleTimeoutSeconds` 限制 HTTP 流连续无数据的时间，以及 WebSocket 首条业务消息后的双向帧空闲时间（含 Ping/Pong 活动）。null 不限制，等待首条业务消息不计入；它不是请求总时长。
-- `maxStreamErrorRetries` 控制 HTTP 200 Responses 流输出前的暂时性错误重试（限流、服务器错误等）；`failoverOnStreamError` 控制耗尽后切换入口。默认 0 次且关闭切换；已输出正文、推理或工具调用时不重放。
+- `maxStreamErrorRetries` 控制 HTTP 200 Responses 流到达终态前的暂时性错误重试（限流、服务器错误、断流等）；启用后代理先缓存到终态，客户端不会收到半截响应；`failoverOnStreamError` 控制耗尽后切换入口。默认 0 次且关闭切换；单次缓存上限 16 MiB，超出后恢复实时转发。
 - `max500Retries` 控制当前入口收到 500 后的额外重试；`failoverOn500` 决定耗尽后是否切换入口。
 - `sessionStickyRetries` 控制当前粘性调度组遇到非 500 可重试故障后的额外尝试。
 - `maxDeferredRounds` 与 `maxRetryDurationSeconds` 都为 `0` 时，可重试故障没有轮数和总时长上限；客户端断开会取消等待。希望请求尽快结束时，应设置有限上限。

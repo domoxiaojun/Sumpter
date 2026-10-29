@@ -1,15 +1,19 @@
-//! Bounded look-ahead before committing a Responses stream to the client.
+//! Bounded buffering before committing a retry-enabled Responses stream to the client.
 
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use futures_util::{StreamExt, stream};
-use sumpter_core::stream_terminal::{ResponsesRetryProbe, StreamRetryDecision, StreamRetryError};
+use sumpter_core::stream_terminal::{
+    ResponsesRetryProbe, SseDialect, SseTerminalTracker, StreamRetryDecision, StreamRetryError,
+};
 
 use crate::outbound::UpstreamResponse;
 
-const MAX_PREFIX_BYTES: usize = 64 * 1024;
-const MAX_PREFIX_WAIT: Duration = Duration::from_secs(5);
+/// Retried Responses streams are held only until a terminal event.  Beyond
+/// this bound the proxy resumes normal streaming so a large response cannot
+/// turn a retry policy into unbounded memory use.
+const MAX_REPLAY_BUFFER_BYTES: usize = 16 * 1024 * 1024;
 
 pub(super) fn request_allows_retry(body: &[u8]) -> bool {
     // Read this from the original body: the small routing projection omits
@@ -31,87 +35,81 @@ pub(super) struct ProbedResponse {
     pub prelude_error: Option<StreamRetryError>,
     pub prefix: Vec<Bytes>,
     pub last_read_at: Instant,
+    pub buffered_until_terminal: bool,
 }
 
-pub(super) async fn probe_response(
+/// Buffer a Responses SSE attempt until a protocol terminal or transport
+/// failure.  Nothing from this attempt reaches the client before completion,
+/// so a mid-stream disconnect can be retried without duplicating text,
+/// reasoning or tool calls.  A bounded buffer falls back to ordinary relay.
+pub(super) async fn buffer_response_until_terminal(
     mut response: UpstreamResponse,
     idle_timeout: Option<Duration>,
 ) -> ProbedResponse {
-    let mut probe = ResponsesRetryProbe::default();
+    let mut retry_probe = ResponsesRetryProbe::default();
+    let mut terminal_tracker = SseTerminalTracker::new(SseDialect::OpenAiResponses);
     let mut buffered = Vec::new();
     let mut prefix = Vec::new();
-    let mut bytes = 0;
+    let mut bytes = 0usize;
+    let mut last_read_at = Instant::now();
     let mut retry_error = None;
     let mut prelude_error = None;
-    let started = Instant::now();
-    let mut last_read_at = started;
+    let mut buffered_until_terminal = true;
+
     loop {
-        let mut deadline = started + MAX_PREFIX_WAIT;
-        if let Some(idle) = idle_timeout {
-            deadline = deadline.min(last_read_at + idle);
-        }
-        let item = match tokio::time::timeout_at(deadline.into(), response.stream.next()).await {
-            Ok(Some(item)) => item,
-            Ok(None) => {
-                if probe.at_event_boundary() {
-                    prelude_error = Some(StreamRetryError {
-                        code: "stream_ended_before_first_output".into(),
-                        retry_after: Vec::new(),
-                    });
-                }
-                response.stream = stream::empty().boxed();
-                break;
-            }
-            Err(_) => {
-                if idle_timeout.is_some_and(|idle| last_read_at + idle <= started + MAX_PREFIX_WAIT)
-                    && probe.at_event_boundary()
+        let next = match idle_timeout {
+            Some(idle) => {
+                match tokio::time::timeout_at((last_read_at + idle).into(), response.stream.next())
+                    .await
                 {
-                    prelude_error = Some(StreamRetryError {
-                        code: "stream_idle_timeout_before_first_output".into(),
-                        retry_after: Vec::new(),
-                    });
+                    Ok(item) => item,
+                    Err(_) => {
+                        prelude_error = Some(StreamRetryError {
+                            code: "stream_idle_timeout_before_completion".into(),
+                            retry_after: Vec::new(),
+                        });
+                        break;
+                    }
                 }
-                break;
             }
+            None => response.stream.next().await,
         };
         last_read_at = Instant::now();
-        if item.is_err() {
-            // A transport error can only be observed here while all earlier
-            // frames were still safe lifecycle prelude frames; any business
-            // frame would already have committed the probe.
-            buffered.push(item);
-            if probe.at_event_boundary() {
-                prelude_error = Some(StreamRetryError {
-                    code: "stream_interrupted_before_first_output".into(),
-                    retry_after: Vec::new(),
-                });
-            }
-            break;
-        }
-        let decision = match &item {
-            Ok(chunk) => {
-                bytes += chunk.len();
+        match next {
+            Some(Ok(chunk)) => {
+                bytes = bytes.saturating_add(chunk.len());
                 prefix.push(chunk.clone());
-                if bytes > MAX_PREFIX_BYTES || prefix.len() >= 1024 {
-                    StreamRetryDecision::Forward
-                } else {
-                    probe.push(chunk)
+                buffered.push(Ok(chunk.clone()));
+                if let StreamRetryDecision::Retry(error) = retry_probe.push(&chunk) {
+                    retry_error = Some(error);
+                    break;
+                }
+                if terminal_tracker.push(&chunk).is_some() {
+                    break;
+                }
+                if bytes > MAX_REPLAY_BUFFER_BYTES {
+                    buffered_until_terminal = false;
+                    break;
                 }
             }
-            Err(_) => unreachable!("transport errors are handled above"),
-        };
-        buffered.push(item);
-        match decision {
-            StreamRetryDecision::Pending => {}
-            StreamRetryDecision::Forward => break,
-            StreamRetryDecision::Retry(error) => {
-                retry_error = Some(error);
+            Some(Err(error)) => {
+                buffered.push(Err(error));
+                prelude_error = Some(StreamRetryError {
+                    code: "stream_interrupted_before_completion".into(),
+                    retry_after: Vec::new(),
+                });
+                break;
+            }
+            None => {
+                prelude_error = Some(StreamRetryError {
+                    code: "stream_ended_before_completion".into(),
+                    retry_after: Vec::new(),
+                });
                 break;
             }
         }
     }
-    // Restore every consumed byte (and any transport error) on non-retried
-    // responses, including malformed, oversized and timed-out prefixes.
+
     response.stream = stream::iter(buffered).chain(response.stream).boxed();
     ProbedResponse {
         response,
@@ -119,163 +117,6 @@ pub(super) async fn probe_response(
         prelude_error,
         prefix,
         last_read_at,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::outbound::TransportError;
-
-    fn response(chunks: Vec<Bytes>) -> UpstreamResponse {
-        UpstreamResponse {
-            status: 200,
-            headers: vec![],
-            stream: stream::iter(chunks.into_iter().map(Ok)).boxed(),
-        }
-    }
-
-    #[tokio::test]
-    async fn probe_limits_release_the_entire_original_body() {
-        let error = Bytes::from_static(b"data: {\"type\":\"error\",\"code\":\"server_error\"}\n\n");
-        for mut chunks in [
-            vec![Bytes::from(vec![b':'; MAX_PREFIX_BYTES + 1])],
-            vec![Bytes::from_static(b": heartbeat\n\n"); 1024],
-        ] {
-            chunks.push(error.clone());
-            let original = chunks.concat();
-            let probed = probe_response(response(chunks), None).await;
-            assert_eq!(probed.retry_error, None);
-            assert_eq!(probed.prelude_error, None);
-            let restored = probed
-                .response
-                .stream
-                .map(Result::unwrap)
-                .collect::<Vec<_>>()
-                .await
-                .concat();
-            assert_eq!(restored, original);
-        }
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn probe_wait_is_bounded_and_keeps_unread_tail() {
-        let mut response = response(vec![]);
-        response.stream = stream::once(async {
-            tokio::time::sleep(Duration::from_secs(6)).await;
-            Ok(Bytes::from_static(b"tail"))
-        })
-        .boxed();
-        let started = tokio::time::Instant::now();
-        let mut probed = probe_response(response, None).await;
-        assert_eq!(probed.retry_error, None);
-        assert_eq!(probed.prelude_error, None);
-        assert!(started.elapsed() >= MAX_PREFIX_WAIT);
-        assert!(started.elapsed() < MAX_PREFIX_WAIT + Duration::from_millis(100));
-        assert_eq!(
-            probed.response.stream.next().await.unwrap().unwrap(),
-            "tail"
-        );
-    }
-
-    #[tokio::test]
-    async fn probe_preserves_transport_errors_as_replayable_prelude_failures() {
-        let mut response = response(vec![]);
-        response.stream =
-            stream::iter([Err(TransportError::ConnectionFailed("reset".into()))]).boxed();
-        let mut probed = probe_response(response, None).await;
-        assert_eq!(probed.retry_error, None);
-        assert_eq!(
-            probed
-                .prelude_error
-                .as_ref()
-                .map(|error| error.code.as_str()),
-            Some("stream_interrupted_before_first_output")
-        );
-        assert!(matches!(
-            probed.response.stream.next().await,
-            Some(Err(TransportError::ConnectionFailed(_)))
-        ));
-    }
-
-    #[tokio::test]
-    async fn probe_marks_empty_or_lifecycle_only_eof_as_replayable() {
-        for chunks in [
-            Vec::new(),
-            vec![Bytes::from_static(
-                b"data: {\"type\":\"response.created\",\"response\":{\"output\":[]}}\n\n",
-            )],
-        ] {
-            let probed = probe_response(response(chunks), None).await;
-            assert_eq!(probed.retry_error, None);
-            assert_eq!(
-                probed
-                    .prelude_error
-                    .as_ref()
-                    .map(|error| error.code.as_str()),
-                Some("stream_ended_before_first_output")
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn probe_marks_transport_error_only_before_business_output() {
-        let mut response_with_prelude = response(vec![Bytes::from_static(
-            b"data: {\"type\":\"response.created\",\"response\":{\"output\":[]}}\n\n",
-        )]);
-        response_with_prelude.stream = stream::iter([
-            Ok(Bytes::from_static(
-                b"data: {\"type\":\"response.created\",\"response\":{\"output\":[]}}\n\n",
-            )),
-            Err(TransportError::ConnectionFailed("reset".into())),
-        ])
-        .boxed();
-        let probed = probe_response(response_with_prelude, None).await;
-        assert_eq!(probed.retry_error, None);
-        assert_eq!(
-            probed
-                .prelude_error
-                .as_ref()
-                .map(|error| error.code.as_str()),
-            Some("stream_interrupted_before_first_output")
-        );
-
-        let mut response_without_output = response(Vec::new());
-        response_without_output.stream = stream::iter([
-            Ok(Bytes::from_static(
-                b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"x\"}\n\n",
-            )),
-            Err(TransportError::ConnectionFailed("reset".into())),
-        ])
-        .boxed();
-        let probed = probe_response(response_without_output, None).await;
-        assert_eq!(probed.retry_error, None);
-        assert_eq!(probed.prelude_error, None);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn probe_reports_configured_idle_timeout_but_not_probe_limit() {
-        let mut response = response(Vec::new());
-        response.stream = stream::pending().boxed();
-        let probed = probe_response(response, Some(Duration::from_secs(1))).await;
-        assert_eq!(
-            probed
-                .prelude_error
-                .as_ref()
-                .map(|error| error.code.as_str()),
-            Some("stream_idle_timeout_before_first_output")
-        );
-    }
-
-    #[tokio::test]
-    async fn incomplete_event_is_not_proven_safe_to_replay() {
-        let probed = probe_response(
-            response(vec![Bytes::from_static(
-                b"data: {\"type\":\"response.output",
-            )]),
-            None,
-        )
-        .await;
-        assert_eq!(probed.prelude_error, None);
+        buffered_until_terminal,
     }
 }

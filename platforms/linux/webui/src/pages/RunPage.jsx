@@ -15,7 +15,7 @@ import { eventAgentLabel, eventCacheLabel, eventHasObservedUsage, eventUsageLabe
 import { copyWithToast } from '../utils/clipboard.js';
 import { api } from '../services/api.js';
 import {
-  eventEndpointName, formatNumber, formatTokenCount, formatDuration, formatTimestamp, eventLogicalModel, eventEndpoint, statusKind, eventDurationText, friendlyEventMessage, eventPurposeLabel, eventClientKindLabel, eventKindLabel, getRequestChain, eventOutcomeLabel, eventPhaseLabel, eventHttpStatusLabel, eventHTTPStatusCode, eventRequestID, eventTTFBMS, eventOutcome, eventFailover, eventField, eventIsInFlight, eventFailureSummaryLabel, eventProjectContext, eventToolCalls
+  eventEndpointName, formatNumber, formatTokenCount, formatDuration, formatTimestamp, eventLogicalModel, eventEndpoint, statusKind, eventDurationText, friendlyEventMessage, eventPurposeLabel, eventClientKindLabel, eventKindLabel, getRequestChain, eventOutcomeLabel, eventPhaseLabel, eventHttpStatusLabel, eventHTTPStatusCode, eventRequestID, eventTTFBMS, eventOutcome, eventFailover, eventField, eventIsInFlight, eventFailureSummaryLabel, eventProjectContext, eventToolCalls, eventTransportLabel
 } from '../utils/helpers.js';
 
 function todayTokenTotals(series) {
@@ -155,6 +155,7 @@ function RecentEventResultCell({ event, live = false }) {
   return (
     <span className={live ? 'telemetry-live-result' : 'telemetry-cell-stack telemetry-result-cell'}>
       <RecentEventOutcome event={event} />
+      <span className="telemetry-result-detail telemetry-result-transport">{eventTransportLabel(event)}</span>
       <span className="telemetry-result-detail" title={recentEventStatusDetail(event)}>
         {eventHTTPStatusCode(event) ? eventHttpStatusLabel(event) : 'HTTP —'}
       </span>

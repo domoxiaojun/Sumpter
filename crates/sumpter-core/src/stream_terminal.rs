@@ -60,6 +60,7 @@ impl ResponsesRetryProbe {
 
     pub fn push(&mut self, data: &[u8]) -> StreamRetryDecision {
         self.pending.extend_from_slice(data);
+        let mut forwarded = false;
         while let Some((end, boundary)) = event_boundary(&self.pending) {
             let frame = String::from_utf8_lossy(&self.pending[..end])
                 .replace("\r\n", "\n")
@@ -72,22 +73,29 @@ impl ResponsesRetryProbe {
                 {
                     continue;
                 }
-                return StreamRetryDecision::Forward;
+                forwarded = true;
+                continue;
             };
             let Ok(value) = serde_json::from_str::<Value>(&payload) else {
-                return StreamRetryDecision::Forward;
+                forwarded = true;
+                continue;
             };
             let output = value.pointer("/response/output");
-            if output.is_some_and(|output| !output.as_array().is_some_and(Vec::is_empty)) {
-                return StreamRetryDecision::Forward;
+            let has_output =
+                output.is_some_and(|output| !output.as_array().is_some_and(Vec::is_empty));
+            if has_output {
+                forwarded = true;
             }
             match value.get("type").and_then(Value::as_str) {
-                Some("response.created" | "response.in_progress") => continue,
+                Some("response.created" | "response.in_progress") if !has_output => continue,
                 Some("response.failed" | "error") => {}
                 Some("response.completed")
                     if value.pointer("/response/status").and_then(Value::as_str)
                         == Some("failed") => {}
-                _ => return StreamRetryDecision::Forward,
+                _ => {
+                    forwarded = true;
+                    continue;
+                }
             }
             let error = value
                 .pointer("/response/error")
@@ -97,7 +105,7 @@ impl ResponsesRetryProbe {
                 .get("code")
                 .and_then(Value::as_str)
                 .or_else(|| error.get("type").and_then(Value::as_str));
-            return match code {
+            let decision = match code {
                 Some(
                     code @ ("rate_limit_exceeded"
                     | "server_error"
@@ -127,9 +135,18 @@ impl ResponsesRetryProbe {
                 }
                 _ => StreamRetryDecision::Forward,
             };
+            match decision {
+                StreamRetryDecision::Retry(error) => {
+                    return StreamRetryDecision::Retry(error);
+                }
+                StreamRetryDecision::Forward => forwarded = true,
+                StreamRetryDecision::Pending => {}
+            }
         }
         if self.pending.len() > MAX_PENDING_BYTES {
             self.pending.clear();
+            StreamRetryDecision::Forward
+        } else if forwarded {
             StreamRetryDecision::Forward
         } else {
             StreamRetryDecision::Pending

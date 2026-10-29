@@ -444,10 +444,37 @@ async fn stream_errors_never_replay_output_or_non_transient_errors() {
     for payload in payloads {
         let fake = FakeTransport::new();
         fake.push("a.example.com", sse_ok(&[&payload]));
+        if payload.contains("\"code\":\"server_error\"")
+            || payload.contains("\"code\":\"rate_limit_exceeded\"")
+        {
+            // Retry-safe buffering now retries transient failures even when
+            // the same SSE chunk already contained output. The client sees
+            // only the recovered complete attempt.
+            fake.push("a.example.com", sse_ok(&[COMPLETED]));
+        }
         let engine = engine_with(config(2, true), fake.clone());
-        assert_eq!(invoke(&engine).await.1, payload.as_bytes());
-        assert_eq!(fake.requests().len(), 1);
+        if payload.contains("\"code\":\"server_error\"") {
+            assert_eq!(invoke(&engine).await.1, COMPLETED.as_bytes());
+            assert_eq!(fake.requests().len(), 2);
+        } else {
+            assert_eq!(invoke(&engine).await.1, payload.as_bytes());
+            assert_eq!(fake.requests().len(), 1);
+        }
     }
+}
+
+#[tokio::test]
+async fn transient_failure_after_partial_output_is_hidden_until_retry_completes() {
+    let fake = FakeTransport::new();
+    let partial_then_failed = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\ndata: {\"type\":\"response.failed\",\"response\":{\"output\":[],\"error\":{\"code\":\"server_error\"}}}\n\n".to_string();
+    fake.push("a.example.com", sse_ok(&[&partial_then_failed]));
+    fake.push("a.example.com", sse_ok(&[COMPLETED]));
+    let engine = engine_with(config(1, false), fake.clone());
+    let (status, bytes) = invoke(&engine).await;
+    assert_eq!(status, 200);
+    assert_eq!(bytes, COMPLETED.as_bytes());
+    assert!(!String::from_utf8_lossy(&bytes).contains("partial"));
+    assert_eq!(fake.requests().len(), 2);
 }
 
 #[tokio::test]

@@ -33,6 +33,7 @@ function RequestChain({ event, chain, onSelect }) {
     const diagnostics = [
       !upstream && requestID !== '-' ? `请求=${requestID}` : null,
       upstream ? eventDurationText(item) : eventEndpointName(item),
+      item.kind !== 'notify' ? `传输=${eventTransportLabel(item)}` : null,
       upstream && item.endpointID ? `入口 ID=${item.endpointID}` : null,
       upstreamID && upstreamID !== '-' ? `上游请求=${upstreamID}` : null,
       tools ? `工具=${tools}` : null,

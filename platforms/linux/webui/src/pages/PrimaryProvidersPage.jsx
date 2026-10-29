@@ -957,7 +957,7 @@ export function PrimaryProvidersPage() {
                 defaultValue={maxStreamErrorRetries}
                 onChange={(e) => { maxStreamErrorRetries = Number(e.target.value); }}
               />
-              <span className="form-hint">仅处理 Responses 流在输出前的限流、服务器内部错误和服务暂不可用；0 表示不在当前入口额外重试。</span>
+              <span className="form-hint">Responses 流会先在代理内缓存到终态；遇到上游断流、限流或服务器错误时，客户端不会先收到半截流，代理按此次数重跑。已输出到终态或超过 16 MiB 缓存上限后不重放；0 表示关闭。</span>
             </div>
             <div className="form-group">
               <label className="form-label">流错误后切换入口</label>

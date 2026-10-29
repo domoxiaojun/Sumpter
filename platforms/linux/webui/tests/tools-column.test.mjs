@@ -18,3 +18,10 @@ test('recent event request cell renders tool calls from the list projection', as
   const css = await readFile(new URL('../src/styles/components.css', import.meta.url), 'utf8');
   assert.match(css, /\.telemetry-event-tools \{[^}]*white-space: nowrap/);
 });
+
+test('recent event result cell exposes the recorded transport', async () => {
+  const page = await readFile(new URL('../src/pages/RunPage.jsx', import.meta.url), 'utf8');
+  const cell = page.slice(page.indexOf('function RecentEventResultCell'), page.indexOf('function RecentEventDurationCell'));
+  assert.match(cell, /eventTransportLabel\(event\)/);
+  assert.match(cell, /telemetry-result-transport/);
+});

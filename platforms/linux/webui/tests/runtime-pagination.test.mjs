@@ -120,6 +120,7 @@ test('event table keeps pagination outside horizontal scrolling and exposes sort
   assert.match(tableSource, /tabIndex=\{0\}/);
   assert.match(runPageSource, /<PaginationBar[\s\S]*?onPageSizeChange/);
   assert.match(runPageSource, /title: '结果'/);
+  assert.match(runPageSource, /eventTransportLabel\(event\)/);
   assert.match(runPageSource, /title: '事件状态'/);
   assert.match(runPageSource, /recentEventRequestSummary/);
   assert.match(runPageSource, /eventAgentLabel\(event\)/);

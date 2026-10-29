@@ -2040,7 +2040,7 @@ impl Engine {
                             })
                     })
                 {
-                    let probed = super::stream_retry::probe_response(
+                    let probed = super::stream_retry::buffer_response_until_terminal(
                         result.expect("checked successful response"),
                         retry
                             .stream_idle_timeout_seconds
@@ -2048,7 +2048,8 @@ impl Engine {
                             .map(Duration::from_secs_f64),
                     )
                     .await;
-                    prefetched = Some((probed.prefix.len(), probed.last_read_at));
+                    prefetched = (!probed.buffered_until_terminal)
+                        .then_some((probed.prefix.len(), probed.last_read_at));
                     if let Some(error) = &probed.retry_error {
                         let code = &error.code;
                         let mut failure =

@@ -108,7 +108,7 @@ WebSocket 在 relay 阶段收到首条 Text/Binary 业务消息后开始空闲�
 | --- | --- |
 | `responseTimeoutSeconds` | 首响应总截止；null 由客户端决定 |
 | `streamIdleTimeoutSeconds` | HTTP 流两次输出之间、WebSocket 首条业务消息后的双向帧活动之间的最长空闲；null 不限制 |
-| `maxStreamErrorRetries` | HTTP 200 Responses SSE 输出前的暂时性错误，当前入口额外重试次数；默认 0 |
+| `maxStreamErrorRetries` | HTTP 200 Responses SSE 终态前的暂时性错误，当前入口额外重试次数；默认 0 |
 | `failoverOnStreamError` | 上述重试耗尽后是否切换入口；默认 false |
 | `max500Retries` | 当前入口收到 500 后的额外重试次数 |
 | `failoverOn500` | 500 重试耗尽后是否切换入口 |
@@ -146,11 +146,10 @@ WebUI 保存使用 generation-safe PUT，防止两个页面互相覆盖。手工
 
 ### HTTP 200 流内暂时性错误
 
-`maxStreamErrorRetries` 与 `failoverOnStreamError` 独立于 HTTP 500、粘性重试和跨轮重试。
-例如次数为 2、切换开启时，当前入口最多请求 3 次，再尝试下一入口；同一请求内每个入口的流错误预算不会因跨轮或粘性重试重置。旧配置默认次数为 0、切换关闭，保持直接转发行为。
+`maxStreamErrorRetries` 与 `failoverOnStreamError` 独立于 HTTP 500、粘性重试和跨轮重试。启用后 Responses SSE 会先缓存到终态，当前入口最多请求「初次 + 重试次数」；同一请求内每个入口的流错误预算不会因跨轮或粘性重试重置。旧配置默认次数为 0、切换关闭，保持直接转发行为。
 
-匹配 Responses SSE 终态中的结构化错误码：`rate_limit_exceeded`、`server_error`、`internal_server_error`、`overloaded_error`、`service_unavailable`、`slow_down`、`server_is_overloaded`。在输出前的前奏检查期间，上游 EOF、传输错误或配置的流空闲超时也进入该策略。参数错误、鉴权错误、余额或组织/项目额度耗尽、未知错误与 `response.incomplete` 不进入此策略。
+匹配 Responses SSE 终态中的结构化错误码：`rate_limit_exceeded`、`server_error`、`internal_server_error`、`overloaded_error`、`service_unavailable`、`slow_down`、`server_is_overloaded`。在终态前，上游 EOF、传输错误或配置的流空闲超时也进入该策略。参数错误、鉴权错误、余额或组织/项目额度耗尽、未知错误与 `response.incomplete` 不进入此策略。
 
-开启后，代理在输出前暂存空的 `response.created` / `response.in_progress` 前奏。收到正文、推理、工具调用或未知事件即开始正常转发，不再重试；暂存最多 64 KiB、1024 块或 5 秒，先达到边界即原样转发，不截断响应。无法确定内容的未完成事件不会被重放。客户端断开会取消等待和上游请求。后台 Responses、Realtime、非 SSE 和压缩流不参与。结构化错误耗尽后保留最后实际响应；前奏期间传输中断耗尽后返回明确的代理错误。每次失败保留真实上游状态及请求 ID。
+开启后，Responses SSE 会在代理内缓存到 `response.completed` 等协议终态；在终态前遇到上游断流、限流或服务器错误时丢弃半截响应并按预算重跑，因此 Codex 不会先收到半截流再自行重连。缓存上限为 16 MiB，超过后恢复普通实时转发，此后的断流不重放。客户端断开会取消等待和上游请求。后台 Responses、Realtime、非 SSE 和压缩流不参与。重试耗尽后保留最后实际响应或返回明确的代理错误。每次失败保留真实上游状态及请求 ID。
 
 例如可设置 `maxStreamErrorRetries: 2`、`failoverOnStreamError: true` 和 `maxRetryDurationSeconds: 60`。默认次数 0 且切换关闭，流错误重试关闭；0 不表示无限次数。
