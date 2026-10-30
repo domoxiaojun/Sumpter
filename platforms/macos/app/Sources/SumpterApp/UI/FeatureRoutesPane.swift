@@ -3,12 +3,17 @@ import SwiftUI
 
 struct RoutingPane: View {
     @ObservedObject var model: AppModel
+    @State private var editingRequestPolicy = false
 
     var body: some View {
         SettingsPage(title: SettingsSection.routing.title, subtitle: SettingsSection.routing.subtitle) {
+            SectionPanel(title: "全客户端请求策略", hint: "并发、排队、重试预算、Responses 流保护与入口兼容声明。") {
+                Button("配置请求策略") { editingRequestPolicy = true }
+            }
             poolPatternsPanel
             FeatureRulesPanel(model: model)
         }
+        .sheet(isPresented: $editingRequestPolicy) { RequestPolicySheet(model: model) }
     }
 
     private var poolPatternsPanel: some View {

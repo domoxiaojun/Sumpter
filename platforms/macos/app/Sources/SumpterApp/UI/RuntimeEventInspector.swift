@@ -101,6 +101,20 @@ struct RuntimeEventInspector: View {
             rows([("客户端模型", event.clientModel), ("逻辑模型", event.effectiveModel), ("上游模型", event.upstreamModel),
                   ("入口", event.endpointName), ("模型组", event.modelGroupName ?? event.modelGroupID),
                   ("命中规则", event.featureRuleID), ("用途", RuntimeEventDisplay.purpose(event))])
+            if let trace = event.requestTrace ?? chain.first(where: { $0.kind == "client" })?.requestTrace {
+                Text("路由过程").font(.headline).padding(.top, 8)
+                ForEach(Array(trace.steps.enumerated()), id: \.offset) { _, step in
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("+\(step.atMs) ms").monospacedDigit().foregroundStyle(.secondary).frame(width: 85, alignment: .leading)
+                        Text(step.label).frame(width: 90, alignment: .leading)
+                        Text([step.endpointId, step.reason, step.durationMs.map { "\($0) ms" }].compactMap { $0 }.joined(separator: " · "))
+                    }.font(.caption)
+                }
+                if trace.omitted > 0 { Text("另外 \(trace.omitted) 个步骤因记录上限省略。").font(.caption).foregroundStyle(.secondary) }
+                Text("时间相对本次请求；计划重试不代表已再次发送，重叠阶段不直接相加。").font(.caption).foregroundStyle(.secondary)
+            } else {
+                Text("此记录没有路由过程；不补造旧记录的阶段耗时。").font(.caption).foregroundStyle(.secondary)
+            }
         case "usage":
             rows([("缓存读占比", event.cacheReadTokenRatio.map { $0.formatted(.percent.precision(.fractionLength(1))) }), ("缓存读状态", event.cacheRead?.statusLabel), ("缓存证据", event.cacheRead?.reasonLabel),
                   ("缓存读计数", ["confirmed": "已确认", "provisional": "暂定，可能增加", "unknown": "未知"][event.cacheRead?.finality ?? "unknown"]),

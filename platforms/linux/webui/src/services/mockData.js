@@ -270,6 +270,20 @@ export const mockRuntime = {
     },
     {
       id: 'ev-failover-client',
+      requestTrace: {
+        omitted: 0,
+        steps: [
+          { atMs: 0, action: 'candidate', endpointId: 'ep-anthropic-direct', detail: 'native' },
+          { atMs: 12, action: 'queue', endpointId: 'ep-anthropic-direct', detail: 'admitted', durationMs: 12 },
+          { atMs: 12, action: 'attempt', endpointId: 'ep-anthropic-direct', detail: 'send' },
+          { atMs: 180, action: 'headers', endpointId: 'ep-anthropic-direct', detail: 'received', durationMs: 168 },
+          { atMs: 181, action: 'failure', endpointId: 'ep-anthropic-direct', detail: 'rate_limit' },
+          { atMs: 190, action: 'attempt', endpointId: 'ep-azure-eastus', detail: 'send' },
+          { atMs: 5800, action: 'headers', endpointId: 'ep-azure-eastus', detail: 'received', durationMs: 5610 },
+          { atMs: 5810, action: 'first_chunk', detail: 'first_chunk_received' },
+          { atMs: 8400, action: 'complete', detail: 'finished', durationMs: 8400 },
+        ],
+      },
       requestID: 'req-failover-002',
       timestamp: now - 38000,
       kind: 'client',

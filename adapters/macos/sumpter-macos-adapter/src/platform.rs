@@ -233,6 +233,7 @@ impl Platform {
         };
 
         let event = RuntimeEvent {
+            request_trace: None,
             source_ip: request.source_ip.clone(),
             session_source: None,
             hook_event: hook_event.clone(),
@@ -689,6 +690,7 @@ fn failure_kind_message(kind: RuntimeFailureKind) -> String {
         RuntimeFailureKind::EndpointsExhausted => "所有上游入口均失败，回合未完成".into(),
         RuntimeFailureKind::ClientCancelled => "回合由客户端中断".into(),
         RuntimeFailureKind::ClientRequestRejected => "请求未被代理接受，回合未完成".into(),
+        RuntimeFailureKind::LocalAdmissionRejected => "本地队列已满或排队超时，回合未完成".into(),
     }
 }
 

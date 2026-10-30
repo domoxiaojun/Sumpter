@@ -9,6 +9,42 @@ use sumpter_core::stream_terminal::SseTerminal;
 
 use crate::outbound::TransportError;
 
+/// Inspect a small error prefix, then restore every byte for normal relay.
+pub(super) async fn inspect_response_failure(
+    response: &mut crate::outbound::UpstreamResponse,
+) -> sumpter_core::request_policy::FailureDecision {
+    use futures_util::{StreamExt, stream};
+    let mut prefix = Vec::new();
+    let mut body = Vec::new();
+    if !matches!(response.status, 401 | 402 | 403 | 429 | 499 | 503) {
+        return sumpter_core::request_policy::classify_failure(response.status, &[]);
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    if matches!(response.status, 401 | 402 | 403 | 429 | 499 | 503)
+        && !response.headers.iter().any(|(key, value)| {
+            key.eq_ignore_ascii_case("content-encoding") && !value.eq_ignore_ascii_case("identity")
+        })
+    {
+        while body.len() < 64 * 1024 && prefix.len() < 32 {
+            let Ok(Some(chunk)) = tokio::time::timeout_at(deadline, response.stream.next()).await
+            else {
+                break;
+            };
+            if let Ok(bytes) = &chunk {
+                body.extend_from_slice(&bytes[..bytes.len().min(64 * 1024 - body.len())]);
+            }
+            let stop = chunk.is_err() || serde_json::from_slice::<serde_json::Value>(&body).is_ok();
+            prefix.push(chunk);
+            if stop {
+                break;
+            }
+        }
+    }
+    let upstream = std::mem::replace(&mut response.stream, stream::empty().boxed());
+    response.stream = stream::iter(prefix).chain(upstream).boxed();
+    sumpter_core::request_policy::classify_failure(response.status, &body)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub(super) enum StreamReadError {
     #[error("stream idle timeout")]

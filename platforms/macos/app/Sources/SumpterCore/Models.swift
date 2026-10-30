@@ -1050,6 +1050,7 @@ public struct ModelCatalogSettings: Codable, Equatable, Sendable {
 }
 
 public struct AppConfig: Codable, Equatable, Sendable {
+    public var requestPolicy = RequestPolicy()
     public static let currentSchemaVersion = 7
     /// 会话粘性归属的默认存活时长(小时)。72h;`<= 0` 表示永不过期。
     public static let defaultSessionStickyTTLHours: Double = 72
@@ -1069,6 +1070,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion
+        case requestPolicy
         case listener
         case retry
         case modelCatalog
@@ -1116,6 +1118,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public init(from decoder: Decoder) throws {
         let keyed = try decoder.container(keyedBy: CodingKeys.self)
         schemaVersion = try keyed.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? AppConfig.currentSchemaVersion
+        requestPolicy = try keyed.decodeIfPresent(RequestPolicy.self, forKey: .requestPolicy) ?? RequestPolicy()
         listener = try keyed.decodeIfPresent(ListenerConfig.self, forKey: .listener) ?? ListenerConfig()
         retry = try keyed.decodeIfPresent(RetryPolicy.self, forKey: .retry) ?? RetryPolicy()
         modelCatalog = try keyed.decodeIfPresent(ModelCatalogSettings.self, forKey: .modelCatalog) ?? ModelCatalogSettings()
@@ -1133,6 +1136,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         // New writes are always the current flat schema. ConfigStore performs
         // the version/validation gate before this method is called.
         try keyed.encode(AppConfig.currentSchemaVersion, forKey: .schemaVersion)
+        if requestPolicy != RequestPolicy() { try keyed.encode(requestPolicy, forKey: .requestPolicy) }
         try keyed.encode(listener, forKey: .listener)
         try keyed.encode(retry, forKey: .retry)
         try keyed.encode(modelCatalog, forKey: .modelCatalog)

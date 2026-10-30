@@ -551,6 +551,7 @@ mod tests {
         routes: Vec<ProviderModelMetadata>,
     ) -> Value {
         let model = LocalModelEntry {
+            compatibility: Default::default(),
             id: id.into(),
             capabilities: vec![ModelCapability::Text],
             metadata: aggregate_metadata(id, routes),
@@ -648,6 +649,7 @@ mod tests {
         let entries = build_codex_models_with_templates(
             &[
                 LocalModelEntry {
+                    compatibility: Default::default(),
                     id: "gpt-6.1-sol".into(),
                     capabilities: vec![ModelCapability::Text],
                     metadata: aggregate_metadata(
@@ -656,6 +658,7 @@ mod tests {
                     ),
                 },
                 LocalModelEntry {
+                    compatibility: Default::default(),
                     id: "gpt-5.5".into(),
                     capabilities: vec![ModelCapability::Text],
                     metadata: aggregate_metadata("gpt-5.5", vec![fallback_metadata("gpt-5.5")]),

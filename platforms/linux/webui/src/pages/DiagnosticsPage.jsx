@@ -4,6 +4,7 @@ import { StatusBadge } from '../components/StatusBadge.jsx';
 import { Icon } from '../utils/icons.jsx';
 import { copyWithToast } from '../utils/clipboard.js';
 import { api } from '../services/api.js';
+import { ClientConnectionDiagnostics } from '../components/ClientConnectionDiagnostics.jsx';
 import { formatDuration, formatTimestamp, formatNumber, clientDeclaredProject, projectSourceLabel, formatWebSocketTrace } from '../utils/helpers.js';
 
 // 原始 Body/Chunks 可能接近整个捕获容量。详情页首屏不应该为每个折叠块
@@ -468,6 +469,7 @@ export function DiagnosticsPage() {
         </div>
       </div>
 
+      <ClientConnectionDiagnostics />
       <div className="glass-panel panel-padded-stack diagnostics-capture-panel">
         <div className="panel-toolbar diagnostics-capture-header">
           <div className="diagnostics-capture-copy">

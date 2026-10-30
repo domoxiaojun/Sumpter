@@ -261,6 +261,7 @@ mod tests {
 
     fn config() -> AppConfig {
         AppConfig {
+            request_policy: Default::default(),
             endpoints: vec![Endpoint {
                 mappings: vec![ModelMapping {
                     client_pattern: "claude-opus-*".into(),

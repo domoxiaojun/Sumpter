@@ -1,6 +1,6 @@
 # Sumpter 使用手册（Linux 发布包）
 
-适用版本：**0.4.55 / schema v7**。本文随发布包提供，可在解压目录阅读；安装入口见 [README](README.md)。
+适用版本：**0.4.56 / schema v7**。本文随发布包提供，可在解压目录阅读；安装入口见 [README](README.md)。
 
 <!-- BEGIN SUMPTER_CANONICAL_ONBOARDING -->
 
@@ -158,6 +158,8 @@ bash setup-client-attribution.sh install all
 
 pi 包装器会自动加载私有 `pi-project-attribution.ts`，保存在 `${XDG_DATA_HOME:-~/.local/share}/sumpter/attribution/`。Provider 须带 `X-Sumpter-Client: pi`，pi 版本须支持 `before_provider_headers`。包管理命令仍直接交给 pi。`/reload` 不能加载新的 shell 配置；后台插件直接调用模型 SDK 的请求也不一定经过 pi 的会话钩子。
 
+只读连接诊断：在客户端所在机器运行 `node client-attribution.mjs doctor all --proxy-url http://127.0.0.1:57878`（发行包 scripts 目录或上述私有副本）。它检查可见地址、包装器实际版本与 pi 显式标记，不改配置、不请求模型。两端诊断页同时显示近期流量；“未见请求”表示未知。localhost 本身不是 Sumpter 标记。
+
 Codex 包装器用于 CLI/TUI，自定义 Provider 的连接设置保持原有内容；它不会注入已运行的会话或 Codex Desktop 图形进程。客户端自带的结构化 workspace 信息仍优先使用。
 
 要撤销某个客户端的包装器：
@@ -200,7 +202,9 @@ bash setup-client-attribution.sh restore pi
 - `maxDeferredRounds` 与 `maxRetryDurationSeconds` 都为 `0` 时，可重试故障没有轮数和总时长上限；客户端断开会取消等待。希望请求尽快结束时，应设置有限上限。
 - `passThroughRetryDelay` 控制失败响应中的 `Retry-After` / `retry_delay` 是否继续传给客户端；它不是入口冷却时间开关。
 
-上游 `Retry-After` 的单次上限为 300 秒，显式设置的 `maxRetryDurationSeconds` 优先：若剩余预算容纳不下等待，就返回最终响应。HTTP 头和本地产生的错误提示也使用此上限；原生 SSE/WebSocket 业务帧保持原样。没有上游提示时，指数退避仍最多 30 秒。
+上游 `Retry-After` 的单次上限为 300 秒，显式设置的 `maxRetryDurationSeconds` 优先：若剩余预算容纳不下等待，就返回最终响应。HTTP 头和本地产生的错误提示也使用此上限；原生 SSE/WebSocket 业务帧保持原样。指数退避基数最多 30 秒，再加不超过 20% 且最多 1 秒的正向抖动。已知结构化硬额度和凭据错误停止同一请求的同入口重试。
+
+“Claude Code 路由 → 全客户端请求策略”可设置所有客户端的 HTTP/SSE 并发、排队、RPM 和总尝试上限。默认不限并发/RPM，完整缓冲保留，单流默认 16 MiB/8192 块、总缓冲 128 MiB；可选择前奏保护以提前输出，提交后不再透明重放。请求详情提供排队、重试、缓冲和失败原因时间线。WebSocket 请求级配额不在此范围内。
 
 收到上游错误后，代理按重试策略处理并尽量保留最终上游状态和错误内容。尚未发往上游的认证、路由、存储或连接问题仍可能产生本地错误。
 

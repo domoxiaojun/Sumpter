@@ -36,6 +36,7 @@ public enum RuntimeFailureKind: String, Codable, Sendable {
     case endpointsExhausted = "endpoints_exhausted"
     case clientCancelled = "client_cancelled"
     case clientRequestRejected = "client_request_rejected"
+    case localAdmissionRejected = "local_admission_rejected"
 }
 
 public enum RuntimeFailurePhase: String, Codable, Sendable {
@@ -589,6 +590,7 @@ public struct CodexMetadata: Codable, Equatable, Sendable {
 }
 
 public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
+    public var requestTrace: RequestTrace? = nil
     public var clientVariant: String? = nil
     public var agentRole: String? = nil
     public var agentName: String? = nil
@@ -685,7 +687,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
     public var attributionScope: String?
 
     private enum CodingKeys: String, CodingKey {
-        case clientVariant, agentRole, agentName, cacheRead, usageSummary, sessionSource, hookEvent, detailsOmitted
+        case clientVariant, agentRole, agentName, cacheRead, usageSummary, sessionSource, hookEvent, detailsOmitted, requestTrace
         case parentThreadID = "parentThreadId"
         case parentTurnID = "parentTurnId"
         case rootTurnID = "rootTurnId"
@@ -713,6 +715,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         clientVariant = try c.decodeIfPresent(String.self, forKey: .clientVariant)
+        requestTrace = try c.decodeIfPresent(RequestTrace.self, forKey: .requestTrace)
         agentRole = try c.decodeIfPresent(String.self, forKey: .agentRole)
         agentName = try c.decodeIfPresent(String.self, forKey: .agentName)
         parentThreadID = try c.decodeIfPresent(String.self, forKey: .parentThreadID)
@@ -832,6 +835,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         try c.encodeIfPresent(timeoutMS, forKey: .timeoutMS)
         try c.encodeIfPresent(upstreamStatusCode, forKey: .upstreamStatusCode)
         try c.encodeIfPresent(upstreamRequestID, forKey: .upstreamRequestID)
+        try c.encodeIfPresent(requestTrace, forKey: .requestTrace)
         try c.encodeIfPresent(codexMetadata, forKey: .codexMetadata)
         try c.encodeIfPresent(clientDeclared, forKey: .clientDeclared)
         try c.encodeIfPresent(grokMetadata, forKey: .grokMetadata)

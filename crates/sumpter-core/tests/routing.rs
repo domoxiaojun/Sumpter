@@ -95,6 +95,7 @@ fn base_config() -> AppConfig {
     );
     qwen.priority = 10;
     AppConfig {
+        request_policy: Default::default(),
         endpoints: vec![
             endpoint("main-a", vec![mapping("claude-opus-*", "")]),
             endpoint("main-b", vec![mapping("claude-opus-*", "")]),
@@ -287,6 +288,7 @@ fn resource_plan_does_not_require_text_model_mapping_or_anthropic_endpoint() {
     let mut anthropic = endpoint("anthropic", vec![]);
     anthropic.protocol = EndpointProtocolMode::Anthropic;
     let config = AppConfig {
+        request_policy: Default::default(),
         endpoints: vec![anthropic, openai],
         feature_rules: vec![],
         listener: ListenerConfig::default(),
@@ -314,6 +316,7 @@ fn files_resource_plan_requires_explicit_files_capability() {
     cpa.protocol = EndpointProtocolMode::OpenAI;
     cpa.priority = 10;
     let config = AppConfig {
+        request_policy: Default::default(),
         endpoints: vec![xiao, cpa],
         feature_rules: vec![],
         listener: ListenerConfig::default(),
@@ -350,6 +353,7 @@ fn files_resource_plan_honors_explicit_files_capability() {
     cpa.protocol = EndpointProtocolMode::OpenAI;
     cpa.priority = 10;
     let config = AppConfig {
+        request_policy: Default::default(),
         endpoints: vec![xiao, cpa],
         feature_rules: vec![],
         listener: ListenerConfig::default(),
@@ -380,6 +384,7 @@ fn files_resource_plan_does_not_treat_live_or_chat_mapping_as_files() {
     cpa.protocol = EndpointProtocolMode::OpenAI;
     cpa.priority = 10;
     let config = AppConfig {
+        request_policy: Default::default(),
         endpoints: vec![xiao, cpa],
         feature_rules: vec![],
         listener: ListenerConfig::default(),
@@ -457,6 +462,7 @@ fn endpoint_with_own_mappings_only_serves_declared_models() {
 #[test]
 fn no_providers_at_all_reports_no_provider_for_model() {
     let config = AppConfig {
+        request_policy: Default::default(),
         endpoints: vec![],
         feature_rules: vec![],
         listener: ListenerConfig::default(),
@@ -1369,6 +1375,7 @@ fn video_intent_does_not_use_the_first_text_provider() {
     );
     cpa.protocol = EndpointProtocolMode::OpenAI;
     let config = AppConfig {
+        request_policy: Default::default(),
         endpoints: vec![xiao, cpa],
         feature_rules: vec![],
         listener: ListenerConfig::default(),
@@ -1420,6 +1427,7 @@ fn text_wildcard_cannot_steal_video_capability_traffic() {
     cpa.protocol = EndpointProtocolMode::OpenAI;
     cpa.priority = 10;
     let config = AppConfig {
+        request_policy: Default::default(),
         endpoints: vec![xiao, cpa],
         feature_rules: vec![],
         listener: ListenerConfig::default(),
@@ -1458,6 +1466,7 @@ fn explicit_mapping_capabilities_override_name_inference_for_routing() {
     );
     video.protocol = EndpointProtocolMode::OpenAI;
     let config = AppConfig {
+        request_policy: Default::default(),
         endpoints: vec![video],
         feature_rules: vec![],
         listener: ListenerConfig::default(),
@@ -1495,6 +1504,7 @@ fn mapping_level_live_capability_remains_model_scoped() {
     );
     private.protocol = EndpointProtocolMode::OpenAI;
     let config = AppConfig {
+        request_policy: Default::default(),
         endpoints: vec![private],
         feature_rules: vec![],
         listener: ListenerConfig::default(),
@@ -1529,6 +1539,7 @@ fn mapping_level_live_capability_remains_model_scoped() {
     );
     public.protocol = EndpointProtocolMode::OpenAI;
     let config = AppConfig {
+        request_policy: Default::default(),
         endpoints: vec![public],
         feature_rules: vec![],
         listener: ListenerConfig::default(),
@@ -1557,6 +1568,7 @@ fn endpoint_live_capability_routes_without_a_model_mapping() {
     cpa.protocol = EndpointProtocolMode::OpenAI;
     cpa.capabilities = vec![ModelCapability::Live];
     let config = AppConfig {
+        request_policy: Default::default(),
         endpoints: vec![cpa],
         feature_rules: vec![],
         listener: ListenerConfig::default(),

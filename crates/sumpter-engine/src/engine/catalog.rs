@@ -78,6 +78,7 @@ pub(super) fn local_model_id_from_path(path: &str) -> Option<&str> {
 
 #[derive(Clone)]
 pub(super) struct LocalModelEntry {
+    pub(super) compatibility: sumpter_core::request_policy::CompatibilityProfile,
     pub(super) id: String,
     pub(super) capabilities: Vec<sumpter_core::capability::ModelCapability>,
     pub(super) metadata: ProviderModelMetadata,
@@ -224,12 +225,23 @@ fn collect_local_models(
             let request =
                 sumpter_core::routing::RoutingRequest::from_value(&json!({"model": id})).unwrap();
             let mut effective: Option<crate::model_catalog::RouteCapabilities> = None;
+            let mut compatibility: Option<sumpter_core::request_policy::CompatibilityProfile> =
+                None;
             if let Ok(plan) = sumpter_core::routing::RoutePlanner::plan_for_source(
                 &request,
                 config,
                 sumpter_core::config::ProviderProtocol::OpenAIResponses,
             ) {
                 for route in plan.endpoints {
+                    let profile = config
+                        .request_policy
+                        .profile(&route.endpoint_id, &route.upstream_model, route.protocol)
+                        .cloned()
+                        .unwrap_or_default();
+                    match &mut compatibility {
+                        Some(current) => current.intersect(&profile),
+                        None => compatibility = Some(profile),
+                    }
                     let caps = config
                         .endpoint(&route.endpoint_id)
                         .and_then(|endpoint| {
@@ -249,6 +261,7 @@ fn collect_local_models(
             }
             effective.unwrap_or_default().apply(&mut metadata);
             LocalModelEntry {
+                compatibility: compatibility.unwrap_or_default(),
                 metadata,
                 id,
                 capabilities,
@@ -263,6 +276,7 @@ pub(super) fn openai_model_object(model: &LocalModelEntry) -> Value {
         "object": "model",
         "created": 0,
         "owned_by": "sumpter",
+        "sumpter_compatibility": model.compatibility,
         "capabilities": model.capabilities.iter().map(|capability| capability.as_str()).collect::<Vec<_>>(),
     })
 }

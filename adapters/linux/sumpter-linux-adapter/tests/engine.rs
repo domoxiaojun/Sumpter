@@ -24,6 +24,9 @@ mod round_robin;
 #[path = "../../../../tests/contracts/stream_error_retry.rs"]
 mod stream_error_retry;
 
+#[path = "../../../../tests/contracts/request_policy.rs"]
+mod request_policy;
+
 #[path = "../../../../tests/contracts/pi.rs"]
 mod pi;
 
@@ -247,6 +250,7 @@ fn two_endpoint_config() -> AppConfig {
     // 绝大多数用例只验证单轮结果；跨轮语义由专门用例显式开启，避免失败剧本
     // 产品默认时长闸为 0（无限）；本用例用 max_deferred_rounds 显式限制轮数。
     AppConfig {
+        request_policy: Default::default(),
         feature_rules: vec![],
         listener: ListenerConfig::default(),
         endpoints: vec![a, b],
@@ -763,13 +767,13 @@ async fn bad_request_400_does_not_switch_endpoints() {
     assert_eq!(fake.requests().len(), 1, "请求错误不得盲目换入口");
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn deferred_rounds_retry_without_passthrough_until_duration_gate() {
     let fake = FakeTransport::new();
     fake.set_delay(Duration::from_millis(2)); // 控制节奏,防止瞬间烧穿剧本
     let mut config = two_endpoint_config();
     config.retry.max_deferred_rounds = 0; // 不限轮
-    config.retry.max_retry_duration_seconds = 0.6; // 容纳首轮 0.5s 退避，第二轮后由时长闸刹停
+    config.retry.max_retry_duration_seconds = 0.75; // 容纳首轮 0.5–0.6s 抖动退避，第二轮后由时长闸刹停
     let engine = engine_with(config, fake.clone());
     // 双入口持续 429/502/503:永不透传,直到时长闸。
     for _ in 0..64 {

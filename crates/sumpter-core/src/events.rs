@@ -148,6 +148,7 @@ pub enum RuntimeFailureKind {
     EndpointsExhausted,
     ClientCancelled,
     ClientRequestRejected,
+    LocalAdmissionRejected,
 }
 
 impl RuntimeFailureKind {
@@ -164,6 +165,7 @@ impl RuntimeFailureKind {
             Self::EndpointsExhausted => "endpoints_exhausted",
             Self::ClientCancelled => "client_cancelled",
             Self::ClientRequestRejected => "client_request_rejected",
+            Self::LocalAdmissionRejected => "local_admission_rejected",
         }
     }
 }
@@ -2805,6 +2807,12 @@ impl Default for DiagnosticCaptureSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeEvent {
+    #[serde(
+        rename = "requestTrace",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub request_trace: Option<crate::request_policy::RequestTrace>,
     /// 事件记录的客户端地址：按 X-Real-IP、X-Forwarded-For、入站 TCP 对端的顺序
     /// 取第一个合法值；转发头由请求方声明，不校验来源。旧事件或没有网络上下文时为空。
     #[serde(rename = "sourceIP", default, skip_serializing_if = "is_none")]
@@ -3264,6 +3272,7 @@ mod tests {
 
     fn event(id: &str, kind: &str, ts: f64) -> RuntimeEvent {
         RuntimeEvent {
+            request_trace: None,
             source_ip: None,
             session_source: None,
             hook_event: None,

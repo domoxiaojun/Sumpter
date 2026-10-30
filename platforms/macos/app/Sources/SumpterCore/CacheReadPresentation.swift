@@ -93,6 +93,7 @@ public extension RuntimeEvent {
         guard incoming.id == id else { return incoming }
         var result = incoming
         if incoming.detailsOmitted == true {
+            result.requestTrace = incoming.requestTrace ?? requestTrace
             result.codexMetadata = incoming.codexMetadata ?? codexMetadata
             result.clientDeclared = incoming.clientDeclared ?? clientDeclared
             result.grokMetadata = incoming.grokMetadata ?? grokMetadata

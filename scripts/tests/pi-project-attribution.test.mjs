@@ -4,7 +4,38 @@ import { mkdtemp, mkdir, rm, readFile, realpath } from 'node:fs/promises';
 import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import extension, { sanitizeRemote } from '../clients/pi-project-attribution.ts';
+import extension, { createWorkspaceCache, sanitizeRemote } from '../clients/pi-project-attribution.ts';
+
+test('workspace cache coalesces requests but changes directory and refreshes expired metadata', async () => {
+  let clock = 0;
+  const calls = [];
+  const cached = createWorkspaceCache(async cwd => {
+    calls.push(cwd);
+    return { workspace: cwd, remote: `https://example.invalid/revision-${calls.length}` };
+  }, () => clock);
+  const results = await Promise.all(Array.from({ length: 20 }, () => cached('/project-a')));
+  assert.equal(calls.length, 1);
+  assert.ok(results.every(value => value === results[0]));
+  assert.equal((await cached('/project-b')).workspace, '/project-b');
+  clock = 30_001;
+  assert.notEqual((await cached('/project-a')).remote, results[0].remote);
+  assert.deepEqual(calls, ['/project-a', '/project-b', '/project-a']);
+});
+
+test('workspace cache bounds retained directories and does not retain failed discovery', async () => {
+  let calls = 0;
+  const cached = createWorkspaceCache(async cwd => {
+    calls++;
+    if (cwd === '/missing') throw new Error('missing');
+    return { workspace: cwd };
+  });
+  for (let i = 0; i < 65; i++) await cached(`/project-${i}`);
+  await cached('/project-0');
+  assert.equal(calls, 66);
+  assert.deepEqual(await cached('/missing'), { workspace: '/missing' });
+  await cached('/missing');
+  assert.equal(calls, 68);
+});
 
 test('pi attribution follows current workspace/session, opts in per provider, and clears stale headers', async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'sumpter-pi-')));

@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { collectHeaders, prepareLaunch, manage, sanitizeRemote } from '../clients/client-attribution.mjs';
+import { collectHeaders, prepareLaunch, manage, sanitizeRemote, diagnoseClients } from '../clients/client-attribution.mjs';
 const source = fileURLToPath(new URL('../clients/client-attribution.mjs', import.meta.url));
 function fixture(t) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'sumpter-unified-')));
@@ -524,4 +524,33 @@ test('pi rejects unsupported shells and broken markers before installing extensi
   writeFileSync(join(f.home, '.bashrc'), '# >>> sumpter client-attribution pi >>>\n');
   assert.throws(() => manage('install', 'pi', {}, f.env), /不完整/);
   assert.equal(existsSync(join(f.home, '.pi')), false);
+});
+
+test('doctor is read-only, reports explicit provider opt-in and never exposes URL credentials', t => {
+  const { home, env } = fixture(t);
+  mkdirSync(join(home, '.pi', 'agent'), { recursive: true });
+  mkdirSync(join(home, '.codex'), { recursive: true });
+  const models = JSON.stringify({ providers: { sumpter: { baseUrl: 'http://user:synthetic-secret@127.0.0.1:57878/v1?token=private', headers: { 'x-sumpter-client': 'pi', Authorization: 'secret-value' } }, another: { baseUrl: 'http://localhost:9999/v1' } } });
+  writeFileSync(join(home, '.pi', 'agent', 'models.json'), models);
+  writeFileSync(join(home, '.codex', 'config.toml'), 'model_provider = "custom"\n[model_providers.custom]\nbase_url = "http://127.0.0.1:57878/v1"\napi_key = "secret-value"\n');
+  const results = diagnoseClients('all', {}, { ...env, ANTHROPIC_BASE_URL: 'https://user:secret@remote.invalid/private-token-path?token=secret' });
+  const pi = results.find(r => r.client === 'pi');
+  assert.equal(pi.sources[0].explicitOptIn, true);
+  assert.equal(pi.sources[1].explicitOptIn, false);
+  assert.equal(pi.sources[0].matchesProxyOrigin, true);
+  assert.equal(results.find(r => r.client === 'codex').sources[0].baseURL, 'http://127.0.0.1:57878/v1');
+  assert.ok(results.every(r => r.traffic === 'unknown'));
+  assert.doesNotMatch(JSON.stringify(results), /synthetic-secret|secret-value|private-token-path|token=|user:/);
+  assert.equal(readFileSync(join(home, '.pi', 'agent', 'models.json'), 'utf8'), models);
+  assert.equal(existsSync(join(home, '.local', 'share', 'sumpter')), false);
+});
+
+test('doctor keeps unreadable or malformed configuration unknown without exposing its text', t => {
+  const { home, env } = fixture(t);
+  mkdirSync(join(home, '.pi', 'agent'), { recursive: true });
+  writeFileSync(join(home, '.pi', 'agent', 'models.json'), '{"apiKey":"secret-value" invalid');
+  const [result] = diagnoseClients('pi', {}, env);
+  assert.equal(result.configuration, 'unknown');
+  assert.ok(result.issues.length > 0);
+  assert.doesNotMatch(JSON.stringify(result), /secret-value/);
 });

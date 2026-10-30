@@ -1,4 +1,5 @@
 import { CacheHitRate } from './CacheHitRate.jsx';
+import { RequestTrace } from './RequestTrace.jsx';
 import {
   eventModel, eventEndpoint, eventEndpointName, eventDurationMS, eventProjectContext, eventClientKindLabel, eventKindLabel,
   eventHttpStatusLabel, eventOutcomeLabel, eventDurationText, friendlyEventMessage, eventFailureSummaryLabel,
@@ -94,6 +95,7 @@ export function EventInspector({ event, chain = [], requestSummary, onSelect, ex
         ['入口', eventEndpoint(event)], ['模型组', event.modelGroupName || event.modelGroupID],
         ['命中规则', event.featureRuleID], ['用途', eventPurposeLabel(event)],
       ])}
+      <RequestTrace trace={event.requestTrace || chain.find(item => item.kind === 'client')?.requestTrace} />
     </>;
     if (key === 'usage') return fields([
       ['缓存读状态', eventCacheStatusLabel(event)], ['缓存证据', eventCacheReason(event)],

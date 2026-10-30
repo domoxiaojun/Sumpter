@@ -712,9 +712,18 @@ pub(super) fn retry_after_seconds(headers: &[(String, String)]) -> Option<f64> {
 fn retry_after_seconds_at(headers: &[(String, String)], now: f64) -> Option<f64> {
     headers
         .iter()
-        .filter(|(name, _)| name.eq_ignore_ascii_case("retry-after"))
-        .filter_map(|(_, value)| {
+        .filter(|(name, _)| {
+            name.eq_ignore_ascii_case("retry-after") || name.eq_ignore_ascii_case("retry-after-ms")
+        })
+        .filter_map(|(name, value)| {
             let value = value.trim();
+            if name.eq_ignore_ascii_case("retry-after-ms") {
+                return value
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|n| n.is_finite() && *n >= 0.0)
+                    .map(|n| (n / 1000.0).min(MAX_RETRY_AFTER_SECS));
+            }
             let seconds = value
                 .parse::<f64>()
                 .ok()
@@ -733,6 +742,19 @@ fn retry_after_seconds_at(headers: &[(String, String)], now: f64) -> Option<f64>
 }
 
 pub(super) fn retry_backoff_delay(round: i64, retry_after_seconds: Option<f64>) -> Duration {
+    use rand::Rng;
+    retry_backoff_with_jitter(
+        round,
+        retry_after_seconds,
+        rand::rng().random_range(0.0..=1.0),
+    )
+}
+
+pub(super) fn retry_backoff_with_jitter(
+    round: i64,
+    retry_after_seconds: Option<f64>,
+    fraction: f64,
+) -> Duration {
     let exponent = (round - 1).clamp(0, 64) as i32;
     let exponential = (RETRY_BACKOFF_INITIAL_SECS * RETRY_BACKOFF_FACTOR.powi(exponent))
         .min(RETRY_BACKOFF_MAX_SECS);
@@ -740,7 +762,11 @@ pub(super) fn retry_backoff_delay(round: i64, retry_after_seconds: Option<f64>) 
         .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
         .unwrap_or(0.0)
         .min(MAX_RETRY_AFTER_SECS);
-    Duration::from_secs_f64(exponential.max(retry_after))
+    // Positive jitter never retries before the provider's minimum delay.
+    let minimum = exponential.max(retry_after);
+    Duration::from_secs_f64(
+        (minimum + fraction.clamp(0.0, 1.0) * (minimum * 0.2).min(1.0)).min(MAX_RETRY_AFTER_SECS),
+    )
 }
 
 fn retry_fits_budget(started: tokio::time::Instant, limit: f64, delay: Duration) -> bool {
@@ -1475,6 +1501,7 @@ impl Engine {
             &client_meta,
         );
         self.record_event(RuntimeEvent {
+            request_trace: None,
             source_ip: None,
             session_source: None,
             hook_event: None,
@@ -1742,6 +1769,23 @@ impl Engine {
                     |body| super::stream_retry::request_allows_retry(body),
                 );
         let request_id = guard.request_id().to_string();
+        guard.trace(
+            "plan",
+            None,
+            &format!("{} 个候选，最多展示前 12 个", candidates.len()),
+            None,
+        );
+        for endpoint in candidates.iter().take(12) {
+            guard.trace(
+                "candidate",
+                Some(&endpoint.endpoint_id),
+                match endpoint.route_mode {
+                    RouteMode::Native => "native",
+                    RouteMode::Translated => "translated",
+                },
+                None,
+            );
+        }
         let client_stream = client_out.as_ref().map_or_else(
             || {
                 request
@@ -1826,11 +1870,24 @@ impl Engine {
             } else {
                 0
             };
+        if let Some(endpoint) = ordered.first() {
+            guard.trace(
+                "affinity",
+                Some(&endpoint.endpoint_id),
+                "session_group",
+                None,
+            );
+        }
+        if let Some(rule_id) = guard.meta.feature_rule_id.clone() {
+            guard.trace("rule", None, &rule_id, None);
+        }
         let forward_started = tokio::time::Instant::now();
         let mut last_attempt_endpoint: Option<String> = None;
         let mut round: i64 = 0;
         let mut consecutive_500_endpoint: Option<String> = None;
         let mut consecutive_500_retries = 0_i64;
+        let mut total_attempts = 0_u32;
+        let mut policy_rejection: Option<&'static str> = None;
         // These budgets span the entire request, including sticky/deferred
         // passes caused by unrelated HTTP failures on another endpoint.
         let mut stream_error_retries: HashMap<String, i64> = HashMap::new();
@@ -1855,7 +1912,7 @@ impl Engine {
             // must be able to probe the provider again and recover from a
             // transient 429/5xx. The cooldown remains active for the next
             // request admission.
-            let round_ordered =
+            let mut round_ordered =
                 self.ordered_endpoint_candidates(&candidates, &session_key, false, false);
             let round_sticky_endpoint_count = if sticky_enabled {
                 round_ordered
@@ -1876,6 +1933,12 @@ impl Engine {
             let mut sticky_retry_number = 0i64;
             let mut sticky_pass_checkpoint = round_state.sticky_retryable_failures;
             while endpoint_index < round_ordered.len() {
+                if config.request_policy.max_total_attempts > 0
+                    && total_attempts >= config.request_policy.max_total_attempts
+                {
+                    guard.trace("stop", None, "attempt_budget", None);
+                    break;
+                }
                 if last_attempt_endpoint.is_some()
                     && !retry_fits_budget(
                         forward_started,
@@ -1898,10 +1961,34 @@ impl Engine {
                     {
                         break;
                     }
-                    tokio::time::sleep(delay).await;
+                    guard.wait_retry(delay).await;
                     sticky_pass_checkpoint = round_state.sticky_retryable_failures;
                     endpoint_index = 0;
                     continue;
+                }
+                let current = &round_ordered[endpoint_index];
+                if !self
+                    .inner
+                    .admission
+                    .available(&current.endpoint_id, &config.request_policy)
+                    && let Some(available) =
+                        ((endpoint_index + 1)..round_ordered.len()).find(|index| {
+                            let candidate = &round_ordered[*index];
+                            candidate.scheduling_group() == current.scheduling_group()
+                                && !exhausted_stream_endpoints.contains(&candidate.endpoint_id)
+                                && self
+                                    .inner
+                                    .admission
+                                    .available(&candidate.endpoint_id, &config.request_policy)
+                        })
+                {
+                    guard.trace(
+                        "skip",
+                        Some(&current.endpoint_id),
+                        "same_group_capacity",
+                        None,
+                    );
+                    round_ordered.swap(endpoint_index, available);
                 }
                 let endpoint = &round_ordered[endpoint_index];
                 endpoint_index += 1;
@@ -2010,6 +2097,62 @@ impl Engine {
                 );
                 outbound_timer.set_bytes(build.request.body.len());
                 drop(outbound_timer);
+                if let Some(profile) = config.request_policy.profile(
+                    &endpoint.endpoint_id,
+                    &endpoint.upstream_model,
+                    endpoint.protocol,
+                ) {
+                    let body =
+                        serde_json::from_slice::<Value>(&build.request.body).unwrap_or(Value::Null);
+                    if let Some(field) = profile.unsupported_field(&body) {
+                        guard.trace("skip", Some(&endpoint.endpoint_id), field, None);
+                        policy_rejection = Some(field);
+                        exhausted_stream_endpoints.insert(endpoint.endpoint_id.clone());
+                        continue;
+                    }
+                }
+                let queue_started = Instant::now();
+                let permit = match self
+                    .inner
+                    .admission
+                    .acquire(&endpoint.endpoint_id, &config.request_policy)
+                    .await
+                {
+                    Ok(permit) => permit,
+                    Err(error) => {
+                        let reason = match error {
+                            super::admission::AdmissionError::QueueFull => "queue_full",
+                            super::admission::AdmissionError::QueueTimeout => "queue_timeout",
+                        };
+                        guard.trace(
+                            "admission_rejected",
+                            Some(&endpoint.endpoint_id),
+                            reason,
+                            Some(queue_started.elapsed()),
+                        );
+                        let mut failure = FailureInfo::endpoints_exhausted();
+                        failure.kind =
+                            sumpter_core::events::RuntimeFailureKind::LocalAdmissionRejected;
+                        failure.detail = Some(reason.into());
+                        guard.complete(429, Some(reason.into()), failure);
+                        let mut response = super::http_response::json_response(
+                            StatusCode::TOO_MANY_REQUESTS,
+                            &serde_json::json!({"error":reason,"requestID":request_id,"scope":"local"}),
+                        );
+                        response
+                            .headers_mut()
+                            .insert("retry-after", axum::http::HeaderValue::from_static("1"));
+                        return response;
+                    }
+                };
+                guard.trace(
+                    "queue",
+                    Some(&endpoint.endpoint_id),
+                    "admitted",
+                    Some(queue_started.elapsed()),
+                );
+                total_attempts = total_attempts.saturating_add(1);
+                guard.trace("attempt", Some(&endpoint.endpoint_id), "send", None);
                 let attempt_started = Instant::now();
                 let capture_attempt_id = self.capture_attempt_started(
                     &request_id,
@@ -2023,7 +2166,22 @@ impl Engine {
                     response_timeout,
                 )
                 .await;
+                if let Ok(response) = &mut result {
+                    super::admission::hold_response(response, permit);
+                } else {
+                    drop(permit);
+                }
                 let attempt_ttfb_ms = attempt_started.elapsed().as_millis() as i64;
+                guard.trace(
+                    "headers",
+                    Some(&endpoint.endpoint_id),
+                    if result.is_ok() {
+                        "received"
+                    } else {
+                        "transport_error"
+                    },
+                    Some(attempt_started.elapsed()),
+                );
                 self.capture_attempt_result(&request_id, &capture_attempt_id, &result);
                 let mut prefetched = None;
                 let mut stream_failure = None;
@@ -2044,14 +2202,23 @@ impl Engine {
                             })
                     })
                 {
+                    let buffer_started = Instant::now();
                     let probed = super::stream_retry::buffer_response_until_terminal(
                         result.expect("checked successful response"),
                         retry
                             .stream_idle_timeout_seconds
                             .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
                             .map(Duration::from_secs_f64),
+                        &config.request_policy,
+                        &self.inner.buffer_budget,
                     )
                     .await;
+                    guard.trace(
+                        "buffer",
+                        Some(&endpoint.endpoint_id),
+                        probed.release_reason,
+                        Some(buffer_started.elapsed()),
+                    );
                     prefetched = (!probed.buffered_until_terminal)
                         .then_some((probed.prefix.len(), probed.last_read_at));
                     if let Some(error) = &probed.retry_error {
@@ -2082,13 +2249,17 @@ impl Engine {
                             .entry(endpoint.endpoint_id.clone())
                             .or_default();
                         let delay = retry_backoff_delay(*used + 1, failure.retry_after_seconds);
-                        let retry_same = *used < retry.max_stream_error_retries.max(0)
+                        let retry_same = (config.request_policy.max_total_attempts == 0
+                            || total_attempts < config.request_policy.max_total_attempts)
+                            && *used < retry.max_stream_error_retries.max(0)
                             && retry_fits_budget(
                                 forward_started,
                                 retry.max_retry_duration_seconds,
                                 delay,
                             );
-                        let failover = retry.failover_on_stream_error
+                        let failover = (config.request_policy.max_total_attempts == 0
+                            || total_attempts < config.request_policy.max_total_attempts)
+                            && retry.failover_on_stream_error
                             && retry_fits_budget(
                                 forward_started,
                                 retry.max_retry_duration_seconds,
@@ -2126,7 +2297,7 @@ impl Engine {
                             if retry_same {
                                 *used += 1;
                                 endpoint_index -= 1;
-                                tokio::time::sleep(delay).await;
+                                guard.wait_retry(delay).await;
                             } else {
                                 exhausted_stream_endpoints.insert(endpoint.endpoint_id.clone());
                             }
@@ -2141,8 +2312,7 @@ impl Engine {
                         // only lifecycle frames has not committed anything to
                         // the client. It is safe to replay the request under
                         // the same stream-error budget.
-                        let stream_error = if error.code
-                            == "stream_idle_timeout_before_first_output"
+                        let stream_error = if error.code == "stream_idle_timeout_before_completion"
                         {
                             super::failure::StreamReadError::IdleTimeout(Duration::from_secs_f64(
                                 retry.stream_idle_timeout_seconds.unwrap(),
@@ -2166,13 +2336,17 @@ impl Engine {
                             .entry(endpoint.endpoint_id.clone())
                             .or_default();
                         let delay = retry_backoff_delay(*used + 1, failure.retry_after_seconds);
-                        let retry_same = *used < retry.max_stream_error_retries.max(0)
+                        let retry_same = (config.request_policy.max_total_attempts == 0
+                            || total_attempts < config.request_policy.max_total_attempts)
+                            && *used < retry.max_stream_error_retries.max(0)
                             && retry_fits_budget(
                                 forward_started,
                                 retry.max_retry_duration_seconds,
                                 delay,
                             );
-                        let failover = retry.failover_on_stream_error
+                        let failover = (config.request_policy.max_total_attempts == 0
+                            || total_attempts < config.request_policy.max_total_attempts)
+                            && retry.failover_on_stream_error
                             && retry_fits_budget(
                                 forward_started,
                                 retry.max_retry_duration_seconds,
@@ -2208,7 +2382,7 @@ impl Engine {
                         if retry_same {
                             *used += 1;
                             endpoint_index -= 1;
-                            tokio::time::sleep(delay).await;
+                            guard.wait_retry(delay).await;
                         } else if failover {
                             exhausted_stream_endpoints.insert(endpoint.endpoint_id.clone());
                         } else {
@@ -2223,6 +2397,46 @@ impl Engine {
                 }
                 // The final failed stream is relayed intact; do not mark its
                 // endpoint healthy or bind the session merely because HTTP=200.
+                let decision = if let Ok(response) = &mut result {
+                    let decision = super::failure::inspect_response_failure(response).await;
+                    if let Some(seconds) = decision.retry_after_seconds {
+                        response
+                            .headers
+                            .push(("retry-after".into(), seconds.to_string()));
+                    }
+                    if !decision.retry_same && !live_bootstrap_request {
+                        exhausted_stream_endpoints.insert(endpoint.endpoint_id.clone());
+                    }
+                    if response.status >= 400 {
+                        guard.trace(
+                            "failure",
+                            Some(&endpoint.endpoint_id),
+                            match decision.class {
+                                sumpter_core::request_policy::FailureClass::QuotaExhausted => {
+                                    "quota_exhausted"
+                                }
+                                sumpter_core::request_policy::FailureClass::Credential => {
+                                    "credential"
+                                }
+                                sumpter_core::request_policy::FailureClass::ModelUnsupported => {
+                                    "model_unsupported"
+                                }
+                                sumpter_core::request_policy::FailureClass::RateLimit => {
+                                    "rate_limit"
+                                }
+                                _ => "upstream_error",
+                            },
+                            None,
+                        );
+                    }
+                    Some(decision)
+                } else {
+                    None
+                };
+                let before_retryable = (
+                    round_state.retryable_failures,
+                    round_state.sticky_retryable_failures,
+                );
                 let attempt = if stream_failure.is_some() {
                     result.ok()
                 } else {
@@ -2239,6 +2453,12 @@ impl Engine {
                         &mut round_state,
                     )
                 };
+                if decision.is_some_and(|d| !d.retry_same) && !live_bootstrap_request {
+                    (
+                        round_state.retryable_failures,
+                        round_state.sticky_retryable_failures,
+                    ) = before_retryable;
+                }
 
                 if let Some(response) = attempt {
                     // accepted:头未回写前的重试机会到此为止。
@@ -2274,7 +2494,10 @@ impl Engine {
                 }
                 // 标准 Realtime 的任何失败都不可重放，包括独立 HTTP 500 重试与
                 // 后备入口；只有已识别的 Codex Live bootstrap 允许有界重试。
-                if realtime_request && !live_bootstrap_request {
+                if (realtime_request && !live_bootstrap_request)
+                    || (config.request_policy.max_total_attempts > 0
+                        && total_attempts >= config.request_policy.max_total_attempts)
+                {
                     break;
                 }
                 // HTTP 500 使用独立的入口内重试次数，不参与 sessionStickyRetries。
@@ -2302,7 +2525,7 @@ impl Engine {
                         ) {
                             break;
                         }
-                        tokio::time::sleep(delay).await;
+                        guard.wait_retry(delay).await;
                         continue;
                     }
                     consecutive_500_retries = 0;
@@ -2327,7 +2550,7 @@ impl Engine {
                         break;
                     }
                     // 复用跨轮退避，避免原入口故障时瞬间轰击；sleep 可随客户端取消。
-                    tokio::time::sleep(delay).await;
+                    guard.wait_retry(delay).await;
                     sticky_pass_checkpoint = round_state.sticky_retryable_failures;
                     endpoint_index = 0;
                 }
@@ -2341,6 +2564,11 @@ impl Engine {
             // default here would turn a dead voice Provider into an endless
             // sequence of retries, leaving the client waiting forever.
             let retry_allowed = !realtime_request
+                && (config.request_policy.max_total_attempts == 0
+                    || total_attempts < config.request_policy.max_total_attempts)
+                && candidates
+                    .iter()
+                    .any(|e| !exhausted_stream_endpoints.contains(&e.endpoint_id))
                 && round_state.retryable_failures > 0
                 && (retry.max_deferred_rounds <= 0 || round < retry.max_deferred_rounds)
                 && (retry.max_retry_duration_seconds <= 0.0
@@ -2350,7 +2578,7 @@ impl Engine {
                 let fits_time_cap =
                     retry_fits_budget(forward_started, retry.max_retry_duration_seconds, delay);
                 if fits_time_cap {
-                    tokio::time::sleep(delay).await;
+                    guard.wait_retry(delay).await;
                     continue;
                 }
             }
@@ -2358,6 +2586,19 @@ impl Engine {
             let mut failure = round_state
                 .last_failure
                 .unwrap_or_else(FailureInfo::endpoints_exhausted);
+            if total_attempts == 0
+                && let Some(field) = policy_rejection
+            {
+                failure.kind = sumpter_core::events::RuntimeFailureKind::ClientRequestRejected;
+                failure.detail = Some(format!(
+                    "explicit compatibility profile does not support {field}"
+                ));
+                guard.complete(400, failure.detail.clone(), failure);
+                return super::http_response::json_response(
+                    StatusCode::BAD_REQUEST,
+                    &serde_json::json!({"error":"unsupported_compatibility","field":field,"requestID":request_id}),
+                );
+            }
             // If the final transport failure followed a retryable response,
             // retain the largest bounded provider hint for the client-facing
             // error instead of dropping it at the round boundary.

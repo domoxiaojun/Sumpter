@@ -18,6 +18,12 @@ pub fn comparable_event(event: &RuntimeEvent) -> RuntimeEvent {
     normalized.ttfb_ms = None;
     normalized.upstream_duration_ms = None;
     normalized.upstream_ttfb_ms = None;
+    if let Some(trace) = normalized.request_trace.as_mut() {
+        for step in &mut trace.steps {
+            step.at_ms = 0;
+            step.duration_ms = step.duration_ms.map(|_| 0);
+        }
+    }
     // Stream timing is measured from the scheduler/clock and can differ by a
     // millisecond (or more) between two otherwise identical replays.  Keep
     // protocol facts such as frame count, byte count, terminal event, and
@@ -349,6 +355,7 @@ impl Engine {
             });
         let message = bounded_failure_detail(message);
         let event = RuntimeEvent {
+            request_trace: None,
             session_source: None,
             hook_event: None,
             cache_read: None,
@@ -494,6 +501,7 @@ impl Engine {
         request_id: &str,
     ) -> RuntimeEvent {
         RuntimeEvent {
+            request_trace: None,
             session_source: None,
             hook_event: None,
             cache_read: None,

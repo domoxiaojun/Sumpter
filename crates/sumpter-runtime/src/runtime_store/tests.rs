@@ -1759,6 +1759,48 @@ fn analytics_uses_apple_epoch_and_streams_aggregation() {
 }
 
 #[test]
+fn request_trace_survives_sqlite_payload_roundtrip() {
+    use sumpter_core::request_policy::{RequestTrace, RequestTraceStep};
+    let dir = test_dir("request-trace");
+    let path = dir.join("runtime.sqlite3");
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    let mut value = event(
+        "trace",
+        KIND_CLIENT,
+        429,
+        RuntimeEventPhase::Completed,
+        Some(RuntimeEventOutcome::Failed),
+        event_now(),
+    );
+    value.failure_kind = Some(RuntimeFailureKind::LocalAdmissionRejected);
+    value.request_trace = Some(RequestTrace {
+        steps: vec![RequestTraceStep {
+            at_ms: 12,
+            action: "admission_rejected".into(),
+            detail: "queue_full".into(),
+            duration_ms: Some(10),
+            ..Default::default()
+        }],
+        omitted: 0,
+    });
+    store
+        .enqueue(value.clone(), RuntimeCounters::default())
+        .unwrap();
+    store.flush().unwrap();
+    let saved = store.event("trace").unwrap().unwrap().event;
+    assert_eq!(saved.request_trace, value.request_trace);
+    assert_eq!(saved.failure_kind, value.failure_kind);
+    drop(store);
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    assert_eq!(
+        store.event("trace").unwrap().unwrap().event.request_trace,
+        value.request_trace
+    );
+    drop(store);
+    remove_test_dir(&dir);
+}
+
+#[test]
 fn analytics_filters_client_project_session_and_uses_protocol_token_semantics() {
     use sumpter_core::config::ProviderProtocol;
 

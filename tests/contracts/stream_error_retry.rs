@@ -80,7 +80,8 @@ async fn stream_event_retry_after_uses_the_largest_valid_http_or_event_hint() {
         assert_eq!(invoke(&engine).await.1, COMPLETED.as_bytes());
         let elapsed = started.elapsed().as_secs_f64();
         assert!(
-            (elapsed - expected).abs() < 0.01,
+            elapsed >= expected
+                && elapsed <= (expected + (expected * 0.2).min(1.0)).min(300.0) + 0.01,
             "{event_hint}: elapsed {elapsed}"
         );
         assert_eq!(fake.requests().len(), 2);
@@ -132,7 +133,11 @@ async fn long_retry_after_and_request_budget_cover_http_and_sse() {
                 attempts,
                 "status {status}, hint {hint}, budget {budget}"
             );
-            assert!((started.elapsed().as_secs_f64() - expected_wait).abs() < 0.1);
+            let elapsed = started.elapsed().as_secs_f64();
+            assert!(
+                elapsed >= expected_wait
+                    && elapsed <= (expected_wait + (expected_wait * 0.2).min(1.0)).min(300.0) + 0.1
+            );
             if attempts == 2 {
                 assert_eq!(&bytes[..], COMPLETED.as_bytes());
             } else {

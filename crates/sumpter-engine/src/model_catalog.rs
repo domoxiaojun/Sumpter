@@ -651,6 +651,124 @@ pub(crate) fn parse_provider_metadata(value: &Value) -> Result<ModelMetadataInde
 
 pub struct ProviderCatalogFetcher;
 
+#[cfg(test)]
+#[path = "model_catalog_cache_tests.rs"]
+mod cache_tests;
+
+#[derive(Clone)]
+struct ConditionalCatalog {
+    etag: reqwest::header::HeaderValue,
+    body: Bytes,
+    at: Instant,
+}
+
+fn conditional_catalogs() -> &'static std::sync::Mutex<BTreeMap<String, ConditionalCatalog>> {
+    static CACHE: OnceLock<std::sync::Mutex<BTreeMap<String, ConditionalCatalog>>> =
+        OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// Scope by transport identity as well as the exact URL and header bytes.
+async fn send_catalog_request(
+    client: &reqwest::Client,
+    request: reqwest::RequestBuilder,
+    scope: &str,
+) -> Result<reqwest::Response, String> {
+    use sha2::{Digest, Sha256};
+    let mut request = request.build().map_err(|e| e.to_string())?;
+    let mut digest = Sha256::new();
+    for bytes in [scope.as_bytes(), request.url().as_str().as_bytes()] {
+        digest.update(bytes.len().to_be_bytes());
+        digest.update(bytes);
+    }
+    let mut headers = request
+        .headers()
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_bytes()))
+        .collect::<Vec<_>>();
+    headers.sort_unstable();
+    for (name, value) in headers {
+        for bytes in [name.as_bytes(), value] {
+            digest.update(bytes.len().to_be_bytes());
+            digest.update(bytes);
+        }
+    }
+    let key = format!("{:x}", digest.finalize());
+    let cached = conditional_catalogs()
+        .lock()
+        .unwrap()
+        .get(&key)
+        .filter(|entry| entry.at.elapsed() < Duration::from_secs(3600))
+        .cloned();
+    if let Some(entry) = &cached {
+        request
+            .headers_mut()
+            .insert(reqwest::header::IF_NONE_MATCH, entry.etag.clone());
+    }
+    let response = client.execute(request).await.map_err(|e| e.to_string())?;
+    if response.status() == StatusCode::NOT_MODIFIED {
+        let cached = cached.ok_or_else(|| "目录返回 304 但没有匹配的缓存".to_string())?;
+        if let Some(entry) = conditional_catalogs().lock().unwrap().get_mut(&key) {
+            entry.at = Instant::now();
+        }
+        return Ok(http::Response::builder()
+            .status(200)
+            .body(cached.body)
+            .map_err(|e| e.to_string())?
+            .into());
+    }
+    if response.status() != StatusCode::OK {
+        return Ok(response);
+    }
+    let etag = response
+        .headers()
+        .get(reqwest::header::ETAG)
+        .filter(|v| v.as_bytes().len() <= 1024)
+        .cloned();
+    let headers = response.headers().clone();
+    let body = read_body(response).await?;
+    if let Some(etag) = etag
+        && serde_json::from_slice::<Value>(&body).is_ok()
+    {
+        let mut cache = conditional_catalogs().lock().unwrap();
+        cache.retain(|_, entry| entry.at.elapsed() < Duration::from_secs(3600));
+        while cache.len() >= 32
+            || cache.values().map(|e| e.body.len()).sum::<usize>() + body.len() > 16 * 1024 * 1024
+        {
+            let Some(oldest) = cache
+                .iter()
+                .min_by_key(|(_, e)| e.at)
+                .map(|(k, _)| k.clone())
+            else {
+                break;
+            };
+            cache.remove(&oldest);
+        }
+        cache.insert(
+            key,
+            ConditionalCatalog {
+                etag,
+                body: body.clone(),
+                at: Instant::now(),
+            },
+        );
+    } else {
+        conditional_catalogs().lock().unwrap().remove(&key);
+    }
+    let mut rebuilt = http::Response::builder()
+        .status(200)
+        .body(body)
+        .map_err(|e| e.to_string())?;
+    *rebuilt.headers_mut() = headers;
+    Ok(rebuilt.into())
+}
+
+type CatalogFlight = Arc<tokio::sync::Mutex<Option<(Instant, ProviderCatalogSnapshot)>>>;
+fn catalog_flights() -> &'static std::sync::Mutex<BTreeMap<String, CatalogFlight>> {
+    static FLIGHTS: OnceLock<std::sync::Mutex<BTreeMap<String, CatalogFlight>>> = OnceLock::new();
+    FLIGHTS.get_or_init(Default::default)
+}
+
 #[derive(Clone)]
 pub struct ModelCatalogScheduler {
     engine: Engine,
@@ -883,7 +1001,7 @@ async fn fetch_metadata(
 ) -> Result<(Value, String), String> {
     let mut errors = Vec::new();
     for url in urls {
-        match client.get(*url).send().await {
+        match send_catalog_request(client, client.get(*url), "public-metadata").await {
             Ok(response) if response.status() == StatusCode::OK => {
                 match read_body(response).await {
                     Ok(body) => match serde_json::from_slice::<Value>(&body) {
@@ -1051,6 +1169,31 @@ fn revision_for(dir: &ConfigDir, name: &str) -> Option<u64> {
 
 impl ProviderCatalogFetcher {
     pub async fn fetch(endpoint: &Endpoint) -> ProviderCatalogSnapshot {
+        let started = Instant::now();
+        let key = endpoint_fingerprint(endpoint);
+        let flight = {
+            let mut flights = catalog_flights().lock().unwrap();
+            if flights.len() >= 64 {
+                flights.retain(|_, entry| Arc::strong_count(entry) > 1);
+            }
+            if flights.len() >= 64 && !flights.contains_key(&key) {
+                Arc::default()
+            } else {
+                flights.entry(key).or_default().clone()
+            }
+        };
+        let mut cached = flight.lock().await;
+        if let Some((finished, snapshot)) = &*cached
+            && *finished >= started
+        {
+            return snapshot.clone();
+        }
+        let snapshot = Self::fetch_uncached(endpoint).await;
+        *cached = Some((Instant::now(), snapshot.clone()));
+        snapshot
+    }
+
+    async fn fetch_uncached(endpoint: &Endpoint) -> ProviderCatalogSnapshot {
         let attempted_at = unix_timestamp();
         match tokio::time::timeout(MODEL_CATALOG_TIMEOUT, fetch_inner(endpoint)).await {
             Ok(Ok((models, source, route_capabilities))) => ProviderCatalogSnapshot {
@@ -1127,6 +1270,7 @@ async fn fetch_inner(
         builder = builder.resolve(host, std::net::SocketAddr::new(ip, port));
     }
     let client = builder.build().map_err(|error| error.to_string())?;
+    let cache_scope = endpoint_fingerprint(endpoint);
     let probes =
         crate::request_build::model_catalog_probes(endpoint.protocol, &endpoint.user_agent);
     let deadline = Instant::now() + Duration::from_millis(11_500);
@@ -1157,7 +1301,7 @@ async fn fetch_inner(
                     request = request.header(*header, value.as_str());
                 }
                 request = request.timeout(remaining.min(Duration::from_secs(3)));
-                match request.send().await {
+                match send_catalog_request(&client, request, &cache_scope).await {
                     Ok(response) if response.status() == StatusCode::OK => {
                         if response
                             .content_length()
@@ -1194,7 +1338,7 @@ async fn fetch_inner(
                                             for (header, value) in crate::request_build::model_catalog_probe_headers(probe) { request = request.header(header, value); }
                                             for (header, value) in &auth { request = request.header(*header, value.as_str()); }
                                             let enrichment = async {
-                                                let response = request.send().await.ok()?;
+                                                let response = send_catalog_request(&client, request, &cache_scope).await.ok()?;
                                                 if response.status() != StatusCode::OK { return None; }
                                                 let bytes = read_body(response).await.ok()?;
                                                 serde_json::from_slice::<Value>(&bytes).ok()

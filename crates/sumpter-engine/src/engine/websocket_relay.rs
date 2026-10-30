@@ -914,6 +914,7 @@ pub(super) fn websocket_client_event(
     failure: Option<&FailureInfo>,
 ) -> RuntimeEvent {
     let mut event = RuntimeEvent {
+        request_trace: None,
         source_ip: context.source_ip.clone(),
         session_source: None,
         hook_event: None,

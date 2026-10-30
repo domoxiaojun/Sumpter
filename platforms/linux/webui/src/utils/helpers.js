@@ -1165,6 +1165,7 @@ export function failureKindLabel(kind) {
     upstream_response_incomplete: '上游响应流未完整结束',
     upstream_response_failed: '上游响应协议失败',
     endpoints_exhausted: '所有可用入口全部耗尽',
+    local_admission_rejected: '本地请求队列已满或排队超时',
     client_cancelled: '客户端断开或取消 (Client Cancelled)',
     client_request_rejected: '客户端请求被代理拒绝',
   };

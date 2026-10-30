@@ -204,6 +204,18 @@ pub fn normalize_event_json<T: Serialize>(event: &T) -> Result<Value, String> {
     object.remove("ttfbMS");
     object.remove("upstreamDurationMS");
     object.remove("upstreamTTFBMS");
+    if let Some(steps) = object
+        .get_mut("requestTrace")
+        .and_then(|trace| trace.get_mut("steps"))
+        .and_then(Value::as_array_mut)
+    {
+        for step in steps {
+            step["atMs"] = Value::from(0);
+            if step["durationMs"].is_number() {
+                step["durationMs"] = Value::from(0);
+            }
+        }
+    }
     if let Some(trace) = object.get_mut("streamTrace").and_then(Value::as_object_mut) {
         trace.remove("maxChunkGapMS");
         trace.remove("lastChunkAtMS");

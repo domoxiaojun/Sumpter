@@ -459,6 +459,8 @@ public enum RuntimeEventPresentation {
             return "客户端断开/取消"
         case .clientRequestRejected:
             return "客户端请求被代理拒绝"
+        case .localAdmissionRejected:
+            return "本地请求队列已满或排队超时"
         }
     }
 
@@ -787,6 +789,7 @@ public enum RuntimeEventPresentation {
         case .endpointsExhausted: "入口耗尽"
         case .clientCancelled: "客户端断开或取消"
         case .clientRequestRejected: "客户端请求被拒绝"
+        case .localAdmissionRejected: "本地请求限流"
         }
     }
 

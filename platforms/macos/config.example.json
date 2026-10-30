@@ -21,6 +21,21 @@
     "maxRetryDurationSeconds": 0
   },
   "sessionStickyTtlHours": 72,
+  "requestPolicy": {
+    "maxTotalAttempts": 6,
+    "streamProtection": "complete",
+    "streamBufferMib": 16,
+    "streamBufferChunks": 8192,
+    "streamBufferSeconds": 0,
+    "maxBufferedMib": 128,
+    "global": {
+      "maxConcurrent": 8,
+      "maxQueued": 16,
+      "queueTimeoutSeconds": 15,
+      "requestsPerMinute": 0
+    },
+    "endpoints": {}
+  },
   "featureRules": [
     {
       "id": "websearch",

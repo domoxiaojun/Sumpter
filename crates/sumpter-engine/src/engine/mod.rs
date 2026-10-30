@@ -3,6 +3,7 @@
 //! HTTP dispatch owns a single `CompletionGuard` until response relay takes it.
 //! Dropping the response body cancels that relay and records a cancelled request.
 
+mod admission;
 pub mod capture;
 pub(crate) mod catalog;
 mod completion;

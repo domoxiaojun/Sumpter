@@ -16,6 +16,7 @@ Sumpter 使用一份 JSON 配置文件，Linux 和 macOS 共用格式。新用�
 | `schemaVersion` | `7` | 当前格式版本，保存时必须明确为 7 |
 | `listener` | 对象 | 代理数据面监听和入站访问控制 |
 | `retry` | 对象 | 超时、重试、退避和失败响应行为 |
+| `requestPolicy` | 对象或省略 | HTTP/SSE 并发、排队、RPM、总尝试预算、Responses 缓冲和兼容声明；见[请求策略](request-policy.md) |
 | `endpoints` | 数组 | Provider 地址、凭据、协议标签和入口映射 |
 | `modelGroups` | 数组或省略 | 统一地址开放哪些模型，以及入口绑定和调度 |
 | `featureRules` | 数组 | WebSearch、WebFetch、安全分类器等子请求分流 |
@@ -120,7 +121,7 @@ WebSocket 在 relay 阶段收到首条 Text/Binary 业务消息后开始空闲�
 
 客户端断开会取消上游请求和等待。有限的轮数或总时长通常比两个值都为 0 更容易排障。代理尽量返回最终实际的上游状态和错误内容；尚未产生上游响应时，才会返回本地访问、路由、配置或连接错误。
 
-HTTP 头、Responses SSE 结构化错误和 WebSocket 握手错误共用 `Retry-After` 解析，支持数字和 HTTP-date，单次上限为 300 秒；无上游提示时的指数退避仍最多 30 秒。若一次等待不能完整落在 `maxRetryDurationSeconds` 内，结束重试并保留最终实际响应，不缩短等待后提前请求上游；每次后续尝试前也检查预算。该预算不截断已经开始的正常响应。
+HTTP 头、Responses SSE 结构化错误和 WebSocket 握手错误共用 `Retry-After` 解析，支持数字和 HTTP-date，HTTP 还支持 `retry-after-ms`；HTTP 结构化额度错误可提供 Google RetryInfo。单次提示上限为 300 秒；无上游提示时指数退避基数最多 30 秒，再加入不超过 20% 且最多 1 秒的正向抖动（总等待仍不超过 300 秒）。若一次等待不能完整落在 `maxRetryDurationSeconds` 内，结束重试并保留最终实际响应，不缩短等待后提前请求上游；每次后续尝试前也检查预算。该预算不截断已经开始的正常响应。
 
 `passThroughRetryDelay` 开启时，对外 HTTP `Retry-After` 和本地错误中的退避值同样最多 300 秒；关闭只隐藏这些提示，内部退避仍生效。原生 SSE/WebSocket 的业务错误正文保持原样，不为截断或隐藏退避信息重写业务帧。Ping/Pong 刷新 WebSocket 活动时间，但不计入业务消息数。
 
@@ -150,6 +151,6 @@ WebUI 保存使用 generation-safe PUT，防止两个页面互相覆盖。手工
 
 匹配 Responses SSE 终态中的结构化错误码：`rate_limit_exceeded`、`server_error`、`internal_server_error`、`overloaded_error`、`service_unavailable`、`slow_down`、`server_is_overloaded`。在终态前，上游 EOF、传输错误或配置的流空闲超时也进入该策略。参数错误、鉴权错误、余额或组织/项目额度耗尽、未知错误与 `response.incomplete` 不进入此策略。
 
-开启后，Responses SSE 会在代理内缓存到 `response.completed` 等协议终态；在终态前遇到上游断流、限流或服务器错误时丢弃半截响应并按预算重跑，因此 Codex 不会先收到半截流再自行重连。缓存上限为 16 MiB，超过后恢复普通实时转发，此后的断流不重放。客户端断开会取消等待和上游请求。后台 Responses、Realtime、非 SSE 和压缩流不参与。重试耗尽后保留最后实际响应或返回明确的代理错误。每次失败保留真实上游状态及请求 ID。
+开启后，Responses SSE 默认在代理内缓存到 `response.completed` 等协议终态；在终态前遇到上游断流、限流或服务器错误时丢弃半截响应并按预算重跑。单流正文默认 16 MiB、8192 块，总回放缓冲默认 128 MiB；达到额度后恢复普通实时转发，此后的断流不重放。`requestPolicy` 可调整额度、设置缓冲时限或选用前奏保护，详见[请求策略](request-policy.md)。客户端断开会取消等待和上游请求。后台 Responses、Realtime、非 SSE 和压缩流不参与。重试耗尽后保留最后实际响应或返回明确的代理错误。每次失败保留真实上游状态及请求 ID。
 
 例如可设置 `maxStreamErrorRetries: 2`、`failoverOnStreamError: true` 和 `maxRetryDurationSeconds: 60`。默认次数 0 且切换关闭，流错误重试关闭；0 不表示无限次数。

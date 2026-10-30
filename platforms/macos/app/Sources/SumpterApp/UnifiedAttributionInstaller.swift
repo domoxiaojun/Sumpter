@@ -65,13 +65,23 @@ enum UnifiedAttributionInstaller {
         _ action: ClaudeAttributionScriptAction, client: String, shell: String,
         scriptURL: URL? = Self.scriptURL, environment: [String: String] = ProcessInfo.processInfo.environment
     ) async throws -> String {
+        try await runCommand(action.rawValue, client: client, shell: shell, scriptURL: scriptURL, environment: environment)
+    }
+
+    static func diagnose(proxyURL: String) async throws -> String {
+        try await runCommand("doctor", client: "all", shell: loginShell, scriptURL: scriptURL, environment: ProcessInfo.processInfo.environment, proxyURL: proxyURL)
+    }
+
+    private static func runCommand(
+        _ action: String, client: String, shell: String, scriptURL: URL?, environment: [String: String], proxyURL: String? = nil
+    ) async throws -> String {
         guard let scriptURL else { throw InstallerError.failed("App 缺少归因配置器，请重新安装完整 App。") }
         let env = executionEnvironment(environment)
         return try await Task.detached(priority: .userInitiated) {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
             // Pass arguments directly; never source or evaluate the user's shell configuration.
-            process.arguments = ["node", scriptURL.path, action.rawValue, client, "--shell", shell]
+            process.arguments = ["node", scriptURL.path, action, client, "--shell", shell] + (proxyURL.map { ["--proxy-url", $0] } ?? [])
             process.environment = env
             process.currentDirectoryURL = URL(fileURLWithPath: env["HOME"] ?? NSHomeDirectory())
             process.standardInput = FileHandle.nullDevice

@@ -1,6 +1,6 @@
 //! Completion implementation for the shared engine.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use sumpter_core::config::ProviderProtocol;
 use sumpter_core::events::{
@@ -109,6 +109,7 @@ impl StreamTraceState {
 /// - **Drop 而未完成 = 客户端断开** → client 记 499；upstream 保留真实 HTTP 状态，
 ///   两者 outcome 都是 cancelled，不计成功也不计失败。
 pub(super) struct CompletionGuard {
+    trace: sumpter_core::request_policy::RequestTrace,
     pub(super) engine: Engine,
     client_event_id: String,
     pub(super) started: Instant,
@@ -143,6 +144,7 @@ impl CompletionGuard {
         meta: ClientMeta,
     ) -> Self {
         Self {
+            trace: Default::default(),
             engine,
             client_event_id,
             started,
@@ -167,6 +169,35 @@ impl CompletionGuard {
 
     pub(super) fn mark_failover(&mut self) {
         self.failover = true;
+    }
+
+    pub(super) fn trace(
+        &mut self,
+        action: &str,
+        endpoint: Option<&str>,
+        detail: &str,
+        duration: Option<Duration>,
+    ) {
+        self.trace
+            .push(sumpter_core::request_policy::RequestTraceStep {
+                at_ms: self.started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+                action: action.into(),
+                endpoint_id: endpoint.map(ToString::to_string),
+                detail: detail.into(),
+                duration_ms: duration.map(|d| d.as_millis().min(u64::MAX as u128) as u64),
+            });
+    }
+
+    pub(super) async fn wait_retry(&mut self, delay: Duration) {
+        self.trace("retry_scheduled", None, "backoff", Some(delay));
+        let started = Instant::now();
+        tokio::time::sleep(delay).await;
+        self.trace(
+            "retry_wait",
+            None,
+            "wait_completed",
+            Some(started.elapsed()),
+        );
     }
 
     pub(super) fn set_passthrough(&mut self, kind: Option<PassthroughKind>) {
@@ -276,6 +307,9 @@ impl CompletionGuard {
     }
 
     pub(super) fn record_stream_chunk(&mut self, bytes: usize) {
+        if self.stream_trace.chunk_count == 0 {
+            self.trace("first_chunk", None, "first_chunk_received", None);
+        }
         self.stream_trace.record_chunk(bytes);
     }
 
@@ -321,6 +355,7 @@ impl CompletionGuard {
             .map(|attempt| &attempt.endpoint)
             .or(self.attempted_endpoint.as_ref());
         RuntimeEvent {
+            request_trace: Some(self.trace.clone()),
             source_ip: self
                 .meta
                 .request_context
@@ -471,6 +506,7 @@ impl CompletionGuard {
         if self.done {
             return;
         }
+        self.trace("complete", None, "failed", Some(self.started.elapsed()));
         self.done = true;
         let mut event = self.client_event(status, message.clone());
         failure.apply_to(&mut event);
@@ -484,6 +520,16 @@ impl CompletionGuard {
         if self.done {
             return;
         }
+        self.trace(
+            "complete",
+            None,
+            if error.is_some() {
+                "failed"
+            } else {
+                "finished"
+            },
+            Some(self.started.elapsed()),
+        );
         self.done = true;
         let [bridged, rounds, unmatched] = self.attempt_tokens();
         match error {
@@ -561,6 +607,7 @@ impl CompletionGuard {
         if self.done {
             return;
         }
+        self.trace("complete", None, "failed", Some(self.started.elapsed()));
         self.done = true;
         failure.upstream_status_code = (self.status > 0).then_some(self.status);
         failure.upstream_request_id = self
@@ -592,6 +639,7 @@ impl Drop for CompletionGuard {
         if self.done {
             return;
         }
+        self.trace("complete", None, "cancelled", Some(self.started.elapsed()));
         self.done = true;
         // 客户端断开:499,不计成功也不计失败;上游连接随 relay drop 已撕掉。
         let failure = FailureInfo::client_cancelled(self.upstream.is_some());

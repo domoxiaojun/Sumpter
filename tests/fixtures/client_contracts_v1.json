@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "provenance": {
+    "codex": { "commit": "5e769a1cda", "source": "codex-rs/core/src/client.rs", "scope": "synthetic Responses HTTP and WebSocket shapes" },
+    "pi": { "commit": "1f78cea7a", "source": "packages/ai/src/api/openai-responses.ts", "scope": "synthetic tool result; local session-affinity patch is separately tested" },
+    "gemini": { "commit": "b633c0703", "source": "packages/core/src/core/geminiChat.ts", "scope": "synthetic multi-turn tool signature" }
+  },
+  "requests": [
+    { "client": "codex", "path": "/v1/responses", "headers": [["originator", "codex_cli_rs"], ["x-codex-turn-state", "synthetic-turn"]], "body": {"model":"claude-opus-5","input":[{"role":"developer","content":"synthetic instruction"},{"role":"user","content":"hello"}],"tools":[{"type":"custom","name":"apply_patch","format":{"type":"grammar","syntax":"lark","definition":"start: \"ok\""}}],"stream":false}, "response":{"id":"synthetic-response","object":"response","status":"completed","output":[],"usage":{"input_tokens":2,"output_tokens":1}} },
+    { "client": "pi", "path": "/v1/responses", "headers": [["x-sumpter-client", "pi"], ["session_id", "synthetic-pi-session"]], "body": {"model":"claude-opus-5","input":[{"type":"function_call","call_id":"call_synthetic","name":"read","arguments":"{\"path\":\"example.txt\"}"},{"type":"function_call_output","call_id":"call_synthetic","output":"hello"}],"tools":[{"type":"function","name":"read","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"strict":true}],"stream":false}, "response":{"id":"synthetic-pi-response","object":"response","status":"completed","output":[],"usage":{"input_tokens":2,"output_tokens":1}} },
+    { "client": "gemini", "path": "/v1beta/models/claude-opus-5:generateContent", "headers": [], "body":{"contents":[{"role":"user","parts":[{"text":"hello"}]},{"role":"model","parts":[{"functionCall":{"name":"read","args":{"path":"example.txt"}},"thoughtSignature":"synthetic-opaque-signature"}]},{"role":"user","parts":[{"functionResponse":{"name":"read","response":{"result":"hello"}}}]}]}, "response":{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":1}} }
+  ],
+  "websocket": [
+    {"direction":"client","frame":{"type":"response.create","model":"claude-opus-5","input":[],"generate":false}},
+    {"direction":"upstream","frame":{"type":"response.created","response":{"id":"warmup"}}},
+    {"direction":"upstream","frame":{"type":"response.completed","response":{"id":"warmup","status":"completed","output":[]}}},
+    {"direction":"client","frame":{"type":"response.create","model":"claude-opus-5","previous_response_id":"warmup","input":[{"role":"user","content":"hello"}],"generate":true}},
+    {"direction":"upstream","frame":{"type":"response.created","response":{"id":"turn"}}},
+    {"direction":"client","frame":{"type":"response.append","response_id":"turn","input":[]}},
+    {"direction":"client","frame":{"type":"response.steer","response_id":"turn","input":[]}},
+    {"direction":"client","frame":{"type":"response.interrupt","response_id":"turn"}},
+    {"direction":"upstream","frame":{"type":"response.interrupted","response":{"id":"turn"}}}
+  ]
+}

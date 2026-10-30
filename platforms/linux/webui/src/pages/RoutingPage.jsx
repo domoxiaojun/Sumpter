@@ -8,6 +8,7 @@ import { sourceFormatLabel } from '../utils/protocols.js';
 import { FeatureRuleEditor } from '../components/FeatureRuleEditor.jsx';
 import { createRouteCatalogLoader, isBuiltinRule } from '../utils/featureRoutes.js';
 import { api } from '../services/api.js';
+import { RequestPolicyEditor } from '../components/RequestPolicyEditor.jsx';
 
 const catalogLoaderFactory = (fetchModels) => createRouteCatalogLoader(fetchModels);
 
@@ -141,6 +142,11 @@ export function RoutingPage() {
         </div>
       </div>
 
+      <div className="glass-panel" style={{ padding: '20px' }}>
+        <h2>全客户端请求策略</h2>
+        <p>设置并发、排队、重试预算、Responses 流保护和入口兼容声明。</p>
+        <button className="btn btn-secondary" onClick={() => openModal({ title: '请求策略', maxWidth: '760px', content: <RequestPolicyEditor /> })}>配置请求策略</button>
+      </div>
       <div className="glass-panel">
         <div className="panel-header">
           <div className="panel-title-group">

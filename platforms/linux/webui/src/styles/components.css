@@ -7712,3 +7712,13 @@ button.responsive-data-card {
   .route-model-toolbar { align-items: flex-start; flex-direction: column; }
   .route-editor-actions { position: sticky; bottom: 0; background: var(--bg-surface); }
 }
+
+.request-policy-form { display: grid; gap: 12px; }
+.request-policy-form p { color: var(--text-secondary); font-size: .85rem; line-height: 1.6; }
+.request-policy-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.request-policy-field { display: grid; gap: 6px; font-size: .85rem; }
+.request-policy-field input, .request-policy-field select { min-width: 0; width: 100%; }
+.request-trace-list { list-style: none; margin: 12px 0; padding: 0; display: grid; gap: 8px; }
+.request-trace-list li { display: grid; grid-template-columns: 70px 100px minmax(0, 1fr); gap: 8px; font-size: .8rem; }
+.request-trace-list small { color: var(--text-muted); }
+@media (max-width: 600px) { .request-policy-grid { grid-template-columns: 1fr; } .request-trace-list li { grid-template-columns: 60px minmax(0, 1fr); } .request-trace-list li > span:last-child { grid-column: 2; } }

@@ -37,7 +37,22 @@ fn pi_explicit_identity_and_session_headers_have_stable_precedence() {
     }
     assert!(observed_session_id(&[("x-client-request-id".into(), "request".into())]).is_none());
 }
-use crate::engine::dispatch::{retry_after_seconds, retry_backoff_delay};
+use crate::engine::dispatch::{retry_after_seconds, retry_backoff_with_jitter};
+
+fn retry_backoff_delay(round: i64, hint: Option<f64>) -> Duration {
+    retry_backoff_with_jitter(round, hint, 0.0)
+}
+
+#[test]
+fn jitter_never_precedes_provider_minimum_and_is_bounded() {
+    assert_seconds(retry_backoff_with_jitter(1, Some(7.0), 1.0), 8.0);
+    assert_seconds(retry_backoff_with_jitter(1, Some(300.0), 1.0), 300.0);
+    assert_seconds(retry_backoff_with_jitter(1, None, 1.0), 0.6);
+    assert_eq!(
+        retry_after_seconds(&[("retry-after-ms".into(), "1500".into())]),
+        Some(1.5)
+    );
+}
 
 fn assert_seconds(actual: Duration, expected: f64) {
     assert!(

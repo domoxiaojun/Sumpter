@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SUMPTER_ATTRIBUTION_BUNDLE_VERSION: 0.4.12
+// SUMPTER_ATTRIBUTION_BUNDLE_VERSION: 0.4.56
 // Canonical standalone launcher/installer. Ship copies via sync-client-attribution.mjs.
 import { spawn, execFileSync } from 'node:child_process';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const clients = ['claude', 'grok', 'gemini', 'codex', 'pi'];
 // Keep the launcher and its companion Pi extension from being mixed across releases.
-export const ATTRIBUTION_BUNDLE_VERSION = '0.4.12';
+export const ATTRIBUTION_BUNDLE_VERSION = '0.4.56';
 const PI_PASSTHROUGH_COMMANDS = new Set(['install', 'remove', 'uninstall', 'update', 'list', 'config', 'auth']);
 const PI_PASSTHROUGH_FLAGS = new Set(['--help', '-h', '--version', '-v']);
 const ownedHeaders = new Set(['x-sumpter-client', 'x-sumpter-project', 'x-sumpter-workspace',
@@ -126,6 +126,82 @@ function codexLaunchContext(args, env, cwd) {
   }
   return { provider, directory };
 }
+/** Inspect visible configuration only. Never read auth stores, invoke a client, or write files. */
+export function diagnoseClients(client = 'all', options = {}, env = process.env) {
+  if (![...clients, 'all'].includes(client)) throw new Error('未知客户端');
+  const home = env.HOME || homedir();
+  let installed = [];
+  try { installed = manage('status', client, options, env); } catch { /* Unsupported shell remains unknown. */ }
+  let wrapperVersion = 'unknown';
+  try {
+    const path = join(env.XDG_DATA_HOME || join(home, '.local/share'), 'sumpter', 'attribution', 'client-attribution.mjs');
+    if (existsSync(path) && statSync(path).size <= 256 * 1024) {
+      wrapperVersion = /SUMPTER_ATTRIBUTION_BUNDLE_VERSION:\s*([0-9]+\.[0-9]+\.[0-9]+)/.exec(readFileSync(path, 'utf8'))?.[1] || 'unknown';
+    }
+  } catch { /* Missing or unreadable installed wrapper remains unknown. */ }
+  const expected = new URL(options.proxyURL || 'http://127.0.0.1:57878').origin;
+  const selected = client === 'all' ? clients : [client];
+  return selected.map(name => {
+    const sources = [], issues = [];
+    const add = (source, value, marker = null) => {
+      if (typeof value !== 'string' || !value.trim()) return;
+      try {
+        const url = new URL(value);
+        if (!['http:', 'https:'].includes(url.protocol)) throw new Error('scheme');
+        const path = /^\/(?:v1|v1beta|api|openai|backend-api|codex|responses)(?:\/(?:v1|v1beta|api|openai|backend-api|codex|responses))*\/?$/.test(url.pathname) ? url.pathname : url.pathname === '/' ? '/' : '/[custom-path]';
+        sources.push({ source, baseURL: url.origin + path, matchesProxyOrigin: url.origin === expected, explicitOptIn: marker });
+      } catch { issues.push(`${source} 的地址无法识别`); }
+    };
+    const json = path => {
+      try {
+        if (!existsSync(path)) return {};
+        if (statSync(path).size > 256 * 1024) { issues.push('配置超过诊断读取上限'); return {}; }
+        return JSON.parse(readFileSync(path, 'utf8'));
+      } catch { issues.push('配置无法读取或不是有效 JSON'); return {}; }
+    };
+    if (name === 'claude') {
+      add('进程环境 ANTHROPIC_BASE_URL', env.ANTHROPIC_BASE_URL);
+      add('用户 settings.json env', json(join(env.CLAUDE_CONFIG_DIR || join(home, '.claude'), 'settings.json'))?.env?.ANTHROPIC_BASE_URL);
+    } else if (name === 'gemini') {
+      add('进程环境 GOOGLE_GEMINI_BASE_URL', env.GOOGLE_GEMINI_BASE_URL);
+      add('进程环境 GOOGLE_VERTEX_BASE_URL', env.GOOGLE_VERTEX_BASE_URL);
+      issues.push('实际地址还取决于所选认证方式；此处不读取凭据或执行登录');
+    } else if (name === 'pi') {
+      const config = json(join(env.PI_CODING_AGENT_DIR || join(home, '.pi', 'agent'), 'models.json'));
+      for (const [provider, value] of Object.entries(config.providers || {}).slice(0, 128)) {
+        const marker = Object.entries(value?.headers || {}).some(([key, value]) => key.toLowerCase() === 'x-sumpter-client' && value === 'pi');
+        add(`models.json provider:${provider}`, value?.baseUrl, marker);
+      }
+      issues.push('只有显式 x-sumpter-client: pi 的 provider 启用项目归因；localhost 本身不是标记');
+    } else if (name === 'codex') {
+      const path = join(env.CODEX_HOME || join(home, '.codex'), 'config.toml');
+      try {
+        if (existsSync(path) && statSync(path).size <= 256 * 1024) {
+          let section = '', provider = 'openai'; const urls = new Map();
+          const literal = value => { try { return value.startsWith('"') ? JSON.parse(value) : value.slice(1, -1); } catch { return undefined; } };
+          for (const line of readFileSync(path, 'utf8').split('\n')) {
+            const table = line.match(/^\s*\[([^\]]+)\]\s*(?:#.*)?$/);
+            if (table) { section = table[1]; continue; }
+            const field = line.match(/^\s*(model_provider|base_url)\s*=\s*("(?:[^"\\]|\\.)*"|'[^']*')\s*(?:#.*)?$/);
+            if (!field) continue;
+            if (!section && field[1] === 'model_provider') provider = literal(field[2]);
+            if (section.startsWith('model_providers.') && field[1] === 'base_url') urls.set(section.slice(16).replace(/^['"]|['"]$/g, ''), literal(field[2]));
+          }
+          add(`用户 config.toml provider:${provider}`, urls.get(provider));
+        }
+      } catch { issues.push('用户 config.toml 无法读取'); }
+      add('进程环境 OPENAI_BASE_URL（是否生效由 provider 决定）', env.OPENAI_BASE_URL);
+    } else {
+      add('进程环境 GROK_BASE_URL', env.GROK_BASE_URL);
+      add('进程环境 XAI_BASE_URL', env.XAI_BASE_URL);
+      issues.push('Grok 的其它配置来源未推断，需结合客户端当前设置核对');
+    }
+    return { client: name, status: installed.find(row => row.client === name)?.status || 'unknown',
+      wrapperVersion, diagnosisVersion: ATTRIBUTION_BUNDLE_VERSION, configuration: sources.length ? 'observed' : 'unknown', sources, issues,
+      traffic: 'unknown', note: '只展示可见配置来源；项目配置、CLI 参数和运行进程环境可能覆盖它们。未观察到流量不代表绕过代理。' };
+  });
+}
+
 export function prepareLaunch(client, args, env = process.env, cwd = process.cwd()) {
   if (client === 'pi') {
     // Pi package/config/auth commands must remain at argv[0]. Loading an extension
@@ -393,7 +469,7 @@ function manageShell(action, client, options, env, source, migrateLegacy) {
 }
 async function main(argv) {
   if (['--help', '-h'].includes(argv[0]) || argv.length === 0) {
-    console.log('用法：node client-attribution.mjs install|status|uninstall|restore claude|grok|gemini|codex|pi|all [--shell bash|zsh] [--rc 文件] [--dry-run]\n临时运行：node client-attribution.mjs run claude|grok|gemini|codex|pi -- [原始参数]\n需要 Node.js 18+。所有客户端使用 bash/zsh 启动包装器；安装或还原后新开终端并重新启动客户端，pi 的 /reload 不会加载 shell 配置；只在连接 Sumpter 的客户端上启用。');
+    console.log('用法：node client-attribution.mjs install|status|uninstall|restore claude|grok|gemini|codex|pi|all [--shell bash|zsh] [--rc 文件] [--dry-run]\n只读诊断：node client-attribution.mjs doctor claude|grok|gemini|codex|pi|all [--proxy-url 实际代理地址] [--shell bash|zsh] [--rc 文件]\n临时运行：node client-attribution.mjs run claude|grok|gemini|codex|pi -- [原始参数]\n需要 Node.js 18+。所有客户端使用 bash/zsh 启动包装器；安装或还原后新开终端并重新启动客户端，pi 的 /reload 不会加载 shell 配置；只在连接 Sumpter 的客户端上启用。');
     return;
   }
   let [action, client, ...rest] = argv;
@@ -410,10 +486,11 @@ async function main(argv) {
   while (rest.length) {
     const flag = rest.shift();
     if (flag === '--dry-run') options.dryRun = true;
+    else if (flag === '--proxy-url' && rest.length) options.proxyURL = rest.shift();
     else if (['--shell', '--rc'].includes(flag) && rest.length) options[flag.slice(2)] = rest.shift();
     else throw new Error(`未知或缺值的安装参数：${flag}`);
   }
-  console.log(JSON.stringify(manage(action, client, options), null, 2));
+  console.log(JSON.stringify(action === 'doctor' ? diagnoseClients(client, options) : manage(action, client, options), null, 2));
 }
 if (process.argv[1] && pathToFileURL(realpathSync(process.argv[1])).href === import.meta.url) {
   const args = basename(process.argv[1]) === 'gemini-sumpter-wrapper.mjs'

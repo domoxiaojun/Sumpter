@@ -1142,6 +1142,7 @@ struct DiagnosticsPane: View {
 
     var body: some View {
         SettingsPage(title: SettingsSection.diagnostics.title, subtitle: SettingsSection.diagnostics.subtitle) {
+            ClientConnectionDiagnostics(model: model)
             diagnosticCapturePanel
             diagnosticsPanel
             claudeSettingsPanel

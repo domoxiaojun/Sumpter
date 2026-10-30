@@ -129,6 +129,12 @@ fn default_true() -> bool {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppConfig {
+    #[serde(
+        rename = "requestPolicy",
+        default,
+        skip_serializing_if = "crate::request_policy::RequestPolicy::is_default"
+    )]
+    pub request_policy: crate::request_policy::RequestPolicy,
     #[serde(default)]
     pub endpoints: Vec<Endpoint>,
     #[serde(
@@ -217,6 +223,7 @@ impl AppConfig {
     /// - 内建分流规则归一:name/match 纠回 canonical,只保留用户的 enabled/target,
     ///   顺序恒为「内建三条(websearch/webfetch/classifier)在前 + 自定义原序在后」。
     pub fn normalized(mut self) -> Self {
+        self.request_policy.normalize();
         self.model_catalog.normalize();
         self.retry.max_deferred_rounds = self.retry.max_deferred_rounds.max(0);
         self.retry.max_retry_duration_seconds = self.retry.max_retry_duration_seconds.max(0.0);
@@ -360,6 +367,7 @@ impl AppConfig {
     /// 全新安装的空壳：零 Provider，内建分流规则全部停用。
     pub fn bootstrap() -> Self {
         Self {
+            request_policy: Default::default(),
             endpoints: vec![],
             model_groups: None,
             feature_rules: builtin_rules::canonical(),
