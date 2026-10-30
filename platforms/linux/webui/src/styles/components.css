@@ -1635,7 +1635,7 @@ html[data-theme="light"] .brand-title {
   line-height: 1.35;
 }
 
-.telemetry-result-duration.is-slow { color: var(--status-warning); }
+.telemetry-result-duration.is-slow { color: var(--text-primary); }
 
 .telemetry-event-message {
   display: block;
@@ -1692,7 +1692,7 @@ html[data-theme="light"] .brand-title {
   font-variant-numeric: tabular-nums;
 }
 
-.telemetry-duration-cell.is-slow { color: var(--status-warning); }
+.telemetry-duration-cell.is-slow { color: var(--text-primary); }
 .telemetry-state-label { margin-right: 8px; color: var(--text-secondary); font-size: 12px; }
 
 .telemetry-table .data-table thead {

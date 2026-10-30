@@ -167,7 +167,7 @@ function RecentEventDurationCell({ event }) {
   if (event.kind === 'notify') return <span className="telemetry-duration-cell">—</span>;
   const slowTTFB = eventTTFBMS(event) >= 5000;
   return (
-    <span className={`mono-cell telemetry-duration-cell${slowTTFB ? ' is-slow' : ''}`}
+    <span className="mono-cell telemetry-duration-cell"
       title={slowTTFB ? '首字节 → 总耗时；首字节超过 5 秒，上游可能排队中' : '首字节 → 总耗时'}>
       {eventDurationText(event)}
     </span>
@@ -260,7 +260,6 @@ function MobileEventList({ events, selectedEventID, onSelect, loading, live = fa
       {events.map((event) => {
         const projectContext = eventProjectContext(event);
         const outcome = eventOutcome(event);
-        const slowTTFB = eventTTFBMS(event) >= 5000;
         const friendly = friendlyEventMessage(event) || (event.outcome === 'failed' ? eventFailureSummaryLabel(event) : '');
         const selected = selectedEventID === event.id;
         return (
@@ -283,8 +282,8 @@ function MobileEventList({ events, selectedEventID, onSelect, loading, live = fa
               <RecentEventOutcome event={event} compact />
               <span
                 className="mono-cell telemetry-mobile-duration"
-                style={{ color: slowTTFB ? 'var(--status-warning)' : outcome === 'failed' ? 'var(--status-critical)' : undefined }}
-                title="首字节 → 总耗时"
+                style={{ color: outcome === 'failed' ? 'var(--status-critical)' : undefined }}
+                title={eventTTFBMS(event) >= 5000 ? '首字节 → 总耗时；首字节超过 5 秒，上游可能排队中' : '首字节 → 总耗时'}
               >
                 {eventDurationText(event)}
               </span>
