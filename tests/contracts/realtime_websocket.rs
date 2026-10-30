@@ -49,6 +49,8 @@ async fn public_realtime_21_model_is_preserved_to_the_upstream() {
     let (target_tx, target_rx) = tokio::sync::oneshot::channel();
     let upstream_task = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
+        // Tungstenite fixes the callback error type to an unboxed HTTP response.
+        #[allow(clippy::result_large_err)]
         let mut socket = accept_hdr_async(stream, move |request: &Request, response: Response| {
             let _ = target_tx.send(request.uri().to_string());
             Ok(response)

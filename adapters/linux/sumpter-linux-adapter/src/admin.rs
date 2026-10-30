@@ -43,15 +43,12 @@ pub(crate) use auth_routes::{
     change_admin_credentials,
 };
 pub(crate) use autostart_routes::{get_autostart, put_autostart};
+#[cfg(test)]
+use config_routes::SecretUpdates;
 pub use config_routes::validate_config;
 pub(crate) use config_routes::{
     PutConfigBody, apply_secrets, config_view, endpoint_secret, get_config, provider_models,
     put_config, reload, validate_config_identity,
-};
-#[cfg(test)]
-use config_routes::{
-    SecretUpdates, extract_models, model_catalog_paths, provider_model_auth_modes,
-    provider_model_auth_sets, proxy_hint_for, summarize_probe_failure,
 };
 #[cfg(test)]
 use diagnostics_routes::{
@@ -77,8 +74,6 @@ pub(crate) use runtime_routes::{
 pub const DEFAULT_ADMIN_HOST: &str = "127.0.0.1";
 pub const DEFAULT_ADMIN_PORT: u16 = 57_879;
 pub const SYSTEMD_UNIT: &str = "sumpter.service";
-pub(crate) const MAX_MODEL_CATALOG_BYTES: usize = 2 * 1024 * 1024;
-pub(crate) const MAX_MODEL_CATALOG_ITEMS: usize = 5_000;
 
 /// Query parameters arrive from `serde_urlencoded` as strings even when the
 /// target type is numeric. Keep accepting the decimal form emitted by older
@@ -960,109 +955,6 @@ mod tests {
                 .unwrap_err()
                 .contains("无效 trustedProxyCIDR: not-an-ip")
         );
-    }
-
-    #[test]
-    fn model_catalog_shapes_are_supported() {
-        let value = json!({"data": [{"id": "m1"}, {"model": "m2"}, "m1"]});
-        assert_eq!(extract_models(&value), vec!["m1", "m2"]);
-
-        let nested = json!({"result": {"data": {"models": {"m3": {}, "m4": {}}}}});
-        assert_eq!(extract_models(&nested), vec!["m3", "m4"]);
-    }
-
-    #[test]
-    fn model_catalog_paths_preserve_custom_base_and_deduplicate_v1() {
-        let root = reqwest::Url::parse("https://example.com").unwrap();
-        assert_eq!(
-            model_catalog_paths(&root),
-            vec!["/v1/models", "/models", "/v1/model/list", "/api/v1/models"]
-        );
-        let v1 = reqwest::Url::parse("https://example.com/v1/").unwrap();
-        assert_eq!(
-            model_catalog_paths(&v1),
-            vec!["/v1/models", "/v1/model/list"]
-        );
-        let custom = reqwest::Url::parse("https://example.com/apps/anthropic").unwrap();
-        assert_eq!(
-            model_catalog_paths(&custom),
-            vec![
-                "/apps/anthropic/v1/models",
-                "/apps/anthropic/models",
-                "/apps/anthropic/v1/model/list"
-            ]
-        );
-    }
-
-    #[test]
-    fn provider_model_auth_modes_allow_anonymous_endpoints() {
-        assert_eq!(provider_model_auth_modes(" "), vec![None]);
-        assert_eq!(
-            provider_model_auth_modes("sk-test"),
-            vec![
-                Some(("x-api-key", "sk-test".to_string())),
-                Some(("authorization", "Bearer sk-test".to_string())),
-                Some(("authorization", "x-api-key sk-test".to_string())),
-            ]
-        );
-        let sets = provider_model_auth_sets("sk-test");
-        assert_eq!(
-            sets[0],
-            vec![
-                ("authorization", "Bearer sk-test".to_string()),
-                ("x-api-key", "sk-test".to_string())
-            ]
-        );
-        assert_eq!(provider_model_auth_sets(" "), vec![Vec::new()]);
-    }
-
-    /// 代理提示:注入 `is_set` 而不是改进程环境 —— 改了会让并行跑的 admin 测试里
-    /// `reqwest::Client::new()` 读到 `*_PROXY` 并试图通过假代理连本机 server。
-    #[test]
-    fn proxy_env_hint_names_variables_without_leaking_their_values() {
-        assert!(
-            proxy_hint_for(|_| false).is_none(),
-            "没有任何代理变量时不应给提示"
-        );
-
-        let hint = proxy_hint_for(|name| name == "HTTPS_PROXY").expect("设置后应给出提示");
-        assert!(hint.contains("HTTPS_PROXY"), "提示应点出变量名: {hint}");
-        assert!(
-            !hint.contains("proxy.internal.invalid") && !hint.contains("8080"),
-            "不得回显代理地址(可能带内网信息或凭据): {hint}"
-        );
-        assert!(
-            hint.contains("不走代理"),
-            "提示要说清探测与转发口径一致: {hint}"
-        );
-
-        // 小写变量同样识别；多个同时设置时都要列出。
-        let both = proxy_hint_for(|name| name == "all_proxy" || name == "http_proxy")
-            .expect("小写变量也要识别");
-        assert!(
-            both.contains("http_proxy") && both.contains("all_proxy"),
-            "{both}"
-        );
-    }
-
-    /// 提示必须真的被拼进调用方看到的失败摘要 —— 只测 `proxy_hint_for` 本身不够。
-    /// `summarize_probe_failure` 是 `fetch_provider_models_inner` 唯一的错误摘要构造点。
-    #[test]
-    fn probe_failure_summary_appends_proxy_hint_and_keeps_first_four_reasons() {
-        let reasons: Vec<String> = (1..=6).map(|n| format!("/p{n} HTTP 500")).collect();
-
-        let plain = summarize_probe_failure(reasons.clone(), None);
-        assert!(plain.starts_with("/p1 HTTP 500"), "原因排在前面: {plain}");
-        assert!(!plain.contains("/p5"), "仍应只保留前 4 条: {plain}");
-
-        let hinted =
-            summarize_probe_failure(reasons, Some("（检测到 HTTPS_PROXY：……不走代理……）".into()));
-        assert!(
-            hinted.starts_with("/p1 HTTP 500"),
-            "原因仍排在前面: {hinted}"
-        );
-        assert!(hinted.contains("不走代理"), "提示要被拼上: {hinted}");
-        assert!(!hinted.contains("/p5"), "提示不应打乱截断: {hinted}");
     }
 
     #[tokio::test]

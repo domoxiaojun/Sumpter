@@ -1,4 +1,3 @@
-import React from 'react';
 import { useApp } from '../context/AppContext.jsx';
 import { Icon } from '../utils/icons.jsx';
 import { getOnboardingState, ONBOARDING_STATES } from '../utils/onboarding.js';

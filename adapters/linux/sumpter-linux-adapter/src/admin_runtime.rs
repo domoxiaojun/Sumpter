@@ -1079,6 +1079,7 @@ pub(crate) fn runtime_query_error_response(error: RuntimeQueryError) -> Response
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct RuntimeAnalyticsQuery {
+    view: Option<String>,
     range: Option<String>,
     #[serde(rename = "clientKind", alias = "client_kind")]
     client_kind: Option<String>,
@@ -1125,6 +1126,7 @@ pub(crate) async fn runtime_analytics(
     State(state): State<AdminState>,
     Query(query): Query<RuntimeAnalyticsQuery>,
 ) -> Response {
+    let diagnostics_only = query.view.as_deref() == Some("diagnostics");
     let range = query.range.as_deref().unwrap_or("24h");
     if !matches!(range, "today" | "1h" | "24h" | "7d" | "30d" | "all") {
         return api_error(
@@ -1153,7 +1155,7 @@ pub(crate) async fn runtime_analytics(
     match state
         .inner
         .engine
-        .runtime_analytics_filtered_async(range, &filter)
+        .runtime_analytics_view_async(range, &filter, diagnostics_only)
         .await
     {
         Ok(value) => json_ok(&value),

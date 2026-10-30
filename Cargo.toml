@@ -12,7 +12,7 @@ members = [
 
 [workspace.package]
 edition = "2024"
-version = "0.4.54"
+version = "0.4.55"
 license = "MIT"
 rust-version = "1.88"
 repository = "https://github.com/domoxiaojun/sumpter"
@@ -31,7 +31,6 @@ axum = { version = "0.8", features = ["ws"] }
 hyper = "1"
 http = "1"
 httpdate = "1"
-http-body-util = "0.1"
 bytes = "1"
 futures-util = "0.3"
 base64 = "0.22"

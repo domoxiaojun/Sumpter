@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import { useRef } from 'react';
 import { connectionsPresentation, visibleConnectionsObservation } from '../utils/responsesConnections.js';
 
 export function ResponsesConnectionsPanel({ observation, autoRefresh }) {

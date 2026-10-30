@@ -693,24 +693,24 @@ pub(super) fn rebuild_hourly_rollup_bucket(
             let usage_present = row.get::<_, Option<i64>>(9)?.unwrap_or(0) != 0;
             let input = row.get::<_, Option<i64>>(10)?;
             let output = row.get::<_, Option<i64>>(11)?;
-            if outcome.as_deref() == Some("succeeded") {
-                if let Some(sample) = crate::runtime_query::output_generation_sample(
+            if outcome.as_deref() == Some("succeeded")
+                && let Some(sample) = crate::runtime_query::output_generation_sample(
                     "client",
                     false,
                     row.get::<_, Option<String>>(8)?.as_deref(),
                     output,
                     row.get(6)?,
                     row.get(7)?,
-                ) {
-                    accumulator.output_generation_tokens = accumulator
-                        .output_generation_tokens
-                        .saturating_add(sample.output_tokens);
-                    accumulator.output_generation_ms = accumulator
-                        .output_generation_ms
-                        .saturating_add(sample.generation_ms);
-                    accumulator.output_generation_requests =
-                        accumulator.output_generation_requests.saturating_add(1);
-                }
+                )
+            {
+                accumulator.output_generation_tokens = accumulator
+                    .output_generation_tokens
+                    .saturating_add(sample.output_tokens);
+                accumulator.output_generation_ms = accumulator
+                    .output_generation_ms
+                    .saturating_add(sample.generation_ms);
+                accumulator.output_generation_requests =
+                    accumulator.output_generation_requests.saturating_add(1);
             }
             let cache_read = row.get::<_, Option<i64>>(12)?;
             let cache_creation = row.get::<_, Option<i64>>(13)?;

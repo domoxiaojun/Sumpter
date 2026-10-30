@@ -2546,15 +2546,9 @@ html[data-theme="light"] .brand-title {
 /* A wide project table must contribute only to its own horizontal scroll
    surface. Without these grid-item constraints, the table's intrinsic width
    becomes the overview column width and leaks into the whole page on phones. */
-.runtime-v2-overview-project-block,
-.runtime-v2-project-overview,
-.runtime-v2-project-overview > * {
+.runtime-v2-overview-project-block {
   min-width: 0;
   max-width: 100%;
-}
-
-.runtime-v2-project-overview {
-  width: 100%;
 }
 
 .runtime-v2-overview-block + .runtime-v2-overview-block {
@@ -2892,14 +2886,6 @@ html[data-theme="light"] .brand-title {
   font-size: 0.68rem;
   line-height: 1.25;
   white-space: nowrap;
-}
-
-.runtime-v2-project-overview-panel {
-  margin-top: var(--space-4);
-}
-
-.runtime-v2-project-table .data-table td {
-  padding-block: var(--space-3);
 }
 
 .runtime-v2-token-card-presence {

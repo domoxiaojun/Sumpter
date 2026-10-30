@@ -1,4 +1,4 @@
-import React, { useCallback, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useId, useLayoutEffect, useRef, useState } from 'react';
 import { tableScrollMetrics, tableScrollHint } from '../utils/tableScroll.js';
 
 // Native overlay scrollbars can disappear even with overflow: scroll. Keep a

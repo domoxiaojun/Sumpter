@@ -1,9 +1,8 @@
-import React from 'react';
-import { useApp } from '../context/AppContext.jsx';
+import { useAppControls } from '../context/AppContext.jsx';
 import { Icon } from '../utils/icons.jsx';
 
 export function ToastContainer() {
-  const { toasts, removeToast } = useApp();
+  const { toasts, removeToast } = useAppControls();
 
   if (!toasts || toasts.length === 0) return null;
 

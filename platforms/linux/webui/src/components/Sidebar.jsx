@@ -1,10 +1,10 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { useApp } from '../context/AppContext.jsx';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useAppControls } from '../context/AppContext.jsx';
 import { Icon } from '../utils/icons.jsx';
 import donkeyHead from '../assets/donkey-logo.png';
 
 export function Sidebar() {
-  const { currentRoute, navigate, status } = useApp();
+  const { currentRoute, navigate, status } = useAppControls();
   const [open, setOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 900px)').matches);
   const menuButtonRef = useRef(null);

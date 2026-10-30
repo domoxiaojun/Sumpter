@@ -1,9 +1,9 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { useApp } from '../context/AppContext.jsx';
+import { useEffect, useRef, useState } from 'react';
+import { useAppControls } from '../context/AppContext.jsx';
 import { Icon } from '../utils/icons.jsx';
 
 export function Modal() {
-  const { activeModal, closeModal } = useApp();
+  const { activeModal, closeModal } = useAppControls();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const busyRef = useRef(false);

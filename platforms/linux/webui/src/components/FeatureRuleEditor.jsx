@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useApp } from '../context/AppContext.jsx';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useAppControls } from '../context/AppContext.jsx';
 import { createLocalID } from '../utils/helpers.js';
 import { isBuiltinRule, routeCatalogKey, routeModelChoices, saveFeatureRule } from '../utils/featureRoutes.js';
 
@@ -10,7 +10,7 @@ const effortOptions = [
 ];
 
 export function FeatureRuleEditor({ rule, catalogLoader }) {
-  const { config, configDoc, saveConfig, closeModal } = useApp();
+  const { config, configDoc, saveConfig, closeModal } = useAppControls();
   const draftSource = useRef(configDoc);
   const [draft, setDraft] = useState(() => ({
     id: rule?.id || createLocalID('rule'), name: rule?.name || '',

@@ -260,9 +260,7 @@ pub fn dimension_page_on(
     } else {
         format!("{sort_column} {order}")
     };
-    let prices = load_price_catalog(&transaction)?;
-    let dimension_cost_map = dimension_costs(&transaction, &builder, key_expression, &prices)?;
-    let mut values = builder.values;
+    let mut values = builder.values.clone();
     values.push(SqlValue::Integer(request.page_size as i64));
     values.push(SqlValue::Integer(offset.min(i64::MAX as usize) as i64));
     let sql = format!(
@@ -409,6 +407,15 @@ pub fn dimension_page_on(
         result
     };
     let mut rows = rows;
+    // Cost is not a sort key. Resolve prices only for the selected page,
+    // retaining the same snapshot and exact per-event price matching.
+    let dimension_cost_map = if rows.is_empty() {
+        HashMap::new()
+    } else {
+        let prices = load_price_catalog(&transaction)?;
+        let keys = rows.iter().map(|row| row.key.as_str()).collect::<Vec<_>>();
+        dimension_costs(&transaction, &builder, key_expression, &prices, &keys)?
+    };
     for row in &mut rows {
         row.cost = dimension_cost_map
             .get(&row.key)
@@ -447,7 +454,13 @@ fn dimension_costs(
     base: &SqlFilter,
     key_expression: &'static str,
     prices: &PriceCatalog,
+    keys: &[&str],
 ) -> QueryResult<HashMap<String, CostCoverage>> {
+    let mut base = base.clone();
+    base.text_values(
+        format!("{key_expression} IN ({})", vec!["?"; keys.len()].join(",")),
+        keys.iter().map(|key| (*key).to_owned()),
+    );
     let sql = format!(
         "SELECT {key_expression} AS dimension_key,timestamp,request_purpose,endpoint_id,\
                 effective_model,input_tokens,output_tokens,cache_read_input_tokens,\

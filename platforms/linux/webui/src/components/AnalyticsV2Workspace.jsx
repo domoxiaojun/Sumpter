@@ -6,38 +6,9 @@ import { StatusBadge } from './StatusBadge.jsx';
 import { Icon } from '../utils/icons.jsx';
 import { api } from '../services/api.js';
 import { piAttributionState, PI_ATTRIBUTION_COPY } from '../utils/piAttribution.js';
-import {
-  CC_ATTRIBUTION_HINT,
-  formatDuration,
-  formatNumber,
-  formatTimestamp,
-  formatTokenCount,
-  normalizeTimestampMS,
-  clientKindLabel,
-  failureKindLabel,
-  failurePhaseLabel,
-  shouldPromptCCAttribution,
-  projectLabelText,
-  projectClientKindsLabel,
-  purposeLabel,
-} from '../utils/helpers.js';
+import { CC_ATTRIBUTION_HINT, formatDuration, formatTimestamp, formatTokenCount, normalizeTimestampMS, clientKindLabel, failureKindLabel, failurePhaseLabel, shouldPromptCCAttribution, projectLabelText, projectClientKindsLabel, purposeLabel } from '../utils/helpers.js';
 import { copyWithToast } from '../utils/clipboard.js';
-import {
-  isRuntimeSnapshotError,
-  normalizeRuntimePagedResult,
-  persistRuntimeAnalyticsPageSize,
-  readRuntimeAnalyticsPageSize,
-  runtimeAppleTimestamp,
-  runtimeCacheRate,
-  runtimeCostAmount,
-  runtimeDateTimeLocal,
-  runtimePagedResultRange,
-  runtimeTodayBounds,
-  runtimePriceInput,
-  runtimePriceMicros,
-  runtimeRatePercent,
-  runtimeV2ErrorMessage,
-} from '../utils/runtimeAnalyticsV2.js';
+import { isRuntimeSnapshotError, normalizeRuntimePagedResult, persistRuntimeAnalyticsPageSize, readRuntimeAnalyticsPageSize, runtimeAppleTimestamp, runtimeCacheRate, runtimeCostAmount, runtimeDateTimeLocal, runtimeTodayBounds, runtimePriceInput, runtimePriceMicros, runtimeV2ErrorMessage } from '../utils/runtimeAnalyticsV2.js';
 import { formatOutputTokensPerSecond, outputSpeedDetail } from '../utils/outputSpeed.js';
 
 const SECTIONS = [
@@ -130,12 +101,7 @@ function dimensionValueLabel(value, kind) {
   }
 }
 
-const RANGE_OPTIONS = [
-  ['today', '今天'],
-  ['7d', '7 天'],
-  ['30d', '30 天'],
-  ['all', '全部保留历史'],
-];
+
 
 function safeNumber(value, fallback = 0) {
   const number = Number(value);
@@ -252,11 +218,7 @@ function TokenCoreGrid({ tokens, compact = false, cache = null }) {
   );
 }
 
-function percentFromOptionalCount(numerator, denominator, digits = 1) {
-  if (numerator === null || numerator === undefined
-      || denominator === null || denominator === undefined) return '—';
-  return percentFromCount(numerator, denominator, digits);
-}
+
 
 function analyticsTokenUsage(analytics) {
   if (!analytics || typeof analytics !== 'object') return {};
@@ -601,67 +563,7 @@ function unavailableCostRequests(cost) {
   return safeNumber(cost?.unpricedRequests) + safeNumber(cost?.unknownAccountingRequests);
 }
 
-function ProjectOverviewTable({ page, loading, onPageChange, onPageSizeChange, onSearchSubmit, onSortChange }) {
-  const [searchDraft, setSearchDraft] = useState(page?.search || '');
-  useEffect(() => setSearchDraft(page?.search || ''), [page?.search]);
-  if (!page) return null;
-  const rows = page.rows || [];
-  const columns = [
-    {
-      title: '项目', key: 'name', type: 'text', minWidth: '240px', sortable: true,
-      render: (row) => <div className="runtime-v2-cell-stack"><strong className="runtime-v2-ellipsis" title={row.name}>{dimensionValueLabel(row.name, 'project')}</strong><small>{projectClientKindsLabel(row.clientKinds)}</small></div>,
-    },
-    { title: '请求', key: 'requests', type: 'number', width: '100px', sortable: true, render: (row) => <span className="mono-cell">{numberWithComma(row.requests)}</span> },
-    { title: '成功率', key: 'success_rate', type: 'number', width: '110px', sortable: true, render: (row) => <span className="mono-cell">{dimensionSuccessRate(row)}</span> },
-    { title: '失败', key: 'failures', type: 'number', width: '95px', sortable: true, render: (row) => <span className="mono-cell">{numberWithComma(row.failures)}</span> },
-    { title: '输入 Token', key: 'input_tokens', type: 'number', width: '132px', sortable: true, render: (row) => <span className="mono-cell">{dimensionTokenValue(row, 'inputTokens')}</span> },
-    { title: '输出 Token', key: 'output_tokens', type: 'number', width: '132px', sortable: true, render: (row) => <span className="mono-cell">{dimensionTokenValue(row, 'outputTokens')}</span> },
-    { title: '输出速度', key: 'output_tokens_per_second', type: 'number', width: '132px', sortable: true, render: (row) => <span className="mono-cell">{formatOutputTokensPerSecond(row.outputTokensPerSecond)}</span> },
-    {
-      title: '缓存读取', key: 'cache_read', type: 'number', width: '150px', sortable: true,
-      render: (row) => <div className="runtime-v2-usage-cell"><span className="mono-cell">{dimensionTokenValue(row, 'cacheReadInputTokens')}</span><small>Token 读占比 {percent(runtimeCacheRate(row, 'token'))}</small></div>,
-    },
-    { title: '缓存写入', key: 'cache_write', type: 'number', width: '132px', sortable: true, render: (row) => <span className="mono-cell">{dimensionTokenValue(row, 'cacheCreationInputTokens')}</span> },
-    { title: '平均耗时', key: 'average_duration', type: 'time', width: '128px', sortable: true, render: (row) => <span className="mono-cell">{formatDuration(row.averageDurationMS)}</span> },
-    { title: '最近活动', key: 'last_seen', type: 'time', width: '180px', sortable: true, render: (row) => <span className="mono-cell">{dateLabel(row.lastSeen)}</span> },
-  ];
-  return (
-    <div className="runtime-v2-project-overview">
-      <form className="runtime-v2-search-label" onSubmit={(event) => { event.preventDefault(); onSearchSubmit(searchDraft.trim()); }}>
-        <label htmlFor="runtime-v2-project-overview-search">查找项目</label>
-        <div className="runtime-v2-search-controls">
-          <input id="runtime-v2-project-overview-search" className="form-input" type="search" value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} placeholder="按项目名或 ID 查找" />
-          <button type="submit" className="btn btn-secondary" disabled={loading}>查找</button>
-        </div>
-      </form>
-      <DataTable
-        className="runtime-v2-table runtime-v2-project-table"
-        ariaLabel="项目使用情况"
-        tableMinWidth="1260px"
-        data={rows}
-        keyField="key"
-        emptyText="当前范围没有项目数据"
-        sortKey={page.sort}
-        sortDirection={page.order}
-        onSortChange={onSortChange}
-        columns={columns}
-      />
-      <PaginationBar
-        itemNoun="个项目"
-        emptySummary="当前搜索没有项目"
-        page={page.page}
-        pageSize={page.pageSize}
-        totalCount={page.totalCount}
-        totalPages={page.totalPages}
-        itemCount={rows.length}
-        loading={loading}
-        onPageChange={onPageChange}
-        onPageSizeChange={onPageSizeChange}
-        ariaLabel="项目分页"
-      />
-    </div>
-  );
-}
+
 
 function DimensionTable({ page, loading, onPageChange, onPageSizeChange, onSearchSubmit, onSortChange, kind, clientKindFacets, addToast, onSessionExport, onSessionDelete, sessionActionID, onProjectStickyClear, onSessionStickyClear, stickyActionKey, mode = 'usage', activeRowKey, onRowClick }) {
   const [searchDraft, setSearchDraft] = useState(page?.search || '');
@@ -1537,21 +1439,7 @@ export function PricingPanel({ pricing, config, endpointID = '', loading, error,
   );
 }
 
-function TokenPanel({ trend, legacyAnalytics, loading, error, onRetry }) {
-  const totals = trend?.totals || legacyTrendTotals(legacyAnalytics);
-  const tokens = mergeDefined(analyticsTokenUsage(legacyAnalytics), totals?.tokens);
-  return (
-    <section className="runtime-v2-panel" aria-labelledby="runtime-v3-tokens-heading">
-      <div className="runtime-v2-panel-header"><div><h2 id="runtime-v3-tokens-heading">成本</h2><p>按入口、项目和会话查看成本；缓存读取命中率只在缓存读取旁显示。</p></div></div>
-      <PanelMessage error={error} onRetry={onRetry} />
-      {loading && !totals ? <LoadingLine text="正在读取 Token 汇总…" /> : totals ? (
-        <>
-          <TokenCoreGrid tokens={tokens} cache={trend?.cacheRead ?? legacyAnalytics?.cacheRead} />
-        </>
-      ) : <div className="runtime-v2-empty">暂无 Token 数据</div>}
-    </section>
-  );
-}
+
 
 function CostPanel({ pricing, trend, legacyAnalytics, costPages, costLoading, costErrors, costCallbacks, clientKindFacets, addToast, selectedProject, selectedSession, onProjectSelect, onSessionSelect, onClearProject, onClearSession }) {
   const totals = trend?.totals || legacyTrendTotals(legacyAnalytics);
@@ -1768,7 +1656,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     const request = beginLatestRequest(diagnosticsRequestRef);
     setDiagnosticsLoading(true); setDiagnosticsError(null);
     try {
-      const value = await api.getRuntimeAnalytics(range, activeFilters, { signal: request.controller.signal });
+      const value = await api.getRuntimeAnalytics(range, activeFilters, { signal: request.controller.signal, diagnosticsOnly: true });
       if (request.isCurrent()) setDiagnostics((previous) => (sameJSON(previous, value) ? previous : value));
     } catch (error) {
       if (!isAbortError(error) && request.isCurrent()) setDiagnosticsError(error);
@@ -2285,8 +2173,3 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     </section>
   );
 }
-
-// Compatibility export for extensions that imported the pre-v3 filename. The
-// page and new code use AnalyticsWorkspace; keeping this alias avoids a hard
-// failure for an out-of-tree plugin while the old component file is retired.
-export const AnalyticsV2Workspace = AnalyticsWorkspace;

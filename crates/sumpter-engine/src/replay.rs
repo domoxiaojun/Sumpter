@@ -202,6 +202,8 @@ pub fn normalize_event_json<T: Serialize>(event: &T) -> Result<Value, String> {
     object.insert("timestamp".into(), Value::from(0));
     object.insert("durationMS".into(), Value::from(0));
     object.remove("ttfbMS");
+    object.remove("upstreamDurationMS");
+    object.remove("upstreamTTFBMS");
     if let Some(trace) = object.get_mut("streamTrace").and_then(Value::as_object_mut) {
         trace.remove("maxChunkGapMS");
         trace.remove("lastChunkAtMS");
@@ -298,6 +300,52 @@ fn normalize_json(value: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn event_comparison_ignores_upstream_clock_but_keeps_retry_outcome() {
+        let left: RuntimeEvent = serde_json::from_value(serde_json::json!({
+            "id": "event-left",
+            "kind": "client",
+            "timestamp": 1.0,
+            "durationMS": 100,
+            "ttfbMS": 50,
+            "upstreamDurationMS": 80,
+            "upstreamTTFBMS": 30,
+            "endpointID": "secondary",
+            "failover": true,
+            "statusCode": 200
+        }))
+        .unwrap();
+        let mut right = left.clone();
+        right.id = "event-right".into();
+        right.timestamp = 2.0;
+        right.duration_ms = 101;
+        right.ttfb_ms = Some(51);
+        right.upstream_duration_ms = Some(81);
+        right.upstream_ttfb_ms = Some(31);
+
+        assert_eq!(comparable_event(&left), comparable_event(&right));
+        assert_eq!(
+            normalize_event_json(&left).unwrap(),
+            normalize_event_json(&right).unwrap()
+        );
+        assert_eq!(left.upstream_duration_ms, Some(80));
+        assert_eq!(left.upstream_ttfb_ms, Some(30));
+
+        right.failover = false;
+        assert_ne!(comparable_event(&left), comparable_event(&right));
+        assert_ne!(
+            normalize_event_json(&left).unwrap(),
+            normalize_event_json(&right).unwrap()
+        );
+        right.failover = left.failover;
+        right.status_code = 503;
+        assert_ne!(comparable_event(&left), comparable_event(&right));
+        assert_ne!(
+            normalize_event_json(&left).unwrap(),
+            normalize_event_json(&right).unwrap()
+        );
+    }
 
     #[test]
     fn normalizes_generated_json_fields_but_keeps_frame_order() {

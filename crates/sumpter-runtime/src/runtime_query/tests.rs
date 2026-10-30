@@ -755,6 +755,114 @@ fn snapshot_generation_and_retention_are_enforced() {
 }
 
 #[test]
+fn dimension_pages_keep_exact_costs_across_price_changes() {
+    let mut connection = test_connection();
+    for seq in 1..=40 {
+        insert_endpoint_test_event(
+            &connection,
+            seq,
+            "client",
+            None,
+            "succeeded",
+            200,
+            Some("codex"),
+            Some("completion"),
+            Some("endpoint-a"),
+            Some("Endpoint A"),
+        );
+    }
+    connection
+        .execute_batch(
+            "UPDATE runtime_events SET
+           timestamp=CASE WHEN seq<=20 THEN 1 ELSE 2 END,
+           project_id=printf('project-%02d', (seq-1)%20),
+           project_name=printf('Project %02d', (seq-1)%20),
+           project_source='client_declared',workspace_paths_json='[]',
+           effective_model='gpt-test',failover=0,usage_present=1,
+           input_tokens=100,output_tokens=20,cache_read_input_tokens=0,
+           cache_creation_input_tokens=0,reasoning_tokens=0,uncached_input_tokens=100,
+           processed_input_tokens=100,processed_total_tokens=120,
+           token_accounting_semantics='subset',token_accounting_quality='complete';
+         UPDATE runtime_events SET project_id='project-00-quoted''key' WHERE (seq-1)%20=0;
+         UPDATE runtime_model_prices SET effective_to=2 WHERE id=1;
+         INSERT INTO runtime_model_prices VALUES
+           (2,'gpt-test',2,NULL,2000000,4000000,200000,1000000,0,0);",
+        )
+        .unwrap();
+    for page in [1, 2] {
+        let result = dimension_page_on(
+            &mut connection,
+            DimensionKind::Project,
+            &DimensionPageQuery {
+                page,
+                page_size: 10,
+                sort: DimensionSort::Name,
+                order: SortOrder::Asc,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(result.total_count, 20);
+        assert_eq!(result.rows.len(), 10);
+        for row in result.rows {
+            assert_eq!(row.requests, 2);
+            assert_eq!(row.cost.estimated_cost_micros, 420);
+            assert_eq!(row.cost.priced_requests, 2);
+        }
+    }
+    assert!(
+        dimension_page_on(
+            &mut connection,
+            DimensionKind::Project,
+            &DimensionPageQuery {
+                page: 3,
+                ..Default::default()
+            }
+        )
+        .unwrap()
+        .rows
+        .is_empty()
+    );
+
+    let full = serde_json::to_value(
+        analytics_on(&mut connection, "all", &RuntimeFilter::default()).unwrap(),
+    )
+    .unwrap();
+    let diagnostic = serde_json::to_value(
+        analytics_view_on(&mut connection, "all", &RuntimeFilter::default(), true).unwrap(),
+    )
+    .unwrap();
+    for key in [
+        "models",
+        "requestPurposes",
+        "protocolRoutes",
+        "failureKinds",
+        "failurePhases",
+        "featureRules",
+        "upstreamStatuses",
+        "streamTerminals",
+        "internalFeatures",
+        "toolCalls",
+        "tokenUsage",
+        "codexRequests",
+    ] {
+        assert_eq!(
+            full[key], diagnostic[key],
+            "diagnostic projection changed {key}"
+        );
+    }
+    assert!(!full["projects"].as_array().unwrap().is_empty());
+    assert!(diagnostic["projects"].as_array().unwrap().is_empty());
+    assert!(diagnostic["sessions"].as_array().unwrap().is_empty());
+    assert!(
+        diagnostic["facets"]["projects"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn outcome_page_uses_partial_composite_index() {
     let connection = test_connection();
     let details = connection

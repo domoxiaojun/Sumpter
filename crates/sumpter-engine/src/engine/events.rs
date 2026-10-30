@@ -16,6 +16,8 @@ pub fn comparable_event(event: &RuntimeEvent) -> RuntimeEvent {
     normalized.timestamp = 0.0;
     normalized.duration_ms = 0;
     normalized.ttfb_ms = None;
+    normalized.upstream_duration_ms = None;
+    normalized.upstream_ttfb_ms = None;
     // Stream timing is measured from the scheduler/clock and can differ by a
     // millisecond (or more) between two otherwise identical replays.  Keep
     // protocol facts such as frame count, byte count, terminal event, and
@@ -130,16 +132,16 @@ impl Engine {
         apply_current_request_context(&mut event);
         let _runtime_write = self.inner.runtime_write.lock().unwrap();
         event.refresh_cache_read();
-        let snapshot = {
+        let counters = {
             let mut state = self.inner.state.lock().unwrap();
             state.runtime.upsert_event(event.clone());
-            state.runtime.clone()
+            RuntimeCounters::from_snapshot(&state.runtime)
         };
-        self.enqueue_runtime_change(event.clone(), &snapshot);
+        self.enqueue_runtime_change(event.clone(), counters);
         let _ = self.inner.notices.send(EngineNotice::Event(event));
     }
 
-    fn enqueue_runtime_change(&self, event: RuntimeEvent, snapshot: &RuntimeSnapshot) {
+    fn enqueue_runtime_change(&self, event: RuntimeEvent, counters: RuntimeCounters) {
         let Some(store) = self.inner.runtime_store.get() else {
             // SQLite 初始化/版本检查失败时，内存窗口和实时 SSE 仍然可用。
             // 零游标要求客户端重新读取 summary 与最新事件页，不能把它
@@ -151,7 +153,7 @@ impl Engine {
             });
             return;
         };
-        match store.enqueue(event.clone(), RuntimeCounters::from_snapshot(snapshot)) {
+        match store.enqueue(event.clone(), counters) {
             Ok(change) => {
                 let _ = self.inner.notices.send(EngineNotice::RuntimeChange {
                     seq: change.seq,
@@ -182,7 +184,7 @@ impl Engine {
         event.phase = Some(RuntimeEventPhase::Completed);
         self.capture_finish(&event);
         event.refresh_cache_read();
-        let snapshot = {
+        let counters = {
             let mut state = self.inner.state.lock().unwrap();
             state.runtime.upsert_event(event.clone());
             state.runtime.client_requests += 1;
@@ -198,9 +200,9 @@ impl Engine {
                     state.last_error = Some(message);
                 }
             }
-            state.runtime.clone()
+            RuntimeCounters::from_snapshot(&state.runtime)
         };
-        self.enqueue_runtime_change(event.clone(), &snapshot);
+        self.enqueue_runtime_change(event.clone(), counters);
         let _ = self.inner.notices.send(EngineNotice::Event(event));
     }
 
@@ -245,7 +247,7 @@ impl Engine {
             }
         }
         event.refresh_cache_read();
-        let snapshot = {
+        let counters = {
             let mut state = self.inner.state.lock().unwrap();
             state.runtime.upsert_event(event.clone());
             state.runtime.upstream_attempts += 1;
@@ -254,9 +256,9 @@ impl Engine {
             } else if event.is_failed() {
                 state.runtime.upstream_failures += 1;
             }
-            state.runtime.clone()
+            RuntimeCounters::from_snapshot(&state.runtime)
         };
-        self.enqueue_runtime_change(event.clone(), &snapshot);
+        self.enqueue_runtime_change(event.clone(), counters);
         let _ = self.inner.notices.send(EngineNotice::Event(event));
     }
 

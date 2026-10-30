@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { endpointGroupModels, modelMatches } from '../utils/modelGroups.js';
 import { Icon } from '../utils/icons.jsx';
 

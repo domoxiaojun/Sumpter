@@ -1,6 +1,7 @@
 use axum::{Json, Router, http::HeaderMap, routing::get};
 use serde_json::json;
 use sumpter_core::config::{AppConfig, EndpointProtocolMode};
+use sumpter_engine::model_catalog::{ProviderCatalogFetcher, extract_models};
 
 #[tokio::test]
 async fn cpa_catalog_preserves_raw_gemini_names_across_probe_identities() {
@@ -32,12 +33,15 @@ async fn cpa_catalog_preserves_raw_gemini_names_across_probe_identities() {
     }))
     .unwrap();
     let mut endpoint = config.endpoints[0].clone();
-    let result = super::fetch_provider_models_inner(&endpoint).await;
-    let (models, _) = result.unwrap();
+    let result = ProviderCatalogFetcher::fetch(&endpoint).await;
+    assert_eq!(result.error, None);
+    let models = result.models;
     assert!(models.contains(&"gemini-dynamic-review".to_string()));
     assert!(models.contains(&"claude-synthetic-gemini-alias".to_string()));
     endpoint.protocol = EndpointProtocolMode::OpenAI;
-    let (models, _) = super::fetch_provider_models_inner(&endpoint).await.unwrap();
+    let result = ProviderCatalogFetcher::fetch(&endpoint).await;
+    assert_eq!(result.error, None);
+    let models = result.models;
     task.abort();
     assert_eq!(models, ["gemini-dynamic-review", "gpt-synthetic"]);
 }
@@ -45,11 +49,11 @@ async fn cpa_catalog_preserves_raw_gemini_names_across_probe_identities() {
 #[test]
 fn catalog_extracts_codex_slugs_and_gemini_resource_names() {
     assert_eq!(
-        super::extract_models(&json!({"models":[{"slug":"gemini-dynamic-review"}]})),
+        extract_models(&json!({"models":[{"slug":"gemini-dynamic-review"}]})),
         ["gemini-dynamic-review"]
     );
     assert_eq!(
-        super::extract_models(&json!({"models":[{"name":"models/gemini-dynamic-review"}]})),
+        extract_models(&json!({"models":[{"name":"models/gemini-dynamic-review"}]})),
         ["models/gemini-dynamic-review"]
     );
 }

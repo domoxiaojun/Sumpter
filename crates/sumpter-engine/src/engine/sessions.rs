@@ -779,15 +779,13 @@ impl Engine {
         let needs_affinity_write =
             removed_persistent || self.inner.session_affinity_dirty.load(Ordering::Acquire);
         let affinity_write_started = std::time::Instant::now();
-        if needs_affinity_write {
-            if let Err(error) = self.flush_session_affinity() {
-                self.inner
-                    .session_affinity_dirty
-                    .store(true, Ordering::Release);
-                return Err(format!(
-                    "内存归属已清除，但 session_affinity.json 同步失败：{error}"
-                ));
-            }
+        if needs_affinity_write && let Err(error) = self.flush_session_affinity() {
+            self.inner
+                .session_affinity_dirty
+                .store(true, Ordering::Release);
+            return Err(format!(
+                "内存归属已清除，但 session_affinity.json 同步失败：{error}"
+            ));
         }
         let affinity_write_ms = if needs_affinity_write {
             affinity_write_started.elapsed().as_millis() as u64

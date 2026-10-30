@@ -128,17 +128,17 @@ pub fn decorate_runtime_change_value(value: &mut Value) {
         let speed = value
             .get("event")
             .and_then(output_tokens_per_second_from_json);
-        if let Some(speed) = speed {
-            if let Some(event) = value.get_mut("event").and_then(Value::as_object_mut) {
-                event.insert("outputTokensPerSecond".to_owned(), json!(speed));
-            }
+        if let Some(speed) = speed
+            && let Some(event) = value.get_mut("event").and_then(Value::as_object_mut)
+        {
+            event.insert("outputTokensPerSecond".to_owned(), json!(speed));
         }
         return;
     }
-    if let Some(speed) = output_tokens_per_second_from_json(value) {
-        if let Some(event) = value.as_object_mut() {
-            event.insert("outputTokensPerSecond".to_owned(), json!(speed));
-        }
+    if let Some(speed) = output_tokens_per_second_from_json(value)
+        && let Some(event) = value.as_object_mut()
+    {
+        event.insert("outputTokensPerSecond".to_owned(), json!(speed));
     }
 }
 

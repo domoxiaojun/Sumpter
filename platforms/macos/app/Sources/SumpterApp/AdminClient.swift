@@ -162,8 +162,9 @@ public struct AdminClient: Sendable {
         return try await send(request("/admin/runtime/analytics", query: query), as: AdminWire.RuntimeAnalytics.self)
     }
 
-    public func runtimeAnalytics(range: String = "today", filter: AdminWire.RuntimeFilter) async throws -> AdminWire.RuntimeAnalytics {
+    public func runtimeAnalytics(range: String = "today", filter: AdminWire.RuntimeFilter, diagnosticsOnly: Bool = false) async throws -> AdminWire.RuntimeAnalytics {
         var query: [String: String] = ["range": range]
+        if diagnosticsOnly { query["view"] = "diagnostics" }
         filter.add(to: &query)
         return try await send(request("/admin/runtime/analytics", query: query), as: AdminWire.RuntimeAnalytics.self)
     }

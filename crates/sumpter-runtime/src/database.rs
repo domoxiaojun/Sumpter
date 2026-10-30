@@ -12,6 +12,7 @@ use sea_orm::{
     TryGetable,
 };
 use std::{
+    collections::VecDeque,
     fmt,
     future::Future,
     marker::PhantomData,
@@ -373,15 +374,25 @@ impl Statement<'_> {
             .as_ref()
             .expect("open connection")
             .clone();
-        let (sender, receiver) = tokio::sync::mpsc::channel(32);
+        // Amortize the async/sync boundary without accumulating a whole query.
+        const ROW_BATCH_SIZE: usize = 16;
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
         let task = executor()?.spawn(async move {
+            let mut batch = Vec::with_capacity(ROW_BATCH_SIZE);
             let result = async {
                 let mut stream = session.stream(statement).await?;
                 loop {
                     tokio::select! {
                         _ = sender.closed() => break,
                         row = stream.next() => match row {
-                            Some(Ok(row)) => if sender.send(Ok(Row(row))).await.is_err() { break; },
+                            Some(Ok(row)) => {
+                                batch.push(Row(row));
+                                if batch.len() == ROW_BATCH_SIZE
+                                    && sender.send(Ok(std::mem::take(&mut batch))).await.is_err()
+                                {
+                                    break;
+                                }
+                            },
                             Some(Err(error)) => return Err(error),
                             None => break,
                         }
@@ -390,6 +401,9 @@ impl Statement<'_> {
                 Ok::<_, DbErr>(())
             }
             .await;
+            if !batch.is_empty() {
+                let _ = sender.send(Ok(batch)).await;
+            }
             if let Err(error) = result {
                 let _ = sender.send(Err(Error::from(error))).await;
             }
@@ -399,6 +413,7 @@ impl Statement<'_> {
             receiver,
             task: Some(task),
             current: None,
+            buffered: VecDeque::new(),
         })
     }
     pub fn query_map<T, F: FnMut(&Row) -> Result<T>>(
@@ -414,14 +429,27 @@ impl Statement<'_> {
 }
 
 pub struct Rows {
-    receiver: tokio::sync::mpsc::Receiver<Result<Row>>,
+    receiver: tokio::sync::mpsc::Receiver<Result<Vec<Row>>>,
     task: Option<tokio::task::JoinHandle<()>>,
     current: Option<Row>,
+    buffered: VecDeque<Row>,
 }
 impl Rows {
     pub fn next(&mut self) -> Result<Option<&Row>> {
         let mut cancelled = crate::query_executor::cancellation();
-        self.current = futures_executor::block_on(tokio::task::unconstrained(async {
+        if cancelled
+            .as_ref()
+            .is_some_and(|receiver| *receiver.borrow())
+        {
+            return Err(Error::Database(DbErr::Custom(
+                "runtime query cancelled".into(),
+            )));
+        }
+        if let Some(row) = self.buffered.pop_front() {
+            self.current = Some(row);
+            return Ok(self.current.as_ref());
+        }
+        let batch = futures_executor::block_on(tokio::task::unconstrained(async {
             if let Some(ref mut receiver) = cancelled {
                 tokio::select! {
                     biased;
@@ -435,11 +463,13 @@ impl Rows {
             }
         }))
         .transpose()?;
-        if self.current.is_none() {
-            if let Some(task) = self.task.take() {
-                futures_executor::block_on(tokio::task::unconstrained(task))
-                    .map_err(|error| Error::InvalidParameterName(format!("ORM stream: {error}")))?;
-            }
+        self.buffered = batch.unwrap_or_default().into();
+        self.current = self.buffered.pop_front();
+        if self.current.is_none()
+            && let Some(task) = self.task.take()
+        {
+            futures_executor::block_on(tokio::task::unconstrained(task))
+                .map_err(|error| Error::InvalidParameterName(format!("ORM stream: {error}")))?;
         }
         Ok(self.current.as_ref())
     }

@@ -1154,23 +1154,23 @@ impl Engine {
                 &[("error", "inbound_auth_required")],
             );
         }
-        if kind == PassthroughKind::GeminiGenerate {
-            if let Some((status, message)) = gemini_request_error(method, path_and_query) {
-                self.record_rejected_client_with_metadata(
-                    status,
-                    message,
-                    None,
-                    Some(purpose),
-                    client_kind,
-                    None,
-                    ClientDeclaredMetadata::from_headers(&headers),
-                    Some(source_format),
-                );
-                return error_response(
-                    StatusCode::from_u16(status as u16).unwrap_or(StatusCode::BAD_REQUEST),
-                    &[("error", "invalid_gemini_request"), ("message", message)],
-                );
-            }
+        if kind == PassthroughKind::GeminiGenerate
+            && let Some((status, message)) = gemini_request_error(method, path_and_query)
+        {
+            self.record_rejected_client_with_metadata(
+                status,
+                message,
+                None,
+                Some(purpose),
+                client_kind,
+                None,
+                ClientDeclaredMetadata::from_headers(&headers),
+                Some(source_format),
+            );
+            return error_response(
+                StatusCode::from_u16(status as u16).unwrap_or(StatusCode::BAD_REQUEST),
+                &[("error", "invalid_gemini_request"), ("message", message)],
+            );
         }
         let mut body = match read_inbound_body(body).await {
             Ok(body) => body,

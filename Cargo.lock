@@ -1824,7 +1824,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "sumpter-core"
-version = "0.4.54"
+version = "0.4.55"
 dependencies = [
  "md-5",
  "rand 0.9.5",
@@ -1836,9 +1836,8 @@ dependencies = [
 
 [[package]]
 name = "sumpter-engine"
-version = "0.4.54"
+version = "0.4.55"
 dependencies = [
- "argon2",
  "async-trait",
  "axum",
  "base64",
@@ -1846,9 +1845,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "http",
- "http-body-util",
  "httpdate",
- "hyper",
  "md-5",
  "rand 0.9.5",
  "reqwest",
@@ -1861,7 +1858,6 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tokio-util",
- "tower-http",
  "tracing",
  "tracing-subscriber",
  "zstd",
@@ -1869,7 +1865,7 @@ dependencies = [
 
 [[package]]
 name = "sumpter-linux-adapter"
-version = "0.4.54"
+version = "0.4.55"
 dependencies = [
  "argon2",
  "async-trait",
@@ -1878,9 +1874,7 @@ dependencies = [
  "bytes",
  "futures-util",
  "http",
- "http-body-util",
  "hyper",
- "md-5",
  "rand 0.9.5",
  "reqwest",
  "serde",
@@ -1888,7 +1882,6 @@ dependencies = [
  "sha2",
  "sumpter-core",
  "sumpter-engine",
- "thiserror",
  "tokio",
  "tokio-tungstenite",
  "tokio-util",
@@ -1898,24 +1891,20 @@ dependencies = [
 
 [[package]]
 name = "sumpter-macos-adapter"
-version = "0.4.54"
+version = "0.4.55"
 dependencies = [
  "async-trait",
  "axum",
  "bytes",
  "futures-util",
  "http",
- "http-body-util",
  "hyper",
- "md-5",
  "rand 0.9.5",
  "reqwest",
  "serde",
  "serde_json",
- "sha2",
  "sumpter-core",
  "sumpter-engine",
- "thiserror",
  "tokio",
  "tokio-tungstenite",
  "tokio-util",
@@ -1924,7 +1913,7 @@ dependencies = [
 
 [[package]]
 name = "sumpter-runtime"
-version = "0.4.54"
+version = "0.4.55"
 dependencies = [
  "async-trait",
  "futures-executor",
@@ -1939,7 +1928,7 @@ dependencies = [
 
 [[package]]
 name = "sumpterd-linux"
-version = "0.4.54"
+version = "0.4.55"
 dependencies = [
  "sumpter-core",
  "sumpter-linux-adapter",
@@ -1950,14 +1939,8 @@ dependencies = [
 
 [[package]]
 name = "sumpterd-macos"
-version = "0.4.54"
+version = "0.4.55"
 dependencies = [
- "axum",
- "bytes",
- "futures-util",
- "rand 0.9.5",
- "reqwest",
- "serde",
  "serde_json",
  "sumpter-core",
  "sumpter-macos-adapter",

@@ -1,12 +1,12 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { useApp } from '../context/AppContext.jsx';
+import { useState, useMemo, useEffect, useRef } from 'react';
+import { useAppControls } from '../context/AppContext.jsx';
 import { Icon } from '../utils/icons.jsx';
 
 export function CommandPalette() {
   const {
     isCommandOpen, setIsCommandOpen, navigate, toggleTheme,
     toggleProxy, refreshCore, status,
-  } = useApp();
+  } = useAppControls();
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef(null);

@@ -1,23 +1,9 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AnalyticsWorkspace } from '../components/AnalyticsWorkspace.jsx';
 import { EventInspector } from '../components/EventInspector.jsx';
 import { useApp } from '../context/AppContext.jsx';
 import { api } from '../services/api.js';
-import {
-  clientKindLabel,
-  eventDurationText,
-  eventEndpointName,
-  eventFailureSummaryLabel,
-  eventOutcomeLabel,
-  eventRequestID,
-  eventResultKind,
-  failureKindLabel,
-  failurePhaseLabel,
-  formatNumber,
-  formatTimestamp,
-  purposeLabel,
-  statusKind,
-} from '../utils/helpers.js';
+import { clientKindLabel, failureKindLabel, failurePhaseLabel, formatNumber, purposeLabel } from '../utils/helpers.js';
 import { Icon } from '../utils/icons.jsx';
 import { copyWithToast } from '../utils/clipboard.js';
 

@@ -46,7 +46,7 @@ pub(super) struct DiagnosticCaptureState {
 /// 诊断捕获的轻量索引缓存。
 ///
 /// 完整记录仍然保存在 `DiagnosticCaptureState` 中并按原样持久化；索引只
-/// 保存最近 200 条元数据。把它拆成独立锁后，后台落盘复制 512 MB 明文时，
+/// 保存最近 200 条元数据。正文使用不可变共享字符串，后台快照仅克隆引用；
 /// Admin 刷新不必等待完整记录锁，也不会把正文带回前端。
 pub(super) struct DiagnosticCaptureIndexCache {
     enabled: bool,
@@ -507,7 +507,7 @@ impl Engine {
             method: "GET".into(),
             path: context.request_path.clone(),
             inbound_headers: Vec::new(),
-            inbound_body: String::new(),
+            inbound_body: "".into(),
             inbound_body_bytes: 0,
             inbound_body_truncated: false,
             client_kind: context.client_kind,
@@ -591,7 +591,7 @@ impl Engine {
             method: method.into(),
             path: path.into(),
             inbound_headers,
-            inbound_body,
+            inbound_body: inbound_body.into(),
             inbound_body_bytes: body.len() as u64,
             inbound_body_truncated: body_truncated,
             client_kind: meta.client_kind,
@@ -679,7 +679,7 @@ impl Engine {
             outbound_method: request.method.clone(),
             outbound_url,
             outbound_headers,
-            outbound_body,
+            outbound_body: outbound_body.into(),
             outbound_body_bytes: request.body.len() as u64,
             outbound_body_truncated: body_truncated,
             response_status: None,
@@ -813,7 +813,7 @@ impl Engine {
                 .push(DiagnosticChunk {
                     at_ms,
                     bytes: bytes.len() as u64,
-                    data,
+                    data: data.into(),
                     truncated,
                 });
         }
@@ -844,7 +844,7 @@ impl Engine {
                 .push(DiagnosticChunk {
                     at_ms,
                     bytes: bytes.len() as u64,
-                    data,
+                    data: data.into(),
                     truncated,
                 });
         }

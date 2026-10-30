@@ -1,4 +1,3 @@
-import React from 'react';
 import { Icon } from '../utils/icons.jsx';
 
 export function MetricCard({ label, value, detail, icon, accent = 'var(--primary)' }) {

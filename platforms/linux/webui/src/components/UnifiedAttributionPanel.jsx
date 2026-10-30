@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { copyWithToast } from '../utils/clipboard.js';
 
 export function UnifiedAttributionPanel() {

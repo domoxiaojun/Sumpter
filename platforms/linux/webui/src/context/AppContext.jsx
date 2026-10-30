@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import { createContext, useMemo, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { api, getAuthState, openEventStream, subscribeAuth } from '../services/api.js';
 import { upsertRuntimeEvent, mergeRuntimeEvent } from '../utils/runtimeEvents.js';
 import { fetchRuntimeChanges, mergeRuntimeListItems, runtimeSummaryRevision, RUNTIME_API_VERSION } from '../utils/runtimeSync.js';
@@ -7,6 +7,7 @@ import { configDraftWrite, requireDraftGeneration } from '../utils/configDraft.j
 import { initialConnectionsObservation, receiveConnectionsSummary, failConnectionsSummary } from '../utils/responsesConnections.js';
 
 const AppContext = createContext(null);
+const RuntimeContext = createContext(null);
 
 function normalizeAnalyticsFilters(filters = {}) {
   return {
@@ -795,7 +796,7 @@ export function AppProvider({ children }) {
     setConnectionsObservation(initialConnectionsObservation);
   }, []);
 
-  const value = {
+  const value = useMemo(() => ({
     currentRoute,
     navigate,
     theme,
@@ -804,17 +805,6 @@ export function AppProvider({ children }) {
     config: configDoc?.config,
     secretStatus: configDoc?.secretStatus,
     status,
-    runtime,
-    connectionsObservation,
-    runtimeAnalytics,
-    runtimeFacets,
-    analyticsRefreshSignal,
-    analyticsLoading,
-    analyticsError,
-    analyticsStale,
-    runtimeEventDetail,
-    analyticsRange,
-    analyticsFilters,
     diagnostics,
     autostart,
     isLoading,
@@ -840,20 +830,40 @@ export function AppProvider({ children }) {
     openModal: setActiveModal,
     closeModal: () => setActiveModal(null),
     refreshCore,
+    toggleProxy,
+    saveConfig,
+  }), [currentRoute, navigate, theme, configDoc, status, diagnostics, autostart, isLoading, lastError, auth, authLoading, login, logout, autoRefresh, setAutoRefresh, refreshIntervalOptions, runRefreshInterval, setRunRefreshInterval, statisticsRefreshInterval, setStatisticsRefreshInterval, streamConnected, toasts, addToast, removeToast, isCommandOpen, setIsCommandOpen, activeModal, refreshCore, toggleProxy, saveConfig]);
+
+  const runtimeValue = useMemo(() => ({
+    runtime,
+    connectionsObservation,
+    runtimeAnalytics,
+    runtimeFacets,
+    analyticsRefreshSignal,
+    analyticsLoading,
+    analyticsError,
+    analyticsStale,
+    runtimeEventDetail,
+    analyticsRange,
+    analyticsFilters,
     loadRuntimeAnalytics,
     loadRuntimeEvent,
     deleteRuntimeSession,
     exportRuntimeSession,
     loadMoreRuntimeEvents,
-    toggleProxy,
-    saveConfig,
-  };
+  }), [runtime, connectionsObservation, runtimeAnalytics, runtimeFacets, analyticsRefreshSignal, analyticsLoading, analyticsError, analyticsStale, runtimeEventDetail, analyticsRange, analyticsFilters, loadRuntimeAnalytics, loadRuntimeEvent, deleteRuntimeSession, exportRuntimeSession, loadMoreRuntimeEvents]);
 
-  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
+  return <AppContext.Provider value={value}><RuntimeContext.Provider value={runtimeValue}>{children}</RuntimeContext.Provider></AppContext.Provider>;
 }
 
-export function useApp() {
+export function useAppControls() {
   const context = useContext(AppContext);
   if (!context) throw new Error('useApp must be used within an AppProvider');
   return context;
+}
+
+export function useApp() {
+  const controls = useAppControls();
+  const runtime = useContext(RuntimeContext);
+  return { ...controls, ...runtime };
 }

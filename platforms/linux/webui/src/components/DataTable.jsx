@@ -1,4 +1,3 @@
-import React from 'react';
 import { HorizontalScroll } from './HorizontalScroll.jsx';
 
 const COLUMN_TYPE_DEFAULTS = Object.freeze({

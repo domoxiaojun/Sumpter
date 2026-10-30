@@ -1,5 +1,3 @@
-import React from 'react';
-
 export function StatusBadge({ status, text, kind }) {
   let resolvedKind = kind;
   let resolvedText = text;

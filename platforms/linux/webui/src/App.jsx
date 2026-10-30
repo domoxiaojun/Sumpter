@@ -1,24 +1,24 @@
-import React, { useEffect } from 'react';
-import { useApp } from './context/AppContext.jsx';
+import { lazy, Suspense, useEffect } from 'react';
+import { useAppControls } from './context/AppContext.jsx';
 import { Sidebar } from './components/Sidebar.jsx';
 import { Topbar } from './components/Topbar.jsx';
 import { CommandPalette } from './components/CommandPalette.jsx';
 import { Modal } from './components/Modal.jsx';
 import { ToastContainer } from './components/Toast.jsx';
 
-import { RunPage } from './pages/RunPage.jsx';
-import { PrimaryProvidersPage } from './pages/PrimaryProvidersPage.jsx';
-import { ModelGroupsPage } from './pages/ModelGroupsPage.jsx';
-import { RoutingPage } from './pages/RoutingPage.jsx';
-import { SecurityPage } from './pages/SecurityPage.jsx';
-import { StatsPage } from './pages/StatsPage.jsx';
-import { DiagnosticsPage } from './pages/DiagnosticsPage.jsx';
-import { HelpPage } from './pages/HelpPage.jsx';
-import { AboutPage } from './pages/AboutPage.jsx';
+const RunPage = lazy(() => import('./pages/RunPage.jsx').then((module) => ({ default: module.RunPage })));
+const PrimaryProvidersPage = lazy(() => import('./pages/PrimaryProvidersPage.jsx').then((module) => ({ default: module.PrimaryProvidersPage })));
+const ModelGroupsPage = lazy(() => import('./pages/ModelGroupsPage.jsx').then((module) => ({ default: module.ModelGroupsPage })));
+const RoutingPage = lazy(() => import('./pages/RoutingPage.jsx').then((module) => ({ default: module.RoutingPage })));
+const SecurityPage = lazy(() => import('./pages/SecurityPage.jsx').then((module) => ({ default: module.SecurityPage })));
+const StatsPage = lazy(() => import('./pages/StatsPage.jsx').then((module) => ({ default: module.StatsPage })));
+const DiagnosticsPage = lazy(() => import('./pages/DiagnosticsPage.jsx').then((module) => ({ default: module.DiagnosticsPage })));
+const HelpPage = lazy(() => import('./pages/HelpPage.jsx').then((module) => ({ default: module.HelpPage })));
+const AboutPage = lazy(() => import('./pages/AboutPage.jsx').then((module) => ({ default: module.AboutPage })));
 import { LoginPage } from './pages/LoginPage.jsx';
 
 export function AppContent() {
-  const { currentRoute, isLoading, auth, authLoading } = useApp();
+  const { currentRoute, isLoading, auth, authLoading } = useAppControls();
 
   useEffect(() => {
     if (!auth.authenticated) return undefined;
@@ -71,7 +71,7 @@ export function AppContent() {
       <div className="main-wrapper">
         <Topbar />
         <main className="content-body" data-route={currentRoute} id="page" tabIndex="-1">
-          {renderPage()}
+          <Suspense fallback={<div className="app-loading-state"><span className="pulse-dot" /><span>正在加载页面…</span></div>}>{renderPage()}</Suspense>
         </main>
       </div>
 

@@ -1,4 +1,3 @@
-import React from 'react';
 import { eventCacheHitRateLabel } from '../utils/eventPresentation.js';
 
 export function CacheHitRate({ event }) {

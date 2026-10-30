@@ -1,5 +1,4 @@
-import React from 'react';
-import { useApp } from '../context/AppContext.jsx';
+import { useAppControls } from '../context/AppContext.jsx';
 import { Icon } from '../utils/icons.jsx';
 
 export function Topbar() {
@@ -9,7 +8,7 @@ export function Topbar() {
     runRefreshInterval, setRunRefreshInterval,
     statisticsRefreshInterval, setStatisticsRefreshInterval,
     auth, logout,
-  } = useApp();
+  } = useAppControls();
   const statisticsPage = currentRoute === 'statistics';
   const refreshInterval = statisticsPage ? statisticsRefreshInterval : runRefreshInterval;
   const setRefreshInterval = statisticsPage ? setStatisticsRefreshInterval : setRunRefreshInterval;

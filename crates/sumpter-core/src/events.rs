@@ -259,10 +259,10 @@ impl ClientKind {
                 return Self::GrokBuild;
             }
         }
-        if let Some(originator) = originator {
-            if is_codex_originator(originator) {
-                return Self::Codex;
-            }
+        if let Some(originator) = originator
+            && is_codex_originator(originator)
+        {
+            return Self::Codex;
         }
         if openai_inbound {
             Self::OpenaiCompat
@@ -2691,7 +2691,7 @@ pub struct DiagnosticChunk {
     #[serde(rename = "atMS")]
     pub at_ms: i64,
     pub bytes: u64,
-    pub data: String,
+    pub data: std::sync::Arc<str>,
     #[serde(default)]
     pub truncated: bool,
 }
@@ -2716,7 +2716,7 @@ pub struct DiagnosticAttemptCapture {
     #[serde(rename = "outboundURL")]
     pub outbound_url: String,
     pub outbound_headers: Vec<DiagnosticHeader>,
-    pub outbound_body: String,
+    pub outbound_body: std::sync::Arc<str>,
     pub outbound_body_bytes: u64,
     #[serde(default)]
     pub outbound_body_truncated: bool,
@@ -2742,7 +2742,7 @@ pub struct DiagnosticRequestCapture {
     pub method: String,
     pub path: String,
     pub inbound_headers: Vec<DiagnosticHeader>,
-    pub inbound_body: String,
+    pub inbound_body: std::sync::Arc<str>,
     pub inbound_body_bytes: u64,
     #[serde(default)]
     pub inbound_body_truncated: bool,
@@ -3232,9 +3232,19 @@ mod tests {
         });
         let record: DiagnosticRequestCapture =
             serde_json::from_value(payload).expect("当前诊断形状必须可读");
+        let snapshot_record = record.clone();
+        assert!(std::sync::Arc::ptr_eq(
+            &record.inbound_body,
+            &snapshot_record.inbound_body
+        ));
+        assert!(std::sync::Arc::ptr_eq(
+            &record.attempts[0].outbound_body,
+            &snapshot_record.attempts[0].outbound_body,
+        ));
         let wire = serde_json::to_value(&record).expect("序列化");
 
         assert_eq!(wire["requestID"], "REQ-1");
+        assert_eq!(wire["inboundBody"], "{}");
         assert_eq!(wire["featureRuleID"], "rule-1");
         assert_eq!(wire["attempts"][0]["endpointID"], "ep-1");
         assert_eq!(

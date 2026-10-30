@@ -124,11 +124,21 @@ impl Engine {
         range: &str,
         filter: &AnalyticsFilter,
     ) -> Result<Value, String> {
+        self.runtime_analytics_view_async(range, filter, false)
+            .await
+    }
+    pub async fn runtime_analytics_view_async(
+        &self,
+        range: &str,
+        filter: &AnalyticsFilter,
+        diagnostics_only: bool,
+    ) -> Result<Value, String> {
         if let Some(store) = self.inner.runtime_store.get() {
-            return runtime_query::asynchronous::analytics(
+            return runtime_query::asynchronous::analytics_view(
                 store.database_path().to_path_buf(),
                 range.to_owned(),
                 filter.normalized().to_runtime_filter(),
+                diagnostics_only,
             )
             .await
             .map_err(|error| error.to_string())

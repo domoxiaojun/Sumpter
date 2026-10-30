@@ -115,8 +115,9 @@ extension AppModel {
         diagnosticCaptureExportTask?.cancel()
         diagnosticCaptureExportRequestGeneration &+= 1
         diagnosticCaptureExportTask = nil
-        runtimeRequestChainTask?.cancel()
-        runtimeRequestChainTask = nil
+        cancelStatisticsRequests()
+        runHistoryTask?.cancel()
+        runHistoryTask = nil
         diagnosticCaptureRequestGeneration &+= 1
         diagnosticCaptureDetailRequestGeneration &+= 1
         diagnosticCapture = nil
@@ -424,6 +425,19 @@ extension AppModel {
         Task { await refreshStatus(loadLatestEvents: true) }
     }
 
+    func cancelStatisticsRequests() {
+        runtimeSnapshotTask?.cancel()
+        runtimeSnapshotTask = nil
+        runtimeFacetsTask?.cancel()
+        runtimeFacetsTask = nil
+        runtimeDimensionTask?.cancel()
+        runtimeDimensionTask = nil
+        runtimeErrorTask?.cancel()
+        runtimeErrorTask = nil
+        runtimeRequestChainTask?.cancel()
+        runtimeRequestChainTask = nil
+    }
+
     /// UsagePane 在进入/离开导航详情时调用。统计聚合不是 liveness 数据，
     /// 因此不让后台 status 轮询在其它页面预取它。
     func setStatisticsVisible(_ visible: Bool) {
@@ -434,6 +448,13 @@ extension AppModel {
         // loading facets here would duplicate the first snapshot request and
         // make entering Statistics pay for two identical SQLite scans.
         if !visible {
+            cancelStatisticsRequests()
+            runtimeFacetsRequestGeneration &+= 1
+            runtimeHistoryLoading = false
+            runtimeErrorPageLoading = false
+            runtimeDimensionPageLoading = false
+            runtimeDimensionsLoading = false
+            runtimeRequestChainLoading = false
             // 让离开页面后返回的旧响应失效，但不清空已显示快照，回到页面
             // 时可以先绘制旧数据再按需更新。
             analyticsRequestGeneration &+= 1

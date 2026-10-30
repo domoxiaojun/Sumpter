@@ -534,11 +534,11 @@ impl Engine {
                             st.guard.record_response_summary(tracker);
                         }
                         let mut out = match &mut st.bridge {
-                            Some(bridge) => bridge.feed(&chunk),
-                            None => chunk.to_vec(),
+                            Some(bridge) => Bytes::from(bridge.feed(&chunk)),
+                            None => chunk,
                         };
                         if let Some(client) = &mut st.client_bridge {
-                            out = client.feed(&out);
+                            out = Bytes::from(client.feed(&out));
                         }
                         let terminal = st.terminal_tracker.as_mut().and_then(|tracker| {
                             if st.observe_sse {
@@ -572,7 +572,7 @@ impl Engine {
                         if out.is_empty() {
                             continue;
                         }
-                        return Some((Ok(Bytes::from(out)), st));
+                        return Some((Ok(out), st));
                     }
                     Ok(None) => {
                         st.finished = true;

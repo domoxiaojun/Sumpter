@@ -1,8 +1,8 @@
 import { StatusBadge } from '../components/StatusBadge.jsx';
 import { Icon } from '../utils/icons.jsx';
 import { UnifiedAttributionPanel } from '../components/UnifiedAttributionPanel.jsx';
-import React, { useState, useEffect, useRef } from 'react';
-import { useApp } from '../context/AppContext.jsx';
+import { useState, useEffect, useRef } from 'react';
+import { useAppControls } from '../context/AppContext.jsx';
 import { QuickToggle } from '../components/QuickToggle.jsx';
 import { api } from '../services/api.js';
 import {
@@ -10,7 +10,7 @@ import {
 } from '../utils/helpers.js';
 
 export function SecurityPage() {
-  const { config, configDoc, secretStatus, saveConfig, addToast, auth } = useApp();
+  const { config, configDoc, secretStatus, saveConfig, addToast, auth } = useAppControls();
   const listenerSource = useRef(configDoc);
 
   // Listener draft state

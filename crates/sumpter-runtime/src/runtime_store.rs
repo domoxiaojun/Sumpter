@@ -801,15 +801,14 @@ impl PendingBatch {
     }
 
     fn upsert(&mut self, message: WriteMessage, inner: &Arc<Inner>) {
-        if let Some(previous) = self
-            .messages
-            .insert(message.event.id.clone(), message.clone())
-        {
+        let bytes = message.bytes;
+        let change_seq = message.change_seq;
+        if let Some(previous) = self.messages.insert(message.event.id.clone(), message) {
             let mut state = inner.state.lock().unwrap();
-            if let Some(delta) = state.pending_counter_deltas.remove(&previous.change_seq) {
-                if let Some(current) = state.pending_counter_deltas.get_mut(&message.change_seq) {
-                    current.adjust(RuntimeCounters::default(), delta);
-                }
+            if let Some(delta) = state.pending_counter_deltas.remove(&previous.change_seq)
+                && let Some(current) = state.pending_counter_deltas.get_mut(&change_seq)
+            {
+                current.adjust(RuntimeCounters::default(), delta);
             }
             self.bytes = self.bytes.saturating_sub(previous.bytes);
             inner.pending_events.fetch_sub(1, Ordering::AcqRel);
@@ -817,7 +816,7 @@ impl PendingBatch {
                 .pending_bytes
                 .fetch_sub(previous.bytes, Ordering::AcqRel);
         }
-        self.bytes += message.bytes;
+        self.bytes += bytes;
         self.first_at.get_or_insert_with(std::time::Instant::now);
     }
 

@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { useApp } from '../context/AppContext.jsx';
+import { useEffect, useRef, useState } from 'react';
+import { useAppControls } from '../context/AppContext.jsx';
 import { Icon } from '../utils/icons.jsx';
 import { ModelGroupBindingEditor } from '../components/ModelGroupBindingEditor.jsx';
 import { clone } from '../utils/helpers.js';
@@ -35,7 +35,7 @@ function CategoryPicker({ categories, selected, onChange }) {
 }
 
 export function ModelGroupsPage() {
-  const { config, configDoc, saveConfig, addToast, openModal } = useApp();
+  const { config, configDoc, saveConfig, addToast, openModal } = useAppControls();
   const draftSource = useRef(configDoc);
   const [groups, setGroups] = useState(() => groupModels(config));
   const [selected, setSelected] = useState(groups[0]?.id);

@@ -191,10 +191,10 @@ pub fn gemini_to_anthropic(body: &Value, model: &str) -> Result<Value, Translati
     out.insert("stream".into(), json!(true));
     out.insert("max_tokens".into(), json!(generation_max_tokens(object)));
 
-    if let Some(system) = object.get("systemInstruction") {
-        if let Some(text) = system_instruction_text(system)? {
-            out.insert("system".into(), json!(text));
-        }
+    if let Some(system) = object.get("systemInstruction")
+        && let Some(text) = system_instruction_text(system)?
+    {
+        out.insert("system".into(), json!(text));
     }
     let config = object.get("generationConfig").and_then(Value::as_object);
     if let Some(config) = config {
@@ -1152,14 +1152,14 @@ impl GeminiStreamBridge {
             .and_then(Value::as_array)
             .and_then(|items| items.first());
         if let Some(candidate) = candidate {
-            if let Some(content) = candidate.get("content") {
-                if let Some(parts) = content.get("parts").and_then(Value::as_array) {
-                    for part in parts {
-                        self.handle_part(part, &mut events);
-                    }
-                    // 保留前面分片里的调用；文本不属于工具签名回放状态。
-                    self.collect_replay_calls(parts);
+            if let Some(content) = candidate.get("content")
+                && let Some(parts) = content.get("parts").and_then(Value::as_array)
+            {
+                for part in parts {
+                    self.handle_part(part, &mut events);
                 }
+                // 保留前面分片里的调用；文本不属于工具签名回放状态。
+                self.collect_replay_calls(parts);
             }
             if let Some(reason) = candidate.get("finishReason").and_then(Value::as_str) {
                 self.stop_reason = map_finish_reason(reason);

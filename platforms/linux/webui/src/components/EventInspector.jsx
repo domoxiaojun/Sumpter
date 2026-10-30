@@ -1,4 +1,3 @@
-import React from 'react';
 import { CacheHitRate } from './CacheHitRate.jsx';
 import {
   eventModel, eventEndpoint, eventEndpointName, eventDurationMS, eventProjectContext, eventClientKindLabel, eventKindLabel,

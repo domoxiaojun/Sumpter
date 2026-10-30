@@ -1,5 +1,5 @@
-import React, { useRef } from 'react';
-import { useApp } from '../context/AppContext.jsx';
+import { useRef } from 'react';
+import { useAppControls } from '../context/AppContext.jsx';
 import { DataTable } from '../components/DataTable.jsx';
 import { QuickToggle } from '../components/QuickToggle.jsx';
 import { Icon } from '../utils/icons.jsx';
@@ -12,7 +12,7 @@ import { api } from '../services/api.js';
 const catalogLoaderFactory = (fetchModels) => createRouteCatalogLoader(fetchModels);
 
 export function RoutingPage() {
-  const { config, configDoc, saveConfig, openModal, addToast } = useApp();
+  const { config, configDoc, saveConfig, openModal, addToast } = useAppControls();
   const rules = config?.featureRules || [];
   const catalogLoaderRef = useRef(null);
   if (!catalogLoaderRef.current) catalogLoaderRef.current = catalogLoaderFactory((endpointID, options) => api.fetchProviderModels(endpointID, options));

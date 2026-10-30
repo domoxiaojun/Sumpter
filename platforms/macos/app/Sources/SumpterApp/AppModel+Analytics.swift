@@ -137,7 +137,8 @@ extension AppModel {
         let generation = runtimeFacetsRequestGeneration
         let range = runtimeAnalyticsRange
         let filter = runtimeV2Filter()
-        Task { [weak self] in
+        runtimeFacetsTask?.cancel()
+        runtimeFacetsTask = Task { [weak self] in
             guard let self, let admin = self.admin else { return }
             do {
                 let value = try await admin.runtimeFacets(range: range, filter: filter)
@@ -148,6 +149,7 @@ extension AppModel {
                 self.lastRuntimeFacetsRefreshAt = Date()
                 self.clearInvalidAnalyticsFacetFilters(value)
             } catch {
+                guard !Task.isCancelled else { return }
                 // Facets are an enhancement; preserve the last good selectors
                 // and let the v3 board report its own query error.
             }
@@ -258,7 +260,8 @@ extension AppModel {
         let anchor = resetSnapshot ? nil : runHistoryPage
         let pageSize = runHistoryPageSize
         let filter = runHistoryFilter
-        Task { [weak self] in
+        runHistoryTask?.cancel()
+        runHistoryTask = Task { [weak self] in
             guard let self else { return }
             guard let admin = self.admin else {
                 guard generation == self.runHistoryRequestGeneration else { return }
@@ -277,6 +280,7 @@ extension AppModel {
                         filter: filter
                     )
                 } catch {
+                    guard !Task.isCancelled else { return }
                     guard generation == self.runHistoryRequestGeneration else { return }
                     guard self.isRuntimeSnapshotError(error), !resetSnapshot else { throw error }
                     // 事件保留/重置导致旧锚点失效时只恢复一次到第一页。
@@ -289,6 +293,7 @@ extension AppModel {
                 self.runHistoryError = nil
                 self.runHistoryLoading = false
             } catch {
+                guard !Task.isCancelled else { return }
                 guard generation == self.runHistoryRequestGeneration else { return }
                 self.runHistoryError = "读取运行事件分页失败：\(error)"
                 self.runHistoryLoading = false
@@ -310,7 +315,8 @@ extension AppModel {
         let pageSize = runHistoryPageSize
         let filter = runHistoryFilter
         let anchor = runHistoryPage
-        Task { [weak self] in
+        runHistoryTask?.cancel()
+        runHistoryTask = Task { [weak self] in
             guard let self else { return }
             guard let admin = self.admin else {
                 guard generation == self.runHistoryRequestGeneration else { return }
@@ -329,6 +335,7 @@ extension AppModel {
                         filter: filter
                     )
                 } catch {
+                    guard !Task.isCancelled else { return }
                     guard generation == self.runHistoryRequestGeneration,
                           self.isRuntimeSnapshotError(error) else { throw error }
                     self.runHistoryPage = nil
@@ -339,6 +346,7 @@ extension AppModel {
                 self.runHistoryError = nil
                 self.runHistoryLoading = false
             } catch {
+                guard !Task.isCancelled else { return }
                 guard generation == self.runHistoryRequestGeneration else { return }
                 if self.isRuntimeSnapshotError(error) {
                     self.runHistoryPage = nil
@@ -424,6 +432,8 @@ extension AppModel {
         resetSnapshot: Bool = false,
         preserveVisibleContent: Bool = false
     ) {
+        runtimeDimensionTask?.cancel()
+        runtimeErrorTask?.cancel()
         // A new snapshot refresh supersedes any in-flight page/aggregate/child
         // request.  Clear their busy flags here, because the superseded task
         // is deliberately not allowed to mutate state when it returns.
@@ -469,7 +479,8 @@ extension AppModel {
                 runtimeModelsPage = nil
             }
         }
-        Task { [weak self] in
+        runtimeSnapshotTask?.cancel()
+        runtimeSnapshotTask = Task { [weak self] in
             guard let self else { return }
             await self.refreshRuntimeV2Async(
                 resetSnapshot: resetSnapshot,
@@ -484,6 +495,7 @@ extension AppModel {
         preserveVisibleContent: Bool,
         generation: Int
     ) async {
+        guard !Task.isCancelled else { return }
         guard let admin else {
             if generation == runtimeV2RequestGeneration {
                 runtimeV2Loading = false
@@ -500,7 +512,7 @@ extension AppModel {
                 retrySnapshot: true,
                 requestGeneration: generation
             )
-            guard generation == runtimeV2RequestGeneration else { return }
+            guard !Task.isCancelled, generation == runtimeV2RequestGeneration else { return }
             let pageChanged = runtimeHistoryPage != page
             applyRuntimeHistoryPage(page)
             if runtimeHistoryError != nil { runtimeHistoryError = nil }
@@ -527,7 +539,7 @@ extension AppModel {
             async let pricingValue = runtimePricingIfNeeded(for: board, using: admin)
             async let diagnosticValue = runtimeDiagnosticAnalyticsIfNeeded(for: board, using: admin)
             let (trend, storage, pricing, diagnostic) = try await (trendValue, storageValue, pricingValue, diagnosticValue)
-            guard generation == runtimeV2RequestGeneration else { return }
+            guard !Task.isCancelled, generation == runtimeV2RequestGeneration else { return }
             if let trend, runtimeTrendSeries != trend { runtimeTrendSeries = trend }
             if let storage, runtimeStorageProbe != storage { runtimeStorageProbe = storage }
             if let pricing, runtimePricing != pricing { runtimePricing = pricing }
@@ -544,7 +556,7 @@ extension AppModel {
             // second loading-state publication and keeps scrolling stable.
             loadRuntimeV2Board(statisticsBoard, force: !preserveVisibleContent || pageChanged)
         } catch {
-            guard generation == runtimeV2RequestGeneration else { return }
+            guard !Task.isCancelled, generation == runtimeV2RequestGeneration else { return }
             if isRuntimeSnapshotError(error) {
                 // A prune/reset can invalidate an anchor between the first
                 // request and the aggregate queries. Clear it and retry once
@@ -607,7 +619,7 @@ extension AppModel {
         using admin: AdminClient
     ) async throws -> AdminWire.RuntimeAnalytics? {
         guard board == "errors" else { return nil }
-        return try await admin.runtimeAnalytics(range: runtimeAnalyticsRange, filter: runtimeV2Filter())
+        return try await admin.runtimeAnalytics(range: runtimeAnalyticsRange, filter: runtimeV2Filter(), diagnosticsOnly: true)
     }
 
     func fetchRuntimeHistoryPage(
@@ -685,7 +697,8 @@ extension AppModel {
         runtimeHistoryLoading = true
         runtimeV2RequestGeneration &+= 1
         let generation = runtimeV2RequestGeneration
-        Task { [weak self] in
+        runtimeSnapshotTask?.cancel()
+        runtimeSnapshotTask = Task { [weak self] in
             guard let self, let admin = self.admin else {
                 self?.runtimeHistoryLoading = false
                 self?.runtimeV2Loading = false
@@ -705,6 +718,7 @@ extension AppModel {
                 self.runtimeHistoryLoading = false
                 self.runtimeV2Loading = false
             } catch {
+                guard !Task.isCancelled else { return }
                 guard generation == self.runtimeV2RequestGeneration else { return }
                 self.runtimeHistoryError = "\(error)"
                 self.runtimeHistoryLoading = false
@@ -897,7 +911,8 @@ extension AppModel {
         let order = runtimeDimensionOrder
         let pageSize = runtimeDimensionPageSize
         let filter = runtimeV2Filter()
-        Task { [weak self] in
+        runtimeDimensionTask?.cancel()
+        runtimeDimensionTask = Task { [weak self] in
             guard let self else { return }
             defer {
                 if generation == self.runtimeDimensionRequestGeneration,
@@ -925,6 +940,7 @@ extension AppModel {
                 }
                 self.runtimeV2Error = nil
             } catch {
+                guard !Task.isCancelled else { return }
                 guard generation == self.runtimeDimensionRequestGeneration,
                       snapshotGeneration == self.runtimeV2RequestGeneration else { return }
                 if self.isRuntimeSnapshotError(error) {
@@ -964,7 +980,8 @@ extension AppModel {
         let modelSearch = runtimeModelSearch
         let modelSort = runtimeModelSort
         let modelOrder = runtimeModelOrder
-        Task { [weak self] in
+        runtimeDimensionTask?.cancel()
+        runtimeDimensionTask = Task { [weak self] in
             guard let self else { return }
             defer {
                 if generation == self.runtimeDimensionRequestGeneration,
@@ -1036,6 +1053,7 @@ extension AppModel {
                 }
                 self.runtimeV2Error = nil
             } catch {
+                guard !Task.isCancelled else { return }
                 guard generation == self.runtimeDimensionRequestGeneration,
                       snapshotGeneration == self.runtimeV2RequestGeneration else { return }
                 if self.isRuntimeSnapshotError(error) {
@@ -1054,7 +1072,8 @@ extension AppModel {
         let generation = runtimeErrorPageRequestGeneration
         let snapshotGeneration = runtimeV2RequestGeneration
         runtimeErrorPageLoading = true
-        Task { [weak self] in
+        runtimeErrorTask?.cancel()
+        runtimeErrorTask = Task { [weak self] in
             guard let self else { return }
             defer {
                 if generation == self.runtimeErrorPageRequestGeneration,
@@ -1078,6 +1097,7 @@ extension AppModel {
                 }
                 self.runtimeV2Error = nil
             } catch {
+                guard !Task.isCancelled else { return }
                 guard generation == self.runtimeErrorPageRequestGeneration,
                       snapshotGeneration == self.runtimeV2RequestGeneration else { return }
                 if self.isRuntimeSnapshotError(error) {
@@ -1187,7 +1207,8 @@ extension AppModel {
         case .model:
             search = runtimeModelSearch; sort = runtimeModelSort; order = runtimeModelOrder; pageSize = runtimeModelPageSize
         }
-        Task { [weak self] in
+        runtimeDimensionTask?.cancel()
+        runtimeDimensionTask = Task { [weak self] in
             guard let self else { return }
             defer {
                 if generation == self.runtimeDimensionRequestGeneration,
@@ -1241,6 +1262,7 @@ extension AppModel {
                 }
                 self.runtimeV2Error = nil
             } catch {
+                guard !Task.isCancelled else { return }
                 guard generation == self.runtimeDimensionRequestGeneration,
                       snapshotGeneration == self.runtimeV2RequestGeneration else { return }
                 if self.isRuntimeSnapshotError(error) {

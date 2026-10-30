@@ -28,6 +28,27 @@ pub fn analytics_on(
     range: &str,
     filter: &RuntimeFilter,
 ) -> QueryResult<AnalyticsSummary> {
+    analytics_view_on(connection, range, filter, false)
+}
+
+/// Diagnostic boards do not need project/session pickers or identity tables.
+/// The default analytics endpoint retains its complete compatibility shape.
+pub fn analytics_view(
+    path: &Path,
+    range: &str,
+    filter: &RuntimeFilter,
+    diagnostics_only: bool,
+) -> QueryResult<AnalyticsSummary> {
+    let mut connection = read_connection(path)?;
+    analytics_view_on(&mut connection, range, filter, diagnostics_only)
+}
+
+pub fn analytics_view_on(
+    connection: &mut Connection,
+    range: &str,
+    filter: &RuntimeFilter,
+    diagnostics_only: bool,
+) -> QueryResult<AnalyticsSummary> {
     let now = current_apple_timestamp();
     let from = match range {
         "1h" => Some(now - 3_600.0),
@@ -128,55 +149,87 @@ pub fn analytics_on(
     let cache_read = cache_read_statistics(&transaction, &client_builder)?;
     let upstream_cache_read = cache_read_statistics(&transaction, &upstream_builder)?;
     let dimensions = AnalyticsDimensions {
-        endpoints: endpoint_dimensions(&transaction, &client_builder, &upstream_builder)?,
+        endpoints: if diagnostics_only {
+            Vec::new()
+        } else {
+            endpoint_dimensions(&transaction, &client_builder, &upstream_builder)?
+        },
         models: analytics_dimension(
             &transaction,
             &client_builder,
             "COALESCE(effective_model,client_model,upstream_model,'unrecorded')",
             Some("kind='client'"),
         )?,
-        client_variants: analytics_dimension(
-            &transaction,
-            &client_builder,
-            "COALESCE(client_variant,'unknown')",
-            None,
-        )?,
-        agent_roles: analytics_dimension(
-            &transaction,
-            &client_builder,
-            "COALESCE(agent_role,'unknown')",
-            None,
-        )?,
-        agent_names: analytics_dimension(
-            &transaction,
-            &client_builder,
-            "COALESCE(agent_name,'unknown')",
-            None,
-        )?,
-        parent_threads: analytics_dimension(
-            &transaction,
-            &client_builder,
-            "COALESCE(parent_thread_id,'unknown')",
-            None,
-        )?,
-        parent_turns: analytics_dimension(
-            &transaction,
-            &client_builder,
-            "COALESCE(parent_turn_id,'unknown')",
-            None,
-        )?,
-        root_turns: analytics_dimension(
-            &transaction,
-            &client_builder,
-            "COALESCE(root_turn_id,'unknown')",
-            None,
-        )?,
-        client_kinds: analytics_dimension(
-            &transaction,
-            &client_builder,
-            "COALESCE(client_kind,'unrecorded_client')",
-            Some("kind='client'"),
-        )?,
+        client_variants: if diagnostics_only {
+            Vec::new()
+        } else {
+            analytics_dimension(
+                &transaction,
+                &client_builder,
+                "COALESCE(client_variant,'unknown')",
+                None,
+            )?
+        },
+        agent_roles: if diagnostics_only {
+            Vec::new()
+        } else {
+            analytics_dimension(
+                &transaction,
+                &client_builder,
+                "COALESCE(agent_role,'unknown')",
+                None,
+            )?
+        },
+        agent_names: if diagnostics_only {
+            Vec::new()
+        } else {
+            analytics_dimension(
+                &transaction,
+                &client_builder,
+                "COALESCE(agent_name,'unknown')",
+                None,
+            )?
+        },
+        parent_threads: if diagnostics_only {
+            Vec::new()
+        } else {
+            analytics_dimension(
+                &transaction,
+                &client_builder,
+                "COALESCE(parent_thread_id,'unknown')",
+                None,
+            )?
+        },
+        parent_turns: if diagnostics_only {
+            Vec::new()
+        } else {
+            analytics_dimension(
+                &transaction,
+                &client_builder,
+                "COALESCE(parent_turn_id,'unknown')",
+                None,
+            )?
+        },
+        root_turns: if diagnostics_only {
+            Vec::new()
+        } else {
+            analytics_dimension(
+                &transaction,
+                &client_builder,
+                "COALESCE(root_turn_id,'unknown')",
+                None,
+            )?
+        },
+        client_kinds: if diagnostics_only {
+            Vec::new()
+        } else {
+            analytics_dimension(
+                &transaction,
+                &client_builder,
+                "COALESCE(client_kind,'unrecorded_client')",
+                Some("kind='client'"),
+            )?
+        },
         request_purposes: analytics_dimension(
             &transaction,
             &client_builder,
@@ -220,26 +273,40 @@ pub fn analytics_on(
             "COALESCE(stream_terminal,'unobserved')",
             Some("kind='client'"),
         )?,
-        projects: analytics_dimension(
-            &transaction,
-            &client_builder,
-            "COALESCE(project_name,project_id,'unidentified_project')",
-            Some("kind='client' AND COALESCE(attribution_scope,'unknown') != 'internal_feature'"),
-        )?,
+        projects: if diagnostics_only {
+            Vec::new()
+        } else {
+            analytics_dimension(
+                &transaction,
+                &client_builder,
+                "COALESCE(project_name,project_id,'unidentified_project')",
+                Some(
+                    "kind='client' AND COALESCE(attribution_scope,'unknown') != 'internal_feature'",
+                ),
+            )?
+        },
         internal_features: analytics_dimension(
             &transaction,
             &client_builder,
             "COALESCE(codex_thread_class,'unknown')",
             Some("kind='client' AND attribution_scope='internal_feature'"),
         )?,
-        sessions: analytics_dimension(
-            &transaction,
-            &client_builder,
-            "COALESCE(session_key,'unidentified_session')",
-            Some("kind='client'"),
-        )?,
+        sessions: if diagnostics_only {
+            Vec::new()
+        } else {
+            analytics_dimension(
+                &transaction,
+                &client_builder,
+                "COALESCE(session_key,'unidentified_session')",
+                Some("kind='client'"),
+            )?
+        },
     };
-    let facets = analytics_facets_for_filter(&transaction, &filters, &snapshot)?;
+    let facets = if diagnostics_only {
+        super::AnalyticsFacets::default()
+    } else {
+        analytics_facets_for_filter(&transaction, &filters, &snapshot)?
+    };
     let tool_calls = analytics_tool_calls(&transaction, &client_builder)?;
     transaction.commit()?;
     let completed = client_successes

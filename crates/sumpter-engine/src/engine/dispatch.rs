@@ -235,7 +235,9 @@ mod random_sticky_tests {
             "a"
         );
         assert_eq!(
-            restored.clear_session_sticky(&[key.value.clone()]).unwrap(),
+            restored
+                .clear_session_sticky(std::slice::from_ref(&key.value))
+                .unwrap(),
             1
         );
         assert!(dir.load_session_affinity().unwrap().is_empty());

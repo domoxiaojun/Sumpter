@@ -53,6 +53,19 @@ pub async fn analytics(
         .map_err(RuntimeQueryError::Output)?
 }
 
+pub async fn analytics_view(
+    path: PathBuf,
+    range: String,
+    filter: RuntimeFilter,
+    diagnostics_only: bool,
+) -> QueryResult<AnalyticsSummary> {
+    crate::query_executor::run(move || {
+        super::analytics_view(&path, &range, &filter, diagnostics_only)
+    })
+    .await
+    .map_err(RuntimeQueryError::Output)?
+}
+
 pub async fn dimension_page(
     path: PathBuf,
     kind: DimensionKind,

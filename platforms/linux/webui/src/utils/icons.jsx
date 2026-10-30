@@ -44,7 +44,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 */
-import React from 'react';
+
 
 export function Icon({ name, size = 18, className = '', ...props }) {
   const icons = {

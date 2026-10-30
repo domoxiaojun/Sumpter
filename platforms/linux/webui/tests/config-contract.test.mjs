@@ -58,12 +58,7 @@ const {
   cacheHitRateValue,
   formatTokenCount,
 } = await import('../src/utils/helpers.js');
-const {
-  aggregateEvents,
-  codexDimensionValues,
-  codexRows,
-  protocolRouteRows,
-} = await import('../src/utils/eventAnalytics.js');
+
 const {
   orderRuntimeEvents,
   trimRuntimeEvents,
@@ -206,32 +201,7 @@ test('Grok Build client kind uses its product label', () => {
   assert.equal(clientKindLabel('grok_build'), 'Grok Build');
 });
 
-test('client attribution separates explicit unknown, missing, and non-applicable events', () => {
-  const explicitUnknown = { kind: 'client', clientKind: 'unknown' };
-  const legacyClient = { kind: 'client', statusCode: 200 };
-  const legacyUpstream = { kind: 'upstream', statusCode: 200 };
-  const notification = { kind: 'notify', statusCode: 200 };
-  assert.equal(eventClientKindState(explicitUnknown), 'explicit');
-  assert.equal(eventClientKindLabel(explicitUnknown), '未知客户端');
-  assert.equal(eventClientKindState(legacyClient), 'missing');
-  assert.equal(eventClientKindLabel(legacyClient), '客户端未记录');
-  assert.equal(eventClientKindState(legacyUpstream), 'missing');
-  assert.equal(eventClientKindLabel(legacyUpstream), '客户端未记录');
-  assert.equal(eventClientKindState(notification), 'not_applicable');
-  assert.equal(eventClientKindLabel(notification), '不适用（通知事件）');
-  assert.equal(eventResultKind(notification), null);
-  assert.equal(eventStatus(notification), '不适用（通知事件）');
-  assert.equal(eventHttpStatusLabel(notification), '不适用（通知事件）');
-  assert.equal(eventOutcomeLabel(notification), '不适用（通知事件）');
-  assert.equal(eventPhaseLabel(notification), '不适用（通知事件）');
-  assert.equal(eventStatusDetailLabel(notification), '不适用（通知事件）');
-  assert.equal(friendlyEventMessage(notification), '通知事件（不参与请求成败统计）');
-  assert.equal(statusKind(notification), 'muted');
-  assert.deepEqual(aggregateEvents([notification], () => 'all'), []);
-  const misleadingNotification = { ...notification, outcome: 'succeeded', phase: 'completed' };
-  assert.equal(eventResultKind(misleadingNotification), null);
-  assert.equal(eventOutcomeLabel(misleadingNotification), '不适用（通知事件）');
-});
+
 
 test('request purpose separates explicit values, legacy missing, and notifications', () => {
   assert.equal(eventPurposeLabel({ kind: 'client', requestPurpose: 'websearch' }), 'WebSearch 搜索');
@@ -626,35 +596,11 @@ test('in-flight client status is not replaced by the upstream HTTP status', () =
   assert.equal(eventStatusDetailLabel(event), '未收到响应头 · 进行中 (In Flight)');
 });
 
-test('in-flight duration is excluded from analytics averages', () => {
-  const rows = aggregateEvents([
-    { id: 'live', kind: 'client', statusCode: 200, phase: 'inFlight', ttfbMS: 8_000, durationMS: 10_000 },
-    { id: 'done', kind: 'client', statusCode: 200, phase: 'completed', outcome: 'succeeded', ttfbMS: 400, durationMS: 1_200 },
-  ], () => 'all');
-  assert.equal(rows[0].avgTTFB, 400);
-  assert.equal(rows[0].avgDuration, 1_200);
-});
 
-test('event analytics keeps HTTP 200 in-flight rows pending', () => {
-  const row = aggregateEvents([{ id: 'live', statusCode: 200, phase: 'inFlight' }], () => 'all')[0];
-  assert.equal(row.successes, 0);
-  assert.equal(row.pending, 1);
-  assert.equal(row.successRate, 0);
-});
 
-test('protocol route aggregation is a client-only secondary diagnostic', () => {
-  const rows = protocolRouteRows([
-    { id: 'native', kind: 'client', sourceFormat: 'openai-responses', targetFormat: 'openai-responses', routeMode: 'native', outcome: 'succeeded' },
-    { id: 'translated', kind: 'client', source_format: 'openai-responses', target_format: 'anthropic', route_mode: 'translated', outcome: 'failed' },
-    { id: 'attempt', kind: 'upstream', sourceFormat: 'openai-responses', targetFormat: 'anthropic', routeMode: 'translated' },
-    { id: 'notify', kind: 'notify', statusCode: 200 },
-  ]);
-  assert.deepEqual(rows.map((row) => row.name), [
-    'OpenAI Responses → Anthropic Messages · 桥接',
-    'OpenAI Responses → OpenAI Responses · 原生',
-  ]);
-  assert.equal(rows.reduce((sum, row) => sum + row.attempts, 0), 2);
-});
+
+
+
 
 test('runtime event phase does not infer completion from a status or outcome', () => {
   assert.equal(
@@ -671,31 +617,7 @@ test('runtime event phase does not infer completion from a status or outcome', (
   );
 });
 
-test('event analytics recognizes failures, streams, tools, and Codex dimensions', () => {
-  const events = [{
-    id: 'failed-200', kind: 'client', statusCode: 200, outcome: 'failed',
-    failureKind: 'upstream_response_failed', failurePhase: 'response_stream',
-    featureRuleID: 'codex', effectiveModel: 'gpt-5',
-    upstreamStatusCode: 200, toolCalls: ['functions.exec_command'],
-    streamTrace: { chunkCount: 4, bytesReceived: 1024, maxChunkGapMS: 250, terminalEvent: 'response.failed' },
-    codexMetadata: {
-      requestKind: 'turn', isSubagent: true, subagentKind: 'thread_spawn',
-      threadSource: 'collaboration', agentName: '/root/worker',
-      workspaces: { '/workspace/demo': {} },
-      toolNamespacesInfo: { functions: {} },
-      compaction: { trigger: 'threshold', phase: 'complete' },
-    },
-  }];
-  const row = aggregateEvents(events, () => 'all')[0];
-  assert.equal(row.failures, 1);
-  assert.equal(row.avgChunks, 4);
-  assert.equal(row.maxChunkGapMS, 250);
-  assert.equal(row.toolsList[0].name, 'functions.exec_command');
-  assert.equal(row.terminalEventsList[0].name, 'response.failed');
-  assert.deepEqual(codexDimensionValues(events[0].codexMetadata, 'workspace'), ['/workspace/demo']);
-  assert.equal(codexRows(events, 'toolNamespace')[0].name, 'functions');
-  assert.equal(codexRows(events, 'compaction')[0].name, 'threshold · complete');
-});
+
 
 test('runtime mock includes a representative HTTP 200 protocol failure', async () => {
   const runtime = await api.getRuntimeEvents({ limit: 200 });
@@ -1572,13 +1494,4 @@ test('安全页面归因引导:三态文案齐全、命令可复制、三个陷�
   );
   assert.match(CC_ATTRIBUTION_HINT.message, /实际运行/);
   assert.match(CC_ATTRIBUTION_HINT.hint, /SSH/);
-});
-
-
-test('Guardian compatibility header appears in role, summary and analytics', () => {
-  const metadata = { subagentHeader: 'guardian', sessionID: 'session', isSubagent: true };
-  assert.equal(codexAgentRoleLabel(metadata), 'Guardian 安全审查');
-  assert.match(codexMetadataSummary(metadata), /^Guardian 安全审查/);
-  assert.deepEqual(codexDimensionValues(metadata, 'subagentKind'), ['Guardian 安全审查']);
-  assert.deepEqual(codexDimensionValues({subagentHeader:'collab_spawn'}, 'subagentKind'), ['collab_spawn']);
 });

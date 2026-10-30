@@ -1,5 +1,3 @@
-import React from 'react';
-
 export function QuickToggle({ checked, onChange, disabled = false, label = '', title = '', ariaLabel = '' }) {
   const accessibleLabel = ariaLabel || title || `${label || '状态'}${checked ? '（已启用）' : '（已停用）'}`;
   return (

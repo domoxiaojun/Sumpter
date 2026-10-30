@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { useApp } from '../context/AppContext.jsx';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { useAppControls } from '../context/AppContext.jsx';
 import { StatusBadge } from '../components/StatusBadge.jsx';
 import { Icon } from '../utils/icons.jsx';
 import { copyWithToast } from '../utils/clipboard.js';
@@ -38,36 +38,6 @@ function headersText(headers = []) {
 
 function chunksText(chunks = []) {
   return chunks.map((chunk) => `[+${chunk.atMS}ms · ${chunk.bytes} bytes${chunk.truncated ? ' · 已截断' : ''}]\n${chunk.data}`).join('\n\n');
-}
-
-const SENSITIVE_NAME = /(authorization|proxy-authorization|cookie|set-cookie|api[-_]?key|token|secret|password|passwd|credential|signature|access[-_]?key)/i;
-
-function redactURL(value) {
-  if (typeof value !== 'string') return value;
-  try {
-    const url = new URL(value, window.location.origin);
-    for (const key of [...url.searchParams.keys()]) {
-      if (SENSITIVE_NAME.test(key)) url.searchParams.set(key, '[REDACTED]');
-    }
-    return url.toString();
-  } catch {
-    return value.replace(/([?&](?:token|key|secret|password|signature)=[^&]*)/gi, (match) => `${match.split('=')[0]}=[REDACTED]`);
-  }
-}
-
-function redactCaptureValue(value, key = '') {
-  if (SENSITIVE_NAME.test(key)) return '[REDACTED]';
-  if (typeof value === 'string') return key.toLowerCase().includes('url') ? redactURL(value) : value;
-  if (Array.isArray(value)) return value.map((item) => redactCaptureValue(item, key));
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(Object.entries(value).map(([childKey, childValue]) => [
-    childKey,
-    redactCaptureValue(childValue, childKey),
-  ]));
-}
-
-function redactedCapture(detail) {
-  return redactCaptureValue(detail);
 }
 
 function formatBytes(bytes = 0) {
@@ -121,7 +91,7 @@ function errorMessage(error, fallback) {
 }
 
 export function DiagnosticsPage() {
-  const { addToast } = useApp();
+  const { addToast } = useAppControls();
   const [diag, setDiag] = useState(null);
   const [loading, setLoading] = useState(true);
   const [capture, setCapture] = useState(null);

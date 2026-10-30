@@ -1,10 +1,10 @@
-import React, { useState } from 'react';
-import { useApp } from '../context/AppContext.jsx';
-import { Icon } from '../utils/icons.jsx';
+import { useState } from 'react';
+import { useAppControls } from '../context/AppContext.jsx';
+
 import donkeyHead from '../assets/donkey-logo.png';
 
 export function LoginPage() {
-  const { login } = useApp();
+  const { login } = useAppControls();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');

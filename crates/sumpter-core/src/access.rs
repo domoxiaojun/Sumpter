@@ -1,7 +1,7 @@
 //! 入站访问控制:CIDR 白名单 + 环回判定。对齐 Swift `ClientAccessControl`。
 //! 另含「转发头 → 客户端 IP」解析:只影响事件 `sourceIP`,不参与鉴权。
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv6Addr};
 
 /// 判定顺序(对齐 Swift):
 /// 1. host 缺失/解析失败 → 仅当 allowedCIDRs 为空才放行;
@@ -243,9 +243,6 @@ fn ip_octets(addr: &IpAddr) -> Vec<u8> {
         IpAddr::V6(v6) => v6.octets().to_vec(),
     }
 }
-
-#[allow(dead_code)]
-fn _types(_: Ipv4Addr) {}
 
 #[cfg(test)]
 mod tests {

@@ -1,11 +1,10 @@
-import React from 'react';
-import { useApp } from '../context/AppContext.jsx';
+import { useAppControls } from '../context/AppContext.jsx';
 import { Icon } from '../utils/icons.jsx';
 
 const repoURL = 'https://github.com/domoxiaojun/sumpter';
 
 export function AboutPage() {
-  const { status } = useApp();
+  const { status } = useAppControls();
   const version = status?.version || '—';
 
   return (

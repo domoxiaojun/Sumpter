@@ -233,18 +233,7 @@ private func loadNotificationPreference(
 }
 
 /// 运行页/统计页自动刷新设置的 UserDefaults 键与可选间隔。
-private let autoRefreshEnabledDefaultsKey = "runtimeAutoRefreshEnabled"
-private let runtimeAutoRefreshIntervalDefaultsKey = "runtimeAutoRefreshIntervalSeconds"
-private let statisticsAutoRefreshIntervalDefaultsKey = "statisticsAutoRefreshIntervalSeconds"
-private let runHistoryPageSizeDefaultsKey = "runtimeRunHistoryPageSize"
-private let runtimeHistoryPageSizeDefaultsKey = "runtimeStatisticsHistoryPageSize"
-private let runtimeErrorPageSizeDefaultsKey = "runtimeStatisticsErrorPageSize"
-private let runtimeDimensionPageSizeDefaultsKey = "runtimeStatisticsDimensionPageSize"
-private let runtimeEndpointPageSizeDefaultsKey = "runtimeStatisticsEndpointPageSize"
-private let runtimeProjectPageSizeDefaultsKey = "runtimeStatisticsProjectPageSize"
-private let runtimeSessionPageSizeDefaultsKey = "runtimeStatisticsSessionPageSize"
-private let runtimeModelPageSizeDefaultsKey = "runtimeStatisticsModelPageSize"
-let autoRefreshIntervalChoices: [Double] = [1, 2, 5, 10, 15, 30]
+
 
 private func storedRuntimePageSize(forKey key: String, default fallback: Int = AdminWire.RuntimeHistoryPage.defaultPageSize) -> Int {
     let stored = UserDefaults.standard.integer(forKey: key)
@@ -531,6 +520,11 @@ final class AppModel: ObservableObject {
     var runtimeExportEstimateRequestGeneration = 0
     var statisticsBoard = "overview"
     var runtimeRequestChainTask: Task<Void, Never>?
+    var runtimeSnapshotTask: Task<Void, Never>?
+    var runtimeFacetsTask: Task<Void, Never>?
+    var runtimeDimensionTask: Task<Void, Never>?
+    var runtimeErrorTask: Task<Void, Never>?
+    var runHistoryTask: Task<Void, Never>?
     var lastRuntimeAnalyticsRefreshAt: Date?
     var lastRuntimeV2RefreshAt: Date?
     var lastRuntimeFacetsRefreshAt: Date?
@@ -556,7 +550,8 @@ final class AppModel: ObservableObject {
     /// 启停按钮的在途标记,防连点。
     @Published var toggleInFlight = false
 
-    init() {
+    init(startServices: Bool = true) {
+        guard startServices else { return }
         Task { await bootstrap() }
         startStatusPolling()
     }

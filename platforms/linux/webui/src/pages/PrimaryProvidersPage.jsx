@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { useApp } from '../context/AppContext.jsx';
+import { useEffect, useRef, useState } from 'react';
+import { useAppControls } from '../context/AppContext.jsx';
 import { DataTable } from '../components/DataTable.jsx';
 import { PricingPanel } from '../components/AnalyticsV2Workspace.jsx';
 import { QuickToggle } from '../components/QuickToggle.jsx';
@@ -468,7 +468,7 @@ function EndpointPricingEditor({ endpoint, config, onSaved }) {
 }
 
 export function PrimaryProvidersPage() {
-  const { config, configDoc, secretStatus, saveConfig, openModal, addToast } = useApp();
+  const { config, configDoc, secretStatus, saveConfig, openModal, addToast } = useAppControls();
   const [selectedEndpointID, setSelectedEndpointID] = useState(null);
   const [fetchingModelEndpointIDs, setFetchingModelEndpointIDs] = useState(() => new Set());
   const [reorderingEndpointID, setReorderingEndpointID] = useState(null);

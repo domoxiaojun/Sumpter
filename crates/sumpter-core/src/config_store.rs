@@ -667,11 +667,14 @@ impl ConfigDir {
         &self,
         snapshot: &DiagnosticCaptureSnapshot,
     ) -> io::Result<PersistOutcome> {
-        let mut data = serde_json::to_vec_pretty(snapshot)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        data.push(b'\n');
         self.ensure_exists()?;
-        atomic_write(&self.root.join("diagnostic_capture.json"), &data)
+        atomic_write_with(&self.root.join("diagnostic_capture.json"), |file| {
+            let mut writer = io::BufWriter::with_capacity(64 * 1024, file);
+            serde_json::to_writer_pretty(&mut writer, snapshot)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            writer.write_all(b"\n")?;
+            writer.flush()
+        })
     }
 }
 
@@ -1111,6 +1114,13 @@ fn write_new_owner_only(path: &Path, data: &[u8]) -> io::Result<()> {
 }
 
 fn atomic_write(path: &Path, data: &[u8]) -> io::Result<PersistOutcome> {
+    atomic_write_with(path, |file| file.write_all(data))
+}
+
+fn atomic_write_with(
+    path: &Path,
+    write: impl FnOnce(&mut std::fs::File) -> io::Result<()>,
+) -> io::Result<PersistOutcome> {
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -1132,7 +1142,7 @@ fn atomic_write(path: &Path, data: &[u8]) -> io::Result<PersistOutcome> {
     let mut file = options.open(&tmp)?;
     let prepare_result = (|| {
         set_owner_only(&tmp)?;
-        file.write_all(data)?;
+        write(&mut file)?;
         file.sync_all()?;
         drop(file);
         let parent = path
@@ -1181,6 +1191,30 @@ mod tests {
             std::env::temp_dir().join(format!("sumpter-linux-test-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         ConfigDir::new(root)
+    }
+
+    #[test]
+    fn streamed_atomic_write_failure_preserves_previous_snapshot() {
+        let dir = temp_dir("streamed-write-failure");
+        dir.ensure_exists().unwrap();
+        let snapshot = DiagnosticCaptureSnapshot::default();
+        assert!(
+            dir.save_diagnostic_capture(&snapshot)
+                .unwrap()
+                .durability_warning()
+                .is_none()
+        );
+        let path = dir.root.join("diagnostic_capture.json");
+        let original = std::fs::read(&path).unwrap();
+        let result = atomic_write_with(&path, |file| {
+            file.write_all(b"incomplete replacement")?;
+            Err(io::Error::other("synthetic write failure"))
+        });
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(dir.load_diagnostic_capture().unwrap(), snapshot);
+        assert_eq!(std::fs::read_dir(&dir.root).unwrap().count(), 1);
+        std::fs::remove_dir_all(&dir.root).unwrap();
     }
 
     #[test]

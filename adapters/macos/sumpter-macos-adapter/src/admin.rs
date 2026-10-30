@@ -1,11 +1,14 @@
 //! admin API(sumpterd 专属,SwiftUI 壳的控制通道)。
 //! 鉴权:**loopback + `X-Control-Token`**(值同 `.control_token`);非环回一律 403。
 //! 端点镜像 schema v5,设计参考 PLAN.md §5。
-#![allow(dead_code)]
 
 use std::convert::Infallible;
+
+#[cfg(test)]
+#[path = "../../../../tests/contracts/provider_catalog.rs"]
+mod provider_catalog_contract;
 use std::net::SocketAddr;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Router;
 use axum::body::Body;
@@ -16,7 +19,6 @@ use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use bytes::Bytes;
-use futures_util::StreamExt;
 use serde::Deserialize;
 use serde::de::{self, Deserializer};
 use serde_json::{Value, json};
@@ -32,9 +34,6 @@ use crate::runtime_store::{
     AnalyticsFilter, RuntimeModelPriceInput, RuntimePricingUpdate, RuntimeRetentionUpdate,
 };
 use sumpter_engine::PlatformNotice;
-
-const MAX_MODEL_CATALOG_BYTES: usize = 2 * 1024 * 1024;
-const MAX_MODEL_CATALOG_ITEMS: usize = 5_000;
 
 /// Query parameters arrive from `serde_urlencoded` as strings even when the
 /// target type is numeric. Keep accepting the decimal form emitted by older
@@ -388,247 +387,6 @@ async fn provider_models_for_endpoint(engine: Engine, endpoint_id: String) -> Re
         })),
         Err(message) => error(StatusCode::BAD_GATEWAY, "models_fetch_failed", &message),
     }
-}
-
-async fn fetch_provider_models_inner(
-    endpoint: &sumpter_core::config::Endpoint,
-) -> Result<(Vec<String>, String), String> {
-    let key = endpoint.api_key.trim();
-    let base = reqwest::Url::parse(endpoint.base_url.trim_end_matches('/'))
-        .map_err(|_| "baseURL 无效".to_string())?;
-    if !matches!(base.scheme(), "http" | "https")
-        || base.host_str().is_none()
-        || !base.username().is_empty()
-        || base.password().is_some()
-        || base.query().is_some()
-        || base.fragment().is_some()
-    {
-        return Err("baseURL 仅支持不带凭据、query 或 fragment 的 HTTP(S) 地址".into());
-    }
-    let mut client_builder = reqwest::Client::builder()
-        .use_rustls_tls()
-        .http1_only()
-        .redirect(reqwest::redirect::Policy::none())
-        .tcp_nodelay(true)
-        .no_proxy()
-        .pool_max_idle_per_host(0)
-        .connect_timeout(Duration::from_secs(2))
-        .timeout(Duration::from_secs(3));
-    if !endpoint.resolve_ip.trim().is_empty() {
-        let ip = endpoint
-            .resolve_ip
-            .trim()
-            .parse::<std::net::IpAddr>()
-            .map_err(|_| format!("resolveIP 无效: {}", endpoint.resolve_ip))?;
-        let host = base
-            .host_str()
-            .ok_or_else(|| "baseURL 缺少主机名".to_string())?;
-        let port = base
-            .port_or_known_default()
-            .ok_or_else(|| "baseURL 缺少有效端口".to_string())?;
-        client_builder = client_builder.resolve(host, std::net::SocketAddr::new(ip, port));
-    }
-    let client = client_builder.build().map_err(|error| error.to_string())?;
-    let mut errors = Vec::new();
-    let mut discovered = std::collections::BTreeSet::new();
-    let mut source = None;
-    let paths = model_catalog_paths(&base);
-    let probes =
-        crate::request_build::model_catalog_probes(endpoint.protocol, &endpoint.user_agent);
-    let deadline = std::time::Instant::now() + Duration::from_millis(11_500);
-    'probes: for (index, probe) in probes.iter().enumerate() {
-        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        let probe_deadline = std::time::Instant::now() + remaining / (probes.len() - index) as u32;
-        for auth in provider_model_auth_sets(key) {
-            for path in &paths {
-                let remaining = probe_deadline.saturating_duration_since(std::time::Instant::now());
-                if remaining.is_zero() {
-                    errors.push("目录身份探测超时，继续其它身份".into());
-                    continue 'probes;
-                }
-                let mut url = base.clone();
-                url.set_path(path);
-                url.set_query(None);
-                url.set_fragment(None);
-                let mut request = client.get(url.clone());
-                for (header, value) in crate::request_build::model_catalog_probe_headers(probe) {
-                    request = request.header(header, value);
-                }
-                for (header, value) in &auth {
-                    request = request.header(*header, value.as_str());
-                }
-                request = request.timeout(remaining.min(Duration::from_secs(3)));
-                match request.send().await {
-                    Ok(response) if response.status() == StatusCode::OK => {
-                        if response
-                            .content_length()
-                            .is_some_and(|length| length > MAX_MODEL_CATALOG_BYTES as u64)
-                        {
-                            errors.push(format!(
-                                "{}: 响应过大(>{} KiB)",
-                                url.path(),
-                                MAX_MODEL_CATALOG_BYTES / 1024
-                            ));
-                            continue;
-                        }
-                        match read_model_catalog_body(response).await {
-                            Err(message) => errors.push(format!("{}: {message}", url.path())),
-                            Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
-                                Ok(value) => {
-                                    let models = extract_models(&value)
-                                        .into_iter()
-                                        .map(|model| sumpter_engine::model_catalog::canonicalize_provider_model_id(&model))
-                                        .collect::<std::collections::BTreeSet<_>>();
-                                    if !models.is_empty() {
-                                        source.get_or_insert_with(|| url.to_string());
-                                        for model in models {
-                                            if discovered.len() >= MAX_MODEL_CATALOG_ITEMS {
-                                                break;
-                                            }
-                                            discovered.insert(model);
-                                        }
-                                        continue 'probes;
-                                    }
-                                    errors.push(format!("{}: 响应中没有模型", url.path()));
-                                }
-                                Err(error) => errors.push(format!("{}: JSON {error}", url.path())),
-                            },
-                        }
-                    }
-                    Ok(response) => {
-                        errors.push(format!("{}: HTTP {}", url.path(), response.status()))
-                    }
-                    Err(error) => errors.push(format!("{}: {error}", url.path())),
-                }
-            }
-        }
-    }
-    if let Some(source) = source {
-        return Ok((discovered.into_iter().collect(), source));
-    }
-    errors.dedup();
-    Err(errors.into_iter().take(4).collect::<Vec<_>>().join("；"))
-}
-
-async fn read_model_catalog_body(response: reqwest::Response) -> Result<Bytes, String> {
-    let mut stream = response.bytes_stream();
-    let mut body = Vec::new();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|error| format!("读取响应失败 {error}"))?;
-        if body.len().saturating_add(chunk.len()) > MAX_MODEL_CATALOG_BYTES {
-            return Err(format!("响应过大(>{} KiB)", MAX_MODEL_CATALOG_BYTES / 1024));
-        }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(Bytes::from(body))
-}
-
-fn model_catalog_paths(base: &reqwest::Url) -> Vec<String> {
-    let prefix = base.path().trim_end_matches('/');
-    let mut paths = Vec::new();
-    let mut append = |path: &str| {
-        let value = if prefix.is_empty() {
-            path.to_string()
-        } else if prefix.ends_with("/v1") && path.starts_with("/v1/") {
-            format!("{}{}", prefix, &path[3..])
-        } else {
-            format!("{prefix}{path}")
-        };
-        if !paths.contains(&value) {
-            paths.push(value);
-        }
-    };
-    append("/v1/models");
-    append("/models");
-    append("/v1/model/list");
-    if prefix.is_empty() {
-        append("/api/v1/models");
-    }
-    paths
-}
-
-/// 探测优先复用数据面同时发送的两种鉴权头；随后保留单头兼容重试。
-fn provider_model_auth_sets(key: &str) -> Vec<Vec<(&'static str, String)>> {
-    let key = key.trim();
-    if key.is_empty() {
-        return vec![Vec::new()];
-    }
-    vec![
-        crate::request_build::provider_auth_headers(key),
-        vec![("x-api-key", key.to_string())],
-        vec![("authorization", format!("Bearer {key}"))],
-        vec![("authorization", format!("x-api-key {key}"))],
-    ]
-}
-
-#[cfg(test)]
-#[path = "../../../../tests/contracts/provider_catalog.rs"]
-mod provider_catalog_contract;
-
-fn extract_models(value: &Value) -> Vec<String> {
-    fn visit(value: &Value, models: &mut Vec<String>, depth: usize) {
-        if depth > 8 || models.len() >= MAX_MODEL_CATALOG_ITEMS {
-            return;
-        }
-        if let Some(model) = value.as_str() {
-            let model = model.trim();
-            if !model.is_empty() {
-                models.push(model.to_string());
-            }
-            return;
-        }
-        if let Some(items) = value.as_array() {
-            for item in items {
-                visit(item, models, depth + 1);
-            }
-            return;
-        }
-        let Some(object) = value.as_object() else {
-            return;
-        };
-        let before = models.len();
-        for key in ["data", "models", "result", "items", "results"] {
-            if let Some(child) = object.get(key) {
-                visit(child, models, depth + 1);
-            }
-        }
-        if models.len() == before {
-            for key in ["id", "slug", "name", "model", "model_id"] {
-                if let Some(model) = object.get(key).and_then(Value::as_str) {
-                    visit(&Value::String(model.to_string()), models, depth + 1);
-                    break;
-                }
-            }
-        }
-        // Some gateways return a map keyed by model id: {"models":{"gpt-4o":{...}}}.
-        if models.len() == before
-            && let Some(Value::Object(entries)) = object.get("models")
-        {
-            for key in entries.keys() {
-                visit(&Value::String(key.clone()), models, depth + 1);
-            }
-        }
-        if models.len() == before
-            && !object.is_empty()
-            && ["data", "models", "result", "items", "results"]
-                .iter()
-                .all(|key| !object.contains_key(*key))
-            && object
-                .values()
-                .all(|value| value.is_object() || value.is_null())
-        {
-            for key in object.keys() {
-                models.push(key.clone());
-            }
-        }
-    }
-    let mut models = Vec::new();
-    visit(value, &mut models, 0);
-    models.sort();
-    models.dedup();
-    models.retain(|model| !model.is_empty());
-    models.truncate(MAX_MODEL_CATALOG_ITEMS);
-    models
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -1565,6 +1323,7 @@ fn runtime_query_error_response(query_error: RuntimeQueryError) -> Response {
 
 #[derive(Debug, serde::Deserialize)]
 struct RuntimeAnalyticsQuery {
+    view: Option<String>,
     range: Option<String>,
     #[serde(rename = "clientKind", alias = "client_kind")]
     client_kind: Option<String>,
@@ -1611,6 +1370,7 @@ async fn runtime_analytics(
     State(engine): State<Engine>,
     Query(query): Query<RuntimeAnalyticsQuery>,
 ) -> Response {
+    let diagnostics_only = query.view.as_deref() == Some("diagnostics");
     let range = query.range.as_deref().unwrap_or("24h");
     if !matches!(range, "today" | "1h" | "24h" | "7d" | "30d" | "all") {
         return error(
@@ -1637,7 +1397,7 @@ async fn runtime_analytics(
         to: query.to,
     };
     match engine
-        .runtime_analytics_filtered_async(range, &filter)
+        .runtime_analytics_view_async(range, &filter, diagnostics_only)
         .await
     {
         Ok(value) => json_ok(&value),
@@ -2464,14 +2224,12 @@ fn error(status: StatusCode, code: &str, message: &str) -> Response {
     crate::engine::error_response(status, &[("error", code), ("message", message)]).into_response()
 }
 
-#[allow(dead_code)]
-fn _headers(_: HeaderMap) {}
-
 #[cfg(test)]
 mod tests {
     use futures_util::StreamExt;
     use std::net::{IpAddr, Ipv4Addr};
     use std::sync::Arc;
+    use std::time::Duration;
 
     use super::*;
     use sumpter_core::config::AppConfig;
@@ -2817,83 +2575,6 @@ mod tests {
 
         server.abort();
         let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn model_catalog_shapes_collect_every_model() {
-        assert_eq!(
-            extract_models(&json!({
-                "data": [{"id": "gpt-a"}, {"id": "gpt-b"}, {"id": "gpt-c"}]
-            })),
-            vec!["gpt-a", "gpt-b", "gpt-c"]
-        );
-        assert_eq!(
-            extract_models(&json!({
-                "data": [{"type": "model", "id": "claude-opus"}, {"type": "model", "id": "claude-sonnet"}]
-            })),
-            vec!["claude-opus", "claude-sonnet"]
-        );
-        assert_eq!(extract_models(&json!(["m1", "m2", "m1"])), vec!["m1", "m2"]);
-        assert_eq!(
-            extract_models(&json!({"models": {"gpt-4o": {}, "gpt-4o-mini": {}}})),
-            vec!["gpt-4o", "gpt-4o-mini"]
-        );
-        assert_eq!(
-            extract_models(&json!({
-                "result": {"data": [{"name": "nested-a"}, {"model": "nested-b"}]}
-            })),
-            vec!["nested-a", "nested-b"]
-        );
-    }
-
-    #[test]
-    fn model_catalog_limits_depth_and_item_count() {
-        let mut nested = json!("too-deep");
-        for _ in 0..10 {
-            nested = json!({"data": nested});
-        }
-        assert!(extract_models(&nested).is_empty());
-
-        let many = (0..=MAX_MODEL_CATALOG_ITEMS)
-            .map(|index| json!({"id": format!("model-{index:05}")}))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            extract_models(&json!({"data": many})).len(),
-            MAX_MODEL_CATALOG_ITEMS
-        );
-    }
-
-    #[test]
-    fn model_catalog_paths_and_authentication_are_compatible() {
-        let root = reqwest::Url::parse("https://example.com").unwrap();
-        assert_eq!(
-            model_catalog_paths(&root),
-            vec!["/v1/models", "/models", "/v1/model/list", "/api/v1/models"]
-        );
-        let v1 = reqwest::Url::parse("https://example.com/v1/").unwrap();
-        assert_eq!(
-            model_catalog_paths(&v1),
-            vec!["/v1/models", "/v1/model/list"]
-        );
-        let custom = reqwest::Url::parse("https://example.com/apps/anthropic").unwrap();
-        assert_eq!(
-            model_catalog_paths(&custom),
-            vec![
-                "/apps/anthropic/v1/models",
-                "/apps/anthropic/models",
-                "/apps/anthropic/v1/model/list"
-            ]
-        );
-
-        let sets = provider_model_auth_sets("sk-test");
-        assert_eq!(
-            sets[0],
-            vec![
-                ("authorization", "Bearer sk-test".to_string()),
-                ("x-api-key", "sk-test".to_string())
-            ]
-        );
-        assert_eq!(provider_model_auth_sets(" "), vec![Vec::new()]);
     }
 
     #[tokio::test]
