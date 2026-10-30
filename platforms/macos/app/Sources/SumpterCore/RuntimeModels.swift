@@ -659,6 +659,8 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
     /// upstream 事件只是该次尝试自身的响应头延迟。看错口径会把「换过一次入口」
     /// 误读成「这个入口很慢」。
     public var ttfbMS: Int?
+    public var upstreamDurationMS: Int?
+    public var upstreamTTFBMS: Int?
     /// 已完成客户端请求的生成速度。缺 TTFB、进行中、上游尝试或 token_count 时为 nil。
     public var outputTokensPerSecond: Double?
     /// 实际生效的首响应/流空闲阈值。
@@ -693,7 +695,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         case message, toolCalls, streamTrace, outcome, phase, featureRuleID
         case failureDetail, failureKind, failurePhase, requestPurpose, requestID
         case requestMethod, requestPath, routeIntent, sourceIP
-        case sessionID, stickyKey, ttfbMS, outputTokensPerSecond, timeoutMS, upstreamStatusCode, upstreamRequestID
+        case sessionID, stickyKey, ttfbMS, upstreamDurationMS, upstreamTTFBMS, outputTokensPerSecond, timeoutMS, upstreamStatusCode, upstreamRequestID
         case codexMetadata, clientDeclared, grokMetadata, projectName, projectSource, localUser, codexThreadClass, attributionScope
     }
 
@@ -758,6 +760,8 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         sessionID = try c.decodeIfPresent(String.self, forKey: .sessionID)
         stickyKey = try c.decodeIfPresent(String.self, forKey: .stickyKey)
         ttfbMS = try c.decodeIfPresent(Int.self, forKey: .ttfbMS)
+        upstreamDurationMS = try c.decodeIfPresent(Int.self, forKey: .upstreamDurationMS)
+        upstreamTTFBMS = try c.decodeIfPresent(Int.self, forKey: .upstreamTTFBMS)
         outputTokensPerSecond = try c.decodeIfPresent(Double.self, forKey: .outputTokensPerSecond)
         timeoutMS = try c.decodeIfPresent(Int.self, forKey: .timeoutMS)
         upstreamStatusCode = try c.decodeIfPresent(Int.self, forKey: .upstreamStatusCode)
@@ -822,6 +826,8 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         try c.encodeIfPresent(sessionID, forKey: .sessionID)
         try c.encodeIfPresent(stickyKey, forKey: .stickyKey)
         try c.encodeIfPresent(ttfbMS, forKey: .ttfbMS)
+        try c.encodeIfPresent(upstreamDurationMS, forKey: .upstreamDurationMS)
+        try c.encodeIfPresent(upstreamTTFBMS, forKey: .upstreamTTFBMS)
         try c.encodeIfPresent(outputTokensPerSecond, forKey: .outputTokensPerSecond)
         try c.encodeIfPresent(timeoutMS, forKey: .timeoutMS)
         try c.encodeIfPresent(upstreamStatusCode, forKey: .upstreamStatusCode)
@@ -888,6 +894,8 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         routeIntent: String? = nil,
         sessionID: String? = nil,
         ttfbMS: Int? = nil,
+        upstreamDurationMS: Int? = nil,
+        upstreamTTFBMS: Int? = nil,
         timeoutMS: Int? = nil,
         upstreamStatusCode: Int? = nil,
         upstreamRequestID: String? = nil,
@@ -935,6 +943,8 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         self.routeIntent = routeIntent
         self.sessionID = sessionID
         self.ttfbMS = ttfbMS
+        self.upstreamDurationMS = upstreamDurationMS
+        self.upstreamTTFBMS = upstreamTTFBMS
         self.timeoutMS = timeoutMS
         self.upstreamStatusCode = upstreamStatusCode
         self.upstreamRequestID = upstreamRequestID

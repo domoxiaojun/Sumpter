@@ -61,6 +61,10 @@ pub struct Model {
     #[sea_orm(column_type = "Integer")]
     pub ttfb_ms: Option<i64>,
     #[sea_orm(column_type = "Integer")]
+    pub upstream_duration_ms: Option<i64>,
+    #[sea_orm(column_type = "Integer")]
+    pub upstream_ttfb_ms: Option<i64>,
+    #[sea_orm(column_type = "Integer")]
     pub failover: Option<i64>,
     pub stream_terminal: Option<String>,
     #[sea_orm(column_type = "Integer")]

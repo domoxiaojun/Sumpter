@@ -1529,6 +1529,8 @@ impl Engine {
             timestamp: client_timestamp,
             // 尚未选定入口,首字节由 accepted 时的回填补上。
             ttfb_ms: None,
+            upstream_duration_ms: None,
+            upstream_ttfb_ms: None,
             stream_trace: None,
             timeout_ms: None,
             upstream_host: None,

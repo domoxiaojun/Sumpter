@@ -179,6 +179,8 @@ struct EventProjection {
     upstream_status_code: Option<i64>,
     duration_ms: i64,
     ttfb_ms: Option<i64>,
+    upstream_duration_ms: Option<i64>,
+    upstream_ttfb_ms: Option<i64>,
     failover: i64,
     stream_terminal: Option<String>,
     codex_metadata_present: i64,
@@ -286,6 +288,8 @@ impl EventProjection {
             upstream_status_code: event.upstream_status_code,
             duration_ms: event.duration_ms,
             ttfb_ms: event.ttfb_ms,
+            upstream_duration_ms: event.upstream_duration_ms,
+            upstream_ttfb_ms: event.upstream_ttfb_ms,
             failover: i64::from(event.failover),
             stream_terminal: event
                 .stream_trace
@@ -596,6 +600,10 @@ pub struct RuntimeEventListItem {
     pub duration_ms: i64,
     #[serde(rename = "ttfbMS")]
     pub ttfb_ms: Option<i64>,
+    #[serde(rename = "upstreamDurationMS", skip_serializing_if = "Option::is_none")]
+    pub upstream_duration_ms: Option<i64>,
+    #[serde(rename = "upstreamTTFBMS", skip_serializing_if = "Option::is_none")]
+    pub upstream_ttfb_ms: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_tokens_per_second: Option<f64>,
     pub failover: bool,
@@ -715,6 +723,8 @@ impl RuntimeEventListItem {
             upstream_request_id: event.upstream_request_id,
             duration_ms: event.duration_ms,
             ttfb_ms: event.ttfb_ms,
+            upstream_duration_ms: event.upstream_duration_ms,
+            upstream_ttfb_ms: event.upstream_ttfb_ms,
             output_tokens_per_second,
             failover: event.failover,
         }

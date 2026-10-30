@@ -191,6 +191,8 @@ impl EventProjection {
             upstream_status_code: Set(self.upstream_status_code),
             duration_ms: Set(Some(self.duration_ms)),
             ttfb_ms: Set(self.ttfb_ms),
+            upstream_duration_ms: Set(self.upstream_duration_ms),
+            upstream_ttfb_ms: Set(self.upstream_ttfb_ms),
             failover: Set(Some(self.failover)),
             stream_terminal: Set(self.stream_terminal.as_ref().map(|value| value.to_string())),
             codex_metadata_present: Set(Some(self.codex_metadata_present)),

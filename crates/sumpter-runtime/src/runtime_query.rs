@@ -1224,14 +1224,16 @@ impl TrendAccumulator {
         self.duration
             .add(row.duration_ms, DURATION_SLOW_MS, DURATION_CRITICAL_MS);
         self.tokens.add(row);
-        self.output_speed.observe(output_generation_sample(
-            "client",
-            false,
-            row.request_purpose.as_deref(),
-            row.output_tokens,
-            row.duration_ms,
-            row.ttfb_ms,
-        ));
+        if row.outcome.as_deref() == Some("succeeded") {
+            self.output_speed.observe(output_generation_sample(
+                "client",
+                false,
+                row.request_purpose.as_deref(),
+                row.output_tokens,
+                row.upstream_duration_ms,
+                row.upstream_ttfb_ms,
+            ));
+        }
         self.cost.add(row, prices);
     }
 
@@ -1275,6 +1277,8 @@ struct TrendRow {
     failover: i64,
     duration_ms: Option<i64>,
     ttfb_ms: Option<i64>,
+    upstream_duration_ms: Option<i64>,
+    upstream_ttfb_ms: Option<i64>,
     request_purpose: Option<String>,
     endpoint_id: Option<String>,
     effective_model: Option<String>,
@@ -1386,6 +1390,8 @@ struct EventListProjection {
     upstream_status_code: Option<i64>,
     duration_ms: i64,
     ttfb_ms: Option<i64>,
+    upstream_duration_ms: Option<i64>,
+    upstream_ttfb_ms: Option<i64>,
     failover: i64,
     project_name: Option<String>,
     project_source: Option<String>,
@@ -1441,8 +1447,8 @@ fn event_list_item_from_projection(row: EventListProjection) -> RuntimeEventList
         row.phase.as_deref() == Some("inFlight"),
         row.request_purpose.as_deref(),
         row.output_tokens,
-        Some(row.duration_ms),
-        row.ttfb_ms,
+        row.upstream_duration_ms,
+        row.upstream_ttfb_ms,
     );
     RuntimeEventListItem {
         source_ip: row.source_ip,
@@ -1519,6 +1525,8 @@ fn event_list_item_from_projection(row: EventListProjection) -> RuntimeEventList
         upstream_request_id: None,
         duration_ms: row.duration_ms,
         ttfb_ms: row.ttfb_ms,
+        upstream_duration_ms: row.upstream_duration_ms,
+        upstream_ttfb_ms: row.upstream_ttfb_ms,
         output_tokens_per_second,
         failover: row.failover != 0,
     }

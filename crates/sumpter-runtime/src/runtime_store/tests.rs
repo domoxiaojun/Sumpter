@@ -3256,6 +3256,8 @@ fn output_generation_speed_matches_across_raw_scan_and_hourly_rollup() {
     );
     fast.duration_ms = 1_100;
     fast.ttfb_ms = Some(100);
+    fast.upstream_duration_ms = Some(1_100);
+    fast.upstream_ttfb_ms = Some(100);
     fast.effective_model = Some("speed-model".into());
     fast.request_purpose = Some(RequestPurpose::Standard);
     fast.stream_trace = serde_json::from_value(json!({
@@ -3273,6 +3275,8 @@ fn output_generation_speed_matches_across_raw_scan_and_hourly_rollup() {
     );
     slow.duration_ms = 9_100;
     slow.ttfb_ms = Some(100);
+    slow.upstream_duration_ms = Some(9_100);
+    slow.upstream_ttfb_ms = Some(100);
     slow.effective_model = Some("speed-model".into());
     slow.stream_trace = serde_json::from_value(json!({
         "usage": {"outputTokens": 100}
@@ -3289,6 +3293,8 @@ fn output_generation_speed_matches_across_raw_scan_and_hourly_rollup() {
     );
     zero.duration_ms = 2_100;
     zero.ttfb_ms = Some(100);
+    zero.upstream_duration_ms = Some(2_100);
+    zero.upstream_ttfb_ms = Some(100);
     zero.effective_model = Some("speed-model".into());
     zero.stream_trace = serde_json::from_value(json!({
         "usage": {"outputTokens": 0}
@@ -3419,6 +3425,8 @@ fn output_generation_speed_matches_across_raw_scan_and_hourly_rollup() {
     );
     other.duration_ms = 1_100;
     other.ttfb_ms = Some(100);
+    other.upstream_duration_ms = Some(1_100);
+    other.upstream_ttfb_ms = Some(100);
     other.effective_model = Some("other-model".into());
     other.stream_trace = serde_json::from_value(json!({
         "usage": {"outputTokens": 10}

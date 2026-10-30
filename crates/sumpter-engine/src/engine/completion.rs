@@ -403,6 +403,9 @@ impl CompletionGuard {
             status_code: status,
             timestamp: unix_to_apple_epoch(now_unix()),
             ttfb_ms: self.ttfb_ms,
+            upstream_duration_ms: upstream
+                .map(|attempt| attempt.started.elapsed().as_millis() as i64),
+            upstream_ttfb_ms: upstream.map(|attempt| attempt.ttfb_ms),
             stream_trace: self.stream_trace.snapshot(),
             timeout_ms: None,
             upstream_host: endpoint.and_then(|endpoint| host_of(&endpoint.base_url)),

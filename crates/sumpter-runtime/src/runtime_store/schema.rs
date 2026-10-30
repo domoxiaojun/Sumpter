@@ -26,6 +26,8 @@ pub(super) fn setup_connection(connection: &mut Connection) -> crate::database::
     )?;
     crate::entities::create_schema(connection)?;
     ensure_output_generation_columns(connection)?;
+    ensure_upstream_timing_columns(connection)?;
+    let upstream_timing_backfilled = backfill_upstream_timing(connection)?;
     let previous_version = meta_i64(connection, "schema_version")?.unwrap_or(0);
     if previous_version > SCHEMA_VERSION && !runtime_schema_supported(previous_version) {
         return Err(crate::database::Error::InvalidParameterName(format!(
@@ -102,7 +104,11 @@ pub(super) fn setup_connection(connection: &mut Connection) -> crate::database::
          VALUES(1,1,'USD',?1) ON CONFLICT(id) DO NOTHING",
         params![now()],
     )?;
-    if previous_version < SCHEMA_VERSION || !hourly_rollup_meta_exists || !output_generation_ready {
+    if previous_version < SCHEMA_VERSION
+        || !hourly_rollup_meta_exists
+        || !output_generation_ready
+        || upstream_timing_backfilled
+    {
         // Rollup columns and threshold semantics changed in v3. Rebuild all
         // retained buckets from projection columns; never read payload_json
         // for analytics.
@@ -178,6 +184,73 @@ fn ensure_output_generation_columns(connection: &Connection) -> crate::database:
         }
     }
     Ok(())
+}
+
+fn ensure_upstream_timing_columns(connection: &Connection) -> crate::database::Result<()> {
+    let columns = connection
+        .prepare("PRAGMA table_info(runtime_events)")?
+        .query_map(crate::database::params![], |row| row.get::<_, String>(1))?
+        .collect::<Result<HashSet<_>, _>>()?;
+    for (name, ddl) in [
+        (
+            "upstream_duration_ms",
+            "ALTER TABLE runtime_events ADD COLUMN upstream_duration_ms INTEGER",
+        ),
+        (
+            "upstream_ttfb_ms",
+            "ALTER TABLE runtime_events ADD COLUMN upstream_ttfb_ms INTEGER",
+        ),
+    ] {
+        if !columns.contains(name) {
+            connection.execute_batch(ddl)?;
+        }
+    }
+    Ok(())
+}
+
+/// Repair client rows written before upstream timing was persisted. The
+/// latest successful upstream attempt is the source of the generation window;
+/// client timing remains untouched for latency diagnostics.
+fn backfill_upstream_timing(connection: &Connection) -> crate::database::Result<bool> {
+    let changed = connection.execute(
+        "UPDATE runtime_events AS client
+         SET payload_json=json_set(payload_json,
+                 '$.upstreamDurationMS', (
+                 SELECT upstream.duration_ms FROM runtime_events AS upstream
+                 WHERE upstream.kind='upstream' AND upstream.outcome='succeeded'
+                   AND upstream.request_id=client.request_id
+                 ORDER BY upstream.seq DESC LIMIT 1
+             ),
+                 '$.upstreamTTFBMS', (
+                 SELECT upstream.ttfb_ms FROM runtime_events AS upstream
+                 WHERE upstream.kind='upstream' AND upstream.outcome='succeeded'
+                   AND upstream.request_id=client.request_id
+                 ORDER BY upstream.seq DESC LIMIT 1
+             )),
+             upstream_duration_ms=(
+                 SELECT upstream.duration_ms FROM runtime_events AS upstream
+                 WHERE upstream.kind='upstream' AND upstream.outcome='succeeded'
+                   AND upstream.request_id=client.request_id
+                 ORDER BY upstream.seq DESC LIMIT 1
+             ),
+             upstream_ttfb_ms=(
+                 SELECT upstream.ttfb_ms FROM runtime_events AS upstream
+                 WHERE upstream.kind='upstream' AND upstream.outcome='succeeded'
+                   AND upstream.request_id=client.request_id
+                 ORDER BY upstream.seq DESC LIMIT 1
+             )
+         WHERE json_valid(client.payload_json)
+           AND client.kind='client' AND client.is_in_flight=0
+           AND client.request_id IS NOT NULL
+           AND (client.upstream_duration_ms IS NULL OR client.upstream_ttfb_ms IS NULL)
+           AND EXISTS (
+                 SELECT 1 FROM runtime_events AS upstream
+                 WHERE upstream.kind='upstream' AND upstream.outcome='succeeded'
+                   AND upstream.request_id=client.request_id
+             )",
+        crate::database::params![],
+    )?;
+    Ok(changed > 0)
 }
 
 fn ensure_sticky_index_maintenance(connection: &Connection) -> crate::database::Result<()> {
@@ -531,7 +604,7 @@ pub(super) fn rebuild_hourly_rollup_bucket(
     let (price_revision, prices) = load_rollup_prices(&transaction)?;
     {
         let mut statement = transaction.prepare(
-            "SELECT seq,kind,outcome,failover,duration_ms,ttfb_ms,request_purpose,usage_present,
+            "SELECT seq,kind,outcome,failover,duration_ms,ttfb_ms,upstream_duration_ms,upstream_ttfb_ms,request_purpose,usage_present,
                     input_tokens,output_tokens,cache_read_input_tokens,
                     cache_creation_input_tokens,reasoning_tokens,uncached_input_tokens,
                     processed_input_tokens,processed_total_tokens,
@@ -616,38 +689,40 @@ pub(super) fn rebuild_hourly_rollup_bucket(
                         accumulator.ttfb_critical_count.saturating_add(1);
                 }
             }
-            let request_purpose = row.get::<_, Option<String>>(6)?;
-            let usage_present = row.get::<_, Option<i64>>(7)?.unwrap_or(0) != 0;
-            let input = row.get::<_, Option<i64>>(8)?;
-            let output = row.get::<_, Option<i64>>(9)?;
-            if let Some(sample) = crate::runtime_query::output_generation_sample(
-                "client",
-                false,
-                row.get::<_, Option<String>>(6)?.as_deref(),
-                output,
-                row.get(4)?,
-                row.get(5)?,
-            ) {
-                accumulator.output_generation_tokens = accumulator
-                    .output_generation_tokens
-                    .saturating_add(sample.output_tokens);
-                accumulator.output_generation_ms = accumulator
-                    .output_generation_ms
-                    .saturating_add(sample.generation_ms);
-                accumulator.output_generation_requests =
-                    accumulator.output_generation_requests.saturating_add(1);
+            let request_purpose = row.get::<_, Option<String>>(8)?;
+            let usage_present = row.get::<_, Option<i64>>(9)?.unwrap_or(0) != 0;
+            let input = row.get::<_, Option<i64>>(10)?;
+            let output = row.get::<_, Option<i64>>(11)?;
+            if outcome.as_deref() == Some("succeeded") {
+                if let Some(sample) = crate::runtime_query::output_generation_sample(
+                    "client",
+                    false,
+                    row.get::<_, Option<String>>(8)?.as_deref(),
+                    output,
+                    row.get(6)?,
+                    row.get(7)?,
+                ) {
+                    accumulator.output_generation_tokens = accumulator
+                        .output_generation_tokens
+                        .saturating_add(sample.output_tokens);
+                    accumulator.output_generation_ms = accumulator
+                        .output_generation_ms
+                        .saturating_add(sample.generation_ms);
+                    accumulator.output_generation_requests =
+                        accumulator.output_generation_requests.saturating_add(1);
+                }
             }
-            let cache_read = row.get::<_, Option<i64>>(10)?;
-            let cache_creation = row.get::<_, Option<i64>>(11)?;
-            let reasoning = row.get::<_, Option<i64>>(12)?;
-            let uncached = row.get::<_, Option<i64>>(13)?;
-            let processed_input = row.get::<_, Option<i64>>(14)?;
-            let processed_total = row.get::<_, Option<i64>>(15)?;
-            let semantics = row.get::<_, Option<String>>(16)?;
-            let quality = row.get::<_, Option<String>>(17)?;
-            let endpoint_id = row.get::<_, Option<String>>(18)?;
-            let event_timestamp = row.get::<_, f64>(19)?;
-            let effective_model = row.get::<_, Option<String>>(20)?;
+            let cache_read = row.get::<_, Option<i64>>(12)?;
+            let cache_creation = row.get::<_, Option<i64>>(13)?;
+            let reasoning = row.get::<_, Option<i64>>(14)?;
+            let uncached = row.get::<_, Option<i64>>(15)?;
+            let processed_input = row.get::<_, Option<i64>>(16)?;
+            let processed_total = row.get::<_, Option<i64>>(17)?;
+            let semantics = row.get::<_, Option<String>>(18)?;
+            let quality = row.get::<_, Option<String>>(19)?;
+            let endpoint_id = row.get::<_, Option<String>>(20)?;
+            let event_timestamp = row.get::<_, f64>(21)?;
+            let effective_model = row.get::<_, Option<String>>(22)?;
             add_rollup_cost(
                 &mut accumulator,
                 request_purpose.as_deref(),

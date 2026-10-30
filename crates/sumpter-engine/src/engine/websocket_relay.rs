@@ -965,6 +965,8 @@ pub(super) fn websocket_client_event(
         status_code: status,
         timestamp: unix_to_apple_epoch(now_unix()),
         ttfb_ms: None,
+        upstream_duration_ms: None,
+        upstream_ttfb_ms: None,
         stream_trace,
         timeout_ms: None,
         upstream_host: endpoint.and_then(|endpoint| host_of(&endpoint.base_url)),

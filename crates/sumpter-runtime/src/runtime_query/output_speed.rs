@@ -1,7 +1,8 @@
-//! Generation speed: output tokens divided by the post-TTFB window.
+//! Generation speed: output tokens divided by the post-upstream-TTFB window.
 //!
 //! The value is derived when a response is built. It is not stored in
-//! `payload_json`. Aggregates sum eligible tokens and generation milliseconds
+//! `payload_json`. Client rows use the final upstream attempt timing.
+//! Aggregates sum eligible tokens and generation milliseconds
 //! separately, then divide once. They are not an average of per-request rates.
 
 use serde_json::{Value, json};
@@ -11,12 +12,12 @@ use sumpter_core::routing::RequestPurpose;
 
 /// SQL predicate matching [`output_generation_sample`].
 pub(crate) const OUTPUT_SPEED_PREDICATE: &str = "\
-kind='client' AND is_in_flight=0 \
+kind='client' AND is_in_flight=0 AND outcome='succeeded' \
 AND (request_purpose IS NULL OR request_purpose!='token_count') \
 AND output_tokens IS NOT NULL AND output_tokens>=0 \
-AND duration_ms IS NOT NULL AND duration_ms>=0 \
-AND ttfb_ms IS NOT NULL AND ttfb_ms>=0 \
-AND duration_ms>ttfb_ms";
+AND upstream_duration_ms IS NOT NULL AND upstream_duration_ms>=0 \
+AND upstream_ttfb_ms IS NOT NULL AND upstream_ttfb_ms>=0 \
+AND upstream_duration_ms>upstream_ttfb_ms";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct OutputGenerationSample {
@@ -97,6 +98,9 @@ pub(crate) fn output_tokens_per_second(
 }
 
 pub(crate) fn output_tokens_per_second_for_event(event: &RuntimeEvent) -> Option<f64> {
+    if !event.is_succeeded() {
+        return None;
+    }
     let purpose = match event.request_purpose {
         Some(RequestPurpose::TokenCount) => Some("token_count"),
         Some(_) | None => None,
@@ -112,8 +116,8 @@ pub(crate) fn output_tokens_per_second_for_event(event: &RuntimeEvent) -> Option
         event.is_in_flight(),
         purpose,
         output_tokens,
-        Some(event.duration_ms),
-        event.ttfb_ms,
+        event.upstream_duration_ms,
+        event.upstream_ttfb_ms,
     )
 }
 
@@ -139,6 +143,9 @@ pub fn decorate_runtime_change_value(value: &mut Value) {
 }
 
 fn output_tokens_per_second_from_json(event: &Value) -> Option<f64> {
+    if event.get("outcome").and_then(Value::as_str) != Some("succeeded") {
+        return None;
+    }
     output_tokens_per_second(
         event.get("kind").and_then(Value::as_str).unwrap_or(""),
         event.get("phase").and_then(Value::as_str) == Some("inFlight"),
@@ -149,8 +156,8 @@ fn output_tokens_per_second_from_json(event: &Value) -> Option<f64> {
                 .and_then(|trace| trace.get("usage"))
                 .and_then(|usage| usage.get("outputTokens")),
         ),
-        json_i64(event.get("durationMS")),
-        json_i64(event.get("ttfbMS")),
+        json_i64(event.get("upstreamDurationMS")),
+        json_i64(event.get("upstreamTTFBMS")),
     )
 }
 

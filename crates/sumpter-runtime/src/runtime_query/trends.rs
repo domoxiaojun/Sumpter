@@ -99,7 +99,7 @@ pub fn trends_on(connection: &mut Connection, request: &TrendRequest) -> QueryRe
     builder.ge_real("timestamp", filters.from);
     builder.le_real("timestamp", filters.to);
     let sql = format!(
-        "SELECT kind,timestamp,outcome,failover,duration_ms,ttfb_ms,request_purpose,endpoint_id,\
+        "SELECT kind,timestamp,outcome,failover,duration_ms,ttfb_ms,upstream_duration_ms,upstream_ttfb_ms,request_purpose,endpoint_id,\
                 effective_model,usage_present,input_tokens,output_tokens,\
                 cache_read_input_tokens,cache_creation_input_tokens,reasoning_tokens,\
                 uncached_input_tokens,processed_input_tokens,processed_total_tokens,\
@@ -127,20 +127,22 @@ pub fn trends_on(connection: &mut Connection, request: &TrendRequest) -> QueryRe
                 failover: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
                 duration_ms: row.get(4)?,
                 ttfb_ms: row.get(5)?,
-                request_purpose: row.get(6)?,
-                endpoint_id: row.get(7)?,
-                effective_model: row.get(8)?,
-                usage_present: row.get::<_, Option<i64>>(9)?.unwrap_or(0),
-                input_tokens: row.get(10)?,
-                output_tokens: row.get(11)?,
-                cache_read_input_tokens: row.get(12)?,
-                cache_creation_input_tokens: row.get(13)?,
-                reasoning_tokens: row.get(14)?,
-                uncached_input_tokens: row.get(15)?,
-                processed_input_tokens: row.get(16)?,
-                processed_total_tokens: row.get(17)?,
-                token_accounting_semantics: row.get(18)?,
-                token_accounting_quality: row.get(19)?,
+                upstream_duration_ms: row.get(6)?,
+                upstream_ttfb_ms: row.get(7)?,
+                request_purpose: row.get(8)?,
+                endpoint_id: row.get(9)?,
+                effective_model: row.get(10)?,
+                usage_present: row.get::<_, Option<i64>>(11)?.unwrap_or(0),
+                input_tokens: row.get(12)?,
+                output_tokens: row.get(13)?,
+                cache_read_input_tokens: row.get(14)?,
+                cache_creation_input_tokens: row.get(15)?,
+                reasoning_tokens: row.get(16)?,
+                uncached_input_tokens: row.get(17)?,
+                processed_input_tokens: row.get(18)?,
+                processed_total_tokens: row.get(19)?,
+                token_accounting_semantics: row.get(20)?,
+                token_accounting_quality: row.get(21)?,
             };
             let bucket = bucket_start(row.timestamp, seconds);
             if let Some(accumulator) = buckets.get_mut(&bucket) {

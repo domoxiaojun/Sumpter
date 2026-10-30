@@ -2941,6 +2941,16 @@ pub struct RuntimeEvent {
     /// 重跑的全部时间);upstream 事件只是该次尝试自身的响应头延迟。
     #[serde(rename = "ttfbMS", default, skip_serializing_if = "is_none")]
     pub ttfb_ms: Option<i64>,
+    /// Final upstream attempt timing used for generated-output speed. Kept
+    /// separate from client-visible timing, which may include retries.
+    #[serde(
+        rename = "upstreamDurationMS",
+        default,
+        skip_serializing_if = "is_none"
+    )]
+    pub upstream_duration_ms: Option<i64>,
+    #[serde(rename = "upstreamTTFBMS", default, skip_serializing_if = "is_none")]
+    pub upstream_ttfb_ms: Option<i64>,
     /// 请求级流诊断；旧事件没有该字段时保持 None。
     #[serde(rename = "streamTrace", default, skip_serializing_if = "is_none")]
     pub stream_trace: Option<StreamTrace>,
@@ -3290,6 +3300,8 @@ mod tests {
             status_code: 200,
             timestamp: ts,
             ttfb_ms: None,
+            upstream_duration_ms: None,
+            upstream_ttfb_ms: None,
             stream_trace: None,
             timeout_ms: None,
             upstream_host: None,

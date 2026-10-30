@@ -135,6 +135,8 @@ mod tests {
             status_code: status,
             timestamp: ts,
             ttfb_ms: None,
+            upstream_duration_ms: None,
+            upstream_ttfb_ms: None,
             stream_trace: None,
             timeout_ms: None,
             upstream_host: None,

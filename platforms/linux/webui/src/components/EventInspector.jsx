@@ -148,6 +148,7 @@ export function EventInspector({ event, chain = [], requestSummary, onSelect, ex
         <Field label={event.kind === 'upstream' ? '上游 HTTP' : '客户端 HTTP'} value={eventHttpStatusLabel(event)} color={eventHttpTone(event)} />
         <Field label="最终结果" value={outcomeLabel(event)} color={`var(--status-${statusKind(event)})`} />
         <Field label="TTFB / 总耗时" value={`${formatDuration(eventTTFBMS(event))} / ${formatDuration(eventDurationMS(event))}`} />
+        {event.kind === 'client' && (event.upstreamTTFBMS != null || event.upstreamDurationMS != null) && <Field label="上游 TTFB / 总耗时" value={`${formatDuration(event.upstreamTTFBMS)} / ${formatDuration(event.upstreamDurationMS)}`} />}
         <Field label="缓存 / 用量" value={<><span className="event-cache-inline">{eventCacheLabel(event)} <CacheHitRate event={event} /></span> · {eventUsageLabel(event)}</>} />
       </>}
     </dl>

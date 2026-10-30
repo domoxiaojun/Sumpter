@@ -26,6 +26,9 @@ struct RuntimeEventInspector: View {
                     InfoRow(title: "最终结果", value: RuntimeEventDisplay.outcome(event))
                         .foregroundStyle(RuntimeEventDisplay.statusColor(event))
                     InfoRow(title: "TTFB / 总耗时", value: "\(event.ttfbMS.map { RuntimeEventPresentation.durationDisplay($0) } ?? "—") / \(RuntimeEventPresentation.durationDisplay(event.durationMS))")
+                    if event.kind == "client", event.upstreamTTFBMS != nil || event.upstreamDurationMS != nil {
+                        InfoRow(title: "上游 TTFB / 总耗时", value: "\(event.upstreamTTFBMS.map { RuntimeEventPresentation.durationDisplay($0) } ?? "—") / \(event.upstreamDurationMS.map { RuntimeEventPresentation.durationDisplay($0) } ?? "—")")
+                    }
                     GridRow {
                         Text("缓存 / 用量").font(.callout).foregroundStyle(.secondary)
                             .frame(minWidth: 92, alignment: .trailing)

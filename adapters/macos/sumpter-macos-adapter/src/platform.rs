@@ -281,6 +281,8 @@ impl Platform {
             status_code: 200,
             timestamp: unix_to_apple_epoch(now_unix()),
             ttfb_ms: None,
+            upstream_duration_ms: None,
+            upstream_ttfb_ms: None,
             stream_trace: None,
             timeout_ms: None,
             upstream_host: None,

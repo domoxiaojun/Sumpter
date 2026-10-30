@@ -76,7 +76,7 @@ pub fn events_page_on(
                 source_format,target_format,route_mode,\
                 CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.transport') END AS transport,\
                 upstream_status_code,\
-                COALESCE(duration_ms,0) AS duration_ms,ttfb_ms,COALESCE(failover,0) AS failover,project_name,project_source,local_user,\
+                COALESCE(duration_ms,0) AS duration_ms,ttfb_ms,upstream_duration_ms,upstream_ttfb_ms,COALESCE(failover,0) AS failover,project_name,project_source,local_user,\
                 codex_thread_class,attribution_scope \
                 ,request_method,request_path,route_intent,model_group_id,model_group_name, \
                 cache_read_state,cache_read_finality,cache_read_reason,hook_event,input_tokens,output_tokens, \

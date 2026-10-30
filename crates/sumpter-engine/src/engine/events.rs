@@ -397,6 +397,8 @@ impl Engine {
             timestamp: unix_to_apple_epoch(now_unix()),
             // 请求在规划/鉴权阶段就被拒,从未 accepted。
             ttfb_ms: None,
+            upstream_duration_ms: None,
+            upstream_ttfb_ms: None,
             stream_trace: None,
             timeout_ms: None,
             upstream_host: None,
@@ -543,6 +545,8 @@ impl Engine {
             // 收到响应头的尝试由调用方(relay / retryable 分支)覆盖;
             // 响应头前失败的尝试保持 None。
             ttfb_ms: None,
+            upstream_duration_ms: None,
+            upstream_ttfb_ms: None,
             stream_trace: None,
             timeout_ms: None,
             upstream_host: host_of(&endpoint.base_url),

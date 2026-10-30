@@ -376,6 +376,8 @@ struct EndpointProjectionRow {
     failover: i64,
     duration_ms: Option<i64>,
     ttfb_ms: Option<i64>,
+    upstream_duration_ms: Option<i64>,
+    upstream_ttfb_ms: Option<i64>,
     request_purpose: Option<String>,
     usage_present: i64,
     input_tokens: Option<i64>,
@@ -395,7 +397,7 @@ fn load_endpoint_projection_rows(
     builder: &SqlFilter,
 ) -> QueryResult<Vec<EndpointProjectionRow>> {
     let sql = format!(
-        "SELECT seq,request_id,outcome,endpoint_id,endpoint_name,failover,duration_ms,ttfb_ms,\
+        "SELECT seq,request_id,outcome,endpoint_id,endpoint_name,failover,duration_ms,ttfb_ms,upstream_duration_ms,upstream_ttfb_ms,\
                 request_purpose,usage_present,input_tokens,output_tokens,cache_read_input_tokens,\
                 cache_creation_input_tokens,reasoning_tokens,uncached_input_tokens,\
                 processed_input_tokens,processed_total_tokens,token_accounting_semantics,\
@@ -413,18 +415,20 @@ fn load_endpoint_projection_rows(
             failover: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
             duration_ms: row.get(6)?,
             ttfb_ms: row.get(7)?,
-            request_purpose: row.get(8)?,
-            usage_present: row.get::<_, Option<i64>>(9)?.unwrap_or(0),
-            input_tokens: row.get(10)?,
-            output_tokens: row.get(11)?,
-            cache_read_input_tokens: row.get(12)?,
-            cache_creation_input_tokens: row.get(13)?,
-            reasoning_tokens: row.get(14)?,
-            uncached_input_tokens: row.get(15)?,
-            processed_input_tokens: row.get(16)?,
-            processed_total_tokens: row.get(17)?,
-            token_accounting_semantics: row.get(18)?,
-            token_accounting_quality: row.get(19)?,
+            upstream_duration_ms: row.get(8)?,
+            upstream_ttfb_ms: row.get(9)?,
+            request_purpose: row.get(10)?,
+            usage_present: row.get::<_, Option<i64>>(11)?.unwrap_or(0),
+            input_tokens: row.get(12)?,
+            output_tokens: row.get(13)?,
+            cache_read_input_tokens: row.get(14)?,
+            cache_creation_input_tokens: row.get(15)?,
+            reasoning_tokens: row.get(16)?,
+            uncached_input_tokens: row.get(17)?,
+            processed_input_tokens: row.get(18)?,
+            processed_total_tokens: row.get(19)?,
+            token_accounting_semantics: row.get(20)?,
+            token_accounting_quality: row.get(21)?,
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -461,6 +465,8 @@ impl EndpointAccumulator {
             failover: row.failover,
             duration_ms: row.duration_ms,
             ttfb_ms: row.ttfb_ms,
+            upstream_duration_ms: row.upstream_duration_ms,
+            upstream_ttfb_ms: row.upstream_ttfb_ms,
             request_purpose: row.request_purpose.clone(),
             endpoint_id: None,
             effective_model: None,
@@ -476,14 +482,16 @@ impl EndpointAccumulator {
             token_accounting_semantics: row.token_accounting_semantics.clone(),
             token_accounting_quality: row.token_accounting_quality.clone(),
         });
-        self.output_speed.observe(super::output_generation_sample(
-            "client",
-            false,
-            row.request_purpose.as_deref(),
-            row.output_tokens,
-            row.duration_ms,
-            row.ttfb_ms,
-        ));
+        if row.outcome.as_deref() == Some("succeeded") {
+            self.output_speed.observe(super::output_generation_sample(
+                "client",
+                false,
+                row.request_purpose.as_deref(),
+                row.output_tokens,
+                row.upstream_duration_ms,
+                row.upstream_ttfb_ms,
+            ));
+        }
     }
 
     fn into_row(self, name: String) -> AnalyticsDimensionRow {
@@ -799,7 +807,7 @@ fn analytics_token_metrics(
     let mut clauses = base.clauses.clone();
     clauses.push("kind='client'".into());
     let sql = format!(
-        "SELECT timestamp,outcome,failover,duration_ms,ttfb_ms,request_purpose,effective_model,\
+        "SELECT timestamp,outcome,failover,duration_ms,ttfb_ms,upstream_duration_ms,upstream_ttfb_ms,request_purpose,effective_model,\
                 usage_present,input_tokens,output_tokens,cache_read_input_tokens,\
                 cache_creation_input_tokens,reasoning_tokens,uncached_input_tokens,\
                 processed_input_tokens,processed_total_tokens,token_accounting_semantics,\
@@ -817,20 +825,22 @@ fn analytics_token_metrics(
             failover: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
             duration_ms: row.get(3)?,
             ttfb_ms: row.get(4)?,
-            request_purpose: row.get(5)?,
+            upstream_duration_ms: row.get(5)?,
+            upstream_ttfb_ms: row.get(6)?,
+            request_purpose: row.get(7)?,
             endpoint_id: None,
-            effective_model: row.get(6)?,
-            usage_present: row.get::<_, Option<i64>>(7)?.unwrap_or(0),
-            input_tokens: row.get(8)?,
-            output_tokens: row.get(9)?,
-            cache_read_input_tokens: row.get(10)?,
-            cache_creation_input_tokens: row.get(11)?,
-            reasoning_tokens: row.get(12)?,
-            uncached_input_tokens: row.get(13)?,
-            processed_input_tokens: row.get(14)?,
-            processed_total_tokens: row.get(15)?,
-            token_accounting_semantics: row.get(16)?,
-            token_accounting_quality: row.get(17)?,
+            effective_model: row.get(8)?,
+            usage_present: row.get::<_, Option<i64>>(9)?.unwrap_or(0),
+            input_tokens: row.get(10)?,
+            output_tokens: row.get(11)?,
+            cache_read_input_tokens: row.get(12)?,
+            cache_creation_input_tokens: row.get(13)?,
+            reasoning_tokens: row.get(14)?,
+            uncached_input_tokens: row.get(15)?,
+            processed_input_tokens: row.get(16)?,
+            processed_total_tokens: row.get(17)?,
+            token_accounting_semantics: row.get(18)?,
+            token_accounting_quality: row.get(19)?,
         });
     }
     Ok(accumulator.finish())

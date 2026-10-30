@@ -332,9 +332,9 @@ pub fn dimension_page_on(
                       COUNT(DISTINCT {related_expression}) AS related_count,
                       {workspace_expr} AS workspace_paths_json,
                       GROUP_CONCAT(DISTINCT COALESCE(client_kind,'unrecorded_client')) AS client_kinds,
-                      SUM(CASE WHEN kind='client' AND is_in_flight=0 AND (request_purpose IS NULL OR request_purpose!='token_count') AND output_tokens IS NOT NULL AND output_tokens>=0 AND duration_ms IS NOT NULL AND duration_ms>=0 AND ttfb_ms IS NOT NULL AND ttfb_ms>=0 AND duration_ms>ttfb_ms THEN output_tokens ELSE 0 END) AS output_generation_tokens,
-                      SUM(CASE WHEN kind='client' AND is_in_flight=0 AND (request_purpose IS NULL OR request_purpose!='token_count') AND output_tokens IS NOT NULL AND output_tokens>=0 AND duration_ms IS NOT NULL AND duration_ms>=0 AND ttfb_ms IS NOT NULL AND ttfb_ms>=0 AND duration_ms>ttfb_ms THEN duration_ms - ttfb_ms ELSE 0 END) AS output_generation_ms,
-                      SUM(CASE WHEN kind='client' AND is_in_flight=0 AND (request_purpose IS NULL OR request_purpose!='token_count') AND output_tokens IS NOT NULL AND output_tokens>=0 AND duration_ms IS NOT NULL AND duration_ms>=0 AND ttfb_ms IS NOT NULL AND ttfb_ms>=0 AND duration_ms>ttfb_ms THEN 1 ELSE 0 END) AS output_speed_requests
+                      SUM(CASE WHEN kind='client' AND outcome='succeeded' AND is_in_flight=0 AND (request_purpose IS NULL OR request_purpose!='token_count') AND output_tokens IS NOT NULL AND output_tokens>=0 AND upstream_duration_ms IS NOT NULL AND upstream_duration_ms>=0 AND upstream_ttfb_ms IS NOT NULL AND upstream_ttfb_ms>=0 AND upstream_duration_ms>upstream_ttfb_ms THEN output_tokens ELSE 0 END) AS output_generation_tokens,
+                      SUM(CASE WHEN kind='client' AND outcome='succeeded' AND is_in_flight=0 AND (request_purpose IS NULL OR request_purpose!='token_count') AND output_tokens IS NOT NULL AND output_tokens>=0 AND upstream_duration_ms IS NOT NULL AND upstream_duration_ms>=0 AND upstream_ttfb_ms IS NOT NULL AND upstream_ttfb_ms>=0 AND upstream_duration_ms>upstream_ttfb_ms THEN upstream_duration_ms - upstream_ttfb_ms ELSE 0 END) AS output_generation_ms,
+                      SUM(CASE WHEN kind='client' AND outcome='succeeded' AND is_in_flight=0 AND (request_purpose IS NULL OR request_purpose!='token_count') AND output_tokens IS NOT NULL AND output_tokens>=0 AND upstream_duration_ms IS NOT NULL AND upstream_duration_ms>=0 AND upstream_ttfb_ms IS NOT NULL AND upstream_ttfb_ms>=0 AND upstream_duration_ms>upstream_ttfb_ms THEN 1 ELSE 0 END) AS output_speed_requests
                FROM runtime_events{where_sql}
               GROUP BY {group_columns}
               ORDER BY {order_by}, key ASC
@@ -468,6 +468,8 @@ fn dimension_costs(
             failover: 0,
             duration_ms: None,
             ttfb_ms: None,
+            upstream_duration_ms: None,
+            upstream_ttfb_ms: None,
             request_purpose: row.get(2)?,
             endpoint_id: row.get(3)?,
             effective_model: row.get(4)?,
