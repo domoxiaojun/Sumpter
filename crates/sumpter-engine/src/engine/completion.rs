@@ -106,8 +106,8 @@ impl StreamTraceState {
 /// 一次客户端请求的完成守卫:
 /// - 正常完成 → 按最终状态记 client + upstream 事件并计数;
 /// - 流中断 → 记中断信息;
-/// - **Drop 而未完成 = 客户端断开** → client 记 499；upstream 保留真实 HTTP 状态，
-///   两者 outcome 都是 cancelled，不计成功也不计失败。
+/// - **Drop 而未完成 = HTTP 生命周期中断，发起方未知** → client 记 499；
+///   upstream 保留真实 HTTP 状态，两者 outcome 都是 cancelled。
 pub(super) struct CompletionGuard {
     trace: sumpter_core::request_policy::RequestTrace,
     pub(super) engine: Engine,
@@ -641,17 +641,18 @@ impl Drop for CompletionGuard {
         }
         self.trace("complete", None, "cancelled", Some(self.started.elapsed()));
         self.done = true;
-        // 客户端断开:499,不计成功也不计失败;上游连接随 relay drop 已撕掉。
-        let failure = FailureInfo::client_cancelled(self.upstream.is_some());
+        // HTTP body/handler drop:499,原因可能是客户端重试、连接丢失或服务取消；
+        // 上游连接随 relay drop 一并撕掉，不把它误报成用户主动取消。
+        let failure = FailureInfo::client_disconnected(self.upstream.is_some());
         let mut event = self.client_event(
             STATUS_CLIENT_DISCONNECTED,
-            Some("client_disconnected: request cancelled".into()),
+            Some("client_connection_closed: cause unknown".into()),
         );
         failure.apply_to(&mut event);
         event.outcome = Some(RuntimeEventOutcome::Cancelled);
         self.complete_upstream_event(
             self.status,
-            Some("client_disconnected".into()),
+            Some("client_connection_closed".into()),
             RuntimeEventOutcome::Cancelled,
             Some(&failure),
         );
@@ -793,7 +794,7 @@ mod tests {
         assert_eq!(event.status_code, STATUS_CLIENT_DISCONNECTED);
         assert_eq!(
             event.failure_kind,
-            Some(RuntimeFailureKind::ClientCancelled)
+            Some(RuntimeFailureKind::ClientDisconnected)
         );
         assert_eq!(
             event.failure_phase,

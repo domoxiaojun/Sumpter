@@ -11,6 +11,7 @@ final class RequestPolicyTests: XCTestCase {
         let data = Data(#"{"schemaVersion":7,"requestPolicy":{"streamProtection":"prelude","maxTotalAttempts":6,"streamBufferMib":8,"endpoints":{"a":{"limits":{"maxConcurrent":2},"protocolModels":{"openai-responses":{"m":{"strictTools":false}}}}}}}"#.utf8)
         let config = try JSONDecoder().decode(AppConfig.self, from: data)
         XCTAssertEqual(config.requestPolicy.streamBufferMiB, 8)
+        XCTAssertEqual(config.requestPolicy.responseWaitTimeoutSeconds, 0)
         XCTAssertEqual(config.requestPolicy.endpoints["a"]?.limits.maxQueued, 128)
         XCTAssertEqual(config.requestPolicy.endpoints["a"]?.protocolModels["openai-responses"]?["m"]?.strictTools, false)
         let roundTrip = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))

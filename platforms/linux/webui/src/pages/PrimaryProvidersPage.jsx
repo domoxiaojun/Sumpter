@@ -878,7 +878,7 @@ export function PrimaryProvidersPage() {
 
           <div className="grid-2col">
             <div className="form-group">
-              <label className="form-label">首响应截止（秒）</label>
+              <label className="form-label">单次上游首响应截止（秒）</label>
               <input
                 type="number"
                 min="0.1"
@@ -888,7 +888,7 @@ export function PrimaryProvidersPage() {
                 placeholder="留空由客户端决定"
                 onChange={(e) => { responseTimeout = e.target.value ? Number(e.target.value) : null; }}
               />
-              <span className="form-hint">连接、TLS 握手与首包响应头总截止。</span>
+              <span className="form-hint">每次上游尝试从连接、TLS 握手到响应头的等待上限；超时后按重试策略继续，不是客户端请求总时限。</span>
             </div>
 
             <div className="form-group">

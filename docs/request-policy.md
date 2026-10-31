@@ -9,6 +9,7 @@ WebUI 和 macOS 的“Claude Code 路由”页面提供“全客户端请求策�
 | 字段 | 默认值 | 含义 |
 | --- | --- | --- |
 | maxTotalAttempts | 0 | 沿用原 retry 预算；设为正整数后限制一个 HTTP 请求的总发送次数，包含粘性、换入口、500、SSE 和跨轮重试 |
+| responseWaitTimeoutSeconds | 0 | 从转发开始到客户端响应头提交的总等待上限，包含排队、重试、退避和缓冲；0 不限，已开始交付的长流不截断 |
 | global.maxConcurrent | 0 | 全局同时处理的上游请求；0 不限，名额保留至上游流结束或取消 |
 | global.maxQueued | 128 | 最多等待请求数；0 立即返回本地 429 |
 | global.queueTimeoutSeconds | 30 | 最长排队等待秒数 |
@@ -27,9 +28,19 @@ WebUI 和 macOS 的“Claude Code 路由”页面提供“全客户端请求策�
 
 排队已满或超时返回 HTTP 429、scope=local、error=queue_full/queue_timeout 和 Retry-After: 1。事件 failureKind=local_admission_rejected，不降低供应商健康状态。客户端取消会移除等待项，不发送上游请求。
 
+## 等待截止与连接中断
+
+responseWaitTimeoutSeconds 可设为 0–86400 秒，默认 0 禁用。显式开启后，从路由完成开始转发计时，排队、上游连接与响应头等待、错误正文探测、退避和 Responses 缓冲共用截止；到时取消未完成工作，返回本地 HTTP 504，failureKind=response_wait_timeout、timeoutMS=配置值，不冒充上游 504 或客户端取消。提交客户端响应后解除这个截止，正常长回答不截断；WebSocket 不受影响。
+
+retry.responseTimeoutSeconds 则是每次上游请求的响应头超时，超时后仍按重试策略继续；retry.maxRetryDurationSeconds 只在重试边界检查，不强制截断正在等待的尝试。无限循环可保持 maxDeferredRounds、maxRetryDurationSeconds、maxTotalAttempts 和 responseWaitTimeoutSeconds 均为 0。显式正值限制仍会结束重试；客户端关闭连接也会终止当前工作。
+
+HTTP 请求处理或响应体提前释放记为 client_disconnected，保留 499 和 cancelled 计数兼容性，两端显示“连接中断（原因未确定）”。它不能证明用户主动取消，也可能来自客户端超时/自动重试、连接丢失或服务取消；旧 client_cancelled 记录不迁移、不删除。
+
+运行页选中请求链后持续更新进行中请求；终态停止，暂停刷新或离开页面停止读取。快照按 changeSeq 合并，不覆盖较新的事件；最多显示 512 条，超出时显示“至少”及截断提示。客户端计时不是模型已经开始输出的证据。
+
 ## 重试和流式恢复
 
-仅识别可确认的结构化错误：insufficient_quota、billing_hard_limit_reached、Google 日额度等不会在同一请求内反复尝试同一入口；已知 invalid_api_key / authentication_error / invalid_grant 也停止同入口重试。无法确认的错误保持原状态码策略。Codex Live 的既有鉴权隔离和有界 bootstrap 行为保留。
+仅识别可确认的结构化错误用于诊断：insufficient_quota、billing_hard_limit_reached、Google 日额度等仍按 429/503 的首响应前重试策略留在代理内部，不向客户端透传中间错误；已知 invalid_api_key / authentication_error / invalid_grant 与模型不支持仍停止同入口重试。无法确认的错误保持原状态码策略。Codex Live 的既有鉴权隔离和有界 bootstrap 行为保留。
 
 Retry-After、retry-after-ms 和 Google RetryInfo 统一取有效等待提示，并加正向抖动。等待仍受既有 300 秒提示上限和请求重试预算约束；超大提示不会导致等待数小时。总尝试预算只统计 Sumpter 的请求，不能限制客户端或 CPA 内部再次重试。
 

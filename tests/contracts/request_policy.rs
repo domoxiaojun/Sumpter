@@ -81,45 +81,59 @@ fn versioned_codex_prewarm_and_controls_remain_distinct() {
     );
 }
 
-#[tokio::test]
-async fn hard_quota_stops_unlimited_retry_configuration() {
-    let transport = FakeTransport::new();
-    transport.push(
-        "a.example.com",
-        reply(429, br#"{"error":{"code":"insufficient_quota"}}"#),
-    );
-    let mut c = config();
-    c.retry.max_deferred_rounds = 0;
-    let engine = engine_with(c, transport.clone());
-    let (status, _) = tokio::time::timeout(
-        Duration::from_secs(1),
-        call(
-            &engine,
-            loopback(),
-            "/v1/responses",
-            vec![],
-            codex_responses_body(),
-        ),
-    )
-    .await
-    .unwrap();
-    assert_eq!(status, 429);
-    assert_eq!(transport.requests().len(), 1);
-    let snapshot = engine.runtime_snapshot();
-    let client = snapshot
-        .recent_events
-        .iter()
-        .find(|e| e.kind == "client")
-        .unwrap();
-    assert!(
-        client
-            .request_trace
-            .as_ref()
-            .unwrap()
-            .steps
+#[tokio::test(start_paused = true)]
+async fn hard_quota_429_stays_inside_proxy_retry_loop() {
+    for status in [429, 503] {
+        let transport = FakeTransport::new();
+        for _ in 0..3 {
+            transport.push(
+                "a.example.com",
+                reply(status, br#"{"error":{"code":"insufficient_quota"}}"#),
+            );
+        }
+        transport.push(
+            "a.example.com",
+            sse_ok(&["event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"]),
+        );
+        let mut c = config();
+        c.retry.max_deferred_rounds = 0;
+        let engine = engine_with(c, transport.clone());
+        let request_engine = engine.clone();
+        let request = tokio::spawn(async move {
+            request_engine
+                .handle_request(loopback(), "POST", "/v1/messages", vec![], body())
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while transport.requests().len() < 3 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("must keep retrying quota-shaped HTTP errors");
+        assert!(
+            !request.is_finished(),
+            "intermediate errors must not commit client headers"
+        );
+        let snapshot = engine.runtime_snapshot();
+        let client = snapshot
+            .recent_events
             .iter()
-            .any(|s| s.detail == "quota_exhausted")
-    );
+            .find(|e| e.kind == "client")
+            .unwrap();
+        assert_eq!(client.status_code, 0);
+        assert_eq!(client.ttfb_ms, None);
+        let response = tokio::time::timeout(Duration::from_secs(10), request)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&bytes).contains("message_stop"));
+        assert_eq!(transport.requests().len(), 4);
+    }
 }
 
 #[tokio::test]
@@ -465,4 +479,126 @@ async fn rpm_wait_timeout_does_not_issue_an_extra_upstream_request() {
         "queue_timeout"
     );
     assert_eq!(transport.requests().len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn response_wait_timeout_bounds_backoff_headers_queue_and_buffer() {
+    for stage in ["headers", "backoff", "buffer", "queue"] {
+        let transport = FakeTransport::new();
+        let mut c = config();
+        c.retry.max_deferred_rounds = 0;
+        c.retry.response_timeout_seconds = Some(200.0);
+        c.request_policy.response_wait_timeout_seconds = 1;
+        if stage == "queue" {
+            c.request_policy.global.max_concurrent = 1;
+            transport.push("a.example.com", Outcome::Gated { status: 200 });
+        }
+        match stage {
+            "headers" => transport.push("a.example.com", Outcome::Hang),
+            "backoff" => transport.push(
+                "a.example.com",
+                Outcome::Status {
+                    status: 429,
+                    headers: vec![("retry-after".into(), "300".into())],
+                    chunks: vec![],
+                },
+            ),
+            "buffer" => {
+                c.retry.max_stream_error_retries = 1;
+                transport.push("a.example.com", Outcome::GatedSse);
+            }
+            _ => {}
+        }
+        let engine = engine_with(c, transport.clone());
+        let held = if stage == "queue" {
+            Some(
+                engine
+                    .handle_request(loopback(), "POST", "/v1/messages", vec![], body())
+                    .await,
+            )
+        } else {
+            None
+        };
+        let started = tokio::time::Instant::now();
+        let response = engine
+            .handle_request(
+                loopback(),
+                "POST",
+                "/v1/responses",
+                vec![],
+                codex_responses_body(),
+            )
+            .await;
+        assert_eq!(response.status(), 504, "{stage}");
+        assert!(started.elapsed() <= Duration::from_millis(1050), "{stage}");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["failureKind"], "response_wait_timeout", "{stage}");
+        assert_eq!(json["timeoutMS"], 1000);
+        assert!(json.get("upstreamStatusCode").is_none());
+        let attempts = transport.requests().len();
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert_eq!(
+            transport.requests().len(),
+            attempts,
+            "deadline must drop forward work"
+        );
+        let snapshot = engine.runtime_snapshot();
+        let client = snapshot
+            .recent_events
+            .iter()
+            .find(|e| e.failure_kind == Some(RuntimeFailureKind::ResponseWaitTimeout))
+            .unwrap();
+        assert_eq!(client.outcome, Some(RuntimeEventOutcome::Failed));
+        assert_eq!(client.ttfb_ms, None);
+        drop(held);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn response_wait_timeout_ends_at_commit_and_does_not_cut_long_output() {
+    let transport = FakeTransport::new();
+    transport.push("a.example.com", Outcome::Gated { status: 200 });
+    let mut c = config();
+    c.request_policy.response_wait_timeout_seconds = 1;
+    let engine = engine_with(c, transport.clone());
+    let response = engine
+        .handle_request(loopback(), "POST", "/v1/messages", vec![], body())
+        .await;
+    assert_eq!(response.status(), 200);
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let tx = transport.gate_sender();
+    tx.send(Ok(Bytes::from_static(
+        b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+    )))
+    .unwrap();
+    drop(tx);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(String::from_utf8_lossy(&bytes).contains("message_stop"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn upstream_200_second_timeout_retries_without_ending_client_request() {
+    let transport = FakeTransport::new();
+    transport.push("a.example.com", Outcome::Hang);
+    transport.push(
+        "b.example.com",
+        sse_ok(&["event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"]),
+    );
+    let mut c = two_endpoint_config();
+    c.retry.max_deferred_rounds = 0;
+    c.retry.response_timeout_seconds = Some(200.0);
+    let engine = engine_with(c, transport.clone());
+    let started = tokio::time::Instant::now();
+    let (status, _) = call(&engine, loopback(), "/v1/messages", vec![], body()).await;
+    assert_eq!(status, 200);
+    assert_eq!(transport.requests().len(), 2);
+    assert!(started.elapsed() >= Duration::from_secs(200));
+    assert!(engine.runtime_snapshot().recent_events.iter().any(
+        |e| e.kind == "upstream" && e.failure_kind == Some(RuntimeFailureKind::ResponseTimeout)
+    ));
 }

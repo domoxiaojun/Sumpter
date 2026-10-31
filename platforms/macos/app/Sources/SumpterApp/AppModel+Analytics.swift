@@ -1147,22 +1147,57 @@ extension AppModel {
                     self.runtimeRequestChainTask = nil
                 }
             }
-            do {
-                let chain = try await admin.runtimeRequestChain(requestID: requestID)
+            var initial = true
+            repeat {
                 guard !Task.isCancelled,
                       generation == self.runtimeRequestChainRequestGeneration,
                       snapshotGeneration == self.runtimeV2RequestGeneration,
-                      connectionGeneration == self.adminConnectionGeneration else { return }
-                self.runtimeRequestChain = chain
-            } catch {
-                guard !Task.isCancelled,
-                      generation == self.runtimeRequestChainRequestGeneration,
-                      snapshotGeneration == self.runtimeV2RequestGeneration,
-                      connectionGeneration == self.adminConnectionGeneration else { return }
-                self.runtimeRequestChainError = "\(error)"
-            }
+                      connectionGeneration == self.adminConnectionGeneration,
+                      initial || self.autoRefreshEnabled else { return }
+                do {
+                    let fetched = try await admin.runtimeRequestChain(requestID: requestID)
+                    guard !Task.isCancelled,
+                          generation == self.runtimeRequestChainRequestGeneration,
+                          snapshotGeneration == self.runtimeV2RequestGeneration,
+                          connectionGeneration == self.adminConnectionGeneration,
+                          initial || self.autoRefreshEnabled else { return }
+                    self.runtimeRequestChain = fetched.merging(self.runtimeRequestChain)
+                    if let detail = self.runtimeEventDetail,
+                       let updated = self.runtimeRequestChain?.events.first(where: { $0.id == detail.event.id }),
+                       updated.changeSeq > detail.changeSeq {
+                        self.loadRuntimeEvent(id: detail.event.id)
+                    }
+                    self.runtimeRequestChainError = nil
+                    self.runtimeRequestChainLoading = false
+                } catch {
+                    guard !Task.isCancelled,
+                          generation == self.runtimeRequestChainRequestGeneration,
+                          connectionGeneration == self.adminConnectionGeneration else { return }
+                    self.runtimeRequestChainError = "\(error)"
+                    self.runtimeRequestChainLoading = false
+                }
+                initial = false
+                guard self.autoRefreshEnabled,
+                      self.runtimeRequestChain?.isInFlight == true else { return }
+                do { try await Task.sleep(nanoseconds: 1_000_000_000) }
+                catch { return }
+            } while !Task.isCancelled
         }
         runtimeRequestChainTask = task
+    }
+
+    func stopRuntimeRequestChainRefresh() {
+        runtimeRequestChainRequestGeneration &+= 1
+        runtimeRequestChainTask?.cancel()
+        runtimeRequestChainTask = nil
+        runtimeRequestChainLoading = false
+    }
+
+    func resumeRuntimeRequestChainRefresh() {
+        guard autoRefreshEnabled, runtimeRequestChainTask == nil,
+              let chain = runtimeRequestChain, chain.isInFlight,
+              let id = chain.events.first(where: { $0.kind == "client" })?.id else { return }
+        loadRuntimeRequestChain(for: id)
     }
 
     func loadRuntimeProjects(page: Int = 1) {
@@ -1488,7 +1523,8 @@ extension AppModel {
             return
         }
         let expected = max(runtimePage?.events.first(where: { $0.id == id })?.changeSeq ?? 0,
-                           runHistoryPage?.events.first(where: { $0.id == id })?.changeSeq ?? 0)
+                           runHistoryPage?.events.first(where: { $0.id == id })?.changeSeq ?? 0,
+                           runtimeRequestChain?.events.first(where: { $0.id == id })?.changeSeq ?? 0)
         if let cached = runtimeEventDetails[id], cached.changeSeq >= expected {
             runtimeEventDetail = cached
             return

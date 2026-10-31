@@ -74,6 +74,7 @@ pub(super) fn proxy_failure_response(
             matches!(
                 failure.kind,
                 RuntimeFailureKind::ResponseTimeout
+                    | RuntimeFailureKind::ResponseWaitTimeout
                     | RuntimeFailureKind::ConnectionFailed
                     | RuntimeFailureKind::UpstreamHttpStatus
                     | RuntimeFailureKind::EndpointsExhausted

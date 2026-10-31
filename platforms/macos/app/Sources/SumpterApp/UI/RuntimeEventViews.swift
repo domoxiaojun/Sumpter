@@ -193,6 +193,7 @@ enum RuntimeEventDisplay {
     }
 
     static func outcome(_ event: RuntimeEvent) -> String {
+        if event.isCancelled && event.failureKind == .clientDisconnected { return "连接中断" }
         return RuntimeEventPresentation.outcomeDisplay(
             event.outcome,
             statusCode: event.statusCode,
@@ -506,6 +507,7 @@ struct RecentEventsPanel: View {
     /// 运行页把类型筛选下推服务端；旧调用方不提供时仍保留本地筛选。
     var initialKindFilter: RuntimeEventKindFilter?
     var onKindFilterChange: ((RuntimeEventKindFilter) -> Void)?
+    var requestChainTruncated: Bool = false
     var requestChainEvents: [RuntimeEvent]?
     var requestChainLoading = false
     var onSelectEvent: ((String?) -> Void)?
@@ -548,6 +550,7 @@ struct RecentEventsPanel: View {
                         HStack(alignment: .top, spacing: 16) {
                             RuntimeRequestTraceView(
                                 chain: selectedRequestChain,
+                                truncated: requestChainTruncated,
                                 selectedEventID: $selectedEventID
                             )
                             .frame(width: 310, alignment: .topLeading)
@@ -561,6 +564,7 @@ struct RecentEventsPanel: View {
                         VStack(alignment: .leading, spacing: 16) {
                             RuntimeRequestTraceView(
                                 chain: selectedRequestChain,
+                                truncated: requestChainTruncated,
                                 selectedEventID: $selectedEventID,
                                 maxHeight: 280
                             )
@@ -1166,6 +1170,7 @@ struct RecentEventsPanel: View {
 /// 同一 requestID 的完整上游尝试链。默认筛选只看客户端行时也能直接看到重试/failover。
 private struct RuntimeRequestTraceView: View {
     let chain: [RuntimeEvent]
+    var truncated: Bool = false
     @Binding var selectedEventID: String?
     var maxHeight: CGFloat = 440
     @State private var contentHeight: CGFloat = 440
@@ -1181,7 +1186,7 @@ private struct RuntimeRequestTraceView: View {
                 Text("请求链")
                     .font(.callout.weight(.semibold))
                 Spacer()
-                Text("\(upstreamAttempts.count) 次上游尝试")
+                Text("\(truncated ? "至少 " : "")\(upstreamAttempts.count) 次上游尝试\(truncated ? "（已截断）" : "")")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }

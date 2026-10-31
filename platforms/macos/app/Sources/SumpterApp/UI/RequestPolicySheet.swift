@@ -27,6 +27,9 @@ struct RequestPolicySheet: View {
                         .font(.caption).foregroundStyle(.secondary)
                     GroupBox("全局请求限制") { limits($draft.global) }
                     number("一次请求最多尝试（0 = 沿用原有重试限制）", $draft.maxTotalAttempts, 0...10_000)
+                    number("代理响应等待上限（秒，0 = 不限）", $draft.responseWaitTimeoutSeconds, 0...86_400)
+                    Text("从代理开始转发到交付响应，包含排队、所有入口尝试、退避和缓冲；到时返回 504。0 保持原重试策略；已开始交付的长回答不受影响。")
+                        .font(.caption).foregroundStyle(.secondary)
                     Button("填入交互预设") {
                         draft.maxTotalAttempts = 6; draft.global.maxConcurrent = 8
                         draft.global.maxQueued = 16; draft.global.queueTimeoutSeconds = 15

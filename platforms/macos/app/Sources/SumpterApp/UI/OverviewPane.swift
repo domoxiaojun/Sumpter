@@ -48,6 +48,7 @@ struct OverviewPane: View {
                 onPageSizeChange: model.setRunHistoryPageSize,
                 initialKindFilter: RuntimeEventKindFilter(rawValue: model.runHistoryKindFilter),
                 onKindFilterChange: { model.setRunHistoryKindFilter($0.rawValue) },
+                requestChainTruncated: model.runtimeRequestChain?.truncated ?? false,
                 requestChainEvents: runRequestChainEvents,
                 requestChainLoading: model.runtimeRequestChainLoading,
                 onSelectEvent: { eventID in
@@ -68,6 +69,7 @@ struct OverviewPane: View {
             // 数据由 SSE 增量推送 + AppModel 兜底轮询驱动;此处只管「冻结/解冻」快照。
             // (旧版在这里另跑一个 1-30 秒轮询循环,与 AppModel 的循环叠加成重复请求。)
             guard model.autoRefreshEnabled else {
+                model.stopRuntimeRequestChainRefresh()
                 frozenRuntime = model.runtime
                 frozenHealth = model.health
                 frozenConnections = model.responsesConnectionsObservation
@@ -75,12 +77,14 @@ struct OverviewPane: View {
                 model.refreshRunHistory(resetSnapshot: model.runHistoryPage == nil)
                 return
             }
+            model.resumeRuntimeRequestChainRefresh()
             frozenRuntime = nil
             frozenHealth = nil
             frozenConnections = nil
             model.refresh()
             model.refreshRunHistory(resetSnapshot: model.runHistoryPage == nil)
         }
+        .onDisappear { model.stopRuntimeRequestChainRefresh() }
     }
 
     /// 开关或间隔一变就重启刷新循环。

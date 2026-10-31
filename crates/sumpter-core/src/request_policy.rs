@@ -135,6 +135,8 @@ pub struct EndpointPolicy {
 #[serde(default, rename_all = "camelCase")]
 pub struct RequestPolicy {
     pub max_total_attempts: u32,
+    /// Forwarding through client response commit, including retries; 0 disables it.
+    pub response_wait_timeout_seconds: u32,
     pub stream_protection: StreamProtection,
     pub stream_buffer_mib: u32,
     pub stream_buffer_chunks: u32,
@@ -148,6 +150,7 @@ impl Default for RequestPolicy {
     fn default() -> Self {
         Self {
             max_total_attempts: 0,
+            response_wait_timeout_seconds: 0,
             stream_protection: StreamProtection::Complete,
             stream_buffer_mib: 16,
             stream_buffer_chunks: 8192,
@@ -166,6 +169,7 @@ impl RequestPolicy {
 
     pub fn normalize(&mut self) {
         self.max_total_attempts = self.max_total_attempts.min(10_000);
+        self.response_wait_timeout_seconds = self.response_wait_timeout_seconds.min(86_400);
         self.stream_buffer_mib = self.stream_buffer_mib.clamp(1, 256);
         self.stream_buffer_chunks = self.stream_buffer_chunks.clamp(16, 65_536);
         self.stream_buffer_seconds = self.stream_buffer_seconds.min(3600);
@@ -283,10 +287,16 @@ pub fn classify_failure(status: u16, body: &[u8]) -> FailureDecision {
     };
     FailureDecision {
         class,
-        retry_same: !(matches!(
-            class,
-            FailureClass::QuotaExhausted | FailureClass::ModelUnsupported
-        ) || (terminal_credentials && class == FailureClass::Credential)),
+        // 首响应前的 429/503 必须由代理继续消化；正文里的额度字段不能
+        // 把限流/暂时不可用错误提前透传给客户端。
+        retry_same: if matches!(status, 429 | 503) {
+            true
+        } else {
+            !(matches!(
+                class,
+                FailureClass::QuotaExhausted | FailureClass::ModelUnsupported
+            ) || (terminal_credentials && class == FailureClass::Credential))
+        },
         retry_after_seconds,
     }
 }
@@ -334,7 +344,7 @@ mod tests {
     #[test]
     fn distinguishes_daily_quota_from_temporary_throttle() {
         let hard = br#"{"error":{"details":[{"violations":[{"quotaId":"RequestsPerDay"}]}]}}"#;
-        assert!(!classify_failure(429, hard).retry_same);
+        assert!(classify_failure(429, hard).retry_same);
         let temporary =
             br#"{"error":{"details":[{"retryDelay":"250ms","reason":"RATE_LIMIT_EXCEEDED"}]}}"#;
         let decision = classify_failure(429, temporary);

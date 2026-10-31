@@ -2033,7 +2033,9 @@ struct UsagePane: View {
                 "upstream_response_incomplete": "上游响应流未完整结束",
                 "upstream_response_failed": "上游响应协议失败",
                 "endpoints_exhausted": "所有可用入口全部耗尽",
-                "client_cancelled": "客户端主动取消",
+                "client_cancelled": "客户端断开或取消",
+                "client_disconnected": "连接中断（原因未确定）",
+                "response_wait_timeout": "代理响应等待超时",
                 "client_request_rejected": "客户端请求被代理拒绝",
             ]
             return labels[value] ?? (value.isEmpty ? "未分类" : value)

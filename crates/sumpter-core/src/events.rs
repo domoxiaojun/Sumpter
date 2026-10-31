@@ -94,7 +94,7 @@ pub mod message_tokens {
     pub const BODY_NOT_OBJECT: &str = "body is not an object";
     /// `stream interrupted: <原因>`:已回写响应头后的断流/吐字超时。
     pub const STREAM_INTERRUPTED_PREFIX: &str = "stream interrupted: ";
-    /// `client_disconnected*`:客户端取消(与 499 状态码成对)。
+    /// `client_disconnected*`:旧版客户端取消/连接断开 token（与 499 状态码成对）。
     pub const CLIENT_DISCONNECTED_PREFIX: &str = "client_disconnected";
 
     /// 组合 token:None/空串跳过;全空返回 None(事件不落 message 键)。
@@ -138,6 +138,7 @@ pub enum RuntimeEventOutcome {
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeFailureKind {
     ResponseTimeout,
+    ResponseWaitTimeout,
     ConnectionFailed,
     InvalidResponse,
     UpstreamHttpStatus,
@@ -147,6 +148,7 @@ pub enum RuntimeFailureKind {
     UpstreamResponseFailed,
     EndpointsExhausted,
     ClientCancelled,
+    ClientDisconnected,
     ClientRequestRejected,
     LocalAdmissionRejected,
 }
@@ -155,6 +157,7 @@ impl RuntimeFailureKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::ResponseTimeout => "response_timeout",
+            Self::ResponseWaitTimeout => "response_wait_timeout",
             Self::ConnectionFailed => "connection_failed",
             Self::InvalidResponse => "invalid_response",
             Self::UpstreamHttpStatus => "upstream_http_status",
@@ -164,6 +167,7 @@ impl RuntimeFailureKind {
             Self::UpstreamResponseFailed => "upstream_response_failed",
             Self::EndpointsExhausted => "endpoints_exhausted",
             Self::ClientCancelled => "client_cancelled",
+            Self::ClientDisconnected => "client_disconnected",
             Self::ClientRequestRejected => "client_request_rejected",
             Self::LocalAdmissionRejected => "local_admission_rejected",
         }

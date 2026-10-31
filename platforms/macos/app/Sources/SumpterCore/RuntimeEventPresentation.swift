@@ -360,7 +360,7 @@ public enum RuntimeEventPresentation {
             if streamTrace?.websocketTrace?.closedBy == "client" {
                 return "客户端侧 WebSocket 连接关闭（可能经过反代）"
             }
-            return "客户端断开或取消请求"
+            return failureKind == .clientDisconnected ? "连接中断（原因未确定）" : "客户端断开或取消请求"
         }
         if let trace = streamTrace?.websocketTrace, trace.stage == "awaiting_first_message", outcome == .failed {
             if trace.relayError == "server_shutdown" { return "代理停止，WebSocket 连接已结束" }
@@ -436,6 +436,10 @@ public enum RuntimeEventPresentation {
                 return "首响应超时（有效阈值 \(durationSeconds(timeoutMS))）"
             }
             return "首响应超时（尚未收到上游响应头）"
+        case .responseWaitTimeout:
+            return "代理响应等待达到上限"
+        case .clientDisconnected:
+            return "连接中断（原因未确定）"
         case .connectionFailed:
             return kind == "upstream" ? "连接失败（未收到响应头）" : "代理连接上游失败"
         case .invalidResponse:
@@ -516,6 +520,9 @@ public enum RuntimeEventPresentation {
         if segment.hasPrefix("stream interrupted:") {
             let reason = segment.dropFirst("stream interrupted:".count)
             return failure(reason.contains("timeout") ? "流中断(吐字超时)" : "流中断(上游断流)")
+        }
+        if segment.hasPrefix("client_connection_closed") {
+            return failure("连接中断（原因未确定）")
         }
         if segment.hasPrefix("client_disconnected") {
             return failure("客户端断开/取消")
@@ -779,6 +786,7 @@ public enum RuntimeEventPresentation {
     public static func failureKindDisplay(_ kind: RuntimeFailureKind) -> String {
         switch kind {
         case .responseTimeout: "首响应超时"
+        case .responseWaitTimeout: "代理响应等待超时"
         case .connectionFailed: "连接失败"
         case .invalidResponse: "响应无法解析"
         case .upstreamHTTPStatus: "上游 HTTP 错误"
@@ -788,6 +796,7 @@ public enum RuntimeEventPresentation {
         case .upstreamResponseFailed: "上游响应失败"
         case .endpointsExhausted: "入口耗尽"
         case .clientCancelled: "客户端断开或取消"
+        case .clientDisconnected: "客户端连接断开"
         case .clientRequestRejected: "客户端请求被拒绝"
         case .localAdmissionRejected: "本地请求限流"
         }

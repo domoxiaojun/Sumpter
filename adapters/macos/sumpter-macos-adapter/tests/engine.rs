@@ -72,7 +72,10 @@ enum Outcome {
     /// 首响应截止超时。
     Timeout,
     /// 长流:状态 200,body 由测试端经 channel 灌入。
-    Gated { status: u16 },
+    Gated {
+        status: u16,
+    },
+    GatedSse,
     /// 悬挂在响应头阶段，用于验证响应超时与请求取消。
     Hang,
 }
@@ -162,6 +165,7 @@ impl UpstreamTransport for FakeTransport {
                 .and_then(|q| q.pop_front())
                 .unwrap_or(Outcome::Error("no scripted outcome".into()))
         };
+        let sse = matches!(&outcome, Outcome::GatedSse);
         match outcome {
             Outcome::Status {
                 status,
@@ -181,7 +185,12 @@ impl UpstreamTransport for FakeTransport {
             Outcome::Error(message) => Err(TransportError::ConnectionFailed(message)),
             Outcome::Invalid(message) => Err(TransportError::InvalidResponse(message)),
             Outcome::Timeout => Err(TransportError::Timeout),
-            Outcome::Gated { status } => {
+            Outcome::Gated { .. } | Outcome::GatedSse => {
+                let status = if let Outcome::Gated { status } = outcome {
+                    status
+                } else {
+                    200
+                };
                 let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
                 self.gate_txs.lock().unwrap().push(tx);
                 let stream = futures_util::stream::unfold(rx, |mut rx| async move {
@@ -189,7 +198,11 @@ impl UpstreamTransport for FakeTransport {
                 });
                 Ok(UpstreamResponse {
                     status,
-                    headers: vec![],
+                    headers: if sse {
+                        vec![("content-type".into(), "text/event-stream".into())]
+                    } else {
+                        vec![]
+                    },
                     stream: stream.boxed(),
                 })
             }
@@ -435,6 +448,7 @@ const MESSAGE_TOKEN_PREFIXES: &[&str] = &[
     "invalid response: ",
     "stream interrupted: ",
     "client_disconnected",
+    "client_connection_closed",
     "upstream_retryable_status",
     "all endpoints failed",
     "inbound_auth_required",
@@ -1842,7 +1856,7 @@ async fn client_disconnect_mid_stream_records_499_and_cancels() {
     assert_eq!(client.phase, Some(RuntimeEventPhase::Completed));
     assert_eq!(
         client.failure_kind,
-        Some(RuntimeFailureKind::ClientCancelled)
+        Some(RuntimeFailureKind::ClientDisconnected)
     );
     let trace = client
         .stream_trace

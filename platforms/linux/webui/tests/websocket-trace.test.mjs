@@ -27,6 +27,7 @@ test('connection outcomes do not imply every response failed or deliberate user 
   assert.equal(friendlyEventMessage({ outcome: 'cancelled', statusCode: 200 }), '客户端断开或取消请求');
   assert.doesNotMatch(eventOutcomeLabel({ outcome: 'cancelled' }), /主动/);
   assert.doesNotMatch(failureKindLabel('client_cancelled'), /主动/);
+  assert.match(failureKindLabel('client_disconnected'), /连接已关闭/);
 });
 
 test('unused Guardian sockets keep transport evidence without claiming a failed inference', () => {

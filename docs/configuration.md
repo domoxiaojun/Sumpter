@@ -107,7 +107,7 @@ WebSocket 在 relay 阶段收到首条 Text/Binary 业务消息后开始空闲�
 
 | 字段 | 说明 |
 | --- | --- |
-| `responseTimeoutSeconds` | 首响应总截止；null 由客户端决定 |
+| `responseTimeoutSeconds` | 单次上游首响应截止；null 不限制单次上游等待 |
 | `streamIdleTimeoutSeconds` | HTTP 流两次输出之间、WebSocket 首条业务消息后的双向帧活动之间的最长空闲；null 不限制 |
 | `maxStreamErrorRetries` | HTTP 200 Responses SSE 终态前的暂时性错误，当前入口额外重试次数；默认 0 |
 | `failoverOnStreamError` | 上述重试耗尽后是否切换入口；默认 false |

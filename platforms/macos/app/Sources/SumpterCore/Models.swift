@@ -315,7 +315,7 @@ public struct ListenerConfig: Codable, Equatable, Sendable {
 
 /// 转发与重试参数,全局单份(旧版每个池各存一份但必须一致)。
 public struct RetryPolicy: Codable, Equatable, Sendable {
-    /// 首响应总截止秒数;nil = 由客户端决定,不设截止。
+    /// 单次上游等待响应头的截止秒数；nil 不设截止，超时仍按重试策略处理。
     public var responseTimeoutSeconds: Double?
     /// 流式响应两次吐字之间的最长间隔;nil = 允许无限空闲。
     public var streamIdleTimeoutSeconds: Double?

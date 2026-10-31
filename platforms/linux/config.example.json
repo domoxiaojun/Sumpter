@@ -23,6 +23,7 @@
   "sessionStickyTtlHours": 72,
   "requestPolicy": {
     "maxTotalAttempts": 6,
+    "responseWaitTimeoutSeconds": 0,
     "streamProtection": "complete",
     "streamBufferMib": 16,
     "streamBufferChunks": 8192,

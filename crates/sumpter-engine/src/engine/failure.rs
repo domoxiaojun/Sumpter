@@ -178,16 +178,31 @@ impl FailureInfo {
         })
     }
 
-    pub(super) fn client_cancelled(response_started: bool) -> Self {
+    pub(super) fn client_disconnected(response_started: bool) -> Self {
         Self {
-            kind: RuntimeFailureKind::ClientCancelled,
+            kind: RuntimeFailureKind::ClientDisconnected,
             phase: if response_started {
                 RuntimeFailurePhase::ResponseStream
             } else {
                 RuntimeFailurePhase::BeforeResponse
             },
-            detail: Some("client disconnected or cancelled the request".into()),
+            detail: Some("HTTP request handler or response body dropped before completion; initiator unknown (connection loss, client timeout/retry, or service cancellation)".into()),
             timeout_ms: None,
+            upstream_status_code: None,
+            upstream_request_id: None,
+            retry_after_seconds: None,
+        }
+    }
+
+    pub(super) fn response_wait_timeout(seconds: u32) -> Self {
+        Self {
+            kind: RuntimeFailureKind::ResponseWaitTimeout,
+            phase: RuntimeFailurePhase::BeforeResponse,
+            detail: Some(
+                "proxy response wait deadline expired before committing client response headers"
+                    .into(),
+            ),
+            timeout_ms: Some(i64::from(seconds) * 1000),
             upstream_status_code: None,
             upstream_request_id: None,
             retry_after_seconds: None,

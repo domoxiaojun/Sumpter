@@ -17,10 +17,11 @@ function Field({ label, value, color }) {
 function outcomeLabel(event) {
   if (event.kind === 'notify') return '不适用（通知事件）';
   if (eventIsInFlight(event)) return '进行中';
+  if (event.failureKind === 'client_disconnected' && eventOutcome(event) === 'cancelled') return '连接中断';
   return ({ succeeded: '成功', failed: '失败', cancelled: '已取消' })[eventOutcome(event)] || '未上报';
 }
 
-function RequestChain({ event, chain, onSelect }) {
+function RequestChain({ event, chain, onSelect, truncated }) {
   const items = chain.length ? chain : [event];
   const primary = items.find((item) => item.kind === 'client' || item.kind === 'notify');
   // The API/context is newest first; number attempts in execution order.
@@ -64,7 +65,7 @@ function RequestChain({ event, chain, onSelect }) {
     </button>;
   };
   return <aside className="request-chain-pane" aria-label="请求链">
-    <div className="request-chain-header"><h3>请求链</h3><span>{attempts.length} 次上游尝试</span></div>
+    <div className="request-chain-header"><h3>请求链</h3><span>{truncated ? "至少 " : ""}{attempts.length} 次上游尝试{truncated ? "（已截断）" : ""}</span></div>
     <div className="request-chain-list" role="region" aria-label="请求链事件列表">
       {primary && traceItem(primary)}
       {attempts.map((item, index) => traceItem(item, index + 1))}
@@ -73,7 +74,7 @@ function RequestChain({ event, chain, onSelect }) {
   </aside>;
 }
 
-export function EventInspector({ event, chain = [], requestSummary, onSelect, expanded, onToggle, onCopy, loading = false }) {
+export function EventInspector({ event, chain = [], chainTruncated = false, requestSummary, onSelect, expanded, onToggle, onCopy, loading = false }) {
   const notify = event.kind === 'notify';
   const cache = eventCacheRead(event);
   const usage = eventUsage(event);
@@ -136,7 +137,7 @@ export function EventInspector({ event, chain = [], requestSummary, onSelect, ex
     </>;
   };
   return <div className="request-detail-grid">
-    <RequestChain event={event} chain={chain} onSelect={onSelect} />
+    <RequestChain event={event} chain={chain} onSelect={onSelect} truncated={chainTruncated} />
     <section className="event-inspector" aria-label="选中事件详情">
     <h3>选中事件</h3>
     <dl className="event-inspector-fields" data-event-detail-tier="primary">

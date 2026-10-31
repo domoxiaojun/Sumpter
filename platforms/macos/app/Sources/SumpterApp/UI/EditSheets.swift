@@ -43,11 +43,11 @@ struct RetryPolicySheet: View {
             onSubmit: submit
         ) {
             VStack(alignment: .leading, spacing: 12) {
-                FormLine(title: "首响应截止（秒）") {
+                FormLine(title: "单次上游首响应截止（秒）") {
                     TextField("客户端决定", text: $responseTimeout)
                         .frame(width: 120)
                 }
-                Text("连接、TLS 握手到首个响应头的总等待上限；留空由客户端决定。")
+                Text("每次上游尝试从连接、TLS 握手到响应头的等待上限；超时后按重试策略继续，不是整条客户端请求的总时限。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

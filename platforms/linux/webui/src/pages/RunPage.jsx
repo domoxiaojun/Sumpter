@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createRequestChainLoader, mergeRequestChain } from '../utils/requestChain.js';
 import { useApp } from '../context/AppContext.jsx';
 import { MetricCard } from '../components/MetricCard.jsx';
 import { ResponsesConnectionsPanel } from '../components/ResponsesConnectionsPanel.jsx';
@@ -79,7 +80,7 @@ function recentEventOutcomeLabel(event) {
   const outcome = eventOutcome(event);
   if (outcome === 'succeeded') return '成功';
   if (outcome === 'failed') return '失败';
-  if (outcome === 'cancelled') return '已取消';
+  if (outcome === 'cancelled') return event.failureKind === 'client_disconnected' ? '连接中断' : '已取消';
   return eventOutcomeLabel(event).replace(/\s*\([^)]*\)\s*/g, '');
 }
 
@@ -325,7 +326,11 @@ export function RunPage() {
   const [selectedEventID, setSelectedEventID] = useState(null);
   const [expandedGroups, setExpandedGroups] = useState({});
   const toggleGroup = (key, open) => setExpandedGroups((previous) => previous[key] === open ? previous : { ...previous, [key]: open });
-  const [requestChainEvents, setRequestChainEvents] = useState([]);
+  const [requestChainSnapshot, setRequestChainSnapshot] = useState(null);
+  const requestChainEvents = requestChainSnapshot?.events || [];
+  const chainLoader = useRef(null);
+  const refreshEnabled = useRef(autoRefresh);
+  refreshEnabled.current = autoRefresh;
   const [eventPageDirection, setEventPageDirection] = useState('none');
   const [, setDurationTick] = useState(0);
 
@@ -400,14 +405,14 @@ export function RunPage() {
   const currentSelectedID = selectedEventID;
   const selectedEvent = currentSelectedID && (runtimeEventDetail?.event?.id === currentSelectedID
     ? runtimeEventDetail.event
-    : requestChainEvents.find((e) => e.id === currentSelectedID)
-      || baseEventContext.find((e) => e.id === currentSelectedID)
+    : baseEventContext.find((e) => e.id === currentSelectedID)
+      || requestChainEvents.find((e) => e.id === currentSelectedID)
       || visibleEvents.find((e) => e.id === currentSelectedID));
 
   // Request chain for selected event
   const requestChain = useMemo(() => {
     const byID = new Map();
-    for (const event of [...baseEventContext, ...requestChainEvents]) byID.set(event.id, event);
+    for (const event of [...requestChainEvents, ...baseEventContext]) byID.set(event.id, mergeRuntimeEvent(byID.get(event.id), event));
     const eventContext = [...byID.values()];
     const chain = getRequestChain(eventContext, currentSelectedID);
     if (runtimeEventDetail?.event?.id !== currentSelectedID) return chain;
@@ -415,20 +420,36 @@ export function RunPage() {
   }, [baseEventContext, currentSelectedID, requestChainEvents, runtimeEventDetail]);
 
   const selectedRequestID = selectedEvent ? eventRequestID(selectedEvent) : '';
-  const selectedChangeSeq = Number(baseEventContext.find((event) => event.id === currentSelectedID)?.changeSeq || 0);
+  const selectedChangeSeq = Math.max(
+    Number(baseEventContext.find(event => event.id === currentSelectedID)?.changeSeq || 0),
+    Number(requestChainEvents.find(event => event.id === currentSelectedID)?.changeSeq || 0),
+  );
   useEffect(() => {
-    setRequestChainEvents([]);
+    setRequestChainSnapshot(null);
     if (!selectedRequestID || selectedRequestID === '-') return undefined;
-    const controller = new AbortController();
-    api.getRuntimeRequestChain(selectedRequestID, { signal: controller.signal })
-      .then((value) => {
-        if (Array.isArray(value?.events)) setRequestChainEvents(value.events);
-      })
-      .catch(() => {
-        // Older daemons do not expose this endpoint; page/detail data remains usable.
-      });
-    return () => controller.abort();
-  }, [selectedRequestID]);
+    const loader = createRequestChainLoader({
+      read: signal => api.getRuntimeRequestChain(selectedRequestID, { signal }),
+      onValue: value => setRequestChainSnapshot(previous => mergeRequestChain(value, previous?.requestID === selectedRequestID ? previous.events : [])),
+      enabled: () => refreshEnabled.current && !document.hidden,
+    });
+    chainLoader.current = loader;
+    const visibility = () => loader.synchronize();
+    document.addEventListener('visibilitychange', visibility);
+    loader.refresh(true);
+    return () => {
+      loader.dispose();
+      if (chainLoader.current === loader) chainLoader.current = null;
+      document.removeEventListener('visibilitychange', visibility);
+    };
+  }, [selectedRequestID, runtime?.resetGeneration]);
+
+  useEffect(() => { chainLoader.current?.synchronize(); }, [autoRefresh]);
+  useEffect(() => {
+    if (!autoRefresh || document.hidden || !selectedRequestID) return;
+    const relevant = baseEventContext.filter(e => eventRequestID(e) === selectedRequestID);
+    setRequestChainSnapshot(previous => previous?.requestID === selectedRequestID ? mergeRequestChain(previous, relevant) : previous);
+    chainLoader.current?.refresh();
+  }, [autoRefresh, baseEventContext, selectedRequestID]);
 
   useEffect(() => {
     if (!currentSelectedID) {
@@ -781,7 +802,7 @@ export function RunPage() {
         </div>
 
         {selectedEvent && <EventInspector
-          event={selectedEvent} chain={requestChain} onSelect={setSelectedEventID}
+          event={selectedEvent} chain={requestChain} chainTruncated={requestChainSnapshot?.truncated} onSelect={setSelectedEventID}
           requestSummary={recentEventRequestSummary(selectedEvent)}
           expanded={expandedGroups} onToggle={toggleGroup} onCopy={copyText}
           loading={runtimeEventDetail?.event?.id !== selectedEvent.id && selectedEvent.detailsOmitted === true}

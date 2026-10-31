@@ -245,6 +245,9 @@ extension AppModel {
         resetGeneration: Int? = nil
     ) {
         runtimeChangeSeq = max(runtimeChangeSeq, item.changeSeq)
+        if autoRefreshEnabled, let chain = runtimeRequestChain, item.requestID == chain.requestID {
+            runtimeRequestChain = chain.merging(AdminWire.RuntimeRequestChain(apiVersion: chain.apiVersion, requestID: chain.requestID, events: [item], truncated: false))
+        }
         // Statistics are served from a stable SQLite snapshot and do not need
         // the run page's per-event overlay. Avoid publishing the high-rate
         // runtime list while this pane is visible; the next page transition
@@ -390,6 +393,8 @@ extension AppModel {
         case .statsReset:
             guard autoRefreshEnabled else { return }
             runtimeChangeSeq = 0
+            stopRuntimeRequestChainRefresh()
+            runtimeRequestChain = nil
             runtimeEventDetails.removeAll()
             runtimeEventDetail = nil
             runtimePage = nil

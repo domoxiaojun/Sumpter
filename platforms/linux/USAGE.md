@@ -1,6 +1,6 @@
 # Sumpter 使用手册（Linux 发布包）
 
-适用版本：**0.4.56 / schema v7**。本文随发布包提供，可在解压目录阅读；安装入口见 [README](README.md)。
+适用版本：**0.4.57 / schema v7**。本文随发布包提供，可在解压目录阅读；安装入口见 [README](README.md)。
 
 <!-- BEGIN SUMPTER_CANONICAL_ONBOARDING -->
 
@@ -194,15 +194,16 @@ bash setup-client-attribution.sh restore pi
 
 通常先保留默认值，确认上游可用后再按实际需求调整。
 
-- `responseTimeoutSeconds` 限制等待首响应的时间；映射级 `failoverTimeoutSeconds` 可进一步缩短某模型的等待时间，两者取较小值。
+- `responseTimeoutSeconds` 限制每次上游尝试等待响应头的时间；映射级 `failoverTimeoutSeconds` 可进一步缩短某模型的等待时间，两者取较小值。
 - `streamIdleTimeoutSeconds` 限制 HTTP 流连续无数据的时间，以及 WebSocket 首条业务消息后的双向帧空闲时间（含 Ping/Pong 活动）。null 不限制，等待首条业务消息不计入；它不是请求总时长。
 - `maxStreamErrorRetries` 控制 HTTP 200 Responses 流到达终态前的暂时性错误重试（限流、服务器错误、断流等）；启用后代理先缓存到终态，客户端不会收到半截响应；`failoverOnStreamError` 控制耗尽后切换入口。默认 0 次且关闭切换；单次缓存上限 16 MiB，超出后恢复实时转发。
 - `max500Retries` 控制当前入口收到 500 后的额外重试；`failoverOn500` 决定耗尽后是否切换入口。
 - `sessionStickyRetries` 控制当前粘性调度组遇到非 500 可重试故障后的额外尝试。
 - `maxDeferredRounds` 与 `maxRetryDurationSeconds` 都为 `0` 时，可重试故障没有轮数和总时长上限；客户端断开会取消等待。希望请求尽快结束时，应设置有限上限。
+- `requestPolicy.responseWaitTimeoutSeconds` 提供可选的代理响应总等待截止，覆盖排队、重试、退避和缓冲；默认 0 不限，开启后到时返回本地 504，已交付的长回答不截断。
 - `passThroughRetryDelay` 控制失败响应中的 `Retry-After` / `retry_delay` 是否继续传给客户端；它不是入口冷却时间开关。
 
-上游 `Retry-After` 的单次上限为 300 秒，显式设置的 `maxRetryDurationSeconds` 优先：若剩余预算容纳不下等待，就返回最终响应。HTTP 头和本地产生的错误提示也使用此上限；原生 SSE/WebSocket 业务帧保持原样。指数退避基数最多 30 秒，再加不超过 20% 且最多 1 秒的正向抖动。已知结构化硬额度和凭据错误停止同一请求的同入口重试。
+上游 `Retry-After` 的单次上限为 300 秒，显式设置的 `maxRetryDurationSeconds` 优先：若剩余预算容纳不下等待，就返回最终响应。HTTP 头和本地产生的错误提示也使用此上限；原生 SSE/WebSocket 业务帧保持原样。指数退避基数最多 30 秒，再加不超过 20% 且最多 1 秒的正向抖动。429/503 即使带额度字段也继续按重试预算处理；其它明确硬额度和凭据错误仍停止同入口重试。
 
 “Claude Code 路由 → 全客户端请求策略”可设置所有客户端的 HTTP/SSE 并发、排队、RPM 和总尝试上限。默认不限并发/RPM，完整缓冲保留，单流默认 16 MiB/8192 块、总缓冲 128 MiB；可选择前奏保护以提前输出，提交后不再透明重放。请求详情提供排队、重试、缓冲和失败原因时间线。WebSocket 请求级配额不在此范围内。
 

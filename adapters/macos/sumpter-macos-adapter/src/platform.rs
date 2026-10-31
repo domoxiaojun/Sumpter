@@ -680,6 +680,7 @@ fn stop_failure_error_message(error: &str) -> String {
 fn failure_kind_message(kind: RuntimeFailureKind) -> String {
     match kind {
         RuntimeFailureKind::ResponseTimeout => "上游响应超时，回合未完成".into(),
+        RuntimeFailureKind::ResponseWaitTimeout => "代理响应等待达到上限，回合未完成".into(),
         RuntimeFailureKind::ConnectionFailed => "无法连接上游，回合未完成".into(),
         RuntimeFailureKind::InvalidResponse => "上游响应无效，回合未完成".into(),
         RuntimeFailureKind::UpstreamHttpStatus => "上游返回错误状态，回合未完成".into(),
@@ -689,6 +690,7 @@ fn failure_kind_message(kind: RuntimeFailureKind) -> String {
         RuntimeFailureKind::UpstreamResponseFailed => "上游响应失败，回合未完成".into(),
         RuntimeFailureKind::EndpointsExhausted => "所有上游入口均失败，回合未完成".into(),
         RuntimeFailureKind::ClientCancelled => "回合由客户端中断".into(),
+        RuntimeFailureKind::ClientDisconnected => "客户端连接已关闭，回合未完成".into(),
         RuntimeFailureKind::ClientRequestRejected => "请求未被代理接受，回合未完成".into(),
         RuntimeFailureKind::LocalAdmissionRejected => "本地队列已满或排队超时，回合未完成".into(),
     }

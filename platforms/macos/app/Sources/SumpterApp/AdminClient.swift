@@ -932,6 +932,23 @@ public enum AdminWire {
         public let requestID: String
         public let events: [RuntimeEventListItem]
         public let truncated: Bool
+
+        public var isInFlight: Bool {
+            events.contains { $0.kind == "client" && $0.phase == .inFlight }
+        }
+
+        /// A delayed API snapshot cannot roll back an SSE update. Keep the
+        /// backend's bounded oldest-first window for very long retry chains.
+        public func merging(_ other: Self?) -> Self {
+            guard let other, other.requestID == requestID else { return self }
+            var byID = Dictionary(events.map { ($0.id, $0) }, uniquingKeysWith: { a, b in a.changeSeq >= b.changeSeq ? a : b })
+            for item in other.events where item.changeSeq >= (byID[item.id]?.changeSeq ?? -1) {
+                byID[item.id] = item
+            }
+            let ordered = byID.values.sorted { $0.seq < $1.seq }
+            return Self(apiVersion: apiVersion, requestID: requestID, events: Array(ordered.prefix(512)),
+                        truncated: truncated || other.truncated || ordered.count > 512)
+        }
     }
 
     public struct RuntimeUsageFieldPresence: Decodable, Equatable, Sendable {

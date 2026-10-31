@@ -1576,19 +1576,45 @@ impl Engine {
             client_meta,
         );
 
-        self.forward(
+        // Keep completion outside the cancellable forward future: a local deadline
+        // must be recorded as a failure, not as a client disconnect on Drop.
+        let mut completion = Some(guard);
+        let forward = self.forward(
             config,
             &request,
             initial_ordered,
             session_key,
-            guard,
+            &mut completion,
             method,
             path_and_query,
             &headers,
             client_out,
             translation_body,
-        )
-        .await
+        );
+        let seconds = config.request_policy.response_wait_timeout_seconds;
+        if seconds == 0 {
+            return forward.await;
+        }
+        match tokio::time::timeout(Duration::from_secs(u64::from(seconds)), forward).await {
+            Ok(response) => response,
+            Err(_) => {
+                let mut guard = completion
+                    .take()
+                    .expect("forward has not committed a response");
+                let failure = FailureInfo::response_wait_timeout(seconds);
+                let request_id = guard.request_id().to_owned();
+                guard.trace("stop", None, "response_wait_timeout", None);
+                guard.complete(504, failure.detail.clone(), failure.clone());
+                proxy_failure_response(
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "response_wait_timeout",
+                    &request_id,
+                    &failure,
+                    config.retry.retry_delay_seconds,
+                    config.retry.pass_through_retry_delay,
+                )
+            }
+        }
     }
 
     /// Apply provider/model cooldown (when requested) and sticky-group
@@ -1751,13 +1777,14 @@ impl Engine {
         request: &RoutingRequest,
         candidates: Vec<PlannedEndpoint>,
         session_key: sticky::SessionKey,
-        mut guard: CompletionGuard,
+        completion: &mut Option<CompletionGuard>,
         method: &str,
         path_and_query: &str,
         headers: &[(String, String)],
         client_out: Option<ClientOut>,
         parsed_json: Option<&Value>,
     ) -> Response {
+        let guard = completion.as_mut().expect("request completion guard");
         let retry = &config.retry;
         let stream_retry_enabled = (retry.max_stream_error_retries > 0
             || retry.failover_on_stream_error)
@@ -2476,7 +2503,9 @@ impl Engine {
                         config,
                         endpoint,
                         response,
-                        guard,
+                        completion
+                            .take()
+                            .expect("response takes completion ownership"),
                         method,
                         path_and_query,
                         attempt_started,

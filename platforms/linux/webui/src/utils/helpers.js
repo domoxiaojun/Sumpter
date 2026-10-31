@@ -1157,6 +1157,7 @@ export function eventKindLabel(kind) {
 export function failureKindLabel(kind) {
   const map = {
     response_timeout: '响应超时 (Response Timeout)',
+    response_wait_timeout: '代理响应等待超时',
     connection_failed: '连接失败 (Connection Failed)',
     invalid_response: '上游响应格式异常 (Invalid Response)',
     upstream_http_status: '上游返回 HTTP 错误状态',
@@ -1167,6 +1168,7 @@ export function failureKindLabel(kind) {
     endpoints_exhausted: '所有可用入口全部耗尽',
     local_admission_rejected: '本地请求队列已满或排队超时',
     client_cancelled: '客户端断开或取消 (Client Cancelled)',
+    client_disconnected: '客户端连接已关闭 (Client Disconnected)',
     client_request_rejected: '客户端请求被代理拒绝',
   };
   return map[kind] || cleanText(kind) || '-';
@@ -1223,7 +1225,7 @@ export function eventOutcomeLabel(event) {
   const outcome = eventOutcome(event);
   if (eventIsInFlight(event)) return '待定 (Pending)';
   if (outcome === 'succeeded') return '成功 (Succeeded)';
-  if (outcome === 'cancelled') return '客户端断开或取消 (Cancelled)';
+  if (outcome === 'cancelled') return event.failureKind === 'client_disconnected' ? '连接中断（原因未确定）' : '客户端断开或取消 (Cancelled)';
   if (outcome === 'failed') return '最终结果失败 (Failed)';
   return '未上报 (Unknown)';
 }
@@ -1393,6 +1395,7 @@ export function friendlyEventMessage(event) {
     return eventStreamTrace(event) ? '流式输出中' : '接收响应中';
   }
   if (outcome === 'cancelled') {
+    if (event.failureKind === 'client_disconnected') return '连接中断（原因未确定）';
     const trace = eventStreamTrace(event)?.websocketTrace ?? eventStreamTrace(event)?.websocket_trace;
     if (trace?.stage === 'awaiting_first_message' && message === 'websocket_unused_prewarm_connection_closed') return '预热连接已关闭（未发送业务请求）';
     if (trace?.stage === 'awaiting_first_message' && message === 'websocket_unused_guardian_connection_closed') {

@@ -37,6 +37,8 @@ export function RequestPolicyEditor() {
     <h3>全局请求限制</h3>
     {limits(draft.global, (k, v) => change(next => { next.global[k] = v; }))}
     {number('一次请求最多尝试（0 = 沿用原有重试限制）', draft.maxTotalAttempts, v => change(next => { next.maxTotalAttempts = v; }), 0, 10000)}
+    {number('代理响应等待上限（秒，0 = 不限）', draft.responseWaitTimeoutSeconds, v => change(next => { next.responseWaitTimeoutSeconds = v; }), 0, 86400)}
+    <p>从代理开始转发到向客户端交付响应，包含排队、所有入口尝试、退避和缓冲；到时返回 504。0 保持原重试策略；已开始交付的长回答不受影响。</p>
     <button type="button" className="btn btn-secondary" onClick={() => change(next => { next.maxTotalAttempts = 6; next.global = { ...next.global, maxConcurrent: 8, maxQueued: 16, queueTimeoutSeconds: 15 }; })}>填入交互预设</button>
     <h3>Responses 流保护</h3>
     <label className="request-policy-field">流式策略<select className="form-select" value={draft.streamProtection} onChange={e => change(next => { next.streamProtection = e.target.value; })}>
