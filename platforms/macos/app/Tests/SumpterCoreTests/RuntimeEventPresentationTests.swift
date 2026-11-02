@@ -736,7 +736,23 @@ final class RuntimeEventPresentationTests: XCTestCase {
         for (wire, expected) in [
             ("claude_code", ClientKind.claudeCode),
             ("codex", .codex),
+            ("gemini_cli", .geminiCli),
             ("grok_build", .grokBuild),
+            ("cursor", .cursor),
+            ("cline", .cline),
+            ("roo_code", .rooCode),
+            ("continue", .continueClient),
+            ("aider", .aider),
+            ("open_code", .openCode),
+            ("goose", .goose),
+            ("open_web_ui", .openWebUI),
+            ("windsurf", .windsurf),
+            ("kilo_code", .kiloCode),
+            ("lite_llm", .liteLlm),
+            ("ollama", .ollama),
+            ("lm_studio", .lmStudio),
+            ("chatbox", .chatbox),
+            ("pi", .pi),
             ("openai_compat", .openaiCompat),
             ("unknown", .unknown)
         ] {

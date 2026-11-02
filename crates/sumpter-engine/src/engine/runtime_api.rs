@@ -31,12 +31,19 @@ impl Engine {
 
     pub fn runtime_summary_value(&self) -> Value {
         let connections = self.responses_websocket_connections();
-        let (counters, latest_event, recent_event_count) = {
+        let (counters, latest_event, recent_event_count, in_flight_events) = {
             let state = self.inner.state.lock().unwrap();
             (
                 RuntimeCounters::from_snapshot(&state.runtime),
                 state.runtime.recent_events.first().cloned(),
                 state.runtime.recent_events.len(),
+                state
+                    .runtime
+                    .recent_events
+                    .iter()
+                    .filter(|event| event.is_in_flight())
+                    .cloned()
+                    .collect::<Vec<_>>(),
             )
         };
         if let Some(store) = self.inner.runtime_store.get() {
@@ -45,6 +52,7 @@ impl Engine {
             summary.latest_event = latest_event;
             let mut value = serde_json::to_value(summary).unwrap_or(Value::Null);
             value["responsesWebSocketConnections"] = json!(connections);
+            value["inFlightEvents"] = json!(in_flight_events);
             return value;
         }
         json!({
@@ -63,6 +71,7 @@ impl Engine {
             "startupIssue": self.runtime_database_issue(),
             "counters": counters,
             "latestEvent": latest_event,
+            "inFlightEvents": in_flight_events,
             "responsesWebSocketConnections": connections,
         })
     }
@@ -589,6 +598,47 @@ mod runtime_regression_tests {
             "rootTurnId":if selected {"root"} else {"other"},
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn summary_keeps_in_flight_outside_latest_page_and_removes_completed() {
+        let (dir, engine) = fixture("in-flight-summary");
+        let mut live = event("long-retry", 100.0, true);
+        live.phase = Some(sumpter_core::events::RuntimeEventPhase::InFlight);
+        live.outcome = None;
+        engine.record_event(live);
+        for index in 0..249 {
+            let mut live = event(&format!("live-{index}"), 100.0, true);
+            live.phase = Some(sumpter_core::events::RuntimeEventPhase::InFlight);
+            live.outcome = None;
+            engine.record_event(live);
+        }
+        for index in 0..30 {
+            engine.complete_client(event(&format!("new-{index}"), 101.0, false), None);
+        }
+        engine.flush_stats().unwrap();
+        let page = engine
+            .runtime_events(None, None, 10, None, None, None, None, None)
+            .unwrap();
+        assert!(
+            page["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|e| e["id"] != "long-retry")
+        );
+        let summary = engine.runtime_summary_value();
+        let live = summary["inFlightEvents"].as_array().unwrap();
+        assert_eq!(live.len(), 250);
+        assert!(live.iter().any(|event| event["id"] == "long-retry"));
+        engine.complete_client(event("long-retry", 100.0, true), None);
+        for index in 0..249 {
+            engine.complete_client(event(&format!("live-{index}"), 100.0, true), None);
+        }
+        assert_eq!(engine.runtime_summary_value()["inFlightEvents"], json!([]));
+        engine.flush_stats().unwrap();
+        drop(engine);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

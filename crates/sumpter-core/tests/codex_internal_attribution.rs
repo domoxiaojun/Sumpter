@@ -84,6 +84,30 @@ fn prewarm_turn_and_controls_keep_separate_identity_and_terminal() {
 }
 
 #[test]
+fn late_interrupt_does_not_reopen_terminal_or_finish_next_turn() {
+    let mut observer = ResponsesRequestObserver::default();
+    observer.client(&json!({"type":"response.create"}), None);
+    observer.upstream(&json!({"type":"response.created","response":{"id":"resp-1"}}));
+    observer.upstream(&json!({"type":"response.completed","response":{"id":"resp-1"}}));
+    observer.client(&json!({"type":"response.create"}), None);
+    observer.upstream(&json!({"type":"response.created","response":{"id":"resp-2"}}));
+    observer.client(
+        &json!({"type":"response.interrupt","response_id":"resp-1"}),
+        None,
+    );
+    observer.upstream(&json!({"type":"response.interrupted","response_id":"resp-1"}));
+    let summary = observer.summary();
+    assert_eq!(summary.recent.len(), 2);
+    assert_eq!(
+        summary.recent[0].terminal.as_deref(),
+        Some("response.completed")
+    );
+    assert_eq!(summary.recent[1].terminal, None);
+    assert_eq!(summary.controls["response.interrupt"], 1);
+    assert!(summary.has_unfinished_requests());
+}
+
+#[test]
 fn ambiguous_late_and_oversize_observations_never_guess_or_grow_unbounded() {
     let mut observer = ResponsesRequestObserver::default();
     observer.client(&json!({"type":"response.create"}), None);
@@ -120,4 +144,23 @@ fn idless_error_can_end_only_a_single_known_active_request() {
         observer.summary().recent[0].terminal.as_deref(),
         Some("error")
     );
+}
+
+#[test]
+fn terminal_close_requires_complete_observation_not_just_last_event() {
+    let mut observer = ResponsesRequestObserver::default();
+    assert_eq!(observer.summary().terminal_event(), None);
+    observer.client(&json!({"type":"response.create"}), None);
+    observer.upstream(&json!({"type":"response.created","response":{"id":"one"}}));
+    observer.upstream(&json!({"type":"response.completed","response":{"id":"one"}}));
+    observer.upstream(&json!({"type":"codex.rate_limits"}));
+    assert_eq!(
+        observer.summary().terminal_event(),
+        Some("response.completed")
+    );
+    let mut truncated = observer.summary();
+    truncated.dropped = 1;
+    assert_eq!(truncated.terminal_event(), None);
+    observer.unobserved();
+    assert_eq!(observer.summary().terminal_event(), None);
 }

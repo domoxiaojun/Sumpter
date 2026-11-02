@@ -279,7 +279,7 @@ extension AppModel {
                 upstreamSuccesses: counters.upstreamSuccesses,
                 upstreamFailures: counters.upstreamFailures,
                 failovers: counters.failovers,
-                recentEvents: mergedEvents
+                recentEvents: summary.reconcilingInFlightEvents(in: mergedEvents)
             )
             if runtime != snapshot { runtime = snapshot }
             if runtimeSummary != summary { runtimeSummary = summary }

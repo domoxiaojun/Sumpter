@@ -539,24 +539,59 @@ impl Engine {
                 trace.requests = Some(metrics.requests.clone());
             }
         }
-        let cancelled = !metrics.failed && metrics.closed_by.as_deref() == Some("client");
-        let failure = (metrics.failed || cancelled).then(|| FailureInfo {
+        let upstream_closed_with_active_request = metrics.closed_by.as_deref() == Some("upstream")
+            && metrics.requests.has_unfinished_requests()
+            && !matches!(
+                metrics.last_event_type.as_deref(),
+                Some(
+                    "response.completed"
+                        | "response.done"
+                        | "response.failed"
+                        | "response.incomplete"
+                        | "response.interrupted"
+                )
+            );
+        let terminal = (context.route_intent == "responses_websocket" && !metrics.failed)
+            .then(|| metrics.requests.terminal_event())
+            .flatten();
+        let business_failure = match terminal {
+            Some("response.failed" | "error") => Some(RuntimeFailureKind::UpstreamResponseFailed),
+            Some("response.incomplete") => Some(RuntimeFailureKind::UpstreamResponseIncomplete),
+            _ => None,
+        };
+        let cancelled = !metrics.failed
+            && (terminal == Some("response.interrupted")
+                || (terminal.is_none() && metrics.closed_by.as_deref() == Some("client")));
+        let failure = (metrics.failed
+            || cancelled
+            || upstream_closed_with_active_request
+            || business_failure.is_some())
+        .then(|| FailureInfo {
             kind: if cancelled {
                 RuntimeFailureKind::ClientCancelled
             } else if metrics.idle_timeout_ms.is_some() {
                 RuntimeFailureKind::StreamIdleTimeout
+            } else if let Some(kind) = business_failure {
+                kind
             } else {
                 RuntimeFailureKind::StreamInterrupted
             },
             phase: RuntimeFailurePhase::ResponseStream,
-            detail: Some(
-                if cancelled {
-                    "client_closed_websocket"
-                } else {
-                    "websocket relay interrupted"
-                }
-                .into(),
-            ),
+            detail:
+                Some(
+                    if let Some(terminal) =
+                        terminal.filter(|_| cancelled || business_failure.is_some())
+                    {
+                        terminal
+                    } else if cancelled {
+                        "client_closed_websocket"
+                    } else if upstream_closed_with_active_request {
+                        "upstream_closed_before_response_terminal"
+                    } else {
+                        "websocket relay interrupted"
+                    }
+                    .into(),
+                ),
             timeout_ms: metrics.idle_timeout_ms,
             upstream_status_code: Some(status),
             upstream_request_id: None,
@@ -608,7 +643,10 @@ impl Engine {
         client.ttfb_ms = Some(connection.handshake_ttfb_ms);
         client.outcome = Some(if cancelled {
             RuntimeEventOutcome::Cancelled
-        } else if metrics.failed {
+        } else if metrics.failed
+            || upstream_closed_with_active_request
+            || business_failure.is_some()
+        {
             RuntimeEventOutcome::Failed
         } else {
             RuntimeEventOutcome::Succeeded

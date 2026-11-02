@@ -188,6 +188,21 @@ pub enum ClientKind {
     GeminiCli,
     /// Grok Build CLI；其公开客户端产品名仍沿用 `grok-shell`。
     GrokBuild,
+    /// 常见第三方 Agent/桌面客户端；仅在 UA 明确包含产品标识时归因。
+    Cursor,
+    Cline,
+    RooCode,
+    Continue,
+    Aider,
+    OpenCode,
+    Goose,
+    OpenWebUi,
+    Windsurf,
+    KiloCode,
+    LiteLlm,
+    Ollama,
+    LmStudio,
+    Chatbox,
     /// 经 OpenAI 兼容层入站但 UA 不是已知客户端。
     OpenaiCompat,
     /// Anthropic 入站且 UA 不是已知客户端(含缺 UA)。
@@ -202,6 +217,20 @@ impl ClientKind {
             Self::Codex => "codex",
             Self::GeminiCli => "gemini_cli",
             Self::GrokBuild => "grok_build",
+            Self::Cursor => "cursor",
+            Self::Cline => "cline",
+            Self::RooCode => "roo_code",
+            Self::Continue => "continue",
+            Self::Aider => "aider",
+            Self::OpenCode => "open_code",
+            Self::Goose => "goose",
+            Self::OpenWebUi => "open_web_ui",
+            Self::Windsurf => "windsurf",
+            Self::KiloCode => "kilo_code",
+            Self::LiteLlm => "lite_llm",
+            Self::Ollama => "ollama",
+            Self::LmStudio => "lm_studio",
+            Self::Chatbox => "chatbox",
             Self::OpenaiCompat => "openai_compat",
             Self::Unknown => "unknown",
         }
@@ -264,6 +293,9 @@ impl ClientKind {
             if lower.contains("grok-shell") {
                 return Self::GrokBuild;
             }
+            if let Some(kind) = detect_known_agent_user_agent(&lower) {
+                return kind;
+            }
         }
         if let Some(originator) = originator
             && is_codex_originator(originator)
@@ -276,6 +308,58 @@ impl ClientKind {
             Self::Unknown
         }
     }
+}
+
+/// Recognize high-confidence third-party client markers without guessing from
+/// generic SDK/browser UAs.  This list is intentionally explicit: UA strings
+/// are caller-controlled and a broad substring match would create false
+/// product attribution.  Add a token only when the product emits a stable
+/// marker and cover it with a regression test.
+fn detect_known_agent_user_agent(value: &str) -> Option<ClientKind> {
+    let starts_with = |prefixes: &[&str]| prefixes.iter().any(|prefix| value.starts_with(prefix));
+    if starts_with(&["cursor/", "cursor-agent/"]) {
+        return Some(ClientKind::Cursor);
+    }
+    if starts_with(&["cline/", "cline-"]) {
+        return Some(ClientKind::Cline);
+    }
+    if starts_with(&["roo-code/", "roo_cline/", "roocode/"]) {
+        return Some(ClientKind::RooCode);
+    }
+    if starts_with(&["continue/", "continue-"]) {
+        return Some(ClientKind::Continue);
+    }
+    if starts_with(&["aider/"]) {
+        return Some(ClientKind::Aider);
+    }
+    if starts_with(&["opencode/", "opencode-"]) {
+        return Some(ClientKind::OpenCode);
+    }
+    if starts_with(&["goose/"]) {
+        return Some(ClientKind::Goose);
+    }
+    if starts_with(&["open-webui/", "openwebui/", "open webui/"]) {
+        return Some(ClientKind::OpenWebUi);
+    }
+    if starts_with(&["windsurf/", "codeium/"]) {
+        return Some(ClientKind::Windsurf);
+    }
+    if starts_with(&["kilo-code/", "kilocode/"]) {
+        return Some(ClientKind::KiloCode);
+    }
+    if starts_with(&["litellm/"]) {
+        return Some(ClientKind::LiteLlm);
+    }
+    if starts_with(&["ollama/"]) {
+        return Some(ClientKind::Ollama);
+    }
+    if starts_with(&["lm-studio/", "lmstudio/"]) {
+        return Some(ClientKind::LmStudio);
+    }
+    if starts_with(&["chatbox/"]) {
+        return Some(ClientKind::Chatbox);
+    }
+    None
 }
 
 /// Recognize the first-party Codex User-Agent prefix without treating an
@@ -3056,7 +3140,25 @@ impl RuntimeEvent {
         match attributed_client_kind {
             Some(ClientKind::Codex) => codex_originator_variant.unwrap_or("cli"),
             Some(ClientKind::ClaudeCode) => "cli",
-            Some(ClientKind::GeminiCli | ClientKind::GrokBuild | ClientKind::Pi) => "cli",
+            Some(
+                ClientKind::GeminiCli
+                | ClientKind::GrokBuild
+                | ClientKind::Cursor
+                | ClientKind::Cline
+                | ClientKind::RooCode
+                | ClientKind::Continue
+                | ClientKind::Aider
+                | ClientKind::OpenCode
+                | ClientKind::Goose
+                | ClientKind::OpenWebUi
+                | ClientKind::Windsurf
+                | ClientKind::KiloCode
+                | ClientKind::LiteLlm
+                | ClientKind::Ollama
+                | ClientKind::LmStudio
+                | ClientKind::Chatbox
+                | ClientKind::Pi,
+            ) => "cli",
             Some(ClientKind::OpenaiCompat | ClientKind::Unknown) | None => "unknown",
         }
     }
@@ -3121,24 +3223,19 @@ impl RuntimeEvent {
     }
 
     /// 按事件类型各留最近 `per_kind_limit` 条(入参新→旧,返回保持原顺序)。
-    /// in-flight 事件优先保留(还要被原地更新),但单独计数、同样封顶——
-    /// 否则永不收尾的僵尸行会无限堆积。
+    /// 进行中事件全量保留，历史窗口上限不能使仍在执行的请求消失。
     pub fn trimmed(events: Vec<RuntimeEvent>, per_kind_limit: usize) -> Vec<RuntimeEvent> {
         if events.len() <= per_kind_limit {
             return events;
         }
         let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        let mut in_flight_counts: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
         events
             .into_iter()
             .filter(|event| {
-                let bucket = if event.is_in_flight() {
-                    &mut in_flight_counts
-                } else {
-                    &mut counts
-                };
-                let count = bucket.entry(event.kind.clone()).or_insert(0);
+                if event.is_in_flight() {
+                    return true;
+                }
+                let count = counts.entry(event.kind.clone()).or_insert(0);
                 if *count < per_kind_limit {
                     *count += 1;
                     true
@@ -3372,8 +3469,8 @@ mod tests {
     #[test]
     fn trim_keeps_per_kind_quota_and_in_flight_extra() {
         let mut events = Vec::new();
-        // 新→旧:300 条 upstream、3 条 client、2 条 in-flight upstream。
-        for i in 0..2 {
+        // 新→旧:300 条 upstream、3 条 client、250 条 in-flight upstream。
+        for i in 0..250 {
             events.push(in_flight(
                 &format!("f{i}"),
                 KIND_UPSTREAM,
@@ -3397,7 +3494,7 @@ mod tests {
             .count();
         let clients = trimmed.iter().filter(|e| e.kind == KIND_CLIENT).count();
         assert_eq!(upstream_completed, 200); // 完成配额
-        assert_eq!(upstream_in_flight, 2); // in-flight 豁免且独立配额
+        assert_eq!(upstream_in_flight, 250); // 进行中全量保留
         assert_eq!(clients, 3); // client 不被 upstream 挤掉
         // 保留的是最新的(数组前端)。
         assert!(trimmed.iter().any(|e| e.id == "u0"));
@@ -3552,6 +3649,33 @@ mod tests {
             ),
             ClientKind::GrokBuild
         );
+        for (ua, expected) in [
+            ("Cursor/0.48.6", ClientKind::Cursor),
+            ("Cline/3.14.0", ClientKind::Cline),
+            ("roo-code/3.20.0", ClientKind::RooCode),
+            ("Continue/1.0.0", ClientKind::Continue),
+            ("aider/0.86.1", ClientKind::Aider),
+            ("OpenCode/0.1.0", ClientKind::OpenCode),
+            ("goose/1.2.0", ClientKind::Goose),
+            ("open-webui/0.6.0", ClientKind::OpenWebUi),
+            ("Windsurf/1.9.0", ClientKind::Windsurf),
+            ("kilo-code/4.0.0", ClientKind::KiloCode),
+            ("LiteLLM/1.74.0", ClientKind::LiteLlm),
+            ("Ollama/0.12.0", ClientKind::Ollama),
+            ("LM-Studio/0.3.0", ClientKind::LmStudio),
+            ("Chatbox/1.20.0", ClientKind::Chatbox),
+        ] {
+            assert_eq!(
+                ClientKind::detect(Some(ua), true),
+                expected,
+                "UA {ua} should retain its high-confidence product attribution"
+            );
+        }
+        // A generic SDK/browser marker must remain a protocol-level fallback.
+        assert_eq!(
+            ClientKind::detect(Some("OpenAI/Python 1.99.0"), true),
+            ClientKind::OpenaiCompat
+        );
         // 未知 UA:按入站方言兜底,缺 UA 同理。
         assert_eq!(
             ClientKind::detect(Some("curl/8.7.1"), true),
@@ -3651,6 +3775,20 @@ mod tests {
             (ClientKind::Codex, "codex"),
             (ClientKind::GeminiCli, "gemini_cli"),
             (ClientKind::GrokBuild, "grok_build"),
+            (ClientKind::Cursor, "cursor"),
+            (ClientKind::Cline, "cline"),
+            (ClientKind::RooCode, "roo_code"),
+            (ClientKind::Continue, "continue"),
+            (ClientKind::Aider, "aider"),
+            (ClientKind::OpenCode, "open_code"),
+            (ClientKind::Goose, "goose"),
+            (ClientKind::OpenWebUi, "open_web_ui"),
+            (ClientKind::Windsurf, "windsurf"),
+            (ClientKind::KiloCode, "kilo_code"),
+            (ClientKind::LiteLlm, "lite_llm"),
+            (ClientKind::Ollama, "ollama"),
+            (ClientKind::LmStudio, "lm_studio"),
+            (ClientKind::Chatbox, "chatbox"),
             (ClientKind::OpenaiCompat, "openai_compat"),
             (ClientKind::Unknown, "unknown"),
         ] {

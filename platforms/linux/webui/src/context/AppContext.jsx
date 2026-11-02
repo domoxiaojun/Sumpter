@@ -1,7 +1,7 @@
 import { createContext, useMemo, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { api, getAuthState, openEventStream, subscribeAuth } from '../services/api.js';
 import { upsertRuntimeEvent, mergeRuntimeEvent } from '../utils/runtimeEvents.js';
-import { fetchRuntimeChanges, mergeRuntimeListItems, runtimeSummaryRevision, RUNTIME_API_VERSION } from '../utils/runtimeSync.js';
+import { fetchRuntimeChanges, mergeRuntimeListItems, reconcileInFlightEvents, runtimeSummaryRevision, RUNTIME_API_VERSION } from '../utils/runtimeSync.js';
 import { clone } from '../utils/helpers.js';
 import { configDraftWrite, requireDraftGeneration } from '../utils/configDraft.js';
 import { initialConnectionsObservation, receiveConnectionsSummary, failConnectionsSummary } from '../utils/responsesConnections.js';
@@ -348,7 +348,10 @@ export function AppProvider({ children }) {
           resetGeneration: summaryRes?.resetGeneration || 0,
           // Statistics refreshes do not request the run-page event list;
           // never replace the live overlay with an empty compatibility page.
-          recentEvents: shouldLoadEvents ? (eventsRes?.events || []) : (previous?.recentEvents || []),
+          recentEvents: reconcileInFlightEvents(
+            shouldLoadEvents ? (eventsRes?.events || []) : (previous?.recentEvents || []),
+            summaryRes?.inFlightEvents,
+          ),
           eventPage: shouldLoadEvents ? eventsRes : previous?.eventPage,
         };
         return sameJSON(previous, nextRuntime) ? previous : nextRuntime;

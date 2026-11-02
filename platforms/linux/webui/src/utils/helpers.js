@@ -1016,6 +1016,19 @@ export function eventDurationMS(event) {
   return eventField(event, 'durationMS', 'duration_ms');
 }
 
+// Completed client rows and output speed use the final upstream attempt's
+// timeline. In-flight rows keep the client clock so the total continues to
+// advance while the request is open.
+export function eventDisplayTiming(event) {
+  const upstreamTTFB = eventField(event, 'upstreamTTFBMS', 'upstream_ttfb_ms');
+  const upstreamDuration = eventField(event, 'upstreamDurationMS', 'upstream_duration_ms');
+  if (cleanText(event?.kind).toLowerCase() === 'client'
+      && !eventIsInFlight(event) && upstreamTTFB != null && upstreamDuration != null) {
+    return { ttfbMS: upstreamTTFB, durationMS: upstreamDuration };
+  }
+  return { ttfbMS: eventTTFBMS(event), durationMS: eventDurationMS(event) };
+}
+
 export function isLoopback(host) {
   const h = cleanText(host).toLowerCase();
   return h === '127.0.0.1' || h === 'localhost' || h === '::1';
@@ -1098,6 +1111,20 @@ export function clientKindLabel(kind) {
     claude_code: 'Claude Code',
     codex: 'Codex',
     grok_build: 'Grok Build',
+    cursor: 'Cursor',
+    cline: 'Cline',
+    roo_code: 'Roo Code',
+    continue: 'Continue',
+    aider: 'Aider',
+    open_code: 'OpenCode',
+    goose: 'Goose',
+    open_web_ui: 'Open WebUI',
+    windsurf: 'Windsurf',
+    kilo_code: 'Kilo Code',
+    lite_llm: 'LiteLLM',
+    ollama: 'Ollama',
+    lm_studio: 'LM Studio',
+    chatbox: 'Chatbox',
     pi: 'pi',
     gemini_cli: 'Gemini CLI',
     openai_compat: 'OpenAI 兼容客户端',
@@ -1184,8 +1211,7 @@ export function failurePhaseLabel(phase) {
 }
 
 export function eventDurationText(event) {
-  const ttfb = eventTTFBMS(event);
-  const duration = eventDurationMS(event);
+  const { ttfbMS: ttfb, durationMS: duration } = eventDisplayTiming(event);
   if (eventIsInFlight(event)) {
     if (ttfb != null) {
       // Keep TTFB fixed while the locally calculated elapsed duration advances.

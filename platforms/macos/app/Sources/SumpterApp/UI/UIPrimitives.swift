@@ -1135,8 +1135,8 @@ struct RuntimeEventDurationText: View {
         if event.isInFlight && windowVisible {
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 Text(RuntimeEventPresentation.durationWithTTFB(
-                    ttfbMS: event.ttfbMS,
-                    durationMS: event.durationMS,
+                    ttfbMS: RuntimeEventDisplay.displayTiming(event).ttfbMS,
+                    durationMS: RuntimeEventDisplay.displayTiming(event).durationMS,
                     inFlight: true,
                     startedAt: event.timestamp,
                     now: context.date
@@ -1144,8 +1144,8 @@ struct RuntimeEventDurationText: View {
             }
         } else {
             Text(RuntimeEventPresentation.durationWithTTFB(
-                ttfbMS: event.ttfbMS,
-                durationMS: event.durationMS
+                ttfbMS: RuntimeEventDisplay.displayTiming(event).ttfbMS,
+                durationMS: RuntimeEventDisplay.displayTiming(event).durationMS
             ))
         }
     }

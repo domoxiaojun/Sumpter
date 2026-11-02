@@ -2,6 +2,14 @@ import { upsertRuntimeEvent } from './runtimeEvents.js';
 
 export const RUNTIME_API_VERSION = 1;
 
+// The newest history page cannot represent the live set during long retries.
+export function reconcileInFlightEvents(events = [], inFlightEvents) {
+  if (!Array.isArray(inFlightEvents)) return events;
+  const completed = events.filter((event) => event.phase !== 'inFlight');
+  const completedIDs = new Set(completed.map((event) => event.id));
+  return [...inFlightEvents.filter((event) => event.phase === 'inFlight' && !completedIDs.has(event.id)), ...completed];
+}
+
 function pageGenerationMatches(page, expectedResetGeneration) {
   return page?.resetGeneration == null
     || expectedResetGeneration == null

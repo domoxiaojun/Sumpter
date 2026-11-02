@@ -57,6 +57,20 @@ public enum ClientKind: String, Codable, CaseIterable, Equatable, Sendable {
     case codex
     case geminiCli = "gemini_cli"
     case grokBuild = "grok_build"
+    case cursor
+    case cline
+    case rooCode = "roo_code"
+    case continueClient = "continue"
+    case aider
+    case openCode = "open_code"
+    case goose
+    case openWebUI = "open_web_ui"
+    case windsurf
+    case kiloCode = "kilo_code"
+    case liteLlm = "lite_llm"
+    case ollama
+    case lmStudio = "lm_studio"
+    case chatbox
     case pi = "pi"
     /// 经 OpenAI 兼容层入站,但 UA 不是已知客户端。
     case openaiCompat = "openai_compat"
@@ -73,6 +87,34 @@ public enum ClientKind: String, Codable, CaseIterable, Equatable, Sendable {
             return "Gemini CLI"
         case .grokBuild:
             return "Grok Build"
+        case .cursor:
+            return "Cursor"
+        case .cline:
+            return "Cline"
+        case .rooCode:
+            return "Roo Code"
+        case .continueClient:
+            return "Continue"
+        case .aider:
+            return "Aider"
+        case .openCode:
+            return "OpenCode"
+        case .goose:
+            return "Goose"
+        case .openWebUI:
+            return "Open WebUI"
+        case .windsurf:
+            return "Windsurf"
+        case .kiloCode:
+            return "Kilo Code"
+        case .liteLlm:
+            return "LiteLLM"
+        case .ollama:
+            return "Ollama"
+        case .lmStudio:
+            return "LM Studio"
+        case .chatbox:
+            return "Chatbox"
         case .pi:
             return "pi"
         case .openaiCompat:
@@ -1027,20 +1069,14 @@ public extension RuntimeEvent {
     }
 
     /// 按事件类型各留最近 `perKindLimit` 条(入参按新 → 旧排列,返回值保持原顺序)。
-    /// 进行中的事件优先保留但单独计数、同样封顶。
+    /// 进行中事件全量保留，不受历史窗口上限影响。
     static func trimmed(_ events: [RuntimeEvent], perKindLimit: Int) -> [RuntimeEvent] {
         guard events.count > perKindLimit else {
             return events
         }
         var counts: [String: Int] = [:]
-        var inFlightCounts: [String: Int] = [:]
         return events.filter { event in
             if event.isInFlight {
-                let count = inFlightCounts[event.kind, default: 0]
-                guard count < perKindLimit else {
-                    return false
-                }
-                inFlightCounts[event.kind] = count + 1
                 return true
             }
             let count = counts[event.kind, default: 0]

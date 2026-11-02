@@ -29,11 +29,11 @@ function eventKind(event) {
 
 export function trimRuntimeEvents(events, perKindLimit = DEFAULT_PER_KIND_LIMIT) {
   const completedCounts = new Map();
-  const inFlightCounts = new Map();
 
   return events.filter((event) => {
+    if (eventPhase(event) === 'inFlight') return true;
     const kind = eventKind(event);
-    const counts = eventPhase(event) === 'inFlight' ? inFlightCounts : completedCounts;
+    const counts = completedCounts;
     const count = counts.get(kind) || 0;
     if (count >= perKindLimit) return false;
     counts.set(kind, count + 1);

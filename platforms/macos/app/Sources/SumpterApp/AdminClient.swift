@@ -710,6 +710,7 @@ public enum AdminWire {
     }
 
     public struct RuntimeSummary: Decodable, Equatable, Sendable {
+        public let inFlightEvents: [RuntimeEvent]?
         public let responsesWebSocketConnections: ResponsesWebSocketConnections?
         public let apiVersion: Int
         public let storage: RuntimeStorage
@@ -717,6 +718,14 @@ public enum AdminWire {
         public let startupIssue: RuntimeDatabaseIssue?
         public let counters: RuntimeCounters
         public let latestEvent: RuntimeEvent?
+
+        /// 最新事件页有数量上限，不能用它代表进行中集合。nil 兼容旧 daemon。
+        func reconcilingInFlightEvents(in events: [RuntimeEvent]) -> [RuntimeEvent] {
+            guard let inFlightEvents else { return events }
+            let completed = events.filter { !$0.isInFlight }
+            let completedIDs = Set(completed.map(\.id))
+            return inFlightEvents.filter { $0.isInFlight && !completedIDs.contains($0.id) } + completed
+        }
     }
 
     public struct RuntimeChange: Decodable, Equatable, Sendable {

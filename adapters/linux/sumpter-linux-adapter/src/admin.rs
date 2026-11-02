@@ -1622,6 +1622,7 @@ mod tests {
         let summary: Value = serde_json::from_slice(&summary.bytes().await.unwrap()).unwrap();
         assert_eq!(summary["apiVersion"], 1);
         assert_eq!(summary["storage"]["backend"], "sqlite");
+        assert_eq!(summary["inFlightEvents"], json!([]));
         assert_eq!(
             summary["responsesWebSocketConnections"],
             json!({

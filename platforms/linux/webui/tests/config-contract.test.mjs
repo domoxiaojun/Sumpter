@@ -355,6 +355,15 @@ test('in-flight duration text advances without event updates and freezes on comp
   }
 });
 
+test('completed client duration text uses the final upstream timeline', () => {
+  const event = {
+    kind: 'client', phase: 'completed', outcome: 'succeeded',
+    ttfbMS: 4400, durationMS: 4500,
+    upstreamTTFBMS: 1700, upstreamDurationMS: 4470,
+  };
+  assert.equal(eventDurationText(event), '1.7s → 4.5s');
+});
+
 test('waiting for the first byte also shows the increasing elapsed duration', (t) => {
   const startedAt = Date.UTC(2026, 8, 11);
   t.mock.timers.enable({ apis: ['Date'], now: startedAt + 2100 });
@@ -409,7 +418,7 @@ test('runtime reconnect requests a newest-page resync for invalid or stalled cur
   assert.equal(stalled.valid, false);
 });
 
-test('runtime event retention keeps independent completed and in-flight quotas per kind', () => {
+test('runtime event retention bounds completed history and keeps all in-flight events', () => {
   const events = [
     { id: 'ci-1', kind: 'client', phase: 'inFlight' },
     { id: 'ci-2', kind: 'client', phase: 'inFlight' },
@@ -420,7 +429,7 @@ test('runtime event retention keeps independent completed and in-flight quotas p
   ];
   assert.deepEqual(
     trimRuntimeEvents(events, 1).map((event) => event.id),
-    ['ci-1', 'cc-1', 'ui-1', 'uc-1'],
+    ['ci-1', 'ci-2', 'cc-1', 'ui-1', 'uc-1'],
   );
 });
 

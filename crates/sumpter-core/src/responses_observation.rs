@@ -19,6 +19,48 @@ pub struct ResponsesRequestSummary {
     pub unassociated_events: u64,
 }
 
+impl ResponsesRequestSummary {
+    /// Only complete, correlated observations may override a normal connection close.
+    /// An earlier successful turn cannot complete a newer or unobserved request.
+    pub fn terminal_event(&self) -> Option<&str> {
+        if self.recent.is_empty()
+            || self.dropped > 0
+            || self.unobserved_frames > 0
+            || self.has_unfinished_requests()
+        {
+            return None;
+        }
+        for terminal in [
+            "response.failed",
+            "error",
+            "response.incomplete",
+            "response.interrupted",
+        ] {
+            if self
+                .recent
+                .iter()
+                .any(|request| request.terminal.as_deref() == Some(terminal))
+            {
+                return Some(terminal);
+            }
+        }
+        self.recent
+            .iter()
+            .all(|request| {
+                matches!(
+                    request.terminal.as_deref(),
+                    Some("response.completed" | "response.done")
+                )
+            })
+            .then_some("response.completed")
+    }
+
+    /// Transport closure does not complete a pending Responses request.
+    pub fn has_unfinished_requests(&self) -> bool {
+        self.recent.iter().any(|request| request.terminal.is_none())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResponsesRequestObservation {

@@ -297,21 +297,32 @@ enum RuntimeEventDisplay {
 
     /// 耗时列颜色:首字节慢的行染橙 —— 这是「上游在排队」和「输出本来就长」的分界。
     static func durationColor(_ event: RuntimeEvent) -> Color {
-        if RuntimeEventPresentation.isSlowTTFB(event.ttfbMS) {
+        if RuntimeEventPresentation.isSlowTTFB(displayTiming(event).ttfbMS) {
             return .orange
         }
         return event.isInFlight ? .blue : .primary
     }
 
+    /// 已完成客户端请求的列表时间轴与输出速度保持一致，使用最终上游尝试。
+    /// 进行中请求仍使用客户端时间轴，保证总耗时实时增长。
+    static func displayTiming(_ event: RuntimeEvent) -> (ttfbMS: Int?, durationMS: Int) {
+        if event.kind == "client", !event.isInFlight,
+           let ttfb = event.upstreamTTFBMS, let duration = event.upstreamDurationMS {
+            return (ttfb, duration)
+        }
+        return (event.ttfbMS, event.durationMS)
+    }
+
     /// 耗时列悬停说明:两段各是什么、client 与 upstream 的口径差别。
     static func durationHelp(_ event: RuntimeEvent) -> String {
-        guard event.ttfbMS != nil else {
+        let timing = displayTiming(event)
+        guard timing.ttfbMS != nil else {
             return "总耗时(该事件无首字节记录)"
         }
-        let scope = event.kind == "upstream"
-            ? "本次上游尝试的响应头延迟"
-            : "客户端等待首字节的总时长（含故障转移与上游重跑）"
-        let slow = RuntimeEventPresentation.isSlowTTFB(event.ttfbMS)
+        let scope = event.kind == "client" && !event.isInFlight
+            ? "最终上游尝试的响应头延迟"
+            : event.kind == "upstream" ? "本次上游尝试的响应头延迟" : "客户端等待首字节的总时长（含故障转移与上游重跑）"
+        let slow = RuntimeEventPresentation.isSlowTTFB(timing.ttfbMS)
             ? "\n首字节超过 \(RuntimeEventPresentation.slowTTFBThresholdMS / 1_000)s,上游可能在排队。"
             : ""
         return "首字节 → 总耗时\n首字节 = \(scope)。\(slow)"

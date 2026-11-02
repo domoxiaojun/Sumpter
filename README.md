@@ -4,13 +4,13 @@ Sumpter 把多个 AI 服务入口集中到一个代理地址。客户端连接 S
 
 适合同时使用多个 Provider、希望统一管理客户端连接，或需要按项目查看 AI 用量的个人与小团队。你需要自行准备可用的上游服务和 API Key。
 
-Linux 提供后台服务和 Web 管理界面；macOS 提供原生 App。两端共用 Rust 引擎和配置格式。本文对应 **0.4.57 / schema v7**，版本以 [Cargo.toml](Cargo.toml) 为准。
+Linux 提供后台服务和 Web 管理界面；macOS 提供原生 App。两端共用 Rust 引擎和配置格式。本文对应 **0.4.58 / schema v7**，版本以 [Cargo.toml](Cargo.toml) 为准。
 
 ## 可以做什么
 
 - **管理上游**：在入口库保存地址、密钥和模型映射，按模型组分配主用与后备入口。
 - **保持会话稳定**：支持优先级、随机粘性和轮询粘性调度；故障时按配置重试或切换入口。
-- **接入现有客户端**：通过 HTTP、流式响应和 WebSocket 转发 Claude Code、Codex、Grok Build、Gemini CLI、pi 等客户端请求。
+- **接入现有客户端**：通过 HTTP、流式响应和 WebSocket 转发 Claude Code、Codex、Grok Build、Gemini CLI、pi 以及常见 OpenAI 兼容客户端请求。
 - **查看运行情况**：区分客户端请求与上游尝试，查看耗时、结果、Token、缓存、项目和会话统计。
 - **控制访问和存储**：设置入站 Token、管理页凭据、统计保留策略；需要排障时再开启诊断捕获。
 
