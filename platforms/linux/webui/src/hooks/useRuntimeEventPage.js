@@ -17,6 +17,7 @@ function eventMatchesKind(event, kind) {
 
 export function useRuntimeEventPage({
   recentEvents = [], eventKind = '', resetGeneration = 0, onRecovered,
+  autoRefresh = true, refreshInterval = 15,
 } = {}) {
   const [page, setPageState] = useState(1);
   const [pageSize, setPageSizeState] = useState(readRuntimeEventPageSize);
@@ -172,6 +173,17 @@ export function useRuntimeEventPage({
       }
     };
   }, [eventKind, refreshing, mode, page, recentEvents]);
+
+  useEffect(() => {
+    if (!autoRefresh || page !== 1 || mode !== 'page') return undefined;
+    const timer = window.setInterval(() => {
+      if (document.hidden || refreshing) return;
+      backgroundRefreshRef.current = true;
+      snapshotRef.current = null;
+      setReloadGeneration((value) => value + 1);
+    }, Math.max(1, Number(refreshInterval) || 15) * 1000);
+    return () => window.clearInterval(timer);
+  }, [autoRefresh, page, mode, refreshInterval, refreshing]);
 
   return {
     mode,

@@ -539,30 +539,28 @@ impl Engine {
                 trace.requests = Some(metrics.requests.clone());
             }
         }
-        let upstream_closed_with_active_request = metrics.closed_by.as_deref() == Some("upstream")
-            && metrics.requests.has_unfinished_requests()
-            && !matches!(
-                metrics.last_event_type.as_deref(),
-                Some(
-                    "response.completed"
-                        | "response.done"
-                        | "response.failed"
-                        | "response.incomplete"
-                        | "response.interrupted"
-                )
-            );
-        let terminal = (context.route_intent == "responses_websocket" && !metrics.failed)
+        // A transport error is independent from the business terminal. The
+        // final response frame may already have been delivered when the peer
+        // drops the WebSocket without a Close frame. Keep the abnormal close
+        // evidence in the trace, but do not turn an already completed request
+        // into a failed inference.
+        let terminal = (context.route_intent == "responses_websocket"
+            && metrics.all_upstream_frames_delivered)
             .then(|| metrics.requests.terminal_event())
             .flatten();
+        let upstream_closed_with_active_request = metrics.closed_by.as_deref() == Some("upstream")
+            && metrics.requests.has_unfinished_requests();
         let business_failure = match terminal {
             Some("response.failed" | "error") => Some(RuntimeFailureKind::UpstreamResponseFailed),
             Some("response.incomplete") => Some(RuntimeFailureKind::UpstreamResponseIncomplete),
             _ => None,
         };
-        let cancelled = !metrics.failed
-            && (terminal == Some("response.interrupted")
-                || (terminal.is_none() && metrics.closed_by.as_deref() == Some("client")));
-        let failure = (metrics.failed
+        let cancelled = terminal == Some("response.interrupted")
+            || (terminal.is_none()
+                && !metrics.failed
+                && metrics.closed_by.as_deref() == Some("client"));
+        let transport_failure = metrics.failed && terminal.is_none();
+        let failure = (transport_failure
             || cancelled
             || upstream_closed_with_active_request
             || business_failure.is_some())
@@ -643,7 +641,7 @@ impl Engine {
         client.ttfb_ms = Some(connection.handshake_ttfb_ms);
         client.outcome = Some(if cancelled {
             RuntimeEventOutcome::Cancelled
-        } else if metrics.failed
+        } else if transport_failure
             || upstream_closed_with_active_request
             || business_failure.is_some()
         {
@@ -1111,6 +1109,7 @@ impl Engine {
         };
         context.model = request.model.clone();
         if let Some(guard) = &connection_guard {
+            guard.set_model(&context.model);
             guard.set_stage(ConnectionStage::ConnectingUpstream);
         }
         let connected = tokio::select! {

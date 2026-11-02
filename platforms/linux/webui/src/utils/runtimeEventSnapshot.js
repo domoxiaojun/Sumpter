@@ -23,5 +23,5 @@ export function mergeCompletedPage(events, additions, pageSize) {
     const previous = byID.get(event.id);
     if (!previous || Number(event.changeSeq || 0) >= Number(previous.changeSeq || 0)) byID.set(event.id, event);
   }
-  return [...byID.values()].sort((left, right) => Number(right.seq || 0) - Number(left.seq || 0)).slice(0, pageSize);
+  return [...byID.values()].sort((left, right) => Number(right.timestamp || 0) - Number(left.timestamp || 0) || Number(right.seq || 0) - Number(left.seq || 0)).slice(0, pageSize);
 }

@@ -71,6 +71,8 @@ public enum ClientKind: String, Codable, CaseIterable, Equatable, Sendable {
     case ollama
     case lmStudio = "lm_studio"
     case chatbox
+    case deepseekHarness = "deepseek_harness"
+    case workbuddy
     case pi = "pi"
     /// 经 OpenAI 兼容层入站,但 UA 不是已知客户端。
     case openaiCompat = "openai_compat"
@@ -115,6 +117,10 @@ public enum ClientKind: String, Codable, CaseIterable, Equatable, Sendable {
             return "LM Studio"
         case .chatbox:
             return "Chatbox"
+        case .deepseekHarness:
+            return "DeepSeek Harness"
+        case .workbuddy:
+            return "WorkBuddy"
         case .pi:
             return "pi"
         case .openaiCompat:

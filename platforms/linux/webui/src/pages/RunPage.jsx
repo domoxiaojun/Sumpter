@@ -336,10 +336,33 @@ export function RunPage() {
 
   const isRunning = status?.running;
   const recentEvents = runtime?.recentEvents || [];
+  const websocketLiveEvents = useMemo(() => {
+    const active = connectionsObservation?.value?.active;
+    if (!Array.isArray(active) || eventFilter === 'upstream') return [];
+    return active.map((connection) => ({
+      id: `websocket:${connection.requestID}`,
+      requestID: connection.requestID,
+      kind: 'client',
+      phase: 'inFlight',
+      statusCode: 101,
+      outcome: null,
+      transport: 'websocket',
+      clientModel: connection.model || null,
+      effectiveModel: connection.model || null,
+      timestamp: connection.startedAt,
+      durationMS: 0,
+      ttfbMS: null,
+      streamTrace: { websocketTrace: { stage: connection.stage, handshakeStatus: connection.stage === 'relay' ? 101 : null } },
+      failover: false,
+      detailsOmitted: false,
+    }));
+  }, [connectionsObservation, eventFilter]);
   const [todayTokens, setTodayTokens] = useState(null);
   const notifySnapshotRecovered = useCallback((message) => addToast(message, 'info'), [addToast]);
   const eventHistory = useRuntimeEventPage({
     recentEvents,
+    autoRefresh,
+    refreshInterval: runRefreshInterval,
     eventKind: eventFilter === 'all' ? '' : eventFilter,
     resetGeneration: runtime?.resetGeneration,
     onRecovered: notifySnapshotRecovered,
@@ -377,14 +400,14 @@ export function RunPage() {
   }, [autoRefresh, runRefreshInterval, runtime?.resetGeneration]);
 
   useEffect(() => {
-    if (!recentEvents.some((event) => eventIsInFlight(event))) return undefined;
+    if (![...recentEvents, ...websocketLiveEvents].some((event) => eventIsInFlight(event))) return undefined;
     const timer = window.setInterval(() => setDurationTick((value) => value + 1), 1000);
     return () => window.clearInterval(timer);
-  }, [recentEvents]);
+  }, [recentEvents, websocketLiveEvents]);
 
   const liveEvents = useMemo(() => (
-    orderRuntimeEvents(eventHistory.liveEvents || [], eventSort)
-  ), [eventHistory.liveEvents, eventSort]);
+    orderRuntimeEvents([...(eventHistory.liveEvents || []), ...websocketLiveEvents], eventSort)
+  ), [eventHistory.liveEvents, eventSort, websocketLiveEvents]);
   const visibleEvents = useMemo(() => (
     orderRuntimeEvents(
       eventHistory.persistedEvents

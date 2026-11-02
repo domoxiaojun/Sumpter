@@ -27,8 +27,9 @@ final class RuntimeEventPresentationTests: XCTestCase {
         XCTAssertTrue(summary.contains("传输错误类型: connection_reset"))
         XCTAssertTrue(summary.contains("最近上游事件: response.completed"))
         XCTAssertTrue(summary.contains("空闲截止:"))
-        XCTAssertEqual(RuntimeEventPresentation.friendlyMessage(kind: "client", statusCode: 101, failover: false, message: nil, outcome: .failed, streamTrace: StreamTrace(websocketTrace: trace)), "WebSocket 连接异常结束（不代表每次响应均失败）")
+        XCTAssertEqual(RuntimeEventPresentation.friendlyMessage(kind: "client", statusCode: 101, failover: false, message: nil, outcome: .failed, streamTrace: StreamTrace(websocketTrace: trace)), "上游侧连接：连接被重置 · 最近事件 response.completed（连接结果不代表每次响应结果）")
         XCTAssertEqual(RuntimeEventPresentation.friendlyMessage(kind: "client", statusCode: 101, failover: false, message: nil, outcome: .succeeded, streamTrace: StreamTrace(websocketTrace: old)), "WebSocket 连接正常结束")
+        XCTAssertTrue(RuntimeEventPresentation.friendlyMessage(kind: "client", statusCode: 101, failover: false, message: nil, outcome: .succeeded, streamTrace: StreamTrace(websocketTrace: trace)).hasPrefix("响应已完成；"))
     }
 
     func testProjectAttributionDoesNotAssignNotificationsOrUpstreamAttempts() throws {
@@ -752,6 +753,8 @@ final class RuntimeEventPresentationTests: XCTestCase {
             ("ollama", .ollama),
             ("lm_studio", .lmStudio),
             ("chatbox", .chatbox),
+            ("deepseek_harness", .deepseekHarness),
+            ("workbuddy", .workbuddy),
             ("pi", .pi),
             ("openai_compat", .openaiCompat),
             ("unknown", .unknown)
@@ -775,6 +778,8 @@ final class RuntimeEventPresentationTests: XCTestCase {
         XCTAssertEqual(ClientKind.claudeCode.displayName, "Claude Code")
         XCTAssertEqual(ClientKind.codex.displayName, "Codex")
         XCTAssertEqual(ClientKind.grokBuild.displayName, "Grok Build")
+        XCTAssertEqual(ClientKind.deepseekHarness.displayName, "DeepSeek Harness")
+        XCTAssertEqual(ClientKind.workbuddy.displayName, "WorkBuddy")
         XCTAssertEqual(ClientKind.openaiCompat.displayName, "OpenAI 兼容客户端")
         XCTAssertEqual(ClientKind.unknown.displayName, "未知客户端")
         XCTAssertEqual(Set(ClientKind.allCases.map(\.displayName)).count, ClientKind.allCases.count)

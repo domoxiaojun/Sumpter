@@ -17,6 +17,123 @@ const TERMINAL: &str = r#"{"type":"response.completed","response":{"status":"com
 type Client =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
+#[tokio::test]
+async fn reused_connection_eof_preserves_terminals_but_never_hides_pending_turns() {
+    for client_eof in [false, true] {
+        for pending in [false, true] {
+            for terminal in [
+                "response.completed",
+                "response.failed",
+                "response.incomplete",
+                "response.interrupted",
+            ] {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let mut config = super::config();
+                config.endpoints[0].base_url = format!("http://{}", listener.local_addr().unwrap());
+                config.migrate_model_groups();
+                let (release, released) = tokio::sync::oneshot::channel();
+                let upstream = tokio::spawn(async move {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                    for i in 0..2 {
+                        socket.next().await.unwrap().unwrap();
+                        for kind in [
+                            "response.created",
+                            if i == 0 {
+                                "response.completed"
+                            } else {
+                                terminal
+                            },
+                        ] {
+                            socket.send(Message::Text(serde_json::json!({"type":kind,"response":{"id":format!("response-{i}")}}).to_string().into())).await.unwrap();
+                        }
+                    }
+                    if pending {
+                        socket.next().await.unwrap().unwrap();
+                        socket
+                            .send(Message::Text(
+                                r#"{"type":"response.created","response":{"id":"pending"}}"#.into(),
+                            ))
+                            .await
+                            .unwrap();
+                    }
+                    released.await.unwrap();
+                    if client_eof {
+                        assert!(
+                            matches!(socket.next().await.unwrap().unwrap(), Message::Close(Some(frame)) if u16::from(frame.code) == 1011)
+                        );
+                    }
+                });
+                let engine = pi_test_engine(config);
+                let mut notices = engine.subscribe();
+                let (address, handle) =
+                    server::serve(engine.clone(), "127.0.0.1:0".parse().unwrap())
+                        .await
+                        .unwrap();
+                let mut socket = connect(address, "").await;
+                for _ in 0..2 {
+                    socket.send(Message::Text(FIRST.into())).await.unwrap();
+                    for _ in 0..2 {
+                        socket.next().await.unwrap().unwrap();
+                    }
+                }
+                if pending {
+                    socket.send(Message::Text(FIRST.into())).await.unwrap();
+                    socket.next().await.unwrap().unwrap();
+                }
+                release.send(()).unwrap();
+                if client_eof {
+                    drop(socket);
+                } else {
+                    assert!(
+                        matches!(socket.next().await.unwrap().unwrap(), Message::Close(Some(frame)) if u16::from(frame.code) == 1011)
+                    );
+                }
+                let event = completed(&mut notices).await;
+                let expected = if pending {
+                    RuntimeEventOutcome::Failed
+                } else {
+                    match terminal {
+                        "response.completed" => RuntimeEventOutcome::Succeeded,
+                        "response.interrupted" => RuntimeEventOutcome::Cancelled,
+                        _ => RuntimeEventOutcome::Failed,
+                    }
+                };
+                assert_eq!(
+                    event.outcome,
+                    Some(expected),
+                    "client={client_eof} pending={pending} terminal={terminal}"
+                );
+                let trace = event
+                    .stream_trace
+                    .as_ref()
+                    .unwrap()
+                    .websocket_trace
+                    .as_ref()
+                    .unwrap();
+                assert_eq!(trace.abnormal_close, Some(true));
+                assert_eq!(
+                    trace.transport_error_kind.as_deref(),
+                    Some("eof_without_close")
+                );
+                assert_eq!(
+                    trace.closed_by.as_deref(),
+                    Some(if client_eof { "client" } else { "upstream" })
+                );
+                assert!(
+                    engine
+                        .runtime_snapshot()
+                        .recent_events
+                        .iter()
+                        .all(|e| e.outcome == Some(expected))
+                );
+                upstream.await.unwrap();
+                pi_test_shutdown(handle).await;
+            }
+        }
+    }
+}
+
 async fn connect(address: std::net::SocketAddr, query: &str) -> Client {
     let mut request = format!("ws://{address}/v1/responses{query}")
         .into_client_request()
@@ -46,6 +163,7 @@ async fn completed(notices: &mut tokio::sync::broadcast::Receiver<EngineNotice>)
         loop {
             if let EngineNotice::Event(event) = notices.recv().await.unwrap()
                 && event.kind == "client"
+                && !event.is_in_flight()
             {
                 return event;
             }
@@ -201,7 +319,9 @@ async fn responses_frames_and_close_remain_ordered_and_exact() {
         matches!(socket.next().await.unwrap().unwrap(), Message::Close(Some(frame)) if u16::from(frame.code) == 1000)
     );
     let event = completed(&mut notices).await;
-    assert_eq!(event.outcome, Some(RuntimeEventOutcome::Succeeded));
+    // Three creates and only one unassociated terminal cannot establish
+    // business success, even though every frame and Close was forwarded.
+    assert_eq!(event.outcome, Some(RuntimeEventOutcome::Failed));
     let trace = event
         .stream_trace
         .as_ref()
@@ -300,14 +420,17 @@ async fn relay_close_eof_reset_and_cancel_have_distinct_results() {
             .unwrap();
         assert_eq!(trace.last_event_type.as_deref(), Some("response.completed"));
         assert_eq!(trace.attempt_count, Some(1));
-        let (outcome, error) = match case {
-            "normal" => (RuntimeEventOutcome::Succeeded, None),
-            "client_close" => (RuntimeEventOutcome::Succeeded, None),
-            "abnormal" => (RuntimeEventOutcome::Failed, Some("abnormal_close")),
-            "reset" => (RuntimeEventOutcome::Failed, Some("connection_reset")),
-            _ => (RuntimeEventOutcome::Failed, Some("eof_without_close")),
+        let error = match case {
+            "normal" | "client_close" => None,
+            "abnormal" => Some("abnormal_close"),
+            "reset" => Some("connection_reset"),
+            _ => Some("eof_without_close"),
         };
-        assert_eq!(event.outcome, Some(outcome), "{case}: {event:?}");
+        assert_eq!(
+            event.outcome,
+            Some(RuntimeEventOutcome::Succeeded),
+            "{case}: {event:?}"
+        );
         assert_eq!(trace.transport_error_kind.as_deref(), error, "{case}");
         assert_eq!(
             trace.closed_by.as_deref(),
@@ -553,10 +676,8 @@ async fn ping_pong_activity_keeps_idle_connections_alive_without_business_counts
         .await
         .unwrap();
         let event = completed(&mut notices).await;
-        assert_eq!(
-            event.failure_kind,
-            Some(RuntimeFailureKind::StreamIdleTimeout)
-        );
+        assert_eq!(event.outcome, Some(RuntimeEventOutcome::Succeeded));
+        assert_eq!(event.failure_kind, None);
         assert!(event.upstream_host.is_some());
         let trace = event.stream_trace.unwrap().websocket_trace.unwrap();
         assert_eq!(trace.client_message_count, Some(1));
@@ -570,7 +691,7 @@ async fn ping_pong_activity_keeps_idle_connections_alive_without_business_counts
 }
 
 #[tokio::test]
-async fn terminal_frame_before_eof_is_delivered_without_synthetic_success() {
+async fn terminal_frame_before_eof_is_a_business_success_and_gets_a_close() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let mut config = super::config();
     config.endpoints[0].base_url = format!("http://{}", listener.local_addr().unwrap());
@@ -593,8 +714,15 @@ async fn terminal_frame_before_eof_is_delivered_without_synthetic_success() {
         client.next().await.unwrap().unwrap(),
         Message::Text(TERMINAL.into())
     );
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(5), client.next())
+            .await
+            .unwrap()
+            .unwrap(),
+        Ok(Message::Close(Some(frame))) if u16::from(frame.code) == 1011
+    ));
     let event = completed(&mut notices).await;
-    assert_eq!(event.outcome, Some(RuntimeEventOutcome::Failed));
+    assert_eq!(event.outcome, Some(RuntimeEventOutcome::Succeeded));
     assert_eq!(
         event
             .stream_trace

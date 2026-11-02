@@ -263,7 +263,7 @@ enum RuntimeEventDisplay {
     }
 
     static func friendlyMessage(_ event: RuntimeEvent) -> String {
-        if event.isInFlight {
+        if event.isInFlight, event.streamTrace?.websocketTrace == nil {
             if event.effectiveHTTPStatusCode == 0 { return "等待响应" }
             return event.streamTrace == nil ? "接收响应中" : "流式输出中"
         }

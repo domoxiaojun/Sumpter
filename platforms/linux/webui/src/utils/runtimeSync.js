@@ -92,3 +92,9 @@ export function runtimeSummaryRevision(summary) {
     },
   });
 }
+
+// A summary read started before an SSE update cannot erase that update.
+export function reconcileRuntimeRefresh(events, inFlightEvents, previous, startedCursor) {
+  const snapshot = reconcileInFlightEvents(events, inFlightEvents);
+  return mergeRuntimeListItems(snapshot, previous.filter(event => Number(event.changeSeq || 0) > startedCursor));
+}

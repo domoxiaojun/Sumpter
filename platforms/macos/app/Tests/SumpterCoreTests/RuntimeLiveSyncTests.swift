@@ -12,6 +12,16 @@ final class RuntimeLiveSyncTests: XCTestCase {
         XCTAssertTrue(updated.contains { $0.id == "249" })
     }
 
+    func testCompletedOverlaySurvivesBeforeCommitAndKeepsOlderPagesStable() throws {
+        let pageJSON = #"{"apiVersion":3,"events":[],"page":1,"pageSize":10,"totalCount":0,"totalPages":0,"snapshotSeq":0,"snapshotChangeSeq":10,"historyGeneration":0,"resetGeneration":0,"retainedFromSeq":0,"hasNext":false,"hasPrevious":false,"filters":{"kind":"client"}}"#
+        let decoder = JSONDecoder()
+        let page = try decoder.decode(AdminWire.RuntimeHistoryPage.self, from: Data(pageJSON.utf8))
+        let done = try decoder.decode(AdminWire.RuntimeEventListItem.self, from: Data(#"{"seq":1,"changeSeq":11,"id":"late","timestamp":100,"kind":"client","phase":"completed","statusCode":101,"durationMS":1000,"failover":false}"#.utf8))
+        XCTAssertEqual(page.visibleEvents(recent: [done]).map(\.id), ["late"])
+        let oldPage = try decoder.decode(AdminWire.RuntimeHistoryPage.self, from: Data(pageJSON.replacingOccurrences(of: "\"page\":1", with: "\"page\":2").utf8))
+        XCTAssertTrue(oldPage.visibleEvents(recent: [done]).isEmpty)
+    }
+
     private func event(_ id: String, phase: String) throws -> RuntimeEvent {
         try JSONDecoder().decode(RuntimeEvent.self, from: Data("""
         {"id":"\(id)","timestamp":1,"kind":"client","phase":"\(phase)","statusCode":200,"durationMS":0,"failover":false}

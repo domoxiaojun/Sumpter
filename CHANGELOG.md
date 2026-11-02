@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+## [0.4.59] - 2026-11-02
+
+### 修复
+
+- 修复 Responses WebSocket 在已完成业务响应后因 EOF、RST 或异常 Close 被误记为请求失败的问题，并保留连接异常诊断。
+- 修复 relay 将单侧异常断开放大为另一侧裸 EOF 的问题，按已排队正文顺序发送受控 Close。
+- 修复多轮 WebSocket 中前一轮终态掩盖后一轮未完成请求的判定问题。
+
+### 验证与边界
+
+- Linux/macOS WebSocket 合同、engine、workspace Rust、WebUI、macOS 测试通过；未进行安装升级或真实 CPA 生产验收。
+
 ## [0.4.58] - 2026-11-02
 
 ### 修复

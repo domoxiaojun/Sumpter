@@ -263,11 +263,10 @@ extension AppModel {
         } else {
             items.append(item)
         }
-        items.sort { $0.seq > $1.seq }
-        let retainedLimit = max(runtimePage?.events.count ?? 50, 50)
-        if items.count > retainedLimit {
-            items = Array(items.prefix(retainedLimit))
-        }
+        // Preserve live requests and newly completed old-seq connections.
+        let live = items.filter { $0.phase == .inFlight }
+        let completed = items.filter { $0.phase != .inFlight }.sorted { $0.changeSeq > $1.changeSeq }
+        items = (live + completed.prefix(200)).sorted { $0.seq > $1.seq }
         runtimePage = AdminWire.RuntimeEventPage(
             events: items,
             hasMore: runtimePage?.hasMore ?? false,

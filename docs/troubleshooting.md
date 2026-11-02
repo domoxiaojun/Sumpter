@@ -82,12 +82,12 @@ curl --noproxy '*' -i http://127.0.0.1:57879/healthz
 
 运行页的“当前 Responses WebSocket”显示当前进程内存中的连接快照：等待首条业务消息（含明确 Guardian 子集）、连接上游中、已进入转发，以及最长首消息等待。三个阶段之和为当前连接总数；没有等待连接时最长等待显示“—”。进入转发只表示上游连接已建立，不代表模型正在生成；带 query model 的连接直接进入上游准备阶段。等待首消息时 Ping/Pong 不改变阶段，`generate:false` 则是业务消息。此快照独立于历史事件，不写入数据库，清空统计不清除存活连接，重启后重新计数；不增加主动心跳、回收或连接数量限制。
 
-两端运行汇总 API v1 增量返回可选对象 `responsesWebSocketConnections`，包含 `total`、`awaitingFirstMessage`、`guardianAwaitingFirstMessage`、`connectingUpstream`、`relaying`、`oldestFirstMessageWaitMS`；无人等待时时长为 `null`。运行页沿用刷新间隔，即使没有新事件也更新；关闭自动刷新会冻结连接区域。旧 daemon 缺少字段时显示“当前版本未提供”；读取失败保留上次值并提示“更新失败”，不能把历史事件条数或读取失败解释成实时零连接。
+两端运行汇总 API v1 增量返回可选对象 `responsesWebSocketConnections`，包含 `total`、`awaitingFirstMessage`、`guardianAwaitingFirstMessage`、`connectingUpstream`、`relaying`、`oldestFirstMessageWaitMS` 与 `active` 连接明细（请求 ID、模型、阶段和开始时间）；无人等待时时长为 `null`。运行页沿用刷新间隔，即使没有新事件也更新；关闭自动刷新会冻结连接区域。旧 daemon 缺少字段时显示“当前版本未提供”；读取失败保留上次值并提示“更新失败”，不能把历史事件条数或读取失败解释成实时零连接。
 
-先区分 HTTP/SSE 请求和可复用的 Responses WebSocket 连接。HTTP 200、WebSocket 101 都不代表最终业务成功；`client_cancelled` 表示客户端侧断开或取消，不能仅凭它断言 Codex 主动停止，也可能涉及反代。WebSocket 的正常 Close 与异常断开分别记录；正常客户端 Close 记取消，正常上游 Close 记连接成功，异常 Close、EOF/RST 原则上仍记失败。
+先区分 HTTP/SSE 请求和可复用的 Responses WebSocket 连接。HTTP 200、WebSocket 101 都不代表最终业务成功；`client_cancelled` 表示客户端侧断开或取消，不能仅凭它断言 Codex 主动停止，也可能涉及反代。业务终态与连接终态分开判断：仅当本连接观察到的所有请求都有可关联的成功终态（`response.completed`/`response.done`），且所有已读上游正文帧均成功写向客户端时，后续异常 Close、EOF 或 RST 才不会改写业务成功，同时在 WebSocket trace 中保留 `abnormalClose`、`closedBy`、`relayError` 和 `transportErrorKind`；没有业务终态的断流仍记失败。已有可确认终态时按业务结果记账；没有终态的正常客户端 Close 记取消，上游正常 Close 也不能把仍未完成的请求记为成功。Sumpter 发现一侧无 Close 的 EOF/RST 后，会在另一侧已排队正文之后发送受控 1011 Close，避免把上游异常直接放大成下游无 closing handshake。
 
 Guardian 未使用预热连接是一个窄范围例外：仅在 Responses 客户端已升级、有明确且无冲突的 Guardian 标记、尚未收到首条业务消息且未连接上游时，正常 Close 或无 Close 的 EOF 记为 `cancelled`，消息为 `websocket_unused_guardian_connection_closed`。Linux/macOS 显示“Guardian 未使用连接已关闭（预热阶段，未发送业务请求）”；保留连接记录与请求总数，不增加成功或失败计数、不触发失败通知。EOF 仍保留 `abnormalClose=true`、`relayError=client_eof_without_close` 和 `transportErrorKind=eof_without_close`，不能据此断定客户端主动回收或网络正常。RST、异常 Close、无效首帧、服务停止、普通非 Guardian 连接及已发送业务帧后的断流仍保留原分类；`generate:false` 也是业务帧，不属于未使用连接。旧记录不追溯改写。
 
-WebSocket 诊断保留 `stage`、`firstMessageWaitMS`、`attemptCount` 与两侧握手状态；`relayError` 标明读写/控制 flush 位置，`transportErrorKind` 标明安全错误类型。`lastEventType` 只观察不超过 64 KiB 的上游业务帧中已知的事件类型；未知、过大或无效业务帧后留空。它不是响应完成的证明，更不能把复用连接最后一次异常算成此前每个响应均失败。`idleTimeoutMS` 只在配置的双向帧空闲截止触发时记录。
+WebSocket 诊断保留 `stage`、`firstMessageWaitMS`、`attemptCount` 与两侧握手状态；`relayError` 标明读写/控制 flush 位置，`transportErrorKind` 标明安全错误类型。`lastEventType` 只观察不超过 64 KiB 的上游业务帧中已知的事件类型；未知、过大或无效业务帧后留空。它不能单独证明响应完成；只有请求观察器完成关联并得到协议终态，才会覆盖连接层异常的失败归类。`idleTimeoutMS` 只在配置的双向帧空闲截止触发时记录，已确认业务完成后的空闲超时保留在连接诊断中，不撤销业务成功；有未完成或无法完整关联的请求时仍按失败处理。
 
 本地回归覆盖两端 adapter、大帧期间的心跳、协议帧透明转发、关闭和空闲超时；不证明真实 CPA/网络已修复。线上归因仍需同一请求与同时间的客户端、Sumpter、CPA 和反代日志。近月差异与剩余边界见 [Codex 流式兼容性审计](codex-streaming-audit.md)。

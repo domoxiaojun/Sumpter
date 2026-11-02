@@ -135,7 +135,7 @@ struct OverviewPane: View {
     private var runPersistedEvents: [RuntimeEvent] {
         let existing = RuntimeEvent.indexedByID(displayRuntime.recentEvents)
         if let page = model.runHistoryPage {
-            return page.events.map { $0.mergedRuntimeEvent(with: existing[$0.id]) }
+            return page.visibleEvents(recent: model.autoRefreshEnabled ? (model.runtimePage?.events ?? []) : []).map { $0.mergedRuntimeEvent(with: existing[$0.id]) }
         }
         return displayRuntime.recentEvents.filter { !$0.isInFlight }
     }
@@ -148,11 +148,29 @@ struct OverviewPane: View {
     }
 
     private var runLiveEvents: [RuntimeEvent] {
-        RuntimeEvent.liveOverlay(
+        var events = RuntimeEvent.liveOverlay(
             displayRuntime.recentEvents,
             excluding: Set(model.runHistoryPage?.events.map(\.id) ?? []),
             filter: RuntimeEventKindFilter(rawValue: model.runHistoryKindFilter) ?? .all
         )
+        let active = model.runtimeSummary?.responsesWebSocketConnections?.active ?? []
+        for connection in active {
+            let event = RuntimeEvent(
+                id: "websocket:\(connection.requestID)",
+                timestamp: Date(timeIntervalSinceReferenceDate: connection.startedAt),
+                kind: "client",
+                clientModel: connection.model,
+                transport: .websocket,
+                effectiveModel: connection.model,
+                statusCode: 101,
+                durationMS: 0,
+                streamTrace: StreamTrace(websocketTrace: WebSocketTrace(stage: connection.stage, handshakeStatus: connection.stage == "relay" ? 101 : nil)),
+                phase: .inFlight,
+                requestID: connection.requestID
+            )
+            if !events.contains(where: { $0.id == event.id }) { events.append(event) }
+        }
+        return events
     }
 
     private var statusPanel: some View {

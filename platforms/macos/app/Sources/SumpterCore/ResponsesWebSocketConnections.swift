@@ -1,5 +1,12 @@
 import Foundation
 
+public struct ActiveResponsesWebSocketConnection: Codable, Equatable, Sendable {
+    public let requestID: String
+    public let model: String
+    public let stage: String
+    public let startedAt: Double
+}
+
 public struct ResponsesWebSocketConnections: Codable, Equatable, Sendable {
     public let total: Int
     public let awaitingFirstMessage: Int
@@ -7,6 +14,7 @@ public struct ResponsesWebSocketConnections: Codable, Equatable, Sendable {
     public let connectingUpstream: Int
     public let relaying: Int
     public let oldestFirstMessageWaitMS: Int?
+    public let active: [ActiveResponsesWebSocketConnection]?
 }
 
 /// A failed refresh preserves the last observation; absence from a successful

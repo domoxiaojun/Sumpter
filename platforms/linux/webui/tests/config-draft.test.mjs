@@ -82,3 +82,9 @@ test('所有分页和导出 API 都传递完成水位', async () => {
     assert.equal(new URL(href, 'http://localhost').searchParams.get('snapshotChangeSeq'), '80');
   } finally { globalThis.fetch = previous; delete globalThis.document; }
 });
+
+test('a long request completing after a full page ranks by final time, not original seq', () => {
+  const page = Array.from({ length: 10 }, (_, i) => ({ id: `recent-${i}`, seq: 100 + i, timestamp: 100 + i, phase: 'completed' }));
+  const late = { id: 'long-request', seq: 1, timestamp: 200, changeSeq: 500, phase: 'completed' };
+  assert.equal(mergeCompletedPage(page, [late], 10)[0].id, late.id);
+});

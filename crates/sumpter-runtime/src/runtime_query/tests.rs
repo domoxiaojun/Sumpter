@@ -942,3 +942,46 @@ fn attribution_filters_match_variant_and_parent_chain_fields() {
     .unwrap();
     assert_eq!(page.total_count, 1);
 }
+
+#[test]
+fn event_page_keeps_late_completion_and_websocket_diagnostics() {
+    let mut connection = test_connection();
+    for seq in 1..=12 {
+        insert_endpoint_test_event(
+            &connection,
+            seq,
+            "client",
+            None,
+            "failed",
+            101,
+            None,
+            None,
+            None,
+            None,
+        );
+    }
+    connection.execute_batch(r#"
+        UPDATE runtime_events SET timestamp=seq;
+        UPDATE runtime_events SET timestamp=100,change_seq=100,completed_change_seq=100,
+        payload_json='{"transport":"websocket","message":"websocket relay","failureDetail":"websocket relay interrupted","streamTrace":{"websocketTrace":{"stage":"relay","closedBy":"upstream","transportErrorKind":"unexpected_eof","lastEventType":"response.completed"}}}'
+        WHERE seq=1;
+    "#).unwrap();
+    let page = events_page_on(&mut connection, &EventPageRequest::default()).unwrap();
+    assert_eq!(page.events.len(), 10);
+    assert_eq!(page.events[0].seq, 1);
+    let trace = page.events[0]
+        .stream_trace
+        .as_ref()
+        .unwrap()
+        .websocket_trace
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        trace.transport_error_kind.as_deref(),
+        Some("unexpected_eof")
+    );
+    assert_eq!(
+        page.events[0].failure_detail.as_deref(),
+        Some("websocket relay interrupted")
+    );
+}

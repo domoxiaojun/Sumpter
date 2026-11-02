@@ -3240,7 +3240,7 @@ fn cache_projection_detail_statistics_and_gemini_export_agree() {
             .unwrap();
     let hit = page.events.iter().find(|event| event.id == "hit").unwrap();
     assert!(hit.details_omitted);
-    assert!(hit.stream_trace.is_none());
+    assert!(hit.stream_trace.is_some());
     assert_eq!(hit.cache_read.state, CacheReadState::Hit);
     assert_eq!(hit.usage_summary.as_ref().unwrap().input_tokens, Some(100));
     assert_eq!(hit.session_id.as_deref(), Some("cache-session"));

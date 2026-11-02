@@ -199,6 +199,8 @@ test('DataTable 不用通用 display 覆盖渲染器布局，Provider 操作栏�
 
 test('Grok Build client kind uses its product label', () => {
   assert.equal(clientKindLabel('grok_build'), 'Grok Build');
+  assert.equal(clientKindLabel('deepseek_harness'), 'DeepSeek Harness');
+  assert.equal(clientKindLabel('workbuddy'), 'WorkBuddy');
 });
 
 

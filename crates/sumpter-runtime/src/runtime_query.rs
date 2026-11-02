@@ -1344,6 +1344,9 @@ struct ExportEventRow {
 /// available through `/runtime/events/{id}`.
 #[derive(Debug, sea_orm::FromQueryResult)]
 struct EventListProjection {
+    stream_trace_json: Option<String>,
+    failure_detail: Option<String>,
+    message: Option<String>,
     source_ip: Option<String>,
     hook_event: Option<String>,
     cache_read_state: Option<String>,
@@ -1511,9 +1514,12 @@ fn event_list_item_from_projection(row: EventListProjection) -> RuntimeEventList
         upstream_model: row.upstream_model,
         failure_kind: decode_projection_enum::<RuntimeFailureKind>(row.failure_kind),
         failure_phase: decode_projection_enum::<RuntimeFailurePhase>(row.failure_phase),
-        failure_detail: None,
-        message: None,
-        stream_trace: None,
+        failure_detail: row.failure_detail,
+        message: row.message,
+        stream_trace: row
+            .stream_trace_json
+            .as_deref()
+            .and_then(|raw| serde_json::from_str(raw).ok()),
         tool_calls: row
             .tool_calls_json
             .as_deref()

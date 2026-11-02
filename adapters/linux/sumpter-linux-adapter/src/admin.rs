@@ -1628,6 +1628,7 @@ mod tests {
             json!({
                 "total": 0, "awaitingFirstMessage": 0, "guardianAwaitingFirstMessage": 0,
                 "connectingUpstream": 0, "relaying": 0, "oldestFirstMessageWaitMS": null,
+                "active": [],
             })
         );
 

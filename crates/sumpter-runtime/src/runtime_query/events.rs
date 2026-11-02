@@ -81,8 +81,11 @@ pub fn events_page_on(
                 ,request_method,request_path,route_intent,model_group_id,model_group_name, \
                 cache_read_state,cache_read_finality,cache_read_reason,hook_event,input_tokens,output_tokens, \
                 cache_read_input_tokens,cache_creation_input_tokens,reasoning_tokens,tool_calls_json, \
-                CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.sourceIP') END AS source_ip \
-         FROM runtime_events{where_sql} ORDER BY seq DESC LIMIT ? OFFSET ?"
+                CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.sourceIP') END AS source_ip, \
+                CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.streamTrace') END AS stream_trace_json, \
+                CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.failureDetail') END AS failure_detail, \
+                CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.message') END AS message \
+         FROM runtime_events{where_sql} ORDER BY timestamp DESC, seq DESC LIMIT ? OFFSET ?"
     );
     let events = {
         let mut statement = transaction.prepare(&sql)?;

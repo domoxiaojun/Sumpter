@@ -934,6 +934,21 @@ public enum AdminWire {
         public let nextCursor: Int?
         public let previousCursor: Int?
         public let filters: RuntimeFilter
+
+        /// First page follows completions even before the writer commits them.
+        /// Older pages retain their stable membership.
+        func visibleEvents(recent: [RuntimeEventListItem]) -> [RuntimeEventListItem] {
+            guard page == 1 else { return events }
+            var byID = Dictionary(events.map { ($0.id, $0) }, uniquingKeysWith: { a, b in a.changeSeq >= b.changeSeq ? a : b })
+            for item in recent where item.phase != .inFlight
+                && (filters.kind == nil || filters.kind == item.kind)
+                && item.changeSeq > (snapshotChangeSeq ?? 0) {
+                if item.changeSeq >= (byID[item.id]?.changeSeq ?? -1) { byID[item.id] = item }
+            }
+            return Array(byID.values.sorted {
+                $0.timestamp == $1.timestamp ? $0.seq > $1.seq : $0.timestamp > $1.timestamp
+            }.prefix(pageSize))
+        }
     }
 
     public struct RuntimeRequestChain: Decodable, Equatable, Sendable {

@@ -182,6 +182,7 @@ extension AppModel {
     ) async {
         refreshRequestGeneration &+= 1
         let generation = refreshRequestGeneration
+        let eventsCursorAtStart = runtimeChangeSeq
         guard sidecar.isRunning, let admin else {
             todayInputTokens = nil
             todayOutputTokens = nil
@@ -281,9 +282,25 @@ extension AppModel {
                 failovers: counters.failovers,
                 recentEvents: summary.reconcilingInFlightEvents(in: mergedEvents)
             )
-            if runtime != snapshot { runtime = snapshot }
+            var reconciled = snapshot
+            if !resetGenerationChanged {
+                for item in runtimePage?.events ?? [] where item.changeSeq > eventsCursorAtStart {
+                    let event = item.mergedRuntimeEvent(with: existing[item.id])
+                    if let index = reconciled.recentEvents.firstIndex(where: { $0.id == item.id }) {
+                        reconciled.recentEvents[index] = event
+                    } else {
+                        reconciled.recentEvents.insert(event, at: 0)
+                    }
+                }
+            }
+            if runtime != reconciled { runtime = reconciled }
             if runtimeSummary != summary { runtimeSummary = summary }
-            if let page, runtimePage != page { runtimePage = page }
+            if let page, runtimePage != page {
+                let newer = resetGenerationChanged ? [] : (runtimePage?.events ?? []).filter { $0.changeSeq > eventsCursorAtStart }
+                var byID = Dictionary(page.events.map { ($0.id, $0) }, uniquingKeysWith: { a, b in a.changeSeq >= b.changeSeq ? a : b })
+                for item in newer where item.changeSeq > (byID[item.id]?.changeSeq ?? -1) { byID[item.id] = item }
+                runtimePage = AdminWire.RuntimeEventPage(events: byID.values.sorted { $0.seq > $1.seq }, hasMore: page.hasMore, resetGeneration: page.resetGeneration, cursorValid: page.cursorValid)
+            }
             if let page {
                 let pageCursor = page.events.map(\.changeSeq).max() ?? 0
                 runtimeChangeSeq = resetGenerationChanged ? pageCursor : max(runtimeChangeSeq, pageCursor)
@@ -301,6 +318,11 @@ extension AppModel {
 
         if reconcileEvents && autoRefreshEnabled && !loadLatestEvents {
             await reconcileRuntimeChanges(using: admin)
+        }
+        // SSE announces before SQLite commits. A quiet connection may have no
+        // later notice, so the normal polling cycle must advance page 1 too.
+        if autoRefreshEnabled, !statisticsVisible, runHistoryPage?.page == 1, !runHistoryLoading {
+            refreshRunHistory(resetSnapshot: true)
         }
         refreshTodayTokenUsageIfDue()
     }

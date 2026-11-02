@@ -70,6 +70,8 @@ pub(super) struct WebSocketRelayCounters {
     pub(super) bytes_received: AtomicU64,
     pub(super) client_message_count: AtomicU64,
     pub(super) upstream_message_count: AtomicU64,
+    observed_upstream_frames: AtomicU64,
+    delivered_upstream_frames: AtomicU64,
     pub(super) failed: AtomicBool,
     pub(super) abnormal_close: AtomicBool,
     client_closed: AtomicBool,
@@ -98,6 +100,7 @@ pub(super) struct WebSocketRelayMetrics {
     pub(super) idle_timeout_ms: Option<i64>,
     pub(super) abnormal_close: bool,
     pub(super) failed: bool,
+    pub(super) all_upstream_frames_delivered: bool,
     pub(super) latest_client_codex_metadata: Option<CodexMetadata>,
     pub(super) requests: sumpter_core::responses_observation::ResponsesRequestSummary,
     pub(super) duration_ms: i64,
@@ -140,7 +143,6 @@ struct RelayQueue {
 #[derive(Debug)]
 enum RelayData {
     Frame(WebSocketMessage),
-    End,
 }
 
 enum ControlWrite {
@@ -357,8 +359,20 @@ async fn relay_reader<R>(
                 let kind = next.and_then(Result::err).unwrap_or("eof_without_close");
                 counters.record_transport_error(peer.read_error(), peer.name(), kind);
                 // Deliver already-read frames before reporting a transport end.
-                // Otherwise a fast EOF can discard the final response chunk.
-                let _ = remote.data.send(RelayData::End).await;
+                // Otherwise a fast EOF can discard the final response chunk. A
+                // peer that disappears without a WebSocket Close must not make
+                // the other side observe a bare TCP EOF as well: enqueue a
+                // protocol close after all already-read payloads. The writer
+                // preserves queue order and cancels the relay after sending it.
+                let _ = remote
+                    .data
+                    .send(RelayData::Frame(WebSocketMessage::Close(Some(
+                        axum::extract::ws::CloseFrame {
+                            code: 1011,
+                            reason: "relay transport closed".into(),
+                        },
+                    ))))
+                    .await;
                 return;
             }
         };
@@ -435,7 +449,6 @@ async fn relay_writer<S>(
             Some(command) = control.recv() => command,
             Some(message) = data.recv() => match message {
                 RelayData::Frame(message) => ControlWrite::Frame(message),
-                RelayData::End => { cancellation.cancel(); return; }
             },
             else => return,
         };
@@ -475,6 +488,11 @@ async fn relay_writer<S>(
             return;
         }
         mark_activity(activity, is_business);
+        if is_business && matches!(peer, Peer::Client) {
+            counters
+                .delivered_upstream_frames
+                .fetch_add(1, Ordering::Relaxed);
+        }
         let (byte_counter, message_counter) = match peer {
             Peer::Client => (&counters.bytes_received, &counters.upstream_message_count),
             Peer::Upstream => (&counters.bytes_sent, &counters.client_message_count),
@@ -560,6 +578,8 @@ impl WebSocketRelayCounters {
         ) {
             return;
         }
+        self.observed_upstream_frames
+            .fetch_add(1, Ordering::Relaxed);
         *self.last_event_type.lock().unwrap() = None;
         let WebSocketMessage::Text(text) = message else {
             return;
@@ -646,6 +666,8 @@ impl WebSocketRelayCounters {
             idle_timeout_ms: *self.idle_timeout_ms.lock().unwrap(),
             abnormal_close: self.abnormal_close.load(Ordering::Acquire),
             failed: self.failed.load(Ordering::Acquire),
+            all_upstream_frames_delivered: self.observed_upstream_frames.load(Ordering::Relaxed)
+                == self.delivered_upstream_frames.load(Ordering::Relaxed),
             latest_client_codex_metadata: requests.latest_metadata.clone(),
             requests: requests.summary(),
             duration_ms: started.elapsed().as_millis().min(i64::MAX as u128) as i64,
@@ -1177,6 +1199,12 @@ mod relay_tests {
                     control.send(ControlWrite::Flush(None)).await.ok().unwrap();
                 }
                 let counters = WebSocketRelayCounters::default();
+                counters.observe_client_request(&WebSocketMessage::Text(
+                    r#"{"type":"response.create"}"#.into(),
+                ));
+                counters.observe_upstream_event(&WebSocketMessage::Text(
+                    r#"{"type":"response.completed"}"#.into(),
+                ));
                 let cancellation = tokio_util::sync::CancellationToken::new();
                 let (activity, _) = watch::channel(None);
                 relay_writer(
@@ -1212,6 +1240,11 @@ mod relay_tests {
                 );
                 assert_eq!(counters.bytes_sent.load(Ordering::Relaxed), 0);
                 assert_eq!(counters.bytes_received.load(Ordering::Relaxed), 0);
+                assert!(
+                    !counters
+                        .snapshot(Instant::now())
+                        .all_upstream_frames_delivered
+                );
             }
         }
     }

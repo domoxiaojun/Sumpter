@@ -24,3 +24,12 @@ test('a completed page event wins over an earlier live snapshot, and old servers
   assert.deepEqual(reconcileInFlightEvents([completed], [live]), [completed]);
   assert.deepEqual(reconcileInFlightEvents([live], undefined), [live]);
 });
+
+test('a delayed summary cannot erase progress or completion received during refresh', async () => {
+  const { reconcileRuntimeRefresh } = await import('../src/utils/runtimeSync.js');
+  const live = { id: 'live', phase: 'inFlight', kind: 'client', changeSeq: 11 };
+  const completed = { id: 'done', phase: 'completed', kind: 'client', changeSeq: 12 };
+  const result = reconcileRuntimeRefresh([], [], [live, completed], 10);
+  assert.deepEqual(new Set(result.map(event => event.id)), new Set(['live', 'done']));
+  assert.deepEqual(reconcileRuntimeRefresh([], [], [live, completed], 12), []);
+});

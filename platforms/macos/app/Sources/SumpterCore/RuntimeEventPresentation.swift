@@ -335,6 +335,19 @@ public enum RuntimeEventPresentation {
         return parts.joined(separator: " · ")
     }
 
+    public static func websocketFailureMessage(_ trace: WebSocketTrace) -> String {
+        guard let kind = trace.transportErrorKind else {
+            return "WebSocket 连接异常结束（不代表每次响应均失败）"
+        }
+        let sides = ["client": "客户端侧连接", "upstream": "上游侧连接", "server": "代理服务"]
+        let reasons = ["eof_without_close": "未完成关闭握手即断开", "unexpected_eof": "传输意外结束", "connection_reset": "连接被重置", "connection_aborted": "连接被中止", "broken_pipe": "写入时连接已断开", "protocol_error": "WebSocket 协议错误", "tls_error": "TLS 连接错误", "timed_out": "传输超时", "abnormal_close": "异常关闭码"]
+        let code = trace.closedBy == "client" ? trace.clientCloseCode : trace.upstreamCloseCode
+        return "\(sides[trace.closedBy ?? ""] ?? "WebSocket 连接")：\(reasons[kind] ?? kind)"
+            + (code.map { "（\($0)）" } ?? "")
+            + (trace.lastEventType.map { " · 最近事件 \($0)" } ?? "")
+            + "（连接结果不代表每次响应结果）"
+    }
+
     public static func friendlyMessage(
         kind: String,
         statusCode: Int,
@@ -349,6 +362,9 @@ public enum RuntimeEventPresentation {
         streamTrace: StreamTrace? = nil
     ) -> String {
         let effectiveStatusCode = statusCode
+        if phase == .inFlight, let trace = streamTrace?.websocketTrace {
+            return ["awaiting_first_message": "WebSocket 等待首条业务消息", "upstream_handshake": "WebSocket 连接上游中", "relay": "WebSocket 连接转发中（不代表模型正在生成）"][trace.stage ?? ""] ?? "WebSocket 连接中"
+        }
         if outcome == .cancelled || failureKind == .clientCancelled {
             if streamTrace?.websocketTrace?.stage == "awaiting_first_message", message == "websocket_unused_prewarm_connection_closed" {
                 return "预热连接已关闭（未发送业务请求）"
@@ -371,8 +387,11 @@ public enum RuntimeEventPresentation {
         if let trace = streamTrace?.websocketTrace, trace.stage == "relay" {
             if trace.relayError == "server_shutdown" { return "代理停止，WebSocket 连接已结束" }
             if failureKind == .streamIdleTimeout { return "WebSocket 双向帧空闲超时" }
-            if outcome == .failed { return "WebSocket 连接异常结束（不代表每次响应均失败）" }
-            if outcome == .succeeded { return "WebSocket 连接正常结束" }
+            if outcome == .failed { return websocketFailureMessage(trace) }
+            if outcome == .succeeded {
+                return trace.abnormalClose == true || trace.transportErrorKind != nil
+                    ? "响应已完成；\(websocketFailureMessage(trace))" : "WebSocket 连接正常结束"
+            }
         }
         // The user-facing explanation follows the recorded lifecycle result.
         // Protocol tokens and free-form engine notes stay in the diagnostic

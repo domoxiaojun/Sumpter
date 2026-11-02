@@ -1125,6 +1125,8 @@ export function clientKindLabel(kind) {
     ollama: 'Ollama',
     lm_studio: 'LM Studio',
     chatbox: 'Chatbox',
+    deepseek_harness: 'DeepSeek Harness',
+    workbuddy: 'WorkBuddy',
     pi: 'pi',
     gemini_cli: 'Gemini CLI',
     openai_compat: 'OpenAI 兼容客户端',
@@ -1405,6 +1407,17 @@ export function formatStreamTrace(trace, { durationMS = null, inFlight = false }
   return parts.join(' · ');
 }
 
+export function websocketFailureMessage(trace) {
+  const side = trace.closedBy ?? trace.closed_by;
+  const sides = { client: '客户端侧连接', upstream: '上游侧连接', server: '代理服务' };
+  const kind = trace.transportErrorKind ?? trace.transport_error_kind;
+  const reasons = { eof_without_close: '未完成关闭握手即断开', unexpected_eof: '传输意外结束', connection_reset: '连接被重置', connection_aborted: '连接被中止', broken_pipe: '写入时连接已断开', protocol_error: 'WebSocket 协议错误', tls_error: 'TLS 连接错误', timed_out: '传输超时', abnormal_close: '异常关闭码' };
+  if (!kind) return 'WebSocket 连接异常结束（不代表每次响应均失败）';
+  const code = side === 'client' ? trace.clientCloseCode : trace.upstreamCloseCode;
+  const last = trace.lastEventType ?? trace.last_event_type;
+  return `${sides[side] || 'WebSocket 连接'}：${reasons[kind] || kind}${code == null ? '' : `（${code}）`}${last ? ` · 最近事件 ${last}` : ''}（连接结果不代表每次响应结果）`;
+}
+
 export function friendlyEventMessage(event) {
   if (!event) return '';
   if (cleanText(event.kind).toLowerCase() === 'notify') {
@@ -1417,6 +1430,8 @@ export function friendlyEventMessage(event) {
   const message = eventMessage(event);
   const failureDetail = eventFailureDetail(event);
   if (phase === 'inFlight' || eventIsInFlight(event)) {
+    const ws = eventStreamTrace(event)?.websocketTrace;
+    if (ws) return ({ awaiting_first_message: 'WebSocket 等待首条业务消息', upstream_handshake: 'WebSocket 连接上游中', relay: 'WebSocket 连接转发中（不代表模型正在生成）' })[ws.stage] || 'WebSocket 连接中';
     if (!statusCode) return '等待响应';
     return eventStreamTrace(event) ? '流式输出中' : '接收响应中';
   }
@@ -1441,8 +1456,9 @@ export function friendlyEventMessage(event) {
   if (websocket?.stage === 'relay') {
     if ((websocket.relayError ?? websocket.relay_error) === 'server_shutdown') return '代理停止，WebSocket 连接已结束';
     if (failureKind === 'stream_idle_timeout') return 'WebSocket 双向帧空闲超时';
-    if (outcome === 'failed') return 'WebSocket 连接异常结束（不代表每次响应均失败）';
-    if (outcome === 'succeeded') return 'WebSocket 连接正常结束';
+    if (outcome === 'failed') return websocketFailureMessage(websocket);
+    if (outcome === 'succeeded') return websocket.abnormalClose || websocket.transportErrorKind
+      ? `响应已完成；${websocketFailureMessage(websocket)}` : 'WebSocket 连接正常结束';
   }
   // A successful request is described by its recorded lifecycle result. The
   // engine message may contain routing tokens (passthrough/bridge) or other

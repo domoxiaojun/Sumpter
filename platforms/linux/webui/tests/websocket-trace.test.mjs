@@ -22,6 +22,7 @@ test('connection outcomes do not imply every response failed or deliberate user 
   const event = { kind: 'client', statusCode: 101, phase: 'completed', streamTrace: { websocketTrace: { stage: 'relay', closedBy: 'upstream' } } };
   assert.equal(friendlyEventMessage({ ...event, outcome: 'succeeded' }), 'WebSocket 连接正常结束');
   assert.equal(friendlyEventMessage({ ...event, outcome: 'failed' }), 'WebSocket 连接异常结束（不代表每次响应均失败）');
+  assert.match(friendlyEventMessage({ ...event, outcome: 'succeeded', streamTrace: { websocketTrace: { stage: 'relay', transportErrorKind: 'eof_without_close', lastEventType: 'response.completed' } } }), /^响应已完成；/);
   assert.equal(friendlyEventMessage({ ...event, outcome: 'failed', failureKind: 'stream_idle_timeout' }), 'WebSocket 双向帧空闲超时');
   assert.equal(friendlyEventMessage({ ...event, outcome: 'cancelled', streamTrace: { websocketTrace: { stage: 'relay', closedBy: 'client' } } }), '客户端侧 WebSocket 连接关闭（可能经过反代）');
   assert.equal(friendlyEventMessage({ outcome: 'cancelled', statusCode: 200 }), '客户端断开或取消请求');
@@ -39,4 +40,11 @@ test('unused Guardian sockets keep transport evidence without claiming a failed 
   assert.equal(friendlyEventMessage({ ...event, message: 'client_closed_before_first_message' }), '客户端侧 WebSocket 连接关闭（可能经过反代）');
   assert.equal(friendlyEventMessage({ ...event, outcome: 'failed' }), '首条业务消息前 WebSocket 异常断开');
   assert.equal(friendlyEventMessage({ ...event, streamTrace: { websocketTrace: { ...trace, stage: 'relay' } } }), '客户端侧 WebSocket 连接关闭（可能经过反代）');
+});
+
+test('WebSocket progress and failures show observed stages and transport direction', () => {
+  const event = { kind: 'client', statusCode: 101, phase: 'inFlight', streamTrace: { websocketTrace: { stage: 'relay' } } };
+  assert.equal(friendlyEventMessage(event), 'WebSocket 连接转发中（不代表模型正在生成）');
+  const failed = { ...event, phase: 'completed', outcome: 'failed', streamTrace: { websocketTrace: { stage: 'relay', closedBy: 'upstream', transportErrorKind: 'unexpected_eof', lastEventType: 'response.completed' } } };
+  assert.equal(friendlyEventMessage(failed), '上游侧连接：传输意外结束 · 最近事件 response.completed（连接结果不代表每次响应结果）');
 });

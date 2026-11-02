@@ -90,6 +90,7 @@ async fn completed(notices: &mut tokio::sync::broadcast::Receiver<EngineNotice>)
         loop {
             if let EngineNotice::Event(event) = notices.recv().await.unwrap()
                 && event.kind == "client"
+                && !event.is_in_flight()
             {
                 return event;
             }
@@ -430,16 +431,19 @@ async fn assert_guardian_pool_lifecycle(case: &'static str) {
         active.next().await.unwrap().unwrap(),
         Message::Text(response.into())
     );
-    live_connections(&engine, 0, 0, 0, 1).await;
+    let live = live_connections(&engine, 0, 0, 0, 1).await;
+    assert_eq!(live["active"][0]["model"], "gpt-4o");
     release.send(()).unwrap();
     let _ = active.next().await;
     let event = completed(&mut notices).await;
     live_connections(&engine, 0, 0, 0, 0).await;
     assert!(ids.insert(event.id));
-    let normal = case == "normal";
+    // A completed prewarm response remains a business success even when the
+    // provider drops the transport immediately after the terminal frame.
+    let completed = matches!(case, "normal" | "completed_eof");
     assert_eq!(
         event.outcome,
-        Some(if normal {
+        Some(if completed {
             RuntimeEventOutcome::Succeeded
         } else {
             RuntimeEventOutcome::Failed
@@ -447,7 +451,7 @@ async fn assert_guardian_pool_lifecycle(case: &'static str) {
     );
     assert_eq!(
         event.failure_kind,
-        if normal {
+        if completed {
             None
         } else {
             Some(RuntimeFailureKind::StreamInterrupted)
@@ -459,8 +463,8 @@ async fn assert_guardian_pool_lifecycle(case: &'static str) {
     assert_eq!(trace.client_message_count, Some(1));
     let runtime = engine.runtime_snapshot();
     assert_eq!(runtime.client_requests, 8);
-    assert_eq!(runtime.client_successes, i64::from(normal));
-    assert_eq!(runtime.client_failures, i64::from(!normal));
+    assert_eq!(runtime.client_successes, i64::from(completed));
+    assert_eq!(runtime.client_failures, i64::from(!completed));
     assert_eq!(runtime.upstream_attempts, 1);
     assert_eq!(runtime.recent_events.len(), 9);
     let capture = engine.diagnostic_capture_snapshot();

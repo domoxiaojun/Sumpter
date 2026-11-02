@@ -203,6 +203,12 @@ pub enum ClientKind {
     Ollama,
     LmStudio,
     Chatbox,
+    /// DeepSeek Harness 官方出站身份(`deepseek-harness/<version> ...`)。
+    #[serde(rename = "deepseek_harness")]
+    DeepSeekHarness,
+    /// WorkBuddy 官方客户端身份(`WorkBuddy/<version> ...`)。
+    #[serde(rename = "workbuddy")]
+    WorkBuddy,
     /// 经 OpenAI 兼容层入站但 UA 不是已知客户端。
     OpenaiCompat,
     /// Anthropic 入站且 UA 不是已知客户端(含缺 UA)。
@@ -231,6 +237,8 @@ impl ClientKind {
             Self::Ollama => "ollama",
             Self::LmStudio => "lm_studio",
             Self::Chatbox => "chatbox",
+            Self::DeepSeekHarness => "deepseek_harness",
+            Self::WorkBuddy => "workbuddy",
             Self::OpenaiCompat => "openai_compat",
             Self::Unknown => "unknown",
         }
@@ -358,6 +366,15 @@ fn detect_known_agent_user_agent(value: &str) -> Option<ClientKind> {
     }
     if starts_with(&["chatbox/"]) {
         return Some(ClientKind::Chatbox);
+    }
+    // DeepSeek Harness 官方 LLM attribution: `deepseek-harness/<version> (+url)`.
+    if starts_with(&["deepseek-harness/"]) {
+        return Some(ClientKind::DeepSeekHarness);
+    }
+    // WorkBuddy 常见桌面端形态以 `WorkBuddy/<version>` 开头;部分 CLI
+    // 请求把 `CLI/<version>` 放在最前,但仍带有明确的 `WorkBuddy AI/<version>` 段。
+    if starts_with(&["workbuddy/"]) || (starts_with(&["cli/"]) && value.contains("workbuddy ai/")) {
+        return Some(ClientKind::WorkBuddy);
     }
     None
 }
@@ -3157,6 +3174,8 @@ impl RuntimeEvent {
                 | ClientKind::Ollama
                 | ClientKind::LmStudio
                 | ClientKind::Chatbox
+                | ClientKind::DeepSeekHarness
+                | ClientKind::WorkBuddy
                 | ClientKind::Pi,
             ) => "cli",
             Some(ClientKind::OpenaiCompat | ClientKind::Unknown) | None => "unknown",
@@ -3664,6 +3683,19 @@ mod tests {
             ("Ollama/0.12.0", ClientKind::Ollama),
             ("LM-Studio/0.3.0", ClientKind::LmStudio),
             ("Chatbox/1.20.0", ClientKind::Chatbox),
+            (
+                "deepseek-harness/0.2.2-alpha.2 (+https://github.com/deepseek-ai/deepseek-harness)",
+                ClientKind::DeepSeekHarness,
+            ),
+            (
+                "WorkBuddy/5.5.6 WorkBuddy AI/5.5.6 CLI/5.5.6",
+                ClientKind::WorkBuddy,
+            ),
+            (
+                "WorkBuddy/5.5.6 WorkBuddy/5.5.6 CLI/5.5.6",
+                ClientKind::WorkBuddy,
+            ),
+            ("CLI/2.137.1 WorkBuddy AI/2.137.1", ClientKind::WorkBuddy),
         ] {
             assert_eq!(
                 ClientKind::detect(Some(ua), true),
@@ -3789,6 +3821,8 @@ mod tests {
             (ClientKind::Ollama, "ollama"),
             (ClientKind::LmStudio, "lm_studio"),
             (ClientKind::Chatbox, "chatbox"),
+            (ClientKind::DeepSeekHarness, "deepseek_harness"),
+            (ClientKind::WorkBuddy, "workbuddy"),
             (ClientKind::OpenaiCompat, "openai_compat"),
             (ClientKind::Unknown, "unknown"),
         ] {

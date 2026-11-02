@@ -7,7 +7,9 @@ use std::time::Instant;
 use serde::Serialize;
 
 use super::Engine;
+use super::state::now_unix;
 use super::websocket_relay::WebSocketEventContext;
+use sumpter_core::events::unix_to_apple_epoch;
 
 #[derive(Clone, Copy)]
 pub(super) enum ConnectionStage {
@@ -20,9 +22,21 @@ pub(super) struct ConnectionEntry {
     stage: ConnectionStage,
     guardian: bool,
     started: Instant,
+    started_at: i64,
+    model: String,
 }
 
 pub(super) type ConnectionRegistry = Mutex<HashMap<String, ConnectionEntry>>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ActiveResponsesWebSocketConnection {
+    #[serde(rename = "requestID")]
+    request_id: String,
+    model: String,
+    stage: &'static str,
+    started_at: i64,
+}
 
 #[derive(Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -34,6 +48,7 @@ pub(super) struct ResponsesWebSocketConnections {
     relaying: usize,
     #[serde(rename = "oldestFirstMessageWaitMS")]
     oldest_first_message_wait_ms: Option<i64>,
+    active: Vec<ActiveResponsesWebSocketConnection>,
 }
 
 pub(super) fn is_explicit_guardian(context: &WebSocketEventContext) -> bool {
@@ -67,6 +82,18 @@ pub(super) struct ConnectionGuard {
 }
 
 impl ConnectionGuard {
+    pub(super) fn set_model(&self, model: &str) {
+        let mut connections = self
+            .engine
+            .inner
+            .responses_websocket_connections
+            .lock()
+            .unwrap();
+        if let Some(entry) = connections.get_mut(&self.id) {
+            entry.model = model.to_owned();
+        }
+    }
+
     pub(super) fn set_stage(&self, stage: ConnectionStage) {
         let mut connections = self
             .engine
@@ -107,6 +134,8 @@ impl Engine {
                     stage,
                     guardian: is_explicit_guardian(context),
                     started: context.started,
+                    started_at: unix_to_apple_epoch(now_unix()) as i64,
+                    model: context.model.clone(),
                 },
             );
         ConnectionGuard {
@@ -122,7 +151,18 @@ impl Engine {
             total: connections.len(),
             ..Default::default()
         };
-        for entry in connections.values() {
+        for (id, entry) in connections.iter() {
+            let stage = match entry.stage {
+                ConnectionStage::AwaitingFirstMessage => "awaiting_first_message",
+                ConnectionStage::ConnectingUpstream => "upstream_handshake",
+                ConnectionStage::Relaying => "relay",
+            };
+            summary.active.push(ActiveResponsesWebSocketConnection {
+                request_id: id.clone(),
+                model: entry.model.clone(),
+                stage,
+                started_at: entry.started_at,
+            });
             match entry.stage {
                 ConnectionStage::AwaitingFirstMessage => {
                     summary.awaiting_first_message += 1;
