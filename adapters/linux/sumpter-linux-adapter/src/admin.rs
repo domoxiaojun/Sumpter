@@ -669,7 +669,10 @@ pub fn admin_router(state: AdminState) -> Router {
 
     let api = Router::new()
         .route("/auth/session", get(auth_session))
-        .route("/auth/login", post(auth_login))
+        .route(
+            "/auth/login",
+            post(auth_login).layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024)),
+        )
         .merge(protected_api);
 
     let mut router = Router::new().nest("/admin/api", api);
@@ -683,8 +686,8 @@ pub fn admin_router(state: AdminState) -> Router {
             );
     }
     router
-        .layer(axum::extract::DefaultBodyLimit::disable())
         .layer(axum::middleware::from_fn(admin_security_headers))
+        .layer(axum::extract::DefaultBodyLimit::max(128 * 1024 * 1024))
         .route("/healthz", get(|| async { StatusCode::NO_CONTENT }))
         .with_state(state)
 }
@@ -1194,7 +1197,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn request_size_admin_accepts_body_above_previous_limit() {
+    async fn request_size_admin_accepts_large_authenticated_body() {
         let engine = Engine::new(
             AppConfig::bootstrap().normalized(),
             None,

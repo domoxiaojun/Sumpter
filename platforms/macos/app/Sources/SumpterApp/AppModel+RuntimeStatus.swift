@@ -80,6 +80,8 @@ extension AppModel {
                 await predecessor.value
             }
             guard let self else { return }
+            self.configWriteInFlight = true
+            defer { self.configWriteInFlight = false }
             if self.store == nil {
                 let url = try SumpterPaths.configURL()
                 self.store = ConfigStore(url: url)

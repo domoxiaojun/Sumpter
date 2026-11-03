@@ -13,7 +13,35 @@ use crate::outbound::UpstreamResponse;
 use std::sync::Arc;
 use sumpter_core::request_policy::{RequestPolicy, StreamProtection};
 
-/// Background Responses must not enter transparent replay.
+/// Only client-executed tools and known read-only provider tools can be replayed.
+/// Unknown provider tools are conservative: buffering cannot undo their effects.
+fn replay_safe_tool_kind(kind: Option<&str>) -> bool {
+    matches!(
+        kind,
+        None | Some(
+            "function"
+                | "custom"
+                | "file_search"
+                | "web_search"
+                | "web_search_preview"
+                | "web_search_20250305"
+                | "web_search_20260209"
+        )
+    )
+}
+
+pub(super) fn value_allows_retry(body: &serde_json::Map<String, serde_json::Value>) -> bool {
+    body.get("background").and_then(serde_json::Value::as_bool) != Some(true)
+        && body.get("tools").is_none_or(|tools| {
+            tools.as_array().is_some_and(|tools| {
+                tools.iter().all(|tool| {
+                    replay_safe_tool_kind(tool.get("type").and_then(serde_json::Value::as_str))
+                })
+            })
+        })
+}
+
+/// Background work and provider-side mutations must not enter transparent replay.
 pub(super) fn request_allows_retry(body: &[u8]) -> bool {
     // Read this from the original body: the small routing projection omits
     // background. Ignore other fields without cloning the conversation.
@@ -21,8 +49,21 @@ pub(super) fn request_allows_retry(body: &[u8]) -> bool {
     struct Metadata {
         #[serde(default)]
         background: bool,
+        #[serde(default)]
+        tools: Vec<Tool>,
     }
-    serde_json::from_slice::<Metadata>(body).is_ok_and(|metadata| !metadata.background)
+    #[derive(serde::Deserialize)]
+    struct Tool {
+        #[serde(rename = "type")]
+        kind: Option<String>,
+    }
+    serde_json::from_slice::<Metadata>(body).is_ok_and(|metadata| {
+        !metadata.background
+            && metadata
+                .tools
+                .iter()
+                .all(|tool| replay_safe_tool_kind(tool.kind.as_deref()))
+    })
 }
 
 pub(super) struct ProbedResponse {

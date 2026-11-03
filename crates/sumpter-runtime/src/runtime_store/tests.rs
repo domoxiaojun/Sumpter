@@ -3335,7 +3335,7 @@ fn output_generation_speed_matches_across_raw_scan_and_hourly_rollup() {
     let dir = test_dir("output-generation-speed");
     let path = dir.join("runtime.sqlite3");
     let (store, _) = RuntimeStore::new(&path).unwrap();
-    let bucket = 1_700_000_000_i64 / 3_600 * 3_600;
+    let bucket = 700_000_000_i64 / 3_600 * 3_600;
     let timestamp = bucket as f64 + 30.0;
 
     let mut fast = event(
@@ -3346,7 +3346,9 @@ fn output_generation_speed_matches_across_raw_scan_and_hourly_rollup() {
         Some(RuntimeEventOutcome::Succeeded),
         timestamp,
     );
-    fast.duration_ms = 1_100;
+    // Keep client-visible timing different from the final upstream attempt so
+    // every stats surface must use the same upstream generation window.
+    fast.duration_ms = 11_100;
     fast.ttfb_ms = Some(100);
     fast.upstream_duration_ms = Some(1_100);
     fast.upstream_ttfb_ms = Some(100);
@@ -3441,7 +3443,25 @@ fn output_generation_speed_matches_across_raw_scan_and_hourly_rollup() {
     }))
     .ok();
 
-    for value in [fast, slow, zero, probe, upstream, missing_ttfb] {
+    let mut failed = event(
+        "speed-failed",
+        KIND_CLIENT,
+        502,
+        RuntimeEventPhase::Completed,
+        Some(RuntimeEventOutcome::Failed),
+        timestamp + 6.0,
+    );
+    failed.duration_ms = 10_100;
+    failed.ttfb_ms = Some(100);
+    failed.upstream_duration_ms = Some(1_100);
+    failed.upstream_ttfb_ms = Some(100);
+    failed.effective_model = Some("speed-model".into());
+    failed.stream_trace = serde_json::from_value(json!({
+        "usage": {"outputTokens": 10_000}
+    }))
+    .ok();
+
+    for value in [fast, slow, zero, probe, upstream, missing_ttfb, failed] {
         store.enqueue(value, RuntimeCounters::default()).unwrap();
     }
     store.flush().unwrap();
@@ -3506,6 +3526,22 @@ fn output_generation_speed_matches_across_raw_scan_and_hourly_rollup() {
     // 200 output tokens over 1s + 9s + 2s.
     assert!((rollup_rate - (200.0 / 12.0)).abs() < 1e-9);
     assert!((raw_rate - rollup_rate).abs() < 1e-9);
+
+    let analytics = crate::runtime_query::analytics(
+        &path,
+        "all",
+        &crate::runtime_query::RuntimeFilter::default(),
+    )
+    .unwrap();
+    assert_eq!(analytics.output_speed_requests, 3);
+    assert!((analytics.output_tokens_per_second.unwrap() - rollup_rate).abs() < 1e-9);
+    let model = analytics
+        .models
+        .iter()
+        .find(|row| row.name == "speed-model")
+        .unwrap();
+    assert_eq!(model.output_speed_requests, 3);
+    assert!((model.output_tokens_per_second.unwrap() - rollup_rate).abs() < 1e-9);
 
     let mut other = event(
         "speed-other-model",

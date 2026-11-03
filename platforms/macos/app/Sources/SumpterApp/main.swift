@@ -540,6 +540,11 @@ final class AppModel: ObservableObject {
     /// network tasks.  Serialize the persistence/reload pipeline so a slower
     /// write cannot overwrite a newer endpoint/catalog edit.
     var configPersistenceTail: Task<Void, Never>?
+    /// A daemon config event can arrive while a local draft is awaiting the
+    /// serialized save pipeline. Do not replace that draft with disk contents;
+    /// the save will either commit against the captured generation or return a
+    /// generation conflict for an explicit retry.
+    var configWriteInFlight = false
     /// 每次 sidecar 重启都换一个连接代次，旧 admin 请求即使晚返回也不能回写新 UI。
     var adminConnectionGeneration = 0
     /// SSE 事件到达后的计数刷新防抖(事件本身即时上屏,计数合并成 1 秒 1 次)。

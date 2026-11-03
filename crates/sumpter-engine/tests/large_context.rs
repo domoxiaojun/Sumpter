@@ -50,7 +50,7 @@ async fn run(engine: &Engine, path: &str, body: Bytes) -> (u16, Bytes) {
 
 #[tokio::test]
 async fn native_responses_share_large_unchanged_body_across_failover_and_capture() {
-    assert_eq!(MAX_BODY_BYTES, usize::MAX);
+    assert_eq!(MAX_BODY_BYTES, 128 * 1024 * 1024);
     let payload = json!({"model":"test","input":[
         {"role":"user","content":[{"type":"input_text","text":"word ".repeat(700_000)},
             {"type":"input_image","image_url":format!("data:image/png;base64,{}","AAAA".repeat(2*1024*1024))}]},

@@ -108,8 +108,11 @@ pub fn header_pairs(headers: &HeaderMap) -> Vec<(String, String)> {
         .collect()
 }
 
-/// 保留兼容常量；请求体不设置产品级大小上限，实际容量受可用内存约束。
-pub const MAX_BODY_BYTES: usize = usize::MAX;
+/// Bounded request bodies keep parsing and protocol conversion from becoming
+/// an unaccounted memory allocation. Large contexts can still use 64 MiB;
+/// callers exceeding it receive a deterministic 413 before JSON conversion.
+pub const MAX_BODY_BYTES: usize = 128 * 1024 * 1024;
+const MAX_DECOMPRESSED_BODY_BYTES: usize = MAX_BODY_BYTES;
 /// Gemini 入站的公共约束:必须 POST、凭据不能走 query、流式必须 `alt=sse`。
 /// 会话与辅助操作共用,避免两条路径的判定漂移。
 fn gemini_request_error(method: &str, path_and_query: &str) -> Option<(i64, &'static str)> {
@@ -371,22 +374,10 @@ impl Engine {
             );
         }
 
-        if !path.starts_with("/__") && self.runtime_storage_backpressured() {
-            self.record_rejected_client_with_metadata(
-                503,
-                "runtime_storage_backpressure",
-                None,
-                Some(RequestPurpose::Standard),
-                detect_client_kind(&headers, true),
-                CodexMetadata::from_request(&headers, None),
-                ClientDeclaredMetadata::from_headers(&headers),
-                Some(ProviderProtocol::OpenAI),
-            );
-            return error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                &[("error", "runtime_storage_backpressure")],
-            );
-        }
+        // Runtime persistence is an observability sink. Its bounded queue may
+        // reject new event writes under disk pressure, but that must not take
+        // the data plane down. The runtime status/API exposes the degraded
+        // state and the event path emits a zero cursor so clients resync.
 
         // Validate CPA's call-resource grammar before the dynamic Realtime
         // dispatcher can mistake a malformed child for a standard Realtime
@@ -513,8 +504,9 @@ impl Engine {
                     });
                 }
                 Err(message) => {
+                    let status = inbound_body_status(message);
                     self.record_rejected_client_with_metadata(
-                        400,
+                        status.as_u16() as i64,
                         message,
                         None,
                         None,
@@ -529,7 +521,7 @@ impl Engine {
                             ProviderProtocol::OpenAIResponses
                         }),
                     );
-                    return error_response(StatusCode::BAD_REQUEST, &[("error", message)]);
+                    return error_response(status, &[("error", inbound_body_error_code(message))]);
                 }
             }
         }
@@ -839,8 +831,9 @@ impl Engine {
             Ok(body) => body,
             Err(error) => {
                 let message = error.to_string();
+                let status = inbound_body_status(&message);
                 self.record_rejected_client_with_metadata(
-                    400,
+                    status.as_u16() as i64,
                     &message,
                     None,
                     None,
@@ -850,8 +843,11 @@ impl Engine {
                     Some(ProviderProtocol::Anthropic),
                 );
                 return error_response(
-                    StatusCode::BAD_REQUEST,
-                    &[("error", "bad_request"), ("message", &message)],
+                    status,
+                    &[
+                        ("error", inbound_body_error_code(&message)),
+                        ("message", &message),
+                    ],
                 );
             }
         };
@@ -1002,8 +998,9 @@ impl Engine {
             Ok(body) => body,
             Err(error) => {
                 let message = error.to_string();
+                let status = inbound_body_status(&message);
                 self.record_rejected_client_with_metadata(
-                    400,
+                    status.as_u16() as i64,
                     &message,
                     None,
                     request_purpose,
@@ -1013,8 +1010,11 @@ impl Engine {
                     Some(source_format),
                 );
                 return error_response(
-                    StatusCode::BAD_REQUEST,
-                    &[("error", "bad_request"), ("message", &message)],
+                    status,
+                    &[
+                        ("error", inbound_body_error_code(&message)),
+                        ("message", &message),
+                    ],
                 );
             }
         };
@@ -1241,8 +1241,9 @@ impl Engine {
             Ok(body) => body,
             Err(error) => {
                 let message = error.to_string();
+                let status = inbound_body_status(&message);
                 self.record_rejected_client_with_metadata(
-                    400,
+                    status.as_u16() as i64,
                     &message,
                     None,
                     Some(purpose),
@@ -1252,8 +1253,11 @@ impl Engine {
                     Some(source_format),
                 );
                 return error_response(
-                    StatusCode::BAD_REQUEST,
-                    &[("error", "bad_request"), ("message", &message)],
+                    status,
+                    &[
+                        ("error", inbound_body_error_code(&message)),
+                        ("message", &message),
+                    ],
                 );
             }
         };
@@ -1707,7 +1711,7 @@ impl Engine {
 // Error strings never include request bytes or arbitrary header values.
 fn decode_inference_body(raw: &[u8], encoding: &str) -> Result<Vec<u8>, &'static str> {
     use std::io::Read;
-    let mut decoder: Box<dyn Read + '_> = match encoding.trim().to_ascii_lowercase().as_str() {
+    let decoder: Box<dyn Read + '_> = match encoding.trim().to_ascii_lowercase().as_str() {
         "zstd" => {
             Box::new(zstd::stream::read::Decoder::new(raw).map_err(|_| "invalid_zstd_request")?)
         }
@@ -1715,9 +1719,13 @@ fn decode_inference_body(raw: &[u8], encoding: &str) -> Result<Vec<u8>, &'static
         _ => return Err("unsupported_request_content_encoding"),
     };
     let mut decoded = Vec::new();
-    decoder
+    let mut limited = decoder.take((MAX_DECOMPRESSED_BODY_BYTES + 1) as u64);
+    limited
         .read_to_end(&mut decoded)
         .map_err(|_| "invalid_compressed_request")?;
+    if decoded.len() > MAX_DECOMPRESSED_BODY_BYTES {
+        return Err("request_body_too_large");
+    }
     Ok(decoded)
 }
 
@@ -1728,6 +1736,33 @@ async fn read_inbound_body(body: Body) -> Result<bytes::Bytes, axum::Error> {
         timer.set_bytes(bytes.len());
     }
     result
+}
+
+fn inbound_body_status(message: &str) -> StatusCode {
+    let normalized = message.to_ascii_lowercase();
+    if normalized.contains("length limit")
+        || normalized.contains("too large")
+        || normalized.contains("too_large")
+    {
+        StatusCode::PAYLOAD_TOO_LARGE
+    } else {
+        StatusCode::BAD_REQUEST
+    }
+}
+
+fn inbound_body_error_code(message: &str) -> &str {
+    if inbound_body_status(message) == StatusCode::PAYLOAD_TOO_LARGE {
+        "request_body_too_large"
+    } else if matches!(
+        message,
+        "invalid_zstd_request"
+            | "invalid_compressed_request"
+            | "unsupported_request_content_encoding"
+    ) {
+        message
+    } else {
+        "request_body_read_failed"
+    }
 }
 
 #[cfg(test)]
@@ -1751,11 +1786,11 @@ mod compression_tests {
     }
 
     #[tokio::test]
-    async fn request_size_compressed_body_above_previous_limit_reaches_upstream() {
+    async fn request_size_compressed_body_above_limit_is_rejected() {
         use crate::replay::{ReplayReply, ReplayTransport};
         use std::io::Write;
         use std::sync::Arc;
-        let content_len = 64 * 1024 * 1024 + 1;
+        let content_len = 128 * 1024 * 1024 + 1;
         let mut raw = br#"{"model":"size-model","input":""#.to_vec();
         raw.resize(raw.len() + content_len, b'x');
         raw.extend_from_slice(br#""}"#);
@@ -1768,7 +1803,10 @@ mod compression_tests {
                 gzip.write_all(&raw).unwrap();
                 gzip.finish().unwrap()
             };
-            assert!(decode_inference_body(&encoded, encoding).unwrap() == raw);
+            assert_eq!(
+                decode_inference_body(&encoded, encoding),
+                Err("request_body_too_large")
+            );
             let transport = Arc::new(ReplayTransport::new([Ok(ReplayReply::ok("{}"))]));
             let config = AppConfig::from_json(
                 &serde_json::json!({
@@ -1798,22 +1836,15 @@ mod compression_tests {
                     Body::from(encoded),
                 )
                 .await;
-            assert_eq!(response.status(), StatusCode::OK, "{encoding}");
+            assert_eq!(
+                response.status(),
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "{encoding}"
+            );
             let _ = axum::body::to_bytes(response.into_body(), usize::MAX)
                 .await
                 .unwrap();
-            let calls = transport.calls();
-            assert_eq!(calls.len(), 1);
-            assert!(
-                !calls[0]
-                    .headers
-                    .iter()
-                    .any(|(name, _)| name.eq_ignore_ascii_case("content-encoding"))
-            );
-            let sent: Value = serde_json::from_slice(&calls[0].body).unwrap();
-            let input = sent["input"].as_str().unwrap();
-            assert_eq!(input.len(), content_len);
-            assert!(input.bytes().all(|byte| byte == b'x'));
+            assert!(transport.calls().is_empty());
         }
     }
 }

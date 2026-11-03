@@ -1272,6 +1272,7 @@ fn map_openai_stop_reason(finish_reason: &str) -> &'static str {
 pub(crate) struct SseBlockBuffer {
     buffer: Vec<u8>,
     previous_cr: bool,
+    failed: bool,
 }
 
 impl SseBlockBuffer {
@@ -1279,35 +1280,35 @@ impl SseBlockBuffer {
         Self {
             buffer: Vec::new(),
             previous_cr: false,
+            failed: false,
         }
     }
 
-    pub(crate) fn push(&mut self, data: &[u8]) -> Vec<String> {
+    pub(crate) fn push(&mut self, data: &[u8]) -> Result<Vec<String>, &'static str> {
+        const TOO_LARGE: &str = "upstream SSE frame exceeds buffer limit";
+        if self.failed {
+            return Err(TOO_LARGE);
+        }
         // 先按字节跨网络分片收集完整帧，再解码 UTF-8；逐 chunk lossy 解码会
         // 把横跨两个 chunk 的中文字符替换成 U+FFFD。CRLF 也可跨 chunk。
-        let mut normalized = Vec::with_capacity(data.len());
+        let mut blocks = Vec::new();
         for &byte in data {
             if byte != b'\n' || !self.previous_cr {
-                normalized.push(if byte == b'\r' { b'\n' } else { byte });
+                self.buffer.push(if byte == b'\r' { b'\n' } else { byte });
+                if self.buffer.len() > MAX_SSE_BUFFER_BYTES {
+                    self.buffer.clear();
+                    self.failed = true;
+                    return Err(TOO_LARGE);
+                }
+                if self.buffer.ends_with(b"\n\n") {
+                    let end = self.buffer.len() - 2;
+                    blocks.push(String::from_utf8_lossy(&self.buffer[..end]).into_owned());
+                    self.buffer.clear();
+                }
             }
             self.previous_cr = byte == b'\r';
         }
-        // 未闭合帧仍保留原有内存上限。
-        if normalized.len() > MAX_SSE_BUFFER_BYTES {
-            self.buffer.clear();
-            return Vec::new();
-        }
-        if self.buffer.len().saturating_add(normalized.len()) > MAX_SSE_BUFFER_BYTES {
-            self.buffer.clear();
-        }
-        self.buffer.extend_from_slice(&normalized);
-        let mut blocks = Vec::new();
-        while let Some(pos) = self.buffer.windows(2).position(|bytes| bytes == b"\n\n") {
-            let block = String::from_utf8_lossy(&self.buffer[..pos]).into_owned();
-            self.buffer.drain(..pos + 2);
-            blocks.push(block);
-        }
-        blocks
+        Ok(blocks)
     }
 
     pub(crate) fn drain_rest(&mut self) -> Option<String> {
@@ -1797,7 +1798,19 @@ impl SseBridge for OpenAiStreamBridge {
             return Vec::new();
         }
         let mut output = Vec::new();
-        for block in self.buffer.push(data) {
+        let blocks = match self.buffer.push(data) {
+            Ok(blocks) => blocks,
+            Err(detail) => {
+                for event in self.fail(detail) {
+                    if self.stream {
+                        output.extend(event.to_bytes());
+                    }
+                }
+                output.extend(self.render_non_stream());
+                return output;
+            }
+        };
+        for block in blocks {
             for event in self.handle_block(&block) {
                 if self.stream {
                     output.extend(event.to_bytes());
@@ -2374,7 +2387,19 @@ impl SseBridge for ResponsesStreamBridge {
             return Vec::new();
         }
         let mut output = Vec::new();
-        for block in self.buffer.push(data) {
+        let blocks = match self.buffer.push(data) {
+            Ok(blocks) => blocks,
+            Err(detail) => {
+                for event in self.fail(detail) {
+                    if self.stream {
+                        output.extend(event.to_bytes());
+                    }
+                }
+                output.extend(self.render_non_stream());
+                return output;
+            }
+        };
+        for block in blocks {
             for event in self.handle_block(&block) {
                 if self.stream {
                     output.extend(event.to_bytes());

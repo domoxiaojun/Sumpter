@@ -364,6 +364,13 @@ extension AppModel {
         case .configReloaded(let generation):
             // 外部 /__reload 或 CLI 改动:sumpterd 已自主读盘,UI 重读磁盘对账内存副本。
             engineGeneration = generation
+            if configWriteInFlight {
+                // Preserve the local draft while a serialized save is in
+                // flight. If the daemon generation changed underneath it,
+                // the PUT returns a conflict instead of silently replacing
+                // the draft with an unrelated disk snapshot.
+                return
+            }
             let previousListener = config.listener
             var listenerChanged = false
             if let store, let result = try? store.loadWithMigration() {

@@ -696,7 +696,7 @@ fn output_speed_totals(
 ) -> QueryResult<super::OutputSpeedTotals> {
     let sql = format!(
         "SELECT COALESCE(SUM(CASE WHEN {pred} THEN output_tokens ELSE 0 END),0),\
-                COALESCE(SUM(CASE WHEN {pred} THEN duration_ms - ttfb_ms ELSE 0 END),0),\
+                COALESCE(SUM(CASE WHEN {pred} THEN upstream_duration_ms - upstream_ttfb_ms ELSE 0 END),0),\
                 COALESCE(SUM(CASE WHEN {pred} THEN 1 ELSE 0 END),0)\
          FROM runtime_events{}",
         base.where_sql(),
@@ -791,9 +791,9 @@ fn analytics_dimension(
                       MAX(workspace_paths_json),
                       GROUP_CONCAT(DISTINCT COALESCE(project_name,project_id,'unidentified_project')),
                       GROUP_CONCAT(DISTINCT COALESCE(client_kind,'unrecorded_client')),
-                      SUM(CASE WHEN kind='client' AND is_in_flight=0 AND (request_purpose IS NULL OR request_purpose!='token_count') AND output_tokens IS NOT NULL AND output_tokens>=0 AND duration_ms IS NOT NULL AND duration_ms>=0 AND ttfb_ms IS NOT NULL AND ttfb_ms>=0 AND duration_ms>ttfb_ms THEN output_tokens ELSE 0 END),
-                      SUM(CASE WHEN kind='client' AND is_in_flight=0 AND (request_purpose IS NULL OR request_purpose!='token_count') AND output_tokens IS NOT NULL AND output_tokens>=0 AND duration_ms IS NOT NULL AND duration_ms>=0 AND ttfb_ms IS NOT NULL AND ttfb_ms>=0 AND duration_ms>ttfb_ms THEN duration_ms - ttfb_ms ELSE 0 END),
-                      SUM(CASE WHEN kind='client' AND is_in_flight=0 AND (request_purpose IS NULL OR request_purpose!='token_count') AND output_tokens IS NOT NULL AND output_tokens>=0 AND duration_ms IS NOT NULL AND duration_ms>=0 AND ttfb_ms IS NOT NULL AND ttfb_ms>=0 AND duration_ms>ttfb_ms THEN 1 ELSE 0 END)
+                      SUM(CASE WHEN kind='client' AND outcome='succeeded' AND is_in_flight=0 AND (request_purpose IS NULL OR request_purpose!='token_count') AND output_tokens IS NOT NULL AND output_tokens>=0 AND upstream_duration_ms IS NOT NULL AND upstream_duration_ms>=0 AND upstream_ttfb_ms IS NOT NULL AND upstream_ttfb_ms>=0 AND upstream_duration_ms>upstream_ttfb_ms THEN output_tokens ELSE 0 END),
+                      SUM(CASE WHEN kind='client' AND outcome='succeeded' AND is_in_flight=0 AND (request_purpose IS NULL OR request_purpose!='token_count') AND output_tokens IS NOT NULL AND output_tokens>=0 AND upstream_duration_ms IS NOT NULL AND upstream_duration_ms>=0 AND upstream_ttfb_ms IS NOT NULL AND upstream_ttfb_ms>=0 AND upstream_duration_ms>upstream_ttfb_ms THEN upstream_duration_ms - upstream_ttfb_ms ELSE 0 END),
+                      SUM(CASE WHEN kind='client' AND outcome='succeeded' AND is_in_flight=0 AND (request_purpose IS NULL OR request_purpose!='token_count') AND output_tokens IS NOT NULL AND output_tokens>=0 AND upstream_duration_ms IS NOT NULL AND upstream_duration_ms>=0 AND upstream_ttfb_ms IS NOT NULL AND upstream_ttfb_ms>=0 AND upstream_duration_ms>upstream_ttfb_ms THEN 1 ELSE 0 END)
                FROM runtime_events{where_sql}
               GROUP BY name
               ORDER BY COUNT(*) DESC, name ASC

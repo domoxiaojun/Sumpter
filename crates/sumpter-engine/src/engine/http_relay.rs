@@ -581,12 +581,13 @@ impl Engine {
                             let _ = tracker.finish();
                             st.guard.record_response_summary(tracker);
                         }
-                        // 只有流正常走到这里(上游 EOF)才回写签名:失败、取消与
-                        // failover 的尝试不会经过这条路径,不会污染下一轮的依据。
-                        // 只有流正常走到这里(上游 EOF)才回写签名:失败、取消与
-                        // failover 的尝试不会经过这条路径,不会污染下一轮的依据。
-                        // 入口从 guard 现取,不在闭包里另存副本(闭包每次 poll 都跑)。
+                        // EOF is a transport boundary; finalize the protocol before
+                        // committing conversation state from this attempt.
+                        let mut tail = st.bridge.as_mut().map(|b| b.finish()).unwrap_or_default();
                         if let Some(session) = st.guard.meta.session_id.clone()
+                            && st.bridge.as_ref().is_some_and(|bridge| {
+                                matches!(bridge.terminal(), bridge::BridgeTerminal::Completed)
+                            })
                             && let Some(parts) =
                                 st.bridge.as_ref().and_then(|bridge| bridge.replay_parts())
                             && let Some(endpoint) = st.guard.upstream_endpoint()
@@ -598,7 +599,6 @@ impl Engine {
                                 parts,
                             );
                         }
-                        let mut tail = st.bridge.as_mut().map(|b| b.finish()).unwrap_or_default();
                         if let Some(client) = &mut st.client_bridge {
                             let mut client_tail = client.feed(&tail);
                             client_tail.extend(client.finish());

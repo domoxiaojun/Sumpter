@@ -1,8 +1,8 @@
 //! Sessions implementation for the shared engine.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use serde_json::Value;
 
@@ -53,6 +53,12 @@ pub(super) const DEFAULT_LIVE_SESSION_TTL_SECS: f64 = 900.0;
 pub(super) const DEFAULT_VIDEO_SESSION_TTL_SECS: f64 = 24.0 * 3600.0;
 pub(super) const MAX_RESOURCE_BINDING_ID_BYTES: usize = 128;
 pub(super) const MAX_RESOURCE_BINDING_TEXT_BYTES: usize = 256;
+
+fn persistence_flush_slot() -> Arc<tokio::sync::Semaphore> {
+    static SLOT: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+    SLOT.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(1)))
+        .clone()
+}
 
 #[derive(Clone)]
 pub(super) struct RealtimeClientSecretEntry {
@@ -113,6 +119,39 @@ pub(super) fn realtime_ephemeral_token(headers: &[(String, String)]) -> Option<S
     })
 }
 impl Engine {
+    /// Hot request paths only enqueue persistence work. The actual atomic
+    /// write and directory fsync run on Tokio's blocking pool; explicit admin
+    /// mutations still call the synchronous method and wait for durability.
+    pub(super) fn schedule_session_affinity_flush(&self) {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            let Ok(permit) = persistence_flush_slot().try_acquire_owned() else {
+                return;
+            };
+            let engine = self.clone();
+            tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                engine.flush_session_affinity_if_dirty();
+            });
+        } else {
+            self.flush_session_affinity_if_dirty();
+        }
+    }
+
+    pub(super) fn schedule_resource_bindings_flush(&self) {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            let Ok(permit) = persistence_flush_slot().try_acquire_owned() else {
+                return;
+            };
+            let engine = self.clone();
+            tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                engine.flush_resource_bindings_if_dirty();
+            });
+        } else {
+            self.flush_resource_bindings_if_dirty();
+        }
+    }
+
     /// Remember an upstream Realtime ephemeral key without persisting or
     /// exposing it through runtime events. The expiration is bounded so a
     /// malformed/overly long upstream lifetime cannot turn it into a durable
@@ -296,7 +335,7 @@ impl Engine {
         self.inner
             .resource_bindings_dirty
             .store(true, Ordering::Release);
-        self.flush_resource_bindings_if_dirty();
+        self.schedule_resource_bindings_flush();
     }
 
     /// Return the originating endpoint for a sideband target. The outer
@@ -323,7 +362,7 @@ impl Engine {
         );
         drop(sessions);
         if pruned {
-            self.flush_resource_bindings_if_dirty();
+            self.schedule_resource_bindings_flush();
         }
         result
     }
@@ -343,7 +382,7 @@ impl Engine {
         let result = Some(sessions.get(&call_id).map(|entry| entry.model.clone()));
         drop(sessions);
         if pruned {
-            self.flush_resource_bindings_if_dirty();
+            self.schedule_resource_bindings_flush();
         }
         result
     }
@@ -403,7 +442,7 @@ impl Engine {
         self.inner
             .resource_bindings_dirty
             .store(true, Ordering::Release);
-        self.flush_resource_bindings_if_dirty();
+        self.schedule_resource_bindings_flush();
     }
 
     pub(super) fn video_session_endpoint(&self, path: &str) -> Option<Option<String>> {
@@ -425,7 +464,7 @@ impl Engine {
         );
         drop(sessions);
         if pruned {
-            self.flush_resource_bindings_if_dirty();
+            self.schedule_resource_bindings_flush();
         }
         result
     }
@@ -445,7 +484,7 @@ impl Engine {
         let result = Some(sessions.get(video_id).map(|entry| entry.model.clone()));
         drop(sessions);
         if pruned {
-            self.flush_resource_bindings_if_dirty();
+            self.schedule_resource_bindings_flush();
         }
         result
     }
@@ -675,19 +714,14 @@ impl Engine {
             }
         }
         drop(state);
-        if session_key.persistent
-            && replace
-            && let Err(error) = self.flush_session_affinity()
-        {
-            self.inner
-                .session_affinity_dirty
-                .store(true, Ordering::Release);
-            tracing::warn!("session_affinity.json 即时落盘失败: {error}");
+        if session_key.persistent && replace {
+            self.schedule_session_affinity_flush();
         }
     }
 
     /// 稳定 Claude 会话在首次出站前就建立固定归属，避免请求尚未成功时进程退出导致漂移。
     /// 配置删除/改名使旧组失效时，允许把归属更新为当前计划的首选组。
+    #[cfg(test)]
     pub(super) fn ensure_session_assignment(
         &self,
         session_key: &sticky::SessionKey,
@@ -704,8 +738,48 @@ impl Engine {
             now,
         );
         drop(state);
-        if claimed && let Err(error) = self.flush_session_affinity() {
-            tracing::warn!("session_affinity.json 首次归属落盘失败: {error}");
+        if claimed {
+            self.schedule_session_affinity_flush();
+        }
+    }
+
+    /// Request-path variant: the first durable affinity claim is acknowledged
+    /// before routing returns. The filesystem work runs on Tokio's blocking
+    /// pool, so the proxy executor never performs fsync inline.
+    pub(super) async fn ensure_session_assignment_async(
+        &self,
+        session_key: &sticky::SessionKey,
+        initial_group: &str,
+        eligible_groups: &[String],
+        now: f64,
+    ) {
+        let claimed = {
+            let mut state = self.inner.state.lock().unwrap();
+            self.claim_session_assignment(
+                &mut state,
+                session_key,
+                initial_group,
+                eligible_groups,
+                now,
+            )
+        };
+        if claimed {
+            let flush_engine = self.clone();
+            match tokio::task::spawn_blocking(move || flush_engine.flush_session_affinity()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    self.inner
+                        .session_affinity_dirty
+                        .store(true, Ordering::Release);
+                    tracing::warn!("session_affinity.json 首次归属落盘失败: {error}");
+                }
+                Err(error) => {
+                    self.inner
+                        .session_affinity_dirty
+                        .store(true, Ordering::Release);
+                    tracing::warn!("session_affinity.json 首次归属任务失败: {error}");
+                }
+            }
         }
     }
 

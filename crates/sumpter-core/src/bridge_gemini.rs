@@ -1287,7 +1287,19 @@ impl SseBridge for GeminiStreamBridge {
             return Vec::new();
         }
         let mut output = Vec::new();
-        for block in self.buffer.push(data) {
+        let blocks = match self.buffer.push(data) {
+            Ok(blocks) => blocks,
+            Err(detail) => {
+                for event in self.fail(detail) {
+                    if self.stream {
+                        output.extend(event.to_bytes());
+                    }
+                }
+                output.extend(self.render_non_stream());
+                return output;
+            }
+        };
+        for block in blocks {
             let Some(payload) = data_payload(&block) else {
                 continue;
             };
@@ -1555,7 +1567,13 @@ impl SseBridge for GeminiClientBridge {
             return Vec::new();
         }
         let mut output = Vec::new();
-        for block in self.buffer.push(data) {
+        let blocks = match self.buffer.push(data) {
+            Ok(blocks) => blocks,
+            Err(detail) => {
+                return self.handle_event(&json!({"type":"error","error":{"message":detail}}));
+            }
+        };
+        for block in blocks {
             let Some(payload) = data_payload(&block) else {
                 continue;
             };

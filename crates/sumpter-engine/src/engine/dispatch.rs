@@ -1757,8 +1757,8 @@ impl Engine {
             }
         }
         drop(state);
-        if claimed && let Err(error) = self.flush_session_affinity() {
-            tracing::warn!("session_affinity.json 首次归属落盘失败: {error}");
+        if claimed {
+            self.schedule_session_affinity_flush();
         }
 
         let mut output: Vec<PlannedEndpoint> = Vec::with_capacity(candidates.len());
@@ -1788,15 +1788,21 @@ impl Engine {
     ) -> Response {
         let guard = completion.as_mut().expect("request completion guard");
         let retry = &config.retry;
-        let stream_retry_enabled = (retry.max_stream_error_retries > 0
-            || retry.failover_on_stream_error)
-            && client_out
-                .as_ref()
-                .and_then(|client| client.passthrough.as_ref())
-                .map_or_else(
-                    || request.raw.get("background").and_then(Value::as_bool) != Some(true),
-                    |body| super::stream_retry::request_allows_retry(body),
-                );
+        let request_replay_safe = client_out
+            .as_ref()
+            .and_then(|client| client.passthrough.as_ref())
+            .map_or_else(
+                || super::stream_retry::value_allows_retry(&request.raw),
+                |body| super::stream_retry::request_allows_retry(body),
+            )
+            && !client_out.as_ref().is_some_and(|client| {
+                matches!(
+                    client.passthrough_kind,
+                    PassthroughKind::Files | PassthroughKind::Videos | PassthroughKind::Raw
+                ) && !matches!(method, "GET" | "HEAD" | "OPTIONS")
+            });
+        let stream_retry_enabled = request_replay_safe
+            && (retry.max_stream_error_retries > 0 || retry.failover_on_stream_error);
         let request_id = guard.request_id().to_string();
         guard.trace(
             "plan",
@@ -1864,12 +1870,13 @@ impl Engine {
         // 所有 Provider 入口统一参与会话粘性与调度组故障转移。
         let sticky_enabled = !ordered.is_empty();
         if sticky_enabled {
-            self.ensure_session_assignment(
+            self.ensure_session_assignment_async(
                 &session_key,
                 &initial_group,
                 &eligible_groups,
                 now_unix(),
-            );
+            )
+            .await;
         }
         // A concurrent first request may have established another assignment.
         // Re-read it before calculating this request's retry-group boundary.
@@ -2525,7 +2532,8 @@ impl Engine {
                 }
                 // 标准 Realtime 的任何失败都不可重放，包括独立 HTTP 500 重试与
                 // 后备入口；只有已识别的 Codex Live bootstrap 允许有界重试。
-                if (realtime_request && !live_bootstrap_request)
+                if !request_replay_safe
+                    || (realtime_request && !live_bootstrap_request)
                     || (config.request_policy.max_total_attempts > 0
                         && total_attempts >= config.request_policy.max_total_attempts)
                 {
@@ -2594,7 +2602,8 @@ impl Engine {
             // been exhausted.  Allowing the ordinary `maxDeferredRounds: 0`
             // default here would turn a dead voice Provider into an endless
             // sequence of retries, leaving the client waiting forever.
-            let retry_allowed = !realtime_request
+            let retry_allowed = request_replay_safe
+                && !realtime_request
                 && (config.request_policy.max_total_attempts == 0
                     || total_attempts < config.request_policy.max_total_attempts)
                 && candidates

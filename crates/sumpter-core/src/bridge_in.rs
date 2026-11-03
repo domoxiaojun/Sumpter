@@ -1716,8 +1716,15 @@ impl ChatClientBridge {
 
 impl SseBridge for ChatClientBridge {
     fn feed(&mut self, data: &[u8]) -> Vec<u8> {
+        if self.finished {
+            return Vec::new();
+        }
         let mut out = Vec::new();
-        for block in self.buffer.push(data) {
+        let blocks = match self.buffer.push(data) {
+            Ok(blocks) => blocks,
+            Err(detail) => return self.emit_failure(detail),
+        };
+        for block in blocks {
             out.extend(self.handle_block(&block));
         }
         out
@@ -2168,8 +2175,15 @@ impl ResponsesClientBridge {
 
 impl SseBridge for ResponsesClientBridge {
     fn feed(&mut self, data: &[u8]) -> Vec<u8> {
+        if self.finished {
+            return Vec::new();
+        }
         let mut out = Vec::new();
-        for block in self.buffer.push(data) {
+        let blocks = match self.buffer.push(data) {
+            Ok(blocks) => blocks,
+            Err(detail) => return self.emit_failure(detail),
+        };
+        for block in blocks {
             out.extend(self.handle_block(&block));
         }
         out

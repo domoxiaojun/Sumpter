@@ -130,7 +130,7 @@ pub fn admin_router(engine: Engine) -> Router {
             get(diagnostic_capture_detail),
         )
         .fallback(not_found)
-        .layer(axum::extract::DefaultBodyLimit::disable())
+        .layer(axum::extract::DefaultBodyLimit::max(128 * 1024 * 1024))
         .layer(axum::middleware::from_fn_with_state(engine.clone(), guard))
         .with_state(engine)
 }
