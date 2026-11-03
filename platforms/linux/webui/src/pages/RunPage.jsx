@@ -282,7 +282,7 @@ function MobileEventList({ events, selectedEventID, onSelect, loading, live = fa
               <span
                 className="mono-cell telemetry-mobile-duration"
                 style={{ color: outcome === 'failed' ? 'var(--status-critical)' : undefined }}
-                title={eventTTFBMS(event) >= 5000 ? '首字节 → 总耗时；首字节超过 5 秒，上游可能排队中' : '首字节 → 总耗时'}
+                title={eventDisplayTiming(event).ttfbMS >= 5000 ? '首字节 → 总耗时；首字节超过 5 秒，上游可能排队中' : '首字节 → 总耗时'}
               >
                 {eventDurationText(event)}
               </span>
