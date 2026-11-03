@@ -443,10 +443,7 @@ fn apply_metadata_overrides(
         "supports_search_tool".into(),
         json!(metadata.supports_search_tool == Some(true)),
     );
-    object.insert(
-        "prefer_websockets".into(),
-        json!(metadata.prefer_websockets == Some(true)),
-    );
+    object.insert("prefer_websockets".into(), json!(false));
     let tiers = metadata.service_tiers.as_deref().unwrap_or_default().iter().map(|id| {
         object.get("service_tiers").and_then(Value::as_array)
             .and_then(|tiers| tiers.iter().find(|tier| tier["id"] == *id)).cloned()
@@ -589,7 +586,6 @@ mod tests {
                     "supported_reasoning_levels",
                     "default_reasoning_level",
                     "supports_search_tool",
-                    "prefer_websockets",
                     "service_tiers",
                     "base_instructions",
                     "model_messages",
@@ -597,6 +593,8 @@ mod tests {
                 ] {
                     assert_eq!(entry[field], official[field], "{slug}: {field}");
                 }
+                // Upstream templates cannot enable an unsupported inbound transport.
+                assert_eq!(entry["prefer_websockets"], false);
                 assert_eq!(
                     entry["context_window"],
                     if slug == "gpt-6.1-sol" {

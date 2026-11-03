@@ -4,7 +4,6 @@ import { upsertRuntimeEvent, mergeRuntimeEvent } from '../utils/runtimeEvents.js
 import { fetchRuntimeChanges, mergeRuntimeListItems, reconcileRuntimeRefresh, runtimeSummaryRevision, RUNTIME_API_VERSION } from '../utils/runtimeSync.js';
 import { clone } from '../utils/helpers.js';
 import { configDraftWrite, requireDraftGeneration } from '../utils/configDraft.js';
-import { initialConnectionsObservation, receiveConnectionsSummary, failConnectionsSummary } from '../utils/responsesConnections.js';
 
 const AppContext = createContext(null);
 const RuntimeContext = createContext(null);
@@ -80,7 +79,6 @@ export function AppProvider({ children }) {
   const [configDoc, setConfigDoc] = useState(null);
   const [status, setStatus] = useState(null);
   const [runtime, setRuntime] = useState(null);
-  const [connectionsObservation, setConnectionsObservation] = useState(initialConnectionsObservation);
   const [runtimeAnalytics, setRuntimeAnalytics] = useState(null);
   const [runtimeFacets, setRuntimeFacets] = useState(null);
   // Incremented after a successful statistics snapshot refresh.  The
@@ -332,7 +330,6 @@ export function AppProvider({ children }) {
       if (coreRefreshGenerationRef.current !== refreshGeneration) return;
       requireStatusRuntimeApiV1(statusRes);
       requireRuntimeApiV1(summaryRes);
-      setConnectionsObservation(receiveConnectionsSummary(summaryRes));
       const nextAnalyticsRevision = runtimeSummaryRevision(summaryRes);
       analyticsSnapshotChanged = analyticsSummaryRevisionRef.current !== nextAnalyticsRevision;
       analyticsSummaryRevisionRef.current = nextAnalyticsRevision;
@@ -385,7 +382,6 @@ export function AppProvider({ children }) {
         ? '核心数据读取超时（10 秒），请检查 Admin 服务是否可用'
         : (err.message || '加载核心数据失败');
       setLastError(message);
-      setConnectionsObservation((previous) => failConnectionsSummary(previous, message));
       addToast(message, 'error');
       if (shouldLoadAnalytics) {
         setAnalyticsLoading(false);
@@ -411,7 +407,6 @@ export function AppProvider({ children }) {
       const summaryRes = await api.getRuntimeSummary({ signal: controller.signal });
       if (aggregateRefreshGenerationRef.current !== refreshGeneration) return false;
       requireRuntimeApiV1(summaryRes);
-      setConnectionsObservation(receiveConnectionsSummary(summaryRes));
       const nextResetGeneration = Number(summaryRes?.resetGeneration || 0);
       if (nextResetGeneration !== resetGenerationRef.current) {
         await refreshCore();
@@ -442,7 +437,6 @@ export function AppProvider({ children }) {
       if (aggregateRefreshGenerationRef.current !== refreshGeneration) return false;
       if (error?.name === 'AbortError') return false;
       const message = error?.message || '刷新运行统计失败';
-      setConnectionsObservation((previous) => failConnectionsSummary(previous, message));
       if (shouldLoadAnalytics) {
         setAnalyticsError(message);
         setAnalyticsStale(true);
@@ -799,7 +793,6 @@ export function AppProvider({ children }) {
     await api.logout();
     eventDetailCacheRef.current.clear();
     setConfigDoc(null); setStatus(null); setRuntime(null); setRuntimeEventDetail(null); setDiagnostics(null);
-    setConnectionsObservation(initialConnectionsObservation);
   }, []);
 
   const value = useMemo(() => ({
@@ -842,7 +835,6 @@ export function AppProvider({ children }) {
 
   const runtimeValue = useMemo(() => ({
     runtime,
-    connectionsObservation,
     runtimeAnalytics,
     runtimeFacets,
     analyticsRefreshSignal,
@@ -857,7 +849,7 @@ export function AppProvider({ children }) {
     deleteRuntimeSession,
     exportRuntimeSession,
     loadMoreRuntimeEvents,
-  }), [runtime, connectionsObservation, runtimeAnalytics, runtimeFacets, analyticsRefreshSignal, analyticsLoading, analyticsError, analyticsStale, runtimeEventDetail, analyticsRange, analyticsFilters, loadRuntimeAnalytics, loadRuntimeEvent, deleteRuntimeSession, exportRuntimeSession, loadMoreRuntimeEvents]);
+  }), [runtime, runtimeAnalytics, runtimeFacets, analyticsRefreshSignal, analyticsLoading, analyticsError, analyticsStale, runtimeEventDetail, analyticsRange, analyticsFilters, loadRuntimeAnalytics, loadRuntimeEvent, deleteRuntimeSession, exportRuntimeSession, loadMoreRuntimeEvents]);
 
   return <AppContext.Provider value={value}><RuntimeContext.Provider value={runtimeValue}>{children}</RuntimeContext.Provider></AppContext.Provider>;
 }

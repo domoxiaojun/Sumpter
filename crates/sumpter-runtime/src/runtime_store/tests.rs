@@ -1,6 +1,56 @@
 use super::*;
 
 #[test]
+fn historical_responses_websocket_trace_survives_reopen_queries_and_export() {
+    let dir = test_dir("historical-responses-ws");
+    let path = dir.join("runtime.sqlite3");
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    let trace = json!({"websocketTrace": {
+        "stage":"relay", "handshakeStatus":101, "clientHandshakeStatus":101,
+        "firstMessageWaitMS":300, "clientMessageCount":2, "upstreamMessageCount":4,
+        "requests":{"counts":{"turn":2},"controls":{},"recent":[
+            {"sequence":1,"kind":"turn","turnId":"turn-1","responseId":"resp-1","generate":true,"terminal":"response.completed"},
+            {"sequence":2,"kind":"turn","turnId":"turn-2","responseId":"resp-2","generate":true,"terminal":"response.completed"}
+        ],"dropped":0,"unobservedFrames":0,"unassociatedEvents":0}
+    }});
+    let mut value = event(
+        "old-ws",
+        KIND_CLIENT,
+        101,
+        RuntimeEventPhase::Completed,
+        Some(RuntimeEventOutcome::Succeeded),
+        event_now(),
+    );
+    value.transport = Some(sumpter_core::events::RuntimeTransport::Websocket);
+    value.client_kind = Some(sumpter_core::events::ClientKind::Codex);
+    value.session_id = Some("old-ws-session".into());
+    value.route_intent = Some("responses_websocket".into());
+    value.stream_trace = Some(serde_json::from_value(trace).unwrap());
+    let original_trace = value.stream_trace.clone();
+    store.enqueue(value, RuntimeCounters::default()).unwrap();
+    store.flush().unwrap();
+    drop(store);
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    let restored = store.event("old-ws").unwrap().unwrap().event;
+    assert_eq!(restored.stream_trace, original_trace);
+    assert_eq!(restored.status_code, 101);
+    assert_eq!(restored.outcome, Some(RuntimeEventOutcome::Succeeded));
+    let page =
+        crate::runtime_query::events_page(&path, &crate::runtime_query::EventPageQuery::default())
+            .unwrap();
+    assert_eq!(page.events.len(), 1);
+    let exported = store.export_session("old-ws-session").unwrap();
+    let exported_trace = &exported["events"][0]["event"]["streamTrace"];
+    assert_eq!(
+        exported_trace["websocketTrace"]["requests"]["counts"]["turn"],
+        2
+    );
+    assert!(exported_trace.get("usage").is_none());
+    drop(store);
+    remove_test_dir(&dir);
+}
+
+#[test]
 fn source_ip_survives_persistence_restart_and_page_projection() {
     let dir = test_dir("source-ip");
     let path = dir.join("runtime.sqlite3");

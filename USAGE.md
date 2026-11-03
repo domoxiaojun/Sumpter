@@ -1,6 +1,6 @@
 # Sumpter 使用手册
 
-适用版本：**0.4.59 / schema v7**。从第一条请求开始，逐步配置客户端、模型组、项目归因和日常维护。
+适用版本：**0.4.60 / schema v7**。从第一条请求开始，逐步配置客户端、模型组、项目归因和日常维护。
 
 <!-- BEGIN SUMPTER_CANONICAL_ONBOARDING -->
 
@@ -205,7 +205,7 @@ bash setup-client-attribution.sh restore pi
 
 上游 `Retry-After` 的单次上限为 300 秒，显式设置的 `maxRetryDurationSeconds` 优先：若剩余预算容纳不下等待，就返回最终响应。HTTP 头和本地产生的错误提示也使用此上限；原生 SSE/WebSocket 业务帧保持原样。指数退避基数最多 30 秒，再加不超过 20% 且最多 1 秒的正向抖动。429/503 即使带额度字段也继续按重试预算处理；其它明确硬额度和凭据错误仍停止同入口重试。
 
-“Claude Code 路由 → 全客户端请求策略”可设置所有客户端的 HTTP/SSE 并发、排队、RPM 和总尝试上限。默认不限并发/RPM，完整缓冲保留，单流默认 16 MiB/8192 块、总缓冲 128 MiB；可选择前奏保护以提前输出，提交后不再透明重放。请求详情提供排队、重试、缓冲和失败原因时间线。WebSocket 请求级配额不在此范围内。
+“Claude Code 路由 → 全客户端请求策略”可设置所有客户端的 HTTP/SSE 并发、排队、RPM 和总尝试上限。默认不限并发/RPM，完整缓冲保留，单流默认 16 MiB/8192 块、总缓冲 128 MiB；可选择前奏保护以提前输出，提交后不再透明重放。请求详情提供排队、重试、缓冲和失败原因时间线。Realtime/Live WebSocket 请求级配额不在此范围内。
 
 收到上游错误后，代理按重试策略处理并尽量保留最终上游状态和错误内容。尚未发往上游的认证、路由、存储或连接问题仍可能产生本地错误。
 
@@ -215,14 +215,15 @@ bash setup-client-attribution.sh restore pi
 
 转换不是全功能兼容：Sumpter 自有 reasoning envelope 可按既有校验还原，外部密文不能跨协议回放。`client_metadata`、`compaction_trigger`、非标准 `incremental_tools` 和 Lite 专属控制项等无等价物时，在发往上游前返回 `unsupported_field` 并说明字段和协议方向；同协议请求继续原样转发。
 
-Codex 目录中的工具搜索、网页搜索、WebSocket 和服务等级按实际有效路由取交集，未知能力不声明支持。网页搜索不会开启工具搜索。能力账本随目录刷新建立，重启后重新发现；获取模型和能力不自动开放模型授权。
+Codex 目录中的工具搜索、网页搜索和服务等级按实际有效路由取交集，未知能力不声明支持。Responses WS 已移除，目录始终声明 `prefer_websockets=false`。网页搜索不会开启工具搜索。能力账本随目录刷新建立，重启后重新发现；获取模型和能力不自动开放模型授权。
 
 | 请求 | 使用要求 |
 | --- | --- |
 | Messages / Chat Completions / Responses | 上游支持客户端实际发送的 API |
 | Gemini | 上游支持 Developer API 原生模型路径 |
 | 图片、文件、视频 | 上游实现对应资源接口；异步资源后续请求依赖原入口绑定 |
-| WebSocket | Responses 通常先升级客户端、收到首条业务消息后再连接上游；Realtime 先完成上游握手 |
+| Responses 传输 | 使用 POST 与 HTTP/SSE；WS 升级返回 426，引导兼容客户端回退，且不计推理请求 |
+| Realtime/Live WebSocket | 仅已声明实时路径可升级，先完成上游握手；保留原生帧转发 |
 | Codex Live | 入口声明 `capabilities: ["live"]`；`/v1/live` / Quicksilver 原样透传，不要求私有模型出现在 mapping 或模型目录 |
 | 标准 Realtime | 同一入口级 `live` 能力承接；保留客户端公开模型名，由 CPA 内部选择 Codex OAuth 凭据 |
 

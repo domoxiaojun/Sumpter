@@ -6,6 +6,22 @@
 
 ## [Unreleased]
 
+## [0.4.60] - 2026-11-03
+
+### 调整
+
+- 移除普通 Responses WebSocket 入站，统一使用 HTTP POST / SSE；三个 Responses 路径别名及其子路径的已认证 WS 探测返回 426 和 `websocket_not_supported`，不建立上游连接。
+- 426 仅作为传输协商，不写模型请求记录、不增加请求或失败计数；客户端模型目录统一声明 `prefer_websockets=false`。
+- 保留 Realtime / Live WebSocket；未知路径不再进入通用 WS 转发，Responses 根路径的普通 GET 返回 405 与 `Allow: POST`。
+- 删除 Linux / macOS 的 Responses 连接面板、空闲连接合成的进行中请求行和汇总 API 的可选连接字段，API 版本保持 v1。
+- 保留旧 WS 记录的查询、诊断与导出，不清空数据库、不回填历史 Token、不重算历史成功率。
+
+### 验证与升级
+
+- 双 adapter 入口、统计及 Realtime 合同，历史数据兼容、Rust、WebUI、macOS 和文档检查通过。
+- 隔离配置下，当前 Codex CLI 0.156.1 经本地模拟上游验收：1 次 WS 探测收到 426，随后 3 次 HTTP 请求完成流式输出和 2 次工具结果回传，未持续重试 WS。
+- 生效需要正常升级并重启进程；不强制切换已有连接。真实供应商、生产网络和安装升级仍需独立验收。
+
 ## [0.4.59] - 2026-11-02
 
 ### 修复

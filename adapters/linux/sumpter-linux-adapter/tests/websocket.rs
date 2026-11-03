@@ -13,8 +13,8 @@ mod realtime_websocket;
 #[path = "../../../../tests/contracts/source_ip_websocket.rs"]
 mod source_ip_websocket;
 
-#[path = "../../../../tests/contracts/websocket_first_message.rs"]
-mod websocket_first_message;
+#[path = "../../../../tests/contracts/responses_http_only.rs"]
+mod responses_http_only;
 
 use std::sync::Arc;
 
@@ -30,10 +30,7 @@ use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 #[tokio::test]
 async fn shutdown_waits_for_upgraded_websocket_relays_and_closes_both_peers() {
     use std::time::Duration;
-    for path in [
-        "/v1/responses?model=gpt-4o",
-        "/v1/realtime?model=gpt-realtime",
-    ] {
+    for path in ["/v1/realtime?model=gpt-realtime"] {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let upstream_address = listener.local_addr().unwrap();
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
@@ -80,28 +77,6 @@ async fn shutdown_waits_for_upgraded_websocket_relays_and_closes_both_peers() {
                 .any(|event| event.kind == "client" && event.outcome.is_some())
         );
     }
-}
-
-#[tokio::test]
-async fn shutdown_cancels_websocket_waiting_for_its_first_model_frame() {
-    use std::time::Duration;
-    let engine = Engine::new(config(), None, Arc::new(ReplayTransport::new([])));
-    let (address, handle) = server::serve(engine, "127.0.0.1:0".parse().unwrap())
-        .await
-        .unwrap();
-    let mut client = connect(
-        format!("ws://{address}/v1/responses"),
-        Some("listener-secret"),
-    )
-    .await;
-    tokio::time::timeout(Duration::from_secs(3), handle.shutdown())
-        .await
-        .expect("first-frame wait is cancellable");
-    assert!(
-        tokio::time::timeout(Duration::from_secs(1), client.next())
-            .await
-            .is_ok()
-    );
 }
 
 #[tokio::test]
@@ -235,69 +210,6 @@ async fn connect(
         .await
         .expect("websocket upgrade");
     socket
-}
-
-#[tokio::test]
-async fn responses_websocket_relays_frames_without_http_or_sse_reconstruction() {
-    let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind upstream");
-    let upstream_address = upstream_listener.local_addr().expect("upstream address");
-    let (received_tx, received_rx) = tokio::sync::oneshot::channel();
-    let upstream_task = tokio::spawn(async move {
-        let (stream, _) = upstream_listener.accept().await.expect("accept upstream");
-        let mut socket = accept_async(stream).await.expect("upstream websocket");
-        let received = socket.next().await.expect("upstream frame").expect("frame");
-        let _ = received_tx.send(received);
-        socket
-            .send(Message::Text(r#"{"type":"response.created"}"#.into()))
-            .await
-            .expect("send upstream event");
-        socket
-            .send(Message::Binary(b"responses-binary".as_slice().into()))
-            .await
-            .expect("send upstream binary");
-        let _ = socket.close(None).await;
-    });
-
-    let mut grouped = config_with_base(&format!("http://{upstream_address}"), "openai-responses");
-    grouped.migrate_model_groups();
-    let engine = Engine::new(grouped, None, Arc::new(ReplayTransport::new([])));
-    let (address, handle) = server::serve(engine, "127.0.0.1:0".parse().unwrap())
-        .await
-        .expect("bind server");
-
-    let mut socket = connect(
-        format!("ws://{address}/v1/responses?model=gpt-4o"),
-        Some("listener-secret"),
-    )
-    .await;
-    socket
-        .send(Message::Text(
-            r#"{"type":"response.create","model":"gpt-4o","input":"hello"}"#.into(),
-        ))
-        .await
-        .expect("send response frame");
-    assert_eq!(
-        received_rx.await.expect("upstream receive"),
-        Message::Text(r#"{"type":"response.create","model":"gpt-4o","input":"hello"}"#.into())
-    );
-    assert_eq!(
-        socket.next().await.expect("response event").expect("frame"),
-        Message::Text(r#"{"type":"response.created"}"#.into())
-    );
-    assert_eq!(
-        socket
-            .next()
-            .await
-            .expect("response binary")
-            .expect("frame"),
-        Message::Binary(b"responses-binary".as_slice().into())
-    );
-
-    let _ = socket.close(None).await;
-    handle.shutdown().await;
-    let _ = upstream_task.await;
 }
 
 #[tokio::test]
@@ -1064,4 +976,8 @@ fn pi_test_engine(config: AppConfig) -> Engine {
 
 async fn pi_test_shutdown(handle: server::ServerHandle) {
     handle.shutdown().await;
+}
+
+fn http_only_test_engine(config: AppConfig, transport: Arc<ReplayTransport>) -> Engine {
+    Engine::new(config, None, transport)
 }

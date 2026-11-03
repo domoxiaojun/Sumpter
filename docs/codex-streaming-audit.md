@@ -1,5 +1,7 @@
 # Codex 流式链路兼容性审计
 
+> 2026-11-03：Responses WS 入站已移除，改用 HTTP/SSE；以下按日期保留历史审计结论，不代表当前仍开放 Responses WS。Realtime/Live WS 保留。
+
 ## 2026-10-19 内部请求归因修复
 
 固定参考 Codex main `89461ea6833832b0551ce24ee32205824d5c108d`；0.163.0 的元数据定义通过 tag peeled SHA `83086188ae0614bd882818ff1aa23f3194962012` 的原始文件核对。

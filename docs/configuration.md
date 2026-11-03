@@ -88,9 +88,9 @@ Linux Admin 是独立监听，默认 `127.0.0.1:57879`，由 CLI 参数或环境
 
 Auto/OpenAI/Responses 入口在目录成功后，还会以相同身份和凭据尝试 `client_version=cpa` 能力目录。此可选请求最多 3 秒，并受剩余目录探测时间约束；失败不丢弃已取得的模型 ID，也不从扩展结果新增模型。明确的不支持不能被另一份目录的支持声明覆盖。
 
-工具搜索、网页搜索、Responses WebSocket 和服务等级按当前 Responses 路由候选取交集：任一有效路由未知或不支持，就不声明全局支持。原生候选优先；只有转换候选时，这些原生能力不声明支持。能力账本仅在进程内保存，目录刷新失败、入口连接信息或凭据改变后失效，重启后需重新发现。Codex 目录的 `supports_search_tool` 只表示工具搜索；`client_version=cpa` 额外返回 `cpa_capabilities.web_search`。普通 `/v1/models` 保持原有结构。能力发现不修改模型组授权，也不因入口支持 Live/Files 而虚构模型。
+工具搜索、网页搜索和服务等级按当前 Responses 路由候选取交集：任一有效路由未知或不支持，就不声明全局支持。原生候选优先；只有转换候选时，这些原生能力不声明支持。能力账本仅在进程内保存，目录刷新失败、入口连接信息或凭据改变后失效，重启后需重新发现。Codex 目录的 `supports_search_tool` 只表示工具搜索；`client_version=cpa` 额外返回 `cpa_capabilities.web_search`。普通 `/v1/models` 保持原有结构。能力发现不修改模型组授权，也不因入口支持 Live/Files 而虚构模型。
 
-同协议的 Responses 请求保留原始正文、SSE 数据和 WebSocket 业务帧，包括未知字段。跨协议必须通过严格转换检查：`client_metadata`、`compaction_trigger`、非标准 `incremental_tools`、Lite 控制项和外部 `encrypted_content` 等无目标等价物时，返回 HTTP 400 `unsupported_field`，附 `field`、`sourceFormat`、`targetFormat`，不请求上游。拒绝事件只记录字段路径和协议方向。Sumpter 自有 reasoning envelope 仍可按既有校验还原；不把外部密文当作自有推理回放。
+Responses 入站仅支持 HTTP/SSE，模型目录始终声明 `prefer_websockets=false`；WS 升级返回 426，不受上游能力或目录缓存影响。同协议的 Responses 请求保留原始正文与 SSE 数据，包括未知字段。跨协议必须通过严格转换检查：`client_metadata`、`compaction_trigger`、非标准 `incremental_tools`、Lite 控制项和外部 `encrypted_content` 等无目标等价物时，返回 HTTP 400 `unsupported_field`，附 `field`、`sourceFormat`、`targetFormat`，不请求上游。拒绝事件只记录字段路径和协议方向。Sumpter 自有 reasoning envelope 仍可按既有校验还原；不把外部密文当作自有推理回放。
 
 ## modelGroups
 
@@ -102,7 +102,7 @@ Auto/OpenAI/Responses 入口在目录成功后，还会以相同身份和凭据�
 
 ## retry
 
-WebSocket 在 relay 阶段收到首条 Text/Binary 业务消息后开始空闲计时；收发任一方向的帧（包括 Ping/Pong）会重置计时，等待首条业务消息不受此配置限制。显式超时会关闭连接并记为 `stream_idle_timeout`；该设置不是推理总时长或写入截止。未配置时不新增默认截止，也不会主动注入心跳。大帧已进入 TCP 写入后不能被控制帧穿插；持续慢读仍受到网络背压约束。
+Realtime/Live WebSocket 在 relay 阶段收到首条 Text/Binary 业务消息后开始空闲计时；收发任一方向的帧（包括 Ping/Pong）会重置计时，等待首条业务消息不受此配置限制。显式超时会关闭连接并记为 `stream_idle_timeout`；该设置不是推理总时长或写入截止。未配置时不新增默认截止，也不会主动注入心跳。大帧已进入 TCP 写入后不能被控制帧穿插；持续慢读仍受到网络背压约束。
 
 
 | 字段 | 说明 |
@@ -129,7 +129,7 @@ HTTP 头、Responses SSE 结构化错误和 WebSocket 握手错误共用 `Retry-
 
 Codex 归因使用独立的观测字段，不改变 featureRules 或出站请求构造。统计中的代理角色区分 Guardian、记忆任务和普通子代理；`request_kind` 区分预热、生成回合、上下文压缩和记忆提取，`turn` 也可能属于内部任务，需与角色一起看。
 
-WebSocket 仍按连接记录原有请求数；连接关闭后，详情展示逻辑 create 数和最近 64 条 turn/response 关联。统计页的 Codex 逻辑请求数独立计算，不能与连接数相加。超过观测大小、明细淘汰、关联不明和旧连接缺少证据均明确标记，不猜测未记录的回合。`historyInitialization`、`analyticsEnabled` 和 MCP 来源数量只用于诊断，不参与授权、计费或路由。
+旧 Responses WebSocket 记录按历史连接口径保留，详情仍展示当时采集的逻辑 create 数和最近 64 条 turn/response 关联；新 Responses 请求通过 HTTP/SSE 逐请求结算。统计页的 Codex 逻辑请求数独立计算，不能与连接数相加。超过观测大小、明细淘汰、关联不明和旧连接缺少证据均明确标记，不猜测未记录的回合。`historyInitialization`、`analyticsEnabled` 和 MCP 来源数量只用于诊断，不参与授权、计费或路由。
 
 ## featureRules
 

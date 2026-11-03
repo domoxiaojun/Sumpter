@@ -27,7 +27,6 @@ mod stream_retry;
 #[cfg(test)]
 mod tests;
 mod websocket;
-mod websocket_connections;
 mod websocket_relay;
 
 use std::sync::Arc;

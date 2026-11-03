@@ -30,7 +30,6 @@ impl Engine {
     }
 
     pub fn runtime_summary_value(&self) -> Value {
-        let connections = self.responses_websocket_connections();
         let (counters, latest_event, recent_event_count, in_flight_events) = {
             let state = self.inner.state.lock().unwrap();
             (
@@ -51,7 +50,6 @@ impl Engine {
             // Store 计数合并持久化值与有界待提交增量，保留实时性且不复活已轮换计数。
             summary.latest_event = latest_event;
             let mut value = serde_json::to_value(summary).unwrap_or(Value::Null);
-            value["responsesWebSocketConnections"] = json!(connections);
             value["inFlightEvents"] = json!(in_flight_events);
             return value;
         }
@@ -72,7 +70,6 @@ impl Engine {
             "counters": counters,
             "latestEvent": latest_event,
             "inFlightEvents": in_flight_events,
-            "responsesWebSocketConnections": connections,
         })
     }
 

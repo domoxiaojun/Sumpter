@@ -13,8 +13,8 @@ mod realtime_websocket;
 #[path = "../../../../tests/contracts/source_ip_websocket.rs"]
 mod source_ip_websocket;
 
-#[path = "../../../../tests/contracts/websocket_first_message.rs"]
-mod websocket_first_message;
+#[path = "../../../../tests/contracts/responses_http_only.rs"]
+mod responses_http_only;
 
 use std::sync::Arc;
 
@@ -324,4 +324,8 @@ fn pi_test_engine(config: AppConfig) -> Engine {
 
 async fn pi_test_shutdown(handle: tokio::task::JoinHandle<()>) {
     handle.abort();
+}
+
+fn http_only_test_engine(config: AppConfig, transport: Arc<ReplayTransport>) -> Engine {
+    Engine::new(config, None, transport, String::new())
 }

@@ -11,14 +11,13 @@ use axum::extract::{ConnectInfo, State, WebSocketUpgrade};
 use axum::http::{HeaderMap, Method, Request, StatusCode, Uri};
 use axum::response::Response;
 use sumpter_core::access;
+use sumpter_engine::engine::inbound::is_realtime_websocket_path;
 
 use crate::engine::Engine;
 
 pub fn router(engine: Engine) -> Router {
     Router::new()
-        // One data-plane dispatcher: there are no compatibility aliases. Any
-        // path/method is forwarded as received; WebSocket upgrades are
-        // selected by the request headers rather than a path allow-list.
+        // HTTP keeps its original path/method; only Realtime/Live may upgrade.
         .fallback(dispatch)
         .layer(axum::extract::DefaultBodyLimit::disable())
         .with_state(engine)
@@ -38,6 +37,7 @@ async fn dispatch(
     // requests remain ordinary HTTP bootstraps even if a proxy leaked Upgrade
     // headers onto them.
     if request.method() == Method::GET
+        && is_realtime_websocket_path(uri.path())
         && let Ok(upgrade) = upgrade
     {
         let shutdown = request
@@ -49,12 +49,7 @@ async fn dispatch(
             .path_and_query()
             .map(|value| value.as_str().to_string())
             .unwrap_or_else(|| "/".into());
-        let realtime = is_realtime_path(&path_and_query);
-        let authorized = if realtime {
-            engine.authorize_realtime_websocket(remote_ip, &pairs)
-        } else {
-            engine.authorize_websocket(remote_ip, &pairs)
-        };
+        let authorized = engine.authorize_realtime_websocket(remote_ip, &pairs);
         if !authorized {
             let cidr_allowed = access::is_allowed(
                 remote_ip.map(|ip| ip.to_string()).as_deref(),
@@ -88,27 +83,19 @@ async fn dispatch(
         let upgrade = select_websocket_protocol(upgrade, &pairs)
             .max_frame_size(usize::MAX)
             .max_message_size(usize::MAX);
-        if realtime {
-            let prepared = match engine
-                .prepare_realtime_websocket(remote_ip, &path_and_query, &pairs)
-                .await
-            {
-                Ok(prepared) => prepared,
-                Err(error) => {
-                    return sumpter_engine::engine::websocket_prepare_error_response(&error);
-                }
-            };
-            let ws_engine = engine.clone();
-            return upgrade.on_upgrade(move |socket| async move {
-                ws_engine
-                    .handle_prepared_websocket_with_shutdown(socket, remote_ip, prepared, shutdown)
-                    .await;
-            });
-        }
+        let prepared = match engine
+            .prepare_realtime_websocket(remote_ip, &path_and_query, &pairs)
+            .await
+        {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                return sumpter_engine::engine::websocket_prepare_error_response(&error);
+            }
+        };
         let ws_engine = engine.clone();
         return upgrade.on_upgrade(move |socket| async move {
             ws_engine
-                .handle_websocket_with_shutdown(socket, remote_ip, path_and_query, pairs, shutdown)
+                .handle_prepared_websocket_with_shutdown(socket, remote_ip, prepared, shutdown)
                 .await;
         });
     }
@@ -151,29 +138,6 @@ async fn handle(
 
 fn remote_ip(addr: SocketAddr) -> IpAddr {
     addr.ip()
-}
-
-fn is_realtime_path(path_and_query: &str) -> bool {
-    let path = path_and_query
-        .split_once('?')
-        .map_or(path_and_query, |(path, _)| path);
-    [
-        "/v1/realtime",
-        "/realtime",
-        "/openai/v1/realtime",
-        "/backend-api/codex/realtime",
-        "/v1/live",
-        "/live",
-        "/openai/v1/live",
-        "/backend-api/codex/live",
-    ]
-    .iter()
-    .any(|prefix| {
-        path == *prefix
-            || path
-                .strip_prefix(prefix)
-                .is_some_and(|rest| rest.starts_with('/'))
-    })
 }
 
 fn select_websocket_protocol(

@@ -56,7 +56,6 @@ pub(super) struct EngineState {
 pub struct EngineInner {
     pub(super) admission: Arc<super::admission::Admission>,
     pub(super) buffer_budget: Arc<super::admission::BufferBudget>,
-    pub(super) responses_websocket_connections: super::websocket_connections::ConnectionRegistry,
     pub(super) config: RwLock<Arc<AppConfig>>,
     pub(super) generation: RwLock<String>,
     pub(super) transport: Arc<dyn UpstreamTransport>,
@@ -240,7 +239,6 @@ impl Engine {
             inner: Arc::new(EngineInner {
                 admission: Arc::default(),
                 buffer_budget: Arc::default(),
-                responses_websocket_connections: Mutex::new(HashMap::new()),
                 config: RwLock::new(Arc::new(config)),
                 generation: RwLock::new(generation),
                 transport: services.transport,

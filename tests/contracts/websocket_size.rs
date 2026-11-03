@@ -1,4 +1,4 @@
-//! Exercise both directions, first-message routing, and both upstream dial paths.
+//! Realtime covers both directions, fragmented messages and upstream dial paths.
 use super::{pi_test_engine, pi_test_shutdown, server};
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
@@ -75,12 +75,12 @@ async fn request_size_websocket_frames_and_fragmented_messages_are_unlimited() {
                 "listener": {"host":"127.0.0.1", "port":0, "authToken":"size-test-token"},
                 "retry": {"maxDeferredRounds":0, "sessionStickyRetries":0},
                 "endpoints":[{"id":"size", "name":"size", "baseURL":format!("http://{host}:{port}"),
-                    "resolveIP":resolve_ip, "apiKey":"upstream-test-token", "protocol":"openai-responses", "enabled":true,
+                    "resolveIP":resolve_ip, "apiKey":"upstream-test-token", "protocol":"openai-responses", "enabled":true, "capabilities":["live"],
                     "mappings":[{"clientPattern":"size-model", "upstreamModel":"size-model"}]}]
             }).to_string()).unwrap().normalized();
             let engine = pi_test_engine(config);
             let (address, handle) = server::serve(engine, "127.0.0.1:0".parse().unwrap()).await.unwrap();
-            let mut request = format!("ws://{address}/v1/responses").into_client_request().unwrap();
+            let mut request = format!("ws://{address}/v1/realtime?model=size-model").into_client_request().unwrap();
             request.headers_mut().insert("authorization", "Bearer size-test-token".parse().unwrap());
             let (mut socket, _) = tokio_tungstenite::connect_async_with_config(request, Some(unlimited()), false)
                 .await.unwrap();

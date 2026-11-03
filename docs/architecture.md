@@ -18,9 +18,11 @@ Sumpter 的核心边界是“客户端请求进入一个地址，代理按配置
 
 转换面按「能力检查 + 构造」同源实现。目标协议表达不了的项（服务端工具、provider 文件引用、Responses 没有等价参数的 `stop_sequences` 等）显式拒绝并回报具体字段，不静默降级。Chat/Responses 的 JSON Schema 约束及工具结果中的图片只转换到能保留其语义的目标；Responses 的 `previous_response_id` 等服务端上下文引用不能跨协议还原时拒绝转换，原生请求不受此限制。Gemini SSE 文本按增量拼接，工具调用的流式与非流式结束原因保持一致。
 
-HTTP、SSE 和 WebSocket 在上游响应或真实握手后才算成功。一个客户端请求可包含多次上游尝试，RuntimeEvent 用同一 request ID 关联它们，界面分别展示客户端最终结果和上游尝试链。
+HTTP/SSE 按请求及业务终态结算；Realtime/Live WebSocket 保留连接与关闭诊断，握手成功不等于模型生成成功。一个客户端请求可包含多次上游尝试，RuntimeEvent 用同一 request ID 关联它们，界面分别展示客户端最终结果和上游尝试链。
 
-Responses WebSocket 的连接事件与逻辑 create 请求分别观测：`websocketTrace.requests` 提供有界的用途计数、控制操作和最近 64 条 turn/response 关联；未知或无法唯一关联的事件不猜归属。`runtime_codex_requests` 是按事件序号维护的内部计数投影，与原事件同事务更新并随删除清理，避免聚合时解析大 JSON。兼容库首次初始化时修正已有 Codex 角色并建立投影，不清空事件、不提升 schema/projection 版本；旧的不兼容库规则保持不变。新 token `websocket_unused_prewarm_connection_closed` 与已有 Guardian token 一样，仅适用于有显式证据的首业务帧前未使用连接，保留传输异常分类。
+Responses 仅支持 HTTP/SSE；通过鉴权的 WS 升级探测在共享入站层返回 426，不建立上游连接、不计推理事件。两个 adapter 只为 Realtime/Live 路径进行 WS 升级。模型目录始终输出 `prefer_websockets=false`，与上游模板或能力缓存无关；不提供重新开启 Responses WS 的配置开关。
+
+历史 `websocketTrace.requests` 结构和 `runtime_codex_requests` 计数投影继续用于旧记录的读取、查询与导出；新 HTTP/SSE 请求沿用逐请求投影。移除入口不迁移或清空数据库，不回填历史缺失字段。运行汇总 API v1 移除可选的 `responsesWebSocketConnections`，两端界面不再用连接合成请求行。
 
 ## 配置与调度
 

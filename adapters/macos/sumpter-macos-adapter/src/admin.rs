@@ -2657,14 +2657,7 @@ mod tests {
         assert_eq!(summary["apiVersion"], 1);
         assert_eq!(summary["storage"]["backend"], "sqlite");
         assert_eq!(summary["inFlightEvents"], json!([]));
-        assert_eq!(
-            summary["responsesWebSocketConnections"],
-            json!({
-                "total": 0, "awaitingFirstMessage": 0, "guardianAwaitingFirstMessage": 0,
-                "connectingUpstream": 0, "relaying": 0, "oldestFirstMessageWaitMS": null,
-                "active": [],
-            })
-        );
+        assert!(summary.get("responsesWebSocketConnections").is_none());
 
         let events = client
             .get(format!("{base}/admin/runtime/events?limit=50"))

@@ -196,10 +196,6 @@ export function createMockApi({ fromWireConfig, normalizeCatalog }) {
           counters,
           latestEvent: this.mockState.runtime.recentEvents[0] || null,
           inFlightEvents: this.mockState.runtime.recentEvents.filter((event) => event.phase === 'inFlight'),
-          responsesWebSocketConnections: {
-            total: 0, awaitingFirstMessage: 0, guardianAwaitingFirstMessage: 0,
-            connectingUpstream: 0, relaying: 0, oldestFirstMessageWaitMS: null,
-          },
         };
       }
       if (path.startsWith('/runtime/request-chain') && method === 'GET') {

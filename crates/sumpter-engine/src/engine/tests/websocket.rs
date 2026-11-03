@@ -3,14 +3,12 @@
 use std::time::Instant;
 
 use axum::extract::ws::Message as WebSocketMessage;
-use sumpter_core::events::ClientKind;
 
 use crate::engine::websocket::{websocket_upstream_headers, websocket_url};
-use crate::engine::websocket_relay::websocket_context_with_first_frame;
 use crate::engine::websocket_relay::websocket_trace;
 use crate::engine::websocket_relay::{
-    WebSocketEventContext, WebSocketRelayCounters, tungstenite_message_stats,
-    websocket_connect_error, websocket_message_codex_metadata, websocket_message_size,
+    WebSocketRelayCounters, tungstenite_message_stats, websocket_connect_error,
+    websocket_message_size,
 };
 use crate::request_build;
 
@@ -77,157 +75,6 @@ fn websocket_trace_keeps_client_upgrade_and_first_message_wait_separate() {
     assert_eq!(value["stage"], "awaiting_first_message");
     assert_eq!(value["firstMessageWaitMS"], 37);
     assert!(value.get("handshakeStatus").is_none());
-}
-
-#[test]
-fn websocket_codex_frame_preserves_workspace_and_canonical_identity() {
-    use sumpter_core::events::CodexMetadata;
-    let body = serde_json::json!({"originator":"Codex Desktop", "response": {
-        "client_metadata": {"x-codex-turn-metadata": serde_json::json!({
-            "session_id":"body-session", "thread_id":"body-thread",
-            "context_window_id":"context", "window_number":0,
-            "turn_trigger":"user_input", "history_ingest_requested":false,
-            "forked_from_thread_id":"parent", "subagent_kind":"thread_spawn",
-            "forked_from_ordinal_exclusive":2,
-            "workspaces":{"/work/project":{}},
-            "tool_namespaces_info":{"functions":{"name":"functions","functions":{}}}
-        }).to_string()}
-    }});
-    let frame = WebSocketMessage::Text(body.to_string().into());
-    let metadata = websocket_message_codex_metadata(&frame).unwrap();
-    let context = WebSocketEventContext {
-        client_upgraded: false,
-        first_message_wait_ms: None,
-        source_ip: None,
-        request_id: "request".into(),
-        request_path: "/v1/responses".into(),
-        route_intent: "responses_websocket".into(),
-        client_kind: ClientKind::OpenaiCompat,
-        model: "model".into(),
-        client_declared: None,
-        grok_metadata: None,
-        session_id: Some("header-session".into()),
-        started: Instant::now(),
-        codex_metadata: CodexMetadata::from_request(
-            &[
-                ("session-id".into(), "header-session".into()),
-                ("thread-id".into(), "header-thread".into()),
-            ],
-            None,
-        ),
-    };
-    let merged = websocket_context_with_first_frame(&context, Some(&metadata));
-    assert_eq!(merged.client_kind, ClientKind::Codex);
-    assert_eq!(merged.session_id.as_deref(), Some("body-session"));
-    let result = merged.codex_metadata.unwrap();
-    assert_eq!(result.thread_id.as_deref(), Some("body-thread"));
-    assert_eq!(result.workspaces, metadata.workspaces);
-    assert!(!result.workspaces.is_empty());
-    assert_eq!(result.tool_namespaces_info, metadata.tool_namespaces_info);
-    assert!(result.parent_thread_id.is_none());
-    assert_eq!(result.forked_from_thread_id.as_deref(), Some("parent"));
-    assert_eq!(result.context_window_id.as_deref(), Some("context"));
-    assert_eq!(result.window_number, Some(0));
-    assert_eq!(result.history_ingest_requested, Some(false));
-    assert_eq!(result.forked_from_ordinal_exclusive, Some(2));
-    assert!(result.has_conflicts);
-    assert!(
-        !result
-            .conflicts
-            .iter()
-            .any(|v| v.contains("header-session"))
-    );
-    let header_parent = CodexMetadata::from_request(
-        &[(
-            "x-codex-parent-thread-id".into(),
-            "authoritative-parent".into(),
-        )],
-        None,
-    );
-    let result =
-        crate::engine::context::merge_codex_metadata(Some(metadata), header_parent).unwrap();
-    assert_eq!(
-        result.parent_thread_id.as_deref(),
-        Some("authoritative-parent")
-    );
-}
-
-#[test]
-fn websocket_first_frame_originator_upgrades_generic_attribution() {
-    let frame = WebSocketMessage::Text(
-        r#"{"type":"response.create","model":"gpt-4o","originator":"Codex Desktop"}"#.into(),
-    );
-    let metadata = websocket_message_codex_metadata(&frame).expect("frame metadata");
-    let context = WebSocketEventContext {
-        client_upgraded: false,
-        first_message_wait_ms: None,
-        source_ip: None,
-        request_id: "request".into(),
-        request_path: "/v1/responses".into(),
-        route_intent: "responses_websocket".into(),
-        client_kind: ClientKind::OpenaiCompat,
-        model: "gpt-4o".into(),
-        codex_metadata: None,
-        client_declared: None,
-        grok_metadata: None,
-        session_id: None,
-        started: Instant::now(),
-    };
-    let merged = websocket_context_with_first_frame(&context, Some(&metadata));
-    assert_eq!(merged.client_kind, ClientKind::Codex);
-    assert_eq!(
-        merged
-            .codex_metadata
-            .as_ref()
-            .and_then(|metadata| metadata.originator.as_deref()),
-        Some("Codex Desktop")
-    );
-}
-
-#[test]
-fn websocket_first_frame_current_codex_originators_upgrade_generic_attribution() {
-    for originator in [
-        "codex_work_web",
-        "codex_work_mobile",
-        "codex_work_cca",
-        "chatgpt_cca",
-        "codex_vscode",
-        "codex_exec",
-        "codex_sdk_ts",
-        "codex_atlas",
-        "codex_chatgpt_desktop",
-        "codex_chatgpt_android_remote",
-        "codex_chatgpt_ios_remote",
-        "codex_app_server_daemon",
-        "codex-backend",
-    ] {
-        let frame = WebSocketMessage::Text(
-            format!(r#"{{"type":"response.create","model":"gpt-4o","originator":"{originator}"}}"#)
-                .into(),
-        );
-        let metadata = websocket_message_codex_metadata(&frame).expect("frame metadata");
-        let context = WebSocketEventContext {
-            client_upgraded: false,
-            first_message_wait_ms: None,
-            source_ip: None,
-            request_id: "request".into(),
-            request_path: "/v1/responses".into(),
-            route_intent: "responses_websocket".into(),
-            client_kind: ClientKind::OpenaiCompat,
-            model: "gpt-4o".into(),
-            codex_metadata: None,
-            client_declared: None,
-            grok_metadata: None,
-            session_id: None,
-            started: Instant::now(),
-        };
-        let merged = websocket_context_with_first_frame(&context, Some(&metadata));
-        assert_eq!(
-            merged.client_kind,
-            ClientKind::Codex,
-            "originator {originator}"
-        );
-    }
 }
 
 #[test]

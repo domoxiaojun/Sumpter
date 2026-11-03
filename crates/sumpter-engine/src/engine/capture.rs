@@ -486,60 +486,6 @@ impl Engine {
         }
     }
 
-    /// Start a metadata-only connection record before any application frame arrives.
-    pub(super) fn capture_websocket_start(
-        &self,
-        context: &super::websocket_relay::WebSocketEventContext,
-    ) {
-        let mut capture = self.inner.capture.lock().unwrap();
-        if !capture.enabled {
-            return;
-        }
-        let record = DiagnosticRequestCapture {
-            websocket_trace: Some(sumpter_core::events::WebSocketTrace {
-                client_handshake_status: Some(101),
-                stage: Some("awaiting_first_message".into()),
-                attempt_count: Some(0),
-                ..Default::default()
-            }),
-            request_id: context.request_id.clone(),
-            timestamp: now_unix(),
-            method: "GET".into(),
-            path: context.request_path.clone(),
-            inbound_headers: Vec::new(),
-            inbound_body: "".into(),
-            inbound_body_bytes: 0,
-            inbound_body_truncated: false,
-            client_kind: context.client_kind,
-            request_purpose: sumpter_core::routing::RequestPurpose::Standard,
-            client_model: String::new(),
-            effective_model: String::new(),
-            feature_rule_id: None,
-            client_declared: None,
-            source_format: Some(sumpter_core::config::ProviderProtocol::OpenAI),
-            target_format: None,
-            route_mode: None,
-            attempts: Vec::new(),
-            client_chunks: Vec::new(),
-            completed_at_ms: None,
-            status_code: Some(101),
-            outcome: None,
-            failure_kind: None,
-            failure_detail: None,
-            truncated: false,
-        };
-        let size = record_size(&record);
-        if size > capture.max_bytes.saturating_sub(capture.captured_bytes) {
-            refresh_capture_usage(&mut capture, true);
-        } else {
-            capture.captured_bytes += size;
-            capture.records.insert(0, record);
-            refresh_capture_usage(&mut capture, false);
-        }
-        self.sync_capture_index_window(&capture);
-        self.inner.capture_dirty.store(true, Ordering::Release);
-    }
-
     pub(super) fn capture_start(
         &self,
         request_id: &str,

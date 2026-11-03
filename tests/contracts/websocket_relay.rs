@@ -17,125 +17,8 @@ const TERMINAL: &str = r#"{"type":"response.completed","response":{"status":"com
 type Client =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
-#[tokio::test]
-async fn reused_connection_eof_preserves_terminals_but_never_hides_pending_turns() {
-    for client_eof in [false, true] {
-        for pending in [false, true] {
-            for terminal in [
-                "response.completed",
-                "response.failed",
-                "response.incomplete",
-                "response.interrupted",
-            ] {
-                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-                let mut config = super::config();
-                config.endpoints[0].base_url = format!("http://{}", listener.local_addr().unwrap());
-                config.migrate_model_groups();
-                let (release, released) = tokio::sync::oneshot::channel();
-                let upstream = tokio::spawn(async move {
-                    let (stream, _) = listener.accept().await.unwrap();
-                    let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
-                    for i in 0..2 {
-                        socket.next().await.unwrap().unwrap();
-                        for kind in [
-                            "response.created",
-                            if i == 0 {
-                                "response.completed"
-                            } else {
-                                terminal
-                            },
-                        ] {
-                            socket.send(Message::Text(serde_json::json!({"type":kind,"response":{"id":format!("response-{i}")}}).to_string().into())).await.unwrap();
-                        }
-                    }
-                    if pending {
-                        socket.next().await.unwrap().unwrap();
-                        socket
-                            .send(Message::Text(
-                                r#"{"type":"response.created","response":{"id":"pending"}}"#.into(),
-                            ))
-                            .await
-                            .unwrap();
-                    }
-                    released.await.unwrap();
-                    if client_eof {
-                        assert!(
-                            matches!(socket.next().await.unwrap().unwrap(), Message::Close(Some(frame)) if u16::from(frame.code) == 1011)
-                        );
-                    }
-                });
-                let engine = pi_test_engine(config);
-                let mut notices = engine.subscribe();
-                let (address, handle) =
-                    server::serve(engine.clone(), "127.0.0.1:0".parse().unwrap())
-                        .await
-                        .unwrap();
-                let mut socket = connect(address, "").await;
-                for _ in 0..2 {
-                    socket.send(Message::Text(FIRST.into())).await.unwrap();
-                    for _ in 0..2 {
-                        socket.next().await.unwrap().unwrap();
-                    }
-                }
-                if pending {
-                    socket.send(Message::Text(FIRST.into())).await.unwrap();
-                    socket.next().await.unwrap().unwrap();
-                }
-                release.send(()).unwrap();
-                if client_eof {
-                    drop(socket);
-                } else {
-                    assert!(
-                        matches!(socket.next().await.unwrap().unwrap(), Message::Close(Some(frame)) if u16::from(frame.code) == 1011)
-                    );
-                }
-                let event = completed(&mut notices).await;
-                let expected = if pending {
-                    RuntimeEventOutcome::Failed
-                } else {
-                    match terminal {
-                        "response.completed" => RuntimeEventOutcome::Succeeded,
-                        "response.interrupted" => RuntimeEventOutcome::Cancelled,
-                        _ => RuntimeEventOutcome::Failed,
-                    }
-                };
-                assert_eq!(
-                    event.outcome,
-                    Some(expected),
-                    "client={client_eof} pending={pending} terminal={terminal}"
-                );
-                let trace = event
-                    .stream_trace
-                    .as_ref()
-                    .unwrap()
-                    .websocket_trace
-                    .as_ref()
-                    .unwrap();
-                assert_eq!(trace.abnormal_close, Some(true));
-                assert_eq!(
-                    trace.transport_error_kind.as_deref(),
-                    Some("eof_without_close")
-                );
-                assert_eq!(
-                    trace.closed_by.as_deref(),
-                    Some(if client_eof { "client" } else { "upstream" })
-                );
-                assert!(
-                    engine
-                        .runtime_snapshot()
-                        .recent_events
-                        .iter()
-                        .all(|e| e.outcome == Some(expected))
-                );
-                upstream.await.unwrap();
-                pi_test_shutdown(handle).await;
-            }
-        }
-    }
-}
-
 async fn connect(address: std::net::SocketAddr, query: &str) -> Client {
-    let mut request = format!("ws://{address}/v1/responses{query}")
+    let mut request = format!("ws://{address}/v1/realtime?model=gpt-realtime{query}")
         .into_client_request()
         .unwrap();
     request
@@ -174,94 +57,7 @@ async fn completed(notices: &mut tokio::sync::broadcast::Receiver<EngineNotice>)
 }
 
 #[tokio::test]
-async fn prewarm_then_turns_preserve_frames_and_record_distinct_requests() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let mut config = super::config();
-    config.endpoints[0].base_url = format!("http://{}", listener.local_addr().unwrap());
-    config.migrate_model_groups();
-    let frames = ["prewarm","turn","compaction","memory"].iter().enumerate().map(|(i,kind)| {
-        serde_json::json!({"type":"response.create","model":"gpt-4o","generate":i!=0,"input":"PRIVATE_BODY", "client_metadata":{"x-codex-turn-metadata":serde_json::json!({"request_kind":kind,"turn_id":format!("turn-{i}"),"thread_source":"user"}).to_string()}}).to_string()
-    }).collect::<Vec<_>>();
-    let expected = frames.clone();
-    let upstream = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
-        for (i, frame) in expected.iter().enumerate() {
-            assert_eq!(
-                socket.next().await.unwrap().unwrap(),
-                Message::Text(frame.clone().into())
-            );
-            for kind in ["response.created", "response.completed"] {
-                socket
-                    .send(Message::Text(
-                        serde_json::json!({"type":kind,"response":{"id":format!("resp-{i}")}})
-                            .to_string()
-                            .into(),
-                    ))
-                    .await
-                    .unwrap();
-            }
-        }
-        socket
-            .send(Message::Close(Some(CloseFrame {
-                code: 1000.into(),
-                reason: "".into(),
-            })))
-            .await
-            .unwrap();
-        let _ = socket.next().await;
-    });
-    let engine = pi_test_engine(config);
-    let mut notices = engine.subscribe();
-    let (address, handle) = server::serve(engine.clone(), "127.0.0.1:0".parse().unwrap())
-        .await
-        .unwrap();
-    let mut socket = connect(address, "").await;
-    for frame in frames {
-        socket.send(Message::Text(frame.into())).await.unwrap();
-        for _ in 0..2 {
-            assert!(matches!(
-                socket.next().await.unwrap().unwrap(),
-                Message::Text(_)
-            ));
-        }
-    }
-    let _ = socket.next().await;
-    let event = completed(&mut notices).await;
-    let metadata = event.codex_metadata.as_ref().unwrap();
-    assert_eq!(metadata.request_kind.as_deref(), Some("memory"));
-    assert_eq!(metadata.turn_id.as_deref(), Some("turn-3"));
-    assert!(!metadata.has_conflicts);
-    let requests = event
-        .stream_trace
-        .as_ref()
-        .unwrap()
-        .websocket_trace
-        .as_ref()
-        .unwrap()
-        .requests
-        .as_ref()
-        .unwrap();
-    for kind in ["prewarm", "turn", "compaction", "memory"] {
-        assert_eq!(requests.counts[kind], 1);
-    }
-    assert_eq!(requests.recent[3].response_id.as_deref(), Some("resp-3"));
-    assert_eq!(
-        requests.recent[3].terminal.as_deref(),
-        Some("response.completed")
-    );
-    assert!(
-        !serde_json::to_string(&event)
-            .unwrap()
-            .contains("PRIVATE_BODY")
-    );
-    assert_eq!(engine.runtime_snapshot().client_requests, 1);
-    upstream.await.unwrap();
-    pi_test_shutdown(handle).await;
-}
-
-#[tokio::test]
-async fn responses_frames_and_close_remain_ordered_and_exact() {
+async fn realtime_frames_and_close_remain_ordered_and_exact() {
     let frames = vec![
         FIRST,
         r#"{ "type":"response.create", "stream_id":"main", "previous_response_id":"resp-1", "input":[{"type":"tool_addition","tools":[]}], "opaque":{"keep":[1,null]} }"#,
@@ -428,7 +224,11 @@ async fn relay_close_eof_reset_and_cancel_have_distinct_results() {
         };
         assert_eq!(
             event.outcome,
-            Some(RuntimeEventOutcome::Succeeded),
+            Some(match case {
+                "normal" => RuntimeEventOutcome::Succeeded,
+                "client_close" => RuntimeEventOutcome::Cancelled,
+                _ => RuntimeEventOutcome::Failed,
+            }),
             "{case}: {event:?}"
         );
         assert_eq!(trace.transport_error_kind.as_deref(), error, "{case}");
@@ -441,12 +241,14 @@ async fn relay_close_eof_reset_and_cancel_have_distinct_results() {
             })
         );
         if case == "client_close" {
-            assert_eq!(event.failure_kind, None);
+            assert_eq!(
+                event.failure_kind,
+                Some(RuntimeFailureKind::ClientCancelled)
+            );
         }
         assert_eq!(engine.runtime_snapshot().recent_events.len(), 2);
         let capture = engine.diagnostic_capture_snapshot();
-        assert_eq!(capture.records.len(), 1);
-        assert_eq!(capture.records[0].websocket_trace.as_ref(), Some(trace));
+        assert!(capture.records.is_empty());
         let encoded = serde_json::to_string(&capture).unwrap();
         assert!(!encoded.contains("PRIVATE_CLOSE") && !encoded.contains("listener-secret"));
         upstream.await.unwrap();
@@ -539,7 +341,7 @@ async fn drain_large_and_ping<S>(
 
 #[tokio::test]
 async fn idle_limit_starts_after_business_and_counts_activity_in_both_directions() {
-    for query in ["", "?model=gpt-4o"] {
+    for query in ["", "&audit=query"] {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let mut config = super::config();
         config.endpoints[0].base_url = format!("http://{}", listener.local_addr().unwrap());
@@ -676,8 +478,11 @@ async fn ping_pong_activity_keeps_idle_connections_alive_without_business_counts
         .await
         .unwrap();
         let event = completed(&mut notices).await;
-        assert_eq!(event.outcome, Some(RuntimeEventOutcome::Succeeded));
-        assert_eq!(event.failure_kind, None);
+        assert_eq!(event.outcome, Some(RuntimeEventOutcome::Failed));
+        assert_eq!(
+            event.failure_kind,
+            Some(RuntimeFailureKind::StreamIdleTimeout)
+        );
         assert!(event.upstream_host.is_some());
         let trace = event.stream_trace.unwrap().websocket_trace.unwrap();
         assert_eq!(trace.client_message_count, Some(1));
@@ -688,53 +493,6 @@ async fn ping_pong_activity_keeps_idle_connections_alive_without_business_counts
         upstream.await.unwrap();
         pi_test_shutdown(handle).await;
     }
-}
-
-#[tokio::test]
-async fn terminal_frame_before_eof_is_a_business_success_and_gets_a_close() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let mut config = super::config();
-    config.endpoints[0].base_url = format!("http://{}", listener.local_addr().unwrap());
-    config.migrate_model_groups();
-    let upstream = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
-        socket.next().await.unwrap().unwrap();
-        socket.send(Message::Text(TERMINAL.into())).await.unwrap();
-        // Immediate EOF after the terminal frame, without a Close handshake.
-    });
-    let engine = pi_test_engine(config);
-    let mut notices = engine.subscribe();
-    let (address, handle) = server::serve(engine, "127.0.0.1:0".parse().unwrap())
-        .await
-        .unwrap();
-    let mut client = connect(address, "").await;
-    client.send(Message::Text(FIRST.into())).await.unwrap();
-    assert_eq!(
-        client.next().await.unwrap().unwrap(),
-        Message::Text(TERMINAL.into())
-    );
-    assert!(matches!(
-        tokio::time::timeout(Duration::from_secs(5), client.next())
-            .await
-            .unwrap()
-            .unwrap(),
-        Ok(Message::Close(Some(frame))) if u16::from(frame.code) == 1011
-    ));
-    let event = completed(&mut notices).await;
-    assert_eq!(event.outcome, Some(RuntimeEventOutcome::Succeeded));
-    assert_eq!(
-        event
-            .stream_trace
-            .unwrap()
-            .websocket_trace
-            .unwrap()
-            .transport_error_kind
-            .as_deref(),
-        Some("eof_without_close")
-    );
-    upstream.await.unwrap();
-    pi_test_shutdown(handle).await;
 }
 
 // Transport closure and business completion are separate. A 1000 close while
@@ -792,232 +550,6 @@ async fn unfinished_response_on_upstream_close_fails_and_releases_connection() {
             .iter()
             .all(|event| !event.is_in_flight())
     );
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while engine.runtime_summary_value()["responsesWebSocketConnections"]["total"] != 0 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
     upstream.await.unwrap();
     pi_test_shutdown(handle).await;
-}
-
-#[tokio::test]
-async fn late_interrupt_is_transparent_and_does_not_reopen_completed_turn() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let mut config = super::config();
-    config.endpoints[0].base_url = format!("http://{}", listener.local_addr().unwrap());
-    config.migrate_model_groups();
-    let created = r#"{"type":"response.created","response":{"id":"finished"}}"#;
-    let terminal = r#"{"type":"response.completed","response":{"id":"finished"}}"#;
-    let interrupt = r#"{ "type":"response.interrupt", "response_id":"finished" }"#;
-    let late = r#"{"type":"response.interrupted","response_id":"finished"}"#;
-    let (release, released) = tokio::sync::oneshot::channel();
-    let upstream = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
-        socket.next().await.unwrap().unwrap();
-        for frame in [created, terminal] {
-            socket.send(Message::Text(frame.into())).await.unwrap();
-        }
-        assert_eq!(
-            socket.next().await.unwrap().unwrap(),
-            Message::Text(interrupt.into())
-        );
-        socket.send(Message::Text(late.into())).await.unwrap();
-        released.await.unwrap();
-        socket
-            .send(Message::Close(Some(CloseFrame {
-                code: 1000.into(),
-                reason: "".into(),
-            })))
-            .await
-            .unwrap();
-        let _ = socket.next().await;
-    });
-    let engine = pi_test_engine(config);
-    let mut notices = engine.subscribe();
-    let (address, handle) = server::serve(engine.clone(), "127.0.0.1:0".parse().unwrap())
-        .await
-        .unwrap();
-    let mut socket = connect(address, "").await;
-    socket.send(Message::Text(FIRST.into())).await.unwrap();
-    for frame in [created, terminal] {
-        assert_eq!(
-            socket.next().await.unwrap().unwrap(),
-            Message::Text(frame.into())
-        );
-    }
-    socket.send(Message::Text(interrupt.into())).await.unwrap();
-    assert_eq!(
-        socket.next().await.unwrap().unwrap(),
-        Message::Text(late.into())
-    );
-    // The retained transport is not a live inference request.
-    assert_eq!(
-        engine.runtime_summary_value()["responsesWebSocketConnections"]["relaying"],
-        1
-    );
-    assert!(
-        engine.runtime_summary_value()["inFlightEvents"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
-    release.send(()).unwrap();
-    let _ = socket.next().await;
-    let event = completed(&mut notices).await;
-    assert_eq!(event.outcome, Some(RuntimeEventOutcome::Succeeded));
-    let requests = event
-        .stream_trace
-        .unwrap()
-        .websocket_trace
-        .unwrap()
-        .requests
-        .unwrap();
-    assert_eq!(requests.recent.len(), 1);
-    assert_eq!(
-        requests.recent[0].terminal.as_deref(),
-        Some("response.completed")
-    );
-    assert_eq!(requests.controls["response.interrupt"], 1);
-    upstream.await.unwrap();
-    pi_test_shutdown(handle).await;
-}
-
-#[tokio::test]
-async fn client_normal_close_preserves_business_terminal_and_pending_turns() {
-    for (terminal, next_turn, expected) in [
-        ("response.completed", false, RuntimeEventOutcome::Succeeded),
-        ("response.done", false, RuntimeEventOutcome::Succeeded),
-        ("response.failed", false, RuntimeEventOutcome::Failed),
-        ("response.incomplete", false, RuntimeEventOutcome::Failed),
-        (
-            "response.interrupted",
-            false,
-            RuntimeEventOutcome::Cancelled,
-        ),
-        ("response.completed", true, RuntimeEventOutcome::Cancelled),
-    ] {
-        tokio::time::timeout(Duration::from_secs(10), async {
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let mut config = super::config();
-            config.endpoints[0].base_url = format!("http://{}", listener.local_addr().unwrap());
-            config.migrate_model_groups();
-            let upstream = tokio::spawn(async move {
-                let (stream, _) = listener.accept().await.unwrap();
-                let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
-                socket.next().await.unwrap().unwrap();
-                for kind in ["response.created", terminal] {
-                    socket
-                        .send(Message::Text(
-                            serde_json::json!({
-                                "type":kind,"response":{"id":"finished"}
-                            })
-                            .to_string()
-                            .into(),
-                        ))
-                        .await
-                        .unwrap();
-                }
-                // Completion must survive ancillary events after the terminal.
-                socket
-                    .send(Message::Text(r#"{"type":"codex.rate_limits"}"#.into()))
-                    .await
-                    .unwrap();
-                if next_turn {
-                    assert!(matches!(
-                        socket.next().await.unwrap().unwrap(),
-                        Message::Text(_)
-                    ));
-                    socket
-                        .send(Message::Text(
-                            r#"{"type":"response.created","response":{"id":"pending"}}"#.into(),
-                        ))
-                        .await
-                        .unwrap();
-                }
-                assert!(matches!(
-                    socket.next().await.unwrap().unwrap(),
-                    Message::Close(_)
-                ));
-                let _ = socket.flush().await;
-            });
-            let engine = pi_test_engine(config);
-            let mut notices = engine.subscribe();
-            let (address, handle) = server::serve(engine.clone(), "127.0.0.1:0".parse().unwrap())
-                .await
-                .unwrap();
-            let mut socket = connect(address, "").await;
-            socket
-                .send(Message::Text(
-                    r#"{"type":"response.create","model":"gpt-4o","input":[]}"#.into(),
-                ))
-                .await
-                .unwrap();
-            for _ in 0..3 {
-                socket.next().await.unwrap().unwrap();
-            }
-            if next_turn {
-                socket
-                    .send(Message::Text(
-                        r#"{"type":"response.create","model":"gpt-4o","input":[]}"#.into(),
-                    ))
-                    .await
-                    .unwrap();
-                socket.next().await.unwrap().unwrap();
-            }
-            socket
-                .send(Message::Close(Some(CloseFrame {
-                    code: 1000.into(),
-                    reason: "done".into(),
-                })))
-                .await
-                .unwrap();
-            let _ = socket.next().await;
-            let event = completed(&mut notices).await;
-            assert_eq!(
-                event.outcome,
-                Some(expected),
-                "{terminal}, next={next_turn}"
-            );
-            assert_eq!(event.status_code, 101);
-            let trace = event
-                .stream_trace
-                .as_ref()
-                .unwrap()
-                .websocket_trace
-                .as_ref()
-                .unwrap();
-            assert_eq!(trace.closed_by.as_deref(), Some("client"));
-            assert_eq!(trace.client_close_code, Some(1000));
-            assert_eq!(trace.abnormal_close, Some(false));
-            let snapshot = engine.runtime_snapshot();
-            assert_eq!(snapshot.recent_events.len(), 2);
-            assert!(
-                snapshot
-                    .recent_events
-                    .iter()
-                    .all(|event| event.outcome == Some(expected) && !event.is_in_flight())
-            );
-            assert_eq!(
-                snapshot.client_successes,
-                i64::from(expected == RuntimeEventOutcome::Succeeded)
-            );
-            assert_eq!(
-                snapshot.client_failures,
-                i64::from(expected == RuntimeEventOutcome::Failed)
-            );
-            assert_eq!(snapshot.upstream_successes, snapshot.client_successes);
-            assert_eq!(snapshot.upstream_failures, snapshot.client_failures);
-            if expected == RuntimeEventOutcome::Succeeded {
-                assert_eq!(event.failure_kind, None);
-            }
-            upstream.await.unwrap();
-            pi_test_shutdown(handle).await;
-        })
-        .await
-        .expect("business terminal close completed");
-    }
 }

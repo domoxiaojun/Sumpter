@@ -293,7 +293,7 @@ async fn forwarded_headers_do_not_affect_access_control() {
     assert_eq!(status, 401);
     assert_source_ip(&engine, Some("203.0.113.9"), 1);
     assert!(
-        !engine.authorize_websocket(
+        !engine.authorize_realtime_websocket(
             loopback(),
             &[("x-forwarded-for".into(), "203.0.113.9".into())]
         ),

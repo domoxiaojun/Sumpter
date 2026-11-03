@@ -103,10 +103,7 @@ async fn relay_and_reject(
 #[tokio::test]
 async fn source_ip_websocket_records_peer_without_forwarded_headers() {
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        for path in [
-            "/v1/responses?model=gpt-4o",
-            "/v1/realtime?model=gpt-realtime",
-        ] {
+        for path in ["/v1/realtime?model=gpt-realtime"] {
             relay_and_reject(path, &[], &[], "127.0.0.1").await;
         }
     })
@@ -119,10 +116,7 @@ async fn source_ip_websocket_records_peer_without_forwarded_headers() {
 #[tokio::test]
 async fn source_ip_websocket_honors_declared_client_without_trust_list() {
     tokio::time::timeout(std::time::Duration::from_secs(20), async {
-        for path in [
-            "/v1/responses?model=gpt-4o",
-            "/v1/realtime?model=gpt-realtime",
-        ] {
+        for path in ["/v1/realtime?model=gpt-realtime"] {
             relay_and_reject(
                 path,
                 &[],
@@ -149,10 +143,7 @@ async fn source_ip_websocket_honors_declared_client_without_trust_list() {
 #[tokio::test]
 async fn source_ip_websocket_skips_listed_proxy_hops() {
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        for path in [
-            "/v1/responses?model=gpt-4o",
-            "/v1/realtime?model=gpt-realtime",
-        ] {
+        for path in ["/v1/realtime?model=gpt-realtime"] {
             relay_and_reject(
                 path,
                 &["127.0.0.1"],

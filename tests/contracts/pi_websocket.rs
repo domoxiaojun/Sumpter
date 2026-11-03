@@ -6,7 +6,7 @@ use sumpter_core::{config::AppConfig, events::ClientKind};
 use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 
 #[tokio::test]
-async fn pi_websocket_preserves_frames_and_attributes_both_sides() {
+async fn pi_realtime_websocket_preserves_frames_and_attributes_both_sides() {
     tokio::time::timeout(Duration::from_secs(10), async {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let upstream_address = listener.local_addr().unwrap();
@@ -31,12 +31,12 @@ async fn pi_websocket_preserves_frames_and_attributes_both_sides() {
             "listener": {"host":"127.0.0.1", "port":0, "authToken":"listener-secret"},
             "retry": {"maxDeferredRounds":0, "sessionStickyRetries":0},
             "endpoints":[{"id":"pi-upstream", "name":"pi-upstream", "baseURL":format!("http://{upstream_address}"),
-                "apiKey":"upstream-secret", "protocol":"openai-responses", "enabled":true,
+                "apiKey":"upstream-secret", "protocol":"openai-responses", "enabled":true, "capabilities":["live"],
                 "mappings":[{"clientPattern":"pi-model", "upstreamModel":"pi-model"}]}]
         }).to_string()).unwrap().normalized();
         let engine = super::pi_test_engine(config);
         let (address, handle) = server::serve(engine.clone(), "127.0.0.1:0".parse().unwrap()).await.unwrap();
-        let mut request = format!("ws://{address}/v1/responses").into_client_request().unwrap();
+        let mut request = format!("ws://{address}/v1/realtime?model=pi-model").into_client_request().unwrap();
         for (name, value) in [
             ("authorization", "Bearer listener-secret"), ("user-agent", "pi (test)"),
             ("x-sumpter-client", "pi"), ("x-sumpter-project", "pi-project"),

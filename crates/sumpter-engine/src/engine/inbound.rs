@@ -139,6 +139,22 @@ struct GeminiInbound {
     stream: bool,
 }
 
+/// Detect intent even when the remaining RFC 6455 handshake fields are missing.
+pub fn websocket_upgrade_requested(method: &str, headers: &[(String, String)]) -> bool {
+    method.eq_ignore_ascii_case("GET")
+        && headers.iter().any(|(name, value)| {
+            name.eq_ignore_ascii_case("upgrade")
+                && value
+                    .split(',')
+                    .any(|token| token.trim().eq_ignore_ascii_case("websocket"))
+        })
+}
+
+/// Only the declared Realtime/Live family can enter the native WS data plane.
+pub fn is_realtime_websocket_path(path_and_query: &str) -> bool {
+    super::protocol::is_realtime_http_path(path_without_query(path_and_query))
+}
+
 impl Engine {
     // -----------------------------------------------------------------------
     // 入站分发
@@ -259,6 +275,50 @@ impl Engine {
                 Some(ProviderProtocol::OpenAI),
             );
             return error_response(StatusCode::FORBIDDEN, &[("error", "client_forbidden")]);
+        }
+
+        // Transport negotiation is local, before body reads and provider routing.
+        // A 426 selects the client's HTTP/SSE fallback and is not an inference.
+        if method.eq_ignore_ascii_case("GET")
+            && !is_realtime_websocket_path(path)
+            && (websocket_upgrade_requested(method, &headers)
+                || matches!(
+                    path,
+                    "/v1/responses" | "/responses" | "/backend-api/codex/responses"
+                ))
+        {
+            if config.listener.has_inbound_auth()
+                && !inbound_auth_ok(&headers, &config.listener.auth_token)
+            {
+                self.record_rejected_client_with_metadata(
+                    401,
+                    message_tokens::INBOUND_AUTH_REQUIRED,
+                    None,
+                    Some(RequestPurpose::Standard),
+                    detect_client_kind(&headers, true),
+                    CodexMetadata::from_request(&headers, None),
+                    ClientDeclaredMetadata::from_headers(&headers),
+                    Some(ProviderProtocol::OpenAI),
+                );
+                return error_response(
+                    StatusCode::UNAUTHORIZED,
+                    &[("error", "inbound_auth_required")],
+                );
+            }
+            if !websocket_upgrade_requested(method, &headers) {
+                return method_not_allowed_response("POST");
+            }
+            if super::protocol::is_responses_websocket_path(path) {
+                return super::http_response::json_response(
+                    StatusCode::UPGRADE_REQUIRED,
+                    &serde_json::json!({"error": {
+                        "type": "invalid_request_error",
+                        "code": "websocket_not_supported",
+                        "message": "Responses WebSocket is not supported; use POST with stream=true for SSE."
+                    }}),
+                );
+            }
+            return error_response(StatusCode::NOT_FOUND, &[("error", "not_found")]);
         }
 
         // Platform actions are identified after the network boundary but

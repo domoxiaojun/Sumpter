@@ -75,9 +75,11 @@ async fn public_realtime_21_model_is_preserved_to_the_upstream() {
         .headers_mut()
         .insert("authorization", "Bearer listener-secret".parse().unwrap());
     let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
-    assert_eq!(
-        engine.runtime_summary_value()["responsesWebSocketConnections"]["total"],
-        0
+    assert!(
+        engine
+            .runtime_summary_value()
+            .get("responsesWebSocketConnections")
+            .is_none()
     );
 
     assert_eq!(

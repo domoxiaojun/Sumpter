@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRequestChainLoader, mergeRequestChain } from '../utils/requestChain.js';
 import { useApp } from '../context/AppContext.jsx';
 import { MetricCard } from '../components/MetricCard.jsx';
-import { ResponsesConnectionsPanel } from '../components/ResponsesConnectionsPanel.jsx';
 import { LiveSurfaceLight } from '../components/LiveSurfaceLight.jsx';
 import { StatusBadge } from '../components/StatusBadge.jsx';
 import { DataTable } from '../components/DataTable.jsx';
@@ -318,7 +317,7 @@ function MobileEventList({ events, selectedEventID, onSelect, loading, live = fa
 export function RunPage() {
   const {
     status, runtime, runtimeEventDetail, config, secretStatus, toggleProxy,
-    connectionsObservation, autoRefresh, runRefreshInterval,
+    autoRefresh, runRefreshInterval,
     loadRuntimeEvent, addToast,
   } = useApp();
   const [eventFilter, setEventFilter] = useState('client'); // 'client' | 'upstream' | 'all'
@@ -336,27 +335,6 @@ export function RunPage() {
 
   const isRunning = status?.running;
   const recentEvents = runtime?.recentEvents || [];
-  const websocketLiveEvents = useMemo(() => {
-    const active = connectionsObservation?.value?.active;
-    if (!Array.isArray(active) || eventFilter === 'upstream') return [];
-    return active.map((connection) => ({
-      id: `websocket:${connection.requestID}`,
-      requestID: connection.requestID,
-      kind: 'client',
-      phase: 'inFlight',
-      statusCode: 101,
-      outcome: null,
-      transport: 'websocket',
-      clientModel: connection.model || null,
-      effectiveModel: connection.model || null,
-      timestamp: connection.startedAt,
-      durationMS: 0,
-      ttfbMS: null,
-      streamTrace: { websocketTrace: { stage: connection.stage, handshakeStatus: connection.stage === 'relay' ? 101 : null } },
-      failover: false,
-      detailsOmitted: false,
-    }));
-  }, [connectionsObservation, eventFilter]);
   const [todayTokens, setTodayTokens] = useState(null);
   const notifySnapshotRecovered = useCallback((message) => addToast(message, 'info'), [addToast]);
   const eventHistory = useRuntimeEventPage({
@@ -400,14 +378,14 @@ export function RunPage() {
   }, [autoRefresh, runRefreshInterval, runtime?.resetGeneration]);
 
   useEffect(() => {
-    if (![...recentEvents, ...websocketLiveEvents].some((event) => eventIsInFlight(event))) return undefined;
+    if (!recentEvents.some((event) => eventIsInFlight(event))) return undefined;
     const timer = window.setInterval(() => setDurationTick((value) => value + 1), 1000);
     return () => window.clearInterval(timer);
-  }, [recentEvents, websocketLiveEvents]);
+  }, [recentEvents]);
 
   const liveEvents = useMemo(() => (
-    orderRuntimeEvents([...(eventHistory.liveEvents || []), ...websocketLiveEvents], eventSort)
-  ), [eventHistory.liveEvents, eventSort, websocketLiveEvents]);
+    orderRuntimeEvents(eventHistory.liveEvents || [], eventSort)
+  ), [eventHistory.liveEvents, eventSort]);
   const visibleEvents = useMemo(() => (
     orderRuntimeEvents(
       eventHistory.persistedEvents
@@ -686,7 +664,6 @@ export function RunPage() {
         />
       </div>
 
-      <ResponsesConnectionsPanel observation={connectionsObservation} autoRefresh={autoRefresh} />
 
       {/* Real-time Streaming Telemetry Event Log */}
       <div className="glass-panel run-events-panel">

@@ -3,7 +3,6 @@
 use super::context::bounded_request_path;
 use super::context::detect_client_kind;
 use super::context::host_of;
-use super::context::is_codex_originator;
 use super::context::merge_codex_metadata;
 use super::context::observed_session_id;
 use super::context::retain_codex_metadata_for_client;
@@ -70,8 +69,6 @@ pub(super) struct WebSocketRelayCounters {
     pub(super) bytes_received: AtomicU64,
     pub(super) client_message_count: AtomicU64,
     pub(super) upstream_message_count: AtomicU64,
-    observed_upstream_frames: AtomicU64,
-    delivered_upstream_frames: AtomicU64,
     pub(super) failed: AtomicBool,
     pub(super) abnormal_close: AtomicBool,
     client_closed: AtomicBool,
@@ -100,36 +97,8 @@ pub(super) struct WebSocketRelayMetrics {
     pub(super) idle_timeout_ms: Option<i64>,
     pub(super) abnormal_close: bool,
     pub(super) failed: bool,
-    pub(super) all_upstream_frames_delivered: bool,
-    pub(super) latest_client_codex_metadata: Option<CodexMetadata>,
     pub(super) requests: sumpter_core::responses_observation::ResponsesRequestSummary,
     pub(super) duration_ms: i64,
-}
-
-pub(super) async fn send_websocket_json_error(
-    socket: &mut WebSocket,
-    status: u16,
-    error_type: &str,
-    message: &str,
-    retry_after_seconds: Option<f64>,
-) -> Result<(), axum::Error> {
-    let status = http::StatusCode::from_u16(status)
-        .ok()
-        .filter(|status| status.is_client_error() || status.is_server_error())
-        .unwrap_or(http::StatusCode::BAD_GATEWAY);
-    let mut event = json!({
-        "type": "error",
-        "status": status.as_u16(),
-        "error": {"type": error_type, "code": error_type, "message": message}
-    });
-    if let Some(seconds) =
-        retry_after_seconds.filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
-    {
-        let delay = seconds.ceil().min(super::dispatch::MAX_RETRY_AFTER_SECS) as u64;
-        event["error"]["headers"] = json!({"retry-after": delay.to_string()});
-    }
-    let payload = serde_json::to_string(&event).expect("serializable websocket error");
-    socket.send(WebSocketMessage::Text(payload.into())).await
 }
 
 /// One pending business message per direction; small control queues cannot retain
@@ -218,18 +187,13 @@ fn axum_transport_error_kind(error: axum::Error) -> &'static str {
 pub(super) async fn relay_native_websocket(
     socket: WebSocket,
     upstream: NativeWebSocket,
-    initial_message: Option<WebSocketMessage>,
     shutdown: tokio_util::sync::CancellationToken,
     idle_timeout: Option<Duration>,
 ) -> WebSocketRelayMetrics {
     let started = Instant::now();
     let counters = Arc::new(WebSocketRelayCounters::default());
     let cancellation = tokio_util::sync::CancellationToken::new();
-    let (activity, activity_rx) = watch::channel(
-        initial_message
-            .as_ref()
-            .map(|_| tokio::time::Instant::now()),
-    );
+    let (activity, activity_rx) = watch::channel(None);
     let (client_tx, client_rx) = socket.split();
     let (upstream_tx, upstream_rx) = upstream.split();
     let (client_data_tx, client_data_rx) = mpsc::channel(1);
@@ -245,15 +209,6 @@ pub(super) async fn relay_native_websocket(
         control: upstream_control_tx,
     };
 
-    // Seed the first frame before starting readers, but do NOT await its network
-    // write: upstream Ping/Close must remain readable even during this first send.
-    if let Some(message) = initial_message {
-        counters.observe_client_request(&message);
-        upstream_queue
-            .data
-            .try_send(RelayData::Frame(message))
-            .unwrap_or_else(|_| unreachable!("empty relay queue"));
-    }
     let client_reader = relay_reader(
         client_rx.map(|item| item.map(Some).map_err(axum_transport_error_kind)),
         Peer::Client,
@@ -488,11 +443,6 @@ async fn relay_writer<S>(
             return;
         }
         mark_activity(activity, is_business);
-        if is_business && matches!(peer, Peer::Client) {
-            counters
-                .delivered_upstream_frames
-                .fetch_add(1, Ordering::Relaxed);
-        }
         let (byte_counter, message_counter) = match peer {
             Peer::Client => (&counters.bytes_received, &counters.upstream_message_count),
             Peer::Upstream => (&counters.bytes_sent, &counters.client_message_count),
@@ -578,8 +528,6 @@ impl WebSocketRelayCounters {
         ) {
             return;
         }
-        self.observed_upstream_frames
-            .fetch_add(1, Ordering::Relaxed);
         *self.last_event_type.lock().unwrap() = None;
         let WebSocketMessage::Text(text) = message else {
             return;
@@ -666,9 +614,6 @@ impl WebSocketRelayCounters {
             idle_timeout_ms: *self.idle_timeout_ms.lock().unwrap(),
             abnormal_close: self.abnormal_close.load(Ordering::Acquire),
             failed: self.failed.load(Ordering::Acquire),
-            all_upstream_frames_delivered: self.observed_upstream_frames.load(Ordering::Relaxed)
-                == self.delivered_upstream_frames.load(Ordering::Relaxed),
-            latest_client_codex_metadata: requests.latest_metadata.clone(),
             requests: requests.summary(),
             duration_ms: started.elapsed().as_millis().min(i64::MAX as u128) as i64,
         }
@@ -841,45 +786,6 @@ pub(super) fn websocket_event_context(
     }
 }
 
-/// Merge the bounded metadata projection observed in a first client frame
-/// into the handshake context. A Responses WebSocket may use a generic
-/// browser-like User-Agent and put `originator` only in `response.create`;
-/// that frame must still be attributable as Codex without persisting its
-/// prompt or raw JSON. Frame body metadata takes priority over handshake
-/// compatibility headers, matching the HTTP parser's precedence.
-pub(super) fn websocket_context_with_first_frame(
-    context: &WebSocketEventContext,
-    frame: Option<&CodexMetadata>,
-) -> WebSocketEventContext {
-    let Some(frame) = frame else {
-        return context.clone();
-    };
-    let mut merged = context.clone();
-    // pi session identity comes from its handshake headers. Responses frame
-    // metadata must not relabel pi as Codex or override explicit attribution.
-    if merged.client_kind == ClientKind::Pi {
-        return merged;
-    }
-    merged.codex_metadata = merge_codex_metadata(Some(frame.clone()), merged.codex_metadata.take());
-    merged.session_id = merged
-        .codex_metadata
-        .as_ref()
-        .and_then(|metadata| metadata.session_id.clone())
-        .or(merged.session_id);
-    if matches!(
-        merged.client_kind,
-        ClientKind::OpenaiCompat | ClientKind::Unknown
-    ) && merged
-        .codex_metadata
-        .as_ref()
-        .and_then(|metadata| metadata.originator.as_deref())
-        .is_some_and(is_codex_originator)
-    {
-        merged.client_kind = ClientKind::Codex;
-    }
-    merged
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn websocket_trace(
     handshake_status: i64,
@@ -1001,28 +907,6 @@ pub(super) fn websocket_client_event(
         failure.apply_to(&mut event);
     }
     event
-}
-
-pub(super) fn websocket_message_model(message: &WebSocketMessage) -> Option<String> {
-    let WebSocketMessage::Text(text) = message else {
-        return None;
-    };
-    let value = serde_json::from_str::<Value>(text.as_str()).ok()?;
-    [
-        value.get("model"),
-        value
-            .get("session")
-            .and_then(|session| session.get("model")),
-        value
-            .get("response")
-            .and_then(|response| response.get("model")),
-    ]
-    .into_iter()
-    .flatten()
-    .filter_map(Value::as_str)
-    .map(str::trim)
-    .find(|model| !model.is_empty())
-    .map(str::to_string)
 }
 
 pub(super) fn websocket_message_to_tungstenite(
@@ -1240,11 +1124,7 @@ mod relay_tests {
                 );
                 assert_eq!(counters.bytes_sent.load(Ordering::Relaxed), 0);
                 assert_eq!(counters.bytes_received.load(Ordering::Relaxed), 0);
-                assert!(
-                    !counters
-                        .snapshot(Instant::now())
-                        .all_upstream_frames_delivered
-                );
+                assert_eq!(counters.snapshot(Instant::now()).bytes_received, 0);
             }
         }
     }

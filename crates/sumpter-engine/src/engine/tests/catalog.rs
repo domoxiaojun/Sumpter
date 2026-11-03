@@ -66,7 +66,7 @@ fn route_capability_ledger_uses_effective_routes_and_never_template_guesses() {
     );
     let known = render(&config, &ledger, "cpa");
     assert_eq!(known["supports_search_tool"], true);
-    assert_eq!(known["prefer_websockets"], true);
+    assert_eq!(known["prefer_websockets"], false);
     assert_eq!(known["cpa_capabilities"]["web_search"], false);
     assert_eq!(known["service_tiers"][0]["id"], "priority");
     assert!(
