@@ -80,6 +80,14 @@ pub fn dimension_page_on(
             "NULL",
             "",
         ),
+        DimensionKind::RequestKind => (
+            "COALESCE(request_kind,'unrecorded')",
+            "COALESCE(request_kind,'unrecorded')",
+            "COALESCE(request_kind,'unrecorded')",
+            "client_kind",
+            "NULL",
+            "",
+        ),
         DimensionKind::ClientVariant => (
             "COALESCE(client_variant,'unknown')",
             "COALESCE(client_variant,'unknown')",

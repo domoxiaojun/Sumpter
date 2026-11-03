@@ -6,7 +6,7 @@ import { StatusBadge } from './StatusBadge.jsx';
 import { Icon } from '../utils/icons.jsx';
 import { api } from '../services/api.js';
 import { piAttributionState, PI_ATTRIBUTION_COPY } from '../utils/piAttribution.js';
-import { CC_ATTRIBUTION_HINT, formatDuration, formatTimestamp, formatTokenCount, normalizeTimestampMS, clientKindLabel, failureKindLabel, failurePhaseLabel, shouldPromptCCAttribution, projectLabelText, projectClientKindsLabel, purposeLabel } from '../utils/helpers.js';
+import { requestKindLabel, clientVariantLabel, agentRoleLabel, CC_ATTRIBUTION_HINT, formatDuration, formatTimestamp, formatTokenCount, normalizeTimestampMS, clientKindLabel, failureKindLabel, failurePhaseLabel, shouldPromptCCAttribution, projectLabelText, projectClientKindsLabel, purposeLabel } from '../utils/helpers.js';
 import { copyWithToast } from '../utils/clipboard.js';
 import { isRuntimeSnapshotError, normalizeRuntimePagedResult, persistRuntimeAnalyticsPageSize, readRuntimeAnalyticsPageSize, runtimeAppleTimestamp, runtimeCacheRate, runtimeCostAmount, runtimeDateTimeLocal, runtimeTodayBounds, runtimePriceInput, runtimePriceMicros, runtimeV2ErrorMessage } from '../utils/runtimeAnalyticsV2.js';
 import { formatOutputTokensPerSecond, outputSpeedDetail } from '../utils/outputSpeed.js';
@@ -43,7 +43,7 @@ const DIMENSION_OPTIONS = [
   ['endpoint', '入口'],
   ['model', '模型'],
   ['clientKind', '客户端'],
-  ['clientVariant', '客户端变体'], ['agentRole', '代理角色'], ['agentName', '代理名称'],
+  ['requestKind', '请求类型'], ['clientVariant', '客户端形态'], ['agentRole', '代理角色'], ['agentName', '代理名称'],
   ['parentThread', '父线程'], ['parentTurn', '父回合'], ['rootTurn', '根回合'],
   ['purpose', '用途'],
   ['failureKind', '失败类型'],
@@ -75,7 +75,10 @@ function dimensionValueLabel(value, kind) {
       return labels[String(value || '')] || String(value || '线程类型未记录');
     }
     case 'clientKind': return clientKindLabel(value);
-    case 'clientVariant': case 'agentRole': case 'agentName': case 'parentThread': case 'parentTurn': case 'rootTurn': return value || 'unknown';
+    case 'requestKind': return requestKindLabel(value);
+    case 'clientVariant': return clientVariantLabel(value);
+    case 'agentRole': return agentRoleLabel(value);
+    case 'agentName': case 'parentThread': case 'parentTurn': case 'rootTurn': return value || 'unknown';
     case 'purpose': return purposeLabel(value);
     case 'failureKind': return failureKindLabel(value);
     case 'failurePhase': return failurePhaseLabel(value);
@@ -482,6 +485,7 @@ function diagnosticRows(analytics, key) {
 function AdvancedDiagnosticsPanel({ analytics, loading, error, onRetry }) {
   const dimensions = [
     ['models', '模型'],
+    ['requestKinds', '请求类型'],
     ['requestPurposes', '用途'],
     ['protocolRoutes', '协议路径'],
     ['failureKinds', '失败类型'],
@@ -507,7 +511,7 @@ function AdvancedDiagnosticsPanel({ analytics, loading, error, onRetry }) {
             {dimensions.map(([key, label]) => {
               const rows = diagnosticRows(analytics, key);
               const total = rows.reduce((sum, row) => sum + safeNumber(row.attempts ?? row.count), 0);
-              const preview = rows.slice(0, 2).map((row) => `${dimensionValueLabel(row.name || row.value, key === 'requestPurposes' ? 'purpose' : key === 'failureKinds' ? 'failureKind' : key === 'failurePhases' ? 'failurePhase' : key === 'streamTerminals' ? 'streamTerminal' : key === 'protocolRoutes' ? 'protocol' : key === 'internalFeatures' ? 'internalFeature' : '')} ${numberWithComma(row.attempts ?? row.count)}`).join(' · ');
+              const preview = rows.slice(0, 2).map((row) => `${dimensionValueLabel(row.name || row.value, key === 'requestKinds' ? 'requestKind' : key === 'requestPurposes' ? 'purpose' : key === 'failureKinds' ? 'failureKind' : key === 'failurePhases' ? 'failurePhase' : key === 'streamTerminals' ? 'streamTerminal' : key === 'protocolRoutes' ? 'protocol' : key === 'internalFeatures' ? 'internalFeature' : '')} ${numberWithComma(row.attempts ?? row.count)}`).join(' · ');
               return <div className="runtime-v2-diagnostic-summary" key={key}><strong>{label}</strong><b className="mono-cell">{numberWithComma(total)}</b><small title={preview}>{preview || '暂无记录'}</small></div>;
             })}
             <div className="runtime-v2-diagnostic-summary"><strong>工具调用</strong><b className="mono-cell">{numberWithComma(diagnosticRows(analytics, 'toolCalls').reduce((sum, row) => sum + safeNumber(row.count), 0))}</b><small>按工具名称汇总</small></div>
@@ -519,7 +523,7 @@ function AdvancedDiagnosticsPanel({ analytics, loading, error, onRetry }) {
             <div className="runtime-v2-diagnostic-detail-grid">
               {dimensions.map(([key, label]) => {
                 const rows = diagnosticRows(analytics, key);
-                return <div key={key}><strong>{label}</strong><ul>{rows.slice(0, 8).map((row) => <li key={`${key}-${row.name || row.value}`}><span>{dimensionValueLabel(row.name || row.value, key === 'requestPurposes' ? 'purpose' : key === 'failureKinds' ? 'failureKind' : key === 'failurePhases' ? 'failurePhase' : key === 'streamTerminals' ? 'streamTerminal' : key === 'protocolRoutes' ? 'protocol' : key === 'internalFeatures' ? 'internalFeature' : '')}</span><b className="mono-cell">{numberWithComma(row.attempts ?? row.count)}</b></li>)}</ul></div>;
+                return <div key={key}><strong>{label}</strong><ul>{rows.slice(0, 8).map((row) => <li key={`${key}-${row.name || row.value}`}><span>{dimensionValueLabel(row.name || row.value, key === 'requestKinds' ? 'requestKind' : key === 'requestPurposes' ? 'purpose' : key === 'failureKinds' ? 'failureKind' : key === 'failurePhases' ? 'failurePhase' : key === 'streamTerminals' ? 'streamTerminal' : key === 'protocolRoutes' ? 'protocol' : key === 'internalFeatures' ? 'internalFeature' : '')}</span><b className="mono-cell">{numberWithComma(row.attempts ?? row.count)}</b></li>)}</ul></div>;
               })}
             </div>
           </details>
@@ -1598,12 +1602,13 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     projectID: String(analyticsFilters?.projectID || '').trim(),
     sessionID: String(analyticsFilters?.sessionID || '').trim(),
     model: String(analyticsFilters?.model || '').trim(),
+    requestKind: String(analyticsFilters?.requestKind || '').trim(),
     requestPurpose: String(analyticsFilters?.requestPurpose || '').trim(),
     outcome: String(analyticsFilters?.outcome || '').trim(),
     failureKind: String(analyticsFilters?.failureKind || '').trim(),
     failurePhase: String(analyticsFilters?.failurePhase || '').trim(),
     ...(localTodayFrom == null ? {} : { from: localTodayFrom }),
-  }), [analyticsFilters?.clientKind, analyticsFilters?.endpointID, analyticsFilters?.project, analyticsFilters?.projectID, analyticsFilters?.sessionID, analyticsFilters?.model, analyticsFilters?.requestPurpose, analyticsFilters?.outcome, analyticsFilters?.failureKind, analyticsFilters?.failurePhase, localTodayFrom]);
+  }), [analyticsFilters?.clientKind, analyticsFilters?.requestKind, analyticsFilters?.endpointID, analyticsFilters?.project, analyticsFilters?.projectID, analyticsFilters?.sessionID, analyticsFilters?.model, analyticsFilters?.requestPurpose, analyticsFilters?.outcome, analyticsFilters?.failureKind, analyticsFilters?.failurePhase, localTodayFrom]);
   const activeQueryKey = useMemo(() => JSON.stringify({ range, filters: activeFilters }), [range, activeFilters]);
   const lastAnalyticsRefreshSignal = useRef(0);
   const previousQueryKeyRef = useRef(activeQueryKey);

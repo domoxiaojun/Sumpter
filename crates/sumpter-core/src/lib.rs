@@ -7,6 +7,7 @@ pub mod bridge_gemini;
 pub mod bridge_in;
 pub mod cache_read;
 pub mod capability;
+pub mod client_attribution;
 pub mod config;
 pub mod config_store;
 pub mod events;

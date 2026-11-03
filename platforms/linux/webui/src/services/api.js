@@ -83,6 +83,7 @@ function runtimeFilterValues(filters = {}) {
     kind: filters.kind,
     outcome: filters.outcome,
     clientKind: filters.clientKind,
+    requestKind: filters.requestKind,
     clientVariant: filters.clientVariant,
     agentRole: filters.agentRole,
     agentName: filters.agentName,
@@ -391,7 +392,7 @@ class ApiService {
   }
   getRuntimeEventPage({
     page = 1, pageSize = RUNTIME_DEFAULT_PAGE_SIZE, snapshotSeq, snapshotChangeSeq, historyGeneration,
-    kind, outcome, clientKind, requestPurpose, requestID, endpointID,
+    kind, outcome, clientKind, requestKind, clientVariant, agentRole, agentName, parentThreadID, parentTurnID, rootTurnID, requestPurpose, requestID, endpointID,
     model, projectID, project, sessionID, failureKind, failurePhase, from, to, signal,
   } = {}) {
     const query = new URLSearchParams({
@@ -400,7 +401,7 @@ class ApiService {
       pageSize: String(Number(pageSize) || RUNTIME_DEFAULT_PAGE_SIZE),
     });
     const filters = {
-      kind, outcome, clientKind, requestPurpose, requestID, endpointID,
+      kind, outcome, clientKind, requestKind, clientVariant, agentRole, agentName, parentThreadID, parentTurnID, rootTurnID, requestPurpose, requestID, endpointID,
       model, projectID, project, sessionID, failureKind, failurePhase, from, to,
     };
     if (snapshotSeq != null) query.set('snapshotSeq', String(snapshotSeq));
@@ -419,6 +420,7 @@ class ApiService {
   getRuntimeAnalytics(range = '24h', filters = {}, { diagnosticsOnly = false, ...options } = {}) {
     const query = new URLSearchParams({ range });
     if (diagnosticsOnly) query.set('view', 'diagnostics');
+    appendQueryValues(query, runtimeFilterValues(filters));
     if (filters.clientKind) query.set('clientKind', filters.clientKind);
     if (filters.endpointID) query.set('endpointID', filters.endpointID);
     if (filters.projectID) query.set('projectID', filters.projectID);
@@ -453,7 +455,7 @@ class ApiService {
   getRuntimeDimensions(kind, {
     page = 1, pageSize = RUNTIME_DEFAULT_PAGE_SIZE, search, sort = 'last_seen', order = 'desc', snapshotSeq, snapshotChangeSeq, historyGeneration, filters = {},
   } = {}, options = {}) {
-    const allowed = ['endpoint', 'model', 'clientKind', 'purpose', 'failureKind', 'failurePhase', 'protocol', 'streamTerminal', 'project', 'session', 'clientVariant', 'agentRole', 'agentName', 'parentThread', 'parentTurn', 'rootTurn'];
+    const allowed = ['requestKind', 'endpoint', 'model', 'clientKind', 'purpose', 'failureKind', 'failurePhase', 'protocol', 'streamTerminal', 'project', 'session', 'clientVariant', 'agentRole', 'agentName', 'parentThread', 'parentTurn', 'rootTurn'];
     if (!allowed.includes(kind)) throw new TypeError(`不支持的 runtime 维度: ${kind}`);
     const query = new URLSearchParams({ kind, page: String(Math.max(1, Number(page) || 1)), pageSize: String(Number(pageSize) || RUNTIME_DEFAULT_PAGE_SIZE), sort, order });
     appendQueryValues(query, { search, snapshotSeq, snapshotChangeSeq, historyGeneration, ...runtimeFilterValues(filters) });
@@ -471,6 +473,7 @@ class ApiService {
       ...value,
       apiVersion: Number(value?.apiVersion || 3),
       facets: {
+        ...Object.fromEntries(['requestKinds', 'clientVariants', 'agentRoles', 'agentNames', 'parentThreads', 'parentTurns', 'rootTurns'].map((key) => [key, Array.isArray(facets[key]) ? facets[key] : []])),
         clientKinds: Array.isArray(facets.clientKinds) ? facets.clientKinds : [],
         endpoints: Array.isArray(facets.endpoints) ? facets.endpoints : [],
         projects: Array.isArray(facets.projects) ? facets.projects : [],

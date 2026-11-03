@@ -11,6 +11,7 @@ const RuntimeContext = createContext(null);
 function normalizeAnalyticsFilters(filters = {}) {
   return {
     clientKind: String(filters.clientKind || ''),
+    requestKind: String(filters.requestKind || ''),
     clientVariant: String(filters.clientVariant || ''),
     agentRole: String(filters.agentRole || ''),
     agentName: String(filters.agentName || ''),
@@ -92,7 +93,7 @@ export function AppProvider({ children }) {
   const [analyticsStale, setAnalyticsStale] = useState(false);
   const [runtimeEventDetail, setRuntimeEventDetail] = useState(null);
   const [analyticsRange, setAnalyticsRange] = useState('today');
-  const [analyticsFilters, setAnalyticsFilters] = useState({ clientKind: '', clientVariant: '', agentRole: '', agentName: '', parentThreadID: '', parentTurnID: '', rootTurnID: '', endpointID: '', project: '', projectID: '', sessionID: '', model: '', requestPurpose: '', outcome: '', failureKind: '', failurePhase: '' });
+  const [analyticsFilters, setAnalyticsFilters] = useState({ clientKind: '', requestKind: '', clientVariant: '', agentRole: '', agentName: '', parentThreadID: '', parentTurnID: '', rootTurnID: '', endpointID: '', project: '', projectID: '', sessionID: '', model: '', requestPurpose: '', outcome: '', failureKind: '', failurePhase: '' });
   const [diagnostics, setDiagnostics] = useState(null);
   const [autostart, setAutostart] = useState(null);
   const [isLoading, setIsLoading] = useState(true);

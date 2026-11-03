@@ -354,7 +354,9 @@ impl CompletionGuard {
         let endpoint = upstream
             .map(|attempt| &attempt.endpoint)
             .or(self.attempted_endpoint.as_ref());
-        RuntimeEvent {
+        let mut event = RuntimeEvent {
+            request_kind: None,
+            client_attribution: None,
             request_trace: Some(self.trace.clone()),
             source_ip: self
                 .meta
@@ -449,7 +451,16 @@ impl CompletionGuard {
                 .or_else(|| Some(self.meta.effective_model.clone())),
             upstream_request_id: upstream.and_then(|u| u.upstream_request_id.clone()),
             upstream_status_code: upstream.and_then(|_| (self.status > 0).then_some(self.status)),
+        };
+        if let Some(attribution) = self
+            .meta
+            .request_context
+            .as_ref()
+            .and_then(|c| c.attribution.as_ref())
+        {
+            attribution.apply(&mut event);
         }
+        event
     }
 
     fn complete_upstream_event(
@@ -483,6 +494,9 @@ impl CompletionGuard {
         event.effective_model = Some(self.meta.effective_model.clone());
         event.feature_rule_id = self.meta.feature_rule_id.clone();
         if let Some(context) = &self.meta.request_context {
+            if let Some(attribution) = &context.attribution {
+                attribution.apply(&mut event);
+            }
             event.source_ip = context.source_ip.clone();
             event.request_method = Some(context.method.clone());
             event.request_path = Some(context.path.clone());

@@ -215,6 +215,8 @@ impl EventProjection {
             request_method: Set(self.request_method.as_ref().map(|value| value.to_string())),
             request_path: Set(self.request_path.as_ref().map(|value| value.to_string())),
             route_intent: Set(self.route_intent.as_ref().map(|value| value.to_string())),
+            request_kind: Set(self.request_kind.clone()),
+            client_attribution_json: Set(self.client_attribution_json.clone()),
             client_variant: Set(self.client_variant.as_ref().map(|value| value.to_string())),
             agent_role: Set(self.agent_role.as_ref().map(|value| value.to_string())),
             agent_name: Set(self.agent_name.as_ref().map(|value| value.to_string())),

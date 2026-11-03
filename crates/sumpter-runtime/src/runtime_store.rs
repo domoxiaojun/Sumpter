@@ -73,6 +73,7 @@ fn option_token<T: serde::Serialize>(value: Option<T>) -> Option<String> {
 /// Analytics 查询筛选。值使用事件中已经脱敏/稳定化的维度键。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AnalyticsFilter {
+    pub request_kind: Option<String>,
     pub client_kind: Option<String>,
     pub client_variant: Option<String>,
     pub agent_role: Option<String>,
@@ -96,6 +97,7 @@ impl AnalyticsFilter {
     pub fn to_runtime_filter(&self) -> crate::runtime_query::RuntimeFilter {
         let filter = self.normalized();
         crate::runtime_query::RuntimeFilter {
+            request_kind: filter.request_kind,
             client_kind: filter.client_kind,
             client_variant: filter.client_variant,
             agent_role: filter.agent_role,
@@ -129,6 +131,7 @@ impl AnalyticsFilter {
                 .map(ToOwned::to_owned)
         }
         Self {
+            request_kind: value(&self.request_kind),
             client_kind: value(&self.client_kind),
             client_variant: value(&self.client_variant),
             agent_role: value(&self.agent_role),
@@ -151,6 +154,8 @@ impl AnalyticsFilter {
 /// queries use these columns and never need to deserialize every retained row.
 #[derive(Debug, Clone)]
 struct EventProjection {
+    request_kind: Option<String>,
+    client_attribution_json: Option<String>,
     client_kind: Option<String>,
     payload_bytes: i64,
     session_key: String,
@@ -244,7 +249,8 @@ impl EventProjection {
         let (project_id, project_name, project_source, workspace_paths_json) =
             event_project_projection(event);
         let is_codex_event = event.kind == KIND_CLIENT
-            && (event.codex_metadata.is_some() || event.client_kind == Some(ClientKind::Codex));
+            && ((event.client_attribution.is_none() && event.codex_metadata.is_some())
+                || event.client_kind == Some(ClientKind::Codex));
         let (codex_thread_class, attribution_scope) = if is_codex_event {
             (
                 Some(codex_thread_class(event.codex_metadata.as_ref()).as_str()),
@@ -255,6 +261,11 @@ impl EventProjection {
         };
         let (session_key, session_source) = event_session_projection(event);
         Self {
+            request_kind: event.request_kind.map(|v| v.as_str().to_owned()),
+            client_attribution_json: event
+                .client_attribution
+                .as_ref()
+                .and_then(|v| serde_json::to_string(v).ok()),
             client_kind: event
                 .attributed_client_kind()
                 .map(|value| value.as_str().to_owned()),
@@ -295,7 +306,11 @@ impl EventProjection {
                 .stream_trace
                 .as_ref()
                 .and_then(|trace| trace.terminal_event.clone()),
-            codex_metadata_present: i64::from(event.codex_metadata.is_some()),
+            codex_metadata_present: i64::from(
+                event.codex_metadata.is_some()
+                    && (event.client_attribution.is_none()
+                        || event.client_kind == Some(ClientKind::Codex)),
+            ),
             usage_present: i64::from(usage.is_some()),
             input_tokens,
             output_tokens,
@@ -495,6 +510,10 @@ pub struct RuntimeChange {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeEventListItem {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_kind: Option<sumpter_core::client_attribution::ObservedRequestKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_attribution: Option<sumpter_core::client_attribution::ClientAttribution>,
     #[serde(rename = "sourceIP", skip_serializing_if = "Option::is_none")]
     pub source_ip: Option<String>,
     pub session_source: Option<String>,
@@ -632,7 +651,8 @@ impl RuntimeEventListItem {
         let projected_source = project_source(&event).to_string();
         let local_user = event_local_user(&event);
         let is_codex_event = event.kind == KIND_CLIENT
-            && (event.codex_metadata.is_some() || event.client_kind == Some(ClientKind::Codex));
+            && ((event.client_attribution.is_none() && event.codex_metadata.is_some())
+                || event.client_kind == Some(ClientKind::Codex));
         let codex_thread_class = is_codex_event.then(|| {
             codex_thread_class(event.codex_metadata.as_ref())
                 .as_str()
@@ -641,6 +661,8 @@ impl RuntimeEventListItem {
         let attribution_scope =
             is_codex_event.then(|| event_attribution_scope(&event).as_str().to_owned());
         Self {
+            request_kind: event.request_kind,
+            client_attribution: event.client_attribution.clone(),
             cache_read,
             source_ip: event.source_ip,
             usage_summary,

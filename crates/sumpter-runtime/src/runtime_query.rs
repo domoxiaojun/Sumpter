@@ -115,6 +115,8 @@ pub type QueryResult<T> = Result<T, RuntimeQueryError>;
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeFilter {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_kind: Option<String>,
     pub kind: Option<String>,
     pub outcome: Option<String>,
     pub client_kind: Option<String>,
@@ -162,6 +164,8 @@ pub struct RuntimeFilter {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalyticsAppliedFilters {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_kind: Option<String>,
     pub client_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_variant: Option<String>,
@@ -189,7 +193,8 @@ pub struct AnalyticsAppliedFilters {
 
 impl RuntimeFilter {
     fn has_agent_filter(&self) -> bool {
-        self.client_variant.is_some()
+        self.request_kind.is_some()
+            || self.client_variant.is_some()
             || self.agent_role.is_some()
             || self.agent_name.is_some()
             || self.parent_thread_id.is_some()
@@ -224,6 +229,7 @@ impl RuntimeFilter {
             ));
         }
         Ok(Self {
+            request_kind: string(&self.request_kind, "requestKind")?,
             kind: string(&self.kind, "kind")?,
             outcome: string(&self.outcome, "outcome")?,
             client_kind: string(&self.client_kind, "clientKind")?,
@@ -563,6 +569,7 @@ pub struct AnalyticsFacets {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<AnalyticsFacetRow>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub request_kinds: Vec<AnalyticsFacetRow>,
     pub request_purposes: Vec<AnalyticsFacetRow>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failure_kinds: Vec<AnalyticsFacetRow>,
@@ -630,6 +637,7 @@ pub struct AnalyticsSummary {
     pub parent_turns: Vec<AnalyticsDimensionRow>,
     pub root_turns: Vec<AnalyticsDimensionRow>,
 
+    pub request_kinds: Vec<AnalyticsDimensionRow>,
     pub request_purposes: Vec<AnalyticsDimensionRow>,
     pub feature_rules: Vec<AnalyticsDimensionRow>,
     pub protocol_routes: Vec<AnalyticsDimensionRow>,
@@ -720,6 +728,7 @@ pub struct ErrorPage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DimensionKind {
+    RequestKind,
     Endpoint,
     Model,
     ClientKind,
@@ -1296,6 +1305,8 @@ struct TrendRow {
 }
 
 struct ExportEventRow {
+    request_kind: Option<String>,
+    client_attribution_json: Option<String>,
     seq: i64,
     change_seq: i64,
     event_id: String,
@@ -1344,6 +1355,8 @@ struct ExportEventRow {
 /// available through `/runtime/events/{id}`.
 #[derive(Debug, sea_orm::FromQueryResult)]
 struct EventListProjection {
+    request_kind: Option<String>,
+    client_attribution_json: Option<String>,
     stream_trace_json: Option<String>,
     failure_detail: Option<String>,
     message: Option<String>,
@@ -1454,6 +1467,10 @@ fn event_list_item_from_projection(row: EventListProjection) -> RuntimeEventList
         row.upstream_ttfb_ms,
     );
     RuntimeEventListItem {
+        request_kind: decode_projection_enum(row.request_kind),
+        client_attribution: row
+            .client_attribution_json
+            .and_then(|v| serde_json::from_str(&v).ok()),
         source_ip: row.source_ip,
         details_omitted: true,
         session_source: row.session_source,
@@ -1755,6 +1772,10 @@ fn append_runtime_filter(builder: &mut SqlFilter, filter: &RuntimeFilter) {
         "COALESCE(root_turn_id,'unknown')",
         filter.root_turn_id.as_deref(),
     );
+    builder.eq_text(
+        "COALESCE(request_kind,'unrecorded')",
+        filter.request_kind.as_deref(),
+    );
     builder.eq_text("request_purpose", filter.request_purpose.as_deref());
     builder.eq_text("request_id", filter.request_id.as_deref());
     builder.eq_text("endpoint_id", filter.endpoint_id.as_deref());
@@ -1794,6 +1815,10 @@ fn analytics_upstream_builder(filter: &RuntimeFilter, snapshot: &HistorySnapshot
     builder.completed_snapshot(snapshot);
     builder.eq_text("kind", filter.kind.as_deref());
     builder.eq_text("outcome", filter.outcome.as_deref());
+    builder.eq_text(
+        "COALESCE(request_kind,'unrecorded')",
+        filter.request_kind.as_deref(),
+    );
     builder.eq_text("request_purpose", filter.request_purpose.as_deref());
     builder.eq_text("request_id", filter.request_id.as_deref());
     builder.eq_text("endpoint_id", filter.endpoint_id.as_deref());

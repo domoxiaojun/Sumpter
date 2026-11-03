@@ -160,6 +160,12 @@ pub fn analytics_view_on(
             "COALESCE(effective_model,client_model,upstream_model,'unrecorded')",
             Some("kind='client'"),
         )?,
+        request_kinds: analytics_dimension(
+            &transaction,
+            &client_builder,
+            "COALESCE(request_kind,'unrecorded')",
+            None,
+        )?,
         client_variants: if diagnostics_only {
             Vec::new()
         } else {
@@ -347,6 +353,7 @@ pub fn analytics_view_on(
         endpoints: dimensions.endpoints,
         models: dimensions.models,
         client_kinds: dimensions.client_kinds,
+        request_kinds: dimensions.request_kinds,
         client_variants: dimensions.client_variants,
         agent_roles: dimensions.agent_roles,
         agent_names: dimensions.agent_names,
@@ -373,6 +380,7 @@ pub fn analytics_view_on(
         filters_applied: true,
         filter_warning: None,
         applied_filters: AnalyticsAppliedFilters {
+            request_kind: filters.request_kind.clone(),
             client_kind: filters.client_kind.clone(),
             client_variant: filters.client_variant.clone(),
             agent_role: filters.agent_role.clone(),
@@ -411,6 +419,7 @@ pub(super) fn cache_read_statistics(
 }
 
 struct AnalyticsDimensions {
+    request_kinds: Vec<AnalyticsDimensionRow>,
     endpoints: Vec<AnalyticsDimensionRow>,
     models: Vec<AnalyticsDimensionRow>,
     client_kinds: Vec<AnalyticsDimensionRow>,

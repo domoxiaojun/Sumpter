@@ -609,7 +609,7 @@ impl ClientDeclaredMetadata {
         let workspace_raw = Self::clean_header(headers, "x-sumpter-workspace", &mut state);
         let user_raw = Self::clean_header(headers, "x-sumpter-user", &mut state);
         let agent_role = Self::clean_header(headers, "x-sumpter-agent-role", &mut state)
-            .filter(|value| matches!(value.as_str(), "root" | "subagent" | "memory"));
+            .and_then(|value| crate::client_attribution::role(&value).map(str::to_owned));
         let agent_name = Self::clean_header(headers, "x-sumpter-agent-name", &mut state)
             .filter(|value| value.len() <= 128);
         let project = project_raw
@@ -2912,6 +2912,11 @@ impl Default for DiagnosticCaptureSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeEvent {
+    /// Observation-only, frozen at ingestion. None denotes a historical event.
+    #[serde(rename = "requestKind", default, skip_serializing_if = "is_none")]
+    pub request_kind: Option<crate::client_attribution::ObservedRequestKind>,
+    #[serde(rename = "clientAttribution", default, skip_serializing_if = "is_none")]
+    pub client_attribution: Option<crate::client_attribution::ClientAttribution>,
     #[serde(
         rename = "requestTrace",
         default,
@@ -3097,6 +3102,9 @@ impl RuntimeEvent {
     /// only when the retained metadata contains a known Codex originator;
     /// generic or malformed metadata remains unchanged.
     pub fn attributed_client_kind(&self) -> Option<ClientKind> {
+        if self.client_attribution.is_some() {
+            return self.client_kind;
+        }
         if matches!(
             self.client_kind,
             Some(ClientKind::OpenaiCompat | ClientKind::Unknown) | None
@@ -3114,6 +3122,13 @@ impl RuntimeEvent {
 
     /// Return a stable client variant for attribution and analytics.
     pub fn derived_client_variant(&self) -> &'static str {
+        if self.client_attribution.is_some() {
+            return self
+                .client_variant
+                .as_deref()
+                .and_then(crate::client_attribution::variant)
+                .unwrap_or("unknown");
+        }
         let attributed_client_kind = self.attributed_client_kind();
         let codex_originator_variant = (attributed_client_kind == Some(ClientKind::Codex))
             .then(|| {
@@ -3184,6 +3199,13 @@ impl RuntimeEvent {
 
     /// Return a normalized root/subagent/internal role.
     pub fn derived_agent_role(&self) -> &'static str {
+        if self.client_attribution.is_some() {
+            return self
+                .agent_role
+                .as_deref()
+                .and_then(crate::client_attribution::role)
+                .unwrap_or("unknown");
+        }
         if let Some(metadata) = &self.codex_metadata {
             return codex_agent_role(metadata);
         }
@@ -3392,6 +3414,8 @@ mod tests {
 
     fn event(id: &str, kind: &str, ts: f64) -> RuntimeEvent {
         RuntimeEvent {
+            request_kind: None,
+            client_attribution: None,
             request_trace: None,
             source_ip: None,
             session_source: None,

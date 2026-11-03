@@ -1,4 +1,4 @@
-/** SUMPTER_ATTRIBUTION_BUNDLE_VERSION: 0.4.60 */
+/** SUMPTER_ATTRIBUTION_BUNDLE_VERSION: 0.4.61 */
 /** The wrapper loads this extension; each Sumpter provider must opt in explicitly. */
 import { execFile } from "node:child_process";
 import { basename } from "node:path";
@@ -11,7 +11,7 @@ const attributionHeaders = [
   "x-sumpter-client",
   "x-sumpter-project", "x-sumpter-workspace", "x-sumpter-user",
   "x-sumpter-git-remote", "x-sumpter-session-id", "x-sumpter-attribution-encoding",
-  "x-sumpter-agent-role", "x-sumpter-agent-name",
+  "x-sumpter-agent-role", "x-sumpter-agent-name", "x-sumpter-request-kind", "x-sumpter-client-variant",
 ];
 
 async function git(cwd: string, args: string[]): Promise<string | undefined> {
@@ -89,7 +89,11 @@ export default function (pi: ExtensionAPI) {
       if (attributionHeaders.includes(name.toLowerCase())) event.headers[name] = null;
     }
     if (!providerOptIn) return;
-    const source = (event as typeof event & { requestSource?: { agentRole?: string; agentName?: string } }).requestSource;
+    const source = (event as typeof event & { requestSource?: { agentRole?: string; agentName?: string; requestKind?: string } }).requestSource;
+    const requestKind = source?.requestKind;
+    if (requestKind && ["turn", "prewarm", "compaction", "session_title", "memory", "review", "websearch", "webfetch", "classifier", "token_count", "image_generation", "image_edit", "alpha_search", "realtime", "unknown"].includes(requestKind)) {
+      event.headers["x-sumpter-request-kind"] = requestKind;
+    }
     const role = source?.agentRole;
     const name = source?.agentName;
     if (role && ["root", "subagent", "memory"].includes(role)) event.headers["x-sumpter-agent-role"] = role;

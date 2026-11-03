@@ -99,6 +99,8 @@ pub struct Model {
     pub request_method: Option<String>,
     pub request_path: Option<String>,
     pub route_intent: Option<String>,
+    pub request_kind: Option<String>,
+    pub client_attribution_json: Option<String>,
     pub client_variant: Option<String>,
     pub agent_role: Option<String>,
     pub agent_name: Option<String>,

@@ -105,7 +105,8 @@ impl RuntimeEvent {
             self.client_kind = attributed_client_kind;
         }
         if self.client_variant.is_none()
-            || (attributed_client_kind == Some(ClientKind::Codex)
+            || (self.client_attribution.is_none()
+                && attributed_client_kind == Some(ClientKind::Codex)
                 && self
                     .codex_metadata
                     .as_ref()
@@ -124,7 +125,9 @@ impl RuntimeEvent {
                 .as_ref()
                 .and_then(|m| m.agent_name.clone());
         }
-        if let Some(metadata) = &self.codex_metadata {
+        if (self.client_attribution.is_none() || attributed_client_kind == Some(ClientKind::Codex))
+            && let Some(metadata) = &self.codex_metadata
+        {
             if self.session_id.is_none() && metadata.session_id.is_some() {
                 self.session_id = metadata.session_id.clone();
                 self.session_source = Some("codex_session".into());

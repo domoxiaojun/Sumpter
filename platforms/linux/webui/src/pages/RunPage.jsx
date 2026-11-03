@@ -14,7 +14,7 @@ import { CacheHitRate } from '../components/CacheHitRate.jsx';
 import { eventAgentLabel, eventCacheLabel, eventHasObservedUsage, eventUsageLabel } from '../utils/eventPresentation.js';
 import { copyWithToast } from '../utils/clipboard.js';
 import { api } from '../services/api.js';
-import { eventEndpointName, formatNumber, formatTokenCount, formatDuration, formatTimestamp, eventLogicalModel, statusKind, eventDurationText, eventDisplayTiming, friendlyEventMessage, eventPurposeLabel, eventClientKindLabel, eventKindLabel, getRequestChain, eventOutcomeLabel, eventPhaseLabel, eventHttpStatusLabel, eventHTTPStatusCode, eventRequestID, eventOutcome, eventFailover, eventField, eventIsInFlight, eventFailureSummaryLabel, eventProjectContext, eventToolCalls, eventTransportLabel } from '../utils/helpers.js';
+import { requestKindLabel, eventEndpointName, formatNumber, formatTokenCount, formatDuration, formatTimestamp, eventLogicalModel, statusKind, eventDurationText, eventDisplayTiming, friendlyEventMessage, eventPurposeLabel, eventClientKindLabel, eventKindLabel, getRequestChain, eventOutcomeLabel, eventPhaseLabel, eventHttpStatusLabel, eventHTTPStatusCode, eventRequestID, eventOutcome, eventFailover, eventField, eventIsInFlight, eventFailureSummaryLabel, eventProjectContext, eventToolCalls, eventTransportLabel } from '../utils/helpers.js';
 
 function todayTokenTotals(series) {
   const tokens = series?.totals?.tokens;
@@ -68,7 +68,8 @@ function recentEventPurposeLabel(event) {
   if (key === 'standard') return '主请求';
   if (key === 'websearch') return 'WebSearch';
   if (key === 'webfetch') return 'WebFetch';
-  return eventPurposeLabel(event);
+  const requestKind = eventField(event, 'requestKind');
+  return requestKind != null ? requestKindLabel(requestKind) : eventPurposeLabel(event);
 }
 
 function recentEventOutcomeLabel(event) {

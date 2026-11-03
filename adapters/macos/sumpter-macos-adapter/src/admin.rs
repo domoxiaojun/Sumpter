@@ -411,6 +411,8 @@ struct RuntimeEventsQuery {
     outcome: Option<String>,
     #[serde(rename = "clientKind", alias = "client_kind")]
     client_kind: Option<String>,
+    #[serde(rename = "requestKind", alias = "request_kind")]
+    request_kind: Option<String>,
     #[serde(rename = "clientVariant", alias = "client_variant")]
     client_variant: Option<String>,
     #[serde(rename = "agentRole", alias = "agent_role")]
@@ -513,6 +515,7 @@ fn runtime_filter_from_events_query(query: &RuntimeEventsQuery) -> RuntimeFilter
         kind: query.kind.clone(),
         outcome: query.outcome.clone(),
         client_kind: query.client_kind.clone(),
+        request_kind: query.request_kind.clone(),
         client_variant: query.client_variant.clone(),
         agent_role: query.agent_role.clone(),
         agent_name: query.agent_name.clone(),
@@ -583,6 +586,8 @@ struct RuntimeFilterQuery {
     kind: Option<String>,
     outcome: Option<String>,
     client_kind: Option<String>,
+    #[serde(rename = "requestKind", alias = "request_kind")]
+    request_kind: Option<String>,
     #[serde(rename = "clientVariant", alias = "client_variant")]
     client_variant: Option<String>,
     #[serde(rename = "agentRole", alias = "agent_role")]
@@ -629,6 +634,7 @@ impl From<RuntimeFilterQuery> for RuntimeFilter {
             kind: query.kind,
             outcome: query.outcome,
             client_kind: query.client_kind,
+            request_kind: query.request_kind,
             client_variant: query.client_variant,
             agent_role: query.agent_role,
             agent_name: query.agent_name,
@@ -823,6 +829,7 @@ fn parse_dimension_kind(value: Option<&str>) -> Option<DimensionKind> {
         "endpoint" => Some(DimensionKind::Endpoint),
         "model" => Some(DimensionKind::Model),
         "clientKind" | "client_kind" => Some(DimensionKind::ClientKind),
+        "requestKind" | "request_kind" => Some(DimensionKind::RequestKind),
         "clientVariant" | "client_variant" => Some(DimensionKind::ClientVariant),
         "agentRole" | "agent_role" => Some(DimensionKind::AgentRole),
         "agentName" | "agent_name" => Some(DimensionKind::AgentName),
@@ -1327,6 +1334,8 @@ struct RuntimeAnalyticsQuery {
     range: Option<String>,
     #[serde(rename = "clientKind", alias = "client_kind")]
     client_kind: Option<String>,
+    #[serde(rename = "requestKind", alias = "request_kind")]
+    request_kind: Option<String>,
     #[serde(rename = "clientVariant", alias = "client_variant")]
     client_variant: Option<String>,
     #[serde(rename = "agentRole", alias = "agent_role")]
@@ -1381,6 +1390,7 @@ async fn runtime_analytics(
     }
     let filter = AnalyticsFilter {
         client_kind: analytics_filter_value(query.client_kind),
+        request_kind: analytics_filter_value(query.request_kind),
         client_variant: analytics_filter_value(query.client_variant),
         agent_role: analytics_filter_value(query.agent_role),
         agent_name: analytics_filter_value(query.agent_name),

@@ -1501,6 +1501,8 @@ impl Engine {
             &client_meta,
         );
         self.record_event(RuntimeEvent {
+            request_kind: None,
+            client_attribution: None,
             request_trace: None,
             source_ip: None,
             session_source: None,

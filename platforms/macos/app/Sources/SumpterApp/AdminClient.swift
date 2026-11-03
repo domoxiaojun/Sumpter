@@ -797,6 +797,8 @@ public enum AdminWire {
         public var codexThreadClass: String? { payload.codexThreadClass }
         public var attributionScope: String? { payload.attributionScope }
         public var failover: Bool { payload.failover }
+        public var requestKind: String? { payload.requestKind }
+        public var clientAttribution: ClientAttribution? { payload.clientAttribution }
         public var clientVariant: String? { payload.clientVariant }
         public var agentRole: String? { payload.agentRole }
         public var agentName: String? { payload.agentName }
@@ -826,6 +828,7 @@ public enum AdminWire {
         public var kind: String?
         public var outcome: String?
         public var clientKind: String?
+        public var requestKind: String?
         public var clientVariant: String?
         public var agentRole: String?
         public var agentName: String?
@@ -851,6 +854,7 @@ public enum AdminWire {
         public init(
             kind: String? = nil,
             outcome: String? = nil,
+            requestKind: String? = nil,
             clientKind: String? = nil,
             clientVariant: String? = nil, agentRole: String? = nil, agentName: String? = nil, parentThreadID: String? = nil, parentTurnID: String? = nil, rootTurnID: String? = nil,
             requestPurpose: String? = nil,
@@ -868,6 +872,7 @@ public enum AdminWire {
             self.kind = kind
             self.outcome = outcome
             self.clientKind = clientKind
+            self.requestKind = requestKind
             self.clientVariant = clientVariant
             self.agentRole = agentRole
             self.agentName = agentName
@@ -890,7 +895,7 @@ public enum AdminWire {
         fileprivate func add(to query: inout [String: String]) {
             let strings: [(String, String?)] = [
                 ("kind", kind), ("outcome", outcome), ("clientKind", clientKind),
-                ("clientVariant", clientVariant), ("agentRole", agentRole), ("agentName", agentName),
+                ("requestKind", requestKind), ("clientVariant", clientVariant), ("agentRole", agentRole), ("agentName", agentName),
                 ("parentThreadID", parentThreadID), ("parentTurnID", parentTurnID), ("rootTurnID", rootTurnID),
                 ("requestPurpose", requestPurpose), ("requestID", requestID),
                 ("endpointID", endpointID), ("model", model), ("projectID", projectID),
@@ -1375,6 +1380,7 @@ public enum AdminWire {
 
         public struct AppliedFilters: Decodable, Equatable, Sendable {
             public let clientKind: String?
+            public let requestKind: String?
             public let clientVariant: String?
             public let agentRole: String?
             public let agentName: String?
@@ -1503,6 +1509,7 @@ public enum AdminWire {
         public let endpoints: [DimensionRow]?
         public let models: [DimensionRow]?
         public let clientKinds: [DimensionRow]?
+        public let requestKinds: [DimensionRow]?
         public let clientVariants: [DimensionRow]?
         public let agentRoles: [DimensionRow]?
         public let agentNames: [DimensionRow]?
@@ -1520,6 +1527,7 @@ public enum AdminWire {
         public let sessions: [DimensionRow]?
         public struct Facets: Decodable, Equatable, Sendable {
             public let clientKinds: [FacetRow]?
+            public let requestKinds: [FacetRow]?
             public let clientVariants: [FacetRow]?
             public let agentRoles: [FacetRow]?
             public let agentNames: [FacetRow]?

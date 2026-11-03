@@ -234,6 +234,14 @@ impl Engine {
                     .cloned()
             };
             if let Some(client) = request_metadata {
+                if event.client_attribution.is_none() && client.client_attribution.is_some() {
+                    event.client_kind = client.client_kind;
+                    event.client_variant = client.client_variant.clone();
+                    event.agent_role = client.agent_role.clone();
+                    event.agent_name = client.agent_name.clone();
+                    event.request_kind = client.request_kind;
+                    event.client_attribution = client.client_attribution.clone();
+                }
                 event.client_model = event.client_model.or(client.client_model);
                 event.source_format = event.source_format.or(client.source_format);
                 event.target_format = event.target_format.or(client.target_format);
@@ -310,6 +318,7 @@ impl Engine {
         request_context: Option<InboundRequestContext>,
     ) {
         let event_id = new_event_id();
+        let attribution = request_context.as_ref().and_then(|c| c.attribution.clone());
         let (
             request_method,
             request_path,
@@ -354,7 +363,9 @@ impl Engine {
                     .and_then(|metadata| metadata.session_id.clone())
             });
         let message = bounded_failure_detail(message);
-        let event = RuntimeEvent {
+        let mut event = RuntimeEvent {
+            request_kind: None,
+            client_attribution: None,
             request_trace: None,
             session_source: None,
             hook_event: None,
@@ -415,6 +426,9 @@ impl Engine {
             upstream_request_id: None,
             upstream_status_code: None,
         };
+        if let Some(attribution) = attribution {
+            attribution.apply(&mut event);
+        }
         self.complete_client(event, Some(message));
     }
 
@@ -501,6 +515,8 @@ impl Engine {
         request_id: &str,
     ) -> RuntimeEvent {
         RuntimeEvent {
+            request_kind: None,
+            client_attribution: None,
             request_trace: None,
             session_source: None,
             hook_event: None,

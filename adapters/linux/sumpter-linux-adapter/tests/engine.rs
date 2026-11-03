@@ -6268,3 +6268,6 @@ async fn clear_runtime_session_sticky_preserves_other_conversations_and_reroutes
 
 #[path = "../../../../tests/contracts/review_fixes.rs"]
 mod review_fixes;
+
+#[path = "../../../../tests/contracts/client_attribution.rs"]
+mod client_attribution;

@@ -46,8 +46,9 @@ extension AppModel {
         refreshRuntimeV2(resetSnapshot: true)
     }
 
-    func setRuntimeAnalyticsFilters(clientKind: String? = nil, clientVariant: String? = nil, agentRole: String? = nil, agentName: String? = nil, parentThreadID: String? = nil, parentTurnID: String? = nil, rootTurnID: String? = nil, endpointID: String? = nil, project: String? = nil, sessionID: String? = nil, model: String? = nil, requestPurpose: String? = nil, outcome: String? = nil, failureKind: String? = nil, failurePhase: String? = nil) {
+    func setRuntimeAnalyticsFilters(requestKind: String? = nil, clientKind: String? = nil, clientVariant: String? = nil, agentRole: String? = nil, agentName: String? = nil, parentThreadID: String? = nil, parentTurnID: String? = nil, rootTurnID: String? = nil, endpointID: String? = nil, project: String? = nil, sessionID: String? = nil, model: String? = nil, requestPurpose: String? = nil, outcome: String? = nil, failureKind: String? = nil, failurePhase: String? = nil) {
         if let clientKind { runtimeAnalyticsClientKind = clientKind }
+        if let requestKind { runtimeAnalyticsRequestKind = requestKind }
         if let clientVariant { runtimeAnalyticsClientVariant = clientVariant }
         if let agentRole { runtimeAnalyticsAgentRole = agentRole }
         if let agentName { runtimeAnalyticsAgentName = agentName }
@@ -382,6 +383,7 @@ extension AppModel {
             .timeIntervalSinceReferenceDate
         let base = AdminWire.RuntimeFilter(
             outcome: runtimeAnalyticsOutcome.isEmpty ? nil : runtimeAnalyticsOutcome,
+            requestKind: runtimeAnalyticsRequestKind.isEmpty ? nil : runtimeAnalyticsRequestKind,
             clientKind: runtimeAnalyticsClientKind.isEmpty ? nil : runtimeAnalyticsClientKind,
             clientVariant: runtimeAnalyticsClientVariant.isEmpty ? nil : runtimeAnalyticsClientVariant,
             agentRole: runtimeAnalyticsAgentRole.isEmpty ? nil : runtimeAnalyticsAgentRole,
@@ -756,13 +758,14 @@ extension AppModel {
     }
 
     static let runtimeDimensionKinds = [
-        "endpoint", "model", "clientKind", "clientVariant", "agentRole", "agentName", "parentThread", "parentTurn", "rootTurn", "purpose", "failureKind",
+        "endpoint", "model", "requestKind", "clientKind", "clientVariant", "agentRole", "agentName", "parentThread", "parentTurn", "rootTurn", "purpose", "failureKind",
         "failurePhase", "protocol", "streamTerminal", "project", "session",
     ]
 
     static func runtimeDimensionWireKind(_ kind: String) -> String {
         switch kind {
         case "clientKind": "client_kind"
+        case "requestKind": "request_kind"
         case "clientVariant": "client_variant"
         case "agentRole": "agent_role"
         case "agentName": "agent_name"

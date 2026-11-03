@@ -48,6 +48,7 @@ use tokio_tungstenite::tungstenite::Error as WsError;
 
 #[derive(Clone)]
 pub(super) struct WebSocketEventContext {
+    attribution: sumpter_core::client_attribution::AttributedRequest,
     pub(super) client_upgraded: bool,
     pub(super) first_message_wait_ms: Option<i64>,
     pub(super) source_ip: Option<String>,
@@ -767,6 +768,7 @@ pub(super) fn websocket_event_context(
     };
     let client_kind = detect_client_kind(headers, true);
     WebSocketEventContext {
+        attribution: sumpter_core::client_attribution::observe("GET", path, headers, None),
         client_upgraded: false,
         first_message_wait_ms: None,
         source_ip,
@@ -842,6 +844,8 @@ pub(super) fn websocket_client_event(
     failure: Option<&FailureInfo>,
 ) -> RuntimeEvent {
     let mut event = RuntimeEvent {
+        request_kind: None,
+        client_attribution: None,
         request_trace: None,
         source_ip: context.source_ip.clone(),
         session_source: None,
@@ -903,6 +907,7 @@ pub(super) fn websocket_client_event(
         upstream_request_id: None,
         upstream_status_code: endpoint.and_then(|_| (status > 0).then_some(status)),
     };
+    context.attribution.apply(&mut event);
     if let Some(failure) = failure {
         failure.apply_to(&mut event);
     }

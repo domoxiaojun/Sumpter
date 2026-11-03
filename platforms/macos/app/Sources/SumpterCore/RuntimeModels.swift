@@ -640,6 +640,8 @@ public struct CodexMetadata: Codable, Equatable, Sendable {
 }
 
 public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
+    public var requestKind: String? = nil
+    public var clientAttribution: ClientAttribution? = nil
     public var requestTrace: RequestTrace? = nil
     public var clientVariant: String? = nil
     public var agentRole: String? = nil
@@ -737,6 +739,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
     public var attributionScope: String?
 
     private enum CodingKeys: String, CodingKey {
+        case requestKind, clientAttribution
         case clientVariant, agentRole, agentName, cacheRead, usageSummary, sessionSource, hookEvent, detailsOmitted, requestTrace
         case parentThreadID = "parentThreadId"
         case parentTurnID = "parentTurnId"
@@ -764,6 +767,8 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        requestKind = try c.decodeIfPresent(String.self, forKey: .requestKind)
+        clientAttribution = try c.decodeIfPresent(ClientAttribution.self, forKey: .clientAttribution)
         clientVariant = try c.decodeIfPresent(String.self, forKey: .clientVariant)
         requestTrace = try c.decodeIfPresent(RequestTrace.self, forKey: .requestTrace)
         agentRole = try c.decodeIfPresent(String.self, forKey: .agentRole)
@@ -831,6 +836,8 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
 
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(requestKind, forKey: .requestKind)
+        try c.encodeIfPresent(clientAttribution, forKey: .clientAttribution)
         try c.encodeIfPresent(clientVariant, forKey: .clientVariant)
         try c.encodeIfPresent(agentRole, forKey: .agentRole)
         try c.encodeIfPresent(agentName, forKey: .agentName)

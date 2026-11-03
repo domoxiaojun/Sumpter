@@ -27,6 +27,19 @@ pub(super) fn setup_connection(connection: &mut Connection) -> crate::database::
     crate::entities::create_schema(connection)?;
     ensure_output_generation_columns(connection)?;
     ensure_upstream_timing_columns(connection)?;
+    // Additive nullable observations: no historical classification/backfill.
+    let attribution_columns = connection
+        .prepare("PRAGMA table_info(runtime_events)")?
+        .query_map(crate::database::params![], |row| row.get::<_, String>(1))?
+        .collect::<Result<HashSet<_>, _>>()?;
+    for column in ["request_kind", "client_attribution_json"] {
+        if !attribution_columns.contains(column) {
+            connection.execute_batch(&format!(
+                "ALTER TABLE runtime_events ADD COLUMN {column} TEXT"
+            ))?;
+        }
+    }
+    connection.execute_batch("CREATE INDEX IF NOT EXISTS runtime_events_request_kind ON runtime_events(request_kind,seq) WHERE request_kind IS NOT NULL")?;
     let upstream_timing_backfilled = backfill_upstream_timing(connection)?;
     let previous_version = meta_i64(connection, "schema_version")?.unwrap_or(0);
     if previous_version > SCHEMA_VERSION && !runtime_schema_supported(previous_version) {

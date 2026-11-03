@@ -17,6 +17,121 @@ fn fixture(label: &str) -> (PathBuf, RuntimeStore) {
     (dir, store)
 }
 
+#[test]
+fn request_attribution_nullable_upgrade_filters_facets_exports_and_reopen_preserve_history() {
+    use sumpter_core::client_attribution::{ObservedRequestKind, observe};
+    let (dir, store) = fixture("request-attribution");
+    let legacy = sample("legacy", false, event_now());
+    store.enqueue(legacy, counts(1)).unwrap();
+    store.flush().unwrap();
+    let reader = Connection::open(store.path()).unwrap();
+    let old_payload: String = reader
+        .query_row(
+            "SELECT payload_json FROM runtime_events WHERE event_id='legacy'",
+            crate::database::params![],
+            |r| r.get(0),
+        )
+        .unwrap();
+    drop(reader);
+    drop(store);
+    let path = dir.join("runtime.sqlite3");
+    let reader = Connection::open(&path).unwrap();
+    reader.execute_batch("DROP INDEX runtime_events_request_kind; ALTER TABLE runtime_events DROP COLUMN request_kind; ALTER TABLE runtime_events DROP COLUMN client_attribution_json;").unwrap();
+    drop(reader);
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    let mut event = sample("new", false, event_now());
+    let h = vec![
+        ("x-sumpter-client".into(), "pi".into()),
+        ("x-sumpter-request-kind".into(), "memory".into()),
+    ];
+    let attribution = observe("POST", "/v1/messages", &h, None);
+    attribution.apply(&mut event);
+    store.enqueue(event, counts(2)).unwrap();
+    store.flush().unwrap();
+    let filter = RuntimeFilter {
+        request_kind: Some("memory".into()),
+        ..Default::default()
+    };
+    let page = crate::runtime_query::events_page(
+        &path,
+        &EventPageQuery {
+            filter: filter.clone(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(page.total_count, 1);
+    assert_eq!(
+        page.events[0].request_kind,
+        Some(ObservedRequestKind::Memory)
+    );
+    assert_eq!(
+        page.events[0].client_attribution.as_ref(),
+        Some(&attribution.attribution)
+    );
+    let analytics = crate::runtime_query::analytics(&path, "all", &filter).unwrap();
+    let data = serde_json::to_value(&analytics).unwrap();
+    assert_eq!(data["clientRequests"], 1);
+    assert_eq!(data["appliedFilters"]["requestKind"], "memory");
+    let facets = data["facets"]["requestKinds"].as_array().unwrap();
+    assert!(
+        facets
+            .iter()
+            .any(|r| r["value"] == "memory" && r["count"] == 1)
+    );
+    assert!(
+        facets
+            .iter()
+            .any(|r| r["value"] == "unrecorded" && r["count"] == 1)
+    );
+    let dimension = crate::runtime_query::dimension_page(
+        &path,
+        DimensionKind::RequestKind,
+        &DimensionPageQuery::default(),
+    )
+    .unwrap();
+    assert_eq!(dimension.rows.len(), 2);
+    let mut output = Vec::new();
+    crate::runtime_query::stream_export(
+        &path,
+        &ExportQuery {
+            filter,
+            scope: ExportScope::Events,
+            format: ExportFormat::Jsonl,
+            privacy: ExportPrivacy::Redacted,
+            confirm_stored: false,
+            snapshot_seq: None,
+            snapshot_change_seq: None,
+            history_generation: None,
+        },
+        |bytes| {
+            output.extend(bytes);
+            Ok(())
+        },
+    )
+    .unwrap();
+    let output = String::from_utf8(output).unwrap();
+    assert!(output.contains("\"requestKind\":\"memory\""));
+    assert!(output.contains("clientAttribution"));
+    drop(store);
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    let legacy = store.event("legacy").unwrap().unwrap().event;
+    assert!(legacy.client_attribution.is_none());
+    assert!(legacy.request_kind.is_none());
+    let reader = Connection::open(&path).unwrap();
+    let payload: String = reader
+        .query_row(
+            "SELECT payload_json FROM runtime_events WHERE event_id='legacy'",
+            crate::database::params![],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(payload, old_payload);
+    drop(reader);
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 fn sample(id: &str, in_flight: bool, timestamp: f64) -> RuntimeEvent {
     serde_json::from_value(json!({
         "id": id, "kind": "client", "timestamp": timestamp,

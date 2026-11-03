@@ -288,6 +288,7 @@ final class AppModel: ObservableObject {
     @Published var runHistoryError: String?
     @Published var runtimeAnalyticsRange = "today"
     @Published var runtimeAnalyticsClientKind = ""
+    @Published var runtimeAnalyticsRequestKind = ""
     @Published var runtimeAnalyticsClientVariant = ""
     @Published var runtimeAnalyticsAgentRole = ""
     @Published var runtimeAnalyticsAgentName = ""

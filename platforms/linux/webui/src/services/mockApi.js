@@ -20,7 +20,7 @@ function runtimeEventListItem(event, sequence) {
   return {
     cacheRead: event.cacheRead,
     usageSummary: event.usageSummary ?? event.streamTrace?.usage,
-    clientVariant: event.clientVariant, agentRole: event.agentRole, agentName: event.agentName,
+    requestKind: event.requestKind, clientAttribution: event.clientAttribution, clientVariant: event.clientVariant, agentRole: event.agentRole, agentName: event.agentName,
     parentThreadId: event.parentThreadId, parentTurnId: event.parentTurnId, rootTurnId: event.rootTurnId,
     sessionSource: event.sessionSource, hookEvent: event.hookEvent, detailsOmitted: false,
     clientDeclared: event.clientDeclared, grokMetadata: event.grokMetadata,
@@ -252,7 +252,7 @@ export function createMockApi({ fromWireConfig, normalizeCatalog }) {
           const from = timestampBoundary(query.get('from'));
           const to = timestampBoundary(query.get('to'));
           const exactFilters = {
-            kind: query.get('kind'), outcome: query.get('outcome'), clientKind: query.get('clientKind'), clientVariant: query.get('clientVariant'), agentRole: query.get('agentRole'), agentName: query.get('agentName'), parentThreadID: query.get('parentThreadID'), parentTurnID: query.get('parentTurnID'), rootTurnID: query.get('rootTurnID'),
+            kind: query.get('kind'), outcome: query.get('outcome'), requestKind: query.get('requestKind'), clientKind: query.get('clientKind'), clientVariant: query.get('clientVariant'), agentRole: query.get('agentRole'), agentName: query.get('agentName'), parentThreadID: query.get('parentThreadID'), parentTurnID: query.get('parentTurnID'), rootTurnID: query.get('rootTurnID'),
             requestPurpose: query.get('requestPurpose'), requestID: query.get('requestID'),
             endpointID: query.get('endpointID'), projectID: query.get('projectID'),
             project: query.get('project') || query.get('projectName'),
@@ -315,6 +315,7 @@ export function createMockApi({ fromWireConfig, normalizeCatalog }) {
         const query = new URLSearchParams(path.split('?')[1] || '');
         const analytics = clone(this.mockState.runtimeAnalytics);
         const selected = {
+          requestKinds: String(query.get('requestKind') || '').trim(),
           clientKinds: String(query.get('clientKind') || '').trim(),
           endpoints: String(query.get('endpointID') || '').trim(),
           projects: String(query.get('project') || query.get('projectID') || '').trim(),
@@ -338,6 +339,7 @@ export function createMockApi({ fromWireConfig, normalizeCatalog }) {
           historyGeneration: this.mockState.runtimeHistoryGeneration,
           retainedFromSeq: 0,
           facets: {
+            requestKinds: withSelected('requestKinds'),
             clientKinds: withSelected('clientKinds'),
             endpoints: withSelected('endpoints'),
             projects: withSelected('projects'),
@@ -733,6 +735,7 @@ export function createMockApi({ fromWireConfig, normalizeCatalog }) {
           endpoint: this.mockState.runtimeAnalytics.endpoints,
           model: this.mockState.runtimeAnalytics.models,
           clientKind: this.mockState.runtimeAnalytics.clientKinds,
+          requestKind: this.mockState.runtimeAnalytics.requestKinds || [],
           purpose: this.mockState.runtimeAnalytics.requestPurposes,
           failureKind: this.mockState.runtimeAnalytics.failureKinds,
           failurePhase: this.mockState.runtimeAnalytics.failurePhases,

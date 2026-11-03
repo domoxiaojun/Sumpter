@@ -24,6 +24,7 @@ use sumpter_core::stream_terminal::SseDialect;
 /// path never contains a query string.
 #[derive(Clone)]
 pub(super) struct InboundRequestContext {
+    pub(super) attribution: Option<sumpter_core::client_attribution::AttributedRequest>,
     pub(super) source_ip: Option<String>,
     pub(super) session_source: Option<String>,
     pub(super) method: String,
@@ -317,6 +318,11 @@ pub(super) fn apply_current_request_context(event: &mut RuntimeEvent) {
     let Some(context) = current_request_context() else {
         return;
     };
+    if event.client_attribution.is_none()
+        && let Some(attribution) = &context.attribution
+    {
+        attribution.apply(event);
+    }
     event.request_method.get_or_insert(context.method);
     event.request_path.get_or_insert(context.path);
     event.route_intent.get_or_insert(context.route_intent);
@@ -332,6 +338,18 @@ pub(super) fn apply_current_request_context(event: &mut RuntimeEvent) {
     if event.grok_metadata.is_none() {
         event.grok_metadata = context.grok_metadata;
     }
+}
+
+pub(super) fn observe_request_attribution(headers: &[(String, String)], body: &serde_json::Value) {
+    let _ = INBOUND_REQUEST_CONTEXT.try_with(|context| {
+        let mut context = context.borrow_mut();
+        context.attribution = Some(sumpter_core::client_attribution::observe(
+            &context.method,
+            &context.path,
+            headers,
+            Some(body),
+        ));
+    });
 }
 
 /// Extract a stable client session identifier for analytics. Values are

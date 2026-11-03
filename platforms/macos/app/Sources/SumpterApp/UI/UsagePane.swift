@@ -46,13 +46,21 @@ private struct RecreateDatabaseButton: View {
 
 
 private struct AttributionFacetPicker: View {
+    private func label(_ value: String) -> String {
+        switch title {
+        case "请求类型": RuntimeEventPresentation.observedRequestKind(value)
+        case "客户端形态": RuntimeEventPresentation.clientVariant(value)
+        case "代理角色": RuntimeEventPresentation.agentRole(value)
+        default: value
+        }
+    }
     let title: String
     @Binding var selection: String
     let rows: [AdminWire.RuntimeAnalytics.FacetRow]
     var body: some View {
         Picker(title, selection: $selection) {
             Text("全部").tag("")
-            ForEach(rows) { item in Text("\(item.value) · \(item.count)").tag(item.value) }
+            ForEach(rows) { item in Text("\(label(item.value)) · \(item.count)").tag(item.value) }
         }
     }
 }
@@ -930,7 +938,8 @@ struct UsagePane: View {
 
     @ViewBuilder
     private var advancedAnalyticsFilterPickers: some View {
-        AttributionFacetPicker(title: "客户端变体", selection: Binding(get: { model.runtimeAnalyticsClientVariant }, set: { model.setRuntimeAnalyticsFilters(clientVariant: $0) }), rows: facets?.clientVariants ?? [])
+        AttributionFacetPicker(title: "请求类型", selection: Binding(get: { model.runtimeAnalyticsRequestKind }, set: { model.setRuntimeAnalyticsFilters(requestKind: $0) }), rows: facets?.requestKinds ?? [])
+        AttributionFacetPicker(title: "客户端形态", selection: Binding(get: { model.runtimeAnalyticsClientVariant }, set: { model.setRuntimeAnalyticsFilters(clientVariant: $0) }), rows: facets?.clientVariants ?? [])
         AttributionFacetPicker(title: "代理角色", selection: Binding(get: { model.runtimeAnalyticsAgentRole }, set: { model.setRuntimeAnalyticsFilters(agentRole: $0) }), rows: facets?.agentRoles ?? [])
         AttributionFacetPicker(title: "代理名称", selection: Binding(get: { model.runtimeAnalyticsAgentName }, set: { model.setRuntimeAnalyticsFilters(agentName: $0) }), rows: facets?.agentNames ?? [])
         AttributionFacetPicker(title: "父线程", selection: Binding(get: { model.runtimeAnalyticsParentThreadID }, set: { model.setRuntimeAnalyticsFilters(parentThreadID: $0) }), rows: facets?.parentThreads ?? [])
@@ -967,7 +976,7 @@ struct UsagePane: View {
 
     private var clearAnalyticsFiltersButton: some View {
         Button("清除筛选") {
-            model.setRuntimeAnalyticsFilters(clientKind: "", clientVariant: "", agentRole: "", agentName: "", parentThreadID: "", parentTurnID: "", rootTurnID: "", endpointID: "", project: "", sessionID: "", model: "", requestPurpose: "", outcome: "", failureKind: "", failurePhase: "")
+            model.setRuntimeAnalyticsFilters(requestKind: "", clientKind: "", clientVariant: "", agentRole: "", agentName: "", parentThreadID: "", parentTurnID: "", rootTurnID: "", endpointID: "", project: "", sessionID: "", model: "", requestPurpose: "", outcome: "", failureKind: "", failurePhase: "")
         }
         .disabled(!hasActiveRuntimeFilters)
     }
@@ -2008,6 +2017,9 @@ struct UsagePane: View {
         case "project": return projectDisplayName(value)
         case "session": return sessionDisplayName(value)
         case "client_kind": return clientDisplayName(value)
+        case "request_kind": return RuntimeEventPresentation.observedRequestKind(value)
+        case "client_variant": return RuntimeEventPresentation.clientVariant(value)
+        case "agent_role": return RuntimeEventPresentation.agentRole(value)
         case "purpose":
             switch value {
             case "normal", "standard": return "主对话"
@@ -2958,6 +2970,7 @@ struct UsagePane: View {
     /// from the same control surface.
     private var hasActiveRuntimeFilters: Bool {
         let globalFilters = [
+            model.runtimeAnalyticsRequestKind,
             model.runtimeAnalyticsClientKind,
             model.runtimeAnalyticsClientVariant, model.runtimeAnalyticsAgentRole, model.runtimeAnalyticsAgentName, model.runtimeAnalyticsParentThreadID, model.runtimeAnalyticsParentTurnID, model.runtimeAnalyticsRootTurnID,
             model.runtimeAnalyticsEndpointID,
@@ -2998,6 +3011,7 @@ struct UsagePane: View {
             model.runtimeAnalyticsParentThreadID.isEmpty ? nil : "父线程=\(model.runtimeAnalyticsParentThreadID)",
             model.runtimeAnalyticsParentTurnID.isEmpty ? nil : "父回合=\(model.runtimeAnalyticsParentTurnID)",
             model.runtimeAnalyticsRootTurnID.isEmpty ? nil : "根回合=\(model.runtimeAnalyticsRootTurnID)",
+            model.runtimeAnalyticsRequestKind.isEmpty ? nil : "请求类型=\(RuntimeEventPresentation.observedRequestKind(model.runtimeAnalyticsRequestKind))",
             model.runtimeAnalyticsClientKind.isEmpty ? nil : "客户端=\(clientDisplayName(model.runtimeAnalyticsClientKind))",
             model.runtimeAnalyticsEndpointID.isEmpty ? nil : "入口=\(model.runtimeAnalyticsEndpointID)",
             model.runtimeAnalyticsProject.isEmpty ? nil : "项目=\(projectDisplayName(model.runtimeAnalyticsProject))",

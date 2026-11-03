@@ -1,7 +1,7 @@
 import { CacheHitRate } from './CacheHitRate.jsx';
 import { RequestTrace } from './RequestTrace.jsx';
 import {
-  eventModel, eventEndpoint, eventEndpointName, eventDurationMS, eventProjectContext, eventClientKindLabel, eventKindLabel,
+  requestKindLabel, clientVariantLabel, agentRoleLabel, clientAttributionSummary, eventModel, eventEndpoint, eventEndpointName, eventDurationMS, eventProjectContext, eventClientKindLabel, eventKindLabel,
   eventHttpStatusLabel, eventOutcomeLabel, eventDurationText, friendlyEventMessage, eventFailureSummaryLabel,
   eventRequestID, eventSessionID, eventToolCalls, eventStreamTrace, formatTimestamp, formatDuration,
   eventTTFBMS, eventUpstreamStatusLabel, eventFailureDetail, eventPurposeLabel, eventProtocolRouteLabel,
@@ -108,7 +108,8 @@ export function EventInspector({ event, chain = [], chainTruncated = false, requ
       ['推理 token（输出子集）', usage?.reasoningTokens],
     ]);
     if (key === 'identity') return fields([
-      ['代理', eventAgentLabel(event) || '未确定'], ['客户端形态', event.clientVariant],
+      ['代理', eventAgentLabel(event) || agentRoleLabel(event.agentRole)], ['客户端形态', clientVariantLabel(event.clientVariant)],
+      ['请求类型', requestKindLabel(event.requestKind)], ['归因依据', clientAttributionSummary(event.clientAttribution)],
       ['请求 ID', eventRequestID(event)], ['会话 ID', eventSessionID(event)], ['会话来源', event.sessionSource],
       ['线程 ID', metadata.threadID], ['回合 ID', metadata.turnID],
       ['父线程', event.parentThreadId ?? metadata.parentThreadID], ['父回合', event.parentTurnId ?? metadata.parentTurnID],
@@ -131,7 +132,7 @@ export function EventInspector({ event, chain = [], chainTruncated = false, requ
       <button type="button" className="btn btn-secondary" onClick={() => onCopy(JSON.stringify(event, null, 2), '完整事件 JSON')}>复制完整事件 JSON</button>
       {fields([['上游追踪 ID', event.upstreamRequestID], ['上游主机', event.upstreamHost], ['入口 ID', event.endpointID], ['事件 ID', event.id]])}
       <pre className="technical-pre event-inspector-json">{JSON.stringify({
-        codexMetadata: event.codexMetadata, grokMetadata: event.grokMetadata, clientDeclared: event.clientDeclared,
+        clientAttribution: event.clientAttribution, requestKind: event.requestKind, codexMetadata: event.codexMetadata, grokMetadata: event.grokMetadata, clientDeclared: event.clientDeclared,
         streamTrace: event.streamTrace, message: event.message,
       }, null, 2)}</pre>
     </>;

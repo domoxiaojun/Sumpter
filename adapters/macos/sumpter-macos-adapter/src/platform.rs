@@ -233,6 +233,8 @@ impl Platform {
         };
 
         let event = RuntimeEvent {
+            request_kind: None,
+            client_attribution: None,
             request_trace: None,
             source_ip: request.source_ip.clone(),
             session_source: None,

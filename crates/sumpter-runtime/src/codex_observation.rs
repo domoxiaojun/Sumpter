@@ -31,7 +31,8 @@ pub(crate) fn write(
     event: &RuntimeEvent,
 ) -> crate::database::Result<()> {
     if event.kind != "client"
-        || (event.client_kind != Some(ClientKind::Codex) && event.codex_metadata.is_none())
+        || (event.client_kind != Some(ClientKind::Codex)
+            && (event.client_attribution.is_some() || event.codex_metadata.is_none()))
     {
         connection.execute(
             "DELETE FROM runtime_codex_requests WHERE event_seq=?1",

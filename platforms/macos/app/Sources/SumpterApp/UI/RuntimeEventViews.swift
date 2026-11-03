@@ -55,7 +55,8 @@ enum RuntimeEventDisplay {
     /// 列表行只显示已记录的用途（主对话 / WebSearch / 自动模式分类器等），
     /// 让分流请求在列表里就能被认出来；未记录时不占位，缺失原因留给详情面板解释。
     static func rowPurpose(_ event: RuntimeEvent) -> String? {
-        event.requestPurpose?.displayName
+        if let kind = event.requestKind { return RuntimeEventPresentation.observedRequestKind(kind) }
+        return event.requestPurpose?.displayName
     }
 
     static func toolCalls(_ event: RuntimeEvent) -> String? {

@@ -1,0 +1,118 @@
+{
+  "version": 1,
+  "provenance": {
+    "legacy": "Sumpter ClientKind regression fixtures: compatibility samples, not a claim that all versions send these UAs",
+    "codex": "retained canonical metadata contract",
+    "claude": "Sumpter strict inspector and Claude Code Hub 0c508ea client-detector",
+    "pi": "1f78cea7a packages/coding-agent/src/core/compaction/utils.ts",
+    "gemini": "b633c0703 packages/core/src/prompts/snippets.ts",
+    "deepseek": "official wire extensions document blob e9a270d98e457fdd3aefc4224cc36372c099ab56"
+  },
+  "clients": [
+    {
+      "client": "codex",
+      "ua": "codex_cli_rs/0.156.1",
+      "variant": "cli"
+    },
+    {
+      "client": "claude_code",
+      "ua": "claude-cli/2.1.220 (external, cli)",
+      "variant": "cli"
+    },
+    {
+      "client": "gemini_cli",
+      "ua": "GeminiCLI/0.1.0/model (darwin; arm64; terminal)",
+      "variant": "cli"
+    },
+    {
+      "client": "grok_build",
+      "ua": "grok-shell/0.2.119",
+      "variant": "cli"
+    },
+    {
+      "client": "pi",
+      "ua": "pi/1.0",
+      "variant": "unknown"
+    },
+    {
+      "client": "cursor",
+      "ua": "Cursor/0.48.6",
+      "variant": "unknown"
+    },
+    {
+      "client": "cline",
+      "ua": "Cline/3.14.0",
+      "variant": "unknown"
+    },
+    {
+      "client": "roo_code",
+      "ua": "roo-code/3.20.0",
+      "variant": "unknown"
+    },
+    {
+      "client": "continue",
+      "ua": "Continue/1.0",
+      "variant": "unknown"
+    },
+    {
+      "client": "aider",
+      "ua": "aider/0.86.1",
+      "variant": "cli"
+    },
+    {
+      "client": "open_code",
+      "ua": "OpenCode/0.1.0",
+      "variant": "unknown"
+    },
+    {
+      "client": "goose",
+      "ua": "goose/1.2.0",
+      "variant": "unknown"
+    },
+    {
+      "client": "open_web_ui",
+      "ua": "open-webui/0.6.0",
+      "variant": "web"
+    },
+    {
+      "client": "windsurf",
+      "ua": "Windsurf/1.9.0",
+      "variant": "unknown"
+    },
+    {
+      "client": "kilo_code",
+      "ua": "kilo-code/4.0.0",
+      "variant": "unknown"
+    },
+    {
+      "client": "lite_llm",
+      "ua": "LiteLLM/1.74.0",
+      "variant": "backend"
+    },
+    {
+      "client": "ollama",
+      "ua": "Ollama/0.12.0",
+      "variant": "unknown"
+    },
+    {
+      "client": "lm_studio",
+      "ua": "LM-Studio/0.3.0",
+      "variant": "unknown"
+    },
+    {
+      "client": "chatbox",
+      "ua": "Chatbox/1.20.0",
+      "variant": "unknown"
+    },
+    {
+      "client": "deepseek_harness",
+      "ua": "deepseek-harness/0.0.1 (+https://github.com/deepseek-ai/deepseek-harness)",
+      "variant": "unknown"
+    },
+    {
+      "client": "workbuddy",
+      "ua": "WorkBuddy/2.137.1",
+      "variant": "unknown"
+    }
+  ]
+}

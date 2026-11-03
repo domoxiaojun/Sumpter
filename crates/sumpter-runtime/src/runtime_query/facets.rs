@@ -69,6 +69,8 @@ pub(super) fn analytics_facets_for_filter(
     session_facet_filter.session_id = None;
     let mut model_facet_filter = filters.clone();
     model_facet_filter.model = None;
+    let mut request_kind_filter = filters.clone();
+    request_kind_filter.request_kind = None;
     let mut purpose_facet_filter = filters.clone();
     purpose_facet_filter.request_purpose = None;
     let mut failure_kind_facet_filter = filters.clone();
@@ -105,7 +107,7 @@ pub(super) fn analytics_facets_for_filter(
         "SELECT outcome,client_kind,request_purpose,request_id,endpoint_id,
                 effective_model,project_id,project_name,session_key,
                 failure_kind,failure_phase,client_variant,agent_role,agent_name,parent_thread_id,parent_turn_id,root_turn_id,
-                attribution_scope,timestamp
+                attribution_scope,timestamp,request_kind
            FROM runtime_events{}",
         base.where_sql()
     );
@@ -131,6 +133,7 @@ pub(super) fn analytics_facets_for_filter(
             root_turn_id: row.get(16)?,
             attribution_scope: row.get(17)?,
             timestamp: row.get(18)?,
+            request_kind: row.get(19)?,
         })
     })?;
     let mut client_counts = HashMap::<String, i64>::new();
@@ -144,11 +147,19 @@ pub(super) fn analytics_facets_for_filter(
     let mut project_counts = HashMap::<String, i64>::new();
     let mut session_counts = HashMap::<String, i64>::new();
     let mut model_counts = HashMap::<String, i64>::new();
+    let mut request_kind_counts = HashMap::<String, i64>::new();
     let mut purpose_counts = HashMap::<String, i64>::new();
     let mut failure_kind_counts = HashMap::<String, i64>::new();
     let mut failure_phase_counts = HashMap::<String, i64>::new();
     for row in rows {
         let row = row?;
+        if facet_row_matches(&row, &request_kind_filter, FacetDimension::RequestKind) {
+            increment_facet(
+                &mut request_kind_counts,
+                row.request_kind.as_deref(),
+                "unrecorded",
+            );
+        }
         if facet_row_matches(&row, &root_turn_id_facet_filter, FacetDimension::RootTurn) {
             increment_facet(
                 &mut root_turn_counts,
@@ -271,6 +282,8 @@ pub(super) fn analytics_facets_for_filter(
     let mut projects = facet_rows_from_counts(project_counts);
     let mut sessions = facet_rows_from_counts(session_counts);
     let mut models = facet_rows_from_counts(model_counts);
+    let mut request_kinds = facet_rows_from_counts(request_kind_counts);
+    ensure_facet_selection(&mut request_kinds, filters.request_kind.as_deref());
     let mut request_purposes = facet_rows_from_counts(purpose_counts);
     let mut failure_kinds = facet_rows_from_counts(failure_kind_counts);
     let mut failure_phases = facet_rows_from_counts(failure_phase_counts);
@@ -295,6 +308,7 @@ pub(super) fn analytics_facets_for_filter(
     ensure_facet_selection(&mut failure_kinds, filters.failure_kind.as_deref());
     ensure_facet_selection(&mut failure_phases, filters.failure_phase.as_deref());
     Ok(AnalyticsFacets {
+        request_kinds,
         client_kinds,
         client_variants,
         agent_roles,
@@ -314,6 +328,7 @@ pub(super) fn analytics_facets_for_filter(
 
 #[derive(Debug)]
 struct FacetProjectionRow {
+    request_kind: Option<String>,
     outcome: Option<String>,
     client_kind: Option<String>,
     request_purpose: Option<String>,
@@ -337,6 +352,7 @@ struct FacetProjectionRow {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FacetDimension {
+    RequestKind,
     ClientVariant,
     AgentRole,
     AgentName,
@@ -364,7 +380,12 @@ fn facet_row_matches(
     let matches = |value: &Option<String>, expected: Option<&String>| {
         expected.is_none_or(|expected| value.as_deref() == Some(expected.as_str()))
     };
-    if !matches(&row.outcome, filter.outcome.as_ref())
+    if (ignored != FacetDimension::RequestKind
+        && filter
+            .request_kind
+            .as_deref()
+            .is_some_and(|value| row.request_kind.as_deref().unwrap_or("unrecorded") != value))
+        || !matches(&row.outcome, filter.outcome.as_ref())
         || !matches(&row.request_purpose, filter.request_purpose.as_ref())
         || !matches(&row.request_id, filter.request_id.as_ref())
         || !matches(&row.model, filter.model.as_ref())

@@ -21,6 +21,7 @@ fn test_connection() -> Connection {
                    completed_change_seq INTEGER,
                    event_id TEXT NOT NULL UNIQUE,request_id TEXT,timestamp REAL NOT NULL,
                    kind TEXT NOT NULL,phase TEXT,outcome TEXT,status_code INTEGER NOT NULL,
+                   request_kind TEXT,client_attribution_json TEXT,
                    client_variant TEXT,agent_role TEXT,agent_name TEXT,parent_thread_id TEXT,parent_turn_id TEXT,root_turn_id TEXT,
                    client_kind TEXT,request_purpose TEXT,endpoint_id TEXT,failure_kind TEXT,
                    is_in_flight INTEGER NOT NULL,payload_json TEXT NOT NULL,

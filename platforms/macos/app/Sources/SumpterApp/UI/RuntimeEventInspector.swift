@@ -123,7 +123,7 @@ struct RuntimeEventInspector: View {
                   ("缓存读 token", usage?.cacheReadInputTokens.map(String.init)), ("缓存写 token", usage?.cacheCreationInputTokens.map(String.init)),
                   ("推理 token（输出子集）", usage?.reasoningTokens.map(String.init))])
         case "identity":
-            rows([("代理", event.agentSummaryLabel), ("客户端形态", event.clientVariant), ("请求 ID", event.requestID),
+            rows([("代理", event.agentSummaryLabel), ("客户端形态", RuntimeEventPresentation.clientVariant(event.clientVariant)), ("请求类型", RuntimeEventPresentation.observedRequestKind(event.requestKind)), ("归因依据", RuntimeEventPresentation.clientAttribution(event.clientAttribution)), ("代理角色", RuntimeEventPresentation.agentRole(event.agentRole)), ("请求 ID", event.requestID),
                   ("会话 ID", event.sessionID), ("会话来源", event.sessionSource), ("线程 ID", event.codexMetadata?.threadID),
                   ("回合 ID", event.codexMetadata?.turnID), ("父线程", event.parentThreadID ?? event.codexMetadata?.parentThreadID),
                   ("父回合", event.parentTurnID ?? event.codexMetadata?.parentTurnID), ("根回合", event.rootTurnID ?? event.codexMetadata?.rootTurnID),

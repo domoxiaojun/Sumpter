@@ -127,6 +127,8 @@ HTTP 头、Responses SSE 结构化错误和 WebSocket 握手错误共用 `Retry-
 
 ## Codex 请求观测
 
+通用客户端身份、形态、代理角色及独立 `requestKind` 见 [客户端归因](client-attribution.md)。新增规则只对新请求生效，历史记录不重算。
+
 Codex 归因使用独立的观测字段，不改变 featureRules 或出站请求构造。统计中的代理角色区分 Guardian、记忆任务和普通子代理；`request_kind` 区分预热、生成回合、上下文压缩和记忆提取，`turn` 也可能属于内部任务，需与角色一起看。
 
 旧 Responses WebSocket 记录按历史连接口径保留，详情仍展示当时采集的逻辑 create 数和最近 64 条 turn/response 关联；新 Responses 请求通过 HTTP/SSE 逐请求结算。统计页的 Codex 逻辑请求数独立计算，不能与连接数相加。超过观测大小、明细淘汰、关联不明和旧连接缺少证据均明确标记，不猜测未记录的回合。`historyInitialization`、`analyticsEnabled` 和 MCP 来源数量只用于诊断，不参与授权、计费或路由。

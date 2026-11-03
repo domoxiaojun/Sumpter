@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SUMPTER_ATTRIBUTION_BUNDLE_VERSION: 0.4.60
+// SUMPTER_ATTRIBUTION_BUNDLE_VERSION: 0.4.61
 // Canonical standalone launcher/installer. Ship copies via sync-client-attribution.mjs.
 import { spawn, execFileSync } from 'node:child_process';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const clients = ['claude', 'grok', 'gemini', 'codex', 'pi'];
 // Keep the launcher and its companion Pi extension from being mixed across releases.
-export const ATTRIBUTION_BUNDLE_VERSION = '0.4.60';
+export const ATTRIBUTION_BUNDLE_VERSION = '0.4.61';
 const PI_PASSTHROUGH_COMMANDS = new Set(['install', 'remove', 'uninstall', 'update', 'list', 'config', 'auth']);
 const PI_PASSTHROUGH_FLAGS = new Set(['--help', '-h', '--version', '-v']);
 const ownedHeaders = new Set(['x-sumpter-client', 'x-sumpter-project', 'x-sumpter-workspace',
@@ -229,6 +229,7 @@ export function prepareLaunch(client, args, env = process.env, cwd = process.cwd
   }
   const codex = client === 'codex' ? codexLaunchContext(args, env, cwd) : undefined;
   const headers = collectHeaders(client, codex?.directory || cwd, env);
+  headers['X-Sumpter-Client'] = ({ claude: 'claude_code', grok: 'grok_build', gemini: 'gemini_cli', codex: 'codex' })[client];
   const next = { ...env };
   const forwarded = [...args];
   if (client === 'claude') {

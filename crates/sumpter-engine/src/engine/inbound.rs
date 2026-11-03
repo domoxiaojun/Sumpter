@@ -230,6 +230,9 @@ impl Engine {
         let route_intent =
             route_intent_for_path(method, path_and_query, query_model.as_deref(), client_kind);
         InboundRequestContext {
+            attribution: Some(sumpter_core::client_attribution::observe(
+                method, &path, headers, None,
+            )),
             // 事件来源在入口只算一次:X-Real-IP / X-Forwarded-For 声明的客户端替换
             // TCP 对端,没有合法头时仍是对端。鉴权、白名单与 /__status 继续用 `remote`。
             source_ip: access::resolve_client_ip_text(
@@ -879,6 +882,7 @@ impl Engine {
                 &[("error", "invalid_request"), ("message", &message)],
             );
         };
+        super::context::observe_request_attribution(&headers, &parsed);
         let codex_metadata = CodexMetadata::from_request(&headers, Some(&parsed));
         if client_kind != ClientKind::Pi
             && let Some(originator) = codex_metadata
@@ -1040,6 +1044,7 @@ impl Engine {
                 &[("error", "invalid_request"), ("message", &message)],
             );
         };
+        super::context::observe_request_attribution(&headers, &parsed);
         let codex_metadata = CodexMetadata::from_request(&headers, Some(&parsed));
         if client_kind != ClientKind::Pi
             && let Some(originator) = codex_metadata
@@ -1279,6 +1284,9 @@ impl Engine {
         // attribution.  The original bytes are retained for the relay.
         let metadata_body_before_normalization =
             metadata_json_body_hint(&body, content_type.as_deref());
+        if let Some(parsed) = &metadata_body_before_normalization {
+            super::context::observe_request_attribution(&headers, parsed);
+        }
         let codex_metadata =
             CodexMetadata::from_request(&headers, metadata_body_before_normalization.as_ref());
         if client_kind != ClientKind::Pi
