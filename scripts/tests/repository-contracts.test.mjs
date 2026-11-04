@@ -38,7 +38,7 @@ test('shared crates do not depend on platform crates and obsolete workflows stay
 test('product version mentions stay in sync across docs', () => {
   // 这些文件的版本号在标记块之外，由人工维护；发版时逐一手改容易漏。
   const version = text('Cargo.toml').match(/\[workspace\.package\][\s\S]*?\nversion = "([^"]+)"/)[1];
-  for (const path of ['README.md', 'USAGE.md', 'platforms/linux/USAGE.md', 'platforms/linux/README.md', 'docs/README.md']) {
+  for (const path of ['README.md', 'USAGE.md', 'platforms/linux/USAGE.md', 'platforms/linux/README.md', 'docs/README.md', 'platforms/linux/DOCKER.md', 'platforms/macos/app/UPDATE.md']) {
     assert.ok(text(path).includes(version), `${path} 未包含当前版本 ${version}`);
   }
 });
