@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useContext, useRef, useState } from 'react';
+import { ModalBusyContext } from '../context/ModalContext.js';
 import { useAppControls } from '../context/AppContext.jsx';
 import { DEFAULT_LIMITS, requestPolicy, validateRequestPolicy } from '../utils/requestPolicy.js';
 
@@ -10,6 +11,8 @@ export function RequestPolicyEditor() {
   const [model, setModel] = useState('*');
   const [protocol, setProtocol] = useState('all');
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const setModalBusy = useContext(ModalBusyContext);
   const change = (edit) => setDraft(prior => { const next = structuredClone(prior); edit(next); return next; });
   const endpoint = draft.endpoints[endpointID] || { limits: DEFAULT_LIMITS, models: {} };
   const ensureEndpoint = (next) => next.endpoints[endpointID] ||= { limits: { ...DEFAULT_LIMITS }, models: {} };
@@ -28,11 +31,13 @@ export function RequestPolicyEditor() {
   </div>;
   const save = async event => {
     event.preventDefault();
-    try { validateRequestPolicy(draft); setSaving(true); await saveConfig({ ...structuredClone(sourceDocument.config), requestPolicy: draft }, {}, sourceDocument); closeModal(); addToast('请求策略已保存', 'success'); }
+    if (savingRef.current) return;
+    try { validateRequestPolicy(draft); savingRef.current = true; setSaving(true); setModalBusy(true); await saveConfig({ ...structuredClone(sourceDocument.config), requestPolicy: draft }, {}, sourceDocument); closeModal(); addToast('请求策略已保存', 'success'); }
     catch (error) { addToast(error.message, 'error'); }
-    finally { setSaving(false); }
+    finally { savingRef.current = false; setSaving(false); setModalBusy(false); }
   };
   return <form onSubmit={save} className="request-policy-form">
+    <fieldset disabled={saving} className="route-editor-fields">
     <p>适用于所有客户端的 HTTP/SSE 请求。并发名额保持到上游响应结束；重试也计入每分钟额度。WebSocket 不按连接数等同为请求数。</p>
     <h3>全局请求限制</h3>
     {limits(draft.global, (k, v) => change(next => { next.global[k] = v; }))}
@@ -61,5 +66,6 @@ export function RequestPolicyEditor() {
       <div className="request-policy-grid">{[['strictTools', '严格工具'], ['grammarTools', '语法工具'], ['developerRole', 'Developer 角色'], ['structuredOutput', '结构化输出']].map(([key, label]) => <label className="request-policy-field" key={key}>{label}<select className="form-select" disabled={!model.trim()} value={profiles[model.trim()]?.[key] == null ? 'unknown' : String(profiles[model.trim()][key])} onChange={e => change(next => { const p = ensureProfiles(next); p[model.trim()] ||= {}; p[model.trim()][key] = e.target.value === 'unknown' ? null : e.target.value === 'true'; })}><option value="unknown">未知 / 保持原样</option><option value="true">支持</option><option value="false">不支持</option></select></label>)}</div>
     </>}
     <div className="modal-actions"><button type="button" className="btn btn-secondary" onClick={closeModal}>取消</button><button className="btn btn-primary" disabled={saving}>{saving ? '保存中…' : '保存请求策略'}</button></div>
+    </fieldset>
   </form>;
 }

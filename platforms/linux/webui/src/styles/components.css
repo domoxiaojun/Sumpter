@@ -4503,9 +4503,14 @@ html[data-theme="light"] .brand-title {
   cursor: pointer;
 }
 
-.data-table-sort-button:hover {
+.data-table-sort-button:hover:not(:disabled) {
   color: var(--primary);
   background: var(--bg-hover);
+}
+
+.data-table-sort-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 
 .data-table-sort-button:focus-visible {
@@ -7713,7 +7718,7 @@ button.responsive-data-card {
   .route-editor-actions { position: sticky; bottom: 0; background: var(--bg-surface); }
 }
 
-.request-policy-form { display: grid; gap: 12px; }
+.request-policy-form, .request-policy-form > fieldset { display: grid; gap: 12px; }
 .request-policy-form p { color: var(--text-secondary); font-size: .85rem; line-height: 1.6; }
 .request-policy-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .request-policy-field { display: grid; gap: 6px; font-size: .85rem; }

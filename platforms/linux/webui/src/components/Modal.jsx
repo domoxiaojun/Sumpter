@@ -1,18 +1,27 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppControls } from '../context/AppContext.jsx';
 import { Icon } from '../utils/icons.jsx';
 import { useDialogFocus } from '../hooks/useDialogFocus.js';
+import { ModalBusyContext } from '../context/ModalContext.js';
 
 export function Modal() {
   const { activeModal, closeModal } = useAppControls();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const busyRef = useRef(false);
+  const [contentBusy, setContentBusy] = useState(false);
+  const contentBusyRef = useRef(false);
+  const updateContentBusy = useCallback(value => {
+    contentBusyRef.current = value;
+    setContentBusy(value);
+  }, []);
+  const dismiss = () => { if (!busyRef.current && !contentBusyRef.current) closeModal(); };
   const activeRef = useRef(activeModal);
   activeRef.current = activeModal;
-  const dialogRef = useDialogFocus(Boolean(activeModal), { onClose: closeModal, canClose: () => !busyRef.current });
+  const dialogRef = useDialogFocus(Boolean(activeModal), { onClose: dismiss });
   useEffect(() => {
     busyRef.current = false;
+    updateContentBusy(false);
     setBusy(false);
     setError('');
   }, [activeModal]);
@@ -22,12 +31,12 @@ export function Modal() {
   const { title, content, actions = [], maxWidth = '580px' } = activeModal;
 
   return (
-    <div className="modal-overlay" onClick={() => { if (!busyRef.current) closeModal(); }}>
+    <div className="modal-overlay" onClick={dismiss}>
       <div
         className="modal-dialog"
         ref={dialogRef}
         tabIndex={-1}
-        aria-busy={busy || undefined}
+        aria-busy={busy || contentBusy || undefined}
         style={{ maxWidth }}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
@@ -38,12 +47,12 @@ export function Modal() {
           <h3 id="modal-title" style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
             {title}
           </h3>
-          <button type="button" className="btn-icon" onClick={closeModal} disabled={busy} aria-label="关闭弹窗">
+          <button type="button" className="btn-icon" onClick={dismiss} disabled={busy || contentBusy} aria-label="关闭弹窗">
             <Icon name="close" size={16} />
           </button>
         </div>
 
-        <div className="modal-body">{content}{error && <p role="alert" className="form-hint">{error}</p>}</div>
+        <div className="modal-body"><ModalBusyContext.Provider value={updateContentBusy}>{content}</ModalBusyContext.Provider>{error && <p role="alert" className="form-hint">{error}</p>}</div>
 
         {actions && actions.length > 0 && (
           <div className="modal-footer">
@@ -53,7 +62,7 @@ export function Modal() {
                 type="button"
                 className={`btn btn-${act.kind || 'secondary'}`}
                 onClick={async () => {
-                  if (busyRef.current) return;
+                  if (busyRef.current || contentBusyRef.current) return;
                   busyRef.current = true;
                   setBusy(true);
                   setError('');
@@ -69,7 +78,7 @@ export function Modal() {
                     }
                   }
                 }}
-                disabled={act.disabled || busy}
+                disabled={act.disabled || busy || contentBusy}
               >
                 {act.label}
               </button>

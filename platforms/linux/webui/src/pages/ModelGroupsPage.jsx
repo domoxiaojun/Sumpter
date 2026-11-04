@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useAppControls } from '../context/AppContext.jsx';
 import { Icon } from '../utils/icons.jsx';
 import { ModelGroupBindingEditor } from '../components/ModelGroupBindingEditor.jsx';
+import { useUnsavedChanges } from '../hooks/useUnsavedChanges.js';
 import { clone } from '../utils/helpers.js';
 import { endpointGroupModels, groupModels, modelCatalogCategories, modelMatches, newModelGroup, pruneGroupReferences } from '../utils/modelGroups.js';
 
@@ -43,6 +44,7 @@ export function ModelGroupsPage() {
   const [saving, setSaving] = useState(false);
   const dirty = useRef(false);
   const [isDirty, setDirty] = useState(false);
+  useUnsavedChanges(isDirty, saving);
   const drag = useRef(null);
   const endpoints = config?.endpoints || [];
   useEffect(() => {

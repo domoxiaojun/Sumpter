@@ -46,6 +46,7 @@ export function DataTable({
   sortKey,
   sortDirection = 'asc',
   onSortChange,
+  loading = false,
   scrollHeight,
   beforeTable = null,
 }) {
@@ -79,6 +80,7 @@ export function DataTable({
         <table
           className={`data-table${adaptive ? ' data-table-adaptive' : ''}`}
           aria-label={ariaLabel}
+          aria-busy={loading || undefined}
           style={{ minWidth: tableMinWidth || (adaptive ? '100%' : tableMinimumWidth(columns)) }}
         >
           <colgroup>
@@ -119,6 +121,8 @@ export function DataTable({
                       <button
                         type="button"
                         className="data-table-sort-button"
+                        disabled={loading}
+                        aria-label={`${col.title}，点击按${activeSort && sortDirection === 'asc' ? '降序' : '升序'}排列`}
                         onClick={() => onSortChange(
                           col.key,
                           activeSort && sortDirection === 'asc' ? 'desc' : 'asc',

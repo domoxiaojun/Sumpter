@@ -176,6 +176,12 @@ function RecentEventResultCell({ event, live = false }) {
   );
 }
 
+function RecentEventSpeed({ event }) {
+  const speed = Number(eventField(event, 'outputTokensPerSecond', 'output_tokens_per_second'));
+  if (event.kind === 'notify' || !Number.isFinite(speed) || speed <= 0) return null;
+  return <span className="telemetry-speed-pill">{speed.toFixed(1)} tok/s</span>;
+}
+
 function RecentEventDurationCell({ event }) {
   if (event.kind === 'notify') return <span className="telemetry-duration-cell">—</span>;
   const live = eventIsInFlight(event);
@@ -186,14 +192,12 @@ function RecentEventDurationCell({ event }) {
     ? Math.min(100, Math.max(10, Math.round((ttfbMS / totalMS) * 100)))
     : 0;
   const streamPart = totalMS > 0 ? Math.max(0, 100 - ttfbPart) : 0;
-  const speed = Number(eventField(event, 'outputTokensPerSecond', 'output_tokens_per_second'));
-  const hasSpeed = Number.isFinite(speed) && speed > 0;
   return (
     <span className="mono-cell telemetry-duration-cell telemetry-inline-latency"
       title={slowTTFB ? '首字节 → 总耗时；首字节超过 5 秒，上游可能排队中' : '首字节 → 总耗时'}>
       <span className="telemetry-inline-latency-top">
         <span className={`telemetry-inline-latency-nums${slowTTFB ? ' is-slow' : ''}${live ? ' is-live' : ''}`}>{eventDurationText(event)}</span>
-        {hasSpeed && <span className="telemetry-speed-pill">{speed.toFixed(1)} tok/s</span>}
+        <RecentEventSpeed event={event} />
       </span>
       {!live && totalMS > 0 && (
         <span className="telemetry-latency-track" aria-hidden="true">
@@ -412,7 +416,8 @@ function MobileEventList({ events, selectedEventID, onSelect, loading, live = fa
                 style={{ color: outcome === 'failed' ? 'var(--status-critical)' : undefined }}
                 title={eventDisplayTiming(event).ttfbMS >= 5000 ? '首字节 → 总耗时；首字节超过 5 秒，上游可能排队中' : '首字节 → 总耗时'}
               >
-                {eventDurationText(event)}
+                <span>{eventDurationText(event)}</span>
+                <RecentEventSpeed event={event} />
               </span>
             </div>
             <div className="telemetry-mobile-route">

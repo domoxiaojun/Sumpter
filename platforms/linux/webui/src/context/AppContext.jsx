@@ -4,6 +4,7 @@ import { upsertRuntimeEvent, mergeRuntimeEvent } from '../utils/runtimeEvents.js
 import { fetchRuntimeChanges, mergeRuntimeListItems, reconcileRuntimeRefresh, runtimeSummaryRevision, RUNTIME_API_VERSION } from '../utils/runtimeSync.js';
 import { clone } from '../utils/helpers.js';
 import { configDraftWrite, requireDraftGeneration } from '../utils/configDraft.js';
+import { createNavigationGuard } from '../utils/navigationGuard.js';
 
 const AppContext = createContext(null);
 const RuntimeContext = createContext(null);
@@ -217,6 +218,14 @@ export function AppProvider({ children }) {
   const [toasts, setToasts] = useState([]);
   const [isCommandOpen, setIsCommandOpen] = useState(false);
   const [activeModal, setActiveModal] = useState(null);
+  const currentRouteRef = useRef(currentRoute);
+  const leaveGuardRef = useRef(null);
+  if (!leaveGuardRef.current) leaveGuardRef.current = createNavigationGuard({
+    confirmDiscard: message => window.confirm(message),
+    notifyBusy: () => window.alert('正在保存，请等待完成后再离开。'),
+  });
+  const registerNavigationGuard = useCallback(read => leaveGuardRef.current.register(read), []);
+  const canLeavePage = useCallback(() => leaveGuardRef.current.canLeave(), []);
 
   // Sync Theme to DOM
   useEffect(() => {
@@ -232,20 +241,37 @@ export function AppProvider({ children }) {
   useEffect(() => {
     const handleHashChange = () => {
       const hash = window.location.hash.replace(/^#/, '');
-      if (hash === 'providers-primary' || hash === 'providers-fallback') {
-        setCurrentRoute('providers');
-      } else if (['run', 'providers', 'model-groups', 'routing', 'security', 'statistics', 'diagnostics', 'help', 'about'].includes(hash)) {
-        setCurrentRoute(hash);
+      const route = hash === 'providers-primary' || hash === 'providers-fallback' ? 'providers' : hash;
+      if (!['run', 'providers', 'model-groups', 'routing', 'security', 'statistics', 'diagnostics', 'help', 'about'].includes(route)
+        || route === currentRouteRef.current) return;
+      if (!leaveGuardRef.current.canLeave()) {
+        window.history.replaceState(null, '', `#${currentRouteRef.current}`);
+        return;
       }
+      currentRouteRef.current = route;
+      setCurrentRoute(route);
+    };
+    const handleBeforeUnload = event => {
+      if (!leaveGuardRef.current.shouldBlockUnload()) return;
+      event.preventDefault();
+      event.returnValue = '';
     };
     window.addEventListener('hashchange', handleHashChange);
-    return () => window.removeEventListener('hashchange', handleHashChange);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('hashchange', handleHashChange);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
   }, []);
 
   // Set Route with Hash update
   const navigate = useCallback((route) => {
+    if (route === currentRouteRef.current) return true;
+    if (!leaveGuardRef.current.canLeave()) return false;
+    currentRouteRef.current = route;
     window.location.hash = `#${route}`;
     setCurrentRoute(route);
+    return true;
   }, []);
 
   // Toast Management
@@ -788,6 +814,7 @@ export function AppProvider({ children }) {
   }, [refreshCore]);
 
   const logout = useCallback(async () => {
+    if (!leaveGuardRef.current.canLeave()) return;
     await api.logout();
     eventDetailCacheRef.current.clear();
     setConfigDoc(null); setStatus(null); setRuntime(null); setRuntimeEventDetail(null); setDiagnostics(null);
@@ -796,6 +823,8 @@ export function AppProvider({ children }) {
   const value = useMemo(() => ({
     currentRoute,
     navigate,
+    registerNavigationGuard,
+    canLeavePage,
     theme,
     toggleTheme: () => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark')),
     configDoc,

@@ -47,6 +47,7 @@ export function PaginationBar({
     itemCount: normalizedItemCount,
   });
   const pageCount = Math.max(1, normalizedTotalPages || 1);
+  const canNavigate = !loading && Boolean(onPageChange) && normalizedTotalPages > 1;
 
   useEffect(() => {
     setPageDraft(String(currentPage));
@@ -54,7 +55,7 @@ export function PaginationBar({
 
   const submitPage = (event) => {
     event?.preventDefault();
-    if (normalizedTotalPages === 0) return;
+    if (!canNavigate) return;
     const parsed = Number.parseInt(String(pageDraft).trim(), 10);
     const target = Math.min(pageCount, Math.max(1, Number.isFinite(parsed) ? parsed : currentPage));
     setPageDraft(String(target));
@@ -87,6 +88,7 @@ export function PaginationBar({
             <select
               className="form-select"
               value={normalizedPageSize}
+              disabled={loading}
               onChange={(event) => onPageSizeChange(Number(event.target.value))}
               aria-label="每页显示数量"
             >
@@ -99,7 +101,7 @@ export function PaginationBar({
 
         <form className="pagination-page-jump" onSubmit={submitPage}>
           {compact && <button type="button" className="btn btn-secondary" aria-label="上一页"
-            disabled={currentPage <= 1} onClick={() => onPageChange?.(currentPage - 1)}><span className="pagination-direction-arrow" aria-hidden="true">‹</span><span className="pagination-direction-label">上一页</span></button>}
+            disabled={!canNavigate || currentPage <= 1} onClick={() => onPageChange?.(currentPage - 1)}><span className="pagination-direction-arrow" aria-hidden="true">‹</span><span className="pagination-direction-label">上一页</span></button>}
           <label htmlFor={pageInputID}>{compact ? '第' : '跳转到'}</label>
           <input
             id={pageInputID}
@@ -110,13 +112,13 @@ export function PaginationBar({
             max={pageCount}
             value={pageDraft}
             onChange={(event) => setPageDraft(event.target.value)}
-            disabled={normalizedTotalPages === 0}
+            disabled={!canNavigate}
             aria-label={`跳转到页码，共 ${pageCount} 页`}
           />
           <span aria-hidden="true">/ {formatNumber(pageCount)}</span>
-          <button type="submit" className="btn btn-secondary pagination-jump-button" disabled={normalizedTotalPages === 0}>跳转</button>
+          <button type="submit" className="btn btn-secondary pagination-jump-button" disabled={!canNavigate}>跳转</button>
           {compact && <button type="button" className="btn btn-secondary" aria-label="下一页"
-            disabled={normalizedTotalPages === 0 || currentPage >= normalizedTotalPages}
+            disabled={!canNavigate || currentPage >= normalizedTotalPages}
             onClick={() => onPageChange?.(currentPage + 1)}><span className="pagination-direction-label">下一页</span><span className="pagination-direction-arrow" aria-hidden="true">›</span></button>}
         </form>
 
@@ -125,7 +127,7 @@ export function PaginationBar({
             type="button"
             className="btn btn-secondary pagination-edge"
             onClick={() => onPageChange?.(1)}
-            disabled={currentPage <= 1}
+            disabled={!canNavigate || currentPage <= 1}
             aria-label="第一页"
           >
             首页
@@ -134,7 +136,7 @@ export function PaginationBar({
             type="button"
             className="btn btn-secondary pagination-edge"
             onClick={() => onPageChange?.(currentPage - 1)}
-            disabled={currentPage <= 1}
+            disabled={!canNavigate || currentPage <= 1}
             aria-label="上一页"
           >
             上一页
@@ -146,7 +148,7 @@ export function PaginationBar({
                 type="button"
                 className={`btn ${value === currentPage ? 'btn-primary' : 'btn-secondary'} pagination-number`}
                 onClick={() => onPageChange?.(value)}
-                disabled={value === currentPage}
+                disabled={!canNavigate || value === currentPage}
                 aria-label={`第 ${value} 页`}
                 aria-current={value === currentPage ? 'page' : undefined}
               >
@@ -158,7 +160,7 @@ export function PaginationBar({
             type="button"
             className="btn btn-secondary pagination-edge"
             onClick={() => onPageChange?.(currentPage + 1)}
-            disabled={normalizedTotalPages === 0 || currentPage >= normalizedTotalPages}
+            disabled={!canNavigate || currentPage >= normalizedTotalPages}
             aria-label="下一页"
           >
             下一页
@@ -167,7 +169,7 @@ export function PaginationBar({
             type="button"
             className="btn btn-secondary pagination-edge"
             onClick={() => onPageChange?.(normalizedTotalPages)}
-            disabled={normalizedTotalPages === 0 || currentPage >= normalizedTotalPages}
+            disabled={!canNavigate || currentPage >= normalizedTotalPages}
             aria-label="最后一页"
           >
             末页

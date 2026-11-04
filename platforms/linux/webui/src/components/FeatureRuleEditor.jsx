@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { ModalBusyContext } from '../context/ModalContext.js';
 import { useAppControls } from '../context/AppContext.jsx';
 import { createLocalID } from '../utils/helpers.js';
 import { isBuiltinRule, routeCatalogKey, routeModelChoices, saveFeatureRule } from '../utils/featureRoutes.js';
@@ -24,6 +25,7 @@ export function FeatureRuleEditor({ rule, catalogLoader }) {
   const [refresh, setRefresh] = useState(0);
   const [query, setQuery] = useState('');
   const [saving, setSaving] = useState(false);
+  const setModalBusy = useContext(ModalBusyContext);
   const [saveError, setSaveError] = useState('');
   const savingRef = useRef(false);
   const mountedRef = useRef(false);
@@ -77,6 +79,7 @@ export function FeatureRuleEditor({ rule, catalogLoader }) {
     if (savingRef.current) return;
     savingRef.current = true;
     setSaving(true);
+    setModalBusy(true);
     setSaveError('');
     try {
       await saveConfig((latest) => saveFeatureRule(latest, rule, draft,
@@ -85,6 +88,7 @@ export function FeatureRuleEditor({ rule, catalogLoader }) {
     } catch (error) {
       if (mountedRef.current) setSaveError(error.message || '保存失败，请重试');
     } finally {
+      setModalBusy(false);
       savingRef.current = false;
       if (mountedRef.current) setSaving(false);
     }

@@ -255,6 +255,7 @@ input[type="checkbox"]:not(.switch-input):disabled { opacity: 0.45; cursor: not-
   z-index: 1;
 }
 .run-events-panel .telemetry-mobile-heading { padding-bottom: 0; }
+.run-events-panel .telemetry-mobile-duration { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .run-events-panel .telemetry-mobile-route { align-content: start; gap: 3px; }
 .run-events-panel .telemetry-mobile-usage { display: grid; align-content: start; gap: 3px; min-width: 0; }
 .run-events-panel .telemetry-mobile-context { gap: 3px; }

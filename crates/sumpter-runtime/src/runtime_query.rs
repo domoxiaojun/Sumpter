@@ -756,7 +756,9 @@ pub enum DimensionSort {
     Failures,
     InputTokens,
     OutputTokens,
+    #[serde(rename = "cache_read")]
     CacheReadTokens,
+    #[serde(rename = "cache_write")]
     CacheWriteTokens,
     Tokens,
     AverageDuration,

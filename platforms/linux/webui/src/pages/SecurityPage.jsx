@@ -5,6 +5,8 @@ import { useState, useEffect, useRef } from 'react';
 import { useAppControls } from '../context/AppContext.jsx';
 import { QuickToggle } from '../components/QuickToggle.jsx';
 import { api } from '../services/api.js';
+import { usePendingActions } from '../hooks/usePendingActions.js';
+import { useUnsavedChanges } from '../hooks/useUnsavedChanges.js';
 import {
   clone, isLoopback, parseList,
 } from '../utils/helpers.js';
@@ -12,6 +14,7 @@ import {
 export function SecurityPage() {
   const { config, configDoc, secretStatus, saveConfig, addToast, auth } = useAppControls();
   const listenerSource = useRef(configDoc);
+  const { pending, run } = usePendingActions();
 
   // Listener draft state
   const [host, setHost] = useState(config?.listener?.host || '127.0.0.1');
@@ -25,39 +28,56 @@ export function SecurityPage() {
   const [newPass, setNewPass] = useState('');
   const [confirmPass, setConfirmPass] = useState('');
   const [adminUser, setAdminUser] = useState(auth?.username || 'admin');
+  const [autostartLoading, setAutostartLoading] = useState(false);
+  const [savedAdminUser, setSavedAdminUser] = useState(auth?.username || 'admin');
+  const listenerValues = value => [value?.host || '127.0.0.1', String(value?.port || 57878), (value?.allowedCIDRs || []).join(', '), (value?.trustedProxyCIDRs || []).join(', ')];
+  const [listenerBaseline, setListenerBaseline] = useState(() => JSON.stringify(listenerValues(config?.listener)));
+  const listenerDirty = JSON.stringify([host, String(port), cidrs, trustedProxies]) !== listenerBaseline;
+  useUnsavedChanges(listenerDirty || Boolean(inboundToken || currentPass || newPass || confirmPass) || adminUser !== savedAdminUser,
+    Boolean(pending.config || pending.admin || (pending.autostart && !autostartLoading)));
+  useEffect(() => {
+    if (listenerDirty) return;
+    listenerSource.current = configDoc;
+    const values = listenerValues(config?.listener);
+    setHost(values[0]); setPort(values[1]); setCidrs(values[2]); setTrustedProxies(values[3]);
+    setListenerBaseline(JSON.stringify(values));
+  }, [configDoc, listenerDirty]);
 
   // Autostart state
   const [autostart, setAutostart] = useState(null);
-  const [autostartLoading, setAutostartLoading] = useState(false);
+  const [autostartError, setAutostartError] = useState('');
 
-  const fetchAutostart = async () => {
+  const fetchAutostart = () => run('autostart', async () => {
     try {
       setAutostartLoading(true);
+      setAutostartError('');
       const data = await api.getAutostart();
       setAutostart(data);
-    } catch {
-      // ignore
+    } catch (error) {
+      setAutostartError(`读取自启动状态失败：${error.message}`);
     } finally {
       setAutostartLoading(false);
     }
-  };
+  });
 
   useEffect(() => {
     fetchAutostart();
   }, []);
 
-  const handleToggleAutostart = async (enabled) => {
+  const handleToggleAutostart = (enabled) => run('autostart', async () => {
+    setAutostartError('');
     try {
       await api.setAutostart(enabled);
       setAutostart((prev) => ({ ...prev, enabled }));
       addToast(enabled ? '已启用 systemd 自启动' : '已停用 systemd 自启动', 'success');
     } catch (err) {
+      setAutostartError(`设置自启动失败：${err.message}`);
       addToast(`设置自启动失败: ${err.message}`, 'error');
     }
-  };
+  });
 
   // Save Listener
-  const handleSaveListener = async () => {
+  const handleSaveListener = () => run('config', async () => {
     if (!host.trim()) {
       return addToast('监听地址不能为空', 'warning');
     }
@@ -78,13 +98,16 @@ export function SecurityPage() {
       nextConfig.listener.allowedCIDRs = parseList(cidrs);
       nextConfig.listener.trustedProxyCIDRs = parseList(trustedProxies);
       listenerSource.current = await saveConfig(nextConfig, {}, listenerSource.current);
+      const values = listenerValues(listenerSource.current.config.listener);
+      setHost(values[0]); setPort(values[1]); setCidrs(values[2]); setTrustedProxies(values[3]);
+      setListenerBaseline(JSON.stringify(values));
     } catch (err) {
       addToast(`保存监听失败: ${err.message}`, 'error');
     }
-  };
+  });
 
   // Set / Clear Token
-  const handleSetToken = async () => {
+  const handleSetToken = () => run('config', async () => {
     if (!inboundToken.trim()) return addToast('请输入有效的入站 Token', 'warning');
     try {
       await saveConfig((latest) => latest, { inboundAuthToken: inboundToken.trim() });
@@ -93,9 +116,9 @@ export function SecurityPage() {
     } catch (err) {
       addToast(`设置失败: ${err.message}`, 'error');
     }
-  };
+  });
 
-  const handleClearToken = async () => {
+  const handleClearToken = () => run('config', async () => {
     if (!confirm('清除入站 Token 后，客户端无需认证即可访问代理监听。确认继续？')) return;
     try {
       await saveConfig((latest) => latest, { inboundAuthToken: '' });
@@ -103,10 +126,10 @@ export function SecurityPage() {
     } catch (err) {
       addToast(`清除失败: ${err.message}`, 'error');
     }
-  };
+  });
 
   // Change Admin Credentials
-  const handleChangeAdmin = async () => {
+  const handleChangeAdmin = () => run('admin', async () => {
     if (!adminUser.trim()) return addToast('用户名不能为空', 'warning');
     if (newPass.length < 12) return addToast('新密码至少需要 12 个字符', 'warning');
     if (newPass !== confirmPass) return addToast('两次输入的新密码不一致', 'warning');
@@ -114,6 +137,8 @@ export function SecurityPage() {
 
     try {
       await api.changeCredentials(currentPass, adminUser.trim(), newPass);
+      setAdminUser(adminUser.trim());
+      setSavedAdminUser(adminUser.trim());
       setCurrentPass('');
       setNewPass('');
       setConfirmPass('');
@@ -121,7 +146,7 @@ export function SecurityPage() {
     } catch (err) {
       addToast(`更新凭据失败: ${err.message}`, 'error');
     }
-  };
+  });
 
   return (
     <div className="page-stack">
@@ -145,7 +170,7 @@ export function SecurityPage() {
 
           <div className="form-group">
             <label className="form-label" htmlFor="security-admin-user">管理员用户名</label>
-            <input id="security-admin-user" autoComplete="username"
+            <input disabled={Boolean(pending.admin)} id="security-admin-user" autoComplete="username"
               type="text"
               className="form-input"
               value={adminUser}
@@ -156,7 +181,7 @@ export function SecurityPage() {
           <div className="grid-2col">
             <div className="form-group">
               <label className="form-label" htmlFor="security-current-password">当前密码</label>
-              <input id="security-current-password" autoComplete="current-password"
+              <input disabled={Boolean(pending.admin)} id="security-current-password" autoComplete="current-password"
                 type="password"
                 className="form-input"
                 placeholder="输入当前旧密码"
@@ -166,7 +191,7 @@ export function SecurityPage() {
             </div>
             <div className="form-group">
               <label className="form-label" htmlFor="security-new-password">新密码 (至少12位)</label>
-              <input id="security-new-password" autoComplete="new-password"
+              <input disabled={Boolean(pending.admin)} id="security-new-password" autoComplete="new-password"
                 type="password"
                 className="form-input"
                 placeholder="输入新密码"
@@ -178,7 +203,7 @@ export function SecurityPage() {
 
           <div className="form-group">
             <label className="form-label" htmlFor="security-confirm-password">确认新密码</label>
-            <input id="security-confirm-password" autoComplete="new-password"
+            <input disabled={Boolean(pending.admin)} id="security-confirm-password" autoComplete="new-password"
               type="password"
               className="form-input"
               placeholder="再次输入新密码"
@@ -191,9 +216,11 @@ export function SecurityPage() {
             type="button"
             className="btn btn-primary panel-action-primary"
             onClick={handleChangeAdmin}
+            disabled={Boolean(pending.admin)}
+            aria-busy={Boolean(pending.admin)}
           >
             <Icon name="check" size={16} />
-            <span>更新登录凭据</span>
+            <span>{pending.admin ? '更新中…' : '更新登录凭据'}</span>
           </button>
         </div>
 
@@ -216,7 +243,7 @@ export function SecurityPage() {
 
           <div className="form-group">
             <label className="form-label" htmlFor="security-inbound-token">设置新 Token</label>
-            <input id="security-inbound-token" autoComplete="off"
+            <input disabled={Boolean(pending.config)} id="security-inbound-token" autoComplete="off"
               type="password"
               className="form-input"
               placeholder="输入新的入站 Token"
@@ -230,16 +257,16 @@ export function SecurityPage() {
               type="button"
               className="btn btn-primary"
               onClick={handleSetToken}
-              disabled={!inboundToken.trim()}
+              disabled={pending.config || !inboundToken.trim()}
             >
               <Icon name="key" size={15} />
-              <span>设置 Token</span>
+              <span>{pending.config ? '处理中…' : '设置 Token'}</span>
             </button>
             <button
               type="button"
               className="btn btn-danger"
               onClick={handleClearToken}
-              disabled={!secretStatus?.inboundAuthToken?.configured}
+              disabled={pending.config || !secretStatus?.inboundAuthToken?.configured}
             >
               <Icon name="trash" size={15} />
               <span>清除 Token</span>
@@ -258,7 +285,7 @@ export function SecurityPage() {
         <div className="grid-3col">
           <div className="form-group">
             <label className="form-label" htmlFor="security-listener-host">监听地址 (Host) *</label>
-            <input id="security-listener-host"
+            <input disabled={Boolean(pending.config)} id="security-listener-host"
               type="text"
               className="form-input"
               value={host}
@@ -268,7 +295,7 @@ export function SecurityPage() {
           </div>
           <div className="form-group">
             <label className="form-label" htmlFor="security-listener-port">监听端口 (Port) *</label>
-            <input id="security-listener-port"
+            <input disabled={Boolean(pending.config)} id="security-listener-port"
               type="number"
               className="form-input"
               value={port}
@@ -277,7 +304,7 @@ export function SecurityPage() {
           </div>
           <div className="form-group">
             <label className="form-label" htmlFor="security-allowed-cidrs">允许的 IP 网段 (CIDR)</label>
-            <input id="security-allowed-cidrs"
+            <input disabled={Boolean(pending.config)} id="security-allowed-cidrs"
               type="text"
               className="form-input"
               value={cidrs}
@@ -289,7 +316,7 @@ export function SecurityPage() {
 
         <div className="form-group">
           <label className="form-label" htmlFor="security-trusted-proxies">可信代理 IP / CIDR</label>
-          <input id="security-trusted-proxies"
+          <input disabled={Boolean(pending.config)} id="security-trusted-proxies"
             type="text"
             className="form-input"
             value={trustedProxies}
@@ -306,9 +333,11 @@ export function SecurityPage() {
           type="button"
           className="btn btn-primary panel-action-primary"
           onClick={handleSaveListener}
+          disabled={Boolean(pending.config) || !listenerDirty}
+          aria-busy={Boolean(pending.config)}
         >
           <Icon name="check" size={16} />
-          <span>保存监听配置</span>
+          <span>{pending.config ? '处理中…' : '保存监听配置'}</span>
         </button>
       </div>
 
@@ -323,14 +352,15 @@ export function SecurityPage() {
             type="button"
             className="btn btn-ghost"
             onClick={fetchAutostart}
-            disabled={autostartLoading}
+            disabled={Boolean(pending.autostart)}
           >
             <Icon name="refresh" size={14} className={autostartLoading ? 'animate-spin' : ''} />
-            <span>刷新状态</span>
+            <span>{pending.autostart ? '处理中…' : '刷新状态'}</span>
           </button>
         </div>
 
-        <div className="status-setting-row">
+        {autostartError && <p role="alert" className="form-hint">{autostartError}；请点击刷新状态重试。</p>}
+        <div className="status-setting-row" aria-busy={Boolean(pending.autostart)}>
           <div>
             <strong>
               {autostart?.scope === 'system' ? 'systemd 系统级服务自启动' : 'systemd user 用户级服务开机自启动'}
@@ -342,7 +372,7 @@ export function SecurityPage() {
           <QuickToggle
             checked={Boolean(autostart?.enabled)}
             onChange={handleToggleAutostart}
-            disabled={!autostart?.available || autostart?.controllable === false}
+            disabled={pending.autostart || Boolean(autostartError) || !autostart?.available || autostart?.controllable === false}
             title={autostart?.controllable === false ? '系统级服务由 root 管理' : '切换开机自启动'}
             ariaLabel="切换 systemd 开机自启动"
           />

@@ -3,6 +3,18 @@ use super::export_queries::stream_export_on;
 use crate::database::{Connection, params};
 use crate::runtime_query::*;
 
+#[test]
+fn cache_sort_response_uses_accepted_query_keys() {
+    assert_eq!(
+        serde_json::to_value(DimensionSort::CacheReadTokens).unwrap(),
+        "cache_read"
+    );
+    assert_eq!(
+        serde_json::to_value(DimensionSort::CacheWriteTokens).unwrap(),
+        "cache_write"
+    );
+}
+
 fn test_connection() -> Connection {
     let connection = Connection::open_in_memory().expect("open in-memory runtime db");
     connection

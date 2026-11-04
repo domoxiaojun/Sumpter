@@ -218,6 +218,14 @@ export function runtimeEventPageRange(page) {
   return { from, to: Math.min(totalCount, from + itemCount - 1) };
 }
 
+// Older daemons serialized enum names instead of the accepted query keys.
+// Keep UI selection, pagination and refresh on the same wire vocabulary.
+export function runtimeDimensionSortState(page) {
+  const aliases = { cache_read_tokens: 'cache_read', cache_write_tokens: 'cache_write' };
+  const sort = page?.sort || 'last_seen';
+  return { sort: aliases[sort] || sort, order: page?.order === 'asc' ? 'asc' : 'desc' };
+}
+
 export function normalizeRuntimePagedResult(value, {
   itemsKey = 'rows',
   page = 1,
@@ -236,6 +244,7 @@ export function normalizeRuntimePagedResult(value, {
   const currentPage = totalPages ? Math.min(requestedPage, totalPages) : 1;
   return {
     ...source,
+    ...(source.sort ? runtimeDimensionSortState(source) : {}),
     [itemsKey]: items,
     page: currentPage,
     pageSize: normalizedPageSize,

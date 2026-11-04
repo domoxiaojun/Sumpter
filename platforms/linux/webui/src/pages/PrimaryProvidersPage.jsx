@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAppControls } from '../context/AppContext.jsx';
+import { useUnsavedChanges } from '../hooks/useUnsavedChanges.js';
 import { DataTable } from '../components/DataTable.jsx';
 import { PricingPanel } from '../components/AnalyticsV2Workspace.jsx';
 import { QuickToggle } from '../components/QuickToggle.jsx';
@@ -265,6 +266,7 @@ function EndpointMappingTable({ endpoint, configDoc, saveConfig, addToast }) {
   const [draftBaseline, setDraftBaseline] = useState(baseline);
   const endpointIDRef = useRef(endpoint?.id);
   const dirty = JSON.stringify(draft.map(mappingFromDraftRow)) !== draftBaseline;
+  useUnsavedChanges(dirty, saving);
 
   // 同一入口收到外部刷新时保留脏草稿；保存以原始 generation 检测冲突。
   useEffect(() => {
@@ -468,7 +470,7 @@ function EndpointPricingEditor({ endpoint, config, onSaved }) {
 }
 
 export function PrimaryProvidersPage() {
-  const { config, configDoc, secretStatus, saveConfig, openModal, addToast } = useAppControls();
+  const { config, configDoc, secretStatus, saveConfig, openModal, addToast, canLeavePage } = useAppControls();
   const [selectedEndpointID, setSelectedEndpointID] = useState(null);
   const [fetchingModelEndpointIDs, setFetchingModelEndpointIDs] = useState(() => new Set());
   const [reorderingEndpointID, setReorderingEndpointID] = useState(null);
@@ -574,6 +576,9 @@ export function PrimaryProvidersPage() {
   const endpoints = config?.endpoints || [];
   const retry = config?.retry || {};
   const selectedEndpoint = endpoints.find((e) => e.id === selectedEndpointID) || endpoints[0];
+  const selectEndpoint = id => {
+    if (id === selectedEndpoint?.id || canLeavePage()) setSelectedEndpointID(id);
+  };
   const enabledEndpointCount = endpoints.filter((endpoint) => endpoint.enabled !== false).length;
   const mappedModelCount = endpoints.reduce((total, endpoint) => total + endpointMappings(endpoint).length, 0);
   const catalogModelCount = new Set(
@@ -1664,7 +1669,7 @@ export function PrimaryProvidersPage() {
               keyField="id"
               getRowProps={providerRowProps}
               tableMinWidth="1114px"
-              onRowClick={(row) => setSelectedEndpointID(row.id)}
+              onRowClick={(row) => selectEndpoint(row.id)}
               activeRowKey={selectedEndpoint?.id}
               emptyText="当前暂无 Provider 入口"
               ariaLabel="上游 Provider 入口"
@@ -1729,7 +1734,7 @@ export function PrimaryProvidersPage() {
                       type="button"
                       className={`btn ${selected ? 'btn-primary' : 'btn-secondary'}`}
                       onClick={() => {
-                        setSelectedEndpointID(endpoint.id);
+                        selectEndpoint(endpoint.id);
                         window.requestAnimationFrame(() => document.getElementById('provider-endpoint-inspector')?.scrollIntoView({ block: 'start' }));
                       }}
                     >

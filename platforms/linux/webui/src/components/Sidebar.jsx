@@ -150,7 +150,7 @@ export function Sidebar() {
                   key={item.id}
                   type="button"
                   className={`nav-link-btn ${active ? 'active' : ''}`}
-                  onClick={() => { navigate(item.id); setOpen(false); }}
+                  onClick={() => { if (navigate(item.id)) setOpen(false); }}
                   aria-current={active ? 'page' : undefined}
                 >
                   <span className="nav-icon">
@@ -173,7 +173,7 @@ export function Sidebar() {
                 key={item.id}
                 type="button"
                 className={`nav-link-btn ${active ? 'active' : ''}`}
-                onClick={() => { navigate(item.id); setOpen(false); }}
+                onClick={() => { if (navigate(item.id)) setOpen(false); }}
                 aria-current={active ? 'page' : undefined}
               >
                 <span className="nav-icon"><Icon name={item.icon} size={18} /></span>

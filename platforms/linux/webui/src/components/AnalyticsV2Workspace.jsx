@@ -9,7 +9,7 @@ import { api } from '../services/api.js';
 import { piAttributionState, PI_ATTRIBUTION_COPY } from '../utils/piAttribution.js';
 import { requestKindLabel, clientVariantLabel, agentRoleLabel, CC_ATTRIBUTION_HINT, formatDuration, formatTimestamp, formatTokenCount, normalizeTimestampMS, clientKindLabel, failureKindLabel, failurePhaseLabel, shouldPromptCCAttribution, projectLabelText, projectClientKindsLabel, projectSourceLabel, purposeLabel } from '../utils/helpers.js';
 import { copyWithToast } from '../utils/clipboard.js';
-import { isRuntimeSnapshotError, normalizeRuntimePagedResult, observeRuntimeDay, persistRuntimeAnalyticsPageSize, readRuntimeAnalyticsPageSize, runtimeAnalyticsFilters, runtimeAppleTimestamp, runtimeCacheRate, runtimeCostAmount, runtimeDateTimeLocal, runtimeFilterValues, runtimeSnapshotFilters, runtimeTodayBounds, runtimePriceInput, runtimePriceMicros, runtimeV2ErrorMessage } from '../utils/runtimeAnalyticsV2.js';
+import { isRuntimeSnapshotError, normalizeRuntimePagedResult, observeRuntimeDay, persistRuntimeAnalyticsPageSize, readRuntimeAnalyticsPageSize, runtimeDimensionSortState, runtimeAnalyticsFilters, runtimeAppleTimestamp, runtimeCacheRate, runtimeCostAmount, runtimeDateTimeLocal, runtimeFilterValues, runtimeSnapshotFilters, runtimeTodayBounds, runtimePriceInput, runtimePriceMicros, runtimeV2ErrorMessage } from '../utils/runtimeAnalyticsV2.js';
 import { formatOutputTokensPerSecond, outputSpeedDetail } from '../utils/outputSpeed.js';
 
 const SECTIONS = [
@@ -127,11 +127,13 @@ function beginLatestRequest(reference) {
   const request = {
     id: safeNumber(reference.current?.id) + 1,
     controller: new AbortController(),
+    pending: true,
   };
   reference.current = request;
   return {
     ...request,
     isCurrent: () => reference.current?.id === request.id,
+    finish: () => { request.pending = false; },
   };
 }
 
@@ -140,6 +142,7 @@ function numberWithComma(value) {
 }
 
 function percent(value, digits = 1) {
+  if (value == null || value === '') return '—';
   const number = Number(value);
   return Number.isFinite(number) ? `${(number * 100).toFixed(digits)}%` : '—';
 }
@@ -762,7 +765,7 @@ function DimensionTable({ page, loading, onPageChange, onPageSizeChange, onSearc
         <span>pi 项目归因：{PI_ATTRIBUTION_COPY[piAttributionState(rows)]} </span>
         <a href="https://github.com/domoxiaojun/sumpter/blob/main/USAGE.md#pi-客户端" target="_blank" rel="noreferrer">接入说明</a>
       </div>}
-      <form className="runtime-v2-search-label" onSubmit={(event) => { event.preventDefault(); onSearchSubmit(searchDraft.trim()); }}>
+      <form className="runtime-v2-search-label" onSubmit={(event) => { event.preventDefault(); if (!loading) onSearchSubmit(searchDraft.trim()); }}>
         <label htmlFor={`runtime-v2-${kind}-search`}>搜索{dimensionLabel(kind)}</label>
         <div className="runtime-v2-search-controls">
           <input id={`runtime-v2-${kind}-search`} className="form-input" type="search" value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} placeholder="输入名称后按回车" />
@@ -778,6 +781,7 @@ function DimensionTable({ page, loading, onPageChange, onPageSizeChange, onSearc
         activeRowKey={activeRowKey}
         onRowClick={onRowClick}
         emptyText={`没有匹配${dimensionLabel(kind)}`}
+        loading={loading}
         sortKey={page.sort}
         sortDirection={page.order}
         onSortChange={onSortChange}
@@ -1868,12 +1872,17 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
         try {
           const value = await api.getRuntimeErrors({ page: 1, pageSize: nextPageSize, filters: activeFilters }, { signal: request.controller.signal });
           const normalized = normalizeRuntimePagedResult(value, { itemsKey: 'groups', page: 1, pageSize: nextPageSize });
-          if (request.isCurrent()) setErrors((previous) => (sameJSON(previous, normalized) ? previous : normalized));
+          if (!normalized) throw new Error('错误聚合响应不是 v2 分页形状');
+          if (request.isCurrent()) {
+            setErrors((previous) => (sameJSON(previous, normalized) ? previous : normalized));
+            setErrorsError(null);
+          }
         } catch (retryError) {
           if (!isAbortError(retryError) && request.isCurrent()) setErrorsError(retryError);
         }
       }
     } finally {
+      request.finish();
       if (request.isCurrent()) setErrorsLoading(false);
     }
   }, [activeFilters, errors, pageSize]);
@@ -1898,9 +1907,8 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     setDimensionError((previous) => ({ ...previous, [kind]: null }));
     const localProject = localSelection === undefined ? selectedProject : localSelection?.project || null;
     const localSession = localSelection === undefined ? selectedSession : localSelection?.session || null;
+    const { sort, order } = runtimeDimensionSortState(snapshot);
     try {
-      const sort = snapshot?.sort || 'last_seen';
-      const order = snapshot?.order || 'desc';
       const queryFilters = (kind === 'session' || kind === 'model') && localSession
         ? {
           ...activeFilters,
@@ -1942,14 +1950,19 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
               project: localProject.key === 'unidentified_project' ? localProject.name : '',
             }
             : activeFilters;
-          const value = await api.getRuntimeDimensions(kind, { page: 1, pageSize: nextPageSize, search, sort: 'last_seen', order: 'desc', filters: queryFilters }, { signal: request.controller.signal });
+          const value = await api.getRuntimeDimensions(kind, { page: 1, pageSize: nextPageSize, search, sort, order, filters: queryFilters }, { signal: request.controller.signal });
           const normalized = normalizeRuntimePagedResult(value, { page: 1, pageSize: nextPageSize });
-          if (request.isCurrent()) setDimensions((previous) => ({ ...previous, [kind]: normalized }));
+          if (!normalized) throw new Error(`${dimensionLabel(kind)}响应不是分页形状`);
+          if (request.isCurrent()) {
+            setDimensions((previous) => ({ ...previous, [kind]: normalized }));
+            setDimensionError((previous) => ({ ...previous, [kind]: null }));
+          }
         } catch (retryError) {
           if (!isAbortError(retryError) && request.isCurrent()) setDimensionError((previous) => ({ ...previous, [kind]: retryError }));
         }
       }
     } finally {
+      request.finish();
       if (request.isCurrent()) setDimensionLoading((previous) => ({ ...previous, [kind]: false }));
     }
   }, [activeFilters, dimensionSearch, dimensions, pageSize, selectedProject, selectedSession]);
@@ -1966,6 +1979,9 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
   // page, page size, search and sort; drop only the snapshot anchor.
   const refreshDimensions = useCallback((kinds = ['endpoint', 'project', 'session', 'model']) => {
     return Promise.allSettled(kinds.map((kind) => {
+      // A timer must not abort the user's sort/search/page request and
+      // replace it with the previous table state.
+      if (dimensionRequestRefs.current[kind].current?.pending) return;
       const current = dimensions[kind];
       const sortOnly = current ? { sort: current.sort, order: current.order } : null;
       return loadDimension(kind, current?.page || 1, current?.pageSize || pageSize, dimensionSearch[kind] || '', sortOnly);
@@ -2108,7 +2124,10 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     if (firstSignal) return;
     if (section === 'overview' || section === 'trends' || section === 'tokens') loadTrends(range);
     if (section === 'overview') refreshDimensions(['endpoint', 'project', 'session', 'model']);
-    if (section === 'errors') { loadErrors(1, errors?.pageSize || pageSize, null); loadDiagnostics(); }
+    if (section === 'errors') {
+      if (!errorsRequestRef.current.pending) loadErrors(errors?.page || 1, errors?.pageSize || pageSize, null);
+      loadDiagnostics();
+    }
     if (section === 'tokens') refreshDimensions(['endpoint', 'project', 'session', 'model']);
     if (section === 'overview' && showStorageSettings) loadStorage({ includeRetention: true });
   }, [analyticsRefreshSignal]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -2148,7 +2167,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     const next = persistRuntimeAnalyticsPageSize(value);
     setAnalyticsPageSize(next);
     if (kind === 'errors') loadErrors(1, next, null);
-    else if (['endpoint', 'project', 'session', 'model'].includes(kind)) loadDimension(kind, 1, next, dimensionSearch[kind] || '', null);
+    else if (['endpoint', 'project', 'session', 'model'].includes(kind)) loadDimension(kind, 1, next, dimensionSearch[kind] || '', runtimeDimensionSortState(dimensions[kind]));
   };
   const retryTrends = useCallback(() => loadTrends(range), [loadTrends, range]);
   const closeStorageSettings = useCallback(() => setShowStorageSettings(false), []);
@@ -2297,12 +2316,12 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
   };
 
   const dimensionCallbacks = {
-    retry: (kind) => loadDimension(kind, 1, dimensions[kind]?.pageSize || pageSize, dimensionSearch[kind] || '', null),
+    retry: (kind) => loadDimension(kind, 1, dimensions[kind]?.pageSize || pageSize, dimensionSearch[kind] || '', runtimeDimensionSortState(dimensions[kind])),
     page: (kind, page) => loadDimension(kind, page),
     pageSize: (kind, size) => changePageSize(kind, size),
     search: (kind, value) => {
       setDimensionSearch((previous) => ({ ...previous, [kind]: value }));
-      loadDimension(kind, 1, dimensions[kind]?.pageSize || pageSize, value, null);
+      loadDimension(kind, 1, dimensions[kind]?.pageSize || pageSize, value, runtimeDimensionSortState(dimensions[kind]));
     },
     sort: (kind, key, order) => loadDimension(
       kind,

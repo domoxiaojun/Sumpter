@@ -75,6 +75,35 @@ async fn runtime_dimensions_keep_stable_identity_after_endpoint_rename() {
 }
 
 #[tokio::test]
+async fn runtime_cache_sort_keys_round_trip() {
+    use sumpter_engine::runtime_query::{
+        DimensionKind, DimensionPageQuery, DimensionSort, SortOrder,
+    };
+
+    let dir = temp_config_dir("cache-sort-contract");
+    let engine = engine_with_dir(config(), dir.clone(), FakeTransport::new());
+    for (sort, key) in [
+        (DimensionSort::CacheReadTokens, "cache_read"),
+        (DimensionSort::CacheWriteTokens, "cache_write"),
+    ] {
+        for (order, direction) in [(SortOrder::Asc, "asc"), (SortOrder::Desc, "desc")] {
+            let query = DimensionPageQuery {
+                sort,
+                order,
+                ..Default::default()
+            };
+            let page = engine
+                .runtime_dimension_page(DimensionKind::Model, &query)
+                .unwrap();
+            assert_eq!(page["sort"], key);
+            assert_eq!(page["order"], direction);
+        }
+    }
+    drop(engine);
+    let _ = std::fs::remove_dir_all(dir.root);
+}
+
+#[tokio::test]
 async fn observational_identity_does_not_change_protocol_conversion() {
     let mut outputs = Vec::new();
     for declared in [false, true] {
