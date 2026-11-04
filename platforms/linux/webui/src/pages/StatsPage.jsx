@@ -7,6 +7,7 @@ import { api } from '../services/api.js';
 import { clientKindLabel, failureKindLabel, failurePhaseLabel, formatNumber, purposeLabel } from '../utils/helpers.js';
 import { Icon } from '../utils/icons.jsx';
 import { copyWithToast } from '../utils/clipboard.js';
+import { useDialogFocus } from '../hooks/useDialogFocus.js';
 
 const RANGE_OPTIONS = [
   ['today', '今天'],
@@ -49,6 +50,7 @@ function RuntimeCleanupDialog({ open, onClose, onCompleted, addToast }) {
   const [preview, setPreview] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const dialogRef = useDialogFocus(open, { onClose, canClose: () => !loading });
 
   useEffect(() => {
     if (open) {
@@ -87,7 +89,7 @@ function RuntimeCleanupDialog({ open, onClose, onCompleted, addToast }) {
   const today = [nowDate.getFullYear(), String(nowDate.getMonth() + 1).padStart(2, '0'), String(nowDate.getDate()).padStart(2, '0')].join('-');
   return (
     <div className="modal-overlay runtime-v2-storage-modal" onClick={(event) => { if (event.target === event.currentTarget && !loading) onClose?.(); }}>
-      <section className="modal-dialog runtime-v2-storage-dialog runtime-cleanup-dialog" role="dialog" aria-modal="true" aria-labelledby="runtime-cleanup-heading">
+      <section ref={dialogRef} tabIndex={-1} className="modal-dialog runtime-v2-storage-dialog runtime-cleanup-dialog" role="dialog" aria-modal="true" aria-labelledby="runtime-cleanup-heading" aria-busy={loading || undefined}>
         <header className="modal-header runtime-v2-storage-dialog-header">
           <div><h2 id="runtime-cleanup-heading">按时间清理运行统计</h2><p>只删除已完成且整组早于截止时间的请求；进行中的请求组会完整保留。</p></div>
           <button type="button" className="btn-icon" onClick={onClose} disabled={loading} aria-label="关闭清理窗口"><Icon name="close" size={16} /></button>
@@ -321,7 +323,7 @@ export function StatsPage() {
         <div className="analytics-v3-filter-status">
           <div>
             <h2 id="analytics-v3-filter-heading">范围与筛选</h2>
-            <p>默认显示全部数据；常用条件直接选择，其他条件在高级筛选中展开。</p>
+            <p>按所选时间范围展示数据；常用条件直接选择，其他条件在高级筛选中展开。</p>
           </div>
         </div>
 

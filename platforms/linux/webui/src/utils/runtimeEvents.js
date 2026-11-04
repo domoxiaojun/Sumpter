@@ -1,4 +1,14 @@
 import { normalizeTimestampMS } from './helpers.js';
+import { APPLE_EPOCH_OFFSET_SECONDS } from './runtimeAnalyticsV2.js';
+
+export function runtimeEventInRange(event, { from, to } = {}) {
+  if (from == null && to == null) return true;
+  if (event?.timestamp == null) return false;
+  const milliseconds = normalizeTimestampMS(event?.timestamp);
+  if (milliseconds == null || !Number.isFinite(milliseconds)) return false;
+  const timestamp = milliseconds / 1000 - APPLE_EPOCH_OFFSET_SECONDS;
+  return (from == null || timestamp >= from) && (to == null || timestamp <= to);
+}
 
 const DEFAULT_PER_KIND_LIMIT = 200;
 

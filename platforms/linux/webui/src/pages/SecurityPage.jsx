@@ -144,8 +144,8 @@ export function SecurityPage() {
           </div>
 
           <div className="form-group">
-            <label className="form-label">管理员用户名</label>
-            <input
+            <label className="form-label" htmlFor="security-admin-user">管理员用户名</label>
+            <input id="security-admin-user" autoComplete="username"
               type="text"
               className="form-input"
               value={adminUser}
@@ -155,8 +155,8 @@ export function SecurityPage() {
 
           <div className="grid-2col">
             <div className="form-group">
-              <label className="form-label">当前密码</label>
-              <input
+              <label className="form-label" htmlFor="security-current-password">当前密码</label>
+              <input id="security-current-password" autoComplete="current-password"
                 type="password"
                 className="form-input"
                 placeholder="输入当前旧密码"
@@ -165,8 +165,8 @@ export function SecurityPage() {
               />
             </div>
             <div className="form-group">
-              <label className="form-label">新密码 (至少12位)</label>
-              <input
+              <label className="form-label" htmlFor="security-new-password">新密码 (至少12位)</label>
+              <input id="security-new-password" autoComplete="new-password"
                 type="password"
                 className="form-input"
                 placeholder="输入新密码"
@@ -177,8 +177,8 @@ export function SecurityPage() {
           </div>
 
           <div className="form-group">
-            <label className="form-label">确认新密码</label>
-            <input
+            <label className="form-label" htmlFor="security-confirm-password">确认新密码</label>
+            <input id="security-confirm-password" autoComplete="new-password"
               type="password"
               className="form-input"
               placeholder="再次输入新密码"
@@ -215,8 +215,8 @@ export function SecurityPage() {
           </p>
 
           <div className="form-group">
-            <label className="form-label">设置新 Token</label>
-            <input
+            <label className="form-label" htmlFor="security-inbound-token">设置新 Token</label>
+            <input id="security-inbound-token" autoComplete="off"
               type="password"
               className="form-input"
               placeholder="输入新的入站 Token"
@@ -257,8 +257,8 @@ export function SecurityPage() {
 
         <div className="grid-3col">
           <div className="form-group">
-            <label className="form-label">监听地址 (Host) *</label>
-            <input
+            <label className="form-label" htmlFor="security-listener-host">监听地址 (Host) *</label>
+            <input id="security-listener-host"
               type="text"
               className="form-input"
               value={host}
@@ -267,8 +267,8 @@ export function SecurityPage() {
             />
           </div>
           <div className="form-group">
-            <label className="form-label">监听端口 (Port) *</label>
-            <input
+            <label className="form-label" htmlFor="security-listener-port">监听端口 (Port) *</label>
+            <input id="security-listener-port"
               type="number"
               className="form-input"
               value={port}
@@ -276,8 +276,8 @@ export function SecurityPage() {
             />
           </div>
           <div className="form-group">
-            <label className="form-label">允许的 IP 网段 (CIDR)</label>
-            <input
+            <label className="form-label" htmlFor="security-allowed-cidrs">允许的 IP 网段 (CIDR)</label>
+            <input id="security-allowed-cidrs"
               type="text"
               className="form-input"
               value={cidrs}
@@ -288,8 +288,8 @@ export function SecurityPage() {
         </div>
 
         <div className="form-group">
-          <label className="form-label">可信代理 IP / CIDR</label>
-          <input
+          <label className="form-label" htmlFor="security-trusted-proxies">可信代理 IP / CIDR</label>
+          <input id="security-trusted-proxies"
             type="text"
             className="form-input"
             value={trustedProxies}

@@ -65,7 +65,7 @@ jobs:
         run: node --test scripts/tests/pi-project-attribution.test.mjs
 
       - name: Test unified client attribution and packaged copies
-        run: node --test scripts/tests/client-attribution.test.mjs
+        run: node --test scripts/tests/client-attribution.test.mjs scripts/tests/attribution-boundaries.test.mjs
 
       - name: Test Codex attribution and packaged copies
         run: node --test scripts/tests/codex-attribution.test.mjs

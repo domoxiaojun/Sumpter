@@ -1248,3 +1248,23 @@ code {
     height: auto;
   }
 }
+
+/* Four analytics boards fit a phone. Do not combine the old five-board grid
+   widths with the desktop inline-flex rail. */
+@media (max-width: 600px) {
+  .runtime-v2-board-picker > .horizontal-scroll-shell { width: 100%; }
+  .runtime-v2-board-picker .runtime-v2-section-tabs {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    width: 100%;
+    overflow-x: auto;
+  }
+  .runtime-v2-board-picker .runtime-v2-section-tabs button {
+    grid-column: auto;
+    width: auto;
+    min-height: 44px;
+    height: auto;
+  }
+  .run-page .run-listener-row { flex-direction: row; flex-wrap: wrap; }
+  .run-page .run-copy-address { width: auto; }
+}

@@ -892,6 +892,23 @@ public enum AdminWire {
             self.to = to
         }
 
+        public static func rangeStart(
+            _ range: String,
+            now: Date = Date(),
+            calendar: Calendar = .autoupdatingCurrent
+        ) -> Double? {
+            let seconds: TimeInterval
+            switch range {
+            case "today": return calendar.startOfDay(for: now).timeIntervalSinceReferenceDate
+            case "1h": seconds = 3_600
+            case "24h": seconds = 86_400
+            case "7d": seconds = 7 * 86_400
+            case "30d": seconds = 30 * 86_400
+            default: return nil
+            }
+            return now.timeIntervalSinceReferenceDate - seconds
+        }
+
         fileprivate func add(to query: inout [String: String]) {
             let strings: [(String, String?)] = [
                 ("kind", kind), ("outcome", outcome), ("clientKind", clientKind),

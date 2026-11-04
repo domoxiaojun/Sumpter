@@ -1328,33 +1328,16 @@ struct UsagePane: View {
         }
     }
 
-    private func sparkbarValueCell(text: String, value: Int, maxValue: Int, tint: Color) -> some View {
-        let ratio = maxValue > 0 ? min(1.0, max(0.0, CGFloat(value) / CGFloat(maxValue))) : 0
-        return ZStack(alignment: .leading) {
-            GeometryReader { proxy in
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(tint.opacity(0.15))
-                    .frame(width: max(ratio > 0 ? 3 : 0, proxy.size.width * ratio))
-            }
-            Text(text)
-                .monospacedDigit()
-                .padding(.horizontal, 4)
-        }
-        .frame(height: 20)
-    }
-
     private func runtimeOverviewUsageTable(_ page: AdminWire.RuntimeDimensionPage, kind: String, sortOrder: Binding<[KeyPathComparator<AdminWire.RuntimeDimensionRow>]>) -> some View {
-        let maxRequests = max(1, page.rows.map(\.requests).max() ?? 1)
-        let maxInputTokens = max(1, page.rows.map(\.inputTokens).max() ?? 1)
         return Table(page.rows, selection: runtimeOverviewTableSelection(page: page, kind: kind), sortOrder: sortOrder) {
-            TableColumn(runtimeDimensionLabel(kind), value: \.name) { row in runtimeOverviewDimensionName(row, kind: kind) }.width(min: 220, ideal: 290)
+            TableColumn(runtimeDimensionLabel(kind), value: \.name) { row in runtimeOverviewDimensionName(row, kind: kind) }.width(min: 180, ideal: 240)
             TableColumn("请求", value: \.requests) { row in
-                sparkbarValueCell(text: tokenNumber(row.requests), value: row.requests, maxValue: maxRequests, tint: palette.brand)
+                Text(tokenNumber(row.requests)).monospacedDigit()
             }.width(min: 84, ideal: 98)
             TableColumn("成功率", value: \.successRateForSorting) { row in Text(rateText(row.successRateForSorting >= 0 ? row.successRateForSorting : nil)).monospacedDigit() }.width(min: 92, ideal: 106)
             TableColumn("失败", value: \.failures) { row in Text(tokenNumber(row.failures)).monospacedDigit() }.width(min: 76, ideal: 88)
             TableColumn("输入 Token", value: \.inputTokens) { row in
-                sparkbarValueCell(text: dimensionTokenText(row.inputTokens, related: row.requests), value: row.inputTokens, maxValue: maxInputTokens, tint: palette.info)
+                Text(dimensionTokenText(row.inputTokens, related: row.requests)).monospacedDigit()
             }.width(min: 112, ideal: 130)
             TableColumn("输出 Token", value: \.outputTokens) { row in Text(dimensionTokenText(row.outputTokens, related: row.requests)).monospacedDigit() }.width(min: 108, ideal: 126)
             TableColumn("输出速度", value: \.outputSpeedForSorting) { row in Text(RuntimeEventPresentation.outputSpeedDisplay(row.outputTokensPerSecond)).monospacedDigit() }.width(min: 108, ideal: 126)
@@ -1369,27 +1352,26 @@ struct UsagePane: View {
         }
         .onChange(of: sortOrder.wrappedValue) { _, order in applyRuntimeOverviewSort(order, kind: kind) }
         .sumpterTableSurface()
-        .frame(minWidth: 1_060)
+        .frame(maxWidth: .infinity)
         .frame(height: min(280, max(96, CGFloat(page.rows.count) * 31 + 38)))
     }
 
     private func runtimeOverviewCostTable(_ page: AdminWire.RuntimeDimensionPage, kind: String, sortOrder: Binding<[KeyPathComparator<AdminWire.RuntimeDimensionRow>]>) -> some View {
-        let maxRequests = max(1, page.rows.map(\.requests).max() ?? 1)
         return Table(page.rows, selection: runtimeOverviewTableSelection(page: page, kind: kind), sortOrder: sortOrder) {
-            TableColumn(runtimeDimensionLabel(kind), value: \.name) { row in runtimeOverviewDimensionName(row, kind: kind) }.width(min: 220, ideal: 290)
+            TableColumn(runtimeDimensionLabel(kind), value: \.name) { row in runtimeOverviewDimensionName(row, kind: kind) }.width(min: 180, ideal: 240)
             // Cost is calculated after the server applies its supported
             // aggregate ordering; keep it read-only here instead of sorting
             // only the visible page on the client.
             TableColumn("成本") { row in Text(costText(row.cost?.estimatedCostMicros ?? 0, currency: row.cost?.currency)).monospacedDigit() }.width(min: 110, ideal: 130)
             TableColumn("请求", value: \.requests) { row in
-                sparkbarValueCell(text: tokenNumber(row.requests), value: row.requests, maxValue: maxRequests, tint: palette.success)
+                Text(tokenNumber(row.requests)).monospacedDigit()
             }.width(min: 84, ideal: 98)
             TableColumn("暂无法计价") { row in Text(tokenNumber((row.cost?.unpricedRequests ?? 0) + (row.cost?.unknownAccountingRequests ?? 0))).monospacedDigit() }.width(min: 110, ideal: 126)
             TableColumn("最近活动", value: \.lastSeen) { row in Text(RuntimeEventDisplay.dateTime(Date(timeIntervalSinceReferenceDate: row.lastSeen))).font(.caption.monospacedDigit()) }.width(min: 150, ideal: 174)
         }
         .onChange(of: sortOrder.wrappedValue) { _, order in applyRuntimeOverviewSort(order, kind: kind) }
         .sumpterTableSurface()
-        .frame(minWidth: 740)
+        .frame(maxWidth: .infinity)
         .frame(height: min(240, max(96, CGFloat(page.rows.count) * 31 + 38)))
     }
 
@@ -2114,7 +2096,7 @@ struct UsagePane: View {
                                 TableColumn("成本") { point in Text(costText(point.cost.estimatedCostMicros, currency: point.cost.currency)).monospacedDigit() }.width(min: 110, ideal: 130)
                             }
                             .sumpterTableSurface()
-                            .frame(minWidth: 820)
+                            .frame(maxWidth: .infinity)
                             .frame(height: min(260, max(90, CGFloat(trend.points.count) * 26 + 34)))
                             .padding(.top, 8)
                         }
@@ -2412,7 +2394,7 @@ struct UsagePane: View {
                             }.width(min: 150, ideal: 170)
                         }
                         .sumpterTableSurface()
-                        .frame(minWidth: 960)
+                        .frame(maxWidth: .infinity)
                         .frame(height: min(240, max(90, CGFloat(page.groups.count) * 28 + 34)))
                     }
                     if let selectedID = selectedErrorSampleEventID,

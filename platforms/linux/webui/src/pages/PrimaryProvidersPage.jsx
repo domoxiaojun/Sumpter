@@ -103,9 +103,9 @@ function RetryDelayControls({ initialSeconds, initialEnabled, onChange }) {
   return (
     <>
       <div className="form-group">
-        <label className="form-label">retry_delay 秒数</label>
-        <input
-          type="number"
+        <label className="form-label" htmlFor="provider-retry-delay">retry_delay 秒数</label>
+        <input id="provider-retry-delay"
+           type="number"
           min="0.1"
           step="0.1"
           className="form-input"
@@ -878,8 +878,8 @@ export function PrimaryProvidersPage() {
 
           <div className="grid-2col">
             <div className="form-group">
-              <label className="form-label">单次上游首响应截止（秒）</label>
-              <input
+              <label className="form-label" htmlFor="provider-response-timeout">单次上游首响应截止（秒）</label>
+              <input id="provider-response-timeout"
                 type="number"
                 min="0.1"
                 step="0.1"
@@ -892,8 +892,8 @@ export function PrimaryProvidersPage() {
             </div>
 
             <div className="form-group">
-              <label className="form-label">流式空闲截止（秒）</label>
-              <input
+              <label className="form-label" htmlFor="provider-stream-timeout">流式空闲截止（秒）</label>
+              <input id="provider-stream-timeout"
                 type="number"
                 min="0.1"
                 step="0.1"
@@ -922,9 +922,9 @@ export function PrimaryProvidersPage() {
             </div>
 
             <div className="form-group">
-              <label className="form-label">入口内 500 重试</label>
-              <input
-                type="number"
+              <label className="form-label" htmlFor="provider-500-retries">入口内 500 重试</label>
+              <input id="provider-500-retries"
+                 type="number"
                 min="0"
                 step="1"
                 className="form-input"
@@ -974,9 +974,9 @@ export function PrimaryProvidersPage() {
 
           <div className="grid-2col">
             <div className="form-group">
-              <label className="form-label">粘性入口额外重试</label>
-              <input
-                type="number"
+              <label className="form-label" htmlFor="provider-sticky-retries">粘性入口额外重试</label>
+              <input id="provider-sticky-retries"
+                 type="number"
                 min="0"
                 step="1"
                 className="form-input"
@@ -987,9 +987,9 @@ export function PrimaryProvidersPage() {
             </div>
 
             <div className="form-group">
-              <label className="form-label">故障重试最大轮数</label>
-              <input
-                type="number"
+              <label className="form-label" htmlFor="provider-retry-rounds">故障重试最大轮数</label>
+              <input id="provider-retry-rounds"
+                 type="number"
                 min="0"
                 step="1"
                 className="form-input"
@@ -1002,9 +1002,9 @@ export function PrimaryProvidersPage() {
 
           <div className="grid-2col">
             <div className="form-group">
-              <label className="form-label">跨轮最长时长（秒）</label>
-              <input
-                type="number"
+              <label className="form-label" htmlFor="provider-retry-time">跨轮最长时长（秒）</label>
+              <input id="provider-retry-time"
+                 type="number"
                 min="0"
                 step="0.1"
                 className="form-input"
@@ -1126,9 +1126,9 @@ export function PrimaryProvidersPage() {
           {isNew && <p className="form-hint">新入口仅加入入口库；请到模型组手动添加入口并选择承接范围。</p>}
           <div className="grid-2col">
             <div className="form-group">
-              <label className="form-label">入口 ID {isNew ? '' : '(只读)'}</label>
+              <label className="form-label" htmlFor="provider-id">入口 ID {isNew ? '' : '(只读)'}</label>
               {isNew ? (
-                <input
+                <input id="provider-id"
                   type="text"
                   className="form-input"
                   defaultValue=""
@@ -1136,7 +1136,7 @@ export function PrimaryProvidersPage() {
                   onChange={(e) => { endpointID = e.target.value; }}
                 />
               ) : (
-                <input type="text" className="form-input" value={endpointID} readOnly aria-readonly="true" />
+                <input id="provider-id" type="text" className="form-input" value={endpointID} readOnly aria-readonly="true" />
               )}
               <span className="form-hint">只允许字母、数字、点、下划线和连字符；保存后不可修改。</span>
             </div>
@@ -1148,9 +1148,9 @@ export function PrimaryProvidersPage() {
           </div>
 
           <div className="form-group">
-            <label className="form-label">入口名称 *</label>
-            <input
-              type="text"
+            <label className="form-label" htmlFor="provider-name">入口名称 *</label>
+            <input id="provider-name"
+               type="text"
               className="form-input"
               defaultValue={name}
               placeholder="如：Anthropic 官方直连"
@@ -1159,9 +1159,9 @@ export function PrimaryProvidersPage() {
           </div>
 
           <div className="form-group">
-            <label className="form-label">API 地址 *</label>
-            <input
-              type="text"
+            <label className="form-label" htmlFor="provider-api-url">API 地址 *</label>
+            <input id="provider-api-url"
+               type="text"
               className="form-input"
               defaultValue={baseURL}
               placeholder="https://api.anthropic.com"
@@ -1170,9 +1170,9 @@ export function PrimaryProvidersPage() {
           </div>
 
           <div className="form-group">
-            <label className="form-label">指定解析 IP</label>
-            <input
-              type="text"
+            <label className="form-label" htmlFor="provider-resolve-ip">指定解析 IP</label>
+            <input id="provider-resolve-ip"
+               type="text"
               className="form-input"
               defaultValue={resolveIP}
               placeholder="留空使用系统 DNS，如 203.0.113.10 或 2001:db8::10"
@@ -1182,9 +1182,9 @@ export function PrimaryProvidersPage() {
           </div>
 
           <div className="form-group">
-            <label className="form-label">API Key 密钥</label>
-            <input
-              type="password"
+            <label className="form-label" htmlFor="provider-api-key">API Key 密钥</label>
+            <input id="provider-api-key"
+               type="password"
               className="form-input"
               defaultValue={fetchedKey}
               placeholder={existingSecretStatus?.configured ? `已保存 (尾号 ${existingSecretStatus.last4}) · 输入以替换` : '输入上游 API Key'}
@@ -1194,9 +1194,9 @@ export function PrimaryProvidersPage() {
           </div>
 
           <div className="form-group">
-            <label className="form-label">入口协议</label>
-            <select
-              className="form-select"
+            <label className="form-label" htmlFor="provider-protocol">入口协议</label>
+            <select id="provider-protocol"
+               className="form-select"
               defaultValue={protocol}
               onChange={(e) => { protocol = normalizeEndpointProtocol(e.target.value, 'auto'); }}
             >
@@ -1210,14 +1210,14 @@ export function PrimaryProvidersPage() {
           <UserAgentEditor initialValue={userAgent} onChange={(value) => { userAgent = value; }} />
 
           <div className="form-group">
-            <label className="form-label">调度优先级 (Priority)</label>
-            <input type="number" className="form-input" defaultValue={priority} onChange={(e) => { priority = Number(e.target.value); }} />
+            <label className="form-label" htmlFor="provider-priority">调度优先级 (Priority)</label>
+            <input id="provider-priority" type="number" className="form-input" defaultValue={priority} onChange={(e) => { priority = Number(e.target.value); }} />
             <span className="form-hint">数值越小越优先调度。</span>
           </div>
 
           <div className="form-group">
-            <label className="form-label">粘性分组</label>
-            <input type="text" className="form-input" defaultValue={stickyGroup} placeholder="留空 = 入口独立分组" onChange={(e) => { stickyGroup = e.target.value; }} />
+            <label className="form-label" htmlFor="provider-sticky-group">粘性分组</label>
+            <input id="provider-sticky-group" type="text" className="form-input" defaultValue={stickyGroup} placeholder="留空 = 入口独立分组" onChange={(e) => { stickyGroup = e.target.value; }} />
             <span className="form-hint">同一分组共享会话粘性；当前分组故障后再故障转移到其他分组。</span>
           </div>
 

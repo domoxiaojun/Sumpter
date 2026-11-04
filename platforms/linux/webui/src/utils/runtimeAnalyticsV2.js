@@ -20,14 +20,74 @@ export function runtimeTodayBounds(now = new Date()) {
 }
 
 /**
- * Return only the lower bound for a local-day query.  The server clamps the
- * upper bound to its current instant, which keeps an auto-refreshing page
- * current and avoids a stale `to` value captured at first render.
+ * Use the same lower bound for trends, paged dimensions, errors and exports.
+ * Leave the upper bound open so a fresh snapshot includes newly completed work.
  */
 export function runtimeRangeFilter(range, now = new Date()) {
-  if (String(range || '').toLowerCase() !== 'today') return {};
-  const { from } = runtimeTodayBounds(now);
-  return from == null ? {} : { from };
+  const current = now instanceof Date ? now : new Date(now);
+  if (Number.isNaN(current.getTime())) return {};
+  const value = String(range || '').toLowerCase();
+  if (value === 'today') return { from: runtimeTodayBounds(current).from };
+  const seconds = { '1h': 3600, '24h': 86400, '7d': 7 * 86400, '30d': 30 * 86400 }[value];
+  return seconds == null ? {} : { from: current.getTime() / 1000 - APPLE_EPOCH_OFFSET_SECONDS - seconds };
+}
+
+const runtimeFilterFields = [
+  'kind', 'outcome', 'clientKind', 'requestKind', 'clientVariant', 'agentRole', 'agentName',
+  'parentThreadID', 'parentTurnID', 'rootTurnID', 'requestPurpose', 'requestID', 'endpointID',
+  'model', 'projectID', 'project', 'sessionID', 'failureKind', 'failurePhase', 'from', 'to',
+];
+
+// Omitted values must not overwrite a computed range boundary with undefined.
+export function runtimeFilterValues(filters = {}) {
+  return Object.fromEntries(runtimeFilterFields.flatMap((key) => {
+    const value = filters[key];
+    return value == null || String(value).trim() === '' ? [] : [[key, value]];
+  }));
+}
+
+export function runtimeAnalyticsFilters(range, filters = {}, now = new Date()) {
+  return { ...runtimeRangeFilter(range, now), ...runtimeFilterValues(filters) };
+}
+
+export function runtimeSnapshotFilters(filters, snapshot) {
+  if (snapshot?.snapshotSeq == null || !snapshot.filters) return filters;
+  const { from: _from, to: _to, ...rest } = filters;
+  return { ...rest, ...runtimeFilterValues({ from: snapshot.filters.from, to: snapshot.filters.to }) };
+}
+
+// A "today" snapshot expires at the next local midnight (or timezone change).
+export function runtimeCurrentRangeSnapshot(range, snapshot, now = new Date()) {
+  const from = snapshot?.filters?.from;
+  if (range === 'today' && (from == null || Number(from) !== runtimeRangeFilter(range, now).from)) return null;
+  return snapshot;
+}
+
+// Refresh a mounted page at the next local midnight, including DST transitions,
+// and catch up immediately when a suspended/background page becomes visible.
+export function observeRuntimeDay(onChange, {
+  now = () => new Date(), schedule = globalThis.setTimeout, cancel = globalThis.clearTimeout,
+  visibility = globalThis.document, focus = globalThis.window,
+} = {}) {
+  let timer;
+  let previous;
+  const check = () => {
+    if (timer != null) cancel(timer);
+    const current = now();
+    const day = runtimeTodayBounds(current).from;
+    if (day !== previous) { previous = day; onChange(day); }
+    const next = new Date(current.getFullYear(), current.getMonth(), current.getDate() + 1);
+    timer = schedule(check, Math.max(1, next.getTime() - current.getTime()));
+  };
+  const resume = () => { if (!visibility?.hidden) check(); };
+  check();
+  visibility?.addEventListener?.('visibilitychange', resume);
+  focus?.addEventListener?.('focus', resume);
+  return () => {
+    if (timer != null) cancel(timer);
+    visibility?.removeEventListener?.('visibilitychange', resume);
+    focus?.removeEventListener?.('focus', resume);
+  };
 }
 
 function finiteInteger(value, fallback) {

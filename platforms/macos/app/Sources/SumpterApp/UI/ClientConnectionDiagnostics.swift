@@ -17,19 +17,24 @@ struct ClientConnectionDiagnostics: View {
     @State private var rows: [ClientDiagnostic] = []
     @State private var busy = false
     @State private var error: String?
-    private let clients = [("Claude Code", "claude_code"), ("Codex", "codex"), ("Gemini CLI", "gemini_cli"), ("pi", "pi"), ("Grok Build", "grok_build")]
+    private let clients: [ClientKind] = {
+        let primary: [ClientKind] = [.claudeCode, .codex, .geminiCli, .pi, .grokBuild]
+        return primary + ClientKind.allCases.filter { !primary.contains($0) }
+    }()
 
     var body: some View {
         SectionPanel(title: "客户端连接诊断", hint: "未见请求表示未知，不能据此判断客户端绕过代理。") {
             VStack(alignment: .leading, spacing: 12) {
-                ForEach(clients, id: \.1) { label, kind in
+                ForEach(clients, id: \.rawValue) { kind in
                     HStack {
-                        Text(label).frame(width: 100, alignment: .leading)
-                        if let event = model.runtime.recentEvents.first(where: { $0.kind == "client" && $0.clientKind?.rawValue == kind }) {
+                        Text(kind.displayName).frame(width: 100, alignment: .leading)
+                        if let event = model.runtime.recentEvents.first(where: { $0.kind == "client" && $0.clientKind == kind }) {
                             Text("已观察到请求 · \(RuntimeEventDisplay.dateTime(event.timestamp))")
                         } else { Text("最近窗口未见请求").foregroundStyle(.secondary) }
                     }.font(.caption)
                 }
+                Text("本机配置检查支持 Claude Code、Codex、Gemini CLI、pi 和 Grok Build。")
+                    .font(.caption).foregroundStyle(.secondary)
                 Button(busy ? "检查中…" : "检查本机可见配置") {
                     busy = true; error = nil
                     Task { @MainActor in

@@ -1,3 +1,4 @@
+import { useDialogFocus } from '../hooks/useDialogFocus.js';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DataTable } from './DataTable.jsx';
 import { HorizontalScroll } from './HorizontalScroll.jsx';
@@ -6,9 +7,9 @@ import { StatusBadge } from './StatusBadge.jsx';
 import { Icon } from '../utils/icons.jsx';
 import { api } from '../services/api.js';
 import { piAttributionState, PI_ATTRIBUTION_COPY } from '../utils/piAttribution.js';
-import { requestKindLabel, clientVariantLabel, agentRoleLabel, CC_ATTRIBUTION_HINT, formatDuration, formatTimestamp, formatTokenCount, normalizeTimestampMS, clientKindLabel, failureKindLabel, failurePhaseLabel, shouldPromptCCAttribution, projectLabelText, projectClientKindsLabel, purposeLabel } from '../utils/helpers.js';
+import { requestKindLabel, clientVariantLabel, agentRoleLabel, CC_ATTRIBUTION_HINT, formatDuration, formatTimestamp, formatTokenCount, normalizeTimestampMS, clientKindLabel, failureKindLabel, failurePhaseLabel, shouldPromptCCAttribution, projectLabelText, projectClientKindsLabel, projectSourceLabel, purposeLabel } from '../utils/helpers.js';
 import { copyWithToast } from '../utils/clipboard.js';
-import { isRuntimeSnapshotError, normalizeRuntimePagedResult, persistRuntimeAnalyticsPageSize, readRuntimeAnalyticsPageSize, runtimeAppleTimestamp, runtimeCacheRate, runtimeCostAmount, runtimeDateTimeLocal, runtimeTodayBounds, runtimePriceInput, runtimePriceMicros, runtimeV2ErrorMessage } from '../utils/runtimeAnalyticsV2.js';
+import { isRuntimeSnapshotError, normalizeRuntimePagedResult, observeRuntimeDay, persistRuntimeAnalyticsPageSize, readRuntimeAnalyticsPageSize, runtimeAnalyticsFilters, runtimeAppleTimestamp, runtimeCacheRate, runtimeCostAmount, runtimeDateTimeLocal, runtimeFilterValues, runtimeSnapshotFilters, runtimeTodayBounds, runtimePriceInput, runtimePriceMicros, runtimeV2ErrorMessage } from '../utils/runtimeAnalyticsV2.js';
 import { formatOutputTokensPerSecond, outputSpeedDetail } from '../utils/outputSpeed.js';
 
 const SECTIONS = [
@@ -61,6 +62,7 @@ function dimensionLabel(kind) {
 function dimensionValueLabel(value, kind) {
   switch (kind) {
     case 'project': return projectLabelText(value);
+    case 'session': return value === 'unidentified_session' ? '未识别会话' : String(value || '未记录');
     case 'internalFeature': {
       const labels = {
         ambient: 'ambient 后台功能',
@@ -521,7 +523,7 @@ function TrendChart({ points, metric = 'clientRequests' }) {
       </svg>
       <details className="runtime-v2-chart-table">
         <summary>显示趋势数据表（键盘和读屏备用）</summary>
-        <HorizontalScroll className="table-container" ariaLabel="趋势数据表">
+        <HorizontalScroll dragToScroll controlsAtTop className="table-container" ariaLabel="趋势数据表">
           <table className="data-table" aria-label={`${trendMetricLabel(metric)}趋势数据表`}>
             <thead><tr><th>时间</th><th className="data-table-column-number">{trendMetricLabel(metric)}</th><th className="data-table-column-number">终态请求</th></tr></thead>
             <tbody>
@@ -551,7 +553,7 @@ function ErrorTable({ page, loading, onPageChange, onPageSizeChange, onSelectEve
       <DataTable
         className="runtime-v2-table"
         ariaLabel="错误聚合"
-        tableMinWidth="1050px"
+        adaptive
         data={groups}
         keyField="__key"
         emptyText="当前范围没有结构化错误"
@@ -679,41 +681,21 @@ function DimensionTable({ page, loading, onPageChange, onPageSizeChange, onSearc
   useEffect(() => setSearchDraft(page?.search || ''), [page?.search, kind]);
   if (!page) return null;
   const rows = page.rows || [];
-  const maxRequests = Math.max(1, ...rows.map((row) => safeNumber(row.requests)));
-  const maxInputTokens = Math.max(1, ...rows.map((row) => safeNumber(row.inputTokens ?? row.tokens?.inputTokens)));
   // 提示只在项目维度出现:症状("未识别项目"行)就在这张表里。
   const showAttributionHint = kind === 'project'
     && shouldPromptCCAttribution(rows, clientKindFacets);
   const identityColumn = {
-    title: dimensionLabel(kind), key: 'name', type: 'text', minWidth: '230px', sortable: true,
-    render: (row) => <div className="runtime-v2-cell-stack"><strong className="runtime-v2-ellipsis" title={row.name}>{dimensionValueLabel(row.name, kind)}</strong><small>{kind === 'project' ? projectClientKindsLabel(row.clientKinds) : (row.source || '—')}</small></div>,
-  };
-  const renderRequestSpark = (row, barMod = '') => {
-    const ratio = Math.min(100, Math.round((safeNumber(row.requests) / maxRequests) * 100));
-    return (
-      <div className="runtime-v2-sparkcell">
-        <span className={`runtime-v2-sparkbar${barMod ? ` ${barMod}` : ''}`} style={{ width: `${ratio}%` }} aria-hidden="true" />
-        <span className="mono-cell runtime-v2-sparkvalue">{numberWithComma(row.requests)}</span>
-      </div>
-    );
+    title: dimensionLabel(kind), key: 'name', type: 'text', minWidth: '180px', sortable: true,
+    render: (row) => <div className="runtime-v2-cell-stack"><strong className="runtime-v2-ellipsis" title={row.name}>{dimensionValueLabel(row.name, kind)}</strong><small>{kind === 'project' ? projectClientKindsLabel(row.clientKinds) : (kind === 'session' ? projectSourceLabel(row.source) : dimensionLabel(kind))}</small></div>,
   };
   const usageColumns = [
     identityColumn,
-    { title: '请求', key: 'requests', type: 'number', width: '118px', sortable: true, render: (row) => renderRequestSpark(row) },
+    { title: '请求', key: 'requests', type: 'number', width: '118px', sortable: true, render: (row) => <span className="mono-cell">{numberWithComma(row.requests)}</span> },
     { title: '成功率', key: 'success_rate', type: 'number', width: '110px', sortable: true, render: (row) => <span className="mono-cell">{dimensionSuccessRate(row)}</span> },
     { title: '失败', key: 'failures', type: 'number', width: '100px', sortable: true, render: (row) => <span className="mono-cell">{numberWithComma(row.failures)}</span> },
     {
       title: '输入 Token', key: 'input_tokens', type: 'number', width: '140px', sortable: true,
-      render: (row) => {
-        const val = safeNumber(row.inputTokens ?? row.tokens?.inputTokens);
-        const ratio = Math.min(100, Math.round((val / maxInputTokens) * 100));
-        return (
-          <div className="runtime-v2-sparkcell">
-            <span className="runtime-v2-sparkbar is-token" style={{ width: `${ratio}%` }} aria-hidden="true" />
-            <span className="mono-cell runtime-v2-sparkvalue">{dimensionTokenValue(row, 'inputTokens')}</span>
-          </div>
-        );
-      },
+      render: (row) => <span className="mono-cell">{dimensionTokenValue(row, 'inputTokens')}</span>,
     },
     { title: '输出 Token', key: 'output_tokens', type: 'number', width: '132px', sortable: true, render: (row) => <span className="mono-cell">{dimensionTokenValue(row, 'outputTokens')}</span> },
     { title: '输出速度', key: 'output_tokens_per_second', type: 'number', width: '132px', sortable: true, render: (row) => <span className="mono-cell">{formatOutputTokensPerSecond(row.outputTokensPerSecond)}</span> },
@@ -732,7 +714,7 @@ function DimensionTable({ page, loading, onPageChange, onPageSizeChange, onSearc
       title: '估算成本', type: 'number', width: '150px',
       render: (row) => <div className="runtime-v2-usage-cell"><strong className="mono-cell">{dimensionCostValue(row)}</strong><small>{safeNumber(row?.cost?.pricedRequests) > 0 ? `已计价 ${numberWithComma(row.cost.pricedRequests)} 个请求` : '暂无可计价请求'}</small></div>,
     },
-    { title: '请求', key: 'requests', type: 'number', width: '118px', sortable: true, render: (row) => renderRequestSpark(row, 'is-cost') },
+    { title: '请求', key: 'requests', type: 'number', width: '118px', sortable: true, render: (row) => <span className="mono-cell">{numberWithComma(row.requests)}</span> },
     { title: '暂无法计价', type: 'number', width: '132px', render: (row) => <span className="mono-cell">{numberWithComma(unavailableCostRequests(row.cost))}</span> },
     { title: '最近活动', key: 'last_seen', type: 'time', width: '180px', sortable: true, render: (row) => <span className="mono-cell">{dateLabel(row.lastSeen)}</span> },
   ];
@@ -790,7 +772,7 @@ function DimensionTable({ page, loading, onPageChange, onPageSizeChange, onSearc
       <DataTable
         className={`runtime-v2-table runtime-v2-${mode}-table`}
         ariaLabel={`${dimensionLabel(kind)}${mode === 'cost' ? '成本' : '使用情况'}`}
-        tableMinWidth={mode === 'cost' ? '820px' : '1500px'}
+        adaptive
         data={rows}
         keyField="key"
         activeRowKey={activeRowKey}
@@ -1323,44 +1305,7 @@ function OverviewPanel({
 }
 
 function StorageSettingsDialog({ storage, retention, loading, error, onClose, onRetry, onUpdateRetention, onManualCleanup, onRecreateDatabase }) {
-  const dialogRef = useRef(null);
-
-  useEffect(() => {
-    if (typeof document === 'undefined') return undefined;
-    const previousFocus = document.activeElement;
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        onClose?.();
-        return;
-      }
-      if (event.key !== 'Tab') return;
-      const focusable = [...(dialogRef.current?.querySelectorAll(
-        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
-      ) || [])].filter((element) => element.offsetParent !== null);
-      if (!focusable.length) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    const focus = () => dialogRef.current?.querySelector('input, button')?.focus();
-    const frame = typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'
-      ? window.requestAnimationFrame(focus)
-      : globalThis.setTimeout(focus, 0);
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      if (typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') window.cancelAnimationFrame(frame);
-      else globalThis.clearTimeout(frame);
-      if (previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus({ preventScroll: true });
-    };
-  }, [onClose]);
+  const dialogRef = useDialogFocus(true, { onClose });
 
   return (
     <div
@@ -1369,6 +1314,7 @@ function StorageSettingsDialog({ storage, retention, loading, error, onClose, on
     >
       <section
         ref={dialogRef}
+        tabIndex={-1}
         className="modal-dialog runtime-v2-storage-dialog"
         role="dialog"
         aria-modal="true"
@@ -1650,7 +1596,7 @@ export function PricingPanel({ pricing, config, endpointID = '', loading, error,
             const exists = prices.some((row) => row.endpointID === model.endpointID && row.modelKey === model.modelKey);
             return <button key={model.endpointID + '/' + model.modelKey} type="button" className="runtime-v2-pricing-model-chip" disabled={exists} onClick={() => addConfiguredModel(model)}><span>{model.endpointName}</span><strong>{model.modelKey}</strong><em>{exists ? '已添加' : '添加价格'}</em></button>;
           })}</div></div>}
-          <HorizontalScroll className="table-container runtime-v2-pricing-table-wrap" ariaLabel="模型价格表"><table className="data-table runtime-v2-pricing-table"><thead><tr><th>入口</th><th>模型键</th><th>生效起点</th><th>生效终点</th><th>输入 / 1M</th><th>输出 / 1M</th><th>缓存读 / 1M</th><th>缓存写 / 1M</th><th>操作</th></tr></thead><tbody>{visiblePrices.map(({ row, index }) => <tr key={row.id || `price-${index}`}>
+          <HorizontalScroll dragToScroll controlsAtTop className="table-container runtime-v2-pricing-table-wrap" ariaLabel="模型价格表"><table className="data-table runtime-v2-pricing-table"><thead><tr><th>入口</th><th>模型键</th><th>生效起点</th><th>生效终点</th><th>输入 / 1M</th><th>输出 / 1M</th><th>缓存读 / 1M</th><th>缓存写 / 1M</th><th>操作</th></tr></thead><tbody>{visiblePrices.map(({ row, index }) => <tr key={row.id || `price-${index}`}>
             <td>{endpointID && row.endpointID === endpointID ? <span className="runtime-v2-pricing-endpoint-label" title={endpointName}>{endpointName}</span> : <select className="form-select" value={row.endpointID || ''} onChange={(event) => update(index, 'endpointID', event.target.value)} aria-label={`第 ${index + 1} 行入口`}><option value="">全局回退</option>{(config?.endpoints || []).map((endpoint) => <option key={endpoint.id} value={endpoint.id}>{endpoint.name || endpoint.id}</option>)}</select>}</td>
             <td><input className="form-input" list="runtime-pricing-models" value={row.modelKey} onChange={(event) => update(index, 'modelKey', event.target.value)} placeholder="exact-model" /></td>
             <td><input className="form-input" type="datetime-local" value={row.effectiveFrom} onChange={(event) => update(index, 'effectiveFrom', event.target.value)} /></td>
@@ -1772,7 +1718,7 @@ function runtimePriceDateValue(value) {
   return runtimeDateTimeLocal(value, normalizeTimestampMS);
 }
 
-function ExportPanel({ addToast, filters = {} }) {
+function ExportPanel({ addToast, filters = {}, filterKey }) {
   const [scope, setScope] = useState('events');
   const [format, setFormat] = useState('jsonl');
   const [privacy, setPrivacy] = useState('stored');
@@ -1780,28 +1726,34 @@ function ExportPanel({ addToast, filters = {} }) {
   const [estimate, setEstimate] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const filterKey = `${filters.clientKind || ''}\u0000${filters.endpointID || ''}\u0000${filters.projectID || ''}\u0000${filters.project || ''}\u0000${filters.sessionID || ''}`;
+  const estimateGeneration = useRef(0);
+  const queryKey = JSON.stringify({ scope, format, privacy, confirmStored, filterKey });
   useEffect(() => {
+    estimateGeneration.current += 1;
     setEstimate(null);
-  }, [filterKey]);
+    setLoading(false);
+    return () => { estimateGeneration.current += 1; };
+  }, [queryKey]);
   const loadEstimate = async () => {
     if (privacy === 'stored' && !confirmStored) {
       setError(new Error('选择 stored 前必须明确确认 SQLite 已存字段范围'));
       return;
     }
+    const generation = ++estimateGeneration.current;
+    const estimateFilters = runtimeFilterValues(filters);
     setLoading(true); setError(null);
     try {
-      const value = await api.estimateRuntimeExport({ scope, format, privacy, confirmStored, filters });
-      setEstimate(value);
-    } catch (nextError) { setError(nextError); }
-    finally { setLoading(false); }
+      const value = await api.estimateRuntimeExport({ scope, format, privacy, confirmStored, filters: estimateFilters });
+      if (generation === estimateGeneration.current) setEstimate({ ...value, filters: estimateFilters });
+    } catch (nextError) { if (generation === estimateGeneration.current) setError(nextError); }
+    finally { if (generation === estimateGeneration.current) setLoading(false); }
   };
   const download = async () => {
     if (!estimate) return loadEstimate();
     if (privacy === 'stored' && !confirmStored) return;
     setLoading(true); setError(null);
     try {
-      await api.downloadRuntimeExport({ scope, format, privacy, confirmStored, snapshotSeq: estimate.snapshotSeq, snapshotChangeSeq: estimate.snapshotChangeSeq, historyGeneration: estimate.historyGeneration, filters });
+      await api.downloadRuntimeExport({ scope, format, privacy, confirmStored, snapshotSeq: estimate.snapshotSeq, snapshotChangeSeq: estimate.snapshotChangeSeq, historyGeneration: estimate.historyGeneration, filters: estimate.filters });
       addToast?.('已按快照开始流式下载', 'success');
     } catch (nextError) { setError(nextError); }
     finally { setLoading(false); }
@@ -1872,25 +1824,13 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
   // one board invisible to a board entered later in the same session.
   const [analyticsPageSize, setAnalyticsPageSize] = useState(() => readRuntimeAnalyticsPageSize());
   const pageSize = analyticsPageSize;
-  const localTodayFrom = useMemo(() => {
-    if (range !== 'today') return null;
-    return runtimeTodayBounds().from;
-  }, [range]);
-  const activeFilters = useMemo(() => ({
-    clientKind: String(analyticsFilters?.clientKind || '').trim(),
-    endpointID: String(analyticsFilters?.endpointID || '').trim(),
-    project: String(analyticsFilters?.project || '').trim(),
-    projectID: String(analyticsFilters?.projectID || '').trim(),
-    sessionID: String(analyticsFilters?.sessionID || '').trim(),
-    model: String(analyticsFilters?.model || '').trim(),
-    requestKind: String(analyticsFilters?.requestKind || '').trim(),
-    requestPurpose: String(analyticsFilters?.requestPurpose || '').trim(),
-    outcome: String(analyticsFilters?.outcome || '').trim(),
-    failureKind: String(analyticsFilters?.failureKind || '').trim(),
-    failurePhase: String(analyticsFilters?.failurePhase || '').trim(),
-    ...(localTodayFrom == null ? {} : { from: localTodayFrom }),
-  }), [analyticsFilters?.clientKind, analyticsFilters?.requestKind, analyticsFilters?.endpointID, analyticsFilters?.project, analyticsFilters?.projectID, analyticsFilters?.sessionID, analyticsFilters?.model, analyticsFilters?.requestPurpose, analyticsFilters?.outcome, analyticsFilters?.failureKind, analyticsFilters?.failurePhase, localTodayFrom]);
-  const activeQueryKey = useMemo(() => JSON.stringify({ range, filters: activeFilters }), [range, activeFilters]);
+  const [localDay, setLocalDay] = useState(() => runtimeTodayBounds().from);
+  useEffect(() => observeRuntimeDay(setLocalDay), []);
+  const rangeClock = useMemo(() => new Date(), [range, localDay, analyticsRefreshSignal]);
+  const activeFilters = useMemo(() => runtimeAnalyticsFilters(range, analyticsFilters, rangeClock), [range, analyticsFilters, rangeClock]);
+  // Rolling bounds advance on refresh without resetting the user's drill-down.
+  // A new local day is a new "today" query and must discard yesterday's snapshot.
+  const activeQueryKey = useMemo(() => JSON.stringify({ range, filters: runtimeFilterValues(analyticsFilters), localDay: range === 'today' ? localDay : null }), [range, analyticsFilters, localDay]);
   const lastAnalyticsRefreshSignal = useRef(0);
   const previousQueryKeyRef = useRef(activeQueryKey);
 
@@ -1917,7 +1857,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     const request = beginLatestRequest(errorsRequestRef);
     setErrorsLoading(true); setErrorsError(null);
     try {
-      const value = await api.getRuntimeErrors({ page, pageSize: nextPageSize, snapshotSeq: snapshot?.snapshotSeq, snapshotChangeSeq: snapshot?.snapshotChangeSeq, historyGeneration: snapshot?.historyGeneration, filters: activeFilters }, { signal: request.controller.signal });
+      const value = await api.getRuntimeErrors({ page, pageSize: nextPageSize, snapshotSeq: snapshot?.snapshotSeq, snapshotChangeSeq: snapshot?.snapshotChangeSeq, historyGeneration: snapshot?.historyGeneration, filters: runtimeSnapshotFilters(activeFilters, snapshot) }, { signal: request.controller.signal });
       const normalized = normalizeRuntimePagedResult(value, { itemsKey: 'groups', page, pageSize: nextPageSize });
       if (!normalized) throw new Error('错误聚合响应不是 v2 分页形状');
       if (request.isCurrent()) setErrors((previous) => (sameJSON(previous, normalized) ? previous : normalized));
@@ -1981,7 +1921,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
       const value = await api.getRuntimeDimensions(kind, {
         page, pageSize: nextPageSize, search, sort, order,
         snapshotSeq: snapshot?.snapshotSeq, snapshotChangeSeq: snapshot?.snapshotChangeSeq, historyGeneration: snapshot?.historyGeneration,
-        filters: queryFilters,
+        filters: runtimeSnapshotFilters(queryFilters, snapshot),
       }, { signal: request.controller.signal });
       const normalized = normalizeRuntimePagedResult(value, { page, pageSize: nextPageSize });
       if (!normalized) throw new Error(`${dimensionLabel(kind)}响应不是分页形状`);
@@ -2015,8 +1955,8 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
   }, [activeFilters, dimensionSearch, dimensions, pageSize, selectedProject, selectedSession]);
 
   const loadDimensions = useCallback((kinds = ['endpoint', 'project', 'session', 'model']) => {
-    return Promise.allSettled(kinds.map((kind) => loadDimension(kind)));
-  }, [loadDimension]);
+    return Promise.allSettled(kinds.map((kind) => loadDimension(kind, 1, dimensions[kind]?.pageSize || pageSize, dimensionSearch[kind] || '', null)));
+  }, [loadDimension, dimensions, pageSize, dimensionSearch]);
 
   // Automatic refresh must re-anchor every usage table on a fresh SQLite
   // snapshot. `loadDimension` defaults to the previously loaded page's
@@ -2470,7 +2410,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
       {section === 'tokens' && <section id="analytics-panel-tokens" role="tabpanel" aria-labelledby="analytics-tab-tokens">
         <CostPanel pricing={pricing} config={config} pricingLoading={storageLoading} pricingError={storageError} onRetryPricing={() => loadStorage({ includeStorage: false, includePricing: true })} onSavePricing={savePricing} trend={trend} legacyAnalytics={legacyAnalytics} costPages={dimensions} costLoading={dimensionLoading} costErrors={dimensionError} costCallbacks={dimensionCallbacks} clientKindFacets={facets?.clientKinds} addToast={addToast} selectedProject={selectedProject} selectedSession={selectedSession} onProjectSelect={selectProject} onSessionSelect={selectSession} onClearProject={clearSelectedProject} onClearSession={clearSelectedSession} />
       </section>}
-      {showExport && <section id="analytics-panel-export" className="runtime-v2-panel" aria-label="运行统计导出"><div className="runtime-v2-panel-header"><div><h2>运行统计导出</h2><p>导出当前筛选下的 SQLite 运行统计字段，不包含诊断正文。</p></div><button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowExport(false)}>关闭</button></div><ExportPanel addToast={addToast} filters={activeFilters} /></section>}
+      {showExport && <section id="analytics-panel-export" className="runtime-v2-panel" aria-label="运行统计导出"><div className="runtime-v2-panel-header"><div><h2>运行统计导出</h2><p>导出当前筛选下的 SQLite 运行统计字段，不包含诊断正文。</p></div><button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowExport(false)}>关闭</button></div><ExportPanel addToast={addToast} filters={activeFilters} filterKey={activeQueryKey} /></section>}
     </section>
   );
 }

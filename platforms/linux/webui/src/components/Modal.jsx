@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAppControls } from '../context/AppContext.jsx';
 import { Icon } from '../utils/icons.jsx';
+import { useDialogFocus } from '../hooks/useDialogFocus.js';
 
 export function Modal() {
   const { activeModal, closeModal } = useAppControls();
@@ -9,6 +10,7 @@ export function Modal() {
   const busyRef = useRef(false);
   const activeRef = useRef(activeModal);
   activeRef.current = activeModal;
+  const dialogRef = useDialogFocus(Boolean(activeModal), { onClose: closeModal, canClose: () => !busyRef.current });
   useEffect(() => {
     busyRef.current = false;
     setBusy(false);
@@ -23,6 +25,9 @@ export function Modal() {
     <div className="modal-overlay" onClick={() => { if (!busyRef.current) closeModal(); }}>
       <div
         className="modal-dialog"
+        ref={dialogRef}
+        tabIndex={-1}
+        aria-busy={busy || undefined}
         style={{ maxWidth }}
         onClick={(e) => e.stopPropagation()}
         role="dialog"

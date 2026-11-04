@@ -261,14 +261,13 @@ final class AppModel: ObservableObject {
     /// These errors are independent from admin liveness. An analytics decode/query
     /// failure must not make a healthy daemon appear unreachable.
     @Published var runtimeSummaryError: String?
-    /// Local-calendar-day token totals for the run overview. Nil means the
-    /// first read has not completed; a zero observed count is an empty day.
-    @Published var todayInputTokens: Int?
-    @Published var todayOutputTokens: Int?
-    @Published var todayTokenObservedRequests: Int?
-    @Published var todayTokenTotalsFailed = false
-    var todayTokenRequestGeneration = 0
-    var lastTodayTokenRefreshAt: Date?
+    /// One local-calendar-day aggregate supplies every usage card on the run overview.
+    /// Nil means unknown, independently of the lifetime runtime counters.
+    @Published var runOverviewTotals: AdminWire.RuntimeTrendPoint?
+    @Published var runOverviewFailed = false
+    @Published var runOverviewDayStart = RunOverviewScope.dayStart()
+    var runOverviewRequestGeneration = 0
+    var lastRunOverviewRefreshAt: Date?
     @Published var runtimeAnalyticsError: String?
     @Published var runtimeAnalyticsLoading = false
     @Published var runtimeEventsError: String?

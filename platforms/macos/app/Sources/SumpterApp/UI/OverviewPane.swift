@@ -1,3 +1,4 @@
+import AppKit
 import SumpterCore
 import SwiftUI
 
@@ -8,6 +9,7 @@ struct OverviewPane: View {
     // AppModel 的后台轮询(菜单栏健康点)仍在更新模型,不冻结的话表格会自己跳动,开关就形同虚设。
     @State private var frozenRuntime: RuntimeSnapshot?
     @State private var frozenHealth: ProxyHealthSummary?
+    @State private var frozenOverview: AdminWire.RuntimeTrendPoint?
 
     var body: some View {
         // The run dashboard is a wide, data-heavy view.  Let it use the
@@ -19,8 +21,9 @@ struct OverviewPane: View {
             RecentEventsPanel(
                 events: runPersistedEvents,
                 liveEvents: runLiveEvents,
+                showEventDate: false,
                 hint: model.runHistoryError.map { "读取稳定事件页失败：\($0)；当前暂显示本地缓存。" }
-                    ?? "客户端请求和上游尝试通过请求 ID 关联；进行中请求单独显示，不占持久事件分页名额。",
+                    ?? "仅显示今天（本地时区）；客户端请求和上游尝试通过请求 ID 关联；进行中请求单独显示，不占持久事件分页名额。",
                 detailedEvent: model.runtimeEventDetail?.event,
                 hasMore: model.runHistoryPage?.hasNext == true,
                 currentPage: model.runHistoryPage?.page,
@@ -56,6 +59,7 @@ struct OverviewPane: View {
                     model.loadRuntimeRequestChain(for: eventID)
                 }
             )
+            .id(model.runOverviewDayStart)
             if let lastError = model.lastError, !lastError.isEmpty {
                 SectionPanel(title: "最近错误") {
                     Text(lastError)
@@ -66,21 +70,34 @@ struct OverviewPane: View {
             }
         }
         .task(id: autoRefreshTaskID) {
+            model.advanceRunOverviewDay()
             // 数据由 SSE 增量推送 + AppModel 兜底轮询驱动;此处只管「冻结/解冻」快照。
             // (旧版在这里另跑一个 1-30 秒轮询循环,与 AppModel 的循环叠加成重复请求。)
             guard model.autoRefreshEnabled else {
                 model.stopRuntimeRequestChainRefresh()
                 frozenRuntime = model.runtime
                 frozenHealth = model.health
-                model.refreshTodayTokenUsageIfDue(force: true)
+                frozenOverview = model.runOverviewTotals
+                model.refreshRunOverviewIfDue(force: true)
                 model.refreshRunHistory(resetSnapshot: model.runHistoryPage == nil)
                 return
             }
             model.resumeRuntimeRequestChainRefresh()
             frozenRuntime = nil
             frozenHealth = nil
+            frozenOverview = nil
             model.refresh()
             model.refreshRunHistory(resetSnapshot: model.runHistoryPage == nil)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in model.advanceRunOverviewDay() }
+        .onReceive(NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange)) { _ in model.advanceRunOverviewDay() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in model.advanceRunOverviewDay() }
+        .onChange(of: model.runOverviewDayStart) { _, _ in
+            frozenRuntime = nil
+            frozenHealth = nil
+            frozenOverview = nil
+            model.refreshRunHistory(resetSnapshot: true)
+            model.refreshRunOverviewIfDue(force: true)
         }
         .onDisappear { model.stopRuntimeRequestChainRefresh() }
     }
@@ -92,15 +109,21 @@ struct OverviewPane: View {
 
     private var displayRuntime: RuntimeSnapshot { frozenRuntime ?? model.runtime }
     private var displayHealth: ProxyHealthSummary { frozenHealth ?? model.health }
+    private var displayOverview: AdminWire.RuntimeTrendPoint? { frozenOverview ?? model.runOverviewTotals }
 
     /// 稳定历史页只包含已落盘事件；实时进行中的请求另行作为 overlay，
     /// 因此不会挤占服务端分页的名额，也不会让 totalCount 与行数失配。
     private var runPersistedEvents: [RuntimeEvent] {
         let existing = RuntimeEvent.indexedByID(displayRuntime.recentEvents)
+        let filter = model.runHistoryFilter(snapshot: model.runHistoryPage?.filters)
         if let page = model.runHistoryPage {
-            return page.visibleEvents(recent: model.autoRefreshEnabled ? (model.runtimePage?.events ?? []) : []).map { $0.mergedRuntimeEvent(with: existing[$0.id]) }
+            let recent = model.autoRefreshEnabled ? (model.runtimePage?.events ?? [])
+                .filter { RunOverviewScope.contains(timestamp: $0.timestamp, filter: filter) } : []
+            return page.visibleEvents(recent: recent)
+                .map { $0.mergedRuntimeEvent(with: existing[$0.id]) }
+                .filter { RunOverviewScope.contains($0, filter: filter) }
         }
-        return displayRuntime.recentEvents.filter { !$0.isInFlight }
+        return displayRuntime.recentEvents.filter { !$0.isInFlight && RunOverviewScope.contains($0, filter: filter) }
     }
 
     /// 运行页默认只拉「客户端」分页；上游尝试要通过 request-chain 端点补齐。
@@ -116,7 +139,8 @@ struct OverviewPane: View {
             excluding: Set(model.runHistoryPage?.events.map(\.id) ?? []),
             filter: RuntimeEventKindFilter(rawValue: model.runHistoryKindFilter) ?? .all
         )
-        return events
+        let filter = model.runHistoryFilter(snapshot: model.runHistoryPage?.filters)
+        return events.filter { RunOverviewScope.contains($0, filter: filter) }
     }
 
     private var statusPanel: some View {
@@ -269,17 +293,18 @@ struct OverviewPane: View {
 
     @ViewBuilder
     private var metricTiles: some View {
-        let observed = model.todayTokenObservedRequests
+        let totals = displayOverview
+        let observed = totals?.tokens.observedRequests
             MetricTile(
                 title: "输入 Token",
-                value: todayTokenValue(model.todayInputTokens, observed: observed),
-                detail: todayTokenDetail(observed: observed),
+                value: overviewTokenValue(totals?.tokens.inputTokens, observed: observed),
+                detail: overviewTokenDetail(observed: observed),
                 systemImage: "arrow.down.doc", minimumHeight: 112
             )
             MetricTile(
                 title: "输出 Token",
-                value: todayTokenValue(model.todayOutputTokens, observed: observed),
-                detail: todayTokenDetail(observed: observed),
+                value: overviewTokenValue(totals?.tokens.outputTokens, observed: observed),
+                detail: overviewTokenDetail(observed: observed),
                 systemImage: "arrow.up.doc", minimumHeight: 112
             )
             // `Provider 候选` and `Endpoints` are the same count in the flat
@@ -287,21 +312,25 @@ struct OverviewPane: View {
             // preserve the routing meaning instead of presenting a duplicate
             // KPI with a different label.
             MetricTile(title: "可调度入口", value: "\(model.endpointCount)", detail: "按优先级形成 Provider 候选序列", systemImage: "arrow.triangle.branch", minimumHeight: 112)
-            MetricTile(title: "客户端请求", value: "\(displayRuntime.clientRequests)", detail: "端到端 · 成功 \(displayRuntime.clientSuccesses) / 失败 \(displayRuntime.clientFailures)", systemImage: "arrow.down.left.and.arrow.up.right", minimumHeight: 112)
-            MetricTile(title: "上游尝试", value: "\(displayRuntime.upstreamAttempts)", detail: "含重试 · 故障转移 \(displayRuntime.failovers)", systemImage: "point.3.connected.trianglepath.dotted", minimumHeight: 112)
+            MetricTile(title: "客户端请求", value: overviewCount(totals?.clientRequests), detail: "今天 · 成功 \(overviewCount(totals?.clientSuccesses)) / 失败 \(overviewCount(totals?.clientFailures))", systemImage: "arrow.down.left.and.arrow.up.right", minimumHeight: 112)
+            MetricTile(title: "上游尝试", value: overviewCount(totals?.upstreamAttempts), detail: "今天 · 含重试 · 故障转移 \(overviewCount(totals?.failovers))", systemImage: "point.3.connected.trianglepath.dotted", minimumHeight: 112)
     }
 
-    /// 运行页卡片使用当地日历日的趋势汇总，不把当前事件页误当成全量。
-    private func todayTokenValue(_ value: Int?, observed: Int?) -> String {
+    private func overviewCount(_ value: Int?) -> String {
+        value.map(String.init) ?? "—"
+    }
+
+    /// 运行页卡片使用本地当日汇总，不把当前事件页误当成全量。
+    private func overviewTokenValue(_ value: Int?, observed: Int?) -> String {
         guard let observed, observed > 0 else { return "—" }
         return RuntimeEventPresentation.tokenCountDisplay(value)
     }
 
-    private func todayTokenDetail(observed: Int?) -> String {
+    private func overviewTokenDetail(observed: Int?) -> String {
         if let observed {
-            return observed > 0 ? "今天累计 · \(observed) 个请求有用量" : "暂无可用用量"
+            return observed > 0 ? "今天 · \(observed) 个请求有用量" : "今天暂无可用用量"
         }
-        return model.todayTokenTotalsFailed ? "今天用量暂不可用" : "正在读取今天的用量"
+        return model.runOverviewFailed ? "今天用量暂不可用" : "正在读取今天的用量"
     }
 
 }

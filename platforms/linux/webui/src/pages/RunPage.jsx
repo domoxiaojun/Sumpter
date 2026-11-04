@@ -14,31 +14,19 @@ import { CacheHitRate } from '../components/CacheHitRate.jsx';
 import { eventAgentLabel, eventCacheLabel, eventHasObservedUsage, eventUsageLabel } from '../utils/eventPresentation.js';
 import { copyWithToast } from '../utils/clipboard.js';
 import { api } from '../services/api.js';
+import { RUN_OVERVIEW_RANGE, runOverviewQuery, runOverviewTotals } from '../utils/runOverview.js';
+import { observeRuntimeDay, runtimeTodayBounds } from '../utils/runtimeAnalyticsV2.js';
 import { requestKindLabel, eventEndpointName, formatNumber, formatTokenCount, formatDuration, formatTimestamp, eventLogicalModel, statusKind, eventDurationText, eventDisplayTiming, friendlyEventMessage, eventPurposeLabel, eventClientKindLabel, eventKindLabel, getRequestChain, eventOutcomeLabel, eventPhaseLabel, eventHttpStatusLabel, eventHTTPStatusCode, eventRequestID, eventOutcome, eventFailover, eventField, eventIsInFlight, eventFailureSummaryLabel, eventProjectContext, eventToolCalls, eventTransportLabel } from '../utils/helpers.js';
 
-function todayTokenTotals(series) {
-  const tokens = series?.totals?.tokens;
-  if (!tokens || typeof tokens !== 'object') return null;
-  const observed = Number(tokens.observedRequests ?? tokens.observed_requests);
-  if (!Number.isFinite(observed) || observed < 0) return null;
-  const number = (value) => {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
-  };
-  return {
-    input: number(tokens.inputTokens ?? tokens.input_tokens),
-    output: number(tokens.outputTokens ?? tokens.output_tokens),
-    observed,
-  };
-}
-
-function todayTokenDetail(totals) {
+function overviewTokenDetail(totals) {
   if (!totals) return '正在读取今天的用量';
   if (totals.status === 'error') return '今天用量暂不可用';
   return totals.observed > 0
-    ? `今天累计 · ${formatNumber(totals.observed)} 个请求有用量`
-    : '暂无可用用量';
+    ? `今天 · ${formatNumber(totals.observed)} 个请求有用量`
+    : '今天暂无可用用量';
 }
+
+const overviewCount = value => value == null ? '—' : formatNumber(value);
 
 // macOS 的最近事件行把请求归属和 Codex 上下文收敛成一条可换行摘要，
 // 让项目、客户端、代理身份、用途和工具路径在第一眼就能被读到。
@@ -126,7 +114,7 @@ function RecentEventRequestCell({ event, live = false }) {
     <span className={live ? 'telemetry-live-request' : 'telemetry-primary-cell'}>
       <span className="telemetry-event-head-row">
         <span className={`mono-cell${live ? ' telemetry-live-time' : ' telemetry-event-time'}`}>
-          {formatTimestamp(event.timestamp, { smartDate: true })}
+          {formatTimestamp(event.timestamp)}
         </span>
         {project && <span className="telemetry-event-project-pill" title={project}>{project}</span>}
       </span>
@@ -480,9 +468,14 @@ export function RunPage() {
 
   const isRunning = status?.running;
   const recentEvents = runtime?.recentEvents || [];
-  const [todayTokens, setTodayTokens] = useState(null);
+  const [overview, setOverview] = useState(null);
+  const [localDay, setLocalDay] = useState(() => runtimeTodayBounds().from);
+  useEffect(() => observeRuntimeDay(setLocalDay), []);
+  useEffect(() => { setSelectedEventID(null); setRequestChainSnapshot(null); }, [localDay]);
   const notifySnapshotRecovered = useCallback((message) => addToast(message, 'info'), [addToast]);
   const eventHistory = useRuntimeEventPage({
+    range: RUN_OVERVIEW_RANGE,
+    scopeKey: localDay,
     recentEvents,
     autoRefresh,
     refreshInterval: runRefreshInterval,
@@ -502,15 +495,16 @@ export function RunPage() {
 
   useEffect(() => {
     let cancelled = false;
+    setOverview(null);
     const load = () => {
       if (document.hidden) return;
-      api.getRuntimeTrends({ range: 'today', granularity: 'hour' }).then((series) => {
+      api.getRuntimeTrends(runOverviewQuery()).then((series) => {
         if (cancelled) return;
-        const totals = todayTokenTotals(series);
-        setTodayTokens(totals ? { status: 'ready', ...totals } : { status: 'error', input: null, output: null, observed: 0 });
+        const totals = runOverviewTotals(series);
+        setOverview(totals ? { status: 'ready', ...totals } : { status: 'error' });
       }).catch(() => {
         if (!cancelled) {
-          setTodayTokens((current) => current?.status === 'ready' ? current : { status: 'error', input: null, output: null, observed: 0 });
+          setOverview((current) => current?.status === 'ready' ? current : { status: 'error' });
         }
       });
     };
@@ -521,7 +515,7 @@ export function RunPage() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [autoRefresh, runRefreshInterval, runtime?.resetGeneration]);
+  }, [autoRefresh, runRefreshInterval, runtime?.resetGeneration, localDay]);
 
   useEffect(() => {
     if (!recentEvents.some((event) => eventIsInFlight(event))) return undefined;
@@ -771,19 +765,19 @@ export function RunPage() {
 
       </div>
 
-      {/* Primary cumulative and recent usage cards */}
-      <div className="run-metric-grid">
+      {/* Today's usage cards and current routing inventory */}
+      <div className="run-metric-grid" aria-label="今天用量与当前入口">
         <MetricCard
           label="输入 Token"
-          value={todayTokens?.status === 'ready' && todayTokens.observed > 0 && todayTokens.input != null ? formatTokenCount(todayTokens.input) : '—'}
-          detail={todayTokenDetail(todayTokens)}
+          value={overview?.status === 'ready' && overview.observed > 0 && overview.input != null ? formatTokenCount(overview.input) : '—'}
+          detail={overviewTokenDetail(overview)}
           icon="file-down"
           accent="var(--primary)"
         />
         <MetricCard
           label="输出 Token"
-          value={todayTokens?.status === 'ready' && todayTokens.observed > 0 && todayTokens.output != null ? formatTokenCount(todayTokens.output) : '—'}
-          detail={todayTokenDetail(todayTokens)}
+          value={overview?.status === 'ready' && overview.observed > 0 && overview.output != null ? formatTokenCount(overview.output) : '—'}
+          detail={overviewTokenDetail(overview)}
           icon="file-up"
           accent="var(--status-warning)"
         />
@@ -796,15 +790,15 @@ export function RunPage() {
         />
         <MetricCard
           label="客户端请求"
-          value={formatNumber(runtime?.clientRequests || 0)}
-          detail={`端到端 · 成功 ${formatNumber(runtime?.clientSuccesses || 0)} / 失败 ${formatNumber(runtime?.clientFailures || 0)}`}
+          value={overviewCount(overview?.clientRequests)}
+          detail={`今天 · 成功 ${overviewCount(overview?.clientSuccesses)} / 失败 ${overviewCount(overview?.clientFailures)}`}
           icon="move-diagonal"
           accent="var(--status-good)"
         />
         <MetricCard
           label="上游尝试"
-          value={formatNumber(runtime?.upstreamAttempts || 0)}
-          detail={`含重试 · 故障转移 ${formatNumber(runtime?.failovers || 0)}`}
+          value={overviewCount(overview?.upstreamAttempts)}
+          detail={`今天 · 含重试 · 故障转移 ${overviewCount(overview?.failovers)}`}
           icon="network"
           accent="var(--accent-indigo)"
         />
@@ -817,7 +811,7 @@ export function RunPage() {
           <div className="panel-title-group">
             <div className="panel-title">
               <Icon name="activity" size={18} style={{ color: 'var(--primary)' }} />
-              <span>最近事件与遥测日志</span>
+              <span>今日事件与遥测日志</span>
             </div>
             <span className="panel-hint">
               客户端请求和上游尝试通过请求 ID 关联；点击一行后查看完整链路。HTTP 状态与最终结果分开显示，200 后的协议中断不会被误报为成功。

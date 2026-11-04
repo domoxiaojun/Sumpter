@@ -6,10 +6,14 @@ import {
   normalizeRuntimeEventPage,
   persistRuntimeEventPageSize,
   readRuntimeEventPageSize,
+  runtimeRangeFilter,
+  runtimeCurrentRangeSnapshot,
+  runtimeSnapshotFilters,
   runtimeSnapshotRecoveryMessage,
 } from '../utils/runtimeAnalyticsV2.js';
 import { eventIsInFlight, eventResultKind } from '../utils/helpers.js';
 import { completedEventsAfterSnapshot, mergeCompletedPage } from '../utils/runtimeEventSnapshot.js';
+import { runtimeEventInRange } from '../utils/runtimeEvents.js';
 
 function eventMatchesKind(event, kind) {
   return !kind || event?.kind === kind;
@@ -22,6 +26,8 @@ function eventMatchesOutcome(event, outcome) {
 export function useRuntimeEventPage({
   recentEvents = [], eventKind = '', outcome = '', resetGeneration = 0, onRecovered,
   autoRefresh = true, refreshInterval = 15,
+  range = 'all',
+  scopeKey = '',
 } = {}) {
   const [page, setPageState] = useState(1);
   const [pageSize, setPageSizeState] = useState(readRuntimeEventPageSize);
@@ -36,7 +42,11 @@ export function useRuntimeEventPage({
   const requestGenerationRef = useRef(0);
   const snapshotRef = useRef(null);
   const autoRefreshTimerRef = useRef(null);
-  const queryKey = `${eventKind || 'all'}:${outcome || 'all'}:${pageSize}:${Number(resetGeneration || 0)}`;
+  const queryKey = `${range}:${scopeKey}:${eventKind || 'all'}:${outcome || 'all'}:${pageSize}:${Number(resetGeneration || 0)}`;
+  const currentSnapshot = runtimeCurrentRangeSnapshot(range, result);
+  const from = currentSnapshot?.filters?.from ?? runtimeRangeFilter(range).from;
+  const to = currentSnapshot?.filters?.to;
+  const scopedRecentEvents = useMemo(() => recentEvents.filter(event => runtimeEventInRange(event, { from, to })), [recentEvents, from, to]);
 
   useEffect(() => {
     backgroundRefreshRef.current = false;
@@ -52,8 +62,8 @@ export function useRuntimeEventPage({
   useEffect(() => {
     const generation = ++requestGenerationRef.current;
     const controller = new AbortController();
-    const requestedPage = Math.max(1, Number(page) || 1);
-    const snapshot = snapshotRef.current;
+    const snapshot = runtimeCurrentRangeSnapshot(range, snapshotRef.current);
+    const requestedPage = snapshotRef.current && !snapshot ? 1 : Math.max(1, Number(page) || 1);
     const background = backgroundRefreshRef.current;
     backgroundRefreshRef.current = false;
     setLoading(!background);
@@ -66,6 +76,7 @@ export function useRuntimeEventPage({
         pageSize,
         kind: eventKind || undefined,
         outcome: outcome || undefined,
+        ...runtimeSnapshotFilters(runtimeRangeFilter(range), useSnapshot ? snapshot : null),
         snapshotSeq: useSnapshot ? snapshot?.snapshotSeq : undefined,
         snapshotChangeSeq: useSnapshot ? snapshot?.snapshotChangeSeq : undefined,
         historyGeneration: useSnapshot ? snapshot?.historyGeneration : undefined,
@@ -100,7 +111,7 @@ export function useRuntimeEventPage({
         snapshotRef.current = normalized;
         setResult(normalized);
         setMode('page');
-        if (normalized.page !== requestedPage) setPageState(normalized.page);
+        if (normalized.page !== page) setPageState(normalized.page);
       } catch (requestError) {
         if (generation !== requestGenerationRef.current || requestError?.name === 'AbortError') return;
         if ([400, 404, 405].includes(Number(requestError?.status))) {
@@ -115,7 +126,7 @@ export function useRuntimeEventPage({
     })();
 
     return () => controller.abort();
-  }, [eventKind, outcome, onRecovered, page, pageSize, reloadGeneration, resetGeneration]);
+  }, [range, scopeKey, eventKind, outcome, onRecovered, page, pageSize, reloadGeneration, resetGeneration]);
 
   const setPage = useCallback((value) => {
     const next = clampRuntimeEventPage(value, result?.totalPages || 1);
@@ -136,23 +147,24 @@ export function useRuntimeEventPage({
   // visible table rows when a request is still streaming.
   const liveEvents = useMemo(() => {
     if ((mode === 'page' && page !== 1) || outcome) return [];
-    return recentEvents.filter((event) => eventMatchesKind(event, eventKind) && eventIsInFlight(event));
-  }, [eventKind, outcome, mode, page, recentEvents]);
+    return scopedRecentEvents.filter((event) => eventMatchesKind(event, eventKind) && eventIsInFlight(event));
+  }, [eventKind, outcome, mode, page, scopedRecentEvents]);
 
   const persistedEvents = useMemo(() => {
     const additions = (mode === 'page' && page === 1
-      ? completedEventsAfterSnapshot(recentEvents, result, eventKind) : [])
+      ? completedEventsAfterSnapshot(scopedRecentEvents, result, eventKind) : [])
       .filter((event) => eventMatchesOutcome(event, outcome));
     const source = mode === 'page'
-      ? mergeCompletedPage(result?.events || [], additions, pageSize) : recentEvents;
+      ? mergeCompletedPage(result?.events || [], additions, pageSize) : scopedRecentEvents;
     const liveIDs = new Set(liveEvents.map((event) => event.id));
     return source.filter((event) => (
       eventMatchesKind(event, eventKind)
+      && runtimeEventInRange(event, { from, to })
       && eventMatchesOutcome(event, outcome)
       && !liveIDs.has(event.id)
       && !eventIsInFlight(event)
     ));
-  }, [eventKind, outcome, liveEvents, mode, page, pageSize, recentEvents, result]);
+  }, [eventKind, outcome, liveEvents, mode, page, pageSize, scopedRecentEvents, result, from, to]);
 
   const events = useMemo(() => [...liveEvents, ...persistedEvents], [liveEvents, persistedEvents]);
 
@@ -162,7 +174,7 @@ export function useRuntimeEventPage({
   // completed events results in one stable-snapshot request.
   useEffect(() => {
     if (mode !== 'page' || page !== 1 || refreshing || snapshotRef.current == null) return undefined;
-    const changes = completedEventsAfterSnapshot(recentEvents, snapshotRef.current, eventKind);
+    const changes = completedEventsAfterSnapshot(scopedRecentEvents, snapshotRef.current, eventKind);
     if (!changes.length || autoRefreshTimerRef.current != null) return undefined;
     const newest = Math.max(...changes.map((event) => Number(event.changeSeq || 0)));
     const signature = `${eventKind}:${snapshotRef.current.snapshotChangeSeq ?? 'legacy'}:${newest}`;
@@ -183,7 +195,7 @@ export function useRuntimeEventPage({
         autoRefreshTimerRef.current = null;
       }
     };
-  }, [eventKind, refreshing, mode, page, recentEvents]);
+  }, [eventKind, refreshing, mode, page, scopedRecentEvents]);
 
   useEffect(() => {
     if (!autoRefresh || page !== 1 || mode !== 'page') return undefined;

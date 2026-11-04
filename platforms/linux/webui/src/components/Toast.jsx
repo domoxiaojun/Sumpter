@@ -19,6 +19,7 @@ export function ToastContainer() {
             <button
               type="button"
               className="btn-icon"
+              aria-label="关闭通知"
               style={{ width: '24px', height: '24px', border: 'none', background: 'transparent' }}
               onClick={() => removeToast(toast.id)}
             >

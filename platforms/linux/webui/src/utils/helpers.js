@@ -1138,33 +1138,34 @@ export function clientAttributionSummary(attribution) {
   return evidence.join('；') || '未识别（缺少有效依据）';
 }
 
+export const CLIENT_KIND_LABELS = Object.freeze({
+  claude_code: 'Claude Code',
+  codex: 'Codex',
+  gemini_cli: 'Gemini CLI',
+  pi: 'pi',
+  grok_build: 'Grok Build',
+  cursor: 'Cursor',
+  cline: 'Cline',
+  roo_code: 'Roo Code',
+  continue: 'Continue',
+  aider: 'Aider',
+  open_code: 'OpenCode',
+  goose: 'Goose',
+  open_web_ui: 'Open WebUI',
+  windsurf: 'Windsurf',
+  kilo_code: 'Kilo Code',
+  lite_llm: 'LiteLLM',
+  ollama: 'Ollama',
+  lm_studio: 'LM Studio',
+  chatbox: 'Chatbox',
+  deepseek_harness: 'DeepSeek Harness',
+  workbuddy: 'WorkBuddy',
+  openai_compat: 'OpenAI 兼容客户端',
+  unknown: '未知客户端',
+});
+
 export function clientKindLabel(kind) {
-  const map = {
-    claude_code: 'Claude Code',
-    codex: 'Codex',
-    grok_build: 'Grok Build',
-    cursor: 'Cursor',
-    cline: 'Cline',
-    roo_code: 'Roo Code',
-    continue: 'Continue',
-    aider: 'Aider',
-    open_code: 'OpenCode',
-    goose: 'Goose',
-    open_web_ui: 'Open WebUI',
-    windsurf: 'Windsurf',
-    kilo_code: 'Kilo Code',
-    lite_llm: 'LiteLLM',
-    ollama: 'Ollama',
-    lm_studio: 'LM Studio',
-    chatbox: 'Chatbox',
-    deepseek_harness: 'DeepSeek Harness',
-    workbuddy: 'WorkBuddy',
-    pi: 'pi',
-    gemini_cli: 'Gemini CLI',
-    openai_compat: 'OpenAI 兼容客户端',
-    unknown: '未知客户端',
-  };
-  return map[cleanText(kind)] || (cleanText(kind) ? cleanText(kind) : '未知客户端');
+  return CLIENT_KIND_LABELS[cleanText(kind)] || (cleanText(kind) ? cleanText(kind) : '未知客户端');
 }
 
 export function projectClientKindsLabel(kinds) {

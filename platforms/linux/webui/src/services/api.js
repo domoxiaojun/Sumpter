@@ -8,7 +8,7 @@ import {
   isSourceFormat,
   normalizeEndpointProtocol,
 } from '../utils/protocols.js';
-import { RUNTIME_DEFAULT_PAGE_SIZE, runtimeRangeFilter } from '../utils/runtimeAnalyticsV2.js';
+import { RUNTIME_DEFAULT_PAGE_SIZE, runtimeAnalyticsFilters, runtimeFilterValues } from '../utils/runtimeAnalyticsV2.js';
 
 const isMock = new URLSearchParams(window.location.search).get('mock') === '1';
 
@@ -76,36 +76,6 @@ function appendQueryValues(query, values = {}) {
     if (value != null && String(value).trim() !== '') query.set(key, String(value));
   }
   return query;
-}
-
-function runtimeFilterValues(filters = {}) {
-  return {
-    kind: filters.kind,
-    outcome: filters.outcome,
-    clientKind: filters.clientKind,
-    requestKind: filters.requestKind,
-    clientVariant: filters.clientVariant,
-    agentRole: filters.agentRole,
-    agentName: filters.agentName,
-    parentThreadID: filters.parentThreadID,
-    parentTurnID: filters.parentTurnID,
-    rootTurnID: filters.rootTurnID,
-    requestPurpose: filters.requestPurpose,
-    requestID: filters.requestID,
-    endpointID: filters.endpointID,
-    model: filters.model,
-    projectID: filters.projectID,
-    // The v2 projection stores a stable projectID, while the UI's picker
-    // intentionally exposes the redacted/project display name.  Send both
-    // forms when available; daemons that understand only projectID keep the
-    // stable-ID behavior and newer daemons can use the compatibility alias.
-    project: filters.project,
-    sessionID: filters.sessionID,
-    failureKind: filters.failureKind,
-    failurePhase: filters.failurePhase,
-    from: filters.from,
-    to: filters.to,
-  };
 }
 
 const thinkingToUI = { disabled: 'disable', passthrough: 'passThrough', adaptive: 'adaptive' };
@@ -420,23 +390,12 @@ class ApiService {
   getRuntimeAnalytics(range = '24h', filters = {}, { diagnosticsOnly = false, ...options } = {}) {
     const query = new URLSearchParams({ range });
     if (diagnosticsOnly) query.set('view', 'diagnostics');
-    appendQueryValues(query, runtimeFilterValues(filters));
-    if (filters.clientKind) query.set('clientKind', filters.clientKind);
-    if (filters.endpointID) query.set('endpointID', filters.endpointID);
-    if (filters.projectID) query.set('projectID', filters.projectID);
-    if (filters.project) query.set('project', filters.project);
-    if (filters.sessionID) query.set('sessionID', filters.sessionID);
-    if (filters.model) query.set('model', filters.model);
-    if (filters.requestPurpose) query.set('requestPurpose', filters.requestPurpose);
-    if (filters.outcome) query.set('outcome', filters.outcome);
-    if (filters.failureKind) query.set('failureKind', filters.failureKind);
-    if (filters.failurePhase) query.set('failurePhase', filters.failurePhase);
-    appendQueryValues(query, { ...runtimeRangeFilter(range), from: filters.from, to: filters.to });
+    appendQueryValues(query, runtimeAnalyticsFilters(range, filters));
     return this.request(`/runtime/analytics?${query.toString()}`, options);
   }
   getRuntimeTrends({ range = '24h', granularity = 'auto', snapshotSeq, snapshotChangeSeq, historyGeneration, filters = {} } = {}, options = {}) {
     const query = new URLSearchParams({ range, granularity });
-    appendQueryValues(query, { snapshotSeq, snapshotChangeSeq, historyGeneration, ...runtimeRangeFilter(range), ...runtimeFilterValues(filters) });
+    appendQueryValues(query, { snapshotSeq, snapshotChangeSeq, historyGeneration, ...runtimeAnalyticsFilters(range, filters) });
     return this.request(`/runtime/trends?${query.toString()}`, options);
   }
   getRuntimeErrors({ page = 1, pageSize = RUNTIME_DEFAULT_PAGE_SIZE, snapshotSeq, snapshotChangeSeq, historyGeneration, filters = {} } = {}, options = {}) {
@@ -466,7 +425,7 @@ class ApiService {
   // race itself during automatic refreshes.
   async getRuntimeFacets(range = '24h', filters = {}, options = {}) {
     const query = new URLSearchParams({ range: String(range || '24h') });
-    appendQueryValues(query, { ...runtimeRangeFilter(range), ...runtimeFilterValues(filters) });
+    appendQueryValues(query, runtimeAnalyticsFilters(range, filters));
     const value = await this.request(`/runtime/facets?${query.toString()}`, options);
     const facets = value?.facets || {};
     return {

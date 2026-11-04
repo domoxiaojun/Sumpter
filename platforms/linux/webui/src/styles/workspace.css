@@ -330,6 +330,32 @@ input[type="checkbox"]:not(.switch-input):disabled { opacity: 0.45; cursor: not-
 .table-scroll-step { flex-basis: 24px; min-height: 24px; font-size: 18px; border: 0; background: transparent; }
 .table-scrollbar { height: 20px; }
 .table-scrollbar:focus-visible { outline-offset: -4px; outline-width: 1px; }
+
+/* Dense statistics use the available width and their content's intrinsic size. */
+.data-table.data-table-adaptive { table-layout: auto; }
+.data-table.data-table-adaptive th, .data-table.data-table-adaptive td { padding-inline: 12px; }
+.data-table-adaptive .data-table-sort-button { width: auto; margin: -8px -12px; padding: 8px 12px; min-height: 36px; }
+.data-table-adaptive .data-table-cell-text { max-width: 24rem; }
+.data-table-adaptive .runtime-v2-cell-stack { min-width: 0; max-width: 24rem; }
+.data-table-adaptive .runtime-v2-cell-stack small { white-space: normal; overflow-wrap: anywhere; }
+.horizontal-scroll-viewport.is-draggable { cursor: grab; }
+.horizontal-scroll-viewport.is-dragging, .horizontal-scroll-viewport.is-dragging * { cursor: grabbing !important; user-select: none; }
+.table-scroll-controls-top { position: static; border-top: 0; border-bottom: 1px solid var(--border-subtle); border-radius: var(--radius-md) var(--radius-md) 0 0; }
+.table-scroll-hint { flex-shrink: 0; color: var(--text-secondary); font-size: 12px; }
+.table-scroll-controls .table-scroll-step { flex-basis: 36px; min-height: 36px; }
+.table-scroll-controls .table-scrollbar { height: 36px; }
+.table-scrollbar::-webkit-slider-runnable-track { height: 10px; }
+.table-scrollbar::-webkit-slider-thumb { height: 10px; background: var(--text-secondary); }
+.table-scrollbar::-moz-range-track { height: 10px; }
+.table-scrollbar::-moz-range-thumb { height: 10px; background: var(--text-secondary); }
+@media (max-width: 600px), (pointer: coarse) {
+  .table-scroll-controls-top { flex-wrap: wrap; }
+  .table-scroll-hint { flex-basis: 100%; padding-top: 6px; }
+  .table-scroll-controls .table-scroll-step { flex-basis: 44px; min-height: 44px; }
+  .table-scroll-controls .table-scrollbar { height: 44px; }
+  .data-table-adaptive .data-table-sort-button { min-height: 44px; }
+  .runtime-v2-metric-pill, .runtime-v2-dimension-focus-btn { min-height: 44px; }
+}
 @container (max-width: 1079px) {
   .run-page .run-detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   /* 地址独占一行,其余四项两两成行;右列补竖线。 */

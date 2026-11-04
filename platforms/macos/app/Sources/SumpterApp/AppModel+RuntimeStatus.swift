@@ -185,11 +185,9 @@ extension AppModel {
         refreshRequestGeneration &+= 1
         let generation = refreshRequestGeneration
         let eventsCursorAtStart = runtimeChangeSeq
+        advanceRunOverviewDay()
         guard sidecar.isRunning, let admin else {
-            todayInputTokens = nil
-            todayOutputTokens = nil
-            todayTokenObservedRequests = nil
-            todayTokenTotalsFailed = false
+            resetRunOverview()
             if isProxyRunning { isProxyRunning = false }
             if case .crashed = sidecarState {
                 // 崩溃态由 onUnexpectedExit 设置,这里不覆盖。
@@ -258,6 +256,7 @@ extension AppModel {
                 guard generation == refreshRequestGeneration else { return }
             }
             if resetGenerationChanged {
+                resetRunOverview()
                 runtimeChangeSeq = 0
                 runtimeEventDetails.removeAll()
                 runtimeEventDetail = nil
@@ -321,38 +320,63 @@ extension AppModel {
         if autoRefreshEnabled, !statisticsVisible, runHistoryPage?.page == 1, !runHistoryLoading {
             refreshRunHistory(resetSnapshot: true)
         }
-        refreshTodayTokenUsageIfDue()
+        refreshRunOverviewIfDue(force: loadLatestEvents)
     }
 
-    /// The run overview must not sum the visible event page. Trends already
-    /// aggregate the local calendar day, and the hourly rollup keeps that
-    /// read bounded. Statistics uses its own filtered snapshot.
-    func refreshTodayTokenUsageIfDue(force: Bool = false) {
-        guard sidecar.isRunning, admin != nil, !statisticsVisible else { return }
-        let due = lastTodayTokenRefreshAt.map { Date().timeIntervalSince($0) >= 15 } ?? true
+    func resetRunOverview() {
+        runOverviewRequestGeneration &+= 1
+        runOverviewTotals = nil
+        runOverviewFailed = false
+        lastRunOverviewRefreshAt = nil
+    }
+
+    @discardableResult
+    func advanceRunOverviewDay(now: Date = Date(), calendar: Calendar = .autoupdatingCurrent) -> Bool {
+        let day = RunOverviewScope.dayStart(now: now, calendar: calendar)
+        guard day != runOverviewDayStart else { return false }
+        runOverviewDayStart = day
+        resetRunOverview()
+        runHistoryTask?.cancel()
+        runHistoryTask = nil
+        runHistoryRequestGeneration &+= 1
+        runHistoryPage = nil
+        runHistoryLoading = false
+        runHistoryError = nil
+        return true
+    }
+
+    /// Trends aggregate the local calendar day, independently of pagination
+    /// and of the statistics page's selected range and filters.
+    func refreshRunOverviewIfDue(force: Bool = false) {
+        guard sidecar.isRunning, admin != nil, !statisticsVisible,
+              autoRefreshEnabled || force else { return }
+        let due = lastRunOverviewRefreshAt.map { Date().timeIntervalSince($0) >= 15 } ?? true
         guard force || due else { return }
-        todayTokenRequestGeneration &+= 1
-        let generation = todayTokenRequestGeneration
-        let from = Calendar.autoupdatingCurrent.startOfDay(for: Date()).timeIntervalSinceReferenceDate
-        lastTodayTokenRefreshAt = Date()
+        runOverviewRequestGeneration &+= 1
+        let generation = runOverviewRequestGeneration
+        let connectionGeneration = adminConnectionGeneration
+        let resetGeneration = runtimeSummary?.resetGeneration
+        let filter = RunOverviewScope.filter()
+        lastRunOverviewRefreshAt = Date()
         Task { [weak self] in
             guard let self, let admin = self.admin else { return }
             do {
                 let series = try await admin.runtimeTrends(
-                    range: "today",
+                    range: RunOverviewScope.range,
                     granularity: "hour",
-                    filter: AdminWire.RuntimeFilter(from: from)
+                    filter: filter
                 )
-                guard generation == self.todayTokenRequestGeneration else { return }
-                let tokens = series.totals.tokens
-                self.todayInputTokens = tokens.inputTokens
-                self.todayOutputTokens = tokens.outputTokens
-                self.todayTokenObservedRequests = tokens.observedRequests
-                self.todayTokenTotalsFailed = false
+                guard generation == self.runOverviewRequestGeneration,
+                      connectionGeneration == self.adminConnectionGeneration,
+                      resetGeneration == self.runtimeSummary?.resetGeneration else { return }
+                self.runOverviewTotals = series.totals
+                self.runOverviewFailed = false
             } catch {
-                guard generation == self.todayTokenRequestGeneration else { return }
-                if self.todayTokenObservedRequests == nil {
-                    self.todayTokenTotalsFailed = true
+                guard generation == self.runOverviewRequestGeneration,
+                      connectionGeneration == self.adminConnectionGeneration,
+                      resetGeneration == self.runtimeSummary?.resetGeneration else { return }
+                if self.runOverviewTotals == nil {
+                    self.runOverviewFailed = true
                 }
             }
         }

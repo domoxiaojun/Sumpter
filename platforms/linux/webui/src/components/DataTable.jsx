@@ -19,11 +19,11 @@ function tableMinimumWidth(columns) {
   return pixels > 0 ? `${Math.ceil(pixels)}px` : undefined;
 }
 
-function columnPresentation(column) {
+function columnPresentation(column, adaptive = false) {
   const defaults = COLUMN_TYPE_DEFAULTS[column.type] || {};
   return {
-    width: column.width ?? defaults.width,
-    minWidth: column.minWidth ?? defaults.minWidth,
+    width: adaptive ? undefined : column.width ?? defaults.width,
+    minWidth: column.minWidth ?? (adaptive ? undefined : defaults.minWidth),
     align: column.align ?? defaults.align ?? 'left',
   };
 }
@@ -42,6 +42,7 @@ export function DataTable({
   onContainerScroll,
   ariaLabel,
   tableMinWidth,
+  adaptive = false,
   sortKey,
   sortDirection = 'asc',
   onSortChange,
@@ -62,6 +63,8 @@ export function DataTable({
 
   return (
     <HorizontalScroll
+      dragToScroll={adaptive}
+      controlsAtTop={adaptive}
       shellClassName="data-table-shell"
       containerRef={containerRef}
       className={`table-container ${scrollHeight ? 'table-container-scroll' : ''} ${className}`}
@@ -74,13 +77,13 @@ export function DataTable({
       {beforeTable}
       {hasData ? (
         <table
-          className="data-table"
+          className={`data-table${adaptive ? ' data-table-adaptive' : ''}`}
           aria-label={ariaLabel}
-          style={{ minWidth: tableMinWidth || tableMinimumWidth(columns) }}
+          style={{ minWidth: tableMinWidth || (adaptive ? '100%' : tableMinimumWidth(columns)) }}
         >
           <colgroup>
             {columns.map((col, idx) => {
-              const presentation = columnPresentation(col);
+              const presentation = columnPresentation(col, adaptive);
               return (
                 <col
                   key={col.key || idx}
@@ -95,7 +98,7 @@ export function DataTable({
           <thead>
             <tr>
               {columns.map((col, idx) => {
-                const presentation = columnPresentation(col);
+                const presentation = columnPresentation(col, adaptive);
                 const sortable = Boolean(col.sortable && col.key && onSortChange);
                 const activeSort = sortable && sortKey === col.key;
                 const ariaSort = sortable
@@ -160,7 +163,7 @@ export function DataTable({
                 >
                   {columns.map((col, colIdx) => {
                     const val = col.render ? col.render(row, rowIdx) : row[col.key];
-                    const presentation = columnPresentation(col);
+                    const presentation = columnPresentation(col, adaptive);
                     return (
                       <td
                         key={col.key || colIdx}

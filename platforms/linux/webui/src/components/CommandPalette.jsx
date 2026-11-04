@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { useAppControls } from '../context/AppContext.jsx';
 import { Icon } from '../utils/icons.jsx';
+import { useDialogFocus } from '../hooks/useDialogFocus.js';
 
 export function CommandPalette() {
   const {
@@ -10,6 +11,7 @@ export function CommandPalette() {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef(null);
+  const dialogRef = useDialogFocus(isCommandOpen, { onClose: () => setIsCommandOpen(false), initialFocusRef: inputRef });
 
   const commands = useMemo(() => [
     { id: 'nav-run', title: '转到：运行监控', category: '页面跳转', icon: 'play', action: () => navigate('run') },
@@ -36,8 +38,6 @@ export function CommandPalette() {
     if (!isCommandOpen) return undefined;
     setQuery('');
     setSelectedIndex(0);
-    const frame = requestAnimationFrame(() => inputRef.current?.focus());
-    return () => cancelAnimationFrame(frame);
   }, [isCommandOpen]);
 
   const executeItem = (item) => {
@@ -48,10 +48,10 @@ export function CommandPalette() {
   const handleKeyDown = (e) => {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setSelectedIndex((prev) => (prev + 1) % filtered.length);
+      if (filtered.length) setSelectedIndex((prev) => (prev + 1) % filtered.length);
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      setSelectedIndex((prev) => (prev - 1 + filtered.length) % filtered.length);
+      if (filtered.length) setSelectedIndex((prev) => (prev - 1 + filtered.length) % filtered.length);
     } else if (e.key === 'Enter') {
       e.preventDefault();
       if (filtered[selectedIndex]) executeItem(filtered[selectedIndex]);
@@ -64,6 +64,8 @@ export function CommandPalette() {
     <div className="modal-overlay" onClick={() => setIsCommandOpen(false)}>
       <div
         className="modal-dialog command-palette-dialog"
+        ref={dialogRef}
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -75,6 +77,12 @@ export function CommandPalette() {
             ref={inputRef}
             type="text"
             className="form-input command-palette-input"
+            aria-label="搜索指令和页面"
+            role="combobox"
+            aria-expanded="true"
+            aria-autocomplete="list"
+            aria-controls="command-palette-results"
+            aria-activedescendant={filtered[selectedIndex] ? `command-${filtered[selectedIndex].id}` : undefined}
             placeholder="输入指令或搜索页面 (如: 运行、Provider、启动代理)..."
             value={query}
             onChange={(e) => {
@@ -83,10 +91,10 @@ export function CommandPalette() {
             }}
             onKeyDown={handleKeyDown}
           />
-          <kbd className="kbd-badge">ESC</kbd>
+          <button type="button" className="btn-icon" aria-label="关闭命令面板" onClick={() => setIsCommandOpen(false)}><Icon name="close" size={16} /></button>
         </div>
 
-        <div className="command-palette-list">
+        <div className="command-palette-list" id="command-palette-results" role="listbox" aria-label="可用指令">
           {filtered.length === 0 ? (
             <div className="command-palette-empty">
               未找到匹配的指令或页面
@@ -97,6 +105,9 @@ export function CommandPalette() {
               return (
                 <div
                   key={item.id}
+                  id={`command-${item.id}`}
+                  role="option"
+                  aria-selected={isSelected}
                   className={`command-palette-item${isSelected ? ' is-selected' : ''}`}
                   onClick={() => executeItem(item)}
                   onMouseEnter={() => setSelectedIndex(idx)}

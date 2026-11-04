@@ -10,7 +10,7 @@ enum RuntimeEventDisplay {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.timeZone = .current
+        formatter.timeZone = .autoupdatingCurrent
         formatter.dateFormat = "HH:mm:ss"
         return formatter
     }()
@@ -19,7 +19,7 @@ enum RuntimeEventDisplay {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.timeZone = .current
+        formatter.timeZone = .autoupdatingCurrent
         formatter.dateFormat = "MM-dd HH:mm:ss"
         return formatter
     }()
@@ -28,13 +28,13 @@ enum RuntimeEventDisplay {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.timeZone = .current
+        formatter.timeZone = .autoupdatingCurrent
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
         return formatter
     }()
 
-    static func time(_ date: Date) -> String {
-        if Calendar.current.isDateInToday(date) {
+    static func time(_ date: Date, includeDate: Bool = true) -> String {
+        if !includeDate || Calendar.current.isDateInToday(date) {
             return local24HourTime.string(from: date)
         }
         return local24HourMonthDayTime.string(from: date)
@@ -510,6 +510,7 @@ struct RecentEventsPanel: View {
     let events: [RuntimeEvent]
     /// 实时进行中的事件单独显示，不计入稳定历史页的 totalCount/pageSize。
     var liveEvents: [RuntimeEvent] = []
+    var showEventDate = true
     var hint = "客户端请求和上游尝试通过请求 ID 关联；HTTP 状态与最终结果分开显示，200 后的协议失败不会被误报为成功。"
     var detailedEvent: RuntimeEvent?
     var hasMore = false
@@ -990,7 +991,7 @@ struct RecentEventsPanel: View {
     private func eventRequestCell(_ event: RuntimeEvent) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .center, spacing: 6) {
-                Text(RuntimeEventDisplay.time(event.timestamp))
+                Text(RuntimeEventDisplay.time(event.timestamp, includeDate: showEventDate))
                     .font(.subheadline.monospacedDigit().weight(.semibold))
                 if let project = RuntimeEventPresentation.projectAttribution(
                     eventKind: event.kind, metadata: event.codexMetadata, declared: event.clientDeclared,
@@ -1273,7 +1274,7 @@ struct RecentEventsPanel: View {
         let isMapped = clientModel != nil && logical != "—" && clientModel != logical
         return VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(RuntimeEventDisplay.time(event.timestamp))
+                Text(RuntimeEventDisplay.time(event.timestamp, includeDate: showEventDate))
                     .font(.subheadline.monospacedDigit())
                 RuntimeEventStatusSummary(event: event, compact: true, includeUsage: false)
                 Spacer(minLength: 4)

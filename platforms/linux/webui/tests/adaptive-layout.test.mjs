@@ -49,7 +49,7 @@ test('Statistics keeps common filters visible and advanced selections discoverab
   assert.match(statisticsSource, /<details className="analytics-v3-advanced-filters">/);
   assert.match(statisticsSource, /advancedFilterLabels.join/);
   assert.match(statisticsSource, /id="analytics-v3-filter-grid" className="analytics-v3-filter-grid"/);
-  assert.match(statisticsSource, /默认显示全部数据/);
+  assert.match(statisticsSource, /按所选时间范围展示数据/);
   const order = ['<span>入口</span>', '<span>项目</span>', '<span>会话</span>', '<span>客户端</span>', '<span>模型</span>', '<span>最终结果</span>', '<span>用途</span>', '<span>失败类型</span>', '<span>失败阶段</span>'];
   let previous = -1;
   for (const marker of order) {

@@ -1,4 +1,28 @@
 const clients = ['claude', 'grok', 'gemini', 'codex', 'pi', 'all'];
+
+// Only infer a direct HTTP connection whose browser address agrees with the
+// daemon's actual Admin listener. Public reverse-proxy URLs need user input.
+export function defaultAttributionProxyURL(pageURL, proxyListener, adminListener) {
+  try {
+    const url = new URL(pageURL);
+    const proxyPort = Number(proxyListener?.port);
+    if (url.protocol !== 'http:' || Number(url.port || 80) !== Number(adminListener?.port)
+      || !Number.isInteger(proxyPort) || proxyPort < 1 || proxyPort > 65535
+      || !['/', '/index.html', '/admin', '/admin/'].includes(url.pathname)) return '';
+    const host = url.hostname.replace(/^\[|\]$/gu, '').toLowerCase();
+    const matches = (value) => {
+      if (typeof value !== 'string') return false;
+      const bound = value.replace(/^\[|\]$/gu, '').trim().toLowerCase();
+      if (bound === '' || bound === '0.0.0.0') return !host.includes(':');
+      if (bound === '::') return host.includes(':');
+      return bound === host || (['localhost', '127.0.0.1'].includes(bound) && ['localhost', '127.0.0.1'].includes(host));
+    };
+    if (!matches(adminListener?.host) || !matches(proxyListener?.host)) return '';
+    url.port = String(proxyPort);
+    return url.origin;
+  } catch { return ''; }
+}
+
 export function attributionCommand(action, client, shell, proxyURL) {
   if (!['enable', 'disable', 'status', 'install', 'restore', 'uninstall'].includes(action)
     || !clients.includes(client) || !['bash', 'zsh'].includes(shell)) throw new Error('归因操作参数无效');

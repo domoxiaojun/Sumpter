@@ -7923,41 +7923,6 @@ button.responsive-data-card {
   margin-left: auto;
 }
 
-.runtime-v2-sparkcell {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  min-width: 68px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  isolation: isolate;
-  overflow: hidden;
-}
-
-.runtime-v2-sparkbar {
-  position: absolute;
-  inset: 1px auto 1px 0;
-  z-index: -1;
-  border-radius: 3px;
-  background: color-mix(in srgb, var(--primary) 15%, transparent);
-  pointer-events: none;
-  transition: width var(--ease-fast);
-}
-
-.runtime-v2-sparkbar.is-token {
-  background: color-mix(in srgb, var(--status-live, var(--primary)) 14%, transparent);
-}
-
-.runtime-v2-sparkbar.is-cost {
-  background: color-mix(in srgb, var(--status-good) 15%, transparent);
-}
-
-.runtime-v2-sparkvalue {
-  position: relative;
-  z-index: 1;
-  font-variant-numeric: tabular-nums;
-}
-
 .runtime-v2-chart-legend-right {
   display: inline-flex;
   align-items: center;

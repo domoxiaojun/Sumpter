@@ -731,11 +731,8 @@ export function AppProvider({ children }) {
     const handleKeyDown = (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
+        if (document.querySelector('[role="dialog"][aria-modal="true"]:not(.command-palette-dialog)')) return;
         setIsCommandOpen((prev) => !prev);
-      }
-      if (e.key === 'Escape') {
-        setIsCommandOpen(false);
-        setActiveModal(null);
       }
     };
     window.addEventListener('keydown', handleKeyDown);

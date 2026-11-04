@@ -27,6 +27,54 @@ fn attribution_headers(client: &str) -> Vec<(String, String)> {
 }
 
 #[tokio::test]
+async fn runtime_dimensions_keep_stable_identity_after_endpoint_rename() {
+    use sumpter_engine::runtime_query::{DimensionKind, DimensionPageQuery, RuntimeFilter};
+
+    let dir = temp_config_dir("dimension-rename-contract");
+    let fake = FakeTransport::new();
+    let mut current = config();
+    current.endpoints[0].name = "Z old".into();
+    let engine = engine_with_dir(current.clone(), dir.clone(), fake.clone());
+    for name in ["Z old", "A new"] {
+        current.endpoints[0].name = name.into();
+        let _ = engine.replace_config(current.clone().normalized());
+        fake.push(
+            "a.example.com",
+            sse_ok(&["data: {\"type\":\"message_stop\"}\n\n"]),
+        );
+        let mut headers = attribution_headers("codex");
+        headers.extend(session_header("dimension-session"));
+        let (status, _) = call(&engine, loopback(), "/v1/messages", headers, body()).await;
+        assert_eq!(status, 200);
+    }
+    engine.flush_stats().unwrap();
+    let query = DimensionPageQuery {
+        filter: RuntimeFilter {
+            request_kind: Some("memory".into()),
+            client_variant: Some("sdk".into()),
+            agent_role: Some("memory".into()),
+            from: Some(0.0),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    for kind in [
+        DimensionKind::Endpoint,
+        DimensionKind::Project,
+        DimensionKind::Session,
+    ] {
+        let page = engine.runtime_dimension_page(kind, &query).unwrap();
+        assert_eq!(page["totalCount"], 1, "{kind:?}");
+        assert_eq!(page["rows"][0]["requests"], 2);
+        if kind == DimensionKind::Endpoint {
+            assert_eq!(page["rows"][0]["name"], "A new");
+        }
+    }
+    drop(engine);
+    let _ = std::fs::remove_dir_all(dir.root);
+}
+
+#[tokio::test]
 async fn observational_identity_does_not_change_protocol_conversion() {
     let mut outputs = Vec::new();
     for declared in [false, true] {

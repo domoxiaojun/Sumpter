@@ -92,6 +92,8 @@ bash setup-client-attribution.sh disable claude --shell zsh
 
 开关保存在 XDG_DATA_HOME/sumpter/attribution/collection.json，默认位于 ~/.local/share。这里仅保存匿名来源 ID、开关、绑定地址与更新时间，不保存密钥。关闭对这个用户的同一数据目录生效，跨 bash/zsh 共用。开关文件损坏时停止采集；损坏的备份记录不阻止 status、disable、uninstall，写操作将损坏内容另存保留。恢复损坏备份仍会报错。
 
+安装操作使用带持有者信息的 install.lock 目录互斥。进程异常退出后，下次写操作可恢复本机已退出进程留下的锁；存活进程的锁不会因时间过长被抢占。旧版无持有者的空锁文件保留 5 分钟保护期，过期后自动恢复；status 不修改锁或配置。
+
 已加载的新包装函数每次启动都重新检查开关。运行中的 Claude/Grok/Gemini/Codex 已经取得进程环境，关闭后需重启；Pi 新版钩子每个请求读取开关。已经加载的旧 Shell 函数或旧版客户端进程无法由新管理器撤回环境，需新开终端并重启。关闭不删除历史，也不屏蔽客户端原生身份和工作区信息。
 
 Gemini 的连接准备与归因开关分开：disable 继续使用 SUMPTER_GEMINI_BASE_URL、SUMPTER_AUTH_TOKEN 准备原有 URL/认证，但不追加项目头或 session-id 参数。uninstall 会移除包装函数，因此不再负责 Gemini 的连接准备。
@@ -100,11 +102,13 @@ Gemini 的连接准备与归因开关分开：disable 继续使用 SUMPTER_GEMIN
 
 - Claude：要求环境或用户设置提供连接依据，并且可见的用户/项目 ANTHROPIC_BASE_URL 候选均匹配。仅项目配置不足以证明它已获信任并生效；额外 settings CLI 入口、可见托管文件、云端/宿主管理或其他 provider 开关均跳过补充。参照 [官方设置优先级](https://code.claude.com/docs/en/settings) 和 [环境变量说明](https://code.claude.com/docs/en/env-vars)，这里采取保守检查，不模拟完整运行时配置解析。
 - Codex：支持用户 config.toml 中选中的自定义 provider，以及 -p / --profile、-C / --cd 和简单 model_provider 选择。项目层 provider 或复杂 CLI provider 改写无法确认时跳过补充；不会替用户更换 provider。桌面 App 不会加载终端包装器。
-- Grok：GROK_CONFIG 的 endpoints.xai_api_base_url 与 endpoints.cli_chat_proxy_base_url 都须指向绑定 origin，可见的 model_providers 地址也要匹配。GROK_CONFIG_PATH 及其他未解析来源保持未知。
+- Grok：GROK_CONFIG 的 endpoints.xai_api_base_url 与 endpoints.cli_chat_proxy_base_url 都须指向绑定地址及路径，可见的 model_providers 地址也要匹配。GROK_CONFIG_PATH 及其他未解析来源保持未知。
 - Gemini：核对包装器实际使用的 SUMPTER_GEMINI_BASE_URL。缺少地址/密钥时直接交由客户端处理，不报告已准备采集。
 - Pi：逐请求要求 provider 的 x-sumpter-client: pi 显式标记，不根据 localhost 或模型名猜测。绑定地址字段不替代 provider 标记；该标记表示用户明确选择的归因目的地。
 
-绑定按 HTTP(S) origin（协议、主机、端口）比较，允许 /v1 等不同协议路径；它是补充采集的保守条件，不是鉴权或全功能客户端配置解析器。无法确认不表示客户端绕过 Sumpter。除 Pi 钩子外，检查发生在启动时；运行中更换连接、/cd 或远程托管策略变化无法由启动包装器重新验证，需关闭补充并重启客户端。
+绑定比较协议、主机、端口和自定义路径前缀，忽略末尾斜杠以及客户端的单个 API 版本后缀（/v1，Gemini 还支持 /v1beta）。例如 /sumpter 与 /sumpter/v1 可匹配，/sumpter 与 /other-service 不匹配。它是补充采集的保守条件，不是鉴权或全功能客户端配置解析器。WebUI 仅在直连 HTTP 管理页且监听地址吻合时按实际代理端口预填；HTTPS 或路径反向代理需手动填写客户端使用的公开地址，已输入的值不会被后续加载覆盖。
+
+无法确认不表示客户端绕过 Sumpter。除 Pi 钩子外，检查发生在启动时；运行中更换连接、/cd 或远程托管策略变化无法由启动包装器重新验证，需关闭补充并重启客户端。
 
 ### 配套更新与生效证据
 

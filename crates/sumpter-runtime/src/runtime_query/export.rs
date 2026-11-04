@@ -38,11 +38,11 @@ pub fn export_estimate_on(
             |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?.max(0) as u64)),
         )?,
         ExportScope::Projects | ExportScope::Sessions => {
-            let (key, name, source) = export_dimension_expressions(query.scope);
+            let (key, _, _) = export_dimension_expressions(query.scope);
             let count = transaction.query_row(
                 &format!(
                     "SELECT COUNT(*) FROM (SELECT 1 FROM runtime_events{where_sql} \
-                     GROUP BY {key},{name},{source})"
+                     GROUP BY {key})"
                 ),
                 params_from_iter(builder.values.iter()),
                 |row| row.get::<_, i64>(0),
@@ -418,23 +418,33 @@ where
 {
     let (key, name, source) = export_dimension_expressions(query.scope);
     let (related, workspace) = match query.scope {
-        ExportScope::Projects => ("session_key", "MAX(workspace_paths_json)"),
+        ExportScope::Projects => ("session_key", "MAX(NULLIF(workspace_paths_json,'[]'))"),
         ExportScope::Sessions => ("project_id", "NULL"),
         ExportScope::Events => unreachable!(),
     };
     let sql = format!(
-        "SELECT {key},{name},{source},COUNT(*),\
-                SUM(CASE WHEN outcome='succeeded' THEN 1 ELSE 0 END),\
-                SUM(CASE WHEN outcome='failed' THEN 1 ELSE 0 END),\
-                SUM(CASE WHEN outcome='cancelled' THEN 1 ELSE 0 END),\
-                SUM(CASE WHEN failover=1 THEN 1 ELSE 0 END),\
-                SUM(CASE WHEN request_purpose!='token_count' OR request_purpose IS NULL THEN COALESCE(input_tokens,0) ELSE 0 END),\
-                SUM(CASE WHEN request_purpose!='token_count' OR request_purpose IS NULL THEN COALESCE(output_tokens,0) ELSE 0 END),\
-                SUM(CASE WHEN request_purpose!='token_count' OR request_purpose IS NULL THEN COALESCE(cache_read_input_tokens,0) ELSE 0 END),\
-                SUM(CASE WHEN request_purpose!='token_count' OR request_purpose IS NULL THEN COALESCE(cache_creation_input_tokens,0) ELSE 0 END),\
-                SUM(CASE WHEN request_purpose!='token_count' OR request_purpose IS NULL THEN COALESCE(processed_total_tokens,0) ELSE 0 END),\
-                MIN(timestamp),MAX(timestamp),COUNT(DISTINCT {related}),{workspace} \
-         FROM runtime_events{} GROUP BY {key},{name},{source} ORDER BY {key} ASC",
+        "WITH aggregated AS (SELECT {key} AS key,MAX(seq) AS metadata_seq,\
+                CASE WHEN COUNT(DISTINCT {source})=1 THEN MIN({source}) ELSE 'mixed' END AS source,\
+                COUNT(*) AS requests,\
+                SUM(CASE WHEN outcome='succeeded' THEN 1 ELSE 0 END) AS successes,\
+                SUM(CASE WHEN outcome='failed' THEN 1 ELSE 0 END) AS failures,\
+                SUM(CASE WHEN outcome='cancelled' THEN 1 ELSE 0 END) AS cancelled,\
+                SUM(CASE WHEN failover=1 THEN 1 ELSE 0 END) AS failovers,\
+                SUM(CASE WHEN request_purpose!='token_count' OR request_purpose IS NULL THEN COALESCE(input_tokens,0) ELSE 0 END) AS input_tokens,\
+                SUM(CASE WHEN request_purpose!='token_count' OR request_purpose IS NULL THEN COALESCE(output_tokens,0) ELSE 0 END) AS output_tokens,\
+                SUM(CASE WHEN request_purpose!='token_count' OR request_purpose IS NULL THEN COALESCE(cache_read_input_tokens,0) ELSE 0 END) AS cache_read_input_tokens,\
+                SUM(CASE WHEN request_purpose!='token_count' OR request_purpose IS NULL THEN COALESCE(cache_creation_input_tokens,0) ELSE 0 END) AS cache_creation_input_tokens,\
+                SUM(CASE WHEN request_purpose!='token_count' OR request_purpose IS NULL THEN COALESCE(processed_total_tokens,0) ELSE 0 END) AS processed_total_tokens,\
+                MIN(timestamp) AS first_seen,MAX(timestamp) AS last_seen,\
+                COUNT(DISTINCT {related}) AS related_count,{workspace} AS workspace_paths \
+         FROM runtime_events{} GROUP BY {key}) \
+         SELECT aggregated.key,{name},aggregated.source,aggregated.requests,aggregated.successes,\
+                aggregated.failures,aggregated.cancelled,aggregated.failovers,\
+                aggregated.input_tokens,aggregated.output_tokens,aggregated.cache_read_input_tokens,\
+                aggregated.cache_creation_input_tokens,aggregated.processed_total_tokens,\
+                aggregated.first_seen,aggregated.last_seen,aggregated.related_count,aggregated.workspace_paths \
+         FROM aggregated JOIN runtime_events ON runtime_events.seq=aggregated.metadata_seq \
+         ORDER BY aggregated.key ASC",
         builder.where_sql()
     );
     let mut statement = transaction.prepare(&sql)?;

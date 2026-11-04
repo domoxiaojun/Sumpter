@@ -863,6 +863,201 @@ fn dimension_pages_keep_exact_costs_across_price_changes() {
     );
 }
 
+fn insert_renamed_dimension_events(connection: &Connection) {
+    for (seq, key, name) in [(1, "a", "Z old"), (2, "b", "Middle"), (3, "a", "A new")] {
+        insert_endpoint_test_event(
+            connection,
+            seq,
+            "client",
+            None,
+            "succeeded",
+            200,
+            Some("codex"),
+            Some("completion"),
+            Some(key),
+            Some(name),
+        );
+    }
+    connection.execute_batch(
+        "UPDATE runtime_events SET timestamp=seq,project_id=endpoint_id,project_name=endpoint_name,
+           project_source=CASE WHEN seq=3 THEN 'session_fallback' ELSE 'workspace_local' END,
+           session_key='session-' || endpoint_id,
+           session_source=CASE WHEN seq=3 THEN 'native' ELSE 'header' END,
+           workspace_paths_json=CASE WHEN seq=3 THEN '[]' ELSE '[\".../repo\"]' END,
+           effective_model='gpt-test',failover=0,usage_present=1,
+           input_tokens=CASE WHEN seq=2 THEN 150 ELSE 100 END,output_tokens=20,
+           cache_read_input_tokens=0,cache_creation_input_tokens=0,
+           uncached_input_tokens=CASE WHEN seq=2 THEN 150 ELSE 100 END,
+           processed_input_tokens=CASE WHEN seq=2 THEN 150 ELSE 100 END,
+           processed_total_tokens=CASE WHEN seq=2 THEN 170 ELSE 120 END,
+           token_accounting_semantics='subset',token_accounting_quality='complete',
+           duration_ms=1000,ttfb_ms=100,upstream_duration_ms=1000,upstream_ttfb_ms=100;"
+    ).unwrap();
+}
+
+#[test]
+fn dimension_identity_survives_renames_and_mixed_sources_for_every_sort() {
+    let mut connection = test_connection();
+    insert_renamed_dimension_events(&connection);
+    for kind in [
+        DimensionKind::Endpoint,
+        DimensionKind::Project,
+        DimensionKind::Session,
+    ] {
+        for sort in [
+            DimensionSort::Name,
+            DimensionSort::Requests,
+            DimensionSort::SuccessRate,
+            DimensionSort::Failures,
+            DimensionSort::InputTokens,
+            DimensionSort::OutputTokens,
+            DimensionSort::CacheReadTokens,
+            DimensionSort::CacheWriteTokens,
+            DimensionSort::Tokens,
+            DimensionSort::AverageDuration,
+            DimensionSort::OutputTokensPerSecond,
+            DimensionSort::LastSeen,
+        ] {
+            for order in [SortOrder::Asc, SortOrder::Desc] {
+                let page = dimension_page_on(
+                    &mut connection,
+                    kind,
+                    &DimensionPageQuery {
+                        sort,
+                        order,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                assert_eq!(page.total_count, 2, "{kind:?} {sort:?}");
+                assert_eq!(page.rows.len(), 2);
+                let row = page
+                    .rows
+                    .iter()
+                    .find(|row| row.key == "a" || row.key == "session-a")
+                    .unwrap();
+                assert_eq!(row.requests, 2);
+                assert_eq!(row.input_tokens, 200);
+                assert_eq!(row.cost.estimated_cost_micros, 280);
+                assert_eq!(row.cost.priced_requests, 2);
+                if kind != DimensionKind::Endpoint {
+                    assert_eq!(row.source, "mixed");
+                }
+                if kind == DimensionKind::Project {
+                    assert_eq!(row.workspace_paths, vec![".../repo"]);
+                }
+                if kind != DimensionKind::Session {
+                    assert_eq!(row.name, "A new");
+                }
+                if sort == DimensionSort::Name && order == SortOrder::Asc {
+                    assert_eq!(page.rows[0].key, row.key);
+                }
+                if sort == DimensionSort::InputTokens && order == SortOrder::Asc {
+                    assert_eq!(page.rows[0].input_tokens, 150);
+                }
+                assert_eq!(
+                    page.rows
+                        .iter()
+                        .map(|row| row.cost.estimated_cost_micros)
+                        .sum::<i64>(),
+                    470
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn dimension_display_metadata_and_cost_respect_snapshot_and_time_filters() {
+    let mut connection = test_connection();
+    insert_renamed_dimension_events(&connection);
+    let snapshot = dimension_page_on(
+        &mut connection,
+        DimensionKind::Project,
+        &DimensionPageQuery {
+            snapshot_seq: Some(2),
+            snapshot_change_seq: Some(2),
+            sort: DimensionSort::Name,
+            order: SortOrder::Asc,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(snapshot.rows[0].name, "Middle");
+    let old = &snapshot.rows[1];
+    assert_eq!(old.key, "a");
+    assert_eq!(old.name, "Z old");
+    assert_eq!(old.source, "workspace_local");
+    assert_eq!(old.requests, 1);
+    assert_eq!(old.cost.estimated_cost_micros, 140);
+
+    let filtered = dimension_page_on(
+        &mut connection,
+        DimensionKind::Project,
+        &DimensionPageQuery {
+            filter: RuntimeFilter {
+                project_id: Some("a".into()),
+                from: Some(2.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(filtered.total_count, 1);
+    assert_eq!(filtered.rows[0].name, "A new");
+    assert_eq!(filtered.rows[0].source, "session_fallback");
+    assert_eq!(filtered.rows[0].requests, 1);
+    assert_eq!(filtered.rows[0].cost.estimated_cost_micros, 140);
+}
+
+#[test]
+fn dimension_export_estimates_and_rows_share_stable_identity() {
+    let mut connection = test_connection();
+    insert_renamed_dimension_events(&connection);
+    for scope in [ExportScope::Projects, ExportScope::Sessions] {
+        for format in [ExportFormat::Jsonl, ExportFormat::Csv] {
+            let query = ExportQuery {
+                scope,
+                format,
+                privacy: ExportPrivacy::Stored,
+                confirm_stored: true,
+                snapshot_seq: None,
+                snapshot_change_seq: None,
+                history_generation: None,
+                filter: RuntimeFilter::default(),
+            };
+            let estimate = export_estimate_on(&mut connection, &query).unwrap();
+            assert_eq!(estimate.row_count, 2);
+            let mut bytes = Vec::new();
+            let manifest = stream_export_on(&mut connection, &query, |chunk| {
+                bytes.extend(chunk);
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(manifest.row_count, estimate.row_count);
+            let text = String::from_utf8(bytes).unwrap();
+            assert_eq!(
+                text.lines().count(),
+                if format == ExportFormat::Csv { 3 } else { 2 }
+            );
+            if format == ExportFormat::Jsonl {
+                let rows = text
+                    .lines()
+                    .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                    .collect::<Vec<_>>();
+                assert_eq!(rows[0]["source"], "mixed");
+                assert_eq!(rows[0]["requests"], 2);
+                assert_eq!(rows[0]["inputTokens"], 200);
+                if scope == ExportScope::Projects {
+                    assert_eq!(rows[0]["name"], "A new");
+                    assert_eq!(rows[0]["workspacePaths"], serde_json::json!([".../repo"]));
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn outcome_page_uses_partial_composite_index() {
     let connection = test_connection();

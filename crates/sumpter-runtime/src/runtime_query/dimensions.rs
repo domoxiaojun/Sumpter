@@ -181,7 +181,7 @@ pub fn dimension_page_on(
             "COALESCE(project_name,project_id,'unidentified_project')",
             "COALESCE(project_source,'missing_workspace_metadata')",
             "session_key",
-            "MAX(workspace_paths_json)",
+            "MAX(NULLIF(workspace_paths_json,'[]'))",
             "COALESCE(attribution_scope,'unknown') != 'internal_feature'",
         ),
         DimensionKind::Session => (
@@ -212,7 +212,9 @@ pub fn dimension_page_on(
         );
     }
     let where_sql = builder.where_sql();
-    let group_columns = format!("{key_expression},{name_expression},{source_expression}");
+    // Labels and attribution sources describe a dimension; they do not change
+    // its identity. Costs below use this same stable key.
+    let group_columns = key_expression;
     let total_count = transaction.query_row(
         &format!(
             "SELECT COUNT(*) FROM (SELECT 1 FROM runtime_events{where_sql} \
@@ -233,25 +235,25 @@ pub fn dimension_page_on(
         .ok_or_else(|| RuntimeQueryError::InvalidInput("page offset is too large".into()))?;
     let sort_column = match request.sort {
         DimensionSort::Name => "name COLLATE NOCASE",
-        DimensionSort::Requests => "requests",
+        DimensionSort::Requests => "aggregated.requests",
         // ORDER BY may refer to aggregate aliases in SQLite. Keep the
         // denominator explicit; NULL means that no terminal result exists and
         // is handled below so an unknown value stays after measured values in
         // either direction.
         DimensionSort::SuccessRate => {
-            "successes * 1.0 / NULLIF(successes + failures + cancelled, 0)"
+            "aggregated.successes * 1.0 / NULLIF(aggregated.successes + aggregated.failures + aggregated.cancelled, 0)"
         }
-        DimensionSort::Failures => "failures",
-        DimensionSort::InputTokens => "input_tokens",
-        DimensionSort::OutputTokens => "output_tokens",
-        DimensionSort::CacheReadTokens => "cache_read_input_tokens",
-        DimensionSort::CacheWriteTokens => "cache_creation_input_tokens",
-        DimensionSort::Tokens => "processed_total_tokens",
-        DimensionSort::AverageDuration => "average_duration_ms",
+        DimensionSort::Failures => "aggregated.failures",
+        DimensionSort::InputTokens => "aggregated.input_tokens",
+        DimensionSort::OutputTokens => "aggregated.output_tokens",
+        DimensionSort::CacheReadTokens => "aggregated.cache_read_input_tokens",
+        DimensionSort::CacheWriteTokens => "aggregated.cache_creation_input_tokens",
+        DimensionSort::Tokens => "aggregated.processed_total_tokens",
+        DimensionSort::AverageDuration => "aggregated.average_duration_ms",
         DimensionSort::OutputTokensPerSecond => {
-            "output_generation_tokens * 1000.0 / NULLIF(output_generation_ms, 0)"
+            "aggregated.output_generation_tokens * 1000.0 / NULLIF(aggregated.output_generation_ms, 0)"
         }
-        DimensionSort::LastSeen => "last_seen",
+        DimensionSort::LastSeen => "aggregated.last_seen",
     };
     let order = match request.order {
         SortOrder::Asc => "ASC",
@@ -272,9 +274,11 @@ pub fn dimension_page_on(
     values.push(SqlValue::Integer(request.page_size as i64));
     values.push(SqlValue::Integer(offset.min(i64::MAX as usize) as i64));
     let sql = format!(
-        r#"SELECT {key_expression} AS key,
-                      {name_expression} AS name,
-                      {source_expression} AS source,
+        r#"WITH aggregated AS (
+               SELECT {key_expression} AS key,
+                      MAX(seq) AS metadata_seq,
+                      CASE WHEN COUNT(DISTINCT {source_expression})=1
+                           THEN MIN({source_expression}) ELSE 'mixed' END AS source,
                       COUNT(*) AS requests,
                       SUM(CASE WHEN outcome='succeeded' THEN 1 ELSE 0 END) AS successes,
                       SUM(CASE WHEN outcome='failed' THEN 1 ELSE 0 END) AS failures,
@@ -343,7 +347,25 @@ pub fn dimension_page_on(
                       SUM(CASE WHEN kind='client' AND outcome='succeeded' AND is_in_flight=0 AND (request_purpose IS NULL OR request_purpose!='token_count') AND output_tokens IS NOT NULL AND output_tokens>=0 AND upstream_duration_ms IS NOT NULL AND upstream_duration_ms>=0 AND upstream_ttfb_ms IS NOT NULL AND upstream_ttfb_ms>=0 AND upstream_duration_ms>upstream_ttfb_ms THEN 1 ELSE 0 END) AS output_speed_requests
                FROM runtime_events{where_sql}
               GROUP BY {group_columns}
-              ORDER BY {order_by}, key ASC
+             )
+             SELECT aggregated.key, {name_expression} AS name, aggregated.source,
+                    aggregated.requests, aggregated.successes, aggregated.failures,
+                    aggregated.cancelled, aggregated.failovers,
+                    aggregated.slow_duration_requests, aggregated.critical_duration_requests,
+                    aggregated.slow_ttfb_requests, aggregated.critical_ttfb_requests,
+                    aggregated.input_tokens, aggregated.output_tokens,
+                    aggregated.cache_read_input_tokens, aggregated.cache_creation_input_tokens,
+                    aggregated.processed_input_tokens, aggregated.processed_total_tokens,
+                    aggregated.cache_read_reported_requests, aggregated.cache_read_hit_requests,
+                    aggregated.cache_read_token_eligible_requests, aggregated.cache_read_token_unknown_requests,
+                    aggregated.cache_read_token_numerator, aggregated.cache_read_token_denominator,
+                    aggregated.first_seen, aggregated.last_seen,
+                    aggregated.average_duration_ms, aggregated.average_ttfb_ms,
+                    aggregated.related_count, aggregated.workspace_paths_json, aggregated.client_kinds,
+                    aggregated.output_generation_tokens, aggregated.output_generation_ms,
+                    aggregated.output_speed_requests
+               FROM aggregated JOIN runtime_events ON runtime_events.seq=aggregated.metadata_seq
+              ORDER BY {order_by}, aggregated.key ASC
               LIMIT ? OFFSET ?"#
     );
     let rows = {

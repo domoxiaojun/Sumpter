@@ -740,11 +740,18 @@ test('token usage values use comma grouping without changing ordinary counters',
   assert.equal(formatTokenCount('—'), '—');
 });
 
-test('runtime analytics request forwards client, endpoint, project, and session filters', () => {
-  assert.match(apiServiceSource, /query\.set\('clientKind', filters\.clientKind\)/);
-  assert.match(apiServiceSource, /query\.set\('endpointID', filters\.endpointID\)/);
-  assert.match(apiServiceSource, /query\.set\('project', filters\.project\)/);
-  assert.match(apiServiceSource, /query\.set\('sessionID', filters\.sessionID\)/);
+test('runtime analytics request forwards client, endpoint, project, and session filters', async t => {
+  let path;
+  t.mock.method(api, 'request', async value => { path = value; return {}; });
+  const filters = {
+    clientKind: 'codex', endpointID: 'ep-direct', projectID: 'project-1',
+    project: 'example', sessionID: 'session-1',
+  };
+  await api.getRuntimeAnalytics('7d', filters);
+  const query = new URL(path, 'http://test.invalid').searchParams;
+  for (const [key, value] of Object.entries(filters)) assert.equal(query.get(key), value);
+  assert.equal(query.get('range'), '7d');
+  assert.ok(Number.isFinite(Number(query.get('from'))));
 });
 
 test('runtime analytics mock applies AND filters and scopes token usage', async () => {

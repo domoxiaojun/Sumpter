@@ -3,9 +3,9 @@
 // Canonical standalone launcher/installer. Ship copies via sync-client-attribution.mjs.
 import { spawn, execFileSync } from 'node:child_process';
 import { basename, dirname, join, resolve } from 'node:path';
-import { homedir, userInfo } from 'node:os';
+import { homedir, hostname, userInfo } from 'node:os';
 import { randomUUID, createHash } from 'node:crypto';
-import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, realpathSync, statSync, lstatSync, openSync, closeSync, unlinkSync, symlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, realpathSync, statSync, lstatSync, unlinkSync, symlinkSync, readdirSync, rmdirSync, rmSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const clients = ['claude', 'grok', 'gemini', 'codex', 'pi'];
@@ -71,11 +71,17 @@ function parseConfig(text, label) {
 function attributionDir(env) {
   return join(env.XDG_DATA_HOME || join(env.HOME || homedir(), '.local/share'), 'sumpter', 'attribution');
 }
-function proxyOrigin(value) {
+function proxyBaseURL(value, client) {
   try {
+    if (!safe(value) || /[\u0000-\u0020\u007f]/u.test(value)) return undefined;
     const url = new URL(value);
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) return undefined;
-    return url.origin;
+    let path = url.pathname.replace(/\/+$/u, '');
+    // Clients may include their API version suffix in a base URL. Strip only
+    // that final segment, never a deployment's custom mount prefix.
+    const suffix = client === 'gemini' ? /\/(?:v1|v1beta)$/u : /\/v1$/u;
+    if (client) path = path.replace(suffix, '');
+    return url.origin + path;
   } catch { return undefined; }
 }
 /** Independent from restore records. A corrupt policy always stops collection. */
@@ -87,7 +93,7 @@ export function readAttributionPolicy(env = process.env) {
     const value = JSON.parse(read(path));
     if (value.version !== 2 || !/^[a-zA-Z0-9_-]{1,128}$/u.test(value.sourceId || '') || !object(value.clients)) throw new Error('schema');
     for (const [name, entry] of Object.entries(value.clients)) {
-      if (!clients.includes(name) || !object(entry) || typeof entry.enabled !== 'boolean' || !proxyOrigin(entry.proxyURL)) throw new Error('entry');
+      if (!clients.includes(name) || !object(entry) || typeof entry.enabled !== 'boolean' || !proxyBaseURL(entry.proxyURL)) throw new Error('entry');
     }
     return { ...value, exists: true, valid: true };
   } catch { return { exists: true, valid: false, clients: {} }; }
@@ -109,8 +115,8 @@ function readObject(path) {
 // Deliberately narrow: unidentified or overriding client configuration pauses
 // collection instead of changing credentials, selecting a provider, or guessing.
 export function connectionBinding(client, args, env, cwd, expected) {
-  const origin = proxyOrigin(expected);
-  if (!origin) return 'unknown';
+  const target = proxyBaseURL(expected, client);
+  if (!target) return 'unknown';
   try {
     let candidates = [];
     if (client === 'pi') return 'provider_opt_in';
@@ -170,8 +176,8 @@ export function connectionBinding(client, args, env, cwd, expected) {
       }
       candidates = [base];
     }
-    if (!candidates.length || candidates.some(value => !proxyOrigin(value))) return 'unknown';
-    return candidates.every(value => proxyOrigin(value) === origin) ? 'matched' : 'mismatch';
+    if (!candidates.length || candidates.some(value => !proxyBaseURL(value, client))) return 'unknown';
+    return candidates.every(value => proxyBaseURL(value, client) === target) ? 'matched' : 'mismatch';
   } catch { return 'unknown'; }
 }
 function git(cwd, args) {
@@ -538,6 +544,83 @@ function atomic(path, contents, mode = 0o600) {
   try { writeFileSync(temp, contents, { mode, flag: 'wx' }); renameSync(temp, path); }
   finally { if (existsSync(temp)) unlinkSync(temp); }
 }
+
+function processStart(pid) {
+  try {
+    return execFileSync('ps', ['-p', String(pid), '-o', 'lstart='], {
+      encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' }, timeout: 1000,
+      maxBuffer: 256, stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim() || undefined;
+  } catch { return undefined; }
+}
+function lockOwnerAlive(owner) {
+  if (owner.host !== hostname()) return true; // Cannot probe another host's PID.
+  try { process.kill(owner.pid, 0); }
+  catch (error) { return error.code !== 'ESRCH'; }
+  const started = owner.started && processStart(owner.pid);
+  return !started || started === owner.started; // Detect a reused PID when ps is available.
+}
+function releaseInstallLock(lock, ownerFile) {
+  // A unique child name protects a replacement owner even if two recoverers
+  // observed the same dead process. Never recursively remove the shared lock.
+  try { unlinkSync(join(lock, ownerFile)); }
+  catch (error) { if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error; }
+  try { rmdirSync(lock); }
+  catch (error) { if (!['ENOENT', 'ENOTDIR', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) throw error; }
+}
+export function acquireInstallLock(dir) {
+  mkdirSync(dir, { recursive: true });
+  const lock = join(dir, 'install.lock');
+  const token = randomUUID();
+  const ownerFile = `owner-${token}.json`;
+  const pending = join(dir, `.install-lock-${token}`);
+  mkdirSync(pending, { mode: 0o700 });
+  try {
+    writeFileSync(join(pending, ownerFile), JSON.stringify({ version: 1, pid: process.pid,
+      host: hostname(), started: processStart(process.pid), token }), { mode: 0o600 });
+    for (let attempt = 0; attempt < 8; attempt++) {
+      try {
+        // A published lock is always nonempty. POSIX rename cannot replace
+        // another nonempty directory, so owner metadata is visible atomically.
+        renameSync(pending, lock);
+        let released = false;
+        return () => { if (!released) { releaseInstallLock(lock, ownerFile); released = true; } };
+      } catch (error) {
+        if (!['EEXIST', 'ENOTEMPTY', 'ENOTDIR'].includes(error.code)) throw error;
+      }
+      try {
+        const info = lstatSync(lock);
+        if (info.isFile() && info.size === 0) {
+          // The previous installer wrote an empty file. Give an active old
+          // installer a grace period; new locks are recovered by owner, not age.
+          if (Date.now() - info.mtimeMs < 5 * 60_000) throw new Error('旧版归因安装锁尚未过期，请等待 5 分钟后重试。');
+          const current = lstatSync(lock);
+          if (current.isFile() && current.ino === info.ino && current.dev === info.dev
+            && current.mtimeMs === info.mtimeMs && current.size === 0) {
+            try { unlinkSync(lock); }
+            catch (error) { if (!['ENOENT', 'EISDIR', 'EPERM'].includes(error.code)) throw error; }
+          }
+          continue;
+        }
+        if (!info.isDirectory()) throw new Error('归因安装锁格式异常，未修改配置。');
+        const names = readdirSync(lock);
+        if (names.length === 0) continue; // Another owner is finishing cleanup.
+        if (names.length !== 1 || !/^owner-[a-f0-9-]{36}\.json$/u.test(names[0])) throw new Error('归因安装锁持有者信息异常，未修改配置。');
+        const path = join(lock, names[0]);
+        const ownerInfo = lstatSync(path);
+        if (!ownerInfo.isFile() || ownerInfo.size > 4096) throw new Error('归因安装锁持有者信息异常，未修改配置。');
+        const owner = JSON.parse(readFileSync(path, 'utf8'));
+        if (owner.version !== 1 || !Number.isSafeInteger(owner.pid) || owner.pid < 1
+          || typeof owner.host !== 'string' || names[0] !== `owner-${owner.token}.json`) throw new Error('归因安装锁持有者信息异常，未修改配置。');
+        if (lockOwnerAlive(owner)) throw new Error('另一个归因管理进程正在运行，请稍后重试。');
+        releaseInstallLock(lock, names[0]);
+      } catch (error) {
+        if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error;
+      }
+    }
+    throw new Error('归因安装锁正在被其他进程更新，请稍后重试。');
+  } finally { rmSync(pending, { recursive: true, force: true }); }
+}
 function atomicLink(path, target) {
   const temp = `${path}.${randomUUID()}.tmp`;
   try { symlinkSync(target, temp); renameSync(temp, path); }
@@ -659,7 +742,7 @@ function manageShell(action, client, options, env, source, migrateLegacy) {
   const policyBefore = read(policyPath);
   const policyNext = { version: 2, sourceId: policy.sourceId || randomUUID(), clients: { ...policy.clients } };
   const target = options.proxyURL || env.SUMPTER_BASE_URL;
-  if (installing && target && !proxyOrigin(target)) throw new Error('Sumpter 地址必须是无凭据、query、fragment 的 HTTP(S) 地址。');
+  if (installing && target && !proxyBaseURL(target)) throw new Error('Sumpter 地址必须是无凭据、query、fragment 的 HTTP(S) 地址。');
   const original = read(rc);
   let text = original;
   const changes = [];
@@ -743,9 +826,7 @@ function manageShell(action, client, options, env, source, migrateLegacy) {
       proxyURL: (installing && target) || entry?.proxyURL || DEFAULT_PROXY, updatedAt: new Date().toISOString() };
   }
   if (['status', 'snippet'].includes(action) || options.dryRun) return changes.map(({ state, statePath, invalidBackup, ...item }) => item);
-  mkdirSync(dir, { recursive: true });
-  const lock = join(dir, 'install.lock');
-  const descriptor = openSync(lock, 'wx', 0o600);
+  const releaseLock = acquireInstallLock(dir);
   try {
     if (read(rc) !== original || read(policyPath) !== policyBefore) throw new Error('归因配置已被其他进程修改，请重试');
     if (!policy.valid) atomic(`${policyPath}.invalid-${Date.now()}`, policyBefore);
@@ -769,7 +850,7 @@ function manageShell(action, client, options, env, source, migrateLegacy) {
     if (action === 'restore') {
       for (const change of changes) if (change.statePath && existsSync(change.statePath)) unlinkSync(change.statePath);
     }
-  } finally { closeSync(descriptor); unlinkSync(lock); }
+  } finally { releaseLock(); }
   const finalStatuses = manageShell('status', client, options, env, source);
   return finalStatuses.map(item => ({ ...item, action, result: changes.find(change => change.client === item.client)?.status,
     backup: changes.find(change => change.client === item.client)?.backup }));

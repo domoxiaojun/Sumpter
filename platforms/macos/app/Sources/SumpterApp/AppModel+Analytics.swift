@@ -243,10 +243,13 @@ extension AppModel {
 
     // MARK: - Run history (独立于统计快照)
 
-    var runHistoryFilter: AdminWire.RuntimeFilter {
-        return AdminWire.RuntimeFilter(
+    func runHistoryFilter(snapshot: AdminWire.RuntimeFilter? = nil, now: Date = Date(), calendar: Calendar = .autoupdatingCurrent) -> AdminWire.RuntimeFilter {
+        return RunOverviewScope.filter(
             kind: runHistoryKindFilter == "all" ? nil : runHistoryKindFilter,
-            outcome: runHistoryOutcomeFilter.isEmpty ? nil : runHistoryOutcomeFilter
+            outcome: runHistoryOutcomeFilter.isEmpty ? nil : runHistoryOutcomeFilter,
+            snapshot: snapshot,
+            now: now,
+            calendar: calendar
         )
     }
 
@@ -254,14 +257,15 @@ extension AppModel {
     /// 状态不会被这个请求改写；实时 SSE 事件由 OverviewPane 作为独立
     /// overlay 展示，不占持久历史页的名额。
     func refreshRunHistory(resetSnapshot: Bool = false) {
+        advanceRunOverviewDay()
         runHistoryRequestGeneration &+= 1
         let generation = runHistoryRequestGeneration
         runHistoryLoading = true
         runHistoryError = nil
-        let page = resetSnapshot ? 1 : (runHistoryPage?.page ?? 1)
-        let anchor = resetSnapshot ? nil : runHistoryPage
+        let anchor = !resetSnapshot && RunOverviewScope.isCurrent(runHistoryPage?.filters) ? runHistoryPage : nil
+        let page = anchor?.page ?? 1
         let pageSize = runHistoryPageSize
-        let filter = runHistoryFilter
+        let filter = runHistoryFilter(snapshot: anchor?.filters)
         runHistoryTask?.cancel()
         runHistoryTask = Task { [weak self] in
             guard let self else { return }
@@ -287,7 +291,7 @@ extension AppModel {
                     guard self.isRuntimeSnapshotError(error), !resetSnapshot else { throw error }
                     // 事件保留/重置导致旧锚点失效时只恢复一次到第一页。
                     value = try await admin.runtimeEventPage(
-                        page: 1, pageSize: pageSize, filter: filter
+                        page: 1, pageSize: pageSize, filter: self.runHistoryFilter()
                     )
                 }
                 guard generation == self.runHistoryRequestGeneration else { return }
@@ -305,6 +309,9 @@ extension AppModel {
 
     func loadRunHistoryPage(_ page: Int) {
         guard page >= 1, runHistoryPage != nil else { return }
+        guard RunOverviewScope.isCurrent(runHistoryPage?.filters) else {
+            return refreshRunHistory(resetSnapshot: true)
+        }
         if page == 1, runHistoryPage?.page != 1 {
             // Returning from an older page should show the current head, not
             // the stale page-1 slice of an earlier snapshot.
@@ -315,8 +322,8 @@ extension AppModel {
         let generation = runHistoryRequestGeneration
         runHistoryLoading = true
         let pageSize = runHistoryPageSize
-        let filter = runHistoryFilter
         let anchor = runHistoryPage
+        let filter = runHistoryFilter(snapshot: anchor?.filters)
         runHistoryTask?.cancel()
         runHistoryTask = Task { [weak self] in
             guard let self else { return }
@@ -386,11 +393,13 @@ extension AppModel {
 
     // MARK: - Runtime analytics v2
 
-    func runtimeV2Filter(includeLocalProject: Bool = false) -> AdminWire.RuntimeFilter {
-        let localTodayStart = Calendar.autoupdatingCurrent
-            .startOfDay(for: Date())
-            .timeIntervalSinceReferenceDate
-        let base = AdminWire.RuntimeFilter(
+    func runtimeV2Filter(
+        includeLocalProject: Bool = false,
+        snapshot: AdminWire.RuntimeFilter? = nil,
+        now: Date = Date(),
+        calendar: Calendar = .autoupdatingCurrent
+    ) -> AdminWire.RuntimeFilter {
+        var base = AdminWire.RuntimeFilter(
             outcome: runtimeAnalyticsOutcome.isEmpty ? nil : runtimeAnalyticsOutcome,
             requestKind: runtimeAnalyticsRequestKind.isEmpty ? nil : runtimeAnalyticsRequestKind,
             clientKind: runtimeAnalyticsClientKind.isEmpty ? nil : runtimeAnalyticsClientKind,
@@ -408,32 +417,28 @@ extension AppModel {
             sessionID: (runtimeV2SessionID.isEmpty ? runtimeAnalyticsSessionID : runtimeV2SessionID).isEmpty ? nil : (runtimeV2SessionID.isEmpty ? runtimeAnalyticsSessionID : runtimeV2SessionID),
             failureKind: runtimeAnalyticsFailureKind.isEmpty ? nil : runtimeAnalyticsFailureKind,
             failurePhase: runtimeAnalyticsFailurePhase.isEmpty ? nil : runtimeAnalyticsFailurePhase,
-            // “今天” means the local calendar day in the app's timezone. The
-            // daemon receives the lower bound explicitly so its own server
-            // timezone cannot turn this into a rolling 24-hour window.
-            from: runtimeAnalyticsRange == "today" ? localTodayStart : nil
+            from: AdminWire.RuntimeFilter.rangeStart(runtimeAnalyticsRange, now: now, calendar: calendar)
         )
+        if let snapshot {
+            base.from = snapshot.from
+            base.to = snapshot.to
+        }
         guard includeLocalProject,
               !runtimeLocalProjectID.isEmpty || !runtimeLocalProjectName.isEmpty || !runtimeLocalSessionID.isEmpty else {
             return base
         }
-        return AdminWire.RuntimeFilter(
-            outcome: base.outcome,
-            clientKind: base.clientKind,
-            requestPurpose: base.requestPurpose,
-            endpointID: base.endpointID,
-            model: base.model,
-            // The synthetic unidentified row has no project_id column; use
-            // its display-name predicate instead of asking SQLite for the
-            // literal key "unidentified_project".
-            projectID: runtimeLocalProjectID == "unidentified_project" ? nil : (runtimeLocalProjectID.isEmpty ? base.projectID : runtimeLocalProjectID),
-            project: runtimeLocalProjectID == "unidentified_project" ? runtimeLocalProjectName : (runtimeLocalProjectName.isEmpty ? base.project : runtimeLocalProjectName),
-            sessionID: runtimeLocalSessionID.isEmpty ? base.sessionID : runtimeLocalSessionID,
-            failureKind: base.failureKind,
-            failurePhase: base.failurePhase,
-            from: base.from,
-            to: base.to
-        )
+        // Override only the local selection. All agent/request filters survive.
+        // Stable IDs do not also require a historical display name to match.
+        if !runtimeLocalProjectID.isEmpty {
+            let unidentified = runtimeLocalProjectID == "unidentified_project"
+            base.projectID = unidentified ? nil : runtimeLocalProjectID
+            base.project = unidentified ? runtimeLocalProjectName : nil
+        } else if !runtimeLocalProjectName.isEmpty {
+            base.projectID = nil
+            base.project = runtimeLocalProjectName
+        }
+        if !runtimeLocalSessionID.isEmpty { base.sessionID = runtimeLocalSessionID }
+        return base
     }
 
     /// Starts a stable v2 snapshot load. The first page establishes the
@@ -530,7 +535,7 @@ extension AppModel {
             if runtimeHistoryLoading { runtimeHistoryLoading = false }
             let snapshot = page.snapshotSeq
             let historyGeneration = page.historyGeneration
-            let filter = runtimeV2Filter()
+            let filter = runtimeV2Filter(snapshot: page.filters)
             let board = statisticsBoard
 
             // These reads use separate read-only SQLite connections in the
@@ -648,7 +653,7 @@ extension AppModel {
                 snapshotSeq: anchor?.snapshotSeq,
                         snapshotChangeSeq: anchor?.snapshotChangeSeq,
                 historyGeneration: anchor?.historyGeneration,
-                filter: runtimeV2Filter()
+                filter: runtimeV2Filter(snapshot: anchor?.filters)
             )
         } catch {
             if retrySnapshot, isRuntimeSnapshotError(error) {
@@ -922,7 +927,7 @@ extension AppModel {
         let sort = runtimeDimensionSort
         let order = runtimeDimensionOrder
         let pageSize = runtimeDimensionPageSize
-        let filter = runtimeV2Filter()
+        let filter = runtimeV2Filter(snapshot: anchor.filters)
         runtimeDimensionTask?.cancel()
         runtimeDimensionTask = Task { [weak self] in
             guard let self else { return }
@@ -972,9 +977,9 @@ extension AppModel {
         runtimeDimensionRequestGeneration &+= 1
         let generation = runtimeDimensionRequestGeneration
         let snapshotGeneration = runtimeV2RequestGeneration
-        let filter = runtimeV2Filter()
-        let sessionFilter = runtimeV2Filter(includeLocalProject: true)
-        let modelFilter = runtimeV2Filter(includeLocalProject: true)
+        let filter = runtimeV2Filter(snapshot: anchor.filters)
+        let sessionFilter = runtimeV2Filter(includeLocalProject: true, snapshot: anchor.filters)
+        let modelFilter = runtimeV2Filter(includeLocalProject: true, snapshot: anchor.filters)
         runtimeDimensionsLoading = true
         let endpointPageSize = runtimeEndpointPageSize
         let projectPageSize = runtimeProjectPageSize
@@ -1100,7 +1105,7 @@ extension AppModel {
                     snapshotSeq: anchor.snapshotSeq,
                     snapshotChangeSeq: anchor.snapshotChangeSeq,
                     historyGeneration: anchor.historyGeneration,
-                    filter: self.runtimeV2Filter()
+                    filter: self.runtimeV2Filter(snapshot: anchor.filters)
                 )
                 guard generation == self.runtimeErrorPageRequestGeneration,
                       snapshotGeneration == self.runtimeV2RequestGeneration else { return }
@@ -1270,28 +1275,28 @@ extension AppModel {
                         kind: "endpoint", page: page, pageSize: pageSize, search: search,
                         sort: sort, order: order, snapshotSeq: anchor.snapshotSeq,
                     snapshotChangeSeq: anchor.snapshotChangeSeq,
-                        historyGeneration: anchor.historyGeneration, filter: self.runtimeV2Filter()
+                        historyGeneration: anchor.historyGeneration, filter: self.runtimeV2Filter(snapshot: anchor.filters)
                     )
                 } else if kind == .project {
                     value = try await admin.runtimeProjects(
                         page: page, pageSize: pageSize, search: search, sort: sort,
                         order: self.runtimeProjectOrder, snapshotSeq: anchor.snapshotSeq,
                     snapshotChangeSeq: anchor.snapshotChangeSeq,
-                        historyGeneration: anchor.historyGeneration, filter: self.runtimeV2Filter()
+                        historyGeneration: anchor.historyGeneration, filter: self.runtimeV2Filter(snapshot: anchor.filters)
                     )
                 } else if kind == .session {
                     value = try await admin.runtimeSessions(
                         page: page, pageSize: pageSize, search: search, sort: sort,
                         order: self.runtimeSessionOrder, snapshotSeq: anchor.snapshotSeq,
                     snapshotChangeSeq: anchor.snapshotChangeSeq,
-                        historyGeneration: anchor.historyGeneration, filter: self.runtimeV2Filter(includeLocalProject: true)
+                        historyGeneration: anchor.historyGeneration, filter: self.runtimeV2Filter(includeLocalProject: true, snapshot: anchor.filters)
                     )
                 } else {
                     value = try await admin.runtimeDimensions(
                         kind: "model", page: page, pageSize: pageSize, search: search,
                         sort: sort, order: order, snapshotSeq: anchor.snapshotSeq,
                     snapshotChangeSeq: anchor.snapshotChangeSeq,
-                        historyGeneration: anchor.historyGeneration, filter: self.runtimeV2Filter(includeLocalProject: true)
+                        historyGeneration: anchor.historyGeneration, filter: self.runtimeV2Filter(includeLocalProject: true, snapshot: anchor.filters)
                     )
                 }
                 guard generation == self.runtimeDimensionRequestGeneration,
@@ -1429,7 +1434,7 @@ extension AppModel {
                     snapshotSeq: anchor?.snapshotSeq,
                         snapshotChangeSeq: anchor?.snapshotChangeSeq,
                     historyGeneration: anchor?.historyGeneration,
-                    filter: self.runtimeV2Filter()
+                    filter: self.runtimeV2Filter(snapshot: anchor?.filters)
                 )
                 guard !Task.isCancelled,
                       generation == self.runtimeExportEstimateRequestGeneration,
@@ -1475,7 +1480,7 @@ extension AppModel {
                     snapshotSeq: anchor?.snapshotSeq,
                         snapshotChangeSeq: anchor?.snapshotChangeSeq,
                     historyGeneration: anchor?.historyGeneration,
-                    filter: self.runtimeV2Filter()
+                    filter: self.runtimeV2Filter(snapshot: anchor?.filters)
                 )
                 guard generation == self.runtimeExportRequestGeneration else { return }
                 self.flash("运行统计导出完成")

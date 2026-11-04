@@ -1,14 +1,26 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { copyWithToast } from '../utils/clipboard.js';
 import { useApp } from '../context/AppContext.jsx';
 import { formatTimestamp } from '../utils/helpers.js';
-import { attributionCommand, latestCollectorEvidence } from '../utils/clientAttribution.js';
+import { api } from '../services/api.js';
+import { attributionCommand, defaultAttributionProxyURL, latestCollectorEvidence } from '../utils/clientAttribution.js';
 
 export function UnifiedAttributionPanel() {
-  const { runtime } = useApp();
+  const { runtime, config, status } = useApp();
   const [client, setClient] = useState('claude');
   const [shell, setShell] = useState('bash');
-  const [proxyURL, setProxyURL] = useState(() => window.location.origin);
+  const [proxyOverride, setProxyURL] = useState(null);
+  const [diagnostics, setDiagnostics] = useState(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    api.getDiagnostics({ signal: controller.signal }).then(value => {
+      if (!controller.signal.aborted) setDiagnostics(value);
+    }).catch(() => {});
+    return () => controller.abort();
+  }, []);
+  const proxyURL = proxyOverride ?? defaultAttributionProxyURL(
+    window.location.href, status?.listener || config?.listener, diagnostics?.adminListener,
+  );
   const [feedback, setFeedback] = useState('');
   const evidence = latestCollectorEvidence(runtime?.recentEvents, client);
   function commandRow(label, action) {
@@ -34,7 +46,7 @@ export function UnifiedAttributionPanel() {
       </select></label>
     </div>
     <label>绑定的 Sumpter 地址 <input className="form-input" value={proxyURL} onChange={e => setProxyURL(e.target.value)} placeholder="http://127.0.0.1:57878" /></label>
-    <p>请核对客户端实际连接地址，远程电脑不能使用服务器的 127.0.0.1。地址不匹配或无法确认时跳过补充采集；pi 以 provider 的显式标记为准。</p>
+    <p>直连管理页时按代理监听端口预填。经 HTTPS 或路径反向代理访问时，请填写客户端实际使用的地址及路径；远程电脑不能使用服务器的 127.0.0.1。地址不匹配或无法确认时跳过补充采集；pi 以 provider 的显式标记为准。</p>
     <div className="attribution-code" aria-label="下载安装命令">
       <pre><code>{"curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/setup-client-attribution.sh"}</code></pre>
     </div>
