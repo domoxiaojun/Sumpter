@@ -334,7 +334,17 @@ public struct CodexCompactionMetadata: Codable, Equatable, Sendable {
 /// 给 Claude Code 之类不上行 workspace 结构的客户端补项目维度用。可信度低于
 /// `CodexMetadata`：值是客户端自称的，daemon 侧归因时排在 Codex workspace 之后。
 /// 路径已由 daemon 脱敏到尾两段，不含完整绝对路径。
+public struct WorkspaceIdentity: Codable, Equatable, Sendable {
+    public var version: Int
+    public var key: String
+    public var name: String
+    public var scoped: Bool
+}
+
 public struct ClientDeclaredMetadata: Codable, Equatable, Sendable {
+    public var workspaceIdentity: WorkspaceIdentity?
+    public var sourceId: String?
+    public var collectorVersion: String?
     public var agentRole: String?
     public var agentName: String?
     public var project: String?
@@ -356,7 +366,10 @@ public struct ClientDeclaredMetadata: Codable, Equatable, Sendable {
         sourceWorkspace: String? = nil,
         sourceUser: String? = nil,
         agentRole: String? = nil,
-        agentName: String? = nil
+        agentName: String? = nil,
+        workspaceIdentity: WorkspaceIdentity? = nil,
+        sourceId: String? = nil,
+        collectorVersion: String? = nil
     ) {
         self.project = project
         self.workspace = workspace
@@ -367,12 +380,16 @@ public struct ClientDeclaredMetadata: Codable, Equatable, Sendable {
         self.sourceUser = sourceUser
         self.agentRole = agentRole
         self.agentName = agentName
+        self.workspaceIdentity = workspaceIdentity
+        self.sourceId = sourceId
+        self.collectorVersion = collectorVersion
     }
 
     public var isEmpty: Bool {
         project == nil && workspace == nil && gitRemote == nil && user == nil
             && sourceProject == nil && sourceWorkspace == nil && sourceUser == nil
             && agentRole == nil && agentName == nil
+            && workspaceIdentity == nil && sourceId == nil && collectorVersion == nil
     }
 }
 
@@ -446,6 +463,7 @@ public struct GrokMetadata: Codable, Equatable, Sendable {
 }
 
 public struct CodexMetadata: Codable, Equatable, Sendable {
+    public var workspaceIdentity: WorkspaceIdentity?
     public var installationID: String?
     /// Unprojected, bounded installation ID kept for local session review.
     public var sourceInstallationID: String?
@@ -496,6 +514,7 @@ public struct CodexMetadata: Codable, Equatable, Sendable {
     public var isSubagent: Bool
 
     private enum CodingKeys: String, CodingKey {
+        case workspaceIdentity
         case installationID, sourceInstallationID, sessionID, threadID, agentName, turnID, windowID, windowNumber, contextWindowID, requestKind, historyInitialization, analyticsEnabled, mcpAttribution
         case forkedFromThreadID, forkedFromOrdinalExclusive, parentThreadID, parentTurnID, rootTurnID
         case subagentHeader, subagentKind, threadSource, turnTrigger, sandbox, sandboxMode
@@ -508,6 +527,7 @@ public struct CodexMetadata: Codable, Equatable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        workspaceIdentity = try c.decodeIfPresent(WorkspaceIdentity.self, forKey: .workspaceIdentity)
         installationID = try c.decodeIfPresent(String.self, forKey: .installationID)
         sourceInstallationID = try c.decodeIfPresent(String.self, forKey: .sourceInstallationID)
         sessionID = try c.decodeIfPresent(String.self, forKey: .sessionID)
@@ -558,6 +578,7 @@ public struct CodexMetadata: Codable, Equatable, Sendable {
 
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(workspaceIdentity, forKey: .workspaceIdentity)
         try c.encodeIfPresent(installationID, forKey: .installationID)
         try c.encodeIfPresent(sourceInstallationID, forKey: .sourceInstallationID)
         try c.encodeIfPresent(sessionID, forKey: .sessionID)

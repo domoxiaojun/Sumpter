@@ -324,28 +324,43 @@ function LoadingLine({ text = '读取中…' }) {
   return <div className="runtime-v2-loading" role="status" aria-live="polite"><span className="loading-dot" />{text}</div>;
 }
 
-function Metric({ label, value, detail, tone = '', accent = 'var(--primary)' }) {
+function Metric({ label, value, detail, tone = '', accent = 'var(--primary)', progress = null }) {
+  const clamped = progress == null || !Number.isFinite(Number(progress))
+    ? null
+    : Math.max(0, Math.min(100, Number(progress)));
   return (
     <div className="runtime-v2-metric" style={{ '--card-accent': accent }}>
       <span>{label}</span>
       <strong className={`mono-cell ${tone}`}>{value}</strong>
+      {clamped != null && (
+        <span className="runtime-v2-metric-bar" aria-hidden="true">
+          <i style={{ width: `${clamped.toFixed(1)}%` }} />
+        </span>
+      )}
       {detail && <small>{detail}</small>}
     </div>
   );
 }
 
-function chartPoints(points, valueForPoint, width = 760, height = 220, padding = 26) {
-  if (!points?.length) return '';
-  const values = points.map((point) => Math.max(0, safeNumber(valueForPoint(point))));
-  const max = Math.max(1, ...values);
-  const innerWidth = width - padding * 2;
-  const innerHeight = height - padding * 2;
-  return values.map((value, index) => {
-    const x = padding + (points.length === 1 ? innerWidth / 2 : (index / (points.length - 1)) * innerWidth);
-    const y = height - padding - (value / max) * innerHeight;
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  }).join(' ');
-}
+const OVERVIEW_TREND_PILLS = [
+  ['clientRequests', '客户端请求'],
+  ['successRate', '成功率'],
+  ['ttfbAverage', '平均首字节'],
+  ['durationAverage', '平均完成耗时'],
+  ['outputSpeed', '输出速度'],
+  ['outputTokens', '输出 Token'],
+  ['cacheTokenRate', '缓存读占比'],
+  ['estimatedCost', '估算成本'],
+];
+
+const NON_ZERO_EMPTY_METRICS = new Set([
+  'successRate',
+  'failureRate',
+  'ttfbAverage',
+  'durationAverage',
+  'outputSpeed',
+  'cacheTokenRate',
+]);
 
 function trendMetricValue(point, metric) {
   const completed = safeNumber(point?.clientSuccesses) + safeNumber(point?.clientFailures) + safeNumber(point?.clientCancelled);
@@ -390,29 +405,119 @@ function formatTrendValue(value, metric) {
 }
 
 function TrendChart({ points, metric = 'clientRequests' }) {
+  const [hoveredIndex, setHoveredIndex] = useState(null);
   const width = 760;
-  const height = 220;
-  const values = (points || []).map((point) => trendMetricValue(point, metric));
-  const line = chartPoints(points, (point) => trendMetricValue(point, metric), width, height);
-  const maxValue = Math.max(1, ...values.filter((value) => Number.isFinite(Number(value))).map(Number));
-  const latest = points?.at(-1);
+  const height = 228;
+  const padLeft = 56;
+  const padRight = 22;
+  const padTop = 20;
+  const padBottom = 30;
+  const innerWidth = width - padLeft - padRight;
+  const innerHeight = height - padTop - padBottom;
+  const baselineY = padTop + innerHeight;
+  const keepNullForEmptyBucket = NON_ZERO_EMPTY_METRICS.has(metric);
+
+  const rawList = points || [];
+  const series = rawList.map((point, index) => {
+    const rawValue = trendMetricValue(point, metric);
+    const hasValue = rawValue != null && Number.isFinite(Number(rawValue));
+    const value = hasValue ? Math.max(0, Number(rawValue)) : (keepNullForEmptyBucket ? null : 0);
+    return { point, index, rawValue, hasValue, value };
+  });
+
+  const validValues = series.filter((item) => item.value != null).map((item) => item.value);
+  const maxValue = Math.max(1, ...validValues);
+
+  const plotted = series.map((item, index) => {
+    const x = padLeft + (rawList.length <= 1 ? innerWidth / 2 : (index / (rawList.length - 1)) * innerWidth);
+    const y = item.value == null ? null : baselineY - (item.value / maxValue) * innerHeight;
+    return { ...item, x, y };
+  });
+
+  const validPlotted = plotted.filter((item) => item.y != null);
+  const line = validPlotted.map((item) => `${item.x.toFixed(1)},${item.y.toFixed(1)}`).join(' ');
+  const areaPath = validPlotted.length >= 2
+    ? `M ${validPlotted[0].x.toFixed(1)} ${baselineY.toFixed(1)} `
+      + validPlotted.map((item) => `L ${item.x.toFixed(1)} ${item.y.toFixed(1)}`).join(' ')
+      + ` L ${validPlotted[validPlotted.length - 1].x.toFixed(1)} ${baselineY.toFixed(1)} Z`
+    : '';
+
+  const latest = rawList.at(-1);
+  const activeItem = (hoveredIndex != null && plotted[hoveredIndex])
+    ? plotted[hoveredIndex]
+    : (validPlotted.at(-1) || plotted.at(-1) || null);
+  const firstPoint = plotted[0]?.point;
+  const midPoint = plotted[Math.floor(plotted.length / 2)]?.point;
+  const lastPoint = plotted.at(-1)?.point;
+
   return (
     <div className="runtime-v2-chart-wrap">
       <div className="runtime-v2-chart-legend" aria-label="趋势图图例">
         <span><i className="runtime-v2-legend-line runtime-v2-legend-request" />{trendMetricLabel(metric)}</span>
-        <span className="runtime-v2-chart-scale">峰值 {formatTrendValue(maxValue, metric)} / 桶</span>
+        <div className="runtime-v2-chart-legend-right">
+          {activeItem?.point && (
+            <span className="runtime-v2-chart-readout" aria-live="polite">
+              <small>{formatTimestamp(activeItem.point.bucketStart, { smartDate: true })}</small>
+              <strong>{formatTrendValue(activeItem.value ?? activeItem.rawValue, metric)}</strong>
+            </span>
+          )}
+          <span className="runtime-v2-chart-scale">峰值 {formatTrendValue(maxValue, metric)} / 桶</span>
+        </div>
       </div>
       <svg
         className="runtime-v2-chart"
         viewBox={`0 0 ${width} ${height}`}
         role="img"
         aria-label={`趋势图：${trendMetricLabel(metric)}，共 ${numberWithComma(points?.length || 0)} 个时间桶，最近桶 ${formatTrendValue(trendMetricValue(latest, metric), metric)}`}
+        onMouseLeave={() => setHoveredIndex(null)}
       >
-        {[0, 1, 2, 3].map((line) => {
-          const y = 26 + line * ((height - 52) / 3);
-          return <line key={line} x1="26" x2="734" y1={y} y2={y} className="runtime-v2-chart-grid" />;
+        <defs>
+          <linearGradient id="runtime-v2-trend-area-gradient" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="var(--primary)" stopOpacity="0.26" />
+            <stop offset="100%" stopColor="var(--primary)" stopOpacity="0.01" />
+          </linearGradient>
+        </defs>
+        {[0, 0.5, 1].map((ratio) => {
+          const y = baselineY - ratio * innerHeight;
+          const labelValue = maxValue * ratio;
+          return (
+            <g key={ratio}>
+              <line x1={padLeft} x2={width - padRight} y1={y} y2={y} className="runtime-v2-chart-grid" />
+              <text x={padLeft - 8} y={y + 4} textAnchor="end" className="runtime-v2-chart-axis-text">
+                {formatTrendValue(labelValue, metric)}
+              </text>
+            </g>
+          );
         })}
-        <polyline points={line} className="runtime-v2-chart-request" />
+        {areaPath && <path d={areaPath} className="runtime-v2-chart-area" fill="url(#runtime-v2-trend-area-gradient)" />}
+        {line && <polyline points={line} className="runtime-v2-chart-request" />}
+        {validPlotted.map((item) => (
+          <circle
+            key={`${item.point.bucketStart}-${item.index}`}
+            cx={item.x}
+            cy={item.y}
+            r={hoveredIndex === item.index ? 4.8 : 3}
+            className={`runtime-v2-chart-point${hoveredIndex === item.index ? ' is-active' : ''}`}
+            onMouseEnter={() => setHoveredIndex(item.index)}
+          >
+            <title>{`${dateLabel(item.point.bucketStart)} · ${formatTrendValue(item.value ?? item.rawValue, metric)}`}</title>
+          </circle>
+        ))}
+        {firstPoint && (
+          <text x={padLeft} y={height - 8} textAnchor="start" className="runtime-v2-chart-axis-text">
+            {formatTimestamp(firstPoint.bucketStart, { smartDate: true })}
+          </text>
+        )}
+        {midPoint && plotted.length > 2 && (
+          <text x={padLeft + innerWidth / 2} y={height - 8} textAnchor="middle" className="runtime-v2-chart-axis-text">
+            {formatTimestamp(midPoint.bucketStart, { smartDate: true })}
+          </text>
+        )}
+        {lastPoint && plotted.length > 1 && (
+          <text x={width - padRight} y={height - 8} textAnchor="end" className="runtime-v2-chart-axis-text">
+            {formatTimestamp(lastPoint.bucketStart, { smartDate: true })}
+          </text>
+        )}
       </svg>
       <details className="runtime-v2-chart-table">
         <summary>显示趋势数据表（键盘和读屏备用）</summary>
@@ -574,6 +679,8 @@ function DimensionTable({ page, loading, onPageChange, onPageSizeChange, onSearc
   useEffect(() => setSearchDraft(page?.search || ''), [page?.search, kind]);
   if (!page) return null;
   const rows = page.rows || [];
+  const maxRequests = Math.max(1, ...rows.map((row) => safeNumber(row.requests)));
+  const maxInputTokens = Math.max(1, ...rows.map((row) => safeNumber(row.inputTokens ?? row.tokens?.inputTokens)));
   // 提示只在项目维度出现:症状("未识别项目"行)就在这张表里。
   const showAttributionHint = kind === 'project'
     && shouldPromptCCAttribution(rows, clientKindFacets);
@@ -581,12 +688,33 @@ function DimensionTable({ page, loading, onPageChange, onPageSizeChange, onSearc
     title: dimensionLabel(kind), key: 'name', type: 'text', minWidth: '230px', sortable: true,
     render: (row) => <div className="runtime-v2-cell-stack"><strong className="runtime-v2-ellipsis" title={row.name}>{dimensionValueLabel(row.name, kind)}</strong><small>{kind === 'project' ? projectClientKindsLabel(row.clientKinds) : (row.source || '—')}</small></div>,
   };
+  const renderRequestSpark = (row, barMod = '') => {
+    const ratio = Math.min(100, Math.round((safeNumber(row.requests) / maxRequests) * 100));
+    return (
+      <div className="runtime-v2-sparkcell">
+        <span className={`runtime-v2-sparkbar${barMod ? ` ${barMod}` : ''}`} style={{ width: `${ratio}%` }} aria-hidden="true" />
+        <span className="mono-cell runtime-v2-sparkvalue">{numberWithComma(row.requests)}</span>
+      </div>
+    );
+  };
   const usageColumns = [
     identityColumn,
-    { title: '请求', key: 'requests', type: 'number', width: '100px', sortable: true, render: (row) => <span className="mono-cell">{numberWithComma(row.requests)}</span> },
+    { title: '请求', key: 'requests', type: 'number', width: '118px', sortable: true, render: (row) => renderRequestSpark(row) },
     { title: '成功率', key: 'success_rate', type: 'number', width: '110px', sortable: true, render: (row) => <span className="mono-cell">{dimensionSuccessRate(row)}</span> },
     { title: '失败', key: 'failures', type: 'number', width: '100px', sortable: true, render: (row) => <span className="mono-cell">{numberWithComma(row.failures)}</span> },
-    { title: '输入 Token', key: 'input_tokens', type: 'number', width: '132px', sortable: true, render: (row) => <span className="mono-cell">{dimensionTokenValue(row, 'inputTokens')}</span> },
+    {
+      title: '输入 Token', key: 'input_tokens', type: 'number', width: '140px', sortable: true,
+      render: (row) => {
+        const val = safeNumber(row.inputTokens ?? row.tokens?.inputTokens);
+        const ratio = Math.min(100, Math.round((val / maxInputTokens) * 100));
+        return (
+          <div className="runtime-v2-sparkcell">
+            <span className="runtime-v2-sparkbar is-token" style={{ width: `${ratio}%` }} aria-hidden="true" />
+            <span className="mono-cell runtime-v2-sparkvalue">{dimensionTokenValue(row, 'inputTokens')}</span>
+          </div>
+        );
+      },
+    },
     { title: '输出 Token', key: 'output_tokens', type: 'number', width: '132px', sortable: true, render: (row) => <span className="mono-cell">{dimensionTokenValue(row, 'outputTokens')}</span> },
     { title: '输出速度', key: 'output_tokens_per_second', type: 'number', width: '132px', sortable: true, render: (row) => <span className="mono-cell">{formatOutputTokensPerSecond(row.outputTokensPerSecond)}</span> },
     { title: '缓存读取', key: 'cache_read', type: 'number', width: '150px', sortable: true, render: (row) => <div className="runtime-v2-usage-cell"><span className="mono-cell">{dimensionTokenValue(row, 'cacheReadInputTokens')}</span><small>Token 读占比 {percent(runtimeCacheRate(row, 'token'))}</small></div> },
@@ -604,7 +732,7 @@ function DimensionTable({ page, loading, onPageChange, onPageSizeChange, onSearc
       title: '估算成本', type: 'number', width: '150px',
       render: (row) => <div className="runtime-v2-usage-cell"><strong className="mono-cell">{dimensionCostValue(row)}</strong><small>{safeNumber(row?.cost?.pricedRequests) > 0 ? `已计价 ${numberWithComma(row.cost.pricedRequests)} 个请求` : '暂无可计价请求'}</small></div>,
     },
-    { title: '请求', key: 'requests', type: 'number', width: '100px', sortable: true, render: (row) => <span className="mono-cell">{numberWithComma(row.requests)}</span> },
+    { title: '请求', key: 'requests', type: 'number', width: '118px', sortable: true, render: (row) => renderRequestSpark(row, 'is-cost') },
     { title: '暂无法计价', type: 'number', width: '132px', render: (row) => <span className="mono-cell">{numberWithComma(unavailableCostRequests(row.cost))}</span> },
     { title: '最近活动', key: 'last_seen', type: 'time', width: '180px', sortable: true, render: (row) => <span className="mono-cell">{dateLabel(row.lastSeen)}</span> },
   ];
@@ -943,6 +1071,45 @@ function TrendPanel({ trend, legacyAnalytics, loading, error, onRetry }) {
 // memoizing it keeps those unrelated updates from rebuilding the SVG/table.
 const MemoizedTrendPanel = React.memo(TrendPanel);
 
+function DrilldownContextBar({ selectedProject, selectedSession, onClearProject, onClearSession }) {
+  if (!selectedProject && !selectedSession) return null;
+  return (
+    <div className="runtime-v2-drilldown-bar" role="status" aria-label="下钻筛选路径">
+      <div className="runtime-v2-drilldown-crumbs">
+        <span className="runtime-v2-drilldown-root">全部维度</span>
+        {selectedProject && (
+          <>
+            <span className="runtime-v2-drilldown-sep" aria-hidden="true">/</span>
+            <span className="runtime-v2-drilldown-pill">
+              <small>项目</small>
+              <strong>{selectedProject.name}</strong>
+              <button type="button" className="runtime-v2-drilldown-clear" onClick={onClearProject} aria-label="清除项目下钻">×</button>
+            </span>
+          </>
+        )}
+        {selectedSession && (
+          <>
+            <span className="runtime-v2-drilldown-sep" aria-hidden="true">/</span>
+            <span className="runtime-v2-drilldown-pill is-session">
+              <small>会话</small>
+              <strong>{selectedSession.name}</strong>
+              <button type="button" className="runtime-v2-drilldown-clear" onClick={onClearSession} aria-label="清除会话下钻">×</button>
+            </span>
+          </>
+        )}
+      </div>
+      <div className="runtime-v2-drilldown-actions">
+        {selectedSession && (
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onClearSession}>返回全部会话</button>
+        )}
+        {selectedProject && (
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onClearProject}>重置下钻</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function OverviewPanel({
   trend,
   legacyAnalytics,
@@ -980,6 +1147,8 @@ function OverviewPanel({
   onClearProject,
   onClearSession,
 }) {
+  const [overviewMetric, setOverviewMetric] = useState('clientRequests');
+  const [dimensionFocus, setDimensionFocus] = useState('all');
   const effectiveStorage = storage
     ? {
         ...storage,
@@ -995,10 +1164,12 @@ function OverviewPanel({
     : summaryStorage;
   const totals = trend?.totals || legacyTrendTotals(legacyAnalytics);
   const completed = totals ? safeNumber(totals.clientSuccesses) + safeNumber(totals.clientFailures) + safeNumber(totals.clientCancelled) : 0;
+  const successRatePct = completed > 0 ? (safeNumber(totals?.clientSuccesses) / completed) * 100 : null;
   const failoverRequests = totals?.failovers ?? null;
   const duration = totals?.durationMS || {};
   const ttfb = totals?.ttfbMS || {};
   const tokens = mergeDefined(analyticsTokenUsage(legacyAnalytics), totals?.tokens);
+  const visibleDimensions = USAGE_DIMENSION_META.filter(([kind]) => dimensionFocus === 'all' || dimensionFocus === kind);
   return (
     <section className="runtime-v2-panel runtime-v2-overview-panel" aria-labelledby="runtime-v3-overview-heading">
       <div className="runtime-v2-panel-header">
@@ -1009,6 +1180,57 @@ function OverviewPanel({
         <span className="runtime-v2-panel-kicker">入口 · 项目 · 会话</span>
       </div>
       <PanelMessage error={error} onRetry={onRetry} />
+      {loading && !totals && <LoadingLine text="正在读取概览快照…" />}
+      {totals && (
+        <>
+          <div className="runtime-v2-overview-block runtime-v2-overview-request-block">
+            <div className="runtime-v2-overview-block-heading">
+              <h3>核心指标</h3>
+              <span>当前范围</span>
+            </div>
+            <div className="runtime-v2-overview-health-grid">
+              <Metric label="请求" value={numberWithComma(totals.clientRequests)} detail={`已完成 ${numberWithComma(completed)} · 待定 ${numberWithComma(totals.clientUnknownResults)}`} accent="var(--primary)" />
+              <Metric label="成功率" value={percentFromCount(totals.clientSuccesses, completed)} detail={`成功 ${numberWithComma(totals.clientSuccesses)} · 失败 ${numberWithComma(totals.clientFailures)} · 取消 ${numberWithComma(totals.clientCancelled)}`} accent="var(--status-good)" progress={successRatePct} />
+              <Metric label="平均首字节" value={formatDuration(latencyAverage(ttfb))} detail="首次响应平均耗时" accent="var(--accent-cyan)" />
+              <Metric label="平均完成耗时" value={formatDuration(latencyAverage(duration))} detail="请求完成平均耗时" accent="var(--accent-indigo)" />
+              <Metric label="输出速度" value={formatOutputTokensPerSecond(totals.outputTokensPerSecond)} detail={outputSpeedDetail(totals.outputSpeedRequests)} accent="var(--accent-indigo)" />
+              <Metric label="故障转移" value={optionalNumberWithComma(failoverRequests)} detail="发生入口切换的请求" tone="runtime-v2-warning" accent="var(--status-warning)" />
+            </div>
+          </div>
+          {trend?.points?.length > 0 && (
+            <div className="runtime-v2-overview-trend-card">
+              <div className="runtime-v2-overview-trend-header">
+                <div className="runtime-v2-overview-trend-title">
+                  <h3>趋势脉搏快览</h3>
+                  <span>按时间桶实时追踪请求规模、延迟、速率与成本走向</span>
+                </div>
+                <div className="runtime-v2-metric-pills" role="group" aria-label="概览趋势指标切换">
+                  {OVERVIEW_TREND_PILLS.map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      className={`runtime-v2-metric-pill${overviewMetric === key ? ' is-active' : ''}`}
+                      aria-pressed={overviewMetric === key}
+                      onClick={() => setOverviewMetric(key)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <TrendChart points={trend.points} metric={overviewMetric} />
+            </div>
+          )}
+          <div className="runtime-v2-overview-block runtime-v2-overview-token-section">
+            <div className="runtime-v2-overview-block-heading">
+              <h3>Token 与缓存</h3>
+              <span>缓存读取下方显示缓存读取命中率</span>
+            </div>
+            <TokenCoreGrid tokens={tokens} compact cache={trend?.cacheRead} />
+          </div>
+        </>
+      )}
+      {!totals && !loading && <div className="runtime-v2-empty">暂无概览数据</div>}
       <StorageManagementCard
         storage={effectiveStorage}
         retention={storageRetention}
@@ -1028,40 +1250,44 @@ function OverviewPanel({
         onManualCleanup={onManualCleanup}
         onRecreateDatabase={onRecreateDatabase}
       />}
-      {loading && !totals && <LoadingLine text="正在读取概览快照…" />}
-      {totals && (
-        <>
-          <div className="runtime-v2-overview-block runtime-v2-overview-request-block">
-            <div className="runtime-v2-overview-block-heading">
-              <h3>核心指标</h3>
-              <span>当前范围</span>
-            </div>
-            <div className="runtime-v2-overview-health-grid">
-              <Metric label="请求" value={numberWithComma(totals.clientRequests)} detail={`已完成 ${numberWithComma(completed)} · 待定 ${numberWithComma(totals.clientUnknownResults)}`} accent="var(--primary)" />
-              <Metric label="成功率" value={percentFromCount(totals.clientSuccesses, completed)} detail={`成功 ${numberWithComma(totals.clientSuccesses)} · 失败 ${numberWithComma(totals.clientFailures)} · 取消 ${numberWithComma(totals.clientCancelled)}`} accent="var(--status-good)" />
-              <Metric label="平均首字节" value={formatDuration(latencyAverage(ttfb))} detail="首次响应平均耗时" accent="var(--accent-cyan)" />
-              <Metric label="平均完成耗时" value={formatDuration(latencyAverage(duration))} detail="请求完成平均耗时" accent="var(--accent-indigo)" />
-              <Metric label="输出速度" value={formatOutputTokensPerSecond(totals.outputTokensPerSecond)} detail={outputSpeedDetail(totals.outputSpeedRequests)} accent="var(--accent-indigo)" />
-              <Metric label="故障转移" value={optionalNumberWithComma(failoverRequests)} detail="发生入口切换的请求" tone="runtime-v2-warning" accent="var(--status-warning)" />
-            </div>
-          </div>
-          <div className="runtime-v2-overview-block runtime-v2-overview-token-section">
-            <div className="runtime-v2-overview-block-heading">
-              <h3>Token 与缓存</h3>
-              <span>缓存读取下方显示缓存读取命中率</span>
-            </div>
-            <TokenCoreGrid tokens={tokens} compact cache={trend?.cacheRead} />
-          </div>
-        </>
-      )}
-      {!totals && !loading && <div className="runtime-v2-empty">暂无概览数据</div>}
       <div className="runtime-v2-overview-block runtime-v2-overview-usage-block">
-        <div className="runtime-v2-overview-block-heading">
-          <h3>使用明细</h3>
-          <span>项目 / 会话行可钻取模型用量</span>
+        <div className="runtime-v2-overview-usage-toolbar">
+          <div className="runtime-v2-overview-block-heading">
+            <h3>使用明细</h3>
+            <span>项目 / 会话行可钻取模型用量</span>
+          </div>
+          <div className="runtime-v2-dimension-focus-bar" role="group" aria-label="维度视图聚焦">
+            {[
+              ['all', '全部维度'],
+              ['endpoint', '入口'],
+              ['project', '项目'],
+              ['session', '会话'],
+              ['model', '模型'],
+            ].map(([id, label]) => {
+              const totalCount = id === 'all' ? null : usagePages?.[id]?.totalCount;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  className={`runtime-v2-dimension-focus-btn${dimensionFocus === id ? ' is-active' : ''}`}
+                  aria-pressed={dimensionFocus === id}
+                  onClick={() => setDimensionFocus(id)}
+                >
+                  <span>{label}</span>
+                  {totalCount != null && <small className="mono-cell">{numberWithComma(totalCount)}</small>}
+                </button>
+              );
+            })}
+          </div>
         </div>
+        <DrilldownContextBar
+          selectedProject={selectedProject}
+          selectedSession={selectedSession}
+          onClearProject={onClearProject}
+          onClearSession={onClearSession}
+        />
         <div className="runtime-v2-dimension-stack">
-          {USAGE_DIMENSION_META.map(([kind, title]) => (
+          {visibleDimensions.map(([kind, title]) => (
             <DimensionBlock
               key={kind}
               kind={kind}
@@ -1445,19 +1671,74 @@ export function PricingPanel({ pricing, config, endpointID = '', loading, error,
 
 
 
-function CostPanel({ pricing, trend, legacyAnalytics, costPages, costLoading, costErrors, costCallbacks, clientKindFacets, addToast, selectedProject, selectedSession, onProjectSelect, onSessionSelect, onClearProject, onClearSession }) {
+function CostPanel({ pricing, config, pricingLoading, pricingError, onRetryPricing, onSavePricing, trend, legacyAnalytics, costPages, costLoading, costErrors, costCallbacks, clientKindFacets, addToast, selectedProject, selectedSession, onProjectSelect, onSessionSelect, onClearProject, onClearSession }) {
+  const [showPricing, setShowPricing] = useState(false);
+  const [dimensionFocus, setDimensionFocus] = useState('all');
   const totals = trend?.totals || legacyTrendTotals(legacyAnalytics);
   const cost = totals?.cost || {};
+  const unpricedTotal = safeNumber(cost?.unpricedRequests) + safeNumber(cost?.unknownAccountingRequests);
+  const visibleDimensions = USAGE_DIMENSION_META.filter(([kind]) => dimensionFocus === 'all' || dimensionFocus === kind);
   return (
     <section className="runtime-v2-panel runtime-v2-cost-section" aria-labelledby="runtime-v3-cost-heading">
-      <div className="runtime-v2-panel-header"><div><h2 id="runtime-v3-cost-heading">成本</h2><p>按入口、项目、会话和模型查看估算成本。点击项目或会话行，可继续查看对应模型成本。</p></div></div>
+      <div className="runtime-v2-panel-header">
+        <div>
+          <h2 id="runtime-v3-cost-heading">成本</h2>
+          <p>按入口、项目、会话和模型查看估算成本。点击项目或会话行，可继续查看对应模型成本。</p>
+        </div>
+        <div className="page-actions">
+          <div className="runtime-v2-dimension-focus-bar" role="group" aria-label="成本维度视图聚焦">
+            {[
+              ['all', '全部维度'],
+              ['endpoint', '入口'],
+              ['project', '项目'],
+              ['session', '会话'],
+              ['model', '模型'],
+            ].map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                className={`runtime-v2-dimension-focus-btn${dimensionFocus === id ? ' is-active' : ''}`}
+                aria-pressed={dimensionFocus === id}
+                onClick={() => setDimensionFocus(id)}
+              >
+                <span>{label}</span>
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            className={`btn ${showPricing ? 'btn-secondary' : 'btn-primary'} btn-sm`}
+            onClick={() => setShowPricing((current) => !current)}
+            aria-expanded={showPricing}
+          >
+            <Icon name="edit" size={14} />
+            {showPricing ? '收起价格表' : '配置模型价格…'}
+          </button>
+        </div>
+      </div>
       <div className="runtime-v2-metrics-grid runtime-v2-cost-summary">
         <Metric label="估算成本" value={safeNumber(cost?.pricedRequests) > 0 ? formatMoney(cost.estimatedCostMicros, cost.currency || pricing?.currency || 'USD') : '—'} detail={safeNumber(cost?.pricedRequests) > 0 ? `基于 ${numberWithComma(cost.pricedRequests)} 个已计价请求` : '暂无可计价请求'} accent="var(--status-good)" />
         <Metric label="请求" value={optionalNumberWithComma(totals?.clientRequests)} detail="当前筛选范围" accent="var(--primary)" />
-        <Metric label="暂无法计价" value={optionalNumberWithComma(safeNumber(cost?.unpricedRequests) + safeNumber(cost?.unknownAccountingRequests))} detail="缺少价格或完整用量" accent="var(--status-warning)" />
+        <Metric label="暂无法计价" value={optionalNumberWithComma(unpricedTotal)} detail={unpricedTotal > 0 ? '缺少价格或完整用量 · 可在右上角补充模型单价' : '所有已完成请求均已匹配单价'} accent="var(--status-warning)" />
       </div>
+      {showPricing && (
+        <PricingPanel
+          pricing={pricing}
+          config={config}
+          loading={pricingLoading}
+          error={pricingError}
+          onRetry={onRetryPricing}
+          onSave={onSavePricing}
+        />
+      )}
+      <DrilldownContextBar
+        selectedProject={selectedProject}
+        selectedSession={selectedSession}
+        onClearProject={onClearProject}
+        onClearSession={onClearSession}
+      />
       <div className="runtime-v2-cost-dimension-stack">
-        {USAGE_DIMENSION_META.map(([kind, title]) => (
+        {visibleDimensions.map(([kind, title]) => (
           <DimensionBlock
             key={kind}
             kind={kind}
@@ -1967,6 +2248,21 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
       throw error;
     }
   };
+  const savePricing = async (payload) => {
+    setStorageError(null);
+    try {
+      const value = await api.updateRuntimePricing(payload);
+      setPricing(value);
+      addToast?.('模型价格表已更新', 'success');
+      await Promise.allSettled([
+        loadTrends(range),
+        refreshDimensions(['endpoint', 'project', 'session', 'model']),
+      ]);
+    } catch (error) {
+      setStorageError(error);
+      addToast?.(`价格表更新失败：${error.message}`, 'error');
+    }
+  };
   const exportSession = async (sessionID) => {
     const value = String(sessionID || '').trim();
     if (!value) return;
@@ -2172,7 +2468,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
       {section === 'trends' && <section id="analytics-panel-trends" className="runtime-v2-tab-panel" role="tabpanel" aria-labelledby="analytics-tab-trends"><MemoizedTrendPanel trend={trend} legacyAnalytics={legacyAnalytics} loading={trendLoading} error={trendError} onRetry={retryTrends} /></section>}
       {section === 'errors' && <section id="analytics-panel-errors" role="tabpanel" aria-labelledby="analytics-tab-errors" className="runtime-v2-panel"><div className="runtime-v2-panel-header"><div><h2>错误与结构化诊断</h2><p>先看错误分组与样本，再按需展开模型、用途、协议、失败和流终止分组。</p></div></div><PanelMessage error={errorsError} onRetry={() => loadErrors(1)} /><div className="runtime-v2-table-status">{errorsLoading && <LoadingLine text="正在读取错误分组…" />}</div>{errors && <ErrorTable page={errors} loading={errorsLoading} onPageChange={(page) => loadErrors(page)} onPageSizeChange={(size) => changePageSize('errors', size)} onSelectEvent={onSelectEvent} />}<AdvancedDiagnosticsPanel analytics={diagnostics} loading={diagnosticsLoading} error={diagnosticsError} onRetry={loadDiagnostics} /></section>}
       {section === 'tokens' && <section id="analytics-panel-tokens" role="tabpanel" aria-labelledby="analytics-tab-tokens">
-        <CostPanel pricing={pricing} trend={trend} legacyAnalytics={legacyAnalytics} costPages={dimensions} costLoading={dimensionLoading} costErrors={dimensionError} costCallbacks={dimensionCallbacks} clientKindFacets={facets?.clientKinds} addToast={addToast} selectedProject={selectedProject} selectedSession={selectedSession} onProjectSelect={selectProject} onSessionSelect={selectSession} onClearProject={clearSelectedProject} onClearSession={clearSelectedSession} />
+        <CostPanel pricing={pricing} config={config} pricingLoading={storageLoading} pricingError={storageError} onRetryPricing={() => loadStorage({ includeStorage: false, includePricing: true })} onSavePricing={savePricing} trend={trend} legacyAnalytics={legacyAnalytics} costPages={dimensions} costLoading={dimensionLoading} costErrors={dimensionError} costCallbacks={dimensionCallbacks} clientKindFacets={facets?.clientKinds} addToast={addToast} selectedProject={selectedProject} selectedSession={selectedSession} onProjectSelect={selectProject} onSessionSelect={selectSession} onClearProject={clearSelectedProject} onClearSession={clearSelectedSession} />
       </section>}
       {showExport && <section id="analytics-panel-export" className="runtime-v2-panel" aria-label="运行统计导出"><div className="runtime-v2-panel-header"><div><h2>运行统计导出</h2><p>导出当前筛选下的 SQLite 运行统计字段，不包含诊断正文。</p></div><button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowExport(false)}>关闭</button></div><ExportPanel addToast={addToast} filters={activeFilters} /></section>}
     </section>

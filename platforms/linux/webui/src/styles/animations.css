@@ -106,17 +106,33 @@
 
 @keyframes telemetry-live-edge-breathe {
   0%, 100% { opacity: 0.22; }
-  50% { opacity: 0.30; }
+  50% { opacity: 0.46; }
+}
+
+@keyframes telemetry-live-rim-breathe {
+  0%, 100% {
+    border-color: color-mix(in srgb, var(--primary) 24%, var(--border-subtle));
+    box-shadow:
+      inset 0 0 18px -8px color-mix(in srgb, var(--primary) 16%, transparent),
+      0 2px 12px -6px color-mix(in srgb, var(--primary) 10%, transparent);
+  }
+  50% {
+    border-color: color-mix(in srgb, var(--accent-cyan) 44%, color-mix(in srgb, var(--accent-indigo) 36%, var(--border-medium)));
+    box-shadow:
+      inset 0 0 26px -6px color-mix(in srgb, var(--accent-cyan) 22%, transparent),
+      inset 0 0 14px -6px color-mix(in srgb, var(--accent-indigo) 18%, transparent),
+      0 4px 20px -6px color-mix(in srgb, var(--primary) 18%, transparent);
+  }
 }
 
 @keyframes telemetry-live-status-pulse {
   0%, 100% {
-    opacity: 0.62;
-    transform: scale(0.86);
+    opacity: 0.48;
+    transform: scale(0.84);
   }
   50% {
     opacity: 1;
-    transform: scale(1);
+    transform: scale(1.04);
   }
 }
 
@@ -182,7 +198,12 @@
 
 @media (prefers-reduced-motion: reduce) {
   .telemetry-live-light,
+  .telemetry-live-group,
+  .telemetry-live-mobile,
   .telemetry-live-status-dot,
+  .telemetry-live-pill-dot,
+  .telemetry-live-heading i,
+  .telemetry-live-heading-cell i,
   .runtime-row-enter,
   .runtime-stream-indicator,
   .loading-dot,

@@ -8,15 +8,19 @@ import {
   readRuntimeEventPageSize,
   runtimeSnapshotRecoveryMessage,
 } from '../utils/runtimeAnalyticsV2.js';
-import { eventIsInFlight } from '../utils/helpers.js';
+import { eventIsInFlight, eventResultKind } from '../utils/helpers.js';
 import { completedEventsAfterSnapshot, mergeCompletedPage } from '../utils/runtimeEventSnapshot.js';
 
 function eventMatchesKind(event, kind) {
   return !kind || event?.kind === kind;
 }
 
+function eventMatchesOutcome(event, outcome) {
+  return !outcome || eventResultKind(event) === outcome;
+}
+
 export function useRuntimeEventPage({
-  recentEvents = [], eventKind = '', resetGeneration = 0, onRecovered,
+  recentEvents = [], eventKind = '', outcome = '', resetGeneration = 0, onRecovered,
   autoRefresh = true, refreshInterval = 15,
 } = {}) {
   const [page, setPageState] = useState(1);
@@ -32,7 +36,7 @@ export function useRuntimeEventPage({
   const requestGenerationRef = useRef(0);
   const snapshotRef = useRef(null);
   const autoRefreshTimerRef = useRef(null);
-  const queryKey = `${eventKind || 'all'}:${pageSize}:${Number(resetGeneration || 0)}`;
+  const queryKey = `${eventKind || 'all'}:${outcome || 'all'}:${pageSize}:${Number(resetGeneration || 0)}`;
 
   useEffect(() => {
     backgroundRefreshRef.current = false;
@@ -61,6 +65,7 @@ export function useRuntimeEventPage({
         page: useSnapshot ? requestedPage : 1,
         pageSize,
         kind: eventKind || undefined,
+        outcome: outcome || undefined,
         snapshotSeq: useSnapshot ? snapshot?.snapshotSeq : undefined,
         snapshotChangeSeq: useSnapshot ? snapshot?.snapshotChangeSeq : undefined,
         historyGeneration: useSnapshot ? snapshot?.historyGeneration : undefined,
@@ -110,7 +115,7 @@ export function useRuntimeEventPage({
     })();
 
     return () => controller.abort();
-  }, [eventKind, onRecovered, page, pageSize, reloadGeneration, resetGeneration]);
+  }, [eventKind, outcome, onRecovered, page, pageSize, reloadGeneration, resetGeneration]);
 
   const setPage = useCallback((value) => {
     const next = clampRuntimeEventPage(value, result?.totalPages || 1);
@@ -130,18 +135,24 @@ export function useRuntimeEventPage({
   // the persisted page-size contract, otherwise “每页 10 条” can render 11
   // visible table rows when a request is still streaming.
   const liveEvents = useMemo(() => {
-    if (mode === 'page' && page !== 1) return [];
+    if ((mode === 'page' && page !== 1) || outcome) return [];
     return recentEvents.filter((event) => eventMatchesKind(event, eventKind) && eventIsInFlight(event));
-  }, [eventKind, mode, page, recentEvents]);
+  }, [eventKind, outcome, mode, page, recentEvents]);
 
   const persistedEvents = useMemo(() => {
-    const additions = mode === 'page' && page === 1
-      ? completedEventsAfterSnapshot(recentEvents, result, eventKind) : [];
+    const additions = (mode === 'page' && page === 1
+      ? completedEventsAfterSnapshot(recentEvents, result, eventKind) : [])
+      .filter((event) => eventMatchesOutcome(event, outcome));
     const source = mode === 'page'
       ? mergeCompletedPage(result?.events || [], additions, pageSize) : recentEvents;
     const liveIDs = new Set(liveEvents.map((event) => event.id));
-    return source.filter((event) => eventMatchesKind(event, eventKind) && !liveIDs.has(event.id) && !eventIsInFlight(event));
-  }, [eventKind, liveEvents, mode, page, pageSize, recentEvents, result]);
+    return source.filter((event) => (
+      eventMatchesKind(event, eventKind)
+      && eventMatchesOutcome(event, outcome)
+      && !liveIDs.has(event.id)
+      && !eventIsInFlight(event)
+    ));
+  }, [eventKind, outcome, liveEvents, mode, page, pageSize, recentEvents, result]);
 
   const events = useMemo(() => [...liveEvents, ...persistedEvents], [liveEvents, persistedEvents]);
 

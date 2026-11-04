@@ -639,7 +639,10 @@ cargo_build_args=(
   --target "$RUST_TARGET"
   --bin "$SIDECAR_BIN"
 )
-cargo_build_args+=("${CARGO_PROFILE_ARGS[@]}")
+# macOS Bash 3.2 treats an empty array as unset under nounset.
+if [[ ${#CARGO_PROFILE_ARGS[@]} -gt 0 ]]; then
+  cargo_build_args+=("${CARGO_PROFILE_ARGS[@]}")
+fi
 if [[ "$ENGINE_PROFILE" == "unified" && "$SHARED_WORKSPACE" == "0" ]]; then
   cargo_build_args+=(--features unified-engine)
 fi

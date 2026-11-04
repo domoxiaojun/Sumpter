@@ -245,7 +245,8 @@ extension AppModel {
 
     var runHistoryFilter: AdminWire.RuntimeFilter {
         return AdminWire.RuntimeFilter(
-            kind: runHistoryKindFilter == "all" ? nil : runHistoryKindFilter
+            kind: runHistoryKindFilter == "all" ? nil : runHistoryKindFilter,
+            outcome: runHistoryOutcomeFilter.isEmpty ? nil : runHistoryOutcomeFilter
         )
     }
 
@@ -371,6 +372,14 @@ extension AppModel {
         guard ["all", "client", "upstream"].contains(kind) else { return }
         guard runHistoryKindFilter != kind else { return }
         runHistoryKindFilter = kind
+        runHistoryPage = nil
+        refreshRunHistory(resetSnapshot: true)
+    }
+
+    func setRunHistoryOutcomeFilter(_ outcome: String) {
+        guard ["", "succeeded", "failed", "cancelled"].contains(outcome) else { return }
+        guard runHistoryOutcomeFilter != outcome else { return }
+        runHistoryOutcomeFilter = outcome
         runHistoryPage = nil
         refreshRunHistory(resetSnapshot: true)
     }

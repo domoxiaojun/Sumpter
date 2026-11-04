@@ -60,3 +60,70 @@
 - 包装器只声明产品身份。pi 的可选 `requestSource.requestKind` 若由扩展提供则逐请求上报，缺失时保持未知；不假设现有 pi SDK 一定提供该字段。不会给整个启动进程设置固定用途或角色。
 
 仅完成源码和合成合同验证时，不能据此声称所有真实客户端、供应商连接、安装包或生产流量均已验收。
+
+## 包装器与安装维护
+
+统一包装器和旧版 Claude/Grok Shell 入口均在发送前去除 Git remote 的用户信息、query 与 fragment。包装器不修改客户端持久配置。Codex 的配置表采用合并语义，没有删除继承 Header 键的 CLI 操作，因此包装器将已有私有声明值置空、禁用对应环境变量绑定，再填写当前项目字段；空值不会成为服务端归因证据。用户的认证头和其他自定义 Header 保留。现有 Codex CLI 不能安全定位含点号的私有 Header 键，遇到这类配置会明确报错，需先移除该旧声明。
+
+Codex 登录、登出、MCP 管理等非推理命令直接透传。Gemini 兼容 `-r5` 等紧邻短参数，注入的会话参数放在 `--` 之前，不改动其后的提示词。恢复选择器仍由客户端解析，未取得完整会话标识时保持未知。
+
+### 新版首次安装与开关
+
+采集器 bundle 独立版本为 2.0.0，与服务端身份识别规则版本 1 分开。其他电脑未安装过归因脚本时，只需在运行客户端的那台电脑安装一次；不需要迁移旧数据库或先安装旧版。
+
+使用同一发行包中的 setup、launcher 和 Pi 扩展，在客户端主机以普通用户运行：
+
+```sh
+bash setup-client-attribution.sh enable claude --shell zsh --proxy-url http://127.0.0.1:57878
+bash setup-client-attribution.sh status claude --shell zsh
+bash setup-client-attribution.sh disable claude --shell zsh
+```
+
+将客户端名替换为 grok、gemini、codex、pi 或 all。远程客户端必须填写它能访问的 Sumpter 地址。首次启用后新开终端并重启客户端；macOS App 只管理本机，WebUI 提供在客户端电脑执行的命令。
+
+| 操作 | 具体效果 |
+| --- | --- |
+| enable | 安装/更新配套资源并启用所选客户端，可指定绑定地址 |
+| disable | 关闭补充采集，保留现代包装器和备份；清理无法读取新开关的旧 Shell 块 |
+| install | 更新资源；首次安装默认开启，已存在的关闭状态保持关闭 |
+| status | 只读检查配置、开关、配套版本、恢复目标和最近启动记录 |
+| restore | 恢复安装前保存的归因块，可能恢复仍会采集的旧版；绝不当作关闭按钮 |
+| uninstall | 关闭新版补充采集并移除终端注册，备份和私有资源保留 |
+
+开关保存在 XDG_DATA_HOME/sumpter/attribution/collection.json，默认位于 ~/.local/share。这里仅保存匿名来源 ID、开关、绑定地址与更新时间，不保存密钥。关闭对这个用户的同一数据目录生效，跨 bash/zsh 共用。开关文件损坏时停止采集；损坏的备份记录不阻止 status、disable、uninstall，写操作将损坏内容另存保留。恢复损坏备份仍会报错。
+
+已加载的新包装函数每次启动都重新检查开关。运行中的 Claude/Grok/Gemini/Codex 已经取得进程环境，关闭后需重启；Pi 新版钩子每个请求读取开关。已经加载的旧 Shell 函数或旧版客户端进程无法由新管理器撤回环境，需新开终端并重启。关闭不删除历史，也不屏蔽客户端原生身份和工作区信息。
+
+Gemini 的连接准备与归因开关分开：disable 继续使用 SUMPTER_GEMINI_BASE_URL、SUMPTER_AUTH_TOKEN 准备原有 URL/认证，但不追加项目头或 session-id 参数。uninstall 会移除包装函数，因此不再负责 Gemini 的连接准备。
+
+### 连接绑定与已知范围
+
+- Claude：要求环境或用户设置提供连接依据，并且可见的用户/项目 ANTHROPIC_BASE_URL 候选均匹配。仅项目配置不足以证明它已获信任并生效；额外 settings CLI 入口、可见托管文件、云端/宿主管理或其他 provider 开关均跳过补充。参照 [官方设置优先级](https://code.claude.com/docs/en/settings) 和 [环境变量说明](https://code.claude.com/docs/en/env-vars)，这里采取保守检查，不模拟完整运行时配置解析。
+- Codex：支持用户 config.toml 中选中的自定义 provider，以及 -p / --profile、-C / --cd 和简单 model_provider 选择。项目层 provider 或复杂 CLI provider 改写无法确认时跳过补充；不会替用户更换 provider。桌面 App 不会加载终端包装器。
+- Grok：GROK_CONFIG 的 endpoints.xai_api_base_url 与 endpoints.cli_chat_proxy_base_url 都须指向绑定 origin，可见的 model_providers 地址也要匹配。GROK_CONFIG_PATH 及其他未解析来源保持未知。
+- Gemini：核对包装器实际使用的 SUMPTER_GEMINI_BASE_URL。缺少地址/密钥时直接交由客户端处理，不报告已准备采集。
+- Pi：逐请求要求 provider 的 x-sumpter-client: pi 显式标记，不根据 localhost 或模型名猜测。绑定地址字段不替代 provider 标记；该标记表示用户明确选择的归因目的地。
+
+绑定按 HTTP(S) origin（协议、主机、端口）比较，允许 /v1 等不同协议路径；它是补充采集的保守条件，不是鉴权或全功能客户端配置解析器。无法确认不表示客户端绕过 Sumpter。除 Pi 钩子外，检查发生在启动时；运行中更换连接、/cd 或远程托管策略变化无法由启动包装器重新验证，需关闭补充并重启客户端。
+
+### 配套更新与生效证据
+
+任何客户端安装都写入 launcher + Pi 扩展 + manifest 完整资源对，再通过原子的 current 符号链接切换。运行中的模块继续引用旧的配套目录；旧目录保留。版本摘要同时覆盖两份源文件，因此只改 Pi 扩展也能区分版本。缺少或版本标记不匹配的配套文件会在修改终端注册前失败。
+
+状态分成三类证据：
+
+1. 配置：registration、enabled、proxyURL、installedVersion、availableVersion、backupState、restoreTarget。旧版恢复目标明确显示 legacy。
+2. 启动：lastLaunch 中记录准备时的 enabled、binding、collectorVersion、sourceId、startedAt。不记录密钥、路径或提示词；这不是成功启动或已发请求的证明。
+3. 请求：服务端 clientDeclared.sourceId 和 collectorVersion 必须匹配，才表明这个来源的该脚本版本曾被观察到。macOS 从已加载请求匹配；WebUI 显示服务端收到的来源，需要与客户端状态核对。已关闭后仍可能展示之前的请求；缺少已加载记录保持未知。
+
+直接运行仓库 launcher 的 run 子命令可临时使用；若没有 collection.json，仍须满足上述连接绑定。常规使用推荐 enable，以生成稳定来源 ID。资源更新不等于更新已安装的 Sumpter App；只有重建并安装新 App 后，GUI 才使用新的内嵌管理器。仓库未发布的改动也不会自动出现在 GitHub 下载地址。
+
+## 项目身份与历史兼容
+
+新入站请求在路径脱敏前生成 workspaceIdentity：version=2、SHA-256 key、有界显示 name、scoped。规范化完整绝对路径及可用的匿名来源作用域参与散列，多个工作区先排序、去重。显示名最多 128 字节，只用于展示；完整路径不作为列表名称。
+
+例如 /srv/customer-a/apps/api 与 /srv/customer-b/apps/api 均显示 api，但身份不同，不再因为脱敏尾部同为 .../apps/api 而合并。相同路径和来源稳定复用身份；不同来源的同一路径保持分开。来源 ID 缺失时只能按完整路径区分，不能保证不同电脑的同一路径可区分。来源 ID、散列都不构成身份认证或路径保密保证。
+
+Codex 原生工作区优先于 wrapper 声明；原生没有 collector 来源时可用已有安装指纹作为作用域。截断的原生元数据不生成新身份，沿用既有兼容投影。当前是本地工作区分组，不自动把同一 Git remote 的多个副本合并为逻辑仓库。
+
+新字段只在入站时生成。读取旧 JSON、重开 SQLite、筛选和导出不回填新身份，不改历史 payload；因此升级前后的记录可能分属旧、新两个项目组。历史迁移不在本次范围内。所有 X-Sumpter-*（包含 Source-Id、Collector-Version）仍在出站前剥离。

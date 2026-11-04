@@ -1,18 +1,14 @@
-/** SUMPTER_ATTRIBUTION_BUNDLE_VERSION: 0.4.63 */
+/** SUMPTER_ATTRIBUTION_BUNDLE_VERSION: 2.0.0 */
 /** The wrapper loads this extension; each Sumpter provider must opt in explicitly. */
 import { execFile } from "node:child_process";
 import { basename } from "node:path";
 import { userInfo } from "node:os";
 import { promisify } from "node:util";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { collectionState, COLLECTOR_REVISION } from "./client-attribution.mjs";
 
 const exec = promisify(execFile);
-const attributionHeaders = [
-  "x-sumpter-client",
-  "x-sumpter-project", "x-sumpter-workspace", "x-sumpter-user",
-  "x-sumpter-git-remote", "x-sumpter-session-id", "x-sumpter-attribution-encoding",
-  "x-sumpter-agent-role", "x-sumpter-agent-name", "x-sumpter-request-kind", "x-sumpter-client-variant",
-];
+const isAttributionHeader = (name: string): boolean => name.toLowerCase().startsWith("x-sumpter-");
 
 async function git(cwd: string, args: string[]): Promise<string | undefined> {
   try {
@@ -86,9 +82,12 @@ export default function (pi: ExtensionAPI) {
     // Clear previous values including alternate casing; failures must not
     // leave another session's metadata on reused headers.
     for (const name of Object.keys(event.headers)) {
-      if (attributionHeaders.includes(name.toLowerCase())) event.headers[name] = null;
+      if (isAttributionHeader(name)) event.headers[name] = null;
     }
-    if (!providerOptIn) return;
+    const policy = collectionState("pi");
+    if (!providerOptIn || !policy.enabled) return;
+    event.headers["x-sumpter-collector-version"] = COLLECTOR_REVISION;
+    if (policy.sourceId) event.headers["x-sumpter-source-id"] = policy.sourceId;
     const source = (event as typeof event & { requestSource?: { agentRole?: string; agentName?: string; requestKind?: string } }).requestSource;
     const requestKind = source?.requestKind;
     if (requestKind && ["turn", "prewarm", "compaction", "session_title", "memory", "review", "websearch", "webfetch", "classifier", "token_count", "image_generation", "image_edit", "alpha_search", "realtime", "unknown"].includes(requestKind)) {

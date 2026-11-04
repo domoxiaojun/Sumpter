@@ -284,6 +284,7 @@ final class AppModel: ObservableObject {
         didSet { UserDefaults.standard.set(runHistoryPageSize, forKey: runHistoryPageSizeDefaultsKey) }
     }
     @Published var runHistoryKindFilter = "client"
+    @Published var runHistoryOutcomeFilter = ""
     @Published var runHistoryLoading = false
     @Published var runHistoryError: String?
     @Published var runtimeAnalyticsRange = "today"

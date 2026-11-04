@@ -153,15 +153,22 @@ export function formatDuration(ms) {
   return `${hours}h ${mins}m`;
 }
 
-export function formatTimestamp(ts, { date = false } = {}) {
+export function formatTimestamp(ts, { date = false, smartDate = false } = {}) {
   if (!ts) return '-';
   const time = normalizeTimestampMS(ts);
   if (Number.isNaN(time) || time <= 0) return String(ts);
   const d = new Date(time);
   const pad = (n) => String(n).padStart(2, '0');
   const timePart = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-  if (!date) return timePart;
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${timePart}`;
+  if (date) return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${timePart}`;
+  if (smartDate) {
+    const now = new Date();
+    const sameDay = d.getFullYear() === now.getFullYear()
+      && d.getMonth() === now.getMonth()
+      && d.getDate() === now.getDate();
+    if (!sameDay) return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${timePart}`;
+  }
+  return timePart;
 }
 
 // Runtime timestamps are seen in three numeric forms: Apple reference

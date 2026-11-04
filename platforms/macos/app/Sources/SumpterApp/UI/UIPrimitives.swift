@@ -375,56 +375,56 @@ struct SumpterPaginationControls: View {
     private var pageCount: Int { max(1, totalPages) }
 
     var body: some View {
-        HStack(spacing: 6) {
+        SumpterWrappingLayout(horizontalSpacing: 6, verticalSpacing: 6) {
             if !compact {
                 Button("首页") { onPageChange?(1) }
-                    .font(.body.weight(.medium))
-                    .frame(minWidth: 64, minHeight: 48)
+                    .font(.caption.weight(.medium))
+                    .frame(minWidth: 44, minHeight: 28)
                     .disabled(!hasPrevious)
                     .help("跳到第一页")
             }
             Button(compact ? "‹" : "上一页") {
                 onPageChange?(max(1, page - 1))
             }
-            .font(.body.weight(.medium))
-            .frame(minWidth: compact ? 48 : 80, minHeight: 48)
+            .font(.caption.weight(.medium))
+            .frame(minWidth: compact ? 32 : 56, minHeight: 28)
             .disabled(!hasPrevious)
             .help("上一页")
 
-            HStack(spacing: 3) {
+            HStack(spacing: 4) {
                 Text("第")
-                    .font(.callout)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                 TextField("页", text: $pageDraft)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 56)
-                    .frame(minHeight: 38)
+                    .frame(width: 48)
+                    .frame(minHeight: 28)
                     .multilineTextAlignment(.center)
-                    .font(.callout.monospacedDigit())
+                    .font(.caption.monospacedDigit())
                     .onSubmit(jumpToDraft)
                     .accessibilityLabel("页码")
                 Text("/ \(pageCount)")
-                    .font(.callout.monospacedDigit())
+                    .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
             Button("跳转", action: jumpToDraft)
-                .font(.body.weight(.medium))
-                .frame(minWidth: 64, minHeight: 48)
-                .controlSize(.regular)
+                .font(.caption.weight(.medium))
+                .frame(minWidth: 44, minHeight: 28)
+                .controlSize(.small)
                 .disabled(totalPages == 0)
                 .help("跳转到输入的页码")
 
             Button(compact ? "›" : "下一页") {
                 onPageChange?(min(pageCount, page + 1))
             }
-            .font(.body.weight(.medium))
-            .frame(minWidth: compact ? 48 : 80, minHeight: 48)
+            .font(.caption.weight(.medium))
+            .frame(minWidth: compact ? 32 : 56, minHeight: 28)
             .disabled(!hasNext)
             .help("下一页")
             if !compact {
                 Button("末页") { onPageChange?(pageCount) }
-                    .font(.body.weight(.medium))
-                    .frame(minWidth: 64, minHeight: 48)
+                    .font(.caption.weight(.medium))
+                    .frame(minWidth: 44, minHeight: 28)
                     .disabled(!hasNext)
                     .help("跳到最后一页")
             }
@@ -441,22 +441,20 @@ struct SumpterPaginationControls: View {
                     }
                     .pickerStyle(.menu)
                     .labelsHidden()
-                    .font(.body.weight(.medium))
-                    .frame(minWidth: compact ? 112 : 124, minHeight: 48)
+                    .font(.caption.weight(.medium))
+                    .frame(minWidth: compact ? 98 : 108, minHeight: 28)
                     .help("每页显示数量")
                 } else {
                     Text("每页 \(pageSize)")
-                        .font(.callout.monospacedDigit())
+                        .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                         .accessibilityLabel("每页 \(pageSize) 条")
                 }
             }
         }
-        // A visible bordered style gives the enlarged hit targets a clear
-        // affordance, especially when the pager is moved below a table.
         .buttonStyle(.bordered)
-        .controlSize(.regular)
-        .frame(minHeight: 48)
+        .controlSize(.small)
+        .frame(minHeight: 28)
         .disabled(loading)
         .opacity(loading ? 0.72 : 1)
         .accessibilityValue(loading ? "正在加载" : "第 \(page) 页，共 \(pageCount) 页")
@@ -903,10 +901,10 @@ struct RuntimeLiveBreathingDot: View {
             .frame(width: size, height: size)
             .phaseAnimator([false, true], trigger: animates) { dot, breathing in
                 dot
-                    .opacity(animates ? (breathing ? 1 : 0.55) : 0.85)
-                    .scaleEffect(animates ? (breathing ? 1 : 0.82) : 1)
+                    .opacity(animates ? (breathing ? 1 : 0.48) : 0.85)
+                    .scaleEffect(animates ? (breathing ? 1.04 : 0.84) : 1)
             } animation: { _ in
-                animates ? .easeInOut(duration: 1.7) : nil
+                animates ? .easeInOut(duration: 2.0) : nil
             }
             .accessibilityHidden(true)
     }

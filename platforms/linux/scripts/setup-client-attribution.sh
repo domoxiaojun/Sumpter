@@ -5,7 +5,9 @@ umask 077
 
 usage() {
   cat <<'HELP'
-用法：bash setup-client-attribution.sh [status|install|restore|uninstall] [claude|grok|gemini|codex|pi|all] [--shell bash|zsh] [--rc 文件]
+用法：bash setup-client-attribution.sh [enable|disable|status|install|restore|uninstall] [claude|grok|gemini|codex|pi|all] [--proxy-url 地址] [--shell bash|zsh] [--rc 文件]
+enable 首次安装并启用；disable 关闭补充采集；install 更新并保留开关。
+restore 恢复安装前配置（可能重新启用旧版）；uninstall 移除终端注册。
 不带参数进入交互菜单；操作后自动检查当前状态。
 优先使用同目录 client-attribution.mjs 与 pi-project-attribution.ts。
 缺失时默认从 GitHub 仓库 raw 下载：
@@ -28,19 +30,19 @@ if [[ -z $action ]]; then
   printf '客户端：1) Claude Code  2) Grok Build  3) Gemini CLI  4) Codex  5) pi  6) 全部\n'
   read -r -p '请选择 [1-6，默认 6]：' choice
   case ${choice:-6} in 1) client=claude;; 2) client=grok;; 3) client=gemini;; 4) client=codex;; 5) client=pi;; 6) client=all;; *) exit 2;; esac
-  printf '操作：1) 检查状态  2) 安装配置  3) 还原配置  4) 卸载配置\n'
-  read -r -p '请选择 [1-4，默认 1]：' choice
-  case ${choice:-1} in 1) action=status;; 2) action=install;; 3) action=restore;; 4) action=uninstall;; *) exit 2;; esac
+  printf '操作：1) 检查状态  2) 启用归因  3) 关闭归因  4) 更新脚本  5) 恢复安装前配置  6) 移除终端注册\n'
+  read -r -p '请选择 [1-6，默认 1]：' choice
+  case ${choice:-1} in 1) action=status;; 2) action=enable;; 3) action=disable;; 4) action=install;; 5) action=restore;; 6) action=uninstall;; *) exit 2;; esac
 else
   shift
   if [[ $# -gt 0 ]]; then shift; fi
 fi
-case $action in status|install|restore|uninstall) ;; *) usage >&2; exit 2;; esac
+case $action in enable|disable|status|install|restore|uninstall) ;; *) usage >&2; exit 2;; esac
 case $client in claude|grok|gemini|codex|pi|all) ;; *) usage >&2; exit 2;; esac
 options=("$@")
 # Validate before attempting a download or changing configuration.
 while [[ $# -gt 0 ]]; do
-  case $1 in --shell|--rc) [[ $# -ge 2 && -n $2 ]] || { usage >&2; exit 2; }; shift 2;; *) usage >&2; exit 2;; esac
+  case $1 in --shell|--rc|--proxy-url) [[ $# -ge 2 && -n $2 ]] || { usage >&2; exit 2; }; shift 2;; *) usage >&2; exit 2;; esac
 done
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 installer="$script_dir/client-attribution.mjs"
@@ -73,7 +75,7 @@ if [[ ! -f $installer ]]; then
   installer="$task_tmp/client-attribution.mjs"
   download_resource client-attribution.mjs "$installer"
 fi
-if [[ $client == pi || $client == all ]]; then
+if [[ $client == pi || $client == all || $action == install || $action == enable ]]; then
   # Stage both files together without writing into the downloaded script's directory.
   extension="$script_dir/pi-project-attribution.ts"
   if [[ $installer != "$task_tmp/client-attribution.mjs" ]]; then
@@ -97,10 +99,14 @@ if [[ $client == pi || $client == all ]]; then
 fi
 node "$installer" "$action" "$client" "${options[@]}" > "$task_tmp/result.json"
 if [[ $action != status ]]; then
-  if [[ $action == install ]]; then
-    echo '归因配置已安装。'
+  if [[ $action == enable ]]; then
+    echo '补充归因已启用；只有确认连接绑定后才采集。'
+  elif [[ $action == install ]]; then
+    echo '归因脚本已更新，保留原开关状态。'
+  elif [[ $action == disable ]]; then
+    echo '补充归因已关闭；新版包装器保留 Gemini 连接配置。'
   elif [[ $action == restore ]]; then
-    echo '归因配置已还原；没有还原记录的客户端保持原样。'
+    echo '已恢复安装前配置，可能恢复旧版归因；请检查下方状态。'
   else
     echo '归因配置已卸载；没有归因配置的客户端保持原样。'
   fi
@@ -109,9 +115,11 @@ if [[ $action != status ]]; then
 fi
 node - "$task_tmp/result.json" <<'NODE'
 const fs = require('node:fs');
-const labels = { installed: '已安装', absent: '未安装', legacy: '旧版配置，建议更新', broken: '配置不完整，需要修复', outdated: '已安装，需要更新' };
+const labels = { installed: '已安装', disabled: '已安装，采集关闭', absent: '未安装', legacy: '旧版配置（可能继续采集）', broken: '配置不完整，需要修复', outdated: '已安装，需要更新' };
 for (const item of JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))) {
   if (item.note) console.log(item.note);
   console.log(`${item.client}：${labels[item.status] || item.status} · ${item.shell} · ${item.rc} · ${item.canRestore ? '可还原' : '无待还原配置'}`);
+  console.log(`绑定地址：${item.proxyURL} · 已安装：${item.installedVersion || '无'} · 可用：${item.availableVersion}`);
+  if (item.lastLaunch?.startedAt) console.log(`最近启动：${item.lastLaunch.startedAt} · ${item.lastLaunch.binding} · ${item.lastLaunch.enabled ? '已准备采集' : '跳过采集'}（不代表已收到请求）`);
 }
 NODE

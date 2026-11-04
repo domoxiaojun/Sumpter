@@ -566,6 +566,13 @@ pub struct CodexCompactionMetadata {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientDeclaredMetadata {
+    /// Generated at ingestion, never reconstructed when reading historical events.
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub workspace_identity: Option<WorkspaceIdentity>,
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub source_id: Option<String>,
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub collector_version: Option<String>,
     /// Explicit client-declared task identity; never inferred from prompt text.
     #[serde(default, skip_serializing_if = "is_none")]
     pub agent_role: Option<String>,
@@ -607,6 +614,19 @@ impl ClientDeclaredMetadata {
 
         let project_raw = Self::clean_header(headers, "x-sumpter-project", &mut state);
         let workspace_raw = Self::clean_header(headers, "x-sumpter-workspace", &mut state);
+        let source_id = attribution_source_id(headers);
+        let collector_version =
+            Self::clean_header(headers, "x-sumpter-collector-version", &mut state).filter(
+                |value| {
+                    value.len() <= 64
+                        && value
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b".-_".contains(&b))
+                },
+            );
+        let workspace_identity = workspace_raw.as_ref().and_then(|path| {
+            WorkspaceIdentity::from_paths(std::slice::from_ref(path), source_id.as_deref())
+        });
         let user_raw = Self::clean_header(headers, "x-sumpter-user", &mut state);
         let agent_role = Self::clean_header(headers, "x-sumpter-agent-role", &mut state)
             .and_then(|value| crate::client_attribution::role(&value).map(str::to_owned));
@@ -647,6 +667,9 @@ impl ClientDeclaredMetadata {
             return None;
         }
         Some(Self {
+            workspace_identity,
+            source_id,
+            collector_version,
             project,
             agent_role,
             agent_name,
@@ -685,6 +708,99 @@ impl ClientDeclaredMetadata {
         }
         Some(trimmed.to_string())
     }
+}
+
+/// Opaque workspace identity and safe display name are deliberately separate.
+/// An optional random collector source scopes identical paths on different hosts.
+/// This is observation metadata, not authentication or a confidentiality boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceIdentity {
+    pub version: u8,
+    pub key: String,
+    pub name: String,
+    pub scoped: bool,
+}
+
+impl WorkspaceIdentity {
+    fn from_paths(paths: &[String], source: Option<&str>) -> Option<Self> {
+        if paths.is_empty() || paths.len() > CODEX_METADATA_MAX_SOURCE_WORKSPACES {
+            return None;
+        }
+        let mut normalized = Vec::new();
+        for raw in paths {
+            if raw.len() > CODEX_METADATA_MAX_SOURCE_PATH_BYTES || raw.chars().any(char::is_control)
+            {
+                return None;
+            }
+            let raw = raw.trim();
+            let windows = raw.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+                && raw.as_bytes().get(1) == Some(&b':')
+                && raw.as_bytes().get(2).is_some_and(|b| b"/\\".contains(b));
+            if !raw.starts_with('/') && !windows {
+                return None;
+            }
+            let path = if windows {
+                raw.replace('\\', "/")
+            } else {
+                raw.to_owned()
+            };
+            let mut parts = Vec::new();
+            for part in path
+                .split('/')
+                .filter(|part| !part.is_empty() && *part != ".")
+            {
+                if part == ".." {
+                    if parts.len() > usize::from(windows) {
+                        parts.pop();
+                    }
+                } else {
+                    parts.push(part);
+                }
+            }
+            if parts.is_empty() {
+                return None;
+            }
+            normalized.push(format!(
+                "{}:/{}",
+                if windows { "windows" } else { "posix" },
+                parts.join("/")
+            ));
+        }
+        normalized.sort();
+        normalized.dedup();
+        let mut name = if normalized.len() == 1 {
+            normalized[0].rsplit('/').next()?.to_owned()
+        } else {
+            "multiple_workspaces".into()
+        };
+        while name.len() > CODEX_METADATA_MAX_LABEL_BYTES {
+            name.pop();
+        }
+        let encoded = serde_json::to_vec(&("workspace-v2", source, &normalized)).ok()?;
+        Some(Self {
+            version: 2,
+            key: format!("{:x}", Sha256::digest(encoded)),
+            name,
+            scoped: source.is_some(),
+        })
+    }
+}
+
+fn attribution_source_id(headers: &[(String, String)]) -> Option<String> {
+    let mut values = headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("x-sumpter-source-id"));
+    let value = values.next()?.1.trim();
+    if values.any(|(_, other)| other.trim() != value)
+        || value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b))
+    {
+        return None;
+    }
+    Some(value.to_owned())
 }
 
 fn decode_attribution_header(value: &str) -> Option<String> {
@@ -942,6 +1058,8 @@ fn grok_user_agent_is_relevant(user_agent: &str, has_grok_fields: bool) -> bool 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexMetadata {
+    #[serde(default, skip_serializing_if = "is_none")]
+    pub workspace_identity: Option<WorkspaceIdentity>,
     /// 稳定 SHA-256 短指纹，不是安装 ID 原文。
     #[serde(rename = "installationID", default, skip_serializing_if = "is_none")]
     pub installation_id: Option<String>,
@@ -1238,7 +1356,18 @@ impl CodexMetadata {
         // A fork records inherited history, not an explicit parent-task relationship.
         let parent_thread_id = merged.parent_thread_id;
 
+        let workspace_identity = if state.truncated {
+            None
+        } else {
+            let source = attribution_source_id(headers);
+            WorkspaceIdentity::from_paths(
+                merged.source_workspace_paths.as_deref().unwrap_or_default(),
+                source.as_deref().or(merged.installation_id.as_deref()),
+            )
+        };
+
         Some(Self {
+            workspace_identity,
             installation_id: merged.installation_id,
             source_installation_id: merged.source_installation_id,
             session_id: merged.session_id,
@@ -4109,6 +4238,79 @@ mod tests {
     }
 
     #[test]
+    fn workspace_v2_identity_uses_full_paths_source_scope_and_bounded_display() {
+        let identity = |path: &str, source: Option<&str>| {
+            WorkspaceIdentity::from_paths(&[path.to_owned()], source).unwrap()
+        };
+        let a = identity("/srv/customer-a/apps/api", Some("host-a"));
+        let b = identity("/srv/customer-b/apps/api", Some("host-a"));
+        assert_eq!(a.name, b.name);
+        assert_ne!(a.key, b.key);
+        assert_eq!(
+            a,
+            identity("/srv/./customer-a/apps/x/../api/", Some("host-a"))
+        );
+        assert_ne!(
+            a.key,
+            identity("/srv/customer-a/apps/api", Some("host-b")).key
+        );
+        assert_ne!(
+            identity("/a", None).key,
+            identity("/a", Some("unscoped")).key
+        );
+        assert_ne!(identity(r"/a\b", None).key, identity("/a/b", None).key);
+        assert_ne!(identity("C:/a", None).key, identity("/C:/a", None).key);
+        assert_eq!(identity(r"C:\a\b", None).key, identity("C:/a/b", None).key);
+        assert!(
+            identity(&format!("/{}", "中文".repeat(200)), None)
+                .name
+                .len()
+                <= CODEX_METADATA_MAX_LABEL_BYTES
+        );
+        for invalid in ["relative/path", ".../apps/api", "/a\nb"] {
+            assert!(WorkspaceIdentity::from_paths(&[invalid.into()], None).is_none());
+        }
+        assert_eq!(
+            WorkspaceIdentity::from_paths(&["/a".into(), "/b".into()], None),
+            WorkspaceIdentity::from_paths(&["/b".into(), "/a".into(), "/a".into()], None)
+        );
+    }
+
+    #[test]
+    fn workspace_v2_ingestion_does_not_reconstruct_historical_identity() {
+        let mut headers = vec![
+            (
+                "x-sumpter-workspace".into(),
+                "/srv/customer-a/apps/api".into(),
+            ),
+            ("x-sumpter-source-id".into(), "host-a".into()),
+            ("x-sumpter-collector-version".into(), "2.0.0-test".into()),
+        ];
+        let current = ClientDeclaredMetadata::from_headers(&headers).unwrap();
+        assert_eq!(current.workspace.as_deref(), Some(".../apps/api"));
+        assert!(current.workspace_identity.as_ref().unwrap().scoped);
+        assert_eq!(current.collector_version.as_deref(), Some("2.0.0-test"));
+        headers.push(("X-Sumpter-Source-Id".into(), "host-b".into()));
+        assert!(
+            ClientDeclaredMetadata::from_headers(&headers)
+                .unwrap()
+                .source_id
+                .is_none()
+        );
+        let legacy: ClientDeclaredMetadata = serde_json::from_value(serde_json::json!({
+            "workspace": ".../apps/api", "sourceWorkspace": "/srv/customer-a/apps/api"
+        }))
+        .unwrap();
+        assert!(legacy.workspace_identity.is_none());
+        assert!(
+            serde_json::to_value(legacy)
+                .unwrap()
+                .get("workspaceIdentity")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn client_declared_metadata_is_omitted_from_the_wire_when_absent() {
         let mut event = event("E1", KIND_CLIENT, 1.0);
         let json = serde_json::to_value(&event).expect("encode");
@@ -4127,6 +4329,7 @@ mod tests {
             source_project: None,
             source_workspace: None,
             source_user: None,
+            ..ClientDeclaredMetadata::default()
         });
         let json = serde_json::to_value(&event).expect("encode");
         assert_eq!(

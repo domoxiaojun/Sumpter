@@ -46,6 +46,8 @@ struct OverviewPane: View {
                 onPageSizeChange: model.setRunHistoryPageSize,
                 initialKindFilter: RuntimeEventKindFilter(rawValue: model.runHistoryKindFilter),
                 onKindFilterChange: { model.setRunHistoryKindFilter($0.rawValue) },
+                initialOutcomeFilter: model.runHistoryOutcomeFilter,
+                onOutcomeFilterChange: model.setRunHistoryOutcomeFilter,
                 requestChainTruncated: model.runtimeRequestChain?.truncated ?? false,
                 requestChainEvents: runRequestChainEvents,
                 requestChainLoading: model.runtimeRequestChainLoading,

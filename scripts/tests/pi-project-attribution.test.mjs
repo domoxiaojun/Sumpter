@@ -94,10 +94,17 @@ test('wrapper opt-in never tags unmarked destinations and explicit task identity
     let handler;
     extension({ on: (_event, callback) => { handler = callback; } });
     const ctx = { cwd: tmpdir(), sessionManager: { getSessionId: () => 'parent-session' } };
-    const direct = { Authorization: 'synthetic', 'x-sumpter-project': 'stale' };
+    const direct = {
+      Authorization: 'synthetic',
+      'x-sumpter-project': 'stale',
+      'X-Sumpter-Request-Kind': 'stale',
+      'X-Sumpter-Agent-Role': 'stale',
+    };
     await handler({ headers: direct }, ctx);
     assert.equal(direct['x-sumpter-session-id'], undefined);
     assert.equal(direct['x-sumpter-project'], null);
+    assert.equal(direct['X-Sumpter-Request-Kind'], null);
+    assert.equal(direct['X-Sumpter-Agent-Role'], null);
     assert.equal(direct.Authorization, 'synthetic');
     const headers = { 'X-Sumpter-Client': 'pi' };
     await handler({ headers, requestSource: { agentRole: 'memory', agentName: 'observational-memory/observer' } }, ctx);
@@ -117,5 +124,34 @@ test('Linux and macOS package resources match the canonical pi extension', async
   const source = await readFile(new URL('../clients/pi-project-attribution.ts', import.meta.url), 'utf8');
   for (const path of ['platforms/linux/scripts/pi-project-attribution.ts', 'platforms/macos/scripts/pi-project-attribution.ts', 'platforms/macos/app/Sources/SumpterApp/Resources/pi-project-attribution.ts']) {
     assert.equal(await readFile(new URL(`../../${path}`, import.meta.url), 'utf8'), source);
+  }
+});
+
+test('running Pi hook rereads the independent collection switch on each request', async () => {
+  const { writeFile } = await import('node:fs/promises');
+  const root = await mkdtemp(join(tmpdir(), 'sumpter-pi-switch-'));
+  const previous = process.env.XDG_DATA_HOME;
+  process.env.XDG_DATA_HOME = root;
+  try {
+    const dir = join(root, 'sumpter/attribution');
+    await mkdir(dir, { recursive: true });
+    const policy = { version: 2, sourceId: 'synthetic-source', clients: { pi: { enabled: true, proxyURL: 'http://localhost:57878' } } };
+    await writeFile(join(dir, 'collection.json'), JSON.stringify(policy));
+    let handler;
+    extension({ on: (_, callback) => { handler = callback; } });
+    const ctx = { cwd: root, sessionManager: { getSessionId: () => 'synthetic-session' } };
+    const enabled = { 'x-sumpter-client': 'pi', Authorization: 'synthetic' };
+    await handler({ headers: enabled }, ctx);
+    assert.equal(enabled['x-sumpter-source-id'], 'synthetic-source');
+    policy.clients.pi.enabled = false;
+    await writeFile(join(dir, 'collection.json'), JSON.stringify(policy));
+    const disabled = { ...enabled, 'x-sumpter-client': 'pi' };
+    await handler({ headers: disabled }, ctx);
+    assert.equal(disabled['x-sumpter-workspace'], null);
+    assert.equal(disabled['x-sumpter-source-id'], null);
+    assert.equal(disabled.Authorization, 'synthetic');
+  } finally {
+    if (previous === undefined) delete process.env.XDG_DATA_HOME; else process.env.XDG_DATA_HOME = previous;
+    await rm(root, { recursive: true, force: true });
   }
 });

@@ -15,6 +15,15 @@ enum RuntimeEventDisplay {
         return formatter
     }()
 
+    private static let local24HourMonthDayTime: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = .current
+        formatter.dateFormat = "MM-dd HH:mm:ss"
+        return formatter
+    }()
+
     private static let local24HourDateTime: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -25,7 +34,10 @@ enum RuntimeEventDisplay {
     }()
 
     static func time(_ date: Date) -> String {
-        local24HourTime.string(from: date)
+        if Calendar.current.isDateInToday(date) {
+            return local24HourTime.string(from: date)
+        }
+        return local24HourMonthDayTime.string(from: date)
     }
 
     static func dateTime(_ date: Date) -> String {
@@ -519,6 +531,8 @@ struct RecentEventsPanel: View {
     /// 运行页把类型筛选下推服务端；旧调用方不提供时仍保留本地筛选。
     var initialKindFilter: RuntimeEventKindFilter?
     var onKindFilterChange: ((RuntimeEventKindFilter) -> Void)?
+    var initialOutcomeFilter: String?
+    var onOutcomeFilterChange: ((String) -> Void)?
     var requestChainTruncated: Bool = false
     var requestChainEvents: [RuntimeEvent]?
     var requestChainLoading = false
@@ -530,16 +544,21 @@ struct RecentEventsPanel: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     // 默认只看客户端:一次请求一行。排 failover 时切「全部」看完整上游尝试链。
     @State private var eventKindFilter: RuntimeEventKindFilter = .client
+    @State private var eventOutcomeFilter = ""
+    @State private var sortAscending = false
 
     private var eventRowHeight: CGFloat {
-        // 第一列最多四行(时间 / 项目 / 请求摘要 / 工具),56 会把工具行挤掉。
-        dynamicTypeSize.isAccessibilitySize ? 100 : 66
+        // 第一列收敛为最多三行(时间+项目 / 请求摘要 / 工具),留足呼吸空间。
+        dynamicTypeSize.isAccessibilitySize ? 102 : 68
     }
 
     var body: some View {
         SectionPanel(title: "最近事件", hint: hint) {
             VStack(alignment: .leading, spacing: 8) {
                 eventToolbar
+                if !visibleEvents.isEmpty {
+                    pageTelemetryStrip
+                }
                 eventListSummary
                 if !visibleLiveEvents.isEmpty {
                     liveEventsSection
@@ -565,11 +584,12 @@ struct RecentEventsPanel: View {
                                 truncated: requestChainTruncated,
                                 selectedEventID: $selectedEventID
                             )
-                            .frame(width: 310, alignment: .topLeading)
+                            .frame(width: 320, alignment: .topLeading)
                             Divider()
                             RuntimeEventInspector(
                                 event: event, chain: selectedRequestChain,
-                                expanded: $expandedEventGroups
+                                expanded: $expandedEventGroups,
+                                onClose: { selectedEventID = nil }
                             )
                             .frame(minWidth: 380, maxWidth: .infinity, alignment: .topLeading)
                         }
@@ -583,7 +603,8 @@ struct RecentEventsPanel: View {
                             Divider()
                             RuntimeEventInspector(
                                 event: event, chain: selectedRequestChain,
-                                expanded: $expandedEventGroups
+                                expanded: $expandedEventGroups,
+                                onClose: { selectedEventID = nil }
                             )
                             .frame(maxWidth: .infinity, alignment: .topLeading)
                         }
@@ -591,11 +612,18 @@ struct RecentEventsPanel: View {
                 }
             }
         }
-        .onAppear { ensureSelection() }
+        .onAppear {
+            if let initialKindFilter { eventKindFilter = initialKindFilter }
+            if let initialOutcomeFilter { eventOutcomeFilter = initialOutcomeFilter }
+            ensureSelection()
+        }
         .onChange(of: visibleEventIDs) { _, _ in ensureSelection() }
         .onChange(of: selectedEventID) { _, eventID in onSelectEvent?(eventID) }
         .onChange(of: eventKindFilter) { _, filter in
             onKindFilterChange?(filter)
+        }
+        .onChange(of: eventOutcomeFilter) { _, outcome in
+            onOutcomeFilterChange?(outcome)
         }
         .onChange(of: currentPage) { _, _ in
             selectedEventID = nil
@@ -606,6 +634,10 @@ struct RecentEventsPanel: View {
         .onChange(of: initialKindFilter) { _, filter in
             guard let filter, filter != eventKindFilter else { return }
             eventKindFilter = filter
+        }
+        .onChange(of: initialOutcomeFilter) { _, outcome in
+            guard let outcome, outcome != eventOutcomeFilter else { return }
+            eventOutcomeFilter = outcome
         }
     }
 
@@ -653,7 +685,12 @@ struct RecentEventsPanel: View {
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(palette.borderSubtle, lineWidth: 0.8)
+                .stroke(palette.brand.opacity(0.32), lineWidth: 1.1)
+                .phaseAnimator([false, true]) { rim, glowing in
+                    rim.opacity(glowing ? 0.95 : 0.38)
+                } animation: { _ in
+                    .easeInOut(duration: 2.4)
+                }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(visibleLiveEvents.count) 个进行中请求")
@@ -710,7 +747,7 @@ struct RecentEventsPanel: View {
     }
 
     private var pageIdentity: String {
-        "\(currentPage ?? 0)-\(pageSize ?? 0)-\(eventKindFilter.rawValue)"
+        "\(currentPage ?? 0)-\(pageSize ?? 0)-\(eventKindFilter.rawValue)-\(eventOutcomeFilter)-\(sortAscending)"
     }
 
     /// Filtering and paging stay above the event rows so navigation remains
@@ -718,19 +755,136 @@ struct RecentEventsPanel: View {
     @ViewBuilder
     private var eventToolbar: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 16) {
+            HStack(spacing: 12) {
                 eventKindPicker
-                    .frame(width: 210)
-                Spacer(minLength: 12)
+                    .frame(width: 204)
+                eventOutcomePicker
+                    .frame(width: 256)
+                eventSortButton
+                Spacer(minLength: 8)
                 eventPageControls(compact: false)
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                eventKindPicker
-                    .frame(width: 210)
+                SumpterWrappingLayout(horizontalSpacing: 10, verticalSpacing: 8) {
+                    eventKindPicker
+                        .frame(width: 204)
+                    eventOutcomePicker
+                        .frame(width: 256)
+                    eventSortButton
+                }
                 eventPageControls(compact: true)
             }
         }
+    }
+
+    @ViewBuilder
+    private var pageTelemetryStrip: some View {
+        let nonNotify = visibleEvents.filter { $0.kind != "notify" }
+        if !nonNotify.isEmpty {
+            let succeeded = nonNotify.filter { $0.outcome == .succeeded }.count
+            let failed = nonNotify.filter { $0.outcome == .failed }.count
+            let cancelled = nonNotify.filter { $0.outcome == .cancelled }.count
+            let completed = succeeded + failed + cancelled
+            let successRate = completed > 0
+                ? String(format: "%.1f%%", Double(succeeded) / Double(completed) * 100)
+                : "—"
+            let ttfbValues = nonNotify.compactMap(\.ttfbMS).filter { $0 >= 0 }
+            let avgTTFB = ttfbValues.isEmpty ? nil : Double(ttfbValues.reduce(0, +)) / Double(ttfbValues.count)
+            let durationValues = nonNotify.map(\.durationMS).filter { $0 >= 0 }
+            let avgDuration = durationValues.isEmpty ? nil : Double(durationValues.reduce(0, +)) / Double(durationValues.count)
+            let totalTokens = nonNotify.reduce(0) { acc, ev in
+                acc + max(0, ev.usageSummary?.inputTokens ?? 0) + max(0, ev.usageSummary?.outputTokens ?? 0)
+            }
+            let failoverCount = nonNotify.filter(\.failover).count
+
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 185, maximum: 380), spacing: 10)],
+                spacing: 10
+            ) {
+                telemetryOverviewCard(
+                    title: "本页请求健康度",
+                    value: successRate,
+                    subLeft: "成功 \(succeeded)",
+                    subRight: "失败 \(failed) · 取消 \(cancelled)"
+                ) {
+                    GeometryReader { geo in
+                        let w = max(20, geo.size.width)
+                        let goodW = completed > 0 ? w * CGFloat(succeeded) / CGFloat(completed) : 0
+                        let failW = completed > 0 ? w * CGFloat(failed) / CGFloat(completed) : 0
+                        let warnW = max(0, w - goodW - failW)
+                        HStack(spacing: 1.5) {
+                            if goodW > 0 { Capsule().fill(palette.success).frame(width: goodW, height: 5) }
+                            if failW > 0 { Capsule().fill(palette.danger).frame(width: failW, height: 5) }
+                            if warnW > 0 && completed > 0 { Capsule().fill(palette.warning).frame(width: warnW, height: 5) }
+                        }
+                    }
+                    .frame(height: 5)
+                }
+
+                telemetryOverviewCard(
+                    title: "本页首字节均值",
+                    value: avgTTFB.map { RuntimeEventPresentation.durationDisplay(Int($0.rounded())) } ?? "—",
+                    subLeft: "蓝青段代表首字节响应",
+                    subRight: "\(ttfbValues.count) 条已采样"
+                )
+
+                telemetryOverviewCard(
+                    title: "本页完成耗时均值",
+                    value: avgDuration.map { RuntimeEventPresentation.durationDisplay(Int($0.rounded())) } ?? "—",
+                    subLeft: "紫绿段代表流式生成",
+                    subRight: "\(durationValues.count) 条已采样"
+                )
+
+                telemetryOverviewCard(
+                    title: "本页 Token 与切换",
+                    value: totalTokens > 0 ? RuntimeEventPresentation.tokenCountDisplay(totalTokens) : "—",
+                    subLeft: "本页输入+输出累计",
+                    subRight: "故障转移 \(failoverCount) 次"
+                )
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
+    private func telemetryOverviewCard<Bar: View>(
+        title: String,
+        value: String,
+        subLeft: String,
+        subRight: String,
+        @ViewBuilder bar: () -> Bar = { EmptyView() }
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(title)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Text(value)
+                    .font(.callout.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(palette.textPrimary)
+                    .lineLimit(1)
+            }
+            bar()
+            HStack(spacing: 6) {
+                Text(subLeft)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Text(subRight)
+                    .lineLimit(1)
+            }
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(palette.inset.opacity(0.75), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(palette.borderSubtle, lineWidth: 0.8)
+        )
     }
 
     private var eventKindPicker: some View {
@@ -742,6 +896,30 @@ struct RecentEventsPanel: View {
         .pickerStyle(.segmented)
         .labelsHidden()
         .frame(minHeight: 30)
+    }
+
+    private var eventOutcomePicker: some View {
+        Picker("结果状态", selection: $eventOutcomeFilter) {
+            Text("全部状态").tag("")
+            Text("成功").tag("succeeded")
+            Text("失败").tag("failed")
+            Text("已取消").tag("cancelled")
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .frame(minHeight: 30)
+    }
+
+    private var eventSortButton: some View {
+        Button {
+            sortAscending.toggle()
+        } label: {
+            Label(sortAscending ? "本页最早优先" : "本页最新优先", systemImage: "arrow.up.arrow.down")
+                .font(.caption.weight(.medium))
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .help("切换当前页事件时间排序")
     }
 
     private var eventCountLabel: some View {
@@ -810,20 +988,25 @@ struct RecentEventsPanel: View {
     /// containers, but their rows use these exact same cells. This keeps font,
     /// size, line height, truncation and semantic colour in sync.
     private func eventRequestCell(_ event: RuntimeEvent) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(RuntimeEventDisplay.time(event.timestamp))
-                .font(.subheadline.monospacedDigit().weight(.medium))
-            if let project = RuntimeEventPresentation.projectAttribution(
-                eventKind: event.kind, metadata: event.codexMetadata, declared: event.clientDeclared,
-                projectedName: event.projectName, projectedSource: event.projectSource, projectedLocalUser: event.localUser
-            ) {
-                Text(project)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .center, spacing: 6) {
+                Text(RuntimeEventDisplay.time(event.timestamp))
+                    .font(.subheadline.monospacedDigit().weight(.semibold))
+                if let project = RuntimeEventPresentation.projectAttribution(
+                    eventKind: event.kind, metadata: event.codexMetadata, declared: event.clientDeclared,
+                    projectedName: event.projectName, projectedSource: event.projectSource, projectedLocalUser: event.localUser
+                ) {
+                    Text(project.replacingOccurrences(of: "项目: ", with: ""))
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1.5)
+                        .background(palette.borderSubtle.opacity(0.65), in: Capsule())
+                }
             }
             Text([RuntimeEventDisplay.kind(event.kind), RuntimeEventDisplay.clientKind(event), event.agentSummaryLabel,
-                  RuntimeEventDisplay.rowPurpose(event)]
+                  RuntimeEventDisplay.rowPurpose(event), event.sourceIP]
                 .compactMap { $0 }.joined(separator: " · "))
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -833,10 +1016,10 @@ struct RecentEventsPanel: View {
                 HStack(spacing: 4) {
                     Image(systemName: "wrench.and.screwdriver")
                         .font(.system(size: 9))
-                        .foregroundStyle(palette.brand.opacity(0.8))
+                        .foregroundStyle(palette.brand.opacity(0.85))
                     Text(tools)
                         .font(.caption2.monospaced())
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
                 .help("调用工具：\(tools)")
@@ -847,49 +1030,120 @@ struct RecentEventsPanel: View {
     }
 
     private func eventRouteCell(_ event: RuntimeEvent) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        let logical = RuntimeEventDisplay.logicalModel(event)
+        let clientModel = RuntimeEventDisplay.displayedModelName(event.clientModel)
+        let isMapped = clientModel != nil && logical != "—" && clientModel != logical
+        return VStack(alignment: .leading, spacing: 3) {
             if event.kind == "notify" {
                 Text(event.hookEvent ?? "通知").font(.subheadline)
             } else {
-            Text(RuntimeEventDisplay.logicalModel(event))
-                .font(.subheadline)
-                .lineLimit(1)
-                .help(RuntimeEventDisplay.logicalModel(event))
-            Text(RuntimeEventDisplay.endpoint(event))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-                .help(RuntimeEventDisplay.endpoint(event))
-            }
-        }
-        .frame(maxWidth: .infinity, minHeight: eventRowHeight - 6, alignment: .leading)
-    }
-
-    private func eventResultCell(_ event: RuntimeEvent) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            if event.kind == "notify" {
-                Text("通知事件").font(.subheadline)
-            } else {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(RuntimeEventPresentation.transportDisplay(event.transport))
-                        .font(.caption2.weight(.semibold))
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text(logical)
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(1)
+                        .help(RuntimeEventDisplay.model(event))
+                    if isMapped, let clientModel {
+                        Text("← \(clientModel)")
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(palette.borderSubtle.opacity(0.6), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                            .help("客户端请求模型 \(clientModel) → 路由模型 \(logical)")
+                    }
+                }
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text(RuntimeEventDisplay.endpoint(event))
+                        .font(.caption)
                         .foregroundStyle(.secondary)
-                    RuntimeEventStatusSummary(event: event, includeUsage: false)
+                        .lineLimit(1)
+                        .help(RuntimeEventDisplay.endpoint(event))
+                    if event.failover {
+                        Text("故障转移")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(palette.warning)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(palette.warning.opacity(0.14), in: Capsule())
+                    }
                 }
             }
         }
         .frame(maxWidth: .infinity, minHeight: eventRowHeight - 6, alignment: .leading)
     }
 
+    private func eventResultCell(_ event: RuntimeEvent) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if event.kind == "notify" {
+                Text("通知事件").font(.subheadline)
+            } else {
+                HStack(alignment: .center, spacing: 6) {
+                    RuntimeEventStatusPill(
+                        text: event.isInFlight ? "进行中" : RuntimeEventDisplay.outcome(event),
+                        color: RuntimeEventDisplay.statusColor(event),
+                        live: event.isInFlight,
+                        compact: true
+                    )
+                    Text(event.effectiveHTTPStatusCode == 0 ? "HTTP —" : RuntimeEventDisplay.httpStatus(event))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .help(RuntimeEventDisplay.statusDetail(event))
+                }
+                Text(RuntimeEventPresentation.transportDisplay(event.transport))
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: eventRowHeight - 6, alignment: .leading)
+    }
+
     private func eventDurationCell(_ event: RuntimeEvent) -> some View {
-        Group {
+        let ttfb = max(0, event.ttfbMS ?? 0)
+        let total = max(ttfb, event.durationMS)
+        let ttfbRatio = total > 0 ? min(1.0, max(0.1, Double(ttfb) / Double(total))) : 0
+        return Group {
             if event.kind == "notify" {
                 Text("—").foregroundStyle(.secondary)
             } else {
-                RuntimeEventDurationText(event: event)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(RuntimeEventDisplay.durationColor(event))
-                    .help(RuntimeEventDisplay.durationHelp(event))
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                        RuntimeEventDurationText(event: event)
+                            .font(.caption.monospacedDigit().weight(.medium))
+                            .foregroundStyle(RuntimeEventDisplay.durationColor(event))
+                        if let speed = event.outputTokensPerSecond, speed > 0 {
+                            Text(String(format: "%.1f tok/s", speed))
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(palette.info)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(palette.info.opacity(0.12), in: Capsule())
+                        }
+                    }
+                    if !event.isInFlight && total > 0 {
+                        GeometryReader { geo in
+                            let width = max(24, geo.size.width)
+                            let ttfbW = ttfb > 0 ? max(4, width * ttfbRatio) : 0
+                            let streamW = max(0, width - ttfbW)
+                            HStack(spacing: 1) {
+                                if ttfbW > 0 {
+                                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                                        .fill((event.ttfbMS ?? 0) >= 5_000 ? palette.warning : palette.info)
+                                        .frame(width: ttfbW, height: 4)
+                                }
+                                if streamW > 0 {
+                                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                                        .fill(palette.brand.opacity(0.85))
+                                        .frame(width: streamW, height: 4)
+                                }
+                            }
+                        }
+                        .frame(height: 4)
+                    }
+                }
+                .help(RuntimeEventDisplay.durationHelp(event))
             }
         }
         .frame(maxWidth: .infinity, minHeight: eventRowHeight - 6, alignment: .leading)
@@ -899,17 +1153,17 @@ struct RecentEventsPanel: View {
         let friendly = RuntimeEventDisplay.friendlyMessage(event)
         return VStack(alignment: .leading, spacing: 2) {
             Text(friendly.isEmpty ? "-" : friendly)
-            .foregroundStyle(RuntimeEventDisplay.messageColor(event, friendly: friendly))
-            .font(.subheadline)
-            .lineLimit(2)
-            .help(
-                event.failureDetail
-                    ?? RuntimeEventPresentation.messageForDisplay(
-                        event.message,
-                        clientKind: event.clientKind
-                    )
-                    ?? friendly
-            )
+                .foregroundStyle(RuntimeEventDisplay.messageColor(event, friendly: friendly))
+                .font(.subheadline)
+                .lineLimit(2)
+                .help(
+                    event.failureDetail
+                        ?? RuntimeEventPresentation.messageForDisplay(
+                            event.message,
+                            clientKind: event.clientKind
+                        )
+                        ?? friendly
+                )
         }
         .frame(maxWidth: .infinity, minHeight: eventRowHeight - 6, alignment: .leading)
     }
@@ -1014,7 +1268,10 @@ struct RecentEventsPanel: View {
     /// remains selectable and opens the full detail view, so no capability is
     /// lost at the compact breakpoint.
     private func compactEventRow(_ event: RuntimeEvent) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
+        let logical = RuntimeEventDisplay.logicalModel(event)
+        let clientModel = RuntimeEventDisplay.displayedModelName(event.clientModel)
+        let isMapped = clientModel != nil && logical != "—" && clientModel != logical
+        return VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(RuntimeEventDisplay.time(event.timestamp))
                     .font(.subheadline.monospacedDigit())
@@ -1022,16 +1279,54 @@ struct RecentEventsPanel: View {
                 Spacer(minLength: 4)
                 RuntimeEventDurationText(event: event)
                     .font(.caption.monospacedDigit())
+                if let speed = event.outputTokensPerSecond, speed > 0 {
+                    Text(String(format: "%.1f tok/s", speed))
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(palette.info)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(palette.info.opacity(0.12), in: Capsule())
+                }
             }
-            Text("\(RuntimeEventDisplay.logicalModel(event)) · \(RuntimeEventDisplay.endpoint(event))")
-                .font(.subheadline)
-                .lineLimit(2)
-                .foregroundStyle(palette.textPrimary)
+            SumpterWrappingLayout(horizontalSpacing: 6, verticalSpacing: 4) {
+                Text("\(logical) · \(RuntimeEventDisplay.endpoint(event))")
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(2)
+                    .foregroundStyle(palette.textPrimary)
+                if isMapped, let clientModel {
+                    Text("← \(clientModel)")
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(palette.borderSubtle.opacity(0.6), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                }
+                if event.failover {
+                    Text("故障转移")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(palette.warning)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(palette.warning.opacity(0.14), in: Capsule())
+                }
+            }
             Text(RuntimeEventDisplay.requestSummary(event))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
                 .help(RuntimeEventDisplay.requestSummary(event))
+            if event.kind != "notify", let tools = RuntimeEventDisplay.toolCalls(event) {
+                HStack(spacing: 4) {
+                    Image(systemName: "wrench.and.screwdriver")
+                        .font(.system(size: 9))
+                        .foregroundStyle(palette.brand.opacity(0.85))
+                    Text(tools)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
             if event.kind != "notify" {
                 RuntimeEventUsageSummary(event: event)
             }
@@ -1057,7 +1352,7 @@ struct RecentEventsPanel: View {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(visibleEvents) { event in
                     Button {
-                        selectedEventID = event.id
+                        selectedEventID = (selectedEventID == event.id ? nil : event.id)
                     } label: {
                         compactEventRow(event)
                     }
@@ -1091,7 +1386,7 @@ struct RecentEventsPanel: View {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(visibleEvents) { event in
                             Button {
-                                selectedEventID = event.id
+                                selectedEventID = (selectedEventID == event.id ? nil : event.id)
                             } label: {
                                 wideEventRow(event, widths: widths)
                             }
@@ -1119,9 +1414,13 @@ struct RecentEventsPanel: View {
         }
     }
 
-    /// 事件表当前可见的行:按类型筛选 + 按时间倒序(引擎侧原地更新不移动行位置,排序在这里做)。
+    /// 事件表当前可见的行:按类型/结果筛选 + 按时间正序/倒序。
     private var visibleEvents: [RuntimeEvent] {
-        RuntimeEvent.ordered(events, filter: eventKindFilter)
+        let base = RuntimeEvent.ordered(events, filter: eventKindFilter).filter { event in
+            guard !eventOutcomeFilter.isEmpty else { return true }
+            return event.outcome?.rawValue == eventOutcomeFilter
+        }
+        return sortAscending ? Array(base.reversed()) : base
     }
 
     private var visibleLiveEvents: [RuntimeEvent] {
@@ -1180,16 +1479,20 @@ struct RecentEventsPanel: View {
 }
 
 /// 同一 requestID 的完整上游尝试链。默认筛选只看客户端行时也能直接看到重试/failover。
-private struct RuntimeRequestTraceView: View {
+struct RuntimeRequestTraceView: View {
     let chain: [RuntimeEvent]
     var truncated: Bool = false
     @Binding var selectedEventID: String?
     var maxHeight: CGFloat = 440
     @State private var contentHeight: CGFloat = 440
+    @Environment(\.sumpterPalette) private var palette
 
     private var clientEvent: RuntimeEvent? { chain.first { $0.kind == "client" } }
     private var upstreamAttempts: [RuntimeEvent] {
         Array(chain.filter { $0.kind == "upstream" }.reversed())
+    }
+    private var maxChainDurationMS: Int {
+        max(1, chain.map(\.durationMS).max() ?? 1)
     }
 
     var body: some View {
@@ -1219,19 +1522,63 @@ private struct RuntimeRequestTraceView: View {
         }
     }
 
+    @ViewBuilder
+    private func chainWaterfallBar(for event: RuntimeEvent) -> some View {
+        let duration = max(0, event.durationMS)
+        if event.kind != "notify", duration > 0 {
+            let ttfb = event.ttfbMS.map { min(duration, max(0, $0)) }
+            let totalRatio = min(1.0, max(0.06, Double(duration) / Double(max(duration, maxChainDurationMS))))
+            let ttfbShare = ttfb.map { min(1.0, max(0.0, Double($0) / Double(duration))) } ?? 0
+            VStack(alignment: .leading, spacing: 3) {
+                GeometryReader { geo in
+                    let barWidth = max(8, geo.size.width * totalRatio)
+                    let ttfbWidth = barWidth * ttfbShare
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(palette.borderSubtle.opacity(0.6))
+                            .frame(height: 5)
+                        HStack(spacing: 0) {
+                            if ttfb != nil, ttfbWidth > 0 {
+                                Rectangle()
+                                    .fill(palette.info.opacity(0.85))
+                                    .frame(width: ttfbWidth, height: 5)
+                            }
+                            Rectangle()
+                                .fill(RuntimeEventDisplay.statusColor(event).opacity(0.85))
+                                .frame(width: max(0, barWidth - ttfbWidth), height: 5)
+                        }
+                        .clipShape(Capsule())
+                    }
+                }
+                .frame(height: 5)
+                Text(RuntimeEventPresentation.durationWithTTFB(
+                    ttfbMS: event.ttfbMS,
+                    durationMS: event.durationMS,
+                    inFlight: event.isInFlight,
+                    startedAt: event.timestamp,
+                    now: Date()
+                ))
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+            }
+            .help("首字节等待（青色）与流式响应耗时（状态色）占比")
+        }
+    }
+
     private var traceContent: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let clientEvent {
                 Button {
                     selectedEventID = clientEvent.id
                 } label: {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 5) {
                         HStack(spacing: 8) {
                             Label(RuntimeEventDisplay.clientKind(clientEvent), systemImage: "desktopcomputer")
-                                .font(.caption.weight(.medium))
+                                .font(.caption.weight(.semibold))
                             Spacer()
                         }
                         RuntimeEventStatusSummary(event: clientEvent, compact: true)
+                        chainWaterfallBar(for: clientEvent)
                         Text(RuntimeEventDisplay.model(clientEvent))
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -1247,6 +1594,11 @@ private struct RuntimeRequestTraceView: View {
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    .padding(8)
+                    .background(
+                        clientEvent.id == selectedEventID ? palette.brand.opacity(0.08) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    )
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -1280,7 +1632,7 @@ private struct RuntimeRequestTraceView: View {
                     .foregroundStyle(RuntimeEventDisplay.statusColor(event))
                     .frame(width: 22, height: 22)
                     .background(RuntimeEventDisplay.statusColor(event).opacity(0.12), in: Circle())
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 4) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text(RuntimeEventDisplay.endpoint(event))
                             .font(.callout.weight(event.id == selectedEventID ? .semibold : .medium))
@@ -1288,15 +1640,9 @@ private struct RuntimeRequestTraceView: View {
                         Spacer(minLength: 6)
                     }
                     RuntimeEventStatusSummary(event: event, compact: true)
+                    chainWaterfallBar(for: event)
                     Text([
                         RuntimeEventDisplay.model(event),
-                        RuntimeEventPresentation.durationWithTTFB(
-                            ttfbMS: event.ttfbMS,
-                            durationMS: event.durationMS,
-                            inFlight: event.isInFlight,
-                            startedAt: event.timestamp,
-                            now: Date()
-                        ),
                         event.endpointID.map { "入口 ID=\($0)" },
                         event.upstreamRequestID.map { "上游请求=\($0)" },
                         RuntimeEventDisplay.toolCalls(event).map { "工具=\($0)" }
@@ -1318,7 +1664,11 @@ private struct RuntimeRequestTraceView: View {
                     }
                 }
             }
-            .padding(.vertical, 2)
+            .padding(6)
+            .background(
+                event.id == selectedEventID ? palette.brand.opacity(0.08) : Color.clear,
+                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+            )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

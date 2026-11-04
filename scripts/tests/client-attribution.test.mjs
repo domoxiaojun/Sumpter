@@ -17,6 +17,8 @@ function fixture(t) {
   execFileSync('git', ['-C', repo, 'config', 'remote.origin.url', 'https://user:synthetic@example.invalid/team/repo.git?token=synthetic#secret']);
   const nested = join(repo, 'nested'); mkdirSync(nested);
   const env = { HOME: home, XDG_DATA_HOME: join(home, '.local/share'), SHELL: '/bin/bash', USER: 'tester', PATH: process.env.PATH,
+    ANTHROPIC_BASE_URL: 'http://127.0.0.1:57878',
+    GROK_CONFIG: JSON.stringify({ endpoints: { xai_api_base_url: 'http://127.0.0.1:57878/v1', cli_chat_proxy_base_url: 'http://127.0.0.1:57878' } }),
     SUMPTER_GEMINI_BASE_URL: 'http://127.0.0.1:57878', SUMPTER_AUTH_TOKEN: 'synthetic-token' };
   return { root, home, repo, nested, env };
 }
@@ -91,9 +93,9 @@ test('clients share Unicode project/root/user/sanitized remote and preserve unre
   assert.equal(decodeURIComponent(base['X-Sumpter-Project']), "中文项目 ' space");
   assert.equal(decodeURIComponent(base['X-Sumpter-Git-Remote']), 'https://example.invalid/team/repo.git');
   const rawEnv = { ...f.env,
-    ANTHROPIC_CUSTOM_HEADERS: 'X-Test: unchanged\nx-sumpter-project: stale\nX-Sumpter-Session-Id: stale',
-    GROK_CONFIG: JSON.stringify({ other: 42, models: { temperature: 0.2, extra_headers: { 'X-Test': 'unchanged', 'x-sumpter-project': 'stale', 'X-Sumpter-Session-Id': 'stale' } } }),
-    GEMINI_CLI_CUSTOM_HEADERS: 'X-Test: unchanged, x-sumpter-project: stale',
+    ANTHROPIC_CUSTOM_HEADERS: 'X-Test: unchanged\nx-sumpter-project: stale\nX-Sumpter-Session-Id: stale\nX-Sumpter-Request-Kind: stale',
+    GROK_CONFIG: JSON.stringify({ ...JSON.parse(f.env.GROK_CONFIG), other: 42, models: { temperature: 0.2, extra_headers: { 'X-Test': 'unchanged', 'x-sumpter-project': 'stale', 'X-Sumpter-Session-Id': 'stale', 'X-Sumpter-Agent-Role': 'stale' } } }),
+    GEMINI_CLI_CUSTOM_HEADERS: 'X-Test: unchanged, x-sumpter-project: stale, X-Sumpter-Client-Variant: stale',
   };
   for (const client of ['claude', 'grok', 'gemini']) {
     const args = ['--model', 'test-model', 'prompt with spaces'];
@@ -103,6 +105,9 @@ test('clients share Unicode project/root/user/sanitized remote and preserve unre
     for (const [key,value] of Object.entries(base)) assert.equal(headers[key], value);
     assert.equal(headers['X-Test'], 'unchanged');
     assert.equal(headers['x-sumpter-project'], undefined);
+    assert.equal(headers['X-Sumpter-Request-Kind'], undefined);
+    assert.equal(headers['X-Sumpter-Agent-Role'], undefined);
+    assert.equal(headers['X-Sumpter-Client-Variant'], undefined);
     for (const [key,value] of Object.entries(headers)) assert.doesNotThrow(() => new Headers({ [key]: value }));
     assert.deepEqual(launch.args.slice(0,3), args);
     if (client !== 'gemini') assert.equal(headers['X-Sumpter-Session-Id'], undefined);
@@ -118,8 +123,8 @@ test('new directory clears stale metadata, fallbacks and validation do not expos
   assert.equal(headers['X-Sumpter-Git-Remote'],undefined);
   assert.equal(sanitizeRemote('git@example.invalid:repo.git?secret=1'), 'ssh://example.invalid/repo.git');
   for(const remote of ['file:///local/secret','https://host/\nsecret','relative/path']) assert.equal(sanitizeRemote(remote),undefined);
-  assert.throws(() => prepareLaunch('grok',[],{...f.env,GROK_CONFIG:'{synthetic-secret'},f.repo), /GROK_CONFIG 不是有效 JSON/);
-  assert.throws(() => prepareLaunch('grok',[],{...f.env,GROK_CONFIG_PATH:'/private/config'},f.repo), /覆盖/);
+  assert.equal(prepareLaunch('grok',[],{...f.env,GROK_CONFIG:'{synthetic-secret'},f.repo).env.GROK_CONFIG, '{synthetic-secret');
+  assert.equal(prepareLaunch('grok',[],{...f.env,GROK_CONFIG_PATH:'/private/config'},f.repo).attribution.enabled, false);
   mkdirSync(join(f.home,'.claude')); writeFileSync(join(f.home,'.claude/settings.json'),JSON.stringify({env:{ANTHROPIC_CUSTOM_HEADERS:'X: synthetic'}}));
   assert.throws(() => prepareLaunch('claude',[],f.env,f.repo), /覆盖动态归因/);
 });
@@ -143,6 +148,109 @@ test('Gemini preserves explicit IDs and complete UUID resume identity without ch
     assert.ok(!launch.env.GEMINI_CLI_CUSTOM_HEADERS.includes('stale'));
   }
 });
+
+test('Gemini respects attached resume, option values and end-of-options without changing the prompt', t => {
+  const f = fixture(t);
+  const uuid = '12345678-1234-1234-1234-123456789abc';
+  for (const args of [['-r5'], ['-rlatest'], [`-r${uuid}`], [`-r=${uuid}`]]) {
+    const launch = prepareLaunch('gemini', args, f.env, f.repo);
+    assert.deepEqual(launch.args, args);
+    const headers = textHeaders(launch.env.GEMINI_CLI_CUSTOM_HEADERS, ',');
+    assert.equal(headers['X-Sumpter-Session-Id'], args[0].includes(uuid) ? uuid : undefined);
+  }
+  for (const args of [['--', '--resume', 'explain this'], ['--prompt', '--resume'], ['-p', '--session-id']]) {
+    const launch = prepareLaunch('gemini', args, f.env, f.repo);
+    const headers = textHeaders(launch.env.GEMINI_CLI_CUSTOM_HEADERS, ',');
+    const index = launch.args.indexOf('--session-id');
+    // The first occurrence can be a prompt value; locate the injected ID by value.
+    const idIndex = launch.args.indexOf(headers['X-Sumpter-Session-Id']);
+    assert.ok(index >= 0 && idIndex > 0);
+    assert.equal(launch.args[idIndex - 1], '--session-id');
+    const original = [...launch.args]; original.splice(idIndex - 1, 2);
+    assert.deepEqual(original, args);
+    if (args[0] === '--') assert.deepEqual(launch.args.slice(2), args);
+  }
+  assert.throws(() => prepareLaunch('gemini', [], { ...f.env, SUMPTER_GEMINI_SESSION_ID: 'invalid:session' }, f.repo), /标识/);
+});
+
+for (const shell of ['bash', 'zsh']) {
+  test(`unified ${shell} legacy uninstall and successive restore cycles preserve the current configuration`, t => {
+    const f = fixture(t);
+    const opts = { shell, rc: join(f.home, `.${shell}rc`) };
+    const legacy = value => `# >>> sumpter cc-project-attribution >>>\nsource /synthetic/${value}.sh\n# <<< sumpter cc-project-attribution <<<\n`;
+    writeFileSync(opts.rc, '# keep\n' + legacy('old'));
+    manage('uninstall', 'claude', { ...opts, dryRun: true }, f.env);
+    assert.equal(manage('status', 'claude', opts, f.env)[0].status, 'legacy');
+    manage('uninstall', 'claude', opts, f.env);
+    assert.equal(readFileSync(opts.rc, 'utf8'), '# keep\n');
+    assert.equal(manage('status', 'claude', opts, f.env)[0].status, 'absent');
+    for (const version of ['old', 'new']) {
+      writeFileSync(opts.rc, '# keep\n' + legacy(version));
+      manage('install', 'claude', opts, f.env);
+      manage('install', 'claude', opts, f.env);
+      writeFileSync(opts.rc, readFileSync(opts.rc, 'utf8') + '# later edit\n');
+      manage('restore', 'claude', opts, f.env);
+      assert.equal(readFileSync(opts.rc, 'utf8'), '# keep\n# later edit\n' + legacy(version));
+      assert.equal(manage('status', 'claude', opts, f.env)[0].canRestore, false);
+    }
+  });
+}
+
+test('updating any client keeps an installed Pi companion paired and rejects incomplete bundles before writes', t => {
+  const f = fixture(t);
+  const old = join(f.root, 'old'); mkdirSync(old);
+  const extension = readFileSync(new URL('../clients/pi-project-attribution.ts', import.meta.url), 'utf8');
+  writeFileSync(join(old, 'client-attribution.mjs'), readFileSync(source, 'utf8').replaceAll('2.0.0', '1.9.0'));
+  writeFileSync(join(old, 'pi-project-attribution.ts'), extension.replaceAll('2.0.0', '1.9.0'));
+  manage('install', 'pi', {}, f.env, join(old, 'client-attribution.mjs'));
+  manage('install', 'claude', {}, f.env);
+  const dir = join(f.env.XDG_DATA_HOME, 'sumpter/attribution');
+  const installed = join(dir, 'client-attribution.mjs');
+  assert.equal(readFileSync(join(dir, 'pi-project-attribution.ts'), 'utf8'), extension);
+  assert.equal(manage('status', 'pi', {}, f.env)[0].status, 'installed');
+  const before = readFileSync(installed);
+  const rcBefore = readFileSync(join(f.home, '.bashrc'));
+  writeFileSync(join(old, 'pi-project-attribution.ts'), extension); // wrong release for old launcher
+  assert.throws(() => manage('install', 'claude', {}, f.env, join(old, 'client-attribution.mjs')), /版本不匹配/);
+  rmSync(join(old, 'pi-project-attribution.ts'));
+  assert.throws(() => manage('install', 'claude', {}, f.env, join(old, 'client-attribution.mjs')), /缺少配套/);
+  assert.deepEqual(readFileSync(installed), before);
+  assert.deepEqual(readFileSync(join(f.home, '.bashrc')), rcBefore);
+  writeFileSync(join(dir, 'pi-project-attribution.ts'), extension.replaceAll('2.0.0', '1.9.0'));
+  const shim = join(f.root, 'pi-shim');
+  writeFileSync(shim, '#!/bin/sh\necho CLIENT_STARTED\n', { mode: 0o700 });
+  const result = spawnSync(process.execPath, [installed, 'run', 'pi', '--', 'hello'], { env: { ...f.env, SUMPTER_PI_BIN: shim }, encoding: 'utf8' });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /版本不匹配/);
+  assert.doesNotMatch(result.stdout, /CLIENT_STARTED/);
+});
+
+for (const platform of ['linux', 'macos']) {
+  for (const client of ['cc', 'grok']) {
+    test(`legacy ${platform}/${client} sanitizes remotes before passing headers to the client`, t => {
+      const f = fixture(t);
+      const installer = fileURLToPath(new URL(`../../platforms/${platform}/scripts/${client}-project-attribution.sh`, import.meta.url));
+      const rc = join(f.home, '.bashrc');
+      execFileSync('/bin/bash', [installer, 'install', '--shell', 'bash', '--rc', rc], { env: f.env });
+      const command = client === 'cc' ? 'claude' : 'grok';
+      writeFileSync(join(f.root, command), `#!/bin/sh\nprintf '%s' "$${client === 'cc' ? 'ANTHROPIC_CUSTOM_HEADERS' : 'GROK_CONFIG'}"\n`, { mode: 0o700 });
+      for (const [remote, expected] of [
+        ['https://user:synthetic@example.invalid/team/repo.git?token=synthetic#private', 'https://example.invalid/team/repo.git'],
+        ['ssh://user:synthetic@example.invalid:2222/team/repo.git#private', 'ssh://example.invalid:2222/team/repo.git'],
+        ['git@example.invalid:team/repo.git?token=synthetic', 'ssh://example.invalid/team/repo.git'],
+        ['file:///private/repo', undefined],
+      ]) {
+        execFileSync('git', ['-C', f.repo, 'config', 'remote.origin.url', remote]);
+        for (const shell of ['/bin/bash', '/bin/zsh'].filter(existsSync)) {
+          const output = execFileSync(shell, ['-c', `. "$1"; ${command}`, 'remote-test', rc], { env: { ...f.env, PATH: `${f.root}:${f.env.PATH}` }, cwd: f.repo, encoding: 'utf8' });
+          const headers = client === 'cc' ? textHeaders(output, '\n') : JSON.parse(output).models.extra_headers;
+          assert.equal(headers['X-Sumpter-Git-Remote'], expected);
+          assert.doesNotMatch(output, /synthetic|token=|private\/repo/);
+        }
+      }
+    });
+  }
+}
 
 test('bash/zsh install is idempotent, migrates legacy blocks and restores locally without deleting later edits', (t) => {
   const f=fixture(t);
@@ -216,7 +324,7 @@ test('status distinguishes outdated and missing scripts; restore all skips clien
   rmSync(installed);
   assert.equal(manage('status', 'claude', opts, f.env)[0].status, 'broken');
   const result = manage('restore', 'all', opts, f.env);
-  assert.deepEqual(result.map(x => x.status), ['restored', 'unchanged', 'unchanged', 'unchanged', 'unchanged']);
+  assert.deepEqual(result.map(x => x.result), ['restored', 'unchanged', 'unchanged', 'unchanged', 'unchanged']);
   assert.equal(manage('status', 'claude', opts, f.env)[0].canRestore, false);
 });
 
@@ -320,8 +428,8 @@ test('remote Linux setup downloads from SUMPTER_RESOURCE_BASE without listener a
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => server.close());
-  const result = await new Promise((resolve, reject) => {
-    const child = spawn('/bin/bash', [script, 'install', 'all', '--shell', 'bash'], {
+  const run = client => new Promise((resolve, reject) => {
+    const child = spawn('/bin/bash', [script, 'install', client, '--shell', 'bash'], {
       env: { ...f.env, SUMPTER_RESOURCE_BASE: `http://127.0.0.1:${server.address().port}` },
     });
     let output = '';
@@ -330,9 +438,16 @@ test('remote Linux setup downloads from SUMPTER_RESOURCE_BASE without listener a
     child.on('error', reject);
     child.on('close', code => resolve({ code, output }));
   });
+  const result = await run('all');
   assert.equal(result.code, 0, result.output);
   assert.match(result.output, /claude：已安装/);
   assert.match(result.output, /pi：已安装/);
+  const privatePi = join(f.env.XDG_DATA_HOME, 'sumpter/attribution/pi-project-attribution.ts');
+  const extension = readFileSync(resources['/pi-project-attribution.ts'], 'utf8');
+  writeFileSync(privatePi, extension.replaceAll('2.0.0', '1.9.0'));
+  const update = await run('claude');
+  assert.equal(update.code, 0, update.output);
+  assert.equal(readFileSync(privatePi, 'utf8'), extension);
 });
 
 function legacyPiFixture(t, original = null) {
@@ -416,7 +531,7 @@ test('pi first install never creates global directory and missing resource fails
   assert.equal(existsSync(join(f.home, '.pi')), false);
   manage('restore', 'pi', {}, f.env);
   assert.equal(readFileSync(join(f.home, '.bashrc'), 'utf8'), '');
-  assert.equal(manage('restore', 'pi', {}, f.env)[0].status, 'unchanged');
+  assert.equal(manage('restore', 'pi', {}, f.env)[0].result, 'unchanged');
   const standalone = join(f.root, 'client-attribution.mjs');
   writeFileSync(standalone, readFileSync(source));
   assert.throws(() => manage('install', 'all', { shell: 'bash' }, f.env, standalone), /缺少配套/);
@@ -462,6 +577,23 @@ for (const platform of ['linux', 'macos']) {
         const command = client === 'cc' ? 'claude' : 'grok';
         const result = execFileSync(shell, ['-c', `. "$1"; typeset -f ${command}`, 'source-test', rc], options);
         assert.match(result, new RegExp(`${command}\\s*\\(\\)`));
+        if (client === 'grok') {
+          const grok = join(f.root, 'grok');
+          writeFileSync(grok, '#!/bin/sh\nprintf "%s" "$GROK_CONFIG"\n', { mode: 0o755 });
+          const config = execFileSync(shell, ['-c', '. "$1"; grok', 'legacy-grok-test', rc], {
+            ...options,
+            env: {
+              ...env,
+              PATH: `${f.root}:${env.PATH}`,
+              GROK_CONFIG: JSON.stringify({ models: { extra_headers: {
+                'X-Test': 'keep', 'X-Sumpter-Request-Kind': 'stale',
+              } } }),
+            },
+          });
+          const headers = JSON.parse(config).models.extra_headers;
+          assert.equal(headers['X-Test'], 'keep');
+          assert.equal(headers['X-Sumpter-Request-Kind'], undefined);
+        }
       }
       run('uninstall', '--dry-run');
       assert.equal(readFileSync(rc, 'utf8'), installed);
@@ -502,7 +634,7 @@ for (const shell of ['bash', 'zsh']) {
       env: { ...f.env, SUMPTER_PI_BIN: shim }, encoding: 'utf8',
     });
     assert.equal(child.status, 7, child.stderr);
-    assert.deepEqual(child.stdout.trimEnd().split('\n'), ['1', '-e', join(f.env.XDG_DATA_HOME, 'sumpter/attribution/pi-project-attribution.ts'), '--resume', 'session with spaces']);
+    assert.deepEqual(child.stdout.trimEnd().split('\n'), ['1', '-e', realpathSync(join(f.env.XDG_DATA_HOME, 'sumpter/attribution/pi-project-attribution.ts')), '--resume', 'session with spaces']);
     const resource = join(f.env.XDG_DATA_HOME, 'sumpter/attribution/pi-project-attribution.ts');
     rmSync(resource);
     assert.equal(manage('status', 'pi', opts, f.env)[0].status, 'broken');
@@ -513,7 +645,7 @@ for (const shell of ['bash', 'zsh']) {
     assert.equal(readFileSync(provider, 'utf8'), '{"keep":true}');
     assert.equal(manage('status', 'pi', opts, f.env)[0].status, 'absent');
     assert.equal(manage('status', 'pi', opts, f.env)[0].canRestore, false);
-    assert.equal(manage('restore', 'pi', opts, f.env)[0].status, 'unchanged');
+    assert.equal(manage('restore', 'pi', opts, f.env)[0].result, 'unchanged');
   });
 }
 
@@ -553,4 +685,127 @@ test('doctor keeps unreadable or malformed configuration unknown without exposin
   assert.equal(result.configuration, 'unknown');
   assert.ok(result.issues.length > 0);
   assert.doesNotMatch(JSON.stringify(result), /secret-value/);
+});
+
+test('v2 enable, disable, update and re-enable retain source identity and independent switches', t => {
+  const f = fixture(t);
+  const enabled = manage('enable', 'all', {}, f.env);
+  const sourceId = enabled[0].sourceId;
+  assert.ok(sourceId);
+  assert.equal(enabled[0].availableVersion, enabled[0].installedVersion);
+  assert.equal(manage('disable', 'claude', {}, f.env)[0].enabled, false);
+  assert.equal(manage('status', 'gemini', {}, f.env)[0].enabled, true);
+  const updated = manage('install', 'claude', {}, f.env)[0];
+  assert.equal(updated.status, 'disabled');
+  assert.equal(updated.sourceId, sourceId);
+  const launch = prepareLaunch('claude', [], f.env, f.repo);
+  assert.equal(launch.attribution.enabled, false);
+  assert.equal(launch.env.ANTHROPIC_CUSTOM_HEADERS, '');
+  assert.equal(manage('enable', 'claude', {}, f.env)[0].enabled, true);
+  assert.equal(prepareLaunch('claude', [], f.env, f.repo).attribution.sourceId, sourceId);
+});
+
+test('already loaded modern shell wrapper obeys disable on its next invocation', t => {
+  const f = fixture(t);
+  const rc = join(f.home, '.bashrc');
+  manage('enable', 'claude', { rc }, f.env);
+  const shim = join(f.root, 'claude-shim');
+  writeFileSync(shim, '#!/bin/sh\nprintf "%s\\n" "$ANTHROPIC_CUSTOM_HEADERS"\n', { mode: 0o700 });
+  const result = spawnSync('/bin/bash', ['-c', 'source "$1"; command node "$2" disable claude --shell bash --rc "$1" >/dev/null; claude', 'test', rc, source], {
+    env: { ...f.env, SUMPTER_CLAUDE_BIN: shim }, cwd: f.repo, encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), '');
+  const status = manage('status', 'claude', { rc }, f.env)[0];
+  assert.equal(status.lastLaunch.enabled, false);
+  assert.equal(status.lastLaunch.collectorVersion, status.installedVersion);
+});
+
+test('corrupt restore records and policy fail closed but cannot block disable or uninstall', t => {
+  const f = fixture(t);
+  const rc = join(f.home, '.bashrc');
+  manage('enable', 'claude', { rc }, f.env);
+  const dir = join(f.env.XDG_DATA_HOME, 'sumpter/attribution');
+  writeFileSync(join(dir, `claude-${Buffer.from(rc).toString('base64url')}.json`), '{bad');
+  writeFileSync(join(dir, 'collection.json'), '{bad');
+  const status = manage('status', 'claude', { rc }, f.env)[0];
+  assert.equal(status.backupState, 'invalid');
+  assert.equal(status.policyState, 'invalid');
+  assert.equal(prepareLaunch('claude', [], f.env, f.repo).attribution.enabled, false);
+  assert.equal(manage('disable', 'claude', { rc }, f.env)[0].enabled, false);
+  assert.equal(manage('uninstall', 'claude', { rc }, f.env)[0].status, 'absent');
+});
+
+test('unbound and mismatched connections skip metadata without changing client arguments', t => {
+  const f = fixture(t);
+  for (const env of [{ ...f.env, ANTHROPIC_BASE_URL: 'https://external.invalid' }, { ...f.env, ANTHROPIC_BASE_URL: '' }]) {
+    const launch = prepareLaunch('claude', ['hello'], env, f.repo);
+    assert.equal(launch.attribution.enabled, false);
+    assert.equal(launch.env.ANTHROPIC_CUSTOM_HEADERS, '');
+    assert.deepEqual(launch.args, ['hello']);
+  }
+  mkdirSync(join(f.repo, '.claude'));
+  writeFileSync(join(f.repo, '.claude/settings.local.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://external.invalid' } }));
+  assert.equal(prepareLaunch('claude', [], f.env, f.repo).attribution.binding, 'mismatch');
+  assert.equal(prepareLaunch('grok', [], { ...f.env, GROK_CONFIG: JSON.stringify({ endpoints: { xai_api_base_url: 'http://127.0.0.1:57878', cli_chat_proxy_base_url: 'https://external.invalid' } }) }, f.repo).attribution.binding, 'mismatch');
+});
+
+test('Gemini disable preserves connection and authentication but leaves session handling native', t => {
+  const f = fixture(t);
+  manage('enable', 'gemini', {}, f.env);
+  const enabled = prepareLaunch('gemini', ['hello'], f.env, f.repo);
+  manage('disable', 'gemini', {}, f.env);
+  const disabled = prepareLaunch('gemini', ['hello'], f.env, f.repo);
+  for (const key of ['GOOGLE_GEMINI_BASE_URL', 'GOOGLE_API_KEY', 'GEMINI_API_KEY']) assert.equal(disabled.env[key], enabled.env[key]);
+  assert.deepEqual(disabled.args, ['hello']);
+  assert.equal(disabled.env.GEMINI_CLI_CUSTOM_HEADERS, '');
+  assert.equal(prepareLaunch('gemini', [], { ...f.env, SUMPTER_AUTH_TOKEN: '' }, f.repo).attribution.enabled, false);
+});
+
+test('restore preview explicitly identifies legacy target while disable retains the backup', t => {
+  const f = fixture(t);
+  const rc = join(f.home, '.bashrc');
+  const legacy = '# >>> sumpter cc-project-attribution >>>\nclaude() { echo legacy; }\n# <<< sumpter cc-project-attribution <<<\n';
+  writeFileSync(rc, legacy);
+  manage('enable', 'claude', { rc }, f.env);
+  const status = manage('disable', 'claude', { rc }, f.env)[0];
+  assert.equal(status.restoreTarget, 'legacy');
+  assert.equal(status.canRestore, true);
+  assert.equal(manage('restore', 'claude', { rc }, f.env)[0].registration, 'legacy');
+  assert.equal(readFileSync(rc, 'utf8'), legacy);
+});
+
+test('companion-only updates change the pair revision and keep active bundles available', t => {
+  const f = fixture(t);
+  const before = manage('enable', 'claude', {}, f.env)[0];
+  const installed = join(f.env.XDG_DATA_HOME, 'sumpter/attribution/client-attribution.mjs');
+  const oldPath = realpathSync(installed);
+  const updated = join(f.root, 'updated'); mkdirSync(updated);
+  writeFileSync(join(updated, 'client-attribution.mjs'), readFileSync(source));
+  writeFileSync(join(updated, 'pi-project-attribution.ts'), readFileSync(new URL('../clients/pi-project-attribution.ts', import.meta.url), 'utf8') + '\n// synthetic update\n');
+  const after = manage('install', 'claude', {}, f.env, join(updated, 'client-attribution.mjs'))[0];
+  assert.notEqual(before.installedVersion, after.installedVersion);
+  assert.notEqual(realpathSync(installed), oldPath);
+  assert.ok(existsSync(oldPath));
+  assert.equal(before.sourceId, after.sourceId);
+});
+
+test('Claude skips alternate providers and project-only or disagreeing connection evidence', t => {
+  const f = fixture(t);
+  for (const key of ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY', 'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST', 'CLAUDE_CODE_REMOTE']) {
+    assert.equal(prepareLaunch('claude', [], { ...f.env, [key]: '1' }, f.repo).attribution.enabled, false);
+  }
+  mkdirSync(join(f.repo, '.claude'));
+  writeFileSync(join(f.repo, '.claude/settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:57878' } }));
+  assert.equal(prepareLaunch('claude', [], { ...f.env, ANTHROPIC_BASE_URL: '' }, f.repo).attribution.binding, 'unknown');
+  assert.equal(prepareLaunch('claude', [], { ...f.env, ANTHROPIC_BASE_URL: 'https://external.invalid' }, f.repo).attribution.binding, 'mismatch');
+});
+
+test('missing and malformed launch receipts remain unknown without blocking status', t => {
+  const f = fixture(t);
+  assert.equal(manage('status', 'claude', {}, f.env)[0].lastLaunch, null);
+  const status = manage('enable', 'claude', {}, f.env)[0];
+  const path = join(f.env.XDG_DATA_HOME, 'sumpter/attribution/launch-claude.json');
+  writeFileSync(path, JSON.stringify({ sourceId: status.sourceId, enabled: true }));
+  assert.equal(manage('status', 'claude', {}, f.env)[0].lastLaunch, null);
 });

@@ -21,11 +21,38 @@ function outcomeLabel(event) {
   return ({ succeeded: '成功', failed: '失败', cancelled: '已取消' })[eventOutcome(event)] || '未上报';
 }
 
+function ChainWaterfallBar({ item, maxDurationMS }) {
+  if (item.kind === 'notify') return null;
+  const duration = Number(eventDurationMS(item));
+  if (!Number.isFinite(duration) || duration <= 0) return null;
+  const rawTTFB = eventTTFBMS(item);
+  const ttfb = rawTTFB != null && Number.isFinite(Number(rawTTFB))
+    ? Math.min(duration, Math.max(0, Number(rawTTFB)))
+    : null;
+  const scaleMax = Math.max(duration, Number(maxDurationMS) || 1);
+  const totalPct = Math.min(100, Math.max(6, (duration / scaleMax) * 100));
+  const ttfbShare = ttfb != null && duration > 0 ? Math.min(100, Math.max(0, (ttfb / duration) * 100)) : 0;
+  return (
+    <span className="event-chain-waterfall" title={`首字节 ${formatDuration(ttfb)} / 总耗时 ${formatDuration(duration)}`}>
+      <span className="event-chain-waterfall-track">
+        <span className="event-chain-waterfall-bar" style={{ width: `${totalPct}%` }}>
+          {ttfb != null && <span className="event-chain-waterfall-ttfb" style={{ width: `${ttfbShare}%` }} />}
+          <span className="event-chain-waterfall-stream" style={{ width: `${Math.max(0, 100 - ttfbShare)}%` }} />
+        </span>
+      </span>
+      <small className="event-chain-waterfall-label mono">
+        {ttfb != null ? `TTFB ${formatDuration(ttfb)} → ${formatDuration(duration)}` : formatDuration(duration)}
+      </small>
+    </span>
+  );
+}
+
 function RequestChain({ event, chain, onSelect, truncated }) {
   const items = chain.length ? chain : [event];
   const primary = items.find((item) => item.kind === 'client' || item.kind === 'notify');
   // The API/context is newest first; number attempts in execution order.
   const attempts = items.filter((item) => item.kind === 'upstream').reverse();
+  const maxDurationMS = Math.max(1, ...items.map((item) => Number(eventDurationMS(item) || 0)));
   const traceItem = (item, number) => {
     const upstream = item.kind === 'upstream';
     const requestID = eventRequestID(item);
@@ -47,16 +74,21 @@ function RequestChain({ event, chain, onSelect, truncated }) {
       style={{ '--chain-tone': `var(--status-${statusKind(item)})` }}>
       {upstream && <span className="event-chain-number" aria-hidden="true">{number}</span>}
       <span className="event-chain-content">
-        <strong className="event-chain-title">
-          {!upstream && <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2" /><path d="M8 21h8M12 17v4" /></svg>}
-          {upstream ? eventEndpointName(item) : eventClientKindLabel(item)}
-        </strong>
-        <span className={`telemetry-outcome-text ${statusKind(item)}`}>{outcomeLabel(item)}</span>
+        <span className="event-chain-head-row">
+          <strong className="event-chain-title">
+            {!upstream && <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2" /><path d="M8 21h8M12 17v4" /></svg>}
+            {upstream ? eventEndpointName(item) : eventClientKindLabel(item)}
+          </strong>
+          <span className={`telemetry-outcome-text ${statusKind(item)} is-compact`}>
+            {eventIsInFlight(item) && <i className="telemetry-live-pill-dot" aria-hidden="true" />}
+            {outcomeLabel(item)}
+          </span>
+        </span>
         {item.kind !== 'notify' && <>
-          <span className="event-chain-secondary">{eventHttpStatusLabel(item)}</span>
+          <ChainWaterfallBar item={item} maxDurationMS={maxDurationMS} />
+          <span className="event-chain-secondary">{eventHttpStatusLabel(item)} · {eventModel(item)}</span>
           <span className="event-chain-usage">{eventUsageLabel(item)}</span>
           <span className="event-chain-secondary event-cache-inline">{eventCacheLabel(item)} <CacheHitRate event={item} />{eventCacheRead(item).finality === 'provisional' ? ' · 暂计' : ''}</span>
-          <span className="event-chain-secondary">{eventModel(item)}</span>
         </>}
         <span className="event-chain-diagnostics">{diagnostics}</span>
         {upstream && <span className="event-chain-message">{friendlyEventMessage(item) || (eventOutcome(item) === 'failed' ? eventFailureSummaryLabel(item) : '')}</span>}
@@ -74,7 +106,7 @@ function RequestChain({ event, chain, onSelect, truncated }) {
   </aside>;
 }
 
-export function EventInspector({ event, chain = [], chainTruncated = false, requestSummary, onSelect, expanded, onToggle, onCopy, loading = false }) {
+export function EventInspector({ event, chain = [], chainTruncated = false, requestSummary, onSelect, onClose, expanded, onToggle, onCopy, loading = false }) {
   const notify = event.kind === 'notify';
   const cache = eventCacheRead(event);
   const usage = eventUsage(event);
@@ -140,7 +172,14 @@ export function EventInspector({ event, chain = [], chainTruncated = false, requ
   return <div className="request-detail-grid">
     <RequestChain event={event} chain={chain} onSelect={onSelect} truncated={chainTruncated} />
     <section className="event-inspector" aria-label="选中事件详情">
-    <h3>选中事件</h3>
+    <div className="event-inspector-header">
+      <h3>选中事件</h3>
+      {onClose && (
+        <button type="button" className="btn btn-secondary btn-sm event-inspector-close" onClick={onClose} aria-label="收起选中事件详情">
+          收起详情
+        </button>
+      )}
+    </div>
     <dl className="event-inspector-fields" data-event-detail-tier="primary">
       <Field label="时间 / 类型" value={`${formatTimestamp(event.timestamp, { date: true })} · ${eventKindLabel(event.kind)}`} />
       <Field label="客户端 / 项目" value={requestSummary || `${eventClientKindLabel(event)} · ${eventProjectContext(event).label}`} />

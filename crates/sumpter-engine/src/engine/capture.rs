@@ -97,10 +97,8 @@ fn websocket_capture_size(trace: Option<&sumpter_core::events::WebSocketTrace>) 
 }
 
 fn client_declared_size(declared: &ClientDeclaredMetadata) -> usize {
-    declared.project.as_ref().map_or(0, String::len)
-        + declared.workspace.as_ref().map_or(0, String::len)
-        + declared.git_remote.as_ref().map_or(0, String::len)
-        + declared.user.as_ref().map_or(0, String::len)
+    // Include source fields and versioned identity in the capture budget.
+    serde_json::to_vec(declared).map_or(0, |bytes| bytes.len())
 }
 
 fn diagnostic_attempt_size(attempt: &DiagnosticAttemptCapture) -> usize {

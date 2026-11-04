@@ -17,6 +17,12 @@ fn attribution_headers(client: &str) -> Vec<(String, String)> {
         ("x-sumpter-request-kind".into(), "memory".into()),
         ("x-sumpter-agent-role".into(), "memory".into()),
         ("x-sumpter-client-variant".into(), "sdk".into()),
+        (
+            "x-sumpter-workspace".into(),
+            "/srv/customer-a/apps/api".into(),
+        ),
+        ("x-sumpter-source-id".into(), "synthetic-host-a".into()),
+        ("x-sumpter-collector-version".into(), "2.0.0-test".into()),
     ]
 }
 
@@ -96,6 +102,13 @@ async fn all_declared_clients_preserve_native_body_and_strip_private_attribution
             assert_eq!(event.client_variant.as_deref(), Some("sdk"));
             assert_eq!(event.agent_role.as_deref(), Some("memory"));
             assert_eq!(event.client_attribution.as_ref().unwrap().version, 1);
+            let declared = event.client_declared.as_ref().unwrap();
+            assert_eq!(declared.source_id.as_deref(), Some("synthetic-host-a"));
+            assert_eq!(declared.collector_version.as_deref(), Some("2.0.0-test"));
+            let identity = declared.workspace_identity.as_ref().unwrap();
+            assert_eq!(identity.version, 2);
+            assert_eq!(identity.name, "api");
+            assert!(identity.scoped);
         }
     }
 }

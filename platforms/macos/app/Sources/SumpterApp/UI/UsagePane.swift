@@ -502,20 +502,75 @@ struct UsagePane: View {
         }
     }
 
+    private enum TrendMetric: String, CaseIterable, Identifiable {
+        case clientRequests
+        case successRate
+        case failureRate
+        case ttfbAverage
+        case durationAverage
+        case outputSpeed
+        case outputTokens
+        case cacheTokenRate
+        case failovers
+        case estimatedCost
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .clientRequests: "请求量"
+            case .successRate: "成功率（比例）"
+            case .failureRate: "失败率（比例）"
+            case .ttfbAverage: "平均首字节"
+            case .durationAverage: "平均完成耗时"
+            case .outputSpeed: "输出速度"
+            case .outputTokens: "输出 Token"
+            case .cacheTokenRate: "缓存 Token 读占比（比例）"
+            case .failovers: "故障转移"
+            case .estimatedCost: "估算成本"
+            }
+        }
+
+        var shortTitle: String {
+            switch self {
+            case .clientRequests: "请求量"
+            case .successRate: "成功率"
+            case .failureRate: "失败率"
+            case .ttfbAverage: "平均首字节"
+            case .durationAverage: "平均完成耗时"
+            case .outputSpeed: "输出速度"
+            case .outputTokens: "输出 Token"
+            case .cacheTokenRate: "缓存 Token 读占比"
+            case .failovers: "故障转移"
+            case .estimatedCost: "估算成本"
+            }
+        }
+
+        var keepsNilForEmptyBucket: Bool {
+            switch self {
+            case .successRate, .failureRate, .ttfbAverage, .durationAverage, .outputSpeed, .cacheTokenRate:
+                true
+            case .clientRequests, .outputTokens, .failovers, .estimatedCost:
+                false
+            }
+        }
+    }
+
     @ObservedObject var model: AppModel
     /// Keep the overview KPI groups on one visual baseline.  The value is a
     /// minimum rather than a fixed frame so larger Dynamic Type sizes can
     /// still expand cards without clipping their details.
     private let overviewMetricMinimumHeight: CGFloat = 112
     @State private var cleanupPresented = false
+    @State private var pricingSheetPresented = false
+    @State private var trendMetric: TrendMetric = .clientRequests
+    @State private var hoveredTrendBucketIndex: Int?
+    @State private var selectedErrorSampleEventID: String?
+    @State private var expandedErrorEventGroups: Set<String> = []
     // 关闭自动刷新时冻结的画面快照;nil 表示跟随实时数据(后台轮询仍在更新模型)。
     @State private var frozenRuntime: RuntimeSnapshot?
     @State private var frozenHealth: ProxyHealthSummary?
     // 排行表的排序由用户掌握,默认是恒定的名称序 —— 见 UsageAggregateRow.stableOrder。
-    @State private var endpointSort = UsageAggregateRow.stableOrder
-    @State private var modelSort = UsageAggregateRow.stableOrder
-    @State private var clientKindSort = UsageAggregateRow.stableOrder
-    @State private var purposeSort = UsageAggregateRow.stableOrder
     @State private var failureSort = UsageAggregateRow.stableOrder
     @State private var protocolRouteSort = UsageAggregateRow.stableOrder
     @State private var featureRuleSort = UsageAggregateRow.stableOrder
@@ -523,10 +578,6 @@ struct UsagePane: View {
     @State private var toolSort = UsageAggregateRow.stableOrder
     @State private var streamSort = UsageAggregateRow.stableOrder
     @State private var codexSort = UsageAggregateRow.stableOrder
-    @State private var endpointDetailSort: [KeyPathComparator<AdminWire.RuntimeAnalytics.DimensionRow>] = [KeyPathComparator(\.name)]
-    @State private var projectSort: [KeyPathComparator<AdminWire.RuntimeAnalytics.DimensionRow>] = [KeyPathComparator(\.name)]
-    @State private var sessionSort: [KeyPathComparator<AdminWire.RuntimeAnalytics.DimensionRow>] = [KeyPathComparator(\.name)]
-    @State private var runtimeDimensionTableSort: [KeyPathComparator<AdminWire.RuntimeDimensionRow>] = [KeyPathComparator(\.lastSeen, order: .reverse)]
     @State private var runtimeEndpointTableSort: [KeyPathComparator<AdminWire.RuntimeDimensionRow>] = [KeyPathComparator(\.lastSeen, order: .reverse)]
     @State private var runtimeProjectTableSort: [KeyPathComparator<AdminWire.RuntimeDimensionRow>] = [KeyPathComparator(\.lastSeen, order: .reverse)]
     @State private var runtimeSessionTableSort: [KeyPathComparator<AdminWire.RuntimeDimensionRow>] = [KeyPathComparator(\.lastSeen, order: .reverse)]
@@ -557,9 +608,6 @@ struct UsagePane: View {
     }
     private var diagnosticSummary: RuntimeDiagnosticSummary {
         RuntimeDiagnosticSummary(events: displayRuntime.recentEvents)
-    }
-    private var operationalSummary: RuntimeOperationalSummary {
-        RuntimeOperationalSummary(events: displayRuntime.recentEvents)
     }
 
     private var unidentifiedSessionAlertPresented: Binding<Bool> {
@@ -649,12 +697,6 @@ struct UsagePane: View {
         .onChange(of: selectedBoard) { _, board in
             model.setStatisticsBoard(board.rawValue)
         }
-        .onChange(of: model.runtimeDimensionSort) { _, sort in
-            runtimeDimensionTableSort = [runtimeDimensionComparator(sort: sort, order: model.runtimeDimensionOrder)]
-        }
-        .onChange(of: model.runtimeDimensionOrder) { _, order in
-            runtimeDimensionTableSort = [runtimeDimensionComparator(sort: model.runtimeDimensionSort, order: order)]
-        }
         .onExitCommand {
             // Escape exits the deepest active drill-down first.  The native
             // Table selection and the local filter stay in sync through the
@@ -670,6 +712,9 @@ struct UsagePane: View {
         }
         .sheet(isPresented: $cleanupPresented) {
             RuntimeCleanupSheet(model: model)
+        }
+        .sheet(isPresented: $pricingSheetPresented) {
+            RuntimePricingEditor(model: model)
         }
         .confirmationDialog(
             "删除会话？",
@@ -1074,19 +1119,119 @@ struct UsagePane: View {
     private var overviewBoard: some View {
         SectionPanel(
             title: "使用概览",
-            hint: "按顺序查看数据存储、核心指标、Token 与缓存，以及入口、项目、会话和模型使用情况。项目或会话行可钻取模型明细。"
+            hint: "按顺序查看核心指标、Token 与缓存、数据存储，以及入口、项目、会话和模型使用情况。项目或会话行可钻取模型明细。"
         ) {
             VStack(alignment: .leading, spacing: 14) {
-            storageOverviewPanel
-                Divider()
                 healthPanel
                 Divider()
                 overviewRequestSummary
+                if let trend = model.runtimeTrendSeries, !trend.points.isEmpty {
+                    Divider()
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("趋势脉搏快览").font(.subheadline.weight(.semibold))
+                            Spacer()
+                            Picker("指标", selection: $trendMetric) {
+                                ForEach(TrendMetric.allCases) { metric in
+                                    Text(metric.title).tag(metric)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .frame(maxWidth: 200)
+                        }
+                        trendAreaChart(points: trend.points)
+                    }
+                }
                 Divider()
                 overviewTokenSummary
                 Divider()
+                storageOverviewPanel
+                Divider()
+                drilldownContextBar
                 overviewDimensionTables
             }
+        }
+    }
+
+    @ViewBuilder
+    private var drilldownContextBar: some View {
+        if !model.runtimeLocalProjectName.isEmpty || !model.runtimeLocalSessionName.isEmpty {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.turn.down.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(palette.brand)
+                Text("全部维度")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                if !model.runtimeLocalProjectName.isEmpty {
+                    Text("/")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                    HStack(spacing: 4) {
+                        Text("项目")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text(projectDisplayName(model.runtimeLocalProjectName))
+                            .font(.caption.weight(.semibold))
+                        Button {
+                            model.clearRuntimeLocalProject()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("清除项目下钻")
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(palette.brand.opacity(0.12), in: Capsule())
+                }
+                if !model.runtimeLocalSessionName.isEmpty {
+                    Text("/")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                    HStack(spacing: 4) {
+                        Text("会话")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text(sessionDisplayName(model.runtimeLocalSessionName))
+                            .font(.caption.weight(.semibold))
+                        Button {
+                            model.clearRuntimeLocalSession()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("清除会话下钻")
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(palette.info.opacity(0.12), in: Capsule())
+                }
+                Spacer(minLength: 8)
+                if !model.runtimeLocalSessionName.isEmpty {
+                    Button("返回全部会话") {
+                        model.clearRuntimeLocalSession()
+                    }
+                    .controlSize(.small)
+                }
+                if !model.runtimeLocalProjectName.isEmpty {
+                    Button("重置下钻") {
+                        model.clearRuntimeLocalProject()
+                    }
+                    .controlSize(.small)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(palette.inset, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .stroke(palette.brand.opacity(0.32), lineWidth: 0.9)
+            )
         }
     }
 
@@ -1124,7 +1269,10 @@ struct UsagePane: View {
                     runtimeOverviewDimensionControls(kind: kind, page: page)
                 }
             }
-            if kind == "project" { piAttributionStatus(page?.rows ?? []) }
+            if kind == "project" {
+                v3AttributionHints(page?.rows ?? [])
+                piAttributionStatus(page?.rows ?? [])
+            }
             if let page {
                 if page.rows.isEmpty {
                     EmptyStateView(title: "暂无匹配的" + runtimeDimensionLabel(kind), systemImage: "chart.bar")
@@ -1143,6 +1291,32 @@ struct UsagePane: View {
         }
     }
 
+    @ViewBuilder
+    private func v3AttributionHints(_ rows: [AdminWire.RuntimeDimensionRow]) -> some View {
+        let hintRows = rows.map {
+            ClaudeAttributionHint.ProjectRow(
+                name: $0.name,
+                projectSource: $0.source,
+                clientKinds: $0.clientKinds ?? [],
+                attempts: $0.requests
+            )
+        }
+        if ClaudeAttributionHint.shouldPrompt(projects: hintRows) {
+            attributionHintCard(
+                title: "Claude Code 项目归因未配置",
+                message: ClaudeAttributionHint.message,
+                command: ClaudeAttributionHint.command
+            )
+        }
+        if GrokAttributionHint.shouldPrompt(projects: hintRows) {
+            attributionHintCard(
+                title: "Grok Build 项目归因未配置",
+                message: GrokAttributionHint.message,
+                command: GrokAttributionHint.command
+            )
+        }
+    }
+
     private func piAttributionStatus(_ rows: [AdminWire.RuntimeDimensionRow]) -> some View {
         let state = PiAttributionHint.state(projects: rows.map {
             .init(name: $0.name, projectSource: $0.source, clientKinds: $0.clientKinds ?? [], attempts: $0.requests)
@@ -1154,13 +1328,34 @@ struct UsagePane: View {
         }
     }
 
+    private func sparkbarValueCell(text: String, value: Int, maxValue: Int, tint: Color) -> some View {
+        let ratio = maxValue > 0 ? min(1.0, max(0.0, CGFloat(value) / CGFloat(maxValue))) : 0
+        return ZStack(alignment: .leading) {
+            GeometryReader { proxy in
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(tint.opacity(0.15))
+                    .frame(width: max(ratio > 0 ? 3 : 0, proxy.size.width * ratio))
+            }
+            Text(text)
+                .monospacedDigit()
+                .padding(.horizontal, 4)
+        }
+        .frame(height: 20)
+    }
+
     private func runtimeOverviewUsageTable(_ page: AdminWire.RuntimeDimensionPage, kind: String, sortOrder: Binding<[KeyPathComparator<AdminWire.RuntimeDimensionRow>]>) -> some View {
-        Table(page.rows, selection: runtimeOverviewTableSelection(page: page, kind: kind), sortOrder: sortOrder) {
-            TableColumn(runtimeDimensionLabel(kind), value: \.name) { row in runtimeOverviewDimensionName(row, kind: kind) }.width(min: 190, ideal: 260)
-            TableColumn("请求", value: \.requests) { row in Text(tokenNumber(row.requests)).monospacedDigit() }.width(min: 76, ideal: 88)
+        let maxRequests = max(1, page.rows.map(\.requests).max() ?? 1)
+        let maxInputTokens = max(1, page.rows.map(\.inputTokens).max() ?? 1)
+        return Table(page.rows, selection: runtimeOverviewTableSelection(page: page, kind: kind), sortOrder: sortOrder) {
+            TableColumn(runtimeDimensionLabel(kind), value: \.name) { row in runtimeOverviewDimensionName(row, kind: kind) }.width(min: 220, ideal: 290)
+            TableColumn("请求", value: \.requests) { row in
+                sparkbarValueCell(text: tokenNumber(row.requests), value: row.requests, maxValue: maxRequests, tint: palette.brand)
+            }.width(min: 84, ideal: 98)
             TableColumn("成功率", value: \.successRateForSorting) { row in Text(rateText(row.successRateForSorting >= 0 ? row.successRateForSorting : nil)).monospacedDigit() }.width(min: 92, ideal: 106)
             TableColumn("失败", value: \.failures) { row in Text(tokenNumber(row.failures)).monospacedDigit() }.width(min: 76, ideal: 88)
-            TableColumn("输入 Token", value: \.inputTokens) { row in Text(dimensionTokenText(row.inputTokens, related: row.requests)).monospacedDigit() }.width(min: 108, ideal: 126)
+            TableColumn("输入 Token", value: \.inputTokens) { row in
+                sparkbarValueCell(text: dimensionTokenText(row.inputTokens, related: row.requests), value: row.inputTokens, maxValue: maxInputTokens, tint: palette.info)
+            }.width(min: 112, ideal: 130)
             TableColumn("输出 Token", value: \.outputTokens) { row in Text(dimensionTokenText(row.outputTokens, related: row.requests)).monospacedDigit() }.width(min: 108, ideal: 126)
             TableColumn("输出速度", value: \.outputSpeedForSorting) { row in Text(RuntimeEventPresentation.outputSpeedDisplay(row.outputTokensPerSecond)).monospacedDigit() }.width(min: 108, ideal: 126)
             TableColumn("缓存读取", value: \.cacheReadInputTokens) { row in
@@ -1174,24 +1369,27 @@ struct UsagePane: View {
         }
         .onChange(of: sortOrder.wrappedValue) { _, order in applyRuntimeOverviewSort(order, kind: kind) }
         .sumpterTableSurface()
-        .frame(minWidth: 1_040)
+        .frame(minWidth: 1_060)
         .frame(height: min(280, max(96, CGFloat(page.rows.count) * 31 + 38)))
     }
 
     private func runtimeOverviewCostTable(_ page: AdminWire.RuntimeDimensionPage, kind: String, sortOrder: Binding<[KeyPathComparator<AdminWire.RuntimeDimensionRow>]>) -> some View {
-        Table(page.rows, selection: runtimeOverviewTableSelection(page: page, kind: kind), sortOrder: sortOrder) {
-            TableColumn(runtimeDimensionLabel(kind), value: \.name) { row in runtimeOverviewDimensionName(row, kind: kind) }.width(min: 210, ideal: 280)
+        let maxRequests = max(1, page.rows.map(\.requests).max() ?? 1)
+        return Table(page.rows, selection: runtimeOverviewTableSelection(page: page, kind: kind), sortOrder: sortOrder) {
+            TableColumn(runtimeDimensionLabel(kind), value: \.name) { row in runtimeOverviewDimensionName(row, kind: kind) }.width(min: 220, ideal: 290)
             // Cost is calculated after the server applies its supported
             // aggregate ordering; keep it read-only here instead of sorting
             // only the visible page on the client.
             TableColumn("成本") { row in Text(costText(row.cost?.estimatedCostMicros ?? 0, currency: row.cost?.currency)).monospacedDigit() }.width(min: 110, ideal: 130)
-            TableColumn("请求", value: \.requests) { row in Text(tokenNumber(row.requests)).monospacedDigit() }.width(min: 76, ideal: 88)
+            TableColumn("请求", value: \.requests) { row in
+                sparkbarValueCell(text: tokenNumber(row.requests), value: row.requests, maxValue: maxRequests, tint: palette.success)
+            }.width(min: 84, ideal: 98)
             TableColumn("暂无法计价") { row in Text(tokenNumber((row.cost?.unpricedRequests ?? 0) + (row.cost?.unknownAccountingRequests ?? 0))).monospacedDigit() }.width(min: 110, ideal: 126)
             TableColumn("最近活动", value: \.lastSeen) { row in Text(RuntimeEventDisplay.dateTime(Date(timeIntervalSinceReferenceDate: row.lastSeen))).font(.caption.monospacedDigit()) }.width(min: 150, ideal: 174)
         }
         .onChange(of: sortOrder.wrappedValue) { _, order in applyRuntimeOverviewSort(order, kind: kind) }
         .sumpterTableSurface()
-        .frame(minWidth: 720)
+        .frame(minWidth: 740)
         .frame(height: min(240, max(96, CGFloat(page.rows.count) * 31 + 38)))
     }
 
@@ -1306,9 +1504,14 @@ struct UsagePane: View {
 
     @ViewBuilder
     private func runtimeOverviewDimensionName(_ row: AdminWire.RuntimeDimensionRow, kind: String) -> some View {
+        let subtitle: String = if kind == "project" {
+            "\(projectClientKindsLabel(row.clientKinds)) · \(dimensionSourceDisplayName(row.source, kind: kind))"
+        } else {
+            dimensionSourceDisplayName(row.source, kind: kind)
+        }
         let content = VStack(alignment: .leading, spacing: 2) {
             Text(runtimeDimensionDisplayName(row.name, kind: kind)).lineLimit(1).help(row.key)
-            Text(dimensionSourceDisplayName(row.source, kind: kind)).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            Text(subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
         }
         if kind == "project" {
             HStack(spacing: 6) {
@@ -1316,6 +1519,23 @@ struct UsagePane: View {
                     .buttonStyle(.link)
                     .help("仅筛选下方会话：\(row.key)")
                     .accessibilityLabel("仅查看项目 \(runtimeDimensionDisplayName(row.name, kind: kind)) 的会话和模型用量")
+                Spacer(minLength: 4)
+                if overviewProjectCanLocate(row) {
+                    Button {
+                        locateOverviewProject(row)
+                    } label: {
+                        if locatingProjectName == row.name {
+                            ProgressView().controlSize(.mini)
+                        } else {
+                            Image(systemName: "folder")
+                                .font(.caption)
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(locatingProjectName != nil)
+                    .help("在 Finder 中定位项目本地路径")
+                    .accessibilityLabel("在 Finder 中定位项目 \(runtimeDimensionDisplayName(row.name, kind: kind))")
+                }
                 Button {
                     confirmStickyClearTarget = (key: row.key, name: runtimeDimensionDisplayName(row.name, kind: kind), isSession: false)
                 } label: {
@@ -1333,6 +1553,7 @@ struct UsagePane: View {
                     .buttonStyle(.link)
                     .help("仅查看会话：\(row.key) 的模型用量")
                     .accessibilityLabel("仅查看会话 \(runtimeDimensionDisplayName(row.name, kind: kind)) 的模型用量")
+                Spacer(minLength: 4)
                 Button {
                     confirmStickyClearTarget = (key: row.key, name: runtimeDimensionDisplayName(row.name, kind: kind), isSession: true)
                 } label: {
@@ -1343,8 +1564,74 @@ struct UsagePane: View {
                 .disabled(stickyClearingKey != nil || row.key == "unidentified_session")
                 .help(row.key == "unidentified_session" ? "未识别会话包含多个对话，不能单独清除" : "只解除此对话的入口绑定，保留统计与事件")
                 .accessibilityLabel("清除会话 \(runtimeDimensionDisplayName(row.name, kind: kind)) 的粘性归属")
+                Button {
+                    model.exportRuntimeSession(sessionID: row.name)
+                } label: {
+                    Image(systemName: "square.and.arrow.down")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .help("导出会话 JSON")
+                .accessibilityLabel("导出会话 \(runtimeDimensionDisplayName(row.name, kind: kind))")
+                Button(role: .destructive) {
+                    if row.name == "unidentified_session" {
+                        unidentifiedConfirmationPhrase = ""
+                        confirmUnidentifiedSessionID = row.name
+                    } else {
+                        confirmDeleteSessionID = row.name
+                    }
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .help(row.name == "unidentified_session" ? "危险操作：删除未识别会话（需输入 DELETE）" : "删除会话及统计")
+                .accessibilityLabel("删除会话 \(runtimeDimensionDisplayName(row.name, kind: kind))")
             }
         } else { content }
+    }
+
+    private func overviewProjectCanLocate(_ row: AdminWire.RuntimeDimensionRow) -> Bool {
+        guard row.name != "unidentified_project", row.name != "multiple_workspaces" else {
+            return false
+        }
+        switch row.source {
+        case "workspace_remote_fallback", "missing_workspace_metadata", "workspace_unidentified":
+            return false
+        default:
+            return true
+        }
+    }
+
+    private func locateOverviewProject(_ row: AdminWire.RuntimeDimensionRow) {
+        guard overviewProjectCanLocate(row), locatingProjectName == nil else { return }
+        let projectName = row.name
+        let workspacePaths = ProjectFinder.workspacePaths(projectName: projectName, events: projectFinderEvents)
+        locatingProjectName = projectName
+        Task { @MainActor in
+            let outcome = await ProjectFinder.locate(
+                projectName: projectName,
+                workspacePaths: workspacePaths
+            )
+            guard locatingProjectName == projectName else { return }
+            locatingProjectName = nil
+            switch outcome {
+            case .matches(let paths):
+                let urls = paths.map { URL(fileURLWithPath: $0, isDirectory: true) }
+                guard !urls.isEmpty else {
+                    model.flash("未找到可验证的本地目录；本地路径已脱敏")
+                    return
+                }
+                NSWorkspace.shared.activateFileViewerSelecting(urls)
+                if urls.count == 1 {
+                    model.flash("已在 Finder 中定位：\(projectDisplayName(projectName))")
+                } else {
+                    model.flash("Finder 已选中 \(urls.count) 个同名目录，请确认本地目录")
+                }
+            case .unavailable:
+                model.flash("未找到可验证的本地目录；本地路径已脱敏")
+            }
+        }
     }
 
     private var costBoard: some View {
@@ -1352,6 +1639,7 @@ struct UsagePane: View {
             VStack(alignment: .leading, spacing: 14) {
                 costSummary
                 Divider()
+                drilldownContextBar
                 runtimeOverviewDimensionTable(kind: "endpoint", title: "入口成本", page: model.runtimeEndpointsPage, sortOrder: $runtimeEndpointTableSort, mode: .cost)
                 runtimeOverviewDimensionTable(kind: "project", title: "项目成本", page: model.runtimeProjectsPage, sortOrder: $runtimeProjectTableSort, mode: .cost)
                 runtimeOverviewDimensionTable(kind: "session", title: "会话成本", page: model.runtimeSessionsPage, sortOrder: $runtimeSessionTableSort, mode: .cost)
@@ -1362,36 +1650,24 @@ struct UsagePane: View {
 
     private var costSummary: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("成本摘要").font(.subheadline.weight(.semibold))
+            HStack {
+                Text("成本摘要").font(.subheadline.weight(.semibold))
+                Spacer()
+                Button {
+                    pricingSheetPresented = true
+                } label: {
+                    Label("配置模型价格…", systemImage: "tag")
+                }
+                .controlSize(.small)
+            }
             if let total = model.runtimeTrendSeries?.totals {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 10)], spacing: 10) {
                     MetricTile(title: "估算成本", value: costText(total.cost.estimatedCostMicros, currency: total.cost.currency), detail: total.cost.complete ? "已完成计价" : "部分请求暂无法计价", systemImage: "yensign.circle")
                     MetricTile(title: "已计价请求", value: tokenNumber(total.cost.pricedRequests), detail: "已匹配入口与模型价格", systemImage: "checkmark.circle")
-                    MetricTile(title: "暂无法计价", value: tokenNumber(total.cost.unpricedRequests + total.cost.unknownAccountingRequests), detail: "缺少价格或完整用量", systemImage: "questionmark.circle")
+                    MetricTile(title: "暂无法计价", value: tokenNumber(total.cost.unpricedRequests + total.cost.unknownAccountingRequests), detail: "缺少价格或完整用量 · 可在右上角补充模型单价", systemImage: "questionmark.circle")
                 }
             } else {
                 Text("暂无成本摘要").font(.caption).foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    /// Projects are the primary unit users asked to compare.  Keep this table
-    /// on the default board and load the complete project projection there;
-    /// the separate “其他维度” board is reserved for drill-down dimensions.
-    private var projectOverviewPanel: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let page = model.runtimeDimensionPage,
-               page.kind == "project" {
-                runtimeDimensionTable(page)
-            } else if model.runtimeDimensionPageLoading || model.runtimeV2Loading {
-                HStack {
-                    ProgressView().controlSize(.small)
-                    Text("正在读取项目使用情况…")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            } else {
-                EmptyStateView(title: "暂无项目使用数据", systemImage: "folder")
             }
         }
     }
@@ -1579,113 +1855,6 @@ struct UsagePane: View {
         }
     }
 
-    private var dimensionsBoard: some View {
-        runtimeDimensionPanel(showsControls: true)
-    }
-
-    @ViewBuilder
-    private var endpointPanel: some View {
-        if let rows = analytics?.endpoints {
-            SectionPanel(
-                title: "入口排行",
-                hint: "上游尝试按入口聚合；缓存读取下方显示 Token 读占比，— 表示计数或输入分母不足以计算。"
-            ) {
-                if rows.isEmpty {
-                    EmptyStateView(title: "暂无可排行的入口", systemImage: "chart.bar")
-                } else {
-                    Table(rows.sorted(using: endpointDetailSort), sortOrder: $endpointDetailSort) {
-                            TableColumn("入口", value: \.name) { row in
-                                Text(row.name).lineLimit(1).help(row.name)
-                            }
-                            .width(min: 150, ideal: 230, max: 320)
-                            TableColumn("尝试", value: \.attempts) { row in
-                                Text("\(row.attempts)").monospacedDigit()
-                            }
-                            .width(min: 68, ideal: 78, max: 90)
-                            TableColumn("输入 Token") { row in
-                                Text(tokenText(row.inputTokens, presence: row.usageFieldPresence?.inputTokens)).monospacedDigit()
-                            }
-                            .width(min: 82, ideal: 92, max: 110)
-                            TableColumn("输出 Token") { row in
-                                Text(tokenText(row.outputTokens, presence: row.usageFieldPresence?.outputTokens)).monospacedDigit()
-                            }
-                            .width(min: 82, ideal: 92, max: 110)
-                            TableColumn("缓存读取") { row in
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(tokenText(row.cacheReadInputTokens, presence: row.usageFieldPresence?.cacheReadInputTokens)).monospacedDigit()
-                                    Text("Token 读占比 " + rateText(row.cacheReadTokenRate))
-                                        .font(.caption2.monospacedDigit())
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            .width(min: 92, ideal: 105, max: 125)
-                            TableColumn("缓存写入") { row in
-                                Text(tokenText(row.cacheCreationInputTokens, presence: row.usageFieldPresence?.cacheCreationInputTokens)).monospacedDigit()
-                            }
-                            .width(min: 92, ideal: 105, max: 125)
-                    }
-                    .sumpterTableSurface()
-                    .frame(minWidth: 1_020)
-                    .frame(minHeight: 150)
-                }
-            }
-        } else {
-            aggregatePanel(
-                title: "入口排行",
-                hint: "基于最近事件窗口的上游尝试；累计见上方。usage 详情将在 SQLite analytics 可用后显示。",
-                rows: analyticsRows(
-                    nil,
-                    fallback: UsageAggregateRow.endpointRows(from: displayRuntime.recentEvents)
-                ),
-                sort: $endpointSort
-            )
-        }
-    }
-
-    private var tokenUsagePanel: some View {
-        SectionPanel(
-            title: "Token 使用",
-            hint: "按已记录用量汇总；没有数据时显示 —。"
-        ) {
-            let usage = model.runtimeTrendSeries?.totals.tokens
-            VStack(alignment: .leading, spacing: 12) {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
-                    MetricTile(title: "输入 Token", value: tokenText(usage?.inputTokens, presence: usage?.usageFieldPresence.inputTokens), detail: "输入用量", systemImage: "arrow.down.doc")
-                    MetricTile(title: "输出 Token", value: tokenText(usage?.outputTokens, presence: usage?.usageFieldPresence.outputTokens), detail: "输出用量", systemImage: "arrow.up.doc")
-                    MetricTile(title: "缓存读取", value: tokenText(usage?.cacheReadInputTokens, presence: usage?.usageFieldPresence.cacheReadInputTokens), detail: "缓存读取用量", footerAccessory: "Token 读占比 " + rateText(usage?.cacheReadTokenRate), systemImage: "externaldrive.badge.checkmark")
-                    MetricTile(title: "缓存写入", value: tokenText(usage?.cacheCreationInputTokens, presence: usage?.usageFieldPresence.cacheCreationInputTokens), systemImage: "externaldrive.badge.plus")
-                }
-            }
-        }
-    }
-
-    private var tokenDimensionPanel: some View {
-        SectionPanel(title: "入口 Token / 缓存", hint: "按当前筛选查看各入口用量。") {
-            runtimeDimensionPanel(showsControls: false)
-        }
-    }
-
-    /// Claude Code 请求落进「未识别项目」时的配置提示。判定在 SumpterCore
-    /// (ClaudeAttributionHint,有单测);这里只展示并提供复制,绝不自动改用户的
-    /// shell 配置——那超出 App 的职责边界。
-    @ViewBuilder
-    private var attributionHint: some View {
-        if ClaudeAttributionHint.shouldPrompt(projects: attributionHintRows) {
-            attributionHintCard(
-                title: "Claude Code 项目归因未配置",
-                message: ClaudeAttributionHint.message,
-                command: ClaudeAttributionHint.command
-            )
-        }
-        if GrokAttributionHint.shouldPrompt(projects: attributionHintRows) {
-            attributionHintCard(
-                title: "Grok Build 项目归因未配置",
-                message: GrokAttributionHint.message,
-                command: GrokAttributionHint.command
-            )
-        }
-    }
-
     @ViewBuilder
     private func attributionHintCard(title: String, message: String, command: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1716,99 +1885,6 @@ struct UsagePane: View {
         .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
     }
 
-    private var attributionHintRows: [ClaudeAttributionHint.ProjectRow] {
-        (analytics?.projects ?? []).map { row in
-            ClaudeAttributionHint.ProjectRow(
-                name: row.name,
-                projectSource: row.projectSource,
-                clientKinds: row.clientKinds ?? [],
-                attempts: row.attempts
-            )
-        }
-    }
-
-    @ViewBuilder
-    private var tokenProjectTable: some View {
-        if let rows = analytics?.projects, !rows.isEmpty {
-            Table(rows.sorted(using: projectSort), sortOrder: $projectSort) {
-                TableColumn("项目", value: \.name) { row in
-                    let workspacePaths = projectWorkspacePaths(row)
-                    HStack(alignment: .center, spacing: 8) {
-                        Button {
-                            // Legacy aggregate rows only carry the display name;
-                            // keep the local drill-down on project name instead
-                            // of pretending it is a stable project ID.
-                            model.setRuntimeLocalProject("", projectName: row.name)
-                        } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(projectDisplayName(row.name))
-                                Text(projectClientKindsLabel(row.clientKinds))
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                if workspacePaths.count == 1, let path = workspacePaths.first {
-                                    Text(path)
-                                        .font(.caption2.monospaced())
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                        .help(path)
-                                } else if workspacePaths.count > 1 {
-                                    Text("\(workspacePaths.count) 条本地路径")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                        .buttonStyle(.link)
-                        .help("按项目筛选统计")
-                        .accessibilityLabel("按项目筛选：\(projectDisplayName(row.name))")
-
-                        Button {
-                            locateProject(row)
-                        } label: {
-                            if locatingProjectName == row.name {
-                                ProgressView()
-                                    .controlSize(.small)
-                            } else {
-                                Image(systemName: "folder")
-                            }
-                        }
-                        .buttonStyle(.borderless)
-                        .frame(minWidth: 44, minHeight: 44)
-                        .disabled(!projectCanLocate(row) || locatingProjectName != nil)
-                        .help(projectLocatorHelp(row))
-                        .accessibilityLabel(projectLocatorHelp(row))
-                    }
-                }
-                .width(min: 220, ideal: 320)
-                TableColumn("输入 Token") { row in
-                    Text(tokenText(row.inputTokens, presence: row.usageFieldPresence?.inputTokens)).monospacedDigit()
-                }
-                .width(min: 82, ideal: 92, max: 110)
-                TableColumn("输出 Token") { row in
-                    Text(tokenText(row.outputTokens, presence: row.usageFieldPresence?.outputTokens)).monospacedDigit()
-                }
-                .width(min: 82, ideal: 92, max: 110)
-                TableColumn("缓存读取") { row in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(tokenText(row.cacheReadInputTokens, presence: row.usageFieldPresence?.cacheReadInputTokens)).monospacedDigit()
-                        Text("Token 读占比 " + rateText(row.cacheReadTokenRate))
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .width(min: 92, ideal: 105, max: 125)
-                TableColumn("缓存写入") { row in
-                    Text(tokenText(row.cacheCreationInputTokens, presence: row.usageFieldPresence?.cacheCreationInputTokens)).monospacedDigit()
-                }
-                .width(min: 92, ideal: 105, max: 125)
-            }
-            .sumpterTableSurface()
-            .frame(minHeight: 150)
-        } else {
-            EmptyStateView(title: "所选范围暂无上游 Token usage", systemImage: "number")
-        }
-    }
-
     private func projectDisplayName(_ value: String) -> String {
         switch value {
         case "unidentified_project": "未识别项目"
@@ -1817,174 +1893,11 @@ struct UsagePane: View {
         }
     }
 
-    private func projectSourceLabel(_ value: String) -> String {
-        switch value {
-        case "workspace_local": "来源：本地项目"
-        case "client_declared": "来源：客户端声明"
-        case "workspace_remote_fallback": "来源：远程仓库回退"
-        case "missing_workspace_metadata": "来源：未记录"
-        case "multiple_workspaces": "来源：多个项目，未拆分"
-        case "workspace_unidentified": "来源：未识别"
-        case "mixed": "来源：混合项目来源"
-        default: "来源：\(value)"
-        }
-    }
-
-    private func projectCanLocate(_ row: AdminWire.RuntimeAnalytics.DimensionRow) -> Bool {
-        guard row.name != "unidentified_project", row.name != "multiple_workspaces" else {
-            return false
-        }
-        switch row.projectSource {
-        case "workspace_remote_fallback", "missing_workspace_metadata", "workspace_unidentified":
-            return false
-        default:
-            // Older daemons may omit projectSource; a normal project name is
-            // still safe to search by name in Finder.
-            return true
-        }
-    }
-
-    /// New daemons attach sanitized workspace suffixes to each project row.
-    /// Keep the event-derived fallback so an older daemon remains usable.
-    private func projectWorkspacePaths(_ row: AdminWire.RuntimeAnalytics.DimensionRow) -> [String] {
-        if let paths = row.workspacePaths, !paths.isEmpty {
-            return paths
-        }
-        return ProjectFinder.workspacePaths(projectName: row.name, events: projectFinderEvents)
-    }
-
-    private func projectLocatorHelp(_ row: AdminWire.RuntimeAnalytics.DimensionRow) -> String {
-        guard projectCanLocate(row) else {
-            return "此项目没有可定位的本地路径"
-        }
-        let paths = projectWorkspacePaths(row)
-        if paths.count == 1, let path = paths.first {
-            return "在 Finder 中定位本地路径：\(path)"
-        }
-        if paths.count > 1 {
-            return "在 Finder 中定位 \(paths.count) 条本地路径"
-        }
-        return "在 Finder 中按项目名查找本地目录（当前统计未保留对应路径）"
-    }
-
     private var projectFinderEvents: [RuntimeEvent] {
         var seen = Set<String>()
         let paged = model.runtimePage?.events.map(\.runtimeEvent) ?? []
         return (displayRuntime.recentEvents + paged).filter { event in
             seen.insert(event.id).inserted
-        }
-    }
-
-    private func locateProject(_ row: AdminWire.RuntimeAnalytics.DimensionRow) {
-        guard projectCanLocate(row), locatingProjectName == nil else { return }
-        let projectName = row.name
-        let workspacePaths = projectWorkspacePaths(row)
-        locatingProjectName = projectName
-        Task { @MainActor in
-            let outcome = await ProjectFinder.locate(
-                projectName: projectName,
-                workspacePaths: workspacePaths
-            )
-            guard locatingProjectName == projectName else { return }
-            locatingProjectName = nil
-            switch outcome {
-            case .matches(let paths):
-                let urls = paths.map { URL(fileURLWithPath: $0, isDirectory: true) }
-                guard !urls.isEmpty else {
-                    model.flash("未找到可验证的本地目录；本地路径已脱敏")
-                    return
-                }
-                NSWorkspace.shared.activateFileViewerSelecting(urls)
-                if urls.count == 1 {
-                    model.flash("已在 Finder 中定位：\(projectDisplayName(projectName))")
-                } else {
-                model.flash("Finder 已选中 \(urls.count) 个同名目录，请确认本地目录")
-                }
-            case .unavailable:
-                model.flash("未找到可验证的本地目录；本地路径已脱敏")
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var tokenSessionTable: some View {
-        if let rows = analytics?.sessions, !rows.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("会话 Token 排行")
-                    .font(.subheadline.weight(.semibold))
-                Table(rows.sorted(using: sessionSort), sortOrder: $sessionSort) {
-                    TableColumn("会话", value: \.name) { row in
-                        Button {
-                            model.setRuntimeAnalyticsFilters(sessionID: row.name)
-                        } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(sessionDisplayName(row.name))
-                                let context = sessionContextLabel(row)
-                                if !context.isEmpty {
-                                    Text(context)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(2)
-                                }
-                            }
-                        }
-                        .buttonStyle(.link)
-                        .help("按会话筛选统计")
-                        .accessibilityLabel("按会话筛选：\(sessionDisplayName(row.name))")
-                    }
-                    .width(min: 240, ideal: 360)
-                    TableColumn("输入 Token") { row in
-                        Text(tokenText(row.inputTokens, presence: row.usageFieldPresence?.inputTokens)).monospacedDigit()
-                    }
-                    .width(min: 82, ideal: 92, max: 110)
-                    TableColumn("输出 Token") { row in
-                        Text(tokenText(row.outputTokens, presence: row.usageFieldPresence?.outputTokens)).monospacedDigit()
-                    }
-                    .width(min: 82, ideal: 92, max: 110)
-                    TableColumn("缓存读取") { row in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(tokenText(row.cacheReadInputTokens, presence: row.usageFieldPresence?.cacheReadInputTokens)).monospacedDigit()
-                            Text("Token 读占比 " + rateText(row.cacheReadTokenRate))
-                                .font(.caption2.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .width(min: 92, ideal: 105, max: 125)
-                    TableColumn("缓存写入") { row in
-                        Text(tokenText(row.cacheCreationInputTokens, presence: row.usageFieldPresence?.cacheCreationInputTokens)).monospacedDigit()
-                    }
-                    .width(min: 92, ideal: 105, max: 125)
-                    TableColumn("操作") { row in
-                        HStack(spacing: 6) {
-                            Button {
-                                model.exportRuntimeSession(sessionID: row.name)
-                            } label: {
-                                Image(systemName: "square.and.arrow.down")
-                            }
-                            .buttonStyle(.borderless)
-                            .frame(minWidth: 44, minHeight: 44)
-                            .help("导出会话 JSON")
-                            Button(role: .destructive) {
-                                if row.name == "unidentified_session" {
-                                    unidentifiedConfirmationPhrase = ""
-                                    confirmUnidentifiedSessionID = row.name
-                                } else {
-                                    confirmDeleteSessionID = row.name
-                                }
-                            } label: {
-                                Image(systemName: "trash")
-                            }
-                            .buttonStyle(.borderless)
-                            .frame(minWidth: 44, minHeight: 44)
-                            .help(row.name == "unidentified_session" ? "危险操作：删除未识别会话（需输入 DELETE）" : "删除会话及统计")
-                            .accessibilityLabel(row.name == "unidentified_session" ? "删除未识别会话，需要输入 DELETE 确认" : "删除会话及统计")
-                        }
-                    }
-                    .width(min: 96, ideal: 112, max: 140)
-                }
-                .sumpterTableSurface()
-                .frame(minHeight: 150)
-            }
         }
     }
 
@@ -2098,33 +2011,6 @@ struct UsagePane: View {
         return "\(value.prefix(12))…\(value.suffix(10))"
     }
 
-    private func sessionContextLabel(_ row: AdminWire.RuntimeAnalytics.DimensionRow) -> String {
-        let projects = (row.projects ?? []).map(projectDisplayName)
-        let clients = (row.clientKinds ?? []).map(clientDisplayName)
-        return [
-            projects.isEmpty ? nil : "项目: \(projects.joined(separator: " + "))",
-            clients.isEmpty ? nil : "客户端: \(clients.joined(separator: " + "))",
-        ].compactMap { $0 }.joined(separator: " · ")
-    }
-
-    private func accountingSemanticsLabel(_ value: String?) -> String {
-        switch value {
-        case "subset": "缓存已包含在输入中"
-        case "independent": "缓存与输入独立"
-        case "mixed": "混合协议，已逐请求计算"
-        default: "协议口径未知"
-        }
-    }
-
-    private func accountingQualityLabel(_ value: String?) -> String {
-        switch value {
-        case "complete": "输入/输出完整"
-        case "partial": "部分 usage 字段缺失"
-        case "mixed": "完整与部分数据混合"
-        default: "暂无 usage"
-        }
-    }
-
     private func tokenText(_ value: Int?) -> String {
         RuntimeEventPresentation.tokenCountDisplay(value)
     }
@@ -2147,44 +2033,8 @@ struct UsagePane: View {
         return String(format: "%.1f%%", locale: Locale(identifier: "en_US_POSIX"), percent)
     }
 
-    private func rateCoverageDetail(eligible: Int?, unknown: Int?) -> String {
-        let known = eligible.map(tokenNumber) ?? "—"
-        let unknownText = unknown.map(tokenNumber) ?? "—"
-        return "可计算 \(known) · 未知 \(unknownText)"
-    }
-
     private func formatBytes(_ bytes: Int) -> String {
         ByteCountFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .memory)
-    }
-
-    private var analyticsRangePanel: some View {
-        SectionPanel(title: "统计范围", hint: "请求健康与看板数据来自同一份 SQLite 稳定快照；切换范围会重新建立快照。") {
-            VStack(alignment: .leading, spacing: 12) {
-                if dynamicTypeSize.isAccessibilitySize {
-                    VStack(alignment: .leading, spacing: 8) {
-                        rangePicker
-                            .pickerStyle(.menu)
-                            .frame(minHeight: 44)
-                        storageSummary
-                    }
-                } else {
-                    ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 12) {
-                        rangePicker
-                            .pickerStyle(.segmented)
-                            .frame(maxWidth: 420)
-                        Spacer()
-                        storageSummary
-                    }
-                    VStack(alignment: .leading, spacing: 8) {
-                        rangePicker
-                            .pickerStyle(.menu)
-                        storageSummary
-                    }
-                }
-                }
-            }
-        }
     }
 
     private var rangePicker: some View {
@@ -2216,85 +2066,270 @@ struct UsagePane: View {
         }
     }
 
-    /// v3 快照控制条。看板内容在下方互斥切换，避免把所有大表纵向堆叠。
-    private var runtimeV2Panel: some View {
-        SectionPanel(
-            title: "统计快照",
-            hint: "所有看板使用同一份可重复快照；数据按统计间隔自动更新。"
-        ) {
-            VStack(alignment: .leading, spacing: 14) {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 10) { historyHeaderItems }
-                    VStack(alignment: .leading, spacing: 8) { historyHeaderItems }
-                }
-                if let error = model.runtimeV2Error ?? model.runtimeHistoryError {
-                    Label(error, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                        .textSelection(.enabled)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var historyHeaderItems: some View {
-        Label("按自动刷新间隔更新", systemImage: "arrow.clockwise")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        if model.runtimeHistoryLoading || model.runtimeV2Loading {
-            ProgressView().controlSize(.small)
-            Text("读取中…").font(.caption).foregroundStyle(.secondary)
-        }
-        if let page = model.runtimeHistoryPage {
-            Text("已同步 \(tokenNumber(page.totalCount)) 条")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-        }
-    }
-
     @ViewBuilder
     private var v3TrendSummary: some View {
-        if let trend = model.runtimeTrendSeries {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("趋势总计")
-                    .font(.subheadline.weight(.semibold))
-                let total = trend.totals
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
-                    MetricTile(title: "请求", value: tokenNumber(total.clientRequests), detail: "快照内客户端请求", systemImage: "arrow.left.arrow.right")
-                    MetricTile(title: "成功", value: tokenNumber(total.clientSuccesses), detail: "失败 \(tokenNumber(total.clientFailures)) · 取消 \(tokenNumber(total.clientCancelled))", systemImage: "checkmark.circle")
-                    MetricTile(title: "故障转移", value: tokenNumber(total.failovers), detail: "恢复 \(tokenNumber(total.failoverRecoveredRequests)) · 最终失败 \(tokenNumber(total.failoverTerminalRequests))", systemImage: "arrow.triangle.2.circlepath")
-                    MetricTile(title: "上游尝试", value: tokenNumber(total.upstreamAttempts), detail: "成功 \(tokenNumber(total.upstreamSuccesses)) · 失败 \(tokenNumber(total.upstreamFailures))", systemImage: "server.rack")
-                    MetricTile(title: "慢请求", value: latencyThresholdPair(total.durationMS, thresholds: trend.thresholds.durationMS), detail: latencyDetail(total.durationMS, thresholds: trend.thresholds.durationMS), systemImage: "tortoise")
-                    MetricTile(title: "首字节慢请求", value: latencyThresholdPair(total.ttfbMS, thresholds: trend.thresholds.ttfbMS), detail: latencyDetail(total.ttfbMS, thresholds: trend.thresholds.ttfbMS), systemImage: "timer")
-                    MetricTile(title: "Token", value: tokenNumber(total.tokens.processedTotalTokens), detail: "输入/输出按协议去重", systemImage: "number")
-                    MetricTile(title: "平均首字节", value: latencyAverage(total.ttfbMS), detail: "首次响应平均耗时", systemImage: "timer")
-                    MetricTile(title: "平均完成耗时", value: latencyAverage(total.durationMS), detail: "请求完成平均耗时", systemImage: "clock")
-                    MetricTile(title: "输出速度", value: RuntimeEventPresentation.outputSpeedDisplay(total.outputTokensPerSecond), detail: outputSpeedDetail(total.outputSpeedRequests), systemImage: "speedometer")
-                    MetricTile(title: "成本", value: costText(total.cost.estimatedCostMicros, currency: total.cost.currency), detail: total.cost.complete ? "价目完整" : "部分请求未定价", systemImage: "yensign.circle")
-                }
-                if !trend.points.isEmpty {
-                    Table(trend.points) {
-                            TableColumn("时间") { point in
-                                Text(RuntimeEventDisplay.dateTime(Date(timeIntervalSinceReferenceDate: point.bucketStart)))
-                                    .font(.caption.monospacedDigit())
-                            }.width(min: 150, ideal: 170)
-                            TableColumn("请求") { point in Text(tokenNumber(point.clientRequests)).monospacedDigit() }.width(min: 80, ideal: 90)
-                            TableColumn("成功") { point in Text(tokenNumber(point.clientSuccesses)).monospacedDigit() }.width(min: 80, ideal: 90)
-                            TableColumn("失败") { point in Text(tokenNumber(point.clientFailures)).monospacedDigit() }.width(min: 80, ideal: 90)
-                            TableColumn("Token") { point in Text(tokenNumber(point.tokens.processedTotalTokens)).monospacedDigit() }.width(min: 100, ideal: 120)
-                            TableColumn("平均首字节") { point in Text(latencyAverage(point.ttfbMS)).monospacedDigit() }.width(min: 108, ideal: 122)
-                            TableColumn("平均完成耗时") { point in Text(latencyAverage(point.durationMS)).monospacedDigit() }.width(min: 108, ideal: 122)
-                            TableColumn("成本") { point in Text(costText(point.cost.estimatedCostMicros, currency: point.cost.currency)).monospacedDigit() }.width(min: 110, ideal: 130)
+        SectionPanel(
+            title: "趋势",
+            hint: "使用上方范围筛选查看请求、响应速度、Token、缓存、故障转移与成本。"
+        ) {
+            if let trend = model.runtimeTrendSeries {
+                VStack(alignment: .leading, spacing: 14) {
+                    let total = trend.totals
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
+                        MetricTile(title: "请求", value: tokenNumber(total.clientRequests), detail: "快照内客户端请求", systemImage: "arrow.left.arrow.right")
+                        MetricTile(title: "成功", value: tokenNumber(total.clientSuccesses), detail: "失败 \(tokenNumber(total.clientFailures)) · 取消 \(tokenNumber(total.clientCancelled))", systemImage: "checkmark.circle")
+                        MetricTile(title: "故障转移", value: tokenNumber(total.failovers), detail: "恢复 \(tokenNumber(total.failoverRecoveredRequests)) · 最终失败 \(tokenNumber(total.failoverTerminalRequests))", systemImage: "arrow.triangle.2.circlepath")
+                        MetricTile(title: "上游尝试", value: tokenNumber(total.upstreamAttempts), detail: "成功 \(tokenNumber(total.upstreamSuccesses)) · 失败 \(tokenNumber(total.upstreamFailures))", systemImage: "server.rack")
+                        MetricTile(title: "慢请求", value: latencyThresholdPair(total.durationMS, thresholds: trend.thresholds.durationMS), detail: latencyDetail(total.durationMS, thresholds: trend.thresholds.durationMS), systemImage: "tortoise")
+                        MetricTile(title: "首字节慢请求", value: latencyThresholdPair(total.ttfbMS, thresholds: trend.thresholds.ttfbMS), detail: latencyDetail(total.ttfbMS, thresholds: trend.thresholds.ttfbMS), systemImage: "timer")
+                        MetricTile(title: "Token", value: tokenNumber(total.tokens.processedTotalTokens), detail: "输入/输出按协议去重", systemImage: "number")
+                        MetricTile(title: "平均首字节", value: latencyAverage(total.ttfbMS), detail: "首次响应平均耗时", systemImage: "timer")
+                        MetricTile(title: "平均完成耗时", value: latencyAverage(total.durationMS), detail: "请求完成平均耗时", systemImage: "clock")
+                        MetricTile(title: "输出速度", value: RuntimeEventPresentation.outputSpeedDisplay(total.outputTokensPerSecond), detail: outputSpeedDetail(total.outputSpeedRequests), systemImage: "speedometer")
+                        MetricTile(title: "成本", value: costText(total.cost.estimatedCostMicros, currency: total.cost.currency), detail: total.cost.complete ? "价目完整" : "部分请求未定价", systemImage: "yensign.circle")
                     }
-                    .sumpterTableSurface()
-                    .frame(minWidth: 820)
-                    .frame(height: min(260, max(90, CGFloat(trend.points.count) * 26 + 34)))
+                    HStack(spacing: 12) {
+                        Picker("展示指标", selection: $trendMetric) {
+                            ForEach(TrendMetric.allCases) { item in
+                                Text(item.title).tag(item)
+                            }
+                        }
+                        .frame(maxWidth: 280)
+                        Spacer()
+                    }
+                    if !trend.points.isEmpty {
+                        trendAreaChart(points: trend.points)
+                        DisclosureGroup("查看时间桶明细（\(trend.points.count)）") {
+                            Table(trend.points) {
+                                TableColumn("时间") { point in
+                                    Text(RuntimeEventDisplay.dateTime(Date(timeIntervalSinceReferenceDate: point.bucketStart)))
+                                        .font(.caption.monospacedDigit())
+                                }.width(min: 150, ideal: 170)
+                                TableColumn("请求") { point in Text(tokenNumber(point.clientRequests)).monospacedDigit() }.width(min: 80, ideal: 90)
+                                TableColumn("成功") { point in Text(tokenNumber(point.clientSuccesses)).monospacedDigit() }.width(min: 80, ideal: 90)
+                                TableColumn("失败") { point in Text(tokenNumber(point.clientFailures)).monospacedDigit() }.width(min: 80, ideal: 90)
+                                TableColumn("Token") { point in Text(tokenNumber(point.tokens.processedTotalTokens)).monospacedDigit() }.width(min: 100, ideal: 120)
+                                TableColumn("平均首字节") { point in Text(latencyAverage(point.ttfbMS)).monospacedDigit() }.width(min: 108, ideal: 122)
+                                TableColumn("平均完成耗时") { point in Text(latencyAverage(point.durationMS)).monospacedDigit() }.width(min: 108, ideal: 122)
+                                TableColumn("成本") { point in Text(costText(point.cost.estimatedCostMicros, currency: point.cost.currency)).monospacedDigit() }.width(min: 110, ideal: 130)
+                            }
+                            .sumpterTableSurface()
+                            .frame(minWidth: 820)
+                            .frame(height: min(260, max(90, CGFloat(trend.points.count) * 26 + 34)))
+                            .padding(.top, 8)
+                        }
+                        .font(.callout.weight(.medium))
+                    }
+                }
+            } else if model.runtimeV2Loading {
+                HStack { ProgressView().controlSize(.small); Text("正在计算趋势…").font(.caption).foregroundStyle(.secondary) }
+            } else {
+                EmptyStateView(title: "暂无趋势数据", systemImage: "chart.xyaxis.line")
+            }
+        }
+    }
+
+    private func trendBucketValue(_ point: AdminWire.RuntimeTrendPoint, metric: TrendMetric) -> Double? {
+        let completed = point.clientSuccesses + point.clientFailures + point.clientCancelled
+        switch metric {
+        case .clientRequests:
+            return Double(point.clientRequests)
+        case .successRate:
+            guard completed > 0 else { return nil }
+            return Double(point.clientSuccesses) * 100.0 / Double(completed)
+        case .failureRate:
+            guard completed > 0 else { return nil }
+            return Double(point.clientFailures) * 100.0 / Double(completed)
+        case .ttfbAverage:
+            return point.ttfbMS.averageMS
+        case .durationAverage:
+            return point.durationMS.averageMS
+        case .outputSpeed:
+            return point.outputTokensPerSecond
+        case .outputTokens:
+            return Double(point.tokens.outputTokens)
+        case .cacheTokenRate:
+            if let rate = point.tokens.cacheReadTokenRate {
+                return rate * 100.0
+            }
+            guard point.tokens.processedInputTokens > 0 else { return nil }
+            return min(100.0, Double(max(0, point.tokens.cacheReadInputTokens)) * 100.0 / Double(point.tokens.processedInputTokens))
+        case .failovers:
+            return Double(point.failovers)
+        case .estimatedCost:
+            return Double(point.cost.estimatedCostMicros) / 1_000_000.0
+        }
+    }
+
+    private func formatTrendMetricValue(_ value: Double?, metric: TrendMetric) -> String {
+        guard let value, value.isFinite else { return "—" }
+        switch metric {
+        case .successRate, .failureRate, .cacheTokenRate:
+            return String(format: "%.1f%%", value)
+        case .ttfbAverage, .durationAverage:
+            return RuntimeEventPresentation.durationDisplay(Int(value.rounded()))
+        case .outputSpeed:
+            return RuntimeEventPresentation.outputSpeedDisplay(value)
+        case .estimatedCost:
+            return String(format: "USD %.4f", value)
+        case .clientRequests, .outputTokens, .failovers:
+            return tokenNumber(Int(value.rounded()))
+        }
+    }
+
+    @ViewBuilder
+    private func trendAreaChart(points: [AdminWire.RuntimeTrendPoint]) -> some View {
+        let keepNil = trendMetric.keepsNilForEmptyBucket
+        let values: [Double?] = points.map { point in
+            if let v = trendBucketValue(point, metric: trendMetric), v.isFinite {
+                return max(0, v)
+            }
+            return keepNil ? nil : 0
+        }
+        let maxValue = max(1.0, values.compactMap { $0 }.max() ?? 1.0)
+        let activeIdx: Int? = if let hovered = hoveredTrendBucketIndex, points.indices.contains(hovered) {
+            hovered
+        } else {
+            values.indices.last(where: { values[$0] != nil }) ?? points.indices.last
+        }
+
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(palette.brand)
+                        .frame(width: 8, height: 8)
+                    Text(trendMetric.shortTitle)
+                        .font(.caption.weight(.semibold))
+                    Text("\(points.count) 个时间桶")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if let idx = activeIdx, points.indices.contains(idx) {
+                    let bucket = points[idx]
+                    HStack(spacing: 6) {
+                        Text(RuntimeEventDisplay.time(Date(timeIntervalSinceReferenceDate: bucket.bucketStart)))
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                        Text(formatTrendMetricValue(values[idx], metric: trendMetric))
+                            .font(.caption.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(.primary)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(palette.raised, in: Capsule())
+                    .overlay(Capsule().stroke(palette.borderSubtle, lineWidth: 0.8))
+                }
+                Text("峰值 \(formatTrendMetricValue(maxValue, metric: trendMetric)) / 桶")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            GeometryReader { geo in
+                let padLeft: CGFloat = 56
+                let padRight: CGFloat = 16
+                let padTop: CGFloat = 12
+                let padBottom: CGFloat = 24
+                let chartW = max(1, geo.size.width - padLeft - padRight)
+                let chartH = max(1, geo.size.height - padTop - padBottom)
+                let baseY = padTop + chartH
+
+                let coords: [(index: Int, x: CGFloat, y: CGFloat, value: Double)] = values.enumerated().compactMap { index, val in
+                    guard let val else { return nil }
+                    let x = padLeft + (points.count <= 1 ? chartW / 2 : (CGFloat(index) / CGFloat(points.count - 1)) * chartW)
+                    let y = baseY - CGFloat(val / maxValue) * chartH
+                    return (index, x, y, val)
+                }
+
+                ZStack(alignment: .topLeading) {
+                    ForEach([0.0, 0.5, 1.0], id: \.self) { ratio in
+                        let y = baseY - CGFloat(ratio) * chartH
+                        Path { path in
+                            path.move(to: CGPoint(x: padLeft, y: y))
+                            path.addLine(to: CGPoint(x: padLeft + chartW, y: y))
+                        }
+                        .stroke(palette.borderSubtle, style: StrokeStyle(lineWidth: 0.8, dash: [4, 4]))
+
+                        Text(formatTrendMetricValue(maxValue * ratio, metric: trendMetric))
+                            .font(.system(size: 10).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .position(x: padLeft / 2 - 2, y: y)
+                    }
+
+                    if coords.count >= 2 {
+                        Path { path in
+                            guard let first = coords.first, let last = coords.last else { return }
+                            path.move(to: CGPoint(x: first.x, y: baseY))
+                            for pt in coords {
+                                path.addLine(to: CGPoint(x: pt.x, y: pt.y))
+                            }
+                            path.addLine(to: CGPoint(x: last.x, y: baseY))
+                            path.closeSubpath()
+                        }
+                        .fill(
+                            LinearGradient(
+                                colors: [palette.brand.opacity(0.28), palette.brand.opacity(0.01)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+
+                        Path { path in
+                            guard let first = coords.first else { return }
+                            path.move(to: CGPoint(x: first.x, y: first.y))
+                            for pt in coords.dropFirst() {
+                                path.addLine(to: CGPoint(x: pt.x, y: pt.y))
+                            }
+                        }
+                        .stroke(palette.brand, style: StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
+                    }
+
+                    ForEach(coords, id: \.index) { pt in
+                        let isHovered = hoveredTrendBucketIndex == pt.index
+                        Circle()
+                            .fill(isHovered ? palette.surface : palette.brand)
+                            .frame(width: isHovered ? 9 : 6, height: isHovered ? 9 : 6)
+                            .overlay(
+                                Circle()
+                                    .stroke(palette.brand, lineWidth: isHovered ? 2.2 : 0)
+                            )
+                            .position(x: pt.x, y: pt.y)
+                            .onHover { hovering in
+                                hoveredTrendBucketIndex = hovering ? pt.index : nil
+                            }
+                            .help("\(RuntimeEventDisplay.dateTime(Date(timeIntervalSinceReferenceDate: points[pt.index].bucketStart))) · \(formatTrendMetricValue(pt.value, metric: trendMetric))")
+                    }
+
+                    if let first = points.first {
+                        Text(RuntimeEventDisplay.time(Date(timeIntervalSinceReferenceDate: first.bucketStart)))
+                            .font(.system(size: 10).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .position(x: padLeft + 28, y: baseY + 13)
+                    }
+                    if points.count > 2 {
+                        let mid = points[points.count / 2]
+                        Text(RuntimeEventDisplay.time(Date(timeIntervalSinceReferenceDate: mid.bucketStart)))
+                            .font(.system(size: 10).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .position(x: padLeft + chartW / 2, y: baseY + 13)
+                    }
+                    if points.count > 1, let last = points.last {
+                        Text(RuntimeEventDisplay.time(Date(timeIntervalSinceReferenceDate: last.bucketStart)))
+                            .font(.system(size: 10).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .position(x: padLeft + chartW - 28, y: baseY + 13)
+                    }
                 }
             }
-        } else if model.runtimeV2Loading {
-            HStack { ProgressView().controlSize(.small); Text("正在计算趋势…").font(.caption).foregroundStyle(.secondary) }
+            .frame(height: 196)
         }
+        .padding(14)
+        .background(palette.inset, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(palette.borderSubtle, lineWidth: 0.8)
+        )
     }
 
     private func outputSpeedDetail(_ requests: Int?) -> String {
@@ -2323,13 +2358,6 @@ struct UsagePane: View {
         return "已观测 " + tokenNumber(metrics.observedRequests) + " · " + values.joined(separator: " · ")
     }
 
-    private func latencyThresholdHeader(_ thresholds: [Int]) -> String {
-        guard !thresholds.isEmpty else { return "超阈值请求" }
-        return thresholds
-            .map { ">" + RuntimeEventPresentation.durationDisplay($0) }
-            .joined(separator: " / ")
-    }
-
     private func latencyThresholdPair(
         _ metrics: AdminWire.RuntimeLatencyMetrics,
         thresholds: [Int]
@@ -2342,230 +2370,128 @@ struct UsagePane: View {
 
     @ViewBuilder
     private var v3ErrorTable: some View {
-        if let page = model.runtimeErrorPage {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("错误聚合").font(.subheadline.weight(.semibold))
-                    Spacer()
-                    Text("共 \(tokenNumber(page.totalCount)) 组").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                    SumpterPaginationControls(
-                        page: page.page,
-                        totalPages: page.totalPages,
-                        hasPrevious: page.hasPrevious,
-                        hasNext: page.hasNext,
-                        pageSize: model.runtimeErrorPageSize,
-                        compact: true,
-                        loading: model.runtimeErrorPageLoading,
-                        onPageChange: { model.loadRuntimeV2ErrorPage(page: $0) },
-                        onPageSizeChange: model.setRuntimeErrorPageSize
-                    )
-                }
-                if page.groups.isEmpty {
-                    EmptyStateView(title: "快照内没有结构化错误", systemImage: "checkmark.circle")
-                } else {
-                    Table(page.groups) {
-                            TableColumn("失败") { group in Text([group.failureKind, group.failurePhase].compactMap { $0 }.joined(separator: " / ")).lineLimit(2).help(group.id) }.width(min: 170, ideal: 220)
-                            TableColumn("入口 / 模型") { group in Text([group.endpointName ?? group.endpointID, group.model].compactMap { $0 }.joined(separator: " · ")).lineLimit(2) }.width(min: 180, ideal: 240)
-                            TableColumn("次数") { group in Text(tokenNumber(group.occurrences)).monospacedDigit() }.width(min: 76, ideal: 86)
-                            TableColumn("请求") { group in Text(tokenNumber(group.affectedRequests)).monospacedDigit() }.width(min: 76, ideal: 86)
-                            TableColumn("会话") { group in Text(tokenNumber(group.affectedSessions)).monospacedDigit() }.width(min: 76, ideal: 86)
-                            TableColumn("最近") { group in Text(RuntimeEventDisplay.dateTime(Date(timeIntervalSinceReferenceDate: group.lastSeen))).font(.caption.monospacedDigit()) }.width(min: 150, ideal: 170)
+        SectionPanel(
+            title: "错误聚合",
+            hint: "按失败类型、阶段、入口和模型聚合；点击样本编号可下钻查看完整请求链与事件详情。"
+        ) {
+            if let page = model.runtimeErrorPage {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("共 \(tokenNumber(page.totalCount)) 组").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        Spacer()
+                        SumpterPaginationControls(
+                            page: page.page,
+                            totalPages: page.totalPages,
+                            hasPrevious: page.hasPrevious,
+                            hasNext: page.hasNext,
+                            pageSize: model.runtimeErrorPageSize,
+                            compact: true,
+                            loading: model.runtimeErrorPageLoading,
+                            onPageChange: { model.loadRuntimeV2ErrorPage(page: $0) },
+                            onPageSizeChange: model.setRuntimeErrorPageSize
+                        )
                     }
-                    .sumpterTableSurface()
-                    .frame(minWidth: 900)
-                    .frame(height: min(240, max(90, CGFloat(page.groups.count) * 28 + 34)))
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var v3DimensionTables: some View {
-        if let projects = model.runtimeProjectsPage, let sessions = model.runtimeSessionsPage {
-            VStack(alignment: .leading, spacing: 12) {
-                piAttributionStatus(projects.rows)
-                dimensionTable(title: "项目（服务端分页）", page: projects, search: $model.runtimeProjectSearch, searchPrompt: "搜索项目名或 ID", onSearch: { model.loadRuntimeProjects(page: 1) }, onPage: { model.loadRuntimeProjects(page: $0) }, pageSize: model.runtimeProjectPageSize, loading: model.runtimeDimensionsLoading, onPageSizeChange: model.setRuntimeProjectPageSize, select: { model.setRuntimeV2Project($0.key, projectName: $0.name) }, isProject: true)
-                dimensionTable(title: "会话（服务端分页）", page: sessions, search: $model.runtimeSessionSearch, searchPrompt: "搜索会话 ID", onSearch: { model.loadRuntimeSessions(page: 1) }, onPage: { model.loadRuntimeSessions(page: $0) }, pageSize: model.runtimeSessionPageSize, loading: model.runtimeDimensionsLoading, onPageSizeChange: model.setRuntimeSessionPageSize, select: { model.setRuntimeV2Session($0.key) }, isProject: false)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func runtimeDimensionPanel(showsControls: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if showsControls {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) { runtimeDimensionControls }
-                    VStack(alignment: .leading, spacing: 8) { runtimeDimensionControls }
-                }
-            }
-            if let page = model.runtimeDimensionPage {
-                runtimeDimensionTable(page)
-            } else if model.runtimeDimensionPageLoading || model.runtimeV2Loading {
-                HStack { ProgressView().controlSize(.small); Text("正在读取维度…").font(.caption).foregroundStyle(.secondary) }
-            } else {
-                EmptyStateView(title: "尚未加载维度", systemImage: "chart.bar")
-            }
-        }
-    }
-
-    /// Shared project/endpoint/other-dimension table.  Native Table headers
-    /// provide the familiar click-to-sort affordance and expose the current
-    /// direction to VoiceOver.  The selected comparator is also forwarded to
-    /// the daemon so sorting applies to the complete server-side page, not
-    /// only the ten rows currently visible in the window.
-    @ViewBuilder
-    private func runtimeDimensionTable(_ page: AdminWire.RuntimeDimensionPage) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) {
-                    runtimeDimensionHeading(page)
-                    Spacer(minLength: 0)
-                    runtimeDimensionPager(page)
-                }
-                VStack(alignment: .leading, spacing: 8) {
-                    runtimeDimensionHeading(page)
-                    runtimeDimensionPager(page)
-                }
-            }
-            if page.rows.isEmpty {
-                EmptyStateView(title: "暂无匹配的\(runtimeDimensionLabel(page.kind))", systemImage: "chart.bar")
-            } else {
-                // The daemon has already sorted the complete snapshot before
-                // applying LIMIT/OFFSET.  Do not sort this page again on the
-                // client: doing so can reorder only the visible ten rows and
-                // makes a cross-page sort appear inconsistent.
-                Table(page.rows, sortOrder: $runtimeDimensionTableSort) {
-                    TableColumn(runtimeDimensionLabel(page.kind), value: \.name) { row in
-                        runtimeDimensionNameCell(row, kind: page.kind)
+                    if page.groups.isEmpty {
+                        EmptyStateView(title: "快照内没有结构化错误", systemImage: "checkmark.circle")
+                    } else {
+                        Table(page.groups) {
+                            TableColumn("失败") { group in
+                                Text(errorFailureTitle(group)).lineLimit(2).help(group.id)
+                            }.width(min: 170, ideal: 220)
+                            TableColumn("入口 / 模型") { group in
+                                Text(errorRouteTitle(group)).lineLimit(2)
+                            }.width(min: 180, ideal: 240)
+                            TableColumn("次数") { group in Text(tokenNumber(group.occurrences)).monospacedDigit() }.width(min: 72, ideal: 82)
+                            TableColumn("请求") { group in Text(tokenNumber(group.affectedRequests)).monospacedDigit() }.width(min: 72, ideal: 82)
+                            TableColumn("会话") { group in Text(tokenNumber(group.affectedSessions)).monospacedDigit() }.width(min: 72, ideal: 82)
+                            TableColumn("样本") { group in
+                                errorSampleCell(group)
+                            }.width(min: 150, ideal: 210)
+                            TableColumn("最近") { group in
+                                Text(RuntimeEventDisplay.dateTime(Date(timeIntervalSinceReferenceDate: group.lastSeen))).font(.caption.monospacedDigit())
+                            }.width(min: 150, ideal: 170)
+                        }
+                        .sumpterTableSurface()
+                        .frame(minWidth: 960)
+                        .frame(height: min(240, max(90, CGFloat(page.groups.count) * 28 + 34)))
                     }
-                    .width(min: 210, ideal: 280)
-                    TableColumn("请求", value: \.requests) { row in
-                        Text(tokenNumber(row.requests)).monospacedDigit()
-                    }
-                    .width(min: 76, ideal: 88)
-                    TableColumn("成功率", value: \.successRateForSorting) { row in
-                        Text(rateText(row.successRateForSorting >= 0 ? row.successRateForSorting : nil)).monospacedDigit()
-                    }
-                    .width(min: 92, ideal: 106)
-                    TableColumn("失败", value: \.failures) { row in
-                        Text(tokenNumber(row.failures)).monospacedDigit()
-                    }
-                    .width(min: 76, ideal: 88)
-                    TableColumn("输入 Token", value: \.inputTokens) { row in
-                        Text(dimensionTokenText(row.inputTokens, related: row.requests)).monospacedDigit()
-                    }
-                    .width(min: 108, ideal: 126)
-                    TableColumn("输出 Token", value: \.outputTokens) { row in
-                        Text(dimensionTokenText(row.outputTokens, related: row.requests)).monospacedDigit()
-                    }
-                    .width(min: 108, ideal: 126)
-                    TableColumn("输出速度", value: \.outputSpeedForSorting) { row in
-                        Text(RuntimeEventPresentation.outputSpeedDisplay(row.outputTokensPerSecond)).monospacedDigit()
-                    }
-                    .width(min: 108, ideal: 126)
-                    TableColumn("缓存读取", value: \.cacheReadInputTokens) { row in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(dimensionTokenText(row.cacheReadInputTokens, related: row.requests)).monospacedDigit()
-                            Text("Token 读占比 \(rateText(dimensionCacheTokenRate(row)))")
-                                .font(.caption2.monospacedDigit())
-                                .foregroundStyle(.secondary)
+                    if let selectedID = selectedErrorSampleEventID,
+                       let selectedEvent = model.runtimeEventDetail?.event ?? v2RequestChainEvents?.first(where: { $0.id == selectedID }) ?? historyEvents.first(where: { $0.id == selectedID }) {
+                        let chainEvents = v2RequestChainEvents ?? [selectedEvent]
+                        Divider()
+                        HStack(alignment: .top, spacing: 16) {
+                            RuntimeRequestTraceView(
+                                chain: chainEvents,
+                                truncated: model.runtimeRequestChain?.truncated ?? false,
+                                selectedEventID: Binding(
+                                    get: { selectedErrorSampleEventID },
+                                    set: { newID in
+                                        selectedErrorSampleEventID = newID
+                                        model.loadRuntimeEvent(id: newID)
+                                        model.loadRuntimeRequestChain(for: newID)
+                                    }
+                                )
+                            )
+                            .frame(width: 310, alignment: .topLeading)
+                            Divider()
+                            RuntimeEventInspector(
+                                event: selectedEvent,
+                                chain: chainEvents,
+                                expanded: $expandedErrorEventGroups,
+                                onClose: {
+                                    selectedErrorSampleEventID = nil
+                                    model.loadRuntimeEvent(id: nil)
+                                    model.loadRuntimeRequestChain(for: nil)
+                                }
+                            )
+                            .frame(minWidth: 360, maxWidth: .infinity, alignment: .topLeading)
                         }
                     }
-                    .width(min: 118, ideal: 142)
-                    TableColumn("平均耗时", value: \.averageDurationForSorting) { row in
-                        Text(row.averageDurationMS.map { RuntimeEventPresentation.durationDisplay(Int($0.rounded())) } ?? "—").monospacedDigit()
-                    }
-                    .width(min: 108, ideal: 126)
-                    TableColumn("最近活动", value: \.lastSeen) { row in
-                        Text(RuntimeEventDisplay.dateTime(Date(timeIntervalSinceReferenceDate: row.lastSeen)))
-                            .font(.caption.monospacedDigit())
-                    }
-                    .width(min: 150, ideal: 174)
                 }
-                .onChange(of: runtimeDimensionTableSort) { _, order in
-                    applyRuntimeDimensionSort(order)
-                }
-                .sumpterTableSurface()
-                .frame(maxWidth: .infinity)
-                .frame(height: min(310, max(102, CGFloat(page.rows.count) * 31 + 38)))
+            } else if model.runtimeErrorPageLoading || model.runtimeV2Loading {
+                HStack { ProgressView().controlSize(.small); Text("正在读取错误分组…").font(.caption).foregroundStyle(.secondary) }
+            } else {
+                EmptyStateView(title: "暂无错误统计数据", systemImage: "checkmark.circle")
             }
         }
     }
 
-    private func runtimeDimensionHeading(_ page: AdminWire.RuntimeDimensionPage) -> some View {
-        SumpterWrappingLayout(horizontalSpacing: 8, verticalSpacing: 4) {
-            Text(page.kind == "project" ? "项目使用情况" : runtimeDimensionLabel(page.kind))
-                .font(.subheadline.weight(.semibold))
-            Text("共 \(tokenNumber(page.totalCount))")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-            Text("列标题可切换正序 / 倒序")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-        }
+    private func errorFailureTitle(_ group: AdminWire.RuntimeErrorGroup) -> String {
+        let kind = group.failureKind.map { dimensionValueDisplayName($0, kind: "failure_kind") }
+        let phase = group.failurePhase.map { dimensionValueDisplayName($0, kind: "failure_phase") }
+        return [kind, phase].compactMap { $0 }.joined(separator: " / ")
     }
 
-    private func runtimeDimensionPager(_ page: AdminWire.RuntimeDimensionPage) -> some View {
-        HStack(spacing: 6) {
-            if model.runtimeDimensionPageLoading { ProgressView().controlSize(.small) }
-            SumpterPaginationControls(
-                page: page.page,
-                totalPages: page.totalPages,
-                hasPrevious: page.hasPrevious,
-                hasNext: page.hasNext,
-                pageSize: model.runtimeDimensionPageSize,
-                compact: true,
-                loading: model.runtimeDimensionPageLoading,
-                onPageChange: { model.loadRuntimeDimensionPage(page: $0) },
-                onPageSizeChange: model.setRuntimeDimensionPageSize
-            )
-        }
+    private func errorRouteTitle(_ group: AdminWire.RuntimeErrorGroup) -> String {
+        [group.endpointName ?? group.endpointID, group.model].compactMap { $0 }.joined(separator: " · ")
     }
 
     @ViewBuilder
-    private func runtimeDimensionNameCell(
-        _ row: AdminWire.RuntimeDimensionRow,
-        kind: String
-    ) -> some View {
-        let label = runtimeDimensionDisplayName(row.name, kind: kind)
-        let content = VStack(alignment: .leading, spacing: 2) {
-            Text(label).lineLimit(1).help(row.key)
-            Text(kind == "project" ? projectClientKindsLabel(row.clientKinds) : dimensionSourceDisplayName(row.source, kind: kind))
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-        }
-        if kind == "project" {
-            Button {
-                model.setRuntimeLocalProject(row.key, projectName: row.name)
-            } label: {
-                content
-            }
-            .buttonStyle(.link)
-            .help("按项目筛选统计")
-            .accessibilityLabel("按项目筛选：\(label)")
-        } else if kind == "session" {
-            Button {
-                model.setRuntimeAnalyticsFilters(sessionID: row.name)
-            } label: {
-                content
-            }
-            .buttonStyle(.link)
-            .help("按会话筛选统计")
-            .accessibilityLabel("按会话筛选：\(label)")
+    private func errorSampleCell(_ group: AdminWire.RuntimeErrorGroup) -> some View {
+        let samples = Array(group.sampleEventIDs.prefix(3))
+        if samples.isEmpty {
+            Text("—").foregroundStyle(.secondary)
         } else {
-            content
+            HStack(spacing: 4) {
+                ForEach(samples, id: \.self) { sampleID in
+                    Button("#" + String(sampleID.prefix(8))) {
+                        if selectedErrorSampleEventID == sampleID {
+                            selectedErrorSampleEventID = nil
+                            model.loadRuntimeEvent(id: nil)
+                            model.loadRuntimeRequestChain(for: nil)
+                        } else {
+                            selectedErrorSampleEventID = sampleID
+                            model.loadRuntimeEvent(id: sampleID)
+                            model.loadRuntimeRequestChain(for: sampleID)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                    .font(.caption2.monospaced())
+                    .help("查看样本事件 \(sampleID)")
+                }
+            }
         }
-    }
-
-    private func applyRuntimeDimensionSort(
-        _ order: [KeyPathComparator<AdminWire.RuntimeDimensionRow>]
-    ) {
-        guard let comparator = order.first else { return }
-        let key = runtimeDimensionSortKey(comparator.keyPath)
-        let direction = comparator.order == .reverse ? "desc" : "asc"
-        model.setRuntimeDimensionSort(key, order: direction)
     }
 
     private func applyRuntimeOverviewSort(
@@ -2598,55 +2524,6 @@ struct UsagePane: View {
         if keyPath == \.outputSpeedForSorting { return "output_tokens_per_second" }
         if keyPath == \.lastSeen { return "last_seen" }
         return model.runtimeDimensionSort
-    }
-
-    private func runtimeDimensionComparator(
-        sort: String,
-        order: String
-    ) -> KeyPathComparator<AdminWire.RuntimeDimensionRow> {
-        let direction: SortOrder = order == "asc" ? .forward : .reverse
-        switch sort {
-        case "name": return KeyPathComparator(\.name, order: direction)
-        case "requests": return KeyPathComparator(\.requests, order: direction)
-        case "success_rate": return KeyPathComparator(\.successRateForSorting, order: direction)
-        case "failures": return KeyPathComparator(\.failures, order: direction)
-        case "input_tokens": return KeyPathComparator(\.inputTokens, order: direction)
-        case "output_tokens": return KeyPathComparator(\.outputTokens, order: direction)
-        case "cache_read": return KeyPathComparator(\.cacheReadInputTokens, order: direction)
-        case "cache_write": return KeyPathComparator(\.cacheCreationInputTokens, order: direction)
-        case "average_duration": return KeyPathComparator(\.averageDurationForSorting, order: direction)
-        case "output_tokens_per_second": return KeyPathComparator(\.outputSpeedForSorting, order: direction)
-        default: return KeyPathComparator(\.lastSeen, order: direction)
-        }
-    }
-
-    @ViewBuilder
-    private var runtimeDimensionControls: some View {
-        Picker("维度", selection: Binding(
-            get: { model.runtimeDimensionKind },
-            set: { model.setRuntimeDimensionKind($0) }
-        )) {
-            Text("入口").tag("endpoint")
-            Text("模型").tag("model")
-            Text("客户端").tag("clientKind")
-            Text("用途").tag("purpose")
-            Text("失败类型").tag("failureKind")
-            Text("失败阶段").tag("failurePhase")
-            Text("协议").tag("protocol")
-            Text("流终止").tag("streamTerminal")
-            Text("项目").tag("project")
-            Text("会话").tag("session")
-        }
-        .frame(minWidth: 110, idealWidth: 135)
-        TextField("搜索名称或 ID", text: $model.runtimeDimensionSearch)
-            .textFieldStyle(.roundedBorder)
-            .frame(minWidth: 160, idealWidth: 220)
-            .onSubmit { model.loadRuntimeDimensionPage(page: 1) }
-        Button("搜索") { model.loadRuntimeDimensionPage(page: 1) }.controlSize(.small)
-        Text("列标题可切换正序/倒序")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: true, vertical: false)
     }
 
     private func runtimeDimensionLabel(_ kind: String) -> String {
@@ -2682,136 +2559,6 @@ struct UsagePane: View {
         if let value = row.cacheReadTokenRate { return value }
         guard let processed = row.processedInputTokens, processed > 0 else { return nil }
         return min(1, Double(max(0, row.cacheReadInputTokens)) / Double(processed))
-    }
-
-    private func dimensionTable(
-        title: String,
-        page: AdminWire.RuntimeDimensionPage,
-        search: Binding<String>,
-        searchPrompt: String,
-        onSearch: @escaping () -> Void,
-        onPage: @escaping (Int) -> Void,
-        pageSize: Int,
-        loading: Bool,
-        onPageSizeChange: @escaping (Int) -> Void,
-        select: @escaping (AdminWire.RuntimeDimensionRow) -> Void,
-        isProject: Bool
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ViewThatFits(in: .horizontal) {
-                HStack {
-                    dimensionTitle(title: title, totalCount: page.totalCount)
-                    Spacer(minLength: 0)
-                    dimensionControls(search: search, prompt: searchPrompt, onSearch: onSearch, page: page, onPage: onPage, pageSize: pageSize, loading: loading, onPageSizeChange: onPageSizeChange)
-                }
-                VStack(alignment: .leading, spacing: 8) {
-                    dimensionTitle(title: title, totalCount: page.totalCount)
-                    dimensionControls(search: search, prompt: searchPrompt, onSearch: onSearch, page: page, onPage: onPage, pageSize: pageSize, loading: loading, onPageSizeChange: onPageSizeChange)
-                }
-            }
-            if page.rows.isEmpty {
-                EmptyStateView(title: "暂无匹配的\(isProject ? "项目" : "会话")", systemImage: isProject ? "folder" : "person.2")
-            } else {
-                Table(page.rows) {
-                        TableColumn(isProject ? "项目" : "会话") { row in
-                            Button {
-                                select(row)
-                            } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(isProject ? projectDisplayName(row.name) : sessionDisplayName(row.name)).lineLimit(1)
-                                    Text(isProject ? projectClientKindsLabel(row.clientKinds) : dimensionSourceDisplayName(row.source, kind: "session"))
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
-                            }
-                            .buttonStyle(.link)
-                            .help("使用稳定 key 筛选：\(row.key)")
-                        }.width(min: 220, ideal: 320)
-                        TableColumn("请求") { row in Text(tokenNumber(row.requests)).monospacedDigit() }.width(min: 80, ideal: 90)
-                        TableColumn("成功") { row in Text(tokenNumber(row.successes)).monospacedDigit() }.width(min: 80, ideal: 90)
-                        TableColumn("失败") { row in Text(tokenNumber(row.failures)).monospacedDigit() }.width(min: 80, ideal: 90)
-                        TableColumn("Token") { row in Text(tokenNumber(row.processedTotalTokens)).monospacedDigit() }.width(min: 100, ideal: 120)
-                        TableColumn("平均耗时") { row in Text(row.averageDurationMS.map { RuntimeEventPresentation.durationDisplay(Int($0.rounded())) } ?? "—").monospacedDigit() }.width(min: 100, ideal: 120)
-                        TableColumn("最近") { row in Text(RuntimeEventDisplay.dateTime(Date(timeIntervalSinceReferenceDate: row.lastSeen))).font(.caption.monospacedDigit()) }.width(min: 150, ideal: 170)
-                }
-                .sumpterTableSurface()
-                .frame(minWidth: 860)
-                .frame(height: min(240, max(90, CGFloat(page.rows.count) * 28 + 34)))
-            }
-        }
-    }
-
-    private func dimensionTitle(title: String, totalCount: Int) -> some View {
-        HStack(spacing: 8) {
-            Text(title).font(.subheadline.weight(.semibold))
-            Text("共 \(tokenNumber(totalCount))")
-                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-        }
-    }
-
-    @ViewBuilder
-    private func dimensionControls(
-        search: Binding<String>,
-        prompt: String,
-        onSearch: @escaping () -> Void,
-        page: AdminWire.RuntimeDimensionPage,
-        onPage: @escaping (Int) -> Void,
-        pageSize: Int,
-        loading: Bool,
-        onPageSizeChange: @escaping (Int) -> Void
-    ) -> some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 6) { dimensionControlItems(search: search, prompt: prompt, onSearch: onSearch, page: page, onPage: onPage, pageSize: pageSize, loading: loading, onPageSizeChange: onPageSizeChange) }
-            VStack(alignment: .leading, spacing: 6) { dimensionControlItems(search: search, prompt: prompt, onSearch: onSearch, page: page, onPage: onPage, pageSize: pageSize, loading: loading, onPageSizeChange: onPageSizeChange) }
-        }
-    }
-
-    @ViewBuilder
-    private func dimensionControlItems(
-        search: Binding<String>,
-        prompt: String,
-        onSearch: @escaping () -> Void,
-        page: AdminWire.RuntimeDimensionPage,
-        onPage: @escaping (Int) -> Void,
-        pageSize: Int,
-        loading: Bool,
-        onPageSizeChange: @escaping (Int) -> Void
-    ) -> some View {
-        TextField(prompt, text: search)
-            .textFieldStyle(.roundedBorder)
-            .frame(minWidth: 150, idealWidth: 190)
-            .onSubmit(onSearch)
-        Button("搜索", action: onSearch).controlSize(.small)
-        SumpterPaginationControls(
-            page: page.page,
-            totalPages: page.totalPages,
-            hasPrevious: page.hasPrevious,
-            hasNext: page.hasNext,
-            pageSize: pageSize,
-            compact: true,
-            loading: loading,
-            onPageChange: onPage,
-            onPageSizeChange: onPageSizeChange
-        )
-    }
-
-    private var v3ExportPanel: some View {
-        SectionPanel(
-            title: "运行统计导出",
-            hint: "按当前筛选导出 SQLite 运行统计字段，不包含诊断正文。"
-        ) {
-            exportControls
-            if let estimate = model.runtimeExportEstimate {
-                Text("估算 \(tokenNumber(estimate.rowCount)) 行 · \(ByteCountFormatter.string(fromByteCount: Int64(clamping: estimate.estimatedBytes), countStyle: .file)) · \(estimate.privacyScope)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if let error = model.runtimeExportEstimateError {
-                Label(error, systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.orange)
-            }
-        }
     }
 
     @ViewBuilder
@@ -3146,69 +2893,6 @@ struct UsagePane: View {
         }
     }
 
-    private var metricGrid: some View {
-        SectionPanel(title: "累计", hint: "客户端请求 = 成功 + 失败 + 客户端断开/取消(499,两边都不计)。") {
-            VStack(alignment: .leading, spacing: 12) {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 12)], spacing: 12) {
-                    MetricTile(
-                        title: "范围内成功率",
-                        value: analytics.map { value in
-                            let completed = value.clientSuccesses + value.clientFailures + value.clientCancelled
-                            return completed > 0
-                                ? "\(Int((Double(value.clientSuccesses) / Double(completed) * 100).rounded()))%"
-                                : "-"
-                        } ?? operationalSummary.successRateText,
-                        detail: analytics.map { "成功 \($0.clientSuccesses) / 失败 \($0.clientFailures) / 取消 \($0.clientCancelled) / 待定 \($0.clientPending ?? max(0, $0.clientRequests - $0.clientSuccesses - $0.clientFailures - $0.clientCancelled))" }
-                            ?? "成功 \(operationalSummary.successes) / 失败 \(operationalSummary.failures) / 取消 \(operationalSummary.cancellations)",
-                        systemImage: "checkmark.circle"
-                    )
-                    MetricTile(
-                        title: "平均首字节",
-                        value: analytics?.averageTTFBMS.map { RuntimeEventPresentation.durationDisplay(Int($0.rounded())) }
-                            ?? operationalSummary.averageTTFBMS.map { RuntimeEventPresentation.durationDisplay($0) }
-                            ?? "-",
-                        detail: "从发起请求到收到首个字节",
-                        systemImage: "timer"
-                    )
-                    MetricTile(
-                        title: "平均完成耗时",
-                        value: analytics?.averageDurationMS.map { RuntimeEventPresentation.durationDisplay(Int($0.rounded())) }
-                            ?? operationalSummary.averageDurationMS.map { RuntimeEventPresentation.durationDisplay($0) }
-                            ?? "-",
-                        detail: "从发起请求到完成",
-                        systemImage: "clock"
-                    )
-                    MetricTile(
-                        title: "范围内故障转移",
-                        value: "\(analytics?.failovers ?? operationalSummary.failovers)",
-                        detail: "\(analytics?.clientRequests ?? operationalSummary.requests) 个已决请求",
-                        systemImage: "arrow.triangle.2.circlepath"
-                    )
-                }
-                DisclosureGroup("累计计数") {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 12)], spacing: 12) {
-                        MetricTile(title: "客户端请求", value: "\(displayRuntime.clientRequests)", detail: "成功 \(displayRuntime.clientSuccesses)", systemImage: "person.crop.circle.badge.checkmark")
-                        MetricTile(title: "客户端失败", value: "\(displayRuntime.clientFailures)", systemImage: "exclamationmark.triangle")
-                        MetricTile(title: "上游尝试", value: "\(displayRuntime.upstreamAttempts)", detail: "成功 \(displayRuntime.upstreamSuccesses) / 失败 \(displayRuntime.upstreamFailures)", systemImage: "server.rack")
-                        MetricTile(title: "累计故障转移", value: "\(displayRuntime.failovers)", detail: "换过入口的请求数", systemImage: "arrow.triangle.2.circlepath")
-                    }
-                    .padding(.top, 8)
-                }
-                .font(.callout.weight(.semibold))
-                HStack {
-                    AutoRefreshControl(
-                        enabled: $model.autoRefreshEnabled,
-                        intervalSeconds: $model.statisticsAutoRefreshIntervalSeconds
-                    )
-                    Spacer()
-                    Label("按自动刷新间隔更新", systemImage: "arrow.clockwise")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-    }
-
     private var diagnosticPanel: some View {
         SectionPanel(
             title: "结构化诊断",
@@ -3402,63 +3086,6 @@ struct UsagePane: View {
             }
             .sumpterTableSurface()
             .frame(height: adaptiveTableHeight(rows: rows.count, max: 240))
-        }
-    }
-
-    @ViewBuilder
-    private func aggregatePanel(
-        title: String,
-        hint: String? = nil,
-        rows: [UsageAggregateRow],
-        sort: Binding<[KeyPathComparator<UsageAggregateRow>]>
-    ) -> some View {
-        SectionPanel(title: title, hint: hint) {
-            if rows.isEmpty {
-                EmptyStateView(title: "暂无可排行的数据", systemImage: "chart.bar")
-            } else {
-                Table(rows.sorted(using: sort.wrappedValue), sortOrder: sort) {
-                    TableColumn("名称", value: \.name) { row in
-                        Text(row.name)
-                            .lineLimit(1)
-                    }
-                    TableColumn("尝试", value: \.attempts) { row in
-                        Text("\(row.attempts)")
-                            .monospacedDigit()
-                    }
-                    TableColumn("成功率", value: \.successRate) { row in
-                        Text(row.successRateText)
-                            .monospacedDigit()
-                    }
-                    TableColumn("失败", value: \.failures) { row in
-                        Text("\(row.failures)")
-                            .monospacedDigit()
-                    }
-                    TableColumn("平均延迟", value: \.averageMS) { row in
-                        Text("\(row.averageMS)ms")
-                            .monospacedDigit()
-                    }
-                    TableColumn("输入 Token", value: \.inputTokens) { row in
-                        Text(tokenText(row.inputTokens, presence: row.inputTokenPresence)).monospacedDigit()
-                    }
-                    TableColumn("输出 Token", value: \.outputTokens) { row in
-                        Text(tokenText(row.outputTokens, presence: row.outputTokenPresence)).monospacedDigit()
-                    }
-                    TableColumn("缓存读取", value: \.cacheReadInputTokens) { row in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(tokenText(row.cacheReadInputTokens, presence: row.cacheReadTokenPresence)).monospacedDigit()
-                            Text("Token 读占比 " + rateText(row.cacheReadTokenRate))
-                                .font(.caption2.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    TableColumn("缓存写入", value: \.cacheCreationInputTokens) { row in
-                        Text(tokenText(row.cacheCreationInputTokens, presence: row.cacheCreationTokenPresence))
-                            .monospacedDigit()
-                    }
-                }
-                .sumpterTableSurface()
-                .frame(height: adaptiveTableHeight(rows: rows.count, max: 220))
-            }
         }
     }
 }

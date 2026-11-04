@@ -647,7 +647,7 @@ impl RuntimeEventListItem {
         let derived_client_variant = event.derived_client_variant().to_owned();
         let derived_agent_role = event.derived_agent_role().to_owned();
         // 必须在 event 被逐字段移动之前算:两个投影值都要借用整个 event。
-        let projected_name = project_base(&project_identity(&event));
+        let projected_name = project_display_name(&event);
         let projected_source = project_source(&event).to_string();
         let local_user = event_local_user(&event);
         let is_codex_event = event.kind == KIND_CLIENT

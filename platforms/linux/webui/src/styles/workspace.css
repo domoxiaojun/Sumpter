@@ -448,3 +448,9 @@ input[type="checkbox"]:not(.switch-input):disabled { opacity: 0.45; cursor: not-
   .run-events-panel .btn, .run-events-panel .form-input,
   .run-events-panel .form-select, .run-events-panel .telemetry-filter-button { min-height: 44px; }
 }
+
+.attribution-panel > label { display: grid; gap: 8px; }
+.attribution-panel button, .attribution-panel select, .attribution-panel input { min-height: 44px; }
+.attribution-panel summary { min-height: 44px; padding-block: 12px; cursor: pointer; }
+.attribution-panel details > .attribution-command { margin-block: 12px; }
+.attribution-panel details p { line-height: 1.65; color: var(--text-secondary); }

@@ -127,6 +127,18 @@ function __sumpter_cc_is_ascii
     string match -qr '^[ -~]+$' -- $argv[1]
 end
 
+function __sumpter_cc_sanitize_remote
+    printf '%s\n' "$argv[1]" | LC_ALL=C sed -nE '
+        s/[?#].*$//
+        /:\/\// {
+            s#^((https?|ssh|git)://)[^/]*@#\1#
+            /^(https?|ssh|git):\/\/[^/@[:space:]]+(\/[^[:space:]]*)?$/p
+            b
+        }
+        s#^([^@/:[:space:]]+@)?([A-Za-z0-9.-]+):([^[:space:]]+)$#ssh://\2/\3#p
+    '
+end
+
 function __sumpter_cc_local_user
     set -l u $USER
     test -n "$u"; or set u $LOGNAME
@@ -155,6 +167,7 @@ function claude
     end
     __sumpter_cc_is_ascii "$proj"; and set -a hdrs "X-Sumpter-Project: $proj"
     __sumpter_cc_is_ascii "$dir"; and set -a hdrs "X-Sumpter-Workspace: $dir"
+    set remote (__sumpter_cc_sanitize_remote "$remote")
     __sumpter_cc_is_ascii "$remote"; and set -a hdrs "X-Sumpter-Git-Remote: $remote"
     set -l user (__sumpter_cc_local_user)
     test -n "$user"; and set -a hdrs "X-Sumpter-User: $user"
@@ -188,6 +201,19 @@ sumpter_cc_is_ascii() {
         *[!\ -~]*) return 1 ;;
         *) return 0 ;;
     esac
+}
+
+# Keep credentials and query/fragment out of the request, before server logging.
+sumpter_cc_sanitize_remote() {
+    printf '%s\n' "$1" | LC_ALL=C sed -nE '
+        s/[?#].*$//
+        /:\/\// {
+            s#^((https?|ssh|git)://)[^/]*@#\1#
+            /^(https?|ssh|git):\/\/[^/@[:space:]]+(\/[^[:space:]]*)?$/p
+            b
+        }
+        s#^([^@/:[:space:]]+@)?([A-Za-z0-9.-]+):([^[:space:]]+)$#ssh://\2/\3#p
+    '
 }
 
 sumpter_cc_local_user() {
@@ -239,6 +265,7 @@ SUMPTER_EOF
 
     sumpter_cc_is_ascii "$proj" && out="${out}X-Sumpter-Project: ${proj}"$'\n'
     sumpter_cc_is_ascii "$ws" && out="${out}X-Sumpter-Workspace: ${ws}"$'\n'
+    remote="$(sumpter_cc_sanitize_remote "$remote")"
     sumpter_cc_is_ascii "$remote" && out="${out}X-Sumpter-Git-Remote: ${remote}"$'\n'
     user="$(sumpter_cc_local_user || true)"
     [ -n "$user" ] && out="${out}X-Sumpter-User: ${user}"$'\n'

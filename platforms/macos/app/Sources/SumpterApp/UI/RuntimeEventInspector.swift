@@ -5,6 +5,7 @@ struct RuntimeEventInspector: View {
     let event: RuntimeEvent
     let chain: [RuntimeEvent]
     @Binding var expanded: Set<String>
+    var onClose: (() -> Void)?
 
     private let groups = [("routing", "路由与重试"), ("usage", "用量与缓存"), ("identity", "会话与代理"),
                           ("response", "请求与响应"), ("tools", "工具与通知"), ("advanced", "高级诊断")]
@@ -13,7 +14,19 @@ struct RuntimeEventInspector: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("选中事件").font(.headline)
+            HStack(alignment: .center, spacing: 8) {
+                Text("选中事件").font(.headline)
+                Spacer(minLength: 8)
+                if let onClose {
+                    Button(action: onClose) {
+                        Label("收起详情", systemImage: "xmark.circle")
+                            .font(.caption.weight(.medium))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityLabel("收起选中事件详情")
+                }
+            }
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 6) {
                 InfoRow(title: "时间 / 类型", value: "\(RuntimeEventDisplay.dateTime(event.timestamp)) · \(RuntimeEventDisplay.kind(event.kind))")
                 InfoRow(title: "客户端 / 项目", value: RuntimeEventDisplay.requestSummary(event))

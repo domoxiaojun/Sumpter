@@ -685,7 +685,7 @@ pub(super) fn event_project_projection(
     } else {
         format!("sha256:{:x}", Sha256::digest(identity.as_bytes()))
     };
-    let project_name = project_base(&identity);
+    let project_name = project_display_name(event);
     let source = project_source(event);
     let mut paths = BTreeSet::new();
     if let Some(metadata) = event.codex_metadata.as_ref() {
@@ -725,6 +725,9 @@ pub(super) fn project_identity(event: &RuntimeEvent) -> String {
         .as_ref()
         .filter(|metadata| !metadata.workspaces.is_empty());
     if let Some(metadata) = codex_workspaces {
+        if let Some(identity) = &metadata.workspace_identity {
+            return format!("workspace-v2:{}", identity.key);
+        }
         return metadata
             .workspaces
             .iter()
@@ -738,6 +741,27 @@ pub(super) fn project_identity(event: &RuntimeEvent) -> String {
         .as_ref()
         .and_then(declared_identity)
         .unwrap_or_else(|| "unidentified_project".into())
+}
+
+pub(super) fn project_display_name(event: &RuntimeEvent) -> String {
+    if !is_internal_resource_event(event) {
+        if let Some(metadata) = event
+            .codex_metadata
+            .as_ref()
+            .filter(|m| !m.workspaces.is_empty())
+        {
+            if let Some(identity) = &metadata.workspace_identity {
+                return identity.name.clone();
+            }
+        } else if let Some(identity) = event
+            .client_declared
+            .as_ref()
+            .and_then(|m| m.workspace_identity.as_ref())
+        {
+            return identity.name.clone();
+        }
+    }
+    project_base(&project_identity(event))
 }
 
 pub(super) fn is_internal_resource_event(event: &RuntimeEvent) -> bool {
@@ -761,6 +785,9 @@ pub(super) fn event_attribution_scope(
 pub(super) fn declared_identity(
     declared: &sumpter_core::events::ClientDeclaredMetadata,
 ) -> Option<String> {
+    if let Some(identity) = &declared.workspace_identity {
+        return Some(format!("workspace-v2:{}", identity.key));
+    }
     let nonempty = |value: &Option<String>| {
         value
             .as_deref()
@@ -907,20 +934,21 @@ pub(super) fn project_short_identity(identity: &str) -> String {
 }
 
 pub(super) fn build_project_keys(events: &[RuntimeEvent]) -> HashMap<String, String> {
-    let mut identities = HashSet::new();
+    let mut identities = HashMap::new();
     for event in events.iter().filter(|event| event.kind == KIND_CLIENT) {
-        identities.insert(project_identity(event));
+        identities.insert(project_identity(event), project_display_name(event));
     }
     let mut bases = HashMap::<String, usize>::new();
-    for identity in &identities {
-        *bases.entry(project_base(identity)).or_default() += 1;
+    for name in identities.values() {
+        *bases.entry(name.clone()).or_default() += 1;
     }
     identities
         .into_iter()
-        .map(|identity| {
-            let base = project_base(&identity);
+        .map(|(identity, base)| {
             let key = if bases.get(&base).copied().unwrap_or(0) <= 1 {
                 base
+            } else if let Some(key) = identity.strip_prefix("workspace-v2:") {
+                format!("{} ({})", base, &key[..key.len().min(8)])
             } else {
                 project_short_identity(&identity)
             };
@@ -934,7 +962,7 @@ pub(super) fn project_key(event: &RuntimeEvent, project_keys: &HashMap<String, S
     project_keys
         .get(&identity)
         .cloned()
-        .unwrap_or_else(|| project_base(&identity))
+        .unwrap_or_else(|| project_display_name(event))
 }
 
 pub(super) fn session_key(event: &RuntimeEvent) -> String {

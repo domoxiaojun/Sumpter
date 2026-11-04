@@ -111,6 +111,18 @@ function __sumpter_grok_is_ascii
     string match -qr '^[ -~]+$' -- $argv[1]
 end
 
+function __sumpter_grok_sanitize_remote
+    printf '%s\n' "$argv[1]" | LC_ALL=C sed -nE '
+        s/[?#].*$//
+        /:\/\// {
+            s#^((https?|ssh|git)://)[^/]*@#\1#
+            /^(https?|ssh|git):\/\/[^/@[:space:]]+(\/[^[:space:]]*)?$/p
+            b
+        }
+        s#^([^@/:[:space:]]+@)?([A-Za-z0-9.-]+):([^[:space:]]+)$#ssh://\2/\3#p
+    '
+end
+
 function __sumpter_grok_local_user
     set -l u $USER
     test -n "$u"; or set u $LOGNAME
@@ -131,6 +143,7 @@ function grok
     set -l pairs
     __sumpter_grok_is_ascii "$proj"; and set -a pairs "X-Sumpter-Project" "$proj"
     __sumpter_grok_is_ascii "$dir"; and set -a pairs "X-Sumpter-Workspace" "$dir"
+    set remote (__sumpter_grok_sanitize_remote "$remote")
     __sumpter_grok_is_ascii "$remote"; and set -a pairs "X-Sumpter-Git-Remote" "$remote"
     test -n "$user"; and set -a pairs "X-Sumpter-User" "$user"
     if test (count $pairs) -eq 0
@@ -159,6 +172,8 @@ headers=models.get("extra_headers")
 if not isinstance(headers, dict):
     headers={}
     models["extra_headers"]=headers
+headers={key:value for key,value in headers.items() if not str(key).lower().startswith("x-sumpter-")}
+models["extra_headers"]=headers
 headers.update(overlay.get("models",{}).get("extra_headers",{}))
 print(json.dumps(cfg,separators=(",",":")))
 ')
@@ -182,6 +197,19 @@ sumpter_grok_is_ascii() {
         *[!\ -~]*) return 1 ;;
         *) return 0 ;;
     esac
+}
+
+# Keep credentials and query/fragment out of the request, before server logging.
+sumpter_grok_sanitize_remote() {
+    printf '%s\n' "$1" | LC_ALL=C sed -nE '
+        s/[?#].*$//
+        /:\/\// {
+            s#^((https?|ssh|git)://)[^/]*@#\1#
+            /^(https?|ssh|git):\/\/[^/@[:space:]]+(\/[^[:space:]]*)?$/p
+            b
+        }
+        s#^([^@/:[:space:]]+@)?([A-Za-z0-9.-]+):([^[:space:]]+)$#ssh://\2/\3#p
+    '
 }
 
 sumpter_grok_local_user() {
@@ -231,6 +259,7 @@ sumpter_grok_overlay() {
         json="${json}${sep}\"X-Sumpter-Workspace\":\"$(sumpter_grok_json_escape "$dir")\""
         sep=","
     fi
+    remote="$(sumpter_grok_sanitize_remote "$remote")"
     if sumpter_grok_is_ascii "$remote"; then
         json="${json}${sep}\"X-Sumpter-Git-Remote\":\"$(sumpter_grok_json_escape "$remote")\""
         sep=","
@@ -272,6 +301,8 @@ headers = models.get("extra_headers")
 if not isinstance(headers, dict):
     headers = {}
     models["extra_headers"] = headers
+headers = {key: value for key, value in headers.items() if not str(key).lower().startswith("x-sumpter-")}
+models["extra_headers"] = headers
 headers.update((overlay.get("models") or {}).get("extra_headers") or {})
 print(json.dumps(cfg, separators=(",", ":"), ensure_ascii=True))
 '

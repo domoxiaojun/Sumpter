@@ -1,5 +1,17 @@
 import Darwin
 import Foundation
+import SumpterCore
+
+enum UnifiedAttributionAction: String {
+    case status, enable, disable, install, restore, uninstall
+}
+
+struct AttributionLaunchReceipt: Decodable, Equatable, Sendable {
+    let enabled: Bool
+    let binding: String
+    let collectorVersion: String
+    let startedAt: String
+}
 
 struct UnifiedAttributionStatus: Decodable, Equatable, Sendable, Identifiable {
     let client: String
@@ -8,16 +20,35 @@ struct UnifiedAttributionStatus: Decodable, Equatable, Sendable, Identifiable {
     let shell: String
     let note: String?
     let canRestore: Bool
+    let enabled: Bool?
+    let canDisable: Bool?
+    let registration: String?
+    let backupState: String?
+    let restoreTarget: String?
+    let proxyURL: String?
+    let sourceId: String?
+    let installedVersion: String?
+    let availableVersion: String?
+    let lastLaunch: AttributionLaunchReceipt?
     var id: String { client }
     var title: String {
         switch status {
         case "installed": "已安装"
+        case "disabled": "已安装，补充采集已关闭"
         case "absent": "未安装"
         case "legacy": "已安装旧版配置，建议更新"
         case "broken": "配置不完整，需要修复"
         case "outdated": "已安装，需要更新"
         default: "未知状态，请重新检查"
         }
+    }
+
+    func observes(_ event: RuntimeEvent) -> Bool {
+        let kind = ["claude": "claude_code", "grok": "grok_build", "gemini": "gemini_cli"][client] ?? client
+        guard let sourceId, let installedVersion else { return false }
+        return event.kind == "client" && event.clientKind?.rawValue == kind
+            && event.clientDeclared?.sourceId == sourceId
+            && event.clientDeclared?.collectorVersion == installedVersion
     }
 }
 
@@ -62,10 +93,10 @@ enum UnifiedAttributionInstaller {
     }
 
     static func run(
-        _ action: ClaudeAttributionScriptAction, client: String, shell: String,
+        _ action: UnifiedAttributionAction, client: String, shell: String, proxyURL: String? = nil,
         scriptURL: URL? = Self.scriptURL, environment: [String: String] = ProcessInfo.processInfo.environment
     ) async throws -> String {
-        try await runCommand(action.rawValue, client: client, shell: shell, scriptURL: scriptURL, environment: environment)
+        try await runCommand(action.rawValue, client: client, shell: shell, scriptURL: scriptURL, environment: environment, proxyURL: proxyURL)
     }
 
     static func diagnose(proxyURL: String) async throws -> String {

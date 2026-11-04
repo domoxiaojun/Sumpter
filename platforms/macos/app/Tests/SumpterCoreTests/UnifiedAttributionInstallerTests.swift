@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import SumpterCore
 @testable import SumpterApp
 
 final class UnifiedAttributionInstallerTests: XCTestCase {
@@ -9,8 +10,25 @@ final class UnifiedAttributionInstallerTests: XCTestCase {
         XCTAssertEqual(status.title, "配置不完整，需要修复")
         XCTAssertEqual(status.rc, "/tmp/a b/.zshrc")
         XCTAssertTrue(status.canRestore)
+        XCTAssertNil(status.enabled)
         XCTAssertThrowsError(try UnifiedAttributionInstaller.parseStatus("[]"))
         XCTAssertThrowsError(try UnifiedAttributionInstaller.parseStatus("not JSON"))
+    }
+
+    func testObservedEvidenceRequiresSameClientSourceAndRevision() throws {
+        let output = #"[{"client":"codex","status":"disabled","rc":"/tmp/.zshrc","shell":"zsh","canRestore":true,"enabled":false,"sourceId":"host-a","installedVersion":"2.0.0-test"}]"#
+        let status = try XCTUnwrap(UnifiedAttributionInstaller.parseStatus(output).first)
+        XCTAssertEqual(status.title, "已安装，补充采集已关闭")
+        let raw = #"{"id":"request","kind":"client","timestamp":1,"statusCode":200,"durationMS":1,"failover":false,"clientKind":"codex","clientDeclared":{"sourceId":"host-a","collectorVersion":"2.0.0-test"}}"#
+        var event = try JSONDecoder().decode(RuntimeEvent.self, from: Data(raw.utf8))
+        XCTAssertTrue(status.observes(event))
+        event.clientDeclared?.sourceId = "host-b"
+        XCTAssertFalse(status.observes(event))
+        event.clientDeclared?.sourceId = "host-a"
+        event.clientDeclared?.collectorVersion = "1.0.0-old"
+        XCTAssertFalse(status.observes(event))
+        event.clientDeclared = nil
+        XCTAssertFalse(status.observes(event))
     }
 
     func testBundledInstallerRoundTripWithIsolatedHome() async throws {
@@ -23,6 +41,11 @@ final class UnifiedAttributionInstallerTests: XCTestCase {
         _ = try await UnifiedAttributionInstaller.run(.install, client: "codex", shell: "zsh", environment: env)
         let installed = try await UnifiedAttributionInstaller.run(.status, client: "codex", shell: "zsh", environment: env)
         XCTAssertEqual(try UnifiedAttributionInstaller.parseStatus(installed).first?.status, "installed")
+        _ = try await UnifiedAttributionInstaller.run(.disable, client: "codex", shell: "zsh", environment: env)
+        let updated = try await UnifiedAttributionInstaller.run(.install, client: "codex", shell: "zsh", environment: env)
+        XCTAssertEqual(try UnifiedAttributionInstaller.parseStatus(updated).first?.enabled, false)
+        let enabled = try await UnifiedAttributionInstaller.run(.enable, client: "codex", shell: "zsh", proxyURL: "http://127.0.0.1:51234", environment: env)
+        XCTAssertEqual(try UnifiedAttributionInstaller.parseStatus(enabled).first?.proxyURL, "http://127.0.0.1:51234")
         let rc = home.appendingPathComponent(".zshrc")
         let text = try String(contentsOf: rc, encoding: .utf8)
         try (text + "# user edit\n").write(to: rc, atomically: true, encoding: .utf8)

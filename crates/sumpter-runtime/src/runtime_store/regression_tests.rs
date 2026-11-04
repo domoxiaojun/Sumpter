@@ -655,3 +655,94 @@ async fn async_history_snapshot_and_export_cancel_preserve_contract() {
     drop(store);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn workspace_v2_projects_separate_same_tail_and_preserve_legacy_after_reopen() {
+    use sumpter_core::events::{ClientDeclaredMetadata, CodexMetadata};
+    let (dir, store) = fixture("workspace-v2");
+    let path = store.path().to_owned();
+    let declared = |workspace: &str| {
+        ClientDeclaredMetadata::from_headers(&[
+            ("x-sumpter-workspace".into(), workspace.into()),
+            ("x-sumpter-source-id".into(), "synthetic-host".into()),
+        ])
+        .unwrap()
+    };
+    let a = declared("/srv/customer-a/apps/api");
+    let b = declared("/srv/customer-b/apps/api");
+    assert_eq!(a.workspace, b.workspace);
+    let mut legacy = sample("legacy-workspace", false, event_now());
+    legacy.client_declared = Some(
+        serde_json::from_value(json!({
+            "workspace":".../apps/api", "sourceWorkspace":"/srv/customer-a/apps/api"
+        }))
+        .unwrap(),
+    );
+    let legacy_id = event_project_projection(&legacy).0;
+    store.enqueue(legacy, counts(1)).unwrap();
+    for (id, metadata) in [("a", a.clone()), ("a-again", a), ("b", b.clone())] {
+        let mut event = sample(id, false, event_now());
+        event.client_declared = Some(metadata);
+        store.enqueue(event, counts(2)).unwrap();
+    }
+    store.flush().unwrap();
+    let reader = Connection::open(&path).unwrap();
+    let old_payload: String = reader
+        .query_row(
+            "SELECT payload_json FROM runtime_events WHERE event_id='legacy-workspace'",
+            crate::database::params![],
+            |r| r.get(0),
+        )
+        .unwrap();
+    drop(reader);
+    drop(store);
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    let page = crate::runtime_query::dimension_page(
+        &path,
+        DimensionKind::Project,
+        &DimensionPageQuery::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        page.total_count, 3,
+        "two new full paths plus the unchanged legacy group"
+    );
+    let reader = Connection::open(&path).unwrap();
+    let (payload, project): (String, String) = reader
+        .query_row(
+            "SELECT payload_json, project_id FROM runtime_events WHERE event_id='legacy-workspace'",
+            crate::database::params![],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(payload, old_payload);
+    assert_eq!(project, legacy_id);
+    let restored = store.event("a").unwrap().unwrap().event;
+    assert_eq!(
+        restored
+            .client_declared
+            .as_ref()
+            .unwrap()
+            .workspace_identity
+            .as_ref()
+            .unwrap()
+            .name,
+        "api"
+    );
+    // Native workspace evidence still outranks the wrapper declaration.
+    let mut native = sample("native", false, event_now());
+    native.client_declared = Some(b);
+    native.codex_metadata = CodexMetadata::from_request(
+        &[],
+        Some(&json!({
+            "client_metadata": { "x-codex-turn-metadata": json!({
+                "workspaces": { "/srv/native/project": {} }
+            }).to_string() }
+        })),
+    );
+    assert_eq!(project_display_name(&native), "project");
+    assert_ne!(project_identity(&native), project_identity(&restored));
+    drop(reader);
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
