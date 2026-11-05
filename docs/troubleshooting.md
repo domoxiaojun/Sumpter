@@ -1,5 +1,7 @@
 # 故障排查
 
+Gemini 原生入口的模型列表、分页鉴权、文件/缓存/批处理、Interactions 和 Live 接入约定见 [Gemini 原生接入](gemini-native.md)。若模型目录错误只列出 `/v1/models` 等兼容路径，应使用包含 Gemini 原生目录修复的版本。
+
 先记录平台、版本、安装方式、客户端、访问地址和触发时间。不要把真实 API Key、Token、Cookie、密码、完整请求正文或未经脱敏的诊断捕获发到 Issue。
 
 ## 先分清三个端口

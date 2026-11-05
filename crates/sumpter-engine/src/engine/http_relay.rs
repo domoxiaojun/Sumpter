@@ -696,6 +696,22 @@ impl Engine {
                 {
                     continue;
                 }
+                let rewritten_upload_url = if endpoint.protocol == ProviderProtocol::Gemini
+                    && name.eq_ignore_ascii_case("x-goog-upload-url")
+                {
+                    super::context::current_request_context()
+                        .and_then(|context| context.public_origin)
+                        .and_then(|origin| {
+                            crate::request_build::gemini_upload_handoff_url(
+                                &origin,
+                                &endpoint.base_url,
+                                value,
+                            )
+                        })
+                } else {
+                    None
+                };
+                let value = rewritten_upload_url.as_ref().unwrap_or(value);
                 if let (Ok(n), Ok(v)) = (
                     HeaderName::from_bytes(name.as_bytes()),
                     HeaderValue::from_str(value),

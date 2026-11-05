@@ -15,6 +15,7 @@ use super::protocol::endpoint_supports_codex_live;
 use super::protocol::endpoint_supports_realtime_model;
 use super::protocol::is_codex_live_family_path;
 use super::protocol::is_codex_live_sideband_target;
+use super::protocol::is_gemini_live_path;
 use super::protocol::is_realtime_http_path;
 use super::protocol::path_without_query;
 use super::protocol::realtime_call_path_error;
@@ -254,7 +255,11 @@ pub(super) fn websocket_url(base_url: &str, path_and_query: &str) -> Option<Stri
         .port()
         .map(|port| format!(":{port}"))
         .unwrap_or_default();
-    let path = request_build::openai_resource_path(parsed.path(), path_and_query);
+    let path = if is_gemini_live_path(path_without_query(path_and_query)) {
+        request_build::gemini_resource_path(parsed.path(), path_and_query)
+    } else {
+        request_build::openai_resource_path(parsed.path(), path_and_query)
+    };
     Some(format!("{scheme}://{host}{port}{path}"))
 }
 impl Engine {
@@ -520,7 +525,8 @@ impl Engine {
     ) -> Result<PreparedWebSocket, WebSocketPrepareError> {
         let started = Instant::now();
         let path = path_without_query(path_and_query);
-        if !is_realtime_http_path(path) {
+        let gemini = is_gemini_live_path(path);
+        if !is_realtime_http_path(path) && !gemini {
             let error = WebSocketPrepareError::new(
                 400,
                 "invalid_request",
@@ -534,6 +540,17 @@ impl Engine {
                 error.message(),
             );
             return Err(error);
+        }
+        if gemini
+            && path_and_query
+                .split_once('?')
+                .is_some_and(|(_, query)| decoded_query_value(query, "key").is_some())
+        {
+            return Err(WebSocketPrepareError::new(
+                400,
+                "invalid_request",
+                "use x-goog-api-key or Bearer for inbound authentication, not a query key",
+            ));
         }
         if let Err(error) = validate_realtime_call_target(path_and_query) {
             let (status, code, message) = realtime_call_path_error(error);
@@ -566,15 +583,19 @@ impl Engine {
             client_kind,
             false,
         );
-        let model = resolve_realtime_route_model(
-            &self.config(),
-            "GET",
-            path_and_query,
-            query_model,
-            sideband_model,
-            secret_model,
-            intent,
-        );
+        let model = if gemini {
+            sumpter_core::routing::RESOURCE_ROUTING_MODEL.to_string()
+        } else {
+            resolve_realtime_route_model(
+                &self.config(),
+                "GET",
+                path_and_query,
+                query_model,
+                sideband_model,
+                secret_model,
+                intent,
+            )
+        };
         let request = match RoutingRequest::from_value(&json!({"model": model})) {
             Some(request) => request,
             None => {
@@ -688,7 +709,15 @@ impl Engine {
             ));
         }
         let config = self.config();
-        let mut plan = match if is_realtime_http_path(path) {
+        let gemini = is_gemini_live_path(path);
+        let mut plan = match if gemini {
+            RoutePlanner::plan_for_gemini_resource(
+                &config,
+                header_value(headers, "x-sumpter-endpoint-id"),
+                Some(sumpter_core::capability::ModelCapability::Live),
+                None,
+            )
+        } else if is_realtime_http_path(path) {
             RoutePlanner::plan_for_capability(
                 request,
                 &config,
@@ -842,7 +871,11 @@ impl Engine {
             // avas/quicksilver query markers are WebRTC HTTP-only.  Forwarding
             // them on GET `/v1/realtime` makes OpenAI/CPA reply
             // `invalid_architecture` instead of opening a standard Realtime WS.
-            let outbound_path_and_query = request_build::strip_codex_live_query(path_and_query);
+            let outbound_path_and_query = if gemini {
+                path_and_query.to_string()
+            } else {
+                request_build::strip_codex_live_query(path_and_query)
+            };
             let Some(url) = websocket_url(&endpoint.base_url, &outbound_path_and_query) else {
                 let error = WebSocketPrepareError::new(
                     0,
@@ -912,10 +945,14 @@ impl Engine {
                     http::header::HeaderValue::from_static("quicksilver=v2"),
                 );
             }
-            let provider_headers = ephemeral
-                .as_deref()
-                .map(|token| vec![("authorization", format!("Bearer {token}"))])
-                .unwrap_or_else(|| request_build::provider_auth_headers(&api_key));
+            let provider_headers = if gemini {
+                request_build::auth_headers_for_target(&api_key, ProviderProtocol::Gemini, None)
+            } else {
+                ephemeral
+                    .as_deref()
+                    .map(|token| vec![("authorization", format!("Bearer {token}"))])
+                    .unwrap_or_else(|| request_build::provider_auth_headers(&api_key))
+            };
             for (name, value) in provider_headers {
                 if let Ok(name) = http::header::HeaderName::from_bytes(name.as_bytes())
                     && let Ok(value) = http::header::HeaderValue::from_str(&value)

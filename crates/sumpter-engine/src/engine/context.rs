@@ -24,6 +24,7 @@ use sumpter_core::stream_terminal::SseDialect;
 /// path never contains a query string.
 #[derive(Clone)]
 pub(super) struct InboundRequestContext {
+    pub(super) public_origin: Option<String>,
     pub(super) inbound_token: Option<sumpter_core::config::InboundTokenIdentity>,
     pub(super) attribution: Option<sumpter_core::client_attribution::AttributedRequest>,
     pub(super) source_ip: Option<String>,

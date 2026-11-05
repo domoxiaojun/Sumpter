@@ -34,6 +34,7 @@ pub(super) fn source_format_for_passthrough(kind: PassthroughKind) -> ProviderPr
         | PassthroughKind::Raw => ProviderProtocol::OpenAI,
         PassthroughKind::GeminiSession => ProviderProtocol::Gemini,
         PassthroughKind::GeminiGenerate => ProviderProtocol::Gemini,
+        PassthroughKind::GeminiResource => ProviderProtocol::Gemini,
     }
 }
 
@@ -57,6 +58,7 @@ pub(super) fn required_native_protocol(kind: PassthroughKind) -> Option<Provider
         // 会话操作有转换面,不再强制原生;辅助操作仍必须落到原生入口。
         PassthroughKind::GeminiSession => None,
         PassthroughKind::GeminiGenerate => Some(ProviderProtocol::Gemini),
+        PassthroughKind::GeminiResource => Some(ProviderProtocol::Gemini),
     }
 }
 
@@ -91,6 +93,9 @@ pub(super) fn route_intent_for_path(
     client_kind: ClientKind,
 ) -> &'static str {
     let path = path_without_query(path_and_query);
+    if is_gemini_resource_path(path) {
+        return "gemini_resource";
+    }
     if is_gemini_generate_path(path) {
         return if path.ends_with(":countTokens") {
             "token_count"
@@ -282,7 +287,10 @@ pub(super) fn is_path_or_child(path: &str, prefix: &str) -> bool {
 }
 
 pub(super) fn is_resource_passthrough_kind(kind: PassthroughKind) -> bool {
-    matches!(kind, PassthroughKind::Files | PassthroughKind::Models)
+    matches!(
+        kind,
+        PassthroughKind::Files | PassthroughKind::Models | PassthroughKind::GeminiResource
+    )
 }
 
 pub(super) fn endpoint_supports_codex_live(config: &AppConfig, endpoint_id: &str) -> bool {
@@ -309,6 +317,8 @@ pub(super) fn endpoint_supports_realtime_model(
 pub(super) fn native_passthrough_kind(path: &str) -> PassthroughKind {
     if is_gemini_generate_path(path) {
         PassthroughKind::GeminiGenerate
+    } else if is_gemini_resource_path(path) {
+        PassthroughKind::GeminiResource
     } else if is_openai_resource_tree(path, "models") {
         PassthroughKind::Models
     } else if is_openai_resource_tree(path, "files") {
@@ -346,15 +356,77 @@ pub(super) fn is_gemini_session_path(path: &str) -> bool {
 pub(super) fn gemini_model_from_path(path: &str) -> Option<String> {
     let rest = path
         .strip_prefix("/v1beta/models/")
+        .or_else(|| path.strip_prefix("/v1alpha/models/"))
         .or_else(|| path.strip_prefix("/v1/models/"))?;
     let (model, operation) = rest.split_once(':')?;
     if !matches!(
         operation,
-        "generateContent" | "streamGenerateContent" | "countTokens" | "embedContent"
+        "generateContent"
+            | "streamGenerateContent"
+            | "countTokens"
+            | "embedContent"
+            | "batchEmbedContents"
+            | "batchGenerateContent"
+            | "asyncBatchEmbedContent"
+            | "predict"
+            | "predictLongRunning"
     ) {
         return None;
     }
-    crate::request_build::valid_gemini_model(model).then(|| model.to_string())
+    (!model.contains('/') && crate::request_build::valid_gemini_model(model))
+        .then(|| model.to_string())
+}
+
+/// Project resources have no conversational model. Keep Google versioned
+/// trees distinct from the existing OpenAI /v1/files and /v1/models surface.
+pub(super) fn is_gemini_resource_path(path: &str) -> bool {
+    let path = path
+        .strip_prefix("/upload")
+        .or_else(|| path.strip_prefix("/download"))
+        .unwrap_or(path);
+    let Some(rest) = path
+        .strip_prefix("/v1beta/")
+        .or_else(|| path.strip_prefix("/v1alpha/"))
+        .or_else(|| {
+            path.strip_prefix("/v1/")
+                .filter(|rest| !rest.starts_with("files") && !rest.starts_with("models"))
+        })
+    else {
+        return false;
+    };
+    let root = rest
+        .split('/')
+        .next()
+        .unwrap_or_default()
+        .split(':')
+        .next()
+        .unwrap_or_default();
+    if root == "models" {
+        return rest == "models"
+            || rest.strip_prefix("models/").is_some_and(|model| {
+                !model.contains('/') && crate::request_build::valid_gemini_model(model)
+            });
+    }
+    matches!(
+        root,
+        "files"
+            | "cachedContents"
+            | "batches"
+            | "operations"
+            | "interactions"
+            | "auth_tokens"
+            | "corpora"
+            | "fileSearchStores"
+            | "generatedFiles"
+    )
+}
+
+pub(super) fn is_gemini_live_path(path: &str) -> bool {
+    ["v1alpha", "v1beta", "v1"].iter().any(|version| {
+        path == format!(
+            "/ws/google.ai.generativelanguage.{version}.GenerativeService.BidiGenerateContent"
+        )
+    })
 }
 
 pub(super) fn gemini_stream_path(path: &str) -> bool {

@@ -19,6 +19,7 @@ use crate::outbound::{OutboundRequest, join_paths};
 pub const CLAUDE_CODE_USER_AGENT: &str = "claude-cli/2.1.220 (external, cli)";
 /// Codex-compatible identity required by several Responses upstream gateways.
 pub const CODEX_USER_AGENT: &str = "codex_cli_rs/0.5.0";
+pub const GEMINI_USER_AGENT: &str = "sumpter/gemini";
 pub const ANTHROPIC_VERSION: &str = "2023-06-01";
 /// Codex Desktop's private Live/Quicksilver bootstrap model.  It is distinct
 /// from the ordinary text model selected by the same client session.
@@ -30,7 +31,9 @@ pub const DEFAULT_REALTIME_MODEL: &str = "gpt-realtime";
 const IDENTITY_ACCEPT_ENCODING: &str = "identity";
 
 pub fn default_user_agent(protocol: ProviderProtocol) -> &'static str {
-    if protocol == ProviderProtocol::OpenAIResponses {
+    if protocol == ProviderProtocol::Gemini {
+        GEMINI_USER_AGENT
+    } else if protocol == ProviderProtocol::OpenAIResponses {
         CODEX_USER_AGENT
     } else {
         CLAUDE_CODE_USER_AGENT
@@ -97,6 +100,8 @@ pub fn model_catalog_probes(
                 configured.to_string()
             } else if protocol == ProviderProtocol::Anthropic {
                 CLAUDE_CODE_USER_AGENT.to_string()
+            } else if protocol == ProviderProtocol::Gemini {
+                GEMINI_USER_AGENT.to_string()
             } else {
                 CODEX_USER_AGENT.to_string()
             };
@@ -236,6 +241,8 @@ pub enum PassthroughKind {
     /// Gemini Developer API 辅助操作(countTokens / embedContent 等)。没有会话
     /// 语义,不参与协议转换。
     GeminiGenerate,
+    /// Gemini project-scoped APIs (models/files/cache/batches/interactions).
+    GeminiResource,
     /// Gemini Developer API 会话操作(generateContent / streamGenerateContent):
     /// 有转换面,可以落到别的协议入口。
     GeminiSession,
@@ -249,7 +256,7 @@ pub enum PassthroughKind {
 ///
 /// 鉴权方式按**目标协议**决定,不按入站 kind:入站是 OpenAI 方言、目标是 Gemini
 /// 入口时,必须发 Gemini 凭据(`x-goog-api-key`),否则上游只会回 401。
-fn auth_headers_for_target(
+pub(crate) fn auth_headers_for_target(
     api_key: &str,
     protocol: ProviderProtocol,
     kind: Option<PassthroughKind>,
@@ -293,6 +300,7 @@ impl PassthroughKind {
             | Self::Realtime
             | Self::Models
             | Self::GeminiGenerate
+            | Self::GeminiResource
             | Self::GeminiSession => None,
         }
     }
@@ -313,6 +321,7 @@ impl PassthroughKind {
             Self::Realtime => "realtime",
             Self::Models => "models",
             Self::GeminiGenerate => "gemini-generate",
+            Self::GeminiResource => "gemini-resource",
             Self::GeminiSession => "gemini-session",
         }
     }
@@ -404,7 +413,10 @@ pub(crate) fn build_outbound_with_json(
     let raw_passthrough = passthrough.as_ref().is_some_and(|request| {
         matches!(
             request.kind,
-            PassthroughKind::Raw | PassthroughKind::GeminiGenerate | PassthroughKind::GeminiSession
+            PassthroughKind::Raw
+                | PassthroughKind::GeminiGenerate
+                | PassthroughKind::GeminiSession
+                | PassthroughKind::GeminiResource
         )
     });
     // 优先级:入口/规则注入的 effort → 模型名后缀。请求体的 `output_config.effort`
@@ -548,6 +560,8 @@ pub(crate) fn build_outbound_with_json(
                 &request.model,
                 &endpoint.upstream_model,
             )
+        } else if passthrough.kind == PassthroughKind::GeminiResource {
+            gemini_resource_path(&base_path, inbound_path_and_query)
         } else if matches!(
             passthrough.kind,
             PassthroughKind::GeminiGenerate | PassthroughKind::GeminiSession
@@ -582,13 +596,24 @@ pub(crate) fn build_outbound_with_json(
                 // JSON bodies can safely follow feature-rule model rewrites. Multipart
                 // uploads stay byte-for-byte intact so boundaries and binary images are
                 // never reconstructed by the proxy.
-                body: rewrite_passthrough_model(
-                    &passthrough_body,
-                    &endpoint.upstream_model,
-                    passthrough.content_type,
+                body: if matches!(
                     passthrough.kind,
-                    parsed_json.filter(|_| passthrough.kind != PassthroughKind::AlphaSearch),
-                ),
+                    PassthroughKind::GeminiResource | PassthroughKind::GeminiGenerate
+                ) {
+                    rewrite_gemini_body_models(
+                        &passthrough_body,
+                        &request.model,
+                        &endpoint.upstream_model,
+                    )
+                } else {
+                    rewrite_passthrough_model(
+                        &passthrough_body,
+                        &endpoint.upstream_model,
+                        passthrough.content_type,
+                        passthrough.kind,
+                        parsed_json.filter(|_| passthrough.kind != PassthroughKind::AlphaSearch),
+                    )
+                },
                 keep_alive: endpoint.keep_alive,
             },
             effort,
@@ -774,6 +799,7 @@ fn rewrite_passthrough_model(
             | PassthroughKind::Videos
             | PassthroughKind::Models
             | PassthroughKind::GeminiGenerate
+            | PassthroughKind::GeminiResource
             | PassthroughKind::GeminiSession
     ) {
         return raw.clone();
@@ -825,7 +851,9 @@ fn rewrite_passthrough_model(
             return raw.clone();
         }
         // Gemini 的模型在 URL 上,正文里没有可改写字段 —— 原样转发。
-        PassthroughKind::GeminiGenerate | PassthroughKind::GeminiSession => return raw.clone(),
+        PassthroughKind::GeminiGenerate
+        | PassthroughKind::GeminiSession
+        | PassthroughKind::GeminiResource => return raw.clone(),
         PassthroughKind::Realtime => {
             let mut changed = false;
             if object.get("model").is_some_and(Value::is_string) {
@@ -956,12 +984,36 @@ pub fn gemini_resource_path(base_path: &str, inbound_path_and_query: &str) -> St
         format!("/{raw_path}")
     };
     let trimmed_base = base_path.trim_end_matches('/');
-    let output = if trimmed_base.ends_with("/v1beta")
-        && (path == "/v1beta" || path.starts_with("/v1beta/"))
-    {
-        format!("{trimmed_base}{}", &path[7..])
-    } else if trimmed_base.ends_with("/v1") && (path == "/v1" || path.starts_with("/v1/")) {
-        format!("{trimmed_base}{}", &path[3..])
+    let versions = ["/v1beta", "/v1alpha", "/v1"];
+    let base_version = versions
+        .iter()
+        .find(|version| trimmed_base.ends_with(**version));
+    let output = if let Some(version) = base_version {
+        let prefix = &trimmed_base[..trimmed_base.len() - version.len()];
+        if let Some(upload) = path
+            .strip_prefix("/upload/")
+            .or_else(|| path.strip_prefix("/download/"))
+        {
+            let transport = if path.starts_with("/upload/") {
+                "upload"
+            } else {
+                "download"
+            };
+            let suffix = upload
+                .split_once('/')
+                .map(|(_, rest)| rest)
+                .unwrap_or(upload);
+            format!("{prefix}/{transport}{version}/{suffix}")
+        } else if path.starts_with("/ws/") {
+            format!("{prefix}{path}")
+        } else if let Some(inbound_version) = versions
+            .iter()
+            .find(|v| path == **v || path.starts_with(&format!("{v}/")))
+        {
+            format!("{trimmed_base}{}", &path[inbound_version.len()..])
+        } else {
+            format!("{trimmed_base}{path}")
+        }
     } else {
         format!("{trimmed_base}{path}")
     };
@@ -969,6 +1021,38 @@ pub fn gemini_resource_path(base_path: &str, inbound_path_and_query: &str) -> St
         Some(query) if !query.is_empty() => format!("{output}?{query}"),
         _ => output,
     }
+}
+
+/// Resumable upload URLs must return through this proxy so the client never
+/// sends the listener token to Google. Only rewrite the selected upstream's
+/// own upload tree; preserve the opaque upload session query exactly.
+pub(crate) fn gemini_upload_handoff_url(
+    origin: &str,
+    base_url: &str,
+    value: &str,
+) -> Option<String> {
+    let base = reqwest::Url::parse(base_url).ok()?;
+    let upload = reqwest::Url::parse(value).ok()?;
+    if upload.origin() != base.origin()
+        || !upload.username().is_empty()
+        || upload.password().is_some()
+    {
+        return None;
+    }
+    let base_path = base.path().trim_end_matches('/');
+    let prefix = ["/v1beta", "/v1alpha", "/v1"]
+        .iter()
+        .find_map(|version| base_path.strip_suffix(version))
+        .unwrap_or(base_path);
+    let path = upload.path().strip_prefix(prefix)?;
+    if !path.starts_with("/upload/") {
+        return None;
+    }
+    let query = upload
+        .query()
+        .map(|query| format!("?{query}"))
+        .unwrap_or_default();
+    Some(format!("{origin}{path}{query}"))
 }
 
 /// Gemini Developer API model path segments are intentionally narrower than a
@@ -981,6 +1065,50 @@ pub fn valid_gemini_model(model: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
         && !model.contains("..")
+}
+
+/// Only model fields defined by the native auxiliary/resource schemas may
+/// follow an explicit mapping. User text, tool args and file URIs stay opaque.
+fn rewrite_gemini_body_models(raw: &Bytes, client_model: &str, upstream_model: &str) -> Bytes {
+    let bare = |model: &str| model.strip_prefix("models/").unwrap_or(model).to_string();
+    if bare(client_model) == bare(upstream_model) || !valid_gemini_model(upstream_model) {
+        return raw.clone();
+    }
+    let Ok(mut value) = serde_json::from_slice::<Value>(raw) else {
+        return raw.clone();
+    };
+    fn replace(object: &mut Value, client: &str, upstream: &str) -> bool {
+        let Some(model) = object.get("model").and_then(Value::as_str) else {
+            return false;
+        };
+        if model.strip_prefix("models/").unwrap_or(model) != client {
+            return false;
+        }
+        let replacement = if model.starts_with("models/") {
+            format!("models/{upstream}")
+        } else {
+            upstream.to_string()
+        };
+        object["model"] = Value::String(replacement);
+        true
+    }
+    let client = bare(client_model);
+    let upstream = bare(upstream_model);
+    let mut changed = replace(&mut value, &client, &upstream);
+    // countTokens.generateContentRequest and batchEmbedContents.requests.
+    if let Some(request) = value.get_mut("generateContentRequest") {
+        changed |= replace(request, &client, &upstream);
+    }
+    if let Some(requests) = value.get_mut("requests").and_then(Value::as_array_mut) {
+        for request in requests {
+            changed |= replace(request, &client, &upstream);
+        }
+    }
+    if changed {
+        Bytes::from(serde_json::to_vec(&value).expect("JSON value"))
+    } else {
+        raw.clone()
+    }
 }
 
 fn rewrite_gemini_model_path(
@@ -1248,6 +1376,54 @@ fn remove_output_config_effort(body: &mut serde_json::Map<String, Value>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn gemini_versioned_paths_and_upload_handoffs() {
+        for (base, inbound, expected) in [
+            (
+                "",
+                "/v1beta/models/m:countTokens",
+                "/v1beta/models/m:countTokens",
+            ),
+            (
+                "/v1",
+                "/v1beta/models/m:countTokens?trace=a%2Fb",
+                "/v1/models/m:countTokens?trace=a%2Fb",
+            ),
+            (
+                "/proxy/v1beta",
+                "/upload/v1beta/files?upload_id=a%2Fb",
+                "/proxy/upload/v1beta/files?upload_id=a%2Fb",
+            ),
+            (
+                "/v1alpha",
+                "/download/v1beta/files/id:download",
+                "/download/v1alpha/files/id:download",
+            ),
+            (
+                "/v1beta",
+                "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent",
+                "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent",
+            ),
+        ] {
+            assert_eq!(super::gemini_resource_path(base, inbound), expected);
+        }
+        assert_eq!(
+            super::gemini_upload_handoff_url(
+                "https://proxy.invalid",
+                "https://google.invalid/proxy/v1beta",
+                "https://google.invalid/proxy/upload/v1beta/files?upload_id=a%2Fb"
+            ),
+            Some("https://proxy.invalid/upload/v1beta/files?upload_id=a%2Fb".into())
+        );
+        assert!(
+            super::gemini_upload_handoff_url(
+                "https://proxy.invalid",
+                "https://google.invalid",
+                "https://foreign.invalid/upload/v1beta/files"
+            )
+            .is_none()
+        );
+    }
     use super::*;
     use serde_json::json;
     use sumpter_core::config::{EndpointProtocolMode, UserAgentMode, UserAgentRule};
@@ -1413,7 +1589,7 @@ mod tests {
         );
         assert_eq!(
             probe_user_agents(EndpointProtocolMode::Auto, &settings),
-            vec!["anthropic-probe", "openai-probe", CLAUDE_CODE_USER_AGENT]
+            vec!["anthropic-probe", "openai-probe", GEMINI_USER_AGENT]
         );
     }
 

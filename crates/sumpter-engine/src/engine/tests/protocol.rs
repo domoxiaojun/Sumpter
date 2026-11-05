@@ -35,6 +35,7 @@ async fn realtime_root_live_bootstrap_is_the_only_root_that_registers_a_call() {
     INBOUND_REQUEST_CONTEXT
         .scope(
             RefCell::new(InboundRequestContext {
+                public_origin: None,
                 inbound_token: None,
                 attribution: None,
                 source_ip: None,
@@ -436,4 +437,39 @@ fn resource_paths_preserve_inbound_aliases_and_avoid_duplicate_base_v1() {
         request_build::openai_resource_path("/gateway/v1", "/v1foo"),
         "/gateway/v1/v1foo"
     );
+}
+
+#[test]
+fn gemini_resource_and_auxiliary_paths_are_narrow() {
+    use crate::engine::protocol::{is_gemini_live_path, is_gemini_resource_path};
+    for action in [
+        "batchEmbedContents",
+        "batchGenerateContent",
+        "asyncBatchEmbedContent",
+        "predict",
+        "predictLongRunning",
+    ] {
+        assert_eq!(
+            gemini_model_from_path(&format!("/v1alpha/models/gemini-test:{action}")),
+            Some("gemini-test".into())
+        );
+    }
+    assert!(is_gemini_resource_path("/upload/v1beta/files"));
+    assert!(is_gemini_resource_path("/v1beta/cachedContents/demo"));
+    assert!(!is_gemini_resource_path(
+        "/v1beta/models/gemini-test:generateContent"
+    ));
+    assert!(!is_gemini_resource_path(
+        "/v1beta/models/gemini-test:unknownOperation"
+    ));
+    assert!(is_gemini_resource_path("/v1/interactions"));
+    assert!(!is_gemini_resource_path("/v1/files/demo"));
+    assert!(!is_gemini_resource_path("/v1beta/not-google"));
+    assert!(!is_gemini_generate_path(
+        "/v1beta/models/models/gemini-test:generateContent"
+    ));
+    assert!(is_gemini_live_path(
+        "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+    ));
+    assert!(!is_gemini_live_path("/ws/anything"));
 }

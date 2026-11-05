@@ -124,7 +124,17 @@ public enum ProviderModelCatalog {
     /// Resolve candidate paths against the configured base path. A base URL
     /// ending in `/v1` must not produce `/v1/v1/models`; custom prefixes such
     /// as `/apps/anthropic` are retained for every candidate.
-    static func candidateURLs(baseURL: URL) -> [URL] {
+    static func candidateURLs(baseURL: URL, protocolMode: ProviderProtocol = .openai) -> [URL] {
+        if protocolMode == .gemini {
+            var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
+            let prefix = baseURL.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let versioned = ["v1", "v1beta", "v1alpha"].contains(prefix.split(separator: "/").last.map(String.init) ?? "")
+            components?.path = (prefix.isEmpty ? "" : "/" + prefix) + (versioned ? "/models" : "/v1beta/models")
+            components?.queryItems = [URLQueryItem(name: "pageSize", value: "1000")]
+            components?.fragment = nil
+            if let url = components?.url { return [url] }
+            return []
+        }
         let prefix = baseURL.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let prefixPath = prefix.isEmpty ? "" : "/\(prefix)"
         var paths: [String] = []
@@ -173,7 +183,7 @@ public enum ProviderModelCatalog {
             }
             let configured = rule.value.trimmingCharacters(in: .whitespacesAndNewlines)
             return ProbeIdentity(protocolMode: proto, userAgent: configured.isEmpty
-                ? (proto == .anthropic ? userAgent : "codex_cli_rs/0.5.0") : configured)
+                ? (proto == .anthropic ? userAgent : proto == .gemini ? "sumpter/gemini" : "codex_cli_rs/0.5.0") : configured)
         }
     }
 
@@ -200,7 +210,6 @@ public enum ProviderModelCatalog {
         // 无 API Key 也要尝试无鉴权目录端点：本地/内网兼容服务常故意不要求
         // 鉴权。带 Key 时先复用 Rust 数据面同时发送的两种鉴权头，再尝试
         // 单头兼容组合；无 Key 时每个候选路径只发一次。
-        let authHeaderSets = authenticationHeaderSets(for: key)
         let identities = probeIdentities(mode: protocolMode, settings: try userAgentSettings.validated())
         var errors: [String] = []
         var discovered = Set<String>()
@@ -209,8 +218,8 @@ public enum ProviderModelCatalog {
         identitiesLoop: for (index, identity) in identities.enumerated() {
             let budget = max(0, deadline.timeIntervalSinceNow) / Double(identities.count - index)
             let identityDeadline = Date().addingTimeInterval(budget)
-            for headers in authHeaderSets {
-                for url in candidateURLs(baseURL: baseURL) {
+            for headers in authenticationHeaderSets(for: key, protocolMode: identity.protocolMode) {
+                for url in candidateURLs(baseURL: baseURL, protocolMode: identity.protocolMode) {
                     let path = url.path
                     let remaining = identityDeadline.timeIntervalSinceNow
                     if remaining <= 0 {
@@ -239,7 +248,10 @@ public enum ProviderModelCatalog {
                             errors.append("\(path) 响应过大(>\(maxResponseBytes / 1024) KiB)")
                             continue
                         }
-                        let ids = try modelIDs(from: data)
+                        let ids = try await paginatedModelIDs(
+                            firstPage: data, request: request, session: session,
+                            protocolMode: identity.protocolMode, deadline: identityDeadline, timeout: timeout
+                        )
                         if !ids.isEmpty {
                             for id in ids where discovered.count < maxModelCount {
                                 discovered.insert(id)
@@ -281,15 +293,80 @@ public enum ProviderModelCatalog {
     }
 
     /// 探测优先复用数据面同时发送的两种鉴权头；随后保留单头兼容重试。
-    static func authenticationHeaderSets(for key: String) -> [[(String, String)]] {
+    static func authenticationHeaderSets(for key: String, protocolMode: ProviderProtocol = .openai) -> [[(String, String)]] {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [[]] }
+        if protocolMode == .gemini {
+            if trimmed.hasPrefix("Bearer ") {
+                return [[("Authorization", "Bearer " + trimmed.dropFirst(7).trimmingCharacters(in: .whitespacesAndNewlines))]]
+            }
+            return [[("x-goog-api-key", trimmed)]]
+        }
         return [
             [("Authorization", "Bearer \(trimmed)"), ("x-api-key", trimmed)],
             [("x-api-key", trimmed)],
             [("Authorization", "Bearer \(trimmed)")],
             [("Authorization", "x-api-key \(trimmed)")],
         ]
+    }
+
+    private static func paginatedModelIDs(
+        firstPage: Data, request: URLRequest, session: URLSession,
+        protocolMode: ProviderProtocol, deadline: Date, timeout: TimeInterval
+    ) async throws -> [String] {
+        guard protocolMode == .gemini else { return try modelIDs(from: firstPage) }
+        var data = firstPage
+        var totalBytes = 0
+        var itemCount = 0
+        var seen = Set<String>()
+        var ids = Set<String>()
+        while true {
+            try Task.checkCancellation()
+            totalBytes += data.count
+            guard totalBytes <= maxResponseBytes else {
+                throw ProviderModelCatalogError.noModels("Gemini 模型目录分页总响应过大")
+            }
+            let object = try JSONSerialization.jsonObject(with: data)
+            if let items = (object as? [String: Any])?["models"] as? [Any] {
+                itemCount += items.count
+            }
+            guard itemCount <= maxModelCount else {
+                throw ProviderModelCatalogError.noModels("Gemini 模型目录数量超限")
+            }
+            for id in modelIDs(fromJSONObject: object) {
+                ids.insert(id.hasPrefix("models/") ? String(id.dropFirst(7)) : id)
+            }
+            let dictionary = object as? [String: Any]
+            guard let rawToken = dictionary?["nextPageToken"], !(rawToken is NSNull) else { break }
+            guard let token = rawToken as? String else {
+                throw ProviderModelCatalogError.noModels("Gemini nextPageToken 必须是字符串")
+            }
+            if token.isEmpty { break }
+            guard dictionary?["models"] is [Any], seen.insert(token).inserted, seen.count <= 100 else {
+                throw ProviderModelCatalogError.noModels("Gemini 模型目录分页重复或无效")
+            }
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0, let url = request.url,
+                  var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+                throw ProviderModelCatalogError.noModels("Gemini 模型目录分页超时")
+            }
+            components.queryItems = (components.queryItems ?? []) + [URLQueryItem(name: "pageToken", value: token)]
+            components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+            var next = request
+            next.url = components.url
+            next.timeoutInterval = min(timeout, remaining)
+            let (page, response) = try await session.data(for: next, delegate: redirectBlocker)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 200
+            guard status == 200 else {
+                throw ProviderModelCatalogError.noModels("Gemini 模型目录分页 HTTP \(status)")
+            }
+            guard let pageObject = try JSONSerialization.jsonObject(with: page) as? [String: Any],
+                  pageObject["models"] is [Any] else {
+                throw ProviderModelCatalogError.noModels("Gemini 模型目录分页缺少 models 数组")
+            }
+            data = page
+        }
+        return ids.sorted()
     }
 }
 

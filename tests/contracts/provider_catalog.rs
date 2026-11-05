@@ -156,3 +156,106 @@ async fn optional_capability_timeout_keeps_successful_model_discovery() {
         None
     );
 }
+
+#[tokio::test]
+async fn gemini_catalog_uses_native_auth_versions_and_all_pages() {
+    use axum::extract::Query;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let recorded = seen.clone();
+    let router = Router::new().fallback(get(move |uri: axum::http::Uri, headers: HeaderMap, Query(query): Query<HashMap<String, String>>| {
+        let recorded = recorded.clone();
+        async move {
+            assert!(uri.path().ends_with("/models"));
+            assert_eq!(headers.get("x-goog-api-key").unwrap(), "synthetic-gemini-key");
+            assert!(!headers.contains_key("authorization"));
+            assert!(!headers.contains_key("x-api-key"));
+            assert!(!headers.contains_key("anthropic-version"));
+            assert_eq!(query.get("pageSize").map(String::as_str), Some("1000"));
+            recorded.lock().unwrap().push(uri.path().to_string());
+            if let Some(token) = query.get("pageToken") {
+                assert_eq!(token, "opaque+/=& token");
+                Json(json!({"models":[{"name":"models/gemini-embedding", "supportedGenerationMethods":["embedContent"]}]}))
+            } else {
+                Json(json!({"models":[{"name":"models/gemini-test"}],"nextPageToken":"opaque+/=& token"}))
+            }
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    for (suffix, expected_path) in [
+        ("", "/v1beta/models"),
+        ("/v1beta", "/v1beta/models"),
+        ("/v1", "/v1/models"),
+        ("/proxy/v1alpha/", "/proxy/v1alpha/models"),
+    ] {
+        let config: AppConfig = serde_json::from_value(json!({"endpoints":[{"id":"gemini", "protocol":"gemini", "baseURL":format!("http://{address}{suffix}"), "apiKey":"synthetic-gemini-key"}]})).unwrap();
+        let result = ProviderCatalogFetcher::fetch(&config.endpoints[0]).await;
+        assert_eq!(result.error, None);
+        assert_eq!(result.models, ["gemini-embedding", "gemini-test"]);
+        assert!(result.route_capabilities.contains_key("gemini-test"));
+        assert!(!result.route_capabilities.contains_key("models/gemini-test"));
+        let paths = seen.lock().unwrap();
+        assert!(paths.iter().rev().take(2).all(|path| path == expected_path));
+    }
+    assert_eq!(seen.lock().unwrap().len(), 8);
+    task.abort();
+}
+
+#[tokio::test]
+async fn gemini_catalog_rejects_failed_or_cyclic_pagination_without_partial_models() {
+    use axum::{extract::Query, response::IntoResponse};
+    use std::collections::HashMap;
+    for cyclic in [false, true] {
+        let router = Router::new().route("/v1beta/models", get(move |Query(query): Query<HashMap<String, String>>| async move {
+            if !cyclic && query.contains_key("pageToken") {
+                return axum::http::StatusCode::FORBIDDEN.into_response();
+            }
+            Json(json!({"models":[{"name":"models/gemini-partial"}],"nextPageToken":"same-token"})).into_response()
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let config: AppConfig = serde_json::from_value(json!({"endpoints":[{"id":"gemini", "protocol":"gemini", "baseURL":format!("http://{address}"), "apiKey":"synthetic"}]})).unwrap();
+        let result = ProviderCatalogFetcher::fetch(&config.endpoints[0]).await;
+        assert!(result.models.is_empty());
+        assert!(
+            result
+                .error
+                .unwrap()
+                .contains(if cyclic { "分页重复" } else { "403" })
+        );
+        task.abort();
+    }
+}
+
+#[tokio::test]
+async fn gemini_catalog_auto_mode_and_oauth_bearer() {
+    let router = Router::new().route(
+        "/v1beta/models",
+        get(|headers: HeaderMap| async move {
+            assert_eq!(
+                headers.get("authorization").unwrap(),
+                "Bearer synthetic-oauth"
+            );
+            assert!(!headers.contains_key("x-goog-api-key"));
+            Json(json!({"models":[{"name":"models/gemini-oauth"}]}))
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let config: AppConfig = serde_json::from_value(json!({"endpoints":[{"id":"auto", "protocol":"auto", "baseURL":format!("http://{address}"), "apiKey":"Bearer synthetic-oauth"}]})).unwrap();
+    let result = ProviderCatalogFetcher::fetch(&config.endpoints[0]).await;
+    assert_eq!(result.error, None);
+    assert_eq!(result.models, ["gemini-oauth"]);
+    task.abort();
+}

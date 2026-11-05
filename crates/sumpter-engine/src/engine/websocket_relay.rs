@@ -757,7 +757,9 @@ pub(super) fn websocket_event_context(
     started: Instant,
 ) -> WebSocketEventContext {
     let path = path_without_query(path_and_query);
-    let route_intent = if is_realtime_http_path(path) {
+    let route_intent = if super::protocol::is_gemini_live_path(path) {
+        "gemini_live"
+    } else if is_realtime_http_path(path) {
         match intent {
             RealtimeRouteIntent::CodexLive => "live",
             RealtimeRouteIntent::StandardRealtime => "realtime",
@@ -865,7 +867,11 @@ pub(super) fn websocket_client_event(
         client_declared: context.client_declared.clone(),
         grok_metadata: context.grok_metadata.clone(),
         client_model: (!context.model.is_empty()).then(|| context.model.clone()),
-        source_format: Some(ProviderProtocol::OpenAI),
+        source_format: Some(if context.route_intent == "gemini_live" {
+            ProviderProtocol::Gemini
+        } else {
+            ProviderProtocol::OpenAI
+        }),
         target_format: endpoint.map(|endpoint| endpoint.protocol),
         route_mode: endpoint.map(|endpoint| endpoint.route_mode),
         transport: Some(RuntimeTransport::Websocket),

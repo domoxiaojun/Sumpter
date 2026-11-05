@@ -113,7 +113,7 @@ pub fn header_pairs(headers: &HeaderMap) -> Vec<(String, String)> {
 /// callers exceeding it receive a deterministic 413 before JSON conversion.
 pub const MAX_BODY_BYTES: usize = 128 * 1024 * 1024;
 const MAX_DECOMPRESSED_BODY_BYTES: usize = MAX_BODY_BYTES;
-/// Gemini 入站的公共约束:必须 POST、凭据不能走 query、流式必须 `alt=sse`。
+/// Gemini 入站的公共约束:模型操作必须 POST、凭据不能走 query。
 /// 会话与辅助操作共用,避免两条路径的判定漂移。
 fn gemini_request_error(method: &str, path_and_query: &str) -> Option<(i64, &'static str)> {
     let query = path_and_query
@@ -127,10 +127,6 @@ fn gemini_request_error(method: &str, path_and_query: &str) -> Option<(i64, &'st
             400,
             "use x-goog-api-key or Bearer for inbound authentication, not a query key",
         ))
-    } else if gemini_stream_path(path_without_query(path_and_query))
-        && decoded_query_value(query, "alt").as_deref() != Some("sse")
-    {
-        Some((400, "streamGenerateContent requires alt=sse"))
     } else {
         None
     }
@@ -156,6 +152,7 @@ pub fn websocket_upgrade_requested(method: &str, headers: &[(String, String)]) -
 /// Only the declared Realtime/Live family can enter the native WS data plane.
 pub fn is_realtime_websocket_path(path_and_query: &str) -> bool {
     super::protocol::is_realtime_http_path(path_without_query(path_and_query))
+        || super::protocol::is_gemini_live_path(path_without_query(path_and_query))
 }
 
 impl Engine {
@@ -233,6 +230,26 @@ impl Engine {
         let route_intent =
             route_intent_for_path(method, path_and_query, query_model.as_deref(), client_kind);
         InboundRequestContext {
+            public_origin: header_value(headers, "host").and_then(|host| {
+                let config = self.config();
+                let trusted = remote.is_some_and(|peer| {
+                    access::is_trusted_proxy(&peer, &config.listener.trusted_proxy_cidrs)
+                });
+                let scheme =
+                    if trusted && header_value(headers, "x-forwarded-proto") == Some("https") {
+                        "https"
+                    } else {
+                        "http"
+                    };
+                let url = reqwest::Url::parse(&format!("{scheme}://{host}")).ok()?;
+                (url.host_str().is_some()
+                    && url.username().is_empty()
+                    && url.password().is_none()
+                    && url.path() == "/"
+                    && url.query().is_none()
+                    && url.fragment().is_none())
+                .then(|| url.origin().ascii_serialization())
+            }),
             inbound_token: super::context::matched_inbound_token(headers, &self.config().listener),
             attribution: Some(sumpter_core::client_attribution::observe(
                 method, &path, headers, None,
@@ -468,18 +485,20 @@ impl Engine {
         // Authentication precedes decompression; opaque resource bodies stay raw.
         let mut headers = headers;
         let mut body = body;
-        if matches!(
-            path,
-            "/v1/messages"
-                | "/v1/responses"
-                | "/responses"
-                | "/backend-api/codex/responses"
-                | "/v1/responses/compact"
-                | "/responses/compact"
-                | "/backend-api/codex/responses/compact"
-                | "/v1/chat/completions"
-                | "/chat/completions"
-        ) && let Some(encoding) = header_value(&headers, "content-encoding").map(str::to_owned)
+        if (is_gemini_session_path(path)
+            || matches!(
+                path,
+                "/v1/messages"
+                    | "/v1/responses"
+                    | "/responses"
+                    | "/backend-api/codex/responses"
+                    | "/v1/responses/compact"
+                    | "/responses/compact"
+                    | "/backend-api/codex/responses/compact"
+                    | "/v1/chat/completions"
+                    | "/chat/completions"
+            ))
+            && let Some(encoding) = header_value(&headers, "content-encoding").map(str::to_owned)
             && !encoding.eq_ignore_ascii_case("identity")
             && (!config.listener.has_inbound_auth() || inbound_auth_ok(&headers, &config.listener))
         {
@@ -523,7 +542,13 @@ impl Engine {
         }
 
         match path {
-            _ if is_gemini_session_path(path) => {
+            _ if is_gemini_session_path(path)
+                && (!gemini_stream_path(path)
+                    || query
+                        .and_then(|query| decoded_query_value(query, "alt"))
+                        .as_deref()
+                        == Some("sse")) =>
+            {
                 // 与会话/辅助操作共用同一份入站约束,避免两条路径的校验漂移。
                 if let Some((status, message)) = gemini_request_error(method, path_and_query) {
                     self.record_rejected_client_with_metadata(
@@ -1220,6 +1245,22 @@ impl Engine {
                 }
             });
         }
+        if kind == PassthroughKind::GeminiResource
+            && path_and_query
+                .split_once('?')
+                .is_some_and(|(_, query)| decoded_query_value(query, "key").is_some())
+        {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                &[
+                    ("error", "invalid_gemini_request"),
+                    (
+                        "message",
+                        "use x-goog-api-key or Bearer for inbound authentication, not a query key",
+                    ),
+                ],
+            );
+        }
         if kind == PassthroughKind::GeminiGenerate
             && let Some((status, message)) = gemini_request_error(method, path_and_query)
         {
@@ -1397,12 +1438,31 @@ impl Engine {
             };
             NativePassthroughFields {
                 model,
-                stream: gemini_stream_path(path_without_query(path_and_query)),
+                stream: gemini_stream_path(path_without_query(path_and_query))
+                    && path_and_query
+                        .split_once('?')
+                        .and_then(|(_, query)| decoded_query_value(query, "alt"))
+                        .as_deref()
+                        == Some("sse"),
             }
         } else if resource_intent {
             NativePassthroughFields {
-                model: sumpter_core::routing::RESOURCE_ROUTING_MODEL.into(),
-                stream: false,
+                model: if kind == PassthroughKind::GeminiResource {
+                    metadata_body_before_normalization
+                        .as_ref()
+                        .and_then(|body| body.get("model"))
+                        .and_then(Value::as_str)
+                        .map(|model| model.strip_prefix("models/").unwrap_or(model).to_string())
+                        .unwrap_or_else(|| sumpter_core::routing::RESOURCE_ROUTING_MODEL.into())
+                } else {
+                    sumpter_core::routing::RESOURCE_ROUTING_MODEL.into()
+                },
+                stream: kind == PassthroughKind::GeminiResource
+                    && metadata_body_before_normalization
+                        .as_ref()
+                        .and_then(|body| body.get("stream"))
+                        .and_then(Value::as_bool)
+                        == Some(true),
             }
         } else if kind == PassthroughKind::Raw {
             // Raw requests are relayed byte-for-byte.  We only perform a
@@ -1695,9 +1755,9 @@ impl Engine {
                     | PassthroughKind::Videos
                     | PassthroughKind::Realtime
                     | PassthroughKind::Models => SseDialect::OpenAiResponses,
-                    PassthroughKind::GeminiGenerate | PassthroughKind::GeminiSession => {
-                        SseDialect::Gemini
-                    }
+                    PassthroughKind::GeminiGenerate
+                    | PassthroughKind::GeminiSession
+                    | PassthroughKind::GeminiResource => SseDialect::Gemini,
                 },
                 realtime_client_secret: is_realtime_client_secret_path(path_and_query),
             }),

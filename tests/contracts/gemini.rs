@@ -1,5 +1,6 @@
 //! Same native Gemini contract runs through both platform adapters.
 use super::*;
+use axum::body::to_bytes;
 
 fn config() -> AppConfig {
     let mut config = two_endpoint_config();
@@ -153,12 +154,6 @@ async fn gemini_native_rejects_invalid_auth_method_query_and_mapping() {
             "/v1beta/models/gemini-test:generateContent",
             true,
             405,
-        ),
-        (
-            "POST",
-            "/v1beta/models/gemini-test:streamGenerateContent",
-            true,
-            400,
         ),
         (
             "POST",
@@ -374,4 +369,265 @@ async fn vertex_shaped_paths_are_not_hijacked_by_the_session_branch() {
         String::from_utf8_lossy(&body)
     );
     assert_eq!(fake.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn gemini_native_auxiliary_methods_and_json_array_stream() {
+    for (operation, response) in [
+        (
+            "batchEmbedContents",
+            r#"{"embeddings":[{"values":[0.1]}],"usageMetadata":{"promptTokenCount":12}}"#,
+        ),
+        ("batchGenerateContent", r#"{"name":"batches/demo"}"#),
+        ("asyncBatchEmbedContent", r#"{"name":"batches/demo"}"#),
+        (
+            "predict",
+            r#"{"predictions":[{"bytesBase64Encoded":"AA=="}]}"#,
+        ),
+        (
+            "predictLongRunning",
+            r#"{"name":"operations/demo","done":false}"#,
+        ),
+        (
+            "streamGenerateContent",
+            r#"[{"candidates":[{"content":{"parts":[{"text":"hi"}]}}]},{"candidates":[{"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"toolUsePromptTokenCount":3,"candidatesTokenCount":4,"thoughtsTokenCount":2}}]"#,
+        ),
+    ] {
+        let fake = FakeTransport::new();
+        fake.push(
+            "a.example.com",
+            Outcome::Status {
+                status: 200,
+                headers: vec![("content-type".into(), "application/json".into())],
+                chunks: response.as_bytes().chunks(13).map(<[u8]>::to_vec).collect(),
+            },
+        );
+        let engine = engine_with(config(), fake.clone());
+        let body = br#"{ "requests":[{"model":"models/gemini-test","content":{"parts":[{"text":"literal gemini-test"}]}}] }"#;
+        let (status, received) = call(
+            &engine,
+            loopback(),
+            &format!("/v1alpha/models/gemini-test:{operation}"),
+            headers(),
+            Bytes::from_static(body),
+        )
+        .await;
+        assert_eq!(status, 200, "{operation}");
+        assert_eq!(received, response.as_bytes());
+        let sent = fake.requests();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(
+            sent[0].path,
+            format!("/v1beta/models/gemini-upstream:{operation}")
+        );
+        let request: Value = serde_json::from_slice(&sent[0].body).unwrap();
+        assert_eq!(request["requests"][0]["model"], "models/gemini-upstream");
+        assert_eq!(
+            request["requests"][0]["content"]["parts"][0]["text"],
+            "literal gemini-test"
+        );
+        let runtime = engine.runtime_snapshot();
+        let event = runtime
+            .recent_events
+            .iter()
+            .find(|event| event.kind == "client")
+            .unwrap();
+        assert!(event.is_succeeded(), "{operation}: {event:?}");
+        if operation == "streamGenerateContent" {
+            let usage = event.stream_trace.as_ref().unwrap().usage.as_ref().unwrap();
+            assert_eq!(usage.input_tokens, Some(13));
+            assert_eq!(usage.output_tokens, Some(6));
+        }
+    }
+}
+
+#[tokio::test]
+async fn gemini_native_resources_preserve_method_body_headers_and_upload_handoff() {
+    for (method, path, body, response) in [
+        ("GET", "/v1beta/models", "", "{\"models\":[]}"),
+        ("GET", "/v1beta/files/demo", "", "{\"name\":\"files/demo\"}"),
+        ("DELETE", "/v1beta/files/demo", "", "{}"),
+        (
+            "PATCH",
+            "/v1beta/cachedContents/demo?updateMask=ttl",
+            "{ \"ttl\":\"300s\" }",
+            "{\"name\":\"cachedContents/demo\"}",
+        ),
+        (
+            "GET",
+            "/v1beta/batches/demo",
+            "",
+            "{\"name\":\"batches/demo\"}",
+        ),
+        (
+            "POST",
+            "/upload/v1beta/files?upload_id=opaque%2Fid",
+            "raw bytes",
+            "{}",
+        ),
+        (
+            "GET",
+            "/download/v1beta/files/demo:download?alt=media",
+            "",
+            "file bytes",
+        ),
+    ] {
+        let fake = FakeTransport::new();
+        fake.push(
+            "a.example.com",
+            Outcome::Status {
+                status: 200,
+                headers: vec![
+                    ("content-type".into(), "application/octet-stream".into()),
+                    (
+                        "x-goog-upload-url".into(),
+                        "https://a.example.com/upload/v1beta/files?upload_id=opaque%2Fid".into(),
+                    ),
+                ],
+                chunks: vec![response.as_bytes().to_vec()],
+            },
+        );
+        let mut config = config();
+        config.endpoints[0].capabilities = vec![sumpter_core::capability::ModelCapability::Files];
+        let engine = engine_with(config, fake.clone());
+        let mut incoming = headers();
+        incoming.retain(|(name, _)| name != "content-type");
+        incoming.extend([
+            ("host".into(), "proxy.example.invalid".into()),
+            ("content-type".into(), "application/octet-stream".into()),
+            ("x-goog-upload-command".into(), "upload, finalize".into()),
+            ("x-goog-upload-offset".into(), "0".into()),
+        ]);
+        let result = engine
+            .handle_request(
+                loopback(),
+                method,
+                path,
+                incoming,
+                Bytes::copy_from_slice(body.as_bytes()),
+            )
+            .await;
+        assert_eq!(result.status().as_u16(), 200, "{path}");
+        assert_eq!(
+            result.headers()["x-goog-upload-url"],
+            "http://proxy.example.invalid/upload/v1beta/files?upload_id=opaque%2Fid"
+        );
+        assert_eq!(
+            to_bytes(result.into_body(), usize::MAX).await.unwrap(),
+            response.as_bytes()
+        );
+        let requests = fake.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, method);
+        assert_eq!(requests[0].path, path);
+        assert_eq!(requests[0].body, body.as_bytes());
+        assert!(requests[0].headers.iter().any(|(name, value)| name == "x-goog-upload-command" && value == "upload, finalize"));
+        assert!(
+            requests[0]
+                .headers
+                .iter()
+                .any(|(name, value)| name == "x-goog-api-key" && value == "provider-secret")
+        );
+    }
+}
+
+#[tokio::test]
+async fn gemini_project_resources_require_an_unambiguous_native_endpoint_and_files_opt_in() {
+    for selector in [None, Some("a")] {
+        let fake = FakeTransport::new();
+        let mut config = config();
+        let mut second = config.endpoints[0].clone();
+        second.id = "another-project".into();
+        config.endpoints.push(second);
+        let first_id = config.endpoints[0].id.clone();
+        let engine = engine_with(config, fake.clone());
+        let mut incoming = headers();
+        if selector.is_some() {
+            incoming.push(("x-sumpter-endpoint-id".into(), first_id));
+            fake.push(
+                "a.example.com",
+                Outcome::Status {
+                    status: 200,
+                    headers: vec![],
+                    chunks: vec![b"{}".to_vec()],
+                },
+            );
+        }
+        let response = engine
+            .handle_request(
+                loopback(),
+                "GET",
+                "/v1beta/cachedContents/demo",
+                incoming,
+                Bytes::new(),
+            )
+            .await;
+        assert_eq!(
+            response.status().as_u16(),
+            if selector.is_some() { 200 } else { 400 }
+        );
+        assert_eq!(fake.requests().len(), usize::from(selector.is_some()));
+    }
+    let fake = FakeTransport::new();
+    let engine = engine_with(config(), fake.clone());
+    assert_eq!(
+        engine
+            .handle_request(
+                loopback(),
+                "DELETE",
+                "/v1beta/files/demo",
+                headers(),
+                Bytes::new()
+            )
+            .await
+            .status()
+            .as_u16(),
+        400
+    );
+    assert!(fake.requests().is_empty());
+}
+
+#[tokio::test]
+async fn gemini_interactions_stream_keeps_native_state_and_accounts_usage() {
+    let fake = FakeTransport::new();
+    let response = concat!(
+        "event: interaction.created\ndata: {\"event_type\":\"interaction.created\",\"interaction\":{\"object\":\"interaction\",\"status\":\"in_progress\"}}\n\n",
+        "event: interaction.completed\ndata: {\"event_type\":\"interaction.completed\",\"interaction\":{\"object\":\"interaction\",\"status\":\"completed\",\"usage\":{\"total_input_tokens\":20,\"total_tool_use_tokens\":3,\"total_output_tokens\":7,\"total_thought_tokens\":2,\"total_cached_tokens\":5}}}\n\n"
+    );
+    fake.push(
+        "a.example.com",
+        Outcome::Status {
+            status: 200,
+            headers: vec![("content-type".into(), "text/event-stream".into())],
+            chunks: response.as_bytes().chunks(11).map(<[u8]>::to_vec).collect(),
+        },
+    );
+    let engine = engine_with(config(), fake.clone());
+    let body = br#"{"model":"gemini-test","input":"hi","stream":true,"store":false,"previous_interaction_id":"native-state","generation_config":{"thinking_level":"high"}}"#;
+    let (status, received) = call(
+        &engine,
+        loopback(),
+        "/v1beta/interactions",
+        headers(),
+        Bytes::from_static(body),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(received, response.as_bytes());
+    let sent: Value = serde_json::from_slice(&fake.requests()[0].body).unwrap();
+    assert_eq!(sent["model"], "gemini-upstream");
+    assert_eq!(sent["store"], false);
+    assert_eq!(sent["previous_interaction_id"], "native-state");
+    let runtime = engine.runtime_snapshot();
+    let event = runtime
+        .recent_events
+        .iter()
+        .find(|event| event.kind == "client")
+        .unwrap();
+    assert!(event.is_succeeded(), "{event:?}");
+    let usage = event.stream_trace.as_ref().unwrap().usage.as_ref().unwrap();
+    assert_eq!(usage.input_tokens, Some(23));
+    assert_eq!(usage.output_tokens, Some(9));
+    assert_eq!(usage.reasoning_tokens, Some(2));
+    assert_eq!(usage.cache_read_input_tokens, Some(5));
 }

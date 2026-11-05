@@ -1028,6 +1028,10 @@ pub enum RoutePlanError {
     NoCompatibleProvider { source_format: String },
     #[error("no Provider accepts {capability} capability")]
     NoProviderForCapability { capability: String },
+    #[error(
+        "Gemini resource requests require a unique Gemini endpoint; set x-sumpter-endpoint-id when several are enabled"
+    )]
+    AmbiguousGeminiResource,
 }
 
 /// 钉住入口可参与调度：入口库启用；已配置模型组时还须有一条启用的组绑定。
@@ -1215,6 +1219,52 @@ impl RoutePlanner {
             feature_rule_id: None,
             endpoints,
         })
+    }
+
+    /// Project-owned resource IDs cannot fail over to a different credential.
+    /// A fixed Gemini endpoint is explicit authorization for this native API;
+    /// Auto does not establish ownership of project files/cache/jobs.
+    pub fn plan_for_gemini_resource(
+        config: &AppConfig,
+        endpoint_id: Option<&str>,
+        capability: Option<crate::capability::ModelCapability>,
+        request: Option<&RoutingRequest>,
+    ) -> Result<RoutePlan, RoutePlanError> {
+        let mut plan = if let Some(request) =
+            request.filter(|request| request.model != RESOURCE_ROUTING_MODEL)
+        {
+            Self::plan_for_passthrough(request, config, ProviderProtocol::Gemini)?
+        } else {
+            Self::plan_for_resource(config, ProviderProtocol::Gemini)?
+        };
+        plan.endpoints.retain(|endpoint| {
+            endpoint.configured_protocol == crate::config::EndpointProtocolMode::Gemini
+                && endpoint_id.is_none_or(|id| endpoint.endpoint_id == id)
+                && capability.is_none_or(|wanted| {
+                    config.endpoint(&endpoint.endpoint_id).is_some_and(|ep| {
+                        ep.has_capability(wanted)
+                            || ep
+                                .mappings
+                                .iter()
+                                .any(|mapping| mapping.capabilities.contains(&wanted))
+                    })
+                })
+        });
+        let ids = plan
+            .endpoints
+            .iter()
+            .map(|endpoint| &endpoint.endpoint_id)
+            .collect::<std::collections::BTreeSet<_>>();
+        if ids.is_empty() {
+            return Err(RoutePlanError::NoCompatibleProvider {
+                source_format: "gemini resource".into(),
+            });
+        }
+        if ids.len() > 1 {
+            return Err(RoutePlanError::AmbiguousGeminiResource);
+        }
+        plan.endpoints.truncate(1);
+        Ok(plan)
     }
 
     /// Plan a resource request against providers that explicitly advertise a

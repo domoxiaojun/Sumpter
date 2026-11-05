@@ -881,6 +881,8 @@ impl Engine {
                     | PassthroughKind::Realtime
                     | PassthroughKind::Models
                     | PassthroughKind::GeminiGenerate
+                    | PassthroughKind::GeminiSession
+                    | PassthroughKind::GeminiResource
                     | PassthroughKind::Raw
             )
         });
@@ -959,7 +961,17 @@ impl Engine {
             return error_response(status, &[("error", error), ("message", message)]);
         }
         let passthrough_kind = client_out.as_ref().map(|client| client.passthrough_kind);
-        let mut plan = match if passthrough_kind == Some(PassthroughKind::Files) {
+        let mut plan = match if passthrough_kind == Some(PassthroughKind::GeminiResource) {
+            RoutePlanner::plan_for_gemini_resource(
+                config,
+                super::context::header_value(&headers, "x-sumpter-endpoint-id"),
+                path_without_query(path_and_query)
+                    .split('/')
+                    .any(|part| part == "files" || part.starts_with("files:"))
+                    .then_some(sumpter_core::capability::ModelCapability::Files),
+                Some(&request),
+            )
+        } else if passthrough_kind == Some(PassthroughKind::Files) {
             RoutePlanner::plan_for_resource_capability(
                 config,
                 source_format,
@@ -1799,7 +1811,10 @@ impl Engine {
             && !client_out.as_ref().is_some_and(|client| {
                 matches!(
                     client.passthrough_kind,
-                    PassthroughKind::Files | PassthroughKind::Videos | PassthroughKind::Raw
+                    PassthroughKind::Files
+                        | PassthroughKind::Videos
+                        | PassthroughKind::Raw
+                        | PassthroughKind::GeminiResource
                 ) && !matches!(method, "GET" | "HEAD" | "OPTIONS")
             });
         let stream_retry_enabled = request_replay_safe

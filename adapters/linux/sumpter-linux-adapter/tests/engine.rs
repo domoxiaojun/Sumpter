@@ -80,6 +80,7 @@ enum Outcome {
 
 #[derive(Clone)]
 struct Recorded {
+    method: String,
     host: String,
     path: String,
     headers: Vec<(String, String)>,
@@ -151,6 +152,7 @@ impl UpstreamTransport for FakeTransport {
             .and_then(|u| u.host_str().map(str::to_string))
             .unwrap_or_default();
         self.requests.lock().unwrap().push(Recorded {
+            method: request.method.clone(),
             host: host.clone(),
             path: request.path_and_query.clone(),
             headers: request.headers.clone(),

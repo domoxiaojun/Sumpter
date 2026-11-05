@@ -9,7 +9,7 @@ use bytes::Bytes;
 use futures_util::StreamExt;
 use reqwest::StatusCode;
 use serde_json::Value;
-use sumpter_core::config::Endpoint;
+use sumpter_core::config::{Endpoint, ProviderProtocol};
 use sumpter_core::config_store::ConfigDir;
 
 use crate::Engine;
@@ -1282,8 +1282,8 @@ async fn fetch_inner(
     'probes: for (index, probe) in probes.iter().enumerate() {
         let remaining = deadline.saturating_duration_since(Instant::now());
         let probe_deadline = Instant::now() + remaining / (probes.len() - index) as u32;
-        for auth in auth_sets(key) {
-            for path in model_catalog_paths(&base) {
+        for auth in auth_sets(key, probe.protocol) {
+            for path in model_catalog_paths_for_protocol(&base, probe.protocol) {
                 let remaining = probe_deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
                     errors.push("目录身份探测超时，继续其它身份".into());
@@ -1293,6 +1293,9 @@ async fn fetch_inner(
                 url.set_path(&path);
                 url.set_query(None);
                 url.set_fragment(None);
+                if probe.protocol == ProviderProtocol::Gemini {
+                    url.query_pairs_mut().append_pair("pageSize", "1000");
+                }
                 let mut request = client.get(url.clone());
                 for (header, value) in crate::request_build::model_catalog_probe_headers(probe) {
                     request = request.header(header, value);
@@ -1317,13 +1320,52 @@ async fn fetch_inner(
                         match read_body(response).await {
                             Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
                                 Ok(value) => {
+                                    let value = match read_catalog_pages(
+                                        &client,
+                                        &url,
+                                        &auth,
+                                        probe,
+                                        &cache_scope,
+                                        probe_deadline,
+                                        value,
+                                    )
+                                    .await
+                                    {
+                                        Ok(value) => value,
+                                        Err(error) => {
+                                            errors.push(format!("{}: {error}", url.path()));
+                                            continue;
+                                        }
+                                    };
                                     let models = extract_models(&value)
                                         .into_iter()
+                                        .map(|id| {
+                                            if probe.protocol == ProviderProtocol::Gemini {
+                                                id.strip_prefix("models/")
+                                                    .unwrap_or(&id)
+                                                    .to_string()
+                                            } else {
+                                                id
+                                            }
+                                        })
                                         .map(|id| canonicalize_provider_model_id(&id))
                                         .collect::<BTreeSet<_>>();
                                     if !models.is_empty() {
                                         source.get_or_insert_with(|| url.to_string());
                                         let mut claims = extract_route_capabilities(&value);
+                                        if probe.protocol == ProviderProtocol::Gemini {
+                                            claims = claims
+                                                .into_iter()
+                                                .map(|(id, claim)| {
+                                                    (
+                                                        id.strip_prefix("models/")
+                                                            .unwrap_or(&id)
+                                                            .to_string(),
+                                                        claim,
+                                                    )
+                                                })
+                                                .collect();
+                                        }
                                         for model in &models {
                                             claims.entry(model.clone()).or_default();
                                         }
@@ -1423,7 +1465,104 @@ pub fn model_catalog_paths(base: &reqwest::Url) -> Vec<String> {
     paths
 }
 
-fn auth_sets(key: &str) -> Vec<Vec<(&'static str, String)>> {
+pub fn model_catalog_paths_for_protocol(
+    base: &reqwest::Url,
+    protocol: ProviderProtocol,
+) -> Vec<String> {
+    if protocol == ProviderProtocol::Gemini {
+        return vec![crate::request_build::gemini_resource_path(
+            base.path(),
+            "/v1beta/models",
+        )];
+    }
+    model_catalog_paths(base)
+}
+
+// Page tokens are opaque values, never URLs. Keep the same endpoint, headers,
+// deadline and response/item bounds for every page; never return a partial list.
+#[allow(clippy::too_many_arguments)]
+async fn read_catalog_pages(
+    client: &reqwest::Client,
+    url: &reqwest::Url,
+    auth: &[(&'static str, String)],
+    probe: &crate::request_build::ModelCatalogProbe,
+    cache_scope: &str,
+    deadline: Instant,
+    mut value: Value,
+) -> Result<Value, String> {
+    if probe.protocol != ProviderProtocol::Gemini {
+        return Ok(value);
+    }
+    if value
+        .get("models")
+        .and_then(Value::as_array)
+        .is_some_and(|models| models.len() > MAX_MODEL_CATALOG_ITEMS)
+    {
+        return Err("Gemini 模型目录数量超限".into());
+    }
+    let mut seen = BTreeSet::new();
+    let mut bytes = value.to_string().len();
+    loop {
+        let token = match value.get("nextPageToken") {
+            None | Some(Value::Null) => break,
+            Some(Value::String(token)) if token.is_empty() => break,
+            Some(Value::String(token)) => token.clone(),
+            _ => return Err("Gemini nextPageToken 必须是字符串".into()),
+        };
+        if !seen.insert(token.clone()) || seen.len() > 100 {
+            return Err("Gemini 模型目录分页重复或超限".into());
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err("Gemini 模型目录分页超时".into());
+        }
+        let mut next_url = url.clone();
+        next_url.query_pairs_mut().append_pair("pageToken", &token);
+        let mut request = client
+            .get(next_url)
+            .timeout(remaining.min(Duration::from_secs(3)));
+        for (name, value) in crate::request_build::model_catalog_probe_headers(probe) {
+            request = request.header(name, value);
+        }
+        for (name, value) in auth {
+            request = request.header(*name, value);
+        }
+        let response = send_catalog_request(client, request, cache_scope)
+            .await
+            .map_err(|_| "Gemini 模型目录分页请求失败".to_string())?;
+        if response.status() != StatusCode::OK {
+            return Err(format!("Gemini 模型目录分页 HTTP {}", response.status()));
+        }
+        let body = read_body(response).await?;
+        bytes = bytes.saturating_add(body.len());
+        if bytes > MAX_MODEL_CATALOG_BYTES {
+            return Err("Gemini 模型目录分页总响应过大".into());
+        }
+        let page: Value = serde_json::from_slice(&body)
+            .map_err(|_| "Gemini 模型目录分页 JSON 无效".to_string())?;
+        let items = page
+            .get("models")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "Gemini 模型目录分页缺少 models 数组".to_string())?;
+        let models = value
+            .get_mut("models")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| "Gemini 模型目录缺少 models 数组".to_string())?;
+        if models.len().saturating_add(items.len()) > MAX_MODEL_CATALOG_ITEMS {
+            return Err("Gemini 模型目录数量超限".into());
+        }
+        models.extend(items.iter().cloned());
+        value["nextPageToken"] = page.get("nextPageToken").cloned().unwrap_or(Value::Null);
+    }
+    Ok(value)
+}
+
+fn auth_sets(key: &str, protocol: ProviderProtocol) -> Vec<Vec<(&'static str, String)>> {
+    if protocol == ProviderProtocol::Gemini {
+        return vec![crate::request_build::auth_headers_for_target(
+            key, protocol, None,
+        )];
+    }
     if key.is_empty() {
         return vec![Vec::new()];
     }

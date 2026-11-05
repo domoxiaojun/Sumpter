@@ -391,6 +391,14 @@ fn observe_response_summary_value(
     evidence: &mut CacheReadEvidence,
     unary: bool,
 ) {
+    if dialect == SseDialect::Gemini
+        && let Some(values) = value.as_array()
+    {
+        for value in values {
+            observe_response_summary_value(dialect, value, usage, stop_reason, evidence, unary);
+        }
+        return;
+    }
     evidence.observed = true;
     let usage_value = match dialect {
         SseDialect::Anthropic => value
@@ -399,7 +407,10 @@ fn observe_response_summary_value(
         SseDialect::OpenAiResponses => value
             .get("usage")
             .or_else(|| value.pointer("/response/usage")),
-        SseDialect::Gemini => value.get("usageMetadata"),
+        SseDialect::Gemini => value
+            .get("usageMetadata")
+            .or_else(|| value.get("usage"))
+            .or_else(|| value.pointer("/interaction/usage")),
         SseDialect::OpenAiChat => value.get("usage"),
         SseDialect::OpenAiImages => None,
     };
@@ -415,9 +426,28 @@ fn observe_response_summary_value(
             &["output_tokens", "completion_tokens"],
         );
         if dialect == SseDialect::Gemini {
-            merge_max(&mut usage.input_tokens, value, &["promptTokenCount"]);
-            let output = value.get("candidatesTokenCount").and_then(Value::as_u64);
-            let thoughts = value.get("thoughtsTokenCount").and_then(Value::as_u64);
+            let prompt = value
+                .get("promptTokenCount")
+                .or_else(|| value.get("total_input_tokens"))
+                .and_then(Value::as_u64);
+            let tool_prompt = value
+                .get("toolUsePromptTokenCount")
+                .or_else(|| value.get("total_tool_use_tokens"))
+                .and_then(Value::as_u64);
+            if prompt.is_some() || tool_prompt.is_some() {
+                merge_token_count(
+                    &mut usage.input_tokens,
+                    prompt.unwrap_or(0).saturating_add(tool_prompt.unwrap_or(0)),
+                );
+            }
+            let output = value
+                .get("candidatesTokenCount")
+                .or_else(|| value.get("total_output_tokens"))
+                .and_then(Value::as_u64);
+            let thoughts = value
+                .get("thoughtsTokenCount")
+                .or_else(|| value.get("total_thought_tokens"))
+                .and_then(Value::as_u64);
             if output.is_some() || thoughts.is_some() {
                 merge_token_count(
                     &mut usage.output_tokens,
@@ -425,6 +455,11 @@ fn observe_response_summary_value(
                 );
             }
             merge_max(&mut usage.reasoning_tokens, value, &["thoughtsTokenCount"]);
+            merge_max(
+                &mut usage.reasoning_tokens,
+                value,
+                &["total_thought_tokens"],
+            );
         }
         merge_max(
             &mut usage.cache_creation_input_tokens,
@@ -506,7 +541,7 @@ fn observe_cache_read(
     unary: bool,
 ) {
     let paths: &[&str] = if dialect == SseDialect::Gemini {
-        &["/cachedContentTokenCount"]
+        &["/cachedContentTokenCount", "/total_cached_tokens"]
     } else {
         &[
             "/cache_read_input_tokens",
@@ -696,6 +731,14 @@ fn observe_tool_call_value(
     calls: &mut Vec<String>,
     truncated: &mut bool,
 ) {
+    if dialect == SseDialect::Gemini
+        && let Some(values) = value.as_array()
+    {
+        for value in values {
+            observe_tool_call_value(dialect, value, calls, truncated);
+        }
+        return;
+    }
     let candidates = match dialect {
         SseDialect::OpenAiResponses => responses_tool_names(value),
         SseDialect::OpenAiChat => chat_tool_names(value),
@@ -978,6 +1021,41 @@ fn classify(dialect: SseDialect, payload: &str) -> Option<SseTerminal> {
 }
 
 fn classify_gemini(value: &Value) -> Option<SseTerminal> {
+    if let Some(values) = value.as_array() {
+        let mut terminal = None;
+        for value in values {
+            if let Some(next) = classify_gemini(value) {
+                if !matches!(next, SseTerminal::Completed) {
+                    return Some(next);
+                }
+                terminal = Some(next);
+            }
+        }
+        return terminal;
+    }
+    let interaction = value.get("interaction").unwrap_or(value);
+    if value.get("event_type").and_then(Value::as_str) == Some("error") {
+        return Some(SseTerminal::Failed {
+            detail: "gemini interaction error".into(),
+        });
+    }
+    if interaction.get("object").and_then(Value::as_str) == Some("interaction")
+        || value
+            .get("event_type")
+            .and_then(Value::as_str)
+            .is_some_and(|event| event.starts_with("interaction."))
+    {
+        return match interaction.get("status").and_then(Value::as_str) {
+            Some("completed" | "requires_action") => Some(SseTerminal::Completed),
+            Some("failed") => Some(SseTerminal::Failed {
+                detail: "gemini interaction failed".into(),
+            }),
+            Some("cancelled" | "incomplete") => Some(SseTerminal::Incomplete {
+                detail: "gemini interaction incomplete".into(),
+            }),
+            _ => None,
+        };
+    }
     if value.get("error").is_some() {
         return Some(SseTerminal::Failed {
             detail: "gemini response error".into(),
@@ -997,6 +1075,20 @@ fn classify_gemini(value: &Value) -> Option<SseTerminal> {
         || value
             .pointer("/embedding/values")
             .is_some_and(Value::is_array)
+        || value
+            .get("embeddings")
+            .and_then(Value::as_array)
+            .is_some_and(|items| {
+                !items.is_empty()
+                    && items
+                        .iter()
+                        .all(|item| item.get("values").is_some_and(Value::is_array))
+            })
+        || value
+            .get("name")
+            .and_then(Value::as_str)
+            .is_some_and(|name| name.starts_with("batches/") || name.starts_with("operations/"))
+        || value.get("predictions").is_some_and(Value::is_array)
     {
         return Some(SseTerminal::Completed);
     }
