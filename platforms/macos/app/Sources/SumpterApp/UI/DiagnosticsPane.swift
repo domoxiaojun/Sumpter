@@ -125,8 +125,6 @@ private struct LazyTextDisclosure<Label: View>: View {
 
 struct SecurityPane: View {
     @ObservedObject var model: AppModel
-    @State private var inboundAuthToken = ""
-    @State private var confirmClearToken = false
     /// 监听配置的本地草稿。
     ///
     /// 旧版把三个输入框直接绑到 `model.config.listener`:字没保存就已改内存配置,
@@ -143,9 +141,8 @@ struct SecurityPane: View {
 
     var body: some View {
         SettingsPage(title: SettingsSection.security.title, subtitle: SettingsSection.security.subtitle) {
-            listenerPanel
-            authPanel
             InboundTokensPanel(model: model)
+            listenerPanel
             launchPanel
             UnifiedAttributionPanel(model: model)
         }
@@ -153,13 +150,6 @@ struct SecurityPane: View {
         // 外部变更(/__reload 或手改文件)后同步草稿,避免拿旧值覆盖。
         .onChange(of: model.config.listener) { _, _ in
             if !listenerDirty { loadDraft() }
-        }
-        .confirmationDialog("清除入站 Token？", isPresented: $confirmClearToken) {
-            Button("清除 Token", role: .destructive) {
-                model.clearInboundAuthToken()
-                inboundAuthToken = ""
-            }
-            Button("取消", role: .cancel) {}
         }
         .confirmationDialog(
             "代理正在运行,改监听地址会重启引擎并断开进行中的请求。继续？",
@@ -303,56 +293,9 @@ struct SecurityPane: View {
         )
     }
 
-    /// 认证徽章颜色:本机监听下「未启用」是常态,用灰色;暴露到局域网才用橙色提醒。
-    private var authBadgeColor: Color {
-        if !model.config.listener.authToken.isEmpty {
-            return .green
-        }
-        return Self.isLoopback(model.config.listener.host) ? .secondary : .orange
-    }
-
     private static func isLoopback(_ host: String) -> Bool {
         let cleaned = host.trimmingCharacters(in: .whitespaces).lowercased()
         return cleaned == "127.0.0.1" || cleaned == "localhost" || cleaned == "::1"
-    }
-
-    private var authPanel: some View {
-        SectionPanel(title: "默认入站 Token", hint: "启用后客户端需要携带对应 Token，适合局域网访问或多人共用。") {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 10) {
-                    StatusBadge(
-                        text: !model.config.listener.authToken.isEmpty ? "已启用" : "未启用",
-                        systemImage: !model.config.listener.authToken.isEmpty ? "lock.fill" : "lock.open",
-                        color: authBadgeColor
-                    )
-                    if !model.config.listener.authToken.isEmpty {
-                        Text("明文 Token 已保存")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                }
-                FormLine(title: "Token") {
-                    RevealableSecureField(placeholder: "输入新 Token", text: $inboundAuthToken)
-                }
-                HStack {
-                    Spacer()
-                    Button {
-                        model.setInboundAuthToken(inboundAuthToken)
-                        inboundAuthToken = ""
-                    } label: {
-                        Label("设置 Token", systemImage: "key")
-                    }
-                    .disabled(inboundAuthToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    Button(role: .destructive) {
-                        confirmClearToken = true
-                    } label: {
-                        Label("清除 Token", systemImage: "trash")
-                    }
-                    .disabled(model.config.listener.authToken.isEmpty)
-                }
-            }
-        }
     }
 
     private var launchPanel: some View {

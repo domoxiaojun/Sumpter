@@ -1,5 +1,4 @@
 import { InboundTokensPanel } from '../components/InboundTokensPanel.jsx';
-import { StatusBadge } from '../components/StatusBadge.jsx';
 import { Icon } from '../utils/icons.jsx';
 import { UnifiedAttributionPanel } from '../components/UnifiedAttributionPanel.jsx';
 import { useState, useEffect, useRef } from 'react';
@@ -22,7 +21,6 @@ export function SecurityPage() {
   const [port, setPort] = useState(config?.listener?.port || 57878);
   const [cidrs, setCidrs] = useState((config?.listener?.allowedCIDRs || []).join(', '));
   const [trustedProxies, setTrustedProxies] = useState((config?.listener?.trustedProxyCIDRs || []).join(', '));
-  const [inboundToken, setInboundToken] = useState('');
 
   // Admin password change state
   const [currentPass, setCurrentPass] = useState('');
@@ -34,7 +32,7 @@ export function SecurityPage() {
   const listenerValues = value => [value?.host || '127.0.0.1', String(value?.port || 57878), (value?.allowedCIDRs || []).join(', '), (value?.trustedProxyCIDRs || []).join(', ')];
   const [listenerBaseline, setListenerBaseline] = useState(() => JSON.stringify(listenerValues(config?.listener)));
   const listenerDirty = JSON.stringify([host, String(port), cidrs, trustedProxies]) !== listenerBaseline;
-  useUnsavedChanges(listenerDirty || Boolean(inboundToken || currentPass || newPass || confirmPass) || adminUser !== savedAdminUser,
+  useUnsavedChanges(listenerDirty || Boolean(currentPass || newPass || confirmPass) || adminUser !== savedAdminUser,
     Boolean(pending.config || pending.admin || (pending.autostart && !autostartLoading)));
   useEffect(() => {
     if (listenerDirty) return;
@@ -107,28 +105,6 @@ export function SecurityPage() {
     }
   });
 
-  // Set / Clear Token
-  const handleSetToken = () => run('config', async () => {
-    if (!inboundToken.trim()) return addToast('请输入有效的入站 Token', 'warning');
-    try {
-      await saveConfig((latest) => latest, { inboundAuthToken: inboundToken.trim() });
-      setInboundToken('');
-      addToast('入站 Token 已更新', 'success');
-    } catch (err) {
-      addToast(`设置失败: ${err.message}`, 'error');
-    }
-  });
-
-  const handleClearToken = () => run('config', async () => {
-    if (!confirm('清除默认 Token 后，使用它的客户端将无法通过认证；如果没有其他 Token，代理会关闭认证。确认继续？')) return;
-    try {
-      await saveConfig((latest) => latest, { inboundAuthToken: '' });
-      addToast('入站 Token 已清除', 'success');
-    } catch (err) {
-      addToast(`清除失败: ${err.message}`, 'error');
-    }
-  });
-
   // Change Admin Credentials
   const handleChangeAdmin = () => run('admin', async () => {
     if (!adminUser.trim()) return addToast('用户名不能为空', 'warning');
@@ -157,11 +133,14 @@ export function SecurityPage() {
             <Icon name="shield" size={24} style={{ color: 'var(--status-good)' }} />
             <span>安全</span>
           </h1>
-          <p className="page-subtitle">监听、入站认证、入站方言和登录项。</p>
+          <p className="page-subtitle">管理客户端访问凭据、监听与控制台登录。</p>
         </div>
       </div>
 
-      <div className="grid-2col">
+      <InboundTokensPanel />
+
+      <details className="glass-panel security-admin-panel">
+        <summary>控制台登录凭据<span className="form-hint">修改管理员用户名或密码</span></summary>
         {/* Admin Credentials Panel */}
         <div className="glass-panel panel-padded-stack">
           <div className="panel-title">
@@ -225,58 +204,7 @@ export function SecurityPage() {
           </button>
         </div>
 
-        {/* Inbound Authentication Token */}
-        <div className="glass-panel panel-padded-stack">
-          <div className="panel-toolbar">
-            <div className="panel-title">
-              <Icon name="shield" size={18} style={{ color: 'var(--accent-cyan)' }} />
-              <span>默认入站客户端 API Token</span>
-            </div>
-            <StatusBadge
-              text={secretStatus?.inboundAuthToken?.configured ? `已启用 (尾号 ${secretStatus.inboundAuthToken.last4 || '****'})` : '未启用'}
-              kind={secretStatus?.inboundAuthToken?.configured ? 'good' : 'warning'}
-            />
-          </div>
-
-          <p className="panel-description">
-            客户端（如 Claude Code / Codex）需在 Header 携带 <code>Authorization: Bearer &lt;Token&gt;</code> 访问代理。
-          </p>
-
-          <div className="form-group">
-            <label className="form-label" htmlFor="security-inbound-token">设置新 Token</label>
-            <input disabled={Boolean(pending.config)} id="security-inbound-token" autoComplete="off"
-              type="password"
-              className="form-input"
-              placeholder="输入新的入站 Token"
-              value={inboundToken}
-              onChange={(e) => setInboundToken(e.target.value)}
-            />
-          </div>
-
-          <div className="panel-actions">
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={handleSetToken}
-              disabled={pending.config || !inboundToken.trim()}
-            >
-              <Icon name="key" size={15} />
-              <span>{pending.config ? '处理中…' : '设置 Token'}</span>
-            </button>
-            <button
-              type="button"
-              className="btn btn-danger"
-              onClick={handleClearToken}
-              disabled={pending.config || !secretStatus?.inboundAuthToken?.configured}
-            >
-              <Icon name="trash" size={15} />
-              <span>清除 Token</span>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <InboundTokensPanel />
+      </details>
 
       {/* Proxy Listener Configuration */}
       <div className="glass-panel panel-padded-stack">

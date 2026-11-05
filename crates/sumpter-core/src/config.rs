@@ -499,6 +499,11 @@ pub struct ListenerConfig {
         default = "ListenerConfig::default_token_name"
     )]
     pub auth_token_name: String,
+    #[serde(
+        rename = "authTokenEnabled",
+        default = "InboundTokenConfig::default_enabled"
+    )]
+    pub auth_token_enabled: bool,
     #[serde(rename = "authTokens", default)]
     pub auth_tokens: Vec<InboundTokenConfig>,
     #[serde(default = "ListenerConfig::default_host")]
@@ -560,7 +565,7 @@ impl ListenerConfig {
         }
 
         let mut matched = None;
-        if token_matches(headers, &self.auth_token) {
+        if self.auth_token_enabled && token_matches(headers, &self.auth_token) {
             matched = Some(InboundTokenIdentity {
                 id: "legacy".into(),
                 name: self.auth_token_name.clone(),
@@ -655,6 +660,7 @@ impl Default for ListenerConfig {
             allowed_cidrs: Vec::new(),
             auth_token: String::new(),
             auth_token_name: Self::default_token_name(),
+            auth_token_enabled: true,
             auth_tokens: Vec::new(),
             host: Self::default_host(),
             port: Self::default_port(),

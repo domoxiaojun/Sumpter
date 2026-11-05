@@ -86,6 +86,7 @@ export function createMockApi({ fromWireConfig, normalizeCatalog }) {
       this.mockState = {
         config: clone(mockConfig),
         secretStatus: clone(mockSecretStatus),
+        inboundSecrets: { legacy: "sk-synthetic-default-8899" },
         status: clone(mockStatus),
         runtime: clone(mockRuntime),
         runtimeHistory: clone(mockRuntimeHistory).map((event, index) => ({
@@ -153,6 +154,14 @@ export function createMockApi({ fromWireConfig, normalizeCatalog }) {
       }
       if (path === '/config' && method === 'PUT') {
         const body = JSON.parse(options.body || '{}');
+        const updates = body.secretUpdates || {};
+        const secrets = this.mockState.inboundSecrets;
+        if (updates.inboundAuthToken !== undefined) secrets.legacy = updates.inboundAuthToken;
+        Object.assign(secrets, updates.inboundTokens || {});
+        const ids = new Set((body.config.listener.authTokens || []).map(entry => entry.id));
+        for (const id of Object.keys(secrets)) if (id !== 'legacy' && !ids.has(id)) delete secrets[id];
+        this.mockState.secretStatus.inboundAuthToken = { configured: Boolean(secrets.legacy), last4: (secrets.legacy || '').slice(-4) };
+        this.mockState.secretStatus.inboundTokens = Object.fromEntries([...ids].map(id => [id, { configured: Boolean(secrets[id]), last4: (secrets[id] || '').slice(-4) }]));
         this.mockState.config = clone(body.config);
         this.mockState.generation = `gen-${Date.now()}`;
         return fromWireConfig({
@@ -160,6 +169,13 @@ export function createMockApi({ fromWireConfig, normalizeCatalog }) {
           config: this.mockState.config,
           secretStatus: this.mockState.secretStatus,
         });
+      }
+      if (path === '/inbound-token-secret' && method === 'POST') {
+        const body = JSON.parse(options.body || '{}');
+        if (body.expectedGeneration !== this.mockState.generation) throw new Error('配置已变化，请重新载入 Token 列表');
+        const token = this.mockState.inboundSecrets[body.tokenID];
+        if (!token) throw new Error('Token 已删除或不存在');
+        return { tokenID: body.tokenID, token, generation: this.mockState.generation };
       }
       if (path === '/provider-models' && method === 'POST') {
         const body = JSON.parse(options.body || '{}');

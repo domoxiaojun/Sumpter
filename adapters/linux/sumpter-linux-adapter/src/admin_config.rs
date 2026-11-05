@@ -57,6 +57,59 @@ pub(crate) struct EndpointSecretUpdate {
     api_key: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct InboundTokenSecretBody {
+    #[serde(rename = "tokenID")]
+    token_id: String,
+    expected_generation: String,
+}
+
+/// Called only on explicit reveal/copy. The ordinary config view stays redacted.
+pub(crate) async fn inbound_token_secret(
+    State(state): State<AdminState>,
+    payload: JsonPayload<InboundTokenSecretBody>,
+) -> Response {
+    let body = match require_json(payload) {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
+    let _transaction = state.inner.engine.config_transaction().await;
+    let generation = state.inner.engine.generation();
+    if body.expected_generation != generation {
+        return api_error(
+            StatusCode::CONFLICT,
+            "config_conflict",
+            "配置已变化，请重新载入 Token 列表",
+        );
+    }
+    let config = state.inner.engine.config();
+    let token = if body.token_id == "legacy" {
+        Some(config.listener.auth_token.as_str()).filter(|value| !value.is_empty())
+    } else {
+        config
+            .listener
+            .auth_tokens
+            .iter()
+            .find(|entry| entry.id == body.token_id)
+            .map(|entry| entry.token.as_str())
+    };
+    let Some(token) = token else {
+        return api_error(
+            StatusCode::NOT_FOUND,
+            "inbound_token_not_found",
+            "Token 已删除或不存在",
+        );
+    };
+    let mut response =
+        json_ok(&json!({"tokenID": body.token_id, "token": token, "generation": generation}));
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    response
+}
+
 #[cfg(test)]
 mod inbound_token_tests {
     use super::*;

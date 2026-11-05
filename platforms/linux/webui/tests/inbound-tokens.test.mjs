@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { inboundTokenOptions, randomToken, validateInboundTokens } from '../src/utils/inboundTokens.js';
+import { buildInboundTokenWrite, inboundTokenDraft, inboundTokenOptions, randomToken, validateInboundTokens } from '../src/utils/inboundTokens.js';
 
 globalThis.window = { location: { search: '' } };
 const { api, toWireConfig, fromWireConfig } = await import('../src/services/api.js');
@@ -41,4 +41,37 @@ test('generated credentials and validation reject duplicates and whitespace', ()
   assert.ok(validateInboundTokens([entry, entry]));
   assert.ok(validateInboundTokens([{ ...entry, token: 'with whitespace token' }]));
   assert.ok(validateInboundTokens([{ ...entry, name: '' }]));
+});
+
+test('default token shares the editor while rename and disable preserve its credential', () => {
+  const doc = { generation: 'current', config: { listener: { authToken: '', authTokenName: '默认 Token', authTokens: [{ id: 'work', name: '工作', enabled: true, token: '' }] } }, secretStatus: { inboundAuthToken: { configured: true, last4: '1234' } } };
+  const entries = inboundTokenDraft(doc);
+  assert.deepEqual(entries.map(entry => entry.id), ['legacy', 'work']);
+  assert.equal(entries[0].token, null);
+  entries[0].name = '第一台电脑'; entries[0].enabled = false;
+  let write = buildInboundTokenWrite(doc, entries);
+  assert.equal(write.config.listener.authTokenName, '第一台电脑');
+  assert.equal(write.config.listener.authTokenEnabled, false);
+  assert.equal(Object.hasOwn(write.secrets, 'inboundAuthToken'), false);
+  assert.deepEqual(write.secrets.inboundTokens, {});
+  assert.equal(write.opensAccess, false);
+  assert.equal(doc.config.listener.authTokenName, '默认 Token');
+  entries[0].token = 'changed-default-token';
+  write = buildInboundTokenWrite(doc, entries);
+  assert.equal(write.secrets.inboundAuthToken, 'changed-default-token');
+  assert.equal(write.config.listener.authTokens.some(entry => entry.id === 'legacy'), false);
+  assert.equal(buildInboundTokenWrite(doc, entries.slice(1)).secrets.inboundAuthToken, '');
+  assert.equal(buildInboundTokenWrite(doc, []).opensAccess, true);
+  entries[0].token = '';
+  assert.throws(() => buildInboundTokenWrite(doc, entries), /Token 不能为空/);
+});
+
+test('secret reveal is an explicit uncached POST scoped to the displayed generation', async t => {
+  const calls = [];
+  t.mock.method(api, 'request', async (path, options) => { calls.push({ path, options }); return { tokenID: 'legacy', token: 'synthetic' }; });
+  await api.getInboundTokenSecret('legacy', 'current');
+  assert.equal(calls[0].path, '/inbound-token-secret');
+  assert.equal(calls[0].options.method, 'POST');
+  assert.equal(calls[0].options.cache, 'no-store');
+  assert.deepEqual(JSON.parse(calls[0].options.body), { tokenID: 'legacy', expectedGeneration: 'current' });
 });

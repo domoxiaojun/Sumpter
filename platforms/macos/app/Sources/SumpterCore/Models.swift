@@ -298,6 +298,7 @@ public struct ListenerConfig: Codable, Equatable, Sendable {
     /// 入站 Auth Token;空 = 不校验(仅环回可达时的默认状态)。
     public var authToken: String
     public var authTokenName: String
+    public var authTokenEnabled: Bool
     public var authTokens: [InboundTokenConfig]
     /// 已知反向代理 IP / CIDR。只用于 `X-Forwarded-For` 链的跳过判断;事件源 IP
     /// 按 X-Real-IP、X-Forwarded-For、TCP 对端取第一个合法值,不以此为前置条件。
@@ -308,7 +309,7 @@ public struct ListenerConfig: Codable, Equatable, Sendable {
         case host
         case port
         case allowedCIDRs
-        case authToken, authTokenName, authTokens
+        case authToken, authTokenName, authTokenEnabled, authTokens
         case trustedProxyCIDRs
     }
 
@@ -318,6 +319,7 @@ public struct ListenerConfig: Codable, Equatable, Sendable {
         allowedCIDRs: [String] = [],
         authToken: String = "",
         authTokenName: String = "默认 Token",
+        authTokenEnabled: Bool = true,
         authTokens: [InboundTokenConfig] = [],
         trustedProxyCIDRs: [String] = []
     ) {
@@ -326,6 +328,7 @@ public struct ListenerConfig: Codable, Equatable, Sendable {
         self.allowedCIDRs = allowedCIDRs
         self.authToken = authToken
         self.authTokenName = authTokenName
+        self.authTokenEnabled = authTokenEnabled
         self.authTokens = authTokens
         self.trustedProxyCIDRs = trustedProxyCIDRs
     }
@@ -337,6 +340,7 @@ public struct ListenerConfig: Codable, Equatable, Sendable {
         allowedCIDRs = try keyed.decodeIfPresent([String].self, forKey: .allowedCIDRs) ?? []
         authToken = try keyed.decodeIfPresent(String.self, forKey: .authToken) ?? ""
         authTokenName = try keyed.decodeIfPresent(String.self, forKey: .authTokenName) ?? "默认 Token"
+        authTokenEnabled = try keyed.decodeIfPresent(Bool.self, forKey: .authTokenEnabled) ?? true
         authTokens = try keyed.decodeIfPresent([InboundTokenConfig].self, forKey: .authTokens) ?? []
         trustedProxyCIDRs = try keyed.decodeIfPresent([String].self, forKey: .trustedProxyCIDRs) ?? []
     }
@@ -361,6 +365,31 @@ public struct ListenerConfig: Codable, Equatable, Sendable {
             guard (16...512).contains(entry.token.utf8.count), entry.token.utf8.allSatisfy({ (33...126).contains($0) }) else { throw invalid("Token 必须为 16–512 个可见 ASCII 字符，不能包含空格") }
             guard secrets.insert(entry.token).inserted else { throw invalid("Token 凭据不能重复") }
         }
+    }
+
+    /// Legacy identity stays stable when shown in the same editor as named tokens.
+    public var editableInboundTokens: [InboundTokenConfig] {
+        (authToken.isEmpty ? [] : [InboundTokenConfig(id: "legacy", name: authTokenName, enabled: authTokenEnabled, token: authToken)]) + authTokens
+    }
+
+    public mutating func setEditableInboundTokens(_ entries: [InboundTokenConfig]) throws {
+        guard entries.filter({ $0.id == "legacy" }).count <= 1, entries.allSatisfy({ !$0.token.isEmpty }) else {
+            throw NSError(domain: "Sumpter.InboundTokens", code: 1, userInfo: [NSLocalizedDescriptionKey: "Token 不能为空；要移除凭据，请使用删除"])
+        }
+        var draft = self
+        let legacy = entries.first { $0.id == "legacy" }
+        draft.authToken = legacy?.token ?? ""
+        if let legacy {
+            draft.authTokenName = legacy.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            draft.authTokenEnabled = legacy.enabled
+        }
+        draft.authTokens = entries.filter { $0.id != "legacy" }.map { entry in
+            var entry = entry
+            entry.name = entry.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            return entry
+        }
+        try draft.validateInboundTokens()
+        self = draft
     }
 
     public var hasInboundAuth: Bool {

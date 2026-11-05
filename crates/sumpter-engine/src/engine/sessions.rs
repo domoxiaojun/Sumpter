@@ -215,7 +215,9 @@ impl Engine {
         secrets
             .get(&token)
             .is_some_and(|entry| match &entry.inbound_token {
-                Some(identity) if identity.id == "legacy" => !config.listener.auth_token.is_empty(),
+                Some(identity) if identity.id == "legacy" => {
+                    config.listener.auth_token_enabled && !config.listener.auth_token.is_empty()
+                }
                 Some(identity) => {
                     config.listener.auth_tokens.iter().any(|item| {
                         item.id == identity.id && item.enabled && !item.token.is_empty()

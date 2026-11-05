@@ -643,6 +643,10 @@ pub fn admin_router(state: AdminState) -> Router {
             get(model_catalog_status).post(model_catalog_refresh),
         )
         .route("/endpoint-secret", get(endpoint_secret))
+        .route(
+            "/inbound-token-secret",
+            post(config_routes::inbound_token_secret),
+        )
         .route("/diagnostics", get(diagnostics))
         .route(
             "/diagnostic-capture",
@@ -898,6 +902,113 @@ use sumpter_core::config::{Endpoint, SCHEMA_VERSION};
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn inbound_token_secret_requires_session_csrf_and_current_generation() {
+        use sumpter_core::config::InboundTokenConfig;
+        let mut config = AppConfig::bootstrap();
+        config.listener.auth_token = "synthetic-legacy-token".into();
+        config.listener.auth_tokens = vec![InboundTokenConfig {
+            id: "work".into(),
+            name: "工作".into(),
+            enabled: false,
+            token: "synthetic-work-token".into(),
+        }];
+        let engine = Engine::new(
+            config.normalized(),
+            None,
+            Arc::new(crate::outbound::ReqwestTransport::new()),
+        );
+        let generation = engine.generation();
+        let state = AdminState::new(
+            engine.clone(),
+            ProxySupervisor::new(engine),
+            ConfigDir::new(
+                std::env::temp_dir()
+                    .join(format!("sumpter-inbound-secret-{}", rand::random::<u64>())),
+            ),
+            None,
+            AdminListen::default(),
+            AdminAuth::password(b"synthetic-admin-password").unwrap(),
+        );
+        let (address, server) = crate::server::serve_router(
+            admin_router(state),
+            SocketAddr::new(IpAddr::from([127, 0, 0, 1]), 0),
+        )
+        .await
+        .unwrap();
+        let client = reqwest::Client::new();
+        let url = format!("http://{address}/admin/api/inbound-token-secret");
+        let body = json!({"tokenID":"legacy", "expectedGeneration": generation});
+        assert_eq!(
+            client
+                .post(&url)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(body.to_string())
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let (cookie, csrf) = login_test_session(&client, address, "synthetic-admin-password").await;
+        assert_eq!(
+            client
+                .post(&url)
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(body.to_string())
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        let view_response = client
+            .get(format!("http://{address}/admin/api/config"))
+            .header(header::COOKIE, &cookie)
+            .send()
+            .await
+            .unwrap();
+        let view: Value = serde_json::from_slice(&view_response.bytes().await.unwrap()).unwrap();
+        assert!(!view.to_string().contains("synthetic-legacy-token"));
+        assert!(!view.to_string().contains("synthetic-work-token"));
+        for (id, token) in [
+            ("legacy", "synthetic-legacy-token"),
+            ("work", "synthetic-work-token"),
+        ] {
+            let response = client
+                .post(&url)
+                .header(header::COOKIE, &cookie)
+                .header("x-sumpter-csrf", &csrf)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(json!({"tokenID":id,"expectedGeneration":generation}).to_string())
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            let value: Value = serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
+            assert_eq!(value["tokenID"], id);
+            assert_eq!(value["token"], token);
+        }
+        for (id, version, expected) in [
+            ("work", "stale", StatusCode::CONFLICT),
+            ("missing", generation.as_str(), StatusCode::NOT_FOUND),
+        ] {
+            let response = client
+                .post(&url)
+                .header(header::COOKIE, &cookie)
+                .header("x-sumpter-csrf", &csrf)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(json!({"tokenID":id,"expectedGeneration":version}).to_string())
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+        }
+        server.shutdown().await;
+    }
 
     #[test]
     fn config_view_never_contains_full_secrets() {

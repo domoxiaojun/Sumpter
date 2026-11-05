@@ -604,6 +604,9 @@ class ApiService {
   setAutostart(enabled) {
     return this.request('/autostart', { method: 'PUT', body: JSON.stringify({ enabled }) });
   }
+  getInboundTokenSecret(tokenID, expectedGeneration) {
+    return this.request('/inbound-token-secret', { method: 'POST', cache: 'no-store', body: JSON.stringify({ tokenID, expectedGeneration }) });
+  }
   getEndpointSecret(endpointID) {
     return this.request(`/endpoint-secret?endpointID=${encodeURIComponent(endpointID)}`);
   }

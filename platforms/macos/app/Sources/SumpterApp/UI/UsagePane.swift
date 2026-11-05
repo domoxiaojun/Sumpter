@@ -928,7 +928,7 @@ struct UsagePane: View {
             rows[entry.id] = (entry.id, entry.name + (entry.enabled ? "" : "（已停用）"), rows[entry.id]?.count ?? 0)
         }
         if rows["legacy"] != nil || !model.config.listener.authToken.isEmpty {
-            rows["legacy"] = ("legacy", model.config.listener.authTokenName, rows["legacy"]?.count ?? 0)
+            rows["legacy"] = ("legacy", model.config.listener.authTokenName + (model.config.listener.authTokenEnabled ? "" : "（已停用）"), rows["legacy"]?.count ?? 0)
         }
         let selected = model.runtimeAnalyticsInboundTokenID
         if !selected.isEmpty && rows[selected] == nil { rows[selected] = (selected, selected, 0) }

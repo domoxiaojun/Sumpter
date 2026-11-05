@@ -14,6 +14,20 @@ fn listener() -> ListenerConfig {
 }
 
 #[test]
+fn default_inbound_token_can_be_disabled_without_erasing_it_or_opening_access() {
+    let mut config = listener();
+    let headers = vec![("authorization".into(), "Bearer old-short-token".into())];
+    assert_eq!(config.matched_inbound_token(&headers).unwrap().id, "legacy");
+    config.auth_token_enabled = false;
+    config.auth_tokens.clear();
+    assert!(config.has_inbound_auth());
+    assert!(config.matched_inbound_token(&headers).is_none());
+    assert_eq!(config.auth_token, "old-short-token");
+    config.auth_token_enabled = true;
+    assert_eq!(config.matched_inbound_token(&headers).unwrap().id, "legacy");
+}
+
+#[test]
 fn inbound_tokens_match_legacy_and_named_headers_and_reject_conflicts() {
     let mut config = listener();
     config.validate_inbound_tokens(true).unwrap();

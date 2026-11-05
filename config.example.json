@@ -6,6 +6,7 @@
     "allowedCIDRs": [],
     "authToken": "",
     "authTokenName": "默认 Token",
+    "authTokenEnabled": true,
     "authTokens": [],
     "trustedProxyCIDRs": []
   },

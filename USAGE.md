@@ -1,6 +1,6 @@
 # Sumpter 使用手册
 
-适用版本：**0.4.68 / schema v7**。从第一条请求开始，逐步配置客户端、模型组、项目归因和日常维护。
+适用版本：**0.4.69 / schema v7**。从第一条请求开始，逐步配置客户端、模型组、项目归因和日常维护。
 
 <!-- BEGIN SUMPTER_CANONICAL_ONBOARDING -->
 
@@ -44,11 +44,11 @@
 
 ## 3. 设置访问权限
 
-在「安全」保留默认 Token，或在「多个入站客户端 API Token」中新增独立 Token、填写名称并保存。把对应凭据填到客户端 API Key / Token 字段；新凭据保存后只显示尾号，请先复制。每个客户端或项目可使用不同的 Token，它们不必与任何 Provider Key 相同。
+在「安全 → 入站 API Token」统一管理默认和新增 Token：直接编辑名称，点击「显示」查看已保存的凭据、点击「复制」取用；要替换凭据，点击「修改 Token」后输入并保存，也可以生成新凭据。默认 Token 的启用开关不会删除原凭据；重新启用时可继续使用。把对应凭据填到客户端 API Key / Token 字段；明文默认隐藏，查看后 60 秒自动隐藏。每个客户端或项目可使用不同的 Token，它们不必与任何 Provider Key 相同。
 
-在「统计」选择「入站 Token」，请求、Token 用量、费用、项目/会话、错误和导出会应用同一筛选。统计按稳定 ID 关联，改名不拆分记录，删除仍保留历史；旧记录没有 Token 信息时显示「未记录 Token」，不会猜测归属。新增列表的全部 Token 停用且未配置默认 Token 时会拒绝请求；清除默认 Token 并删除所有新增 Token 后则关闭入站认证。
+在「统计」选择「入站 Token」，请求、Token 用量、费用、项目/会话、错误和导出会应用同一筛选。统计按稳定 ID 关联，改名不拆分记录，删除仍保留历史；旧记录没有 Token 信息时显示「未记录 Token」，不会猜测归属。包括默认项在内的全部 Token 停用时会拒绝请求；删除所有 Token 后则关闭入站认证。
 
-配置沿用 schema v7，新增 `listener.authTokenName` 与 `listener.authTokens`（每项包含 `id`、`name`、`enabled`、`token`）。运行数据库仍为 schema 5 / projection 11，归属写入事件 JSON，不升级数据库或回填历史。
+配置沿用 schema v7，使用 `listener.authTokenName`、`listener.authTokenEnabled` 与 `listener.authTokens`（每项包含 `id`、`name`、`enabled`、`token`）。运行数据库仍为 schema 5 / projection 11，归属写入事件 JSON，不升级数据库或回填历史。
 
 `listener.allowedCIDRs` 是允许访问的 IP 网段列表，空数组表示不按网段限制。Compose 默认只将端口发布到宿主机回环地址；远程使用按部署教程设置 SSH 隧道、VPN 或 HTTPS 反向代理。
 

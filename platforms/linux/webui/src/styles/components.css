@@ -7978,3 +7978,25 @@ button.responsive-data-card {
 .runtime-v2-chart-point:hover {
   fill: var(--primary);
 }
+
+/* Unified inbound token editor: credentials and their names stay together. */
+.inbound-token-list { display: grid; gap: var(--space-4); }
+.inbound-token-row { min-width: 0; border: 1px solid var(--border-medium); border-radius: var(--radius-md); padding: var(--space-4); }
+.inbound-token-row-header, .inbound-token-row-footer, .inbound-token-badges, .inbound-token-actions { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.inbound-token-row-header, .inbound-token-row-footer { justify-content: space-between; }
+.inbound-token-fields { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(240px, 2fr); gap: var(--space-4); margin-top: var(--space-3); }
+.inbound-token-fields .form-group { margin: 0 0 var(--space-3); min-width: 0; }
+.inbound-token-value { font-family: var(--font-mono); }
+.inbound-token-toggle { display: inline-flex; align-items: center; min-height: 44px; gap: var(--space-2); cursor: pointer; }
+.inbound-token-actions .btn { min-height: 44px; }
+.inbound-token-error { margin: 0; color: var(--status-critical); }
+.security-admin-panel > summary { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-4) var(--panel-padding); cursor: pointer; font-weight: 600; flex-wrap: wrap; }
+.security-admin-panel > summary::before { content: '▸'; }
+.security-admin-panel[open] > summary::before { content: '▾'; }
+.security-admin-panel > .glass-panel { border: 0; background: transparent; box-shadow: none; }
+@media (max-width: 640px) {
+  .inbound-token-fields { grid-template-columns: minmax(0, 1fr); }
+  .inbound-token-actions { width: 100%; }
+  .inbound-token-actions .btn { flex: 1 1 auto; }
+  .inbound-token-row { padding: var(--space-3); }
+}
