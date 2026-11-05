@@ -46,6 +46,8 @@ pub(super) fn analytics_facets_for_filter(
     // filter. This prevents a selected value from making the next picker
     // appear empty; the selected value is retained with count 0 when the
     // remaining filters are incompatible.
+    let mut token_filter = filters.clone();
+    token_filter.inbound_token_id = None;
     let mut client_variant_facet_filter = filters.clone();
     client_variant_facet_filter.client_variant = None;
     let mut agent_role_facet_filter = filters.clone();
@@ -83,8 +85,8 @@ pub(super) fn analytics_facets_for_filter(
     // temporary B-trees. Keep the exact "ignore this facet's own filter"
     // semantics, but push the common predicates (especially the selected
     // time range) into SQLite first. A 24-hour refresh must not deserialize
-    // every event ever retained in an `all`-range database; payload_json is
-    // never touched on this path.
+    // every event ever retained in an `all`-range database. Only the optional
+    // Token identity is extracted from JSON; no schema upgrade is required.
     let mut base = SqlFilter::default();
     base.raw("is_in_flight = 0");
     base.raw(format!("projection_version = {PROJECTION_VERSION}"));
@@ -107,13 +109,16 @@ pub(super) fn analytics_facets_for_filter(
         "SELECT outcome,client_kind,request_purpose,request_id,endpoint_id,
                 effective_model,project_id,project_name,session_key,
                 failure_kind,failure_phase,client_variant,agent_role,agent_name,parent_thread_id,parent_turn_id,root_turn_id,
-                attribution_scope,timestamp,request_kind
+                attribution_scope,timestamp,request_kind,
+                {token_id}, CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.inboundToken.name') END
            FROM runtime_events{}",
-        base.where_sql()
+        base.where_sql(), token_id = super::INBOUND_TOKEN_ID_SQL
     );
     let mut statement = transaction.prepare(&sql)?;
     let rows = statement.query_map(params_from_iter(base.values.iter()), |row| {
         Ok(FacetProjectionRow {
+            inbound_token_id: row.get(20)?,
+            inbound_token_name: row.get(21)?,
             outcome: row.get(0)?,
             client_kind: row.get(1)?,
             request_purpose: row.get(2)?,
@@ -136,6 +141,7 @@ pub(super) fn analytics_facets_for_filter(
             request_kind: row.get(19)?,
         })
     })?;
+    let mut token_counts = HashMap::<String, (i64, String, f64)>::new();
     let mut client_counts = HashMap::<String, i64>::new();
     let mut client_variant_counts = HashMap::<String, i64>::new();
     let mut agent_role_counts = HashMap::<String, i64>::new();
@@ -153,6 +159,22 @@ pub(super) fn analytics_facets_for_filter(
     let mut failure_phase_counts = HashMap::<String, i64>::new();
     for row in rows {
         let row = row?;
+        if facet_row_matches(&row, &token_filter, FacetDimension::InboundToken) {
+            let name = row
+                .inbound_token_name
+                .clone()
+                .unwrap_or_else(|| "未记录 Token".into());
+            let value = token_counts.entry(row.inbound_token_id.clone()).or_insert((
+                0,
+                name.clone(),
+                row.timestamp,
+            ));
+            value.0 += 1;
+            if row.timestamp >= value.2 {
+                value.1 = name;
+                value.2 = row.timestamp;
+            }
+        }
         if facet_row_matches(&row, &request_kind_filter, FacetDimension::RequestKind) {
             increment_facet(
                 &mut request_kind_counts,
@@ -307,7 +329,18 @@ pub(super) fn analytics_facets_for_filter(
     ensure_facet_selection(&mut request_purposes, filters.request_purpose.as_deref());
     ensure_facet_selection(&mut failure_kinds, filters.failure_kind.as_deref());
     ensure_facet_selection(&mut failure_phases, filters.failure_phase.as_deref());
+    if let Some(id) = &filters.inbound_token_id {
+        token_counts
+            .entry(id.clone())
+            .or_insert((0, id.clone(), 0.0));
+    }
+    let mut inbound_tokens: Vec<_> = token_counts
+        .into_iter()
+        .map(|(value, (count, name, _))| super::InboundTokenFacet { value, name, count })
+        .collect();
+    inbound_tokens.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.value.cmp(&b.value)));
     Ok(AnalyticsFacets {
+        inbound_tokens,
         request_kinds,
         client_kinds,
         client_variants,
@@ -328,6 +361,8 @@ pub(super) fn analytics_facets_for_filter(
 
 #[derive(Debug)]
 struct FacetProjectionRow {
+    inbound_token_id: String,
+    inbound_token_name: Option<String>,
     request_kind: Option<String>,
     outcome: Option<String>,
     client_kind: Option<String>,
@@ -352,6 +387,7 @@ struct FacetProjectionRow {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FacetDimension {
+    InboundToken,
     RequestKind,
     ClientVariant,
     AgentRole,
@@ -375,6 +411,14 @@ fn facet_row_matches(
     ignored: FacetDimension,
 ) -> bool {
     if filter.kind.as_deref().is_some_and(|kind| kind != "client") {
+        return false;
+    }
+    if ignored != FacetDimension::InboundToken
+        && filter
+            .inbound_token_id
+            .as_ref()
+            .is_some_and(|id| id != &row.inbound_token_id)
+    {
         return false;
     }
     let matches = |value: &Option<String>, expected: Option<&String>| {

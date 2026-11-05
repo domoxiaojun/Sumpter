@@ -721,10 +721,14 @@ pub enum ConfigLoadError {
 }
 
 pub fn validate_config_wire(value: &Value) -> Result<(), String> {
-    validate_current_wire(value)
+    validate_current_wire_secrets(value, false)
 }
 
 fn validate_current_wire(value: &Value) -> Result<(), String> {
+    validate_current_wire_secrets(value, true)
+}
+
+fn validate_current_wire_secrets(value: &Value, require_secrets: bool) -> Result<(), String> {
     let root = value
         .as_object()
         .ok_or_else(|| "配置根节点必须是对象".to_string())?;
@@ -749,6 +753,7 @@ fn validate_current_wire(value: &Value) -> Result<(), String> {
         let listener: crate::config::ListenerConfig = serde_json::from_value(listener.clone())
             .map_err(|error| format!("listener 格式无效: {error}"))?;
         listener.validate_cidr_lists()?;
+        listener.validate_inbound_tokens(require_secrets)?;
     }
     if root.contains_key("pools") {
         return Err("schema v7 不允许 pools；请先完成 Provider 候选迁移".into());

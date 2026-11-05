@@ -117,6 +117,11 @@ impl RelayState {
                 self.realtime_secret_endpoint_id.as_deref(),
                 self.realtime_secret_model.as_deref(),
                 self.realtime_secret_session.take(),
+                self.guard
+                    .meta
+                    .request_context
+                    .as_ref()
+                    .and_then(|context| context.inbound_token.clone()),
             );
         }
         if let Some(video_body) = self.video_session_body.take()

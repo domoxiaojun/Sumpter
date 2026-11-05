@@ -64,16 +64,25 @@ async fn public_realtime_21_model_is_preserved_to_the_upstream() {
         let _ = socket.close(None).await;
     });
 
-    let engine = pi_test_engine(realtime_config(upstream_address));
+    let mut config = realtime_config(upstream_address);
+    config.listener.auth_token.clear();
+    config.listener.auth_tokens = vec![sumpter_core::config::InboundTokenConfig {
+        id: "work".into(),
+        name: "工作电脑".into(),
+        enabled: true,
+        token: "synthetic-work-token".into(),
+    }];
+    let engine = pi_test_engine(config);
     let (address, handle) = server::serve(engine.clone(), "127.0.0.1:0".parse().unwrap())
         .await
         .unwrap();
     let mut request = format!("ws://{address}/v1/realtime?model=gpt-realtime-2.1")
         .into_client_request()
         .unwrap();
-    request
-        .headers_mut()
-        .insert("authorization", "Bearer listener-secret".parse().unwrap());
+    request.headers_mut().insert(
+        "authorization",
+        "Bearer synthetic-work-token".parse().unwrap(),
+    );
     let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
     assert!(
         engine
@@ -94,4 +103,12 @@ async fn public_realtime_21_model_is_preserved_to_the_upstream() {
     let _ = socket.close(None).await;
     upstream_task.await.unwrap();
     pi_test_shutdown(handle).await;
+    let events = engine.runtime_snapshot().recent_events;
+    assert!(events.iter().any(|event| event.kind == "client"));
+    for event in events
+        .iter()
+        .filter(|event| matches!(event.kind.as_str(), "client" | "upstream"))
+    {
+        assert_eq!(event.inbound_token.as_ref().unwrap().id, "work");
+    }
 }

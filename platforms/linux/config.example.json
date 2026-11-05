@@ -5,6 +5,8 @@
     "port": 57878,
     "allowedCIDRs": [],
     "authToken": "",
+    "authTokenName": "默认 Token",
+    "authTokens": [],
     "trustedProxyCIDRs": []
   },
   "retry": {

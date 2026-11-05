@@ -73,6 +73,7 @@ fn option_token<T: serde::Serialize>(value: Option<T>) -> Option<String> {
 /// Analytics 查询筛选。值使用事件中已经脱敏/稳定化的维度键。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AnalyticsFilter {
+    pub inbound_token_id: Option<String>,
     pub request_kind: Option<String>,
     pub client_kind: Option<String>,
     pub client_variant: Option<String>,
@@ -97,6 +98,7 @@ impl AnalyticsFilter {
     pub fn to_runtime_filter(&self) -> crate::runtime_query::RuntimeFilter {
         let filter = self.normalized();
         crate::runtime_query::RuntimeFilter {
+            inbound_token_id: filter.inbound_token_id,
             request_kind: filter.request_kind,
             client_kind: filter.client_kind,
             client_variant: filter.client_variant,
@@ -131,6 +133,7 @@ impl AnalyticsFilter {
                 .map(ToOwned::to_owned)
         }
         Self {
+            inbound_token_id: value(&self.inbound_token_id),
             request_kind: value(&self.request_kind),
             client_kind: value(&self.client_kind),
             client_variant: value(&self.client_variant),
@@ -511,6 +514,8 @@ pub struct RuntimeChange {
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeEventListItem {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub inbound_token: Option<sumpter_core::config::InboundTokenIdentity>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub request_kind: Option<sumpter_core::client_attribution::ObservedRequestKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_attribution: Option<sumpter_core::client_attribution::ClientAttribution>,
@@ -661,6 +666,7 @@ impl RuntimeEventListItem {
         let attribution_scope =
             is_codex_event.then(|| event_attribution_scope(&event).as_str().to_owned());
         Self {
+            inbound_token: event.inbound_token.clone(),
             request_kind: event.request_kind,
             client_attribution: event.client_attribution.clone(),
             cache_read,

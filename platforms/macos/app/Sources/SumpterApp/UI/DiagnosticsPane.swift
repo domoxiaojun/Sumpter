@@ -145,6 +145,7 @@ struct SecurityPane: View {
         SettingsPage(title: SettingsSection.security.title, subtitle: SettingsSection.security.subtitle) {
             listenerPanel
             authPanel
+            InboundTokensPanel(model: model)
             launchPanel
             UnifiedAttributionPanel(model: model)
         }
@@ -304,7 +305,7 @@ struct SecurityPane: View {
 
     /// 认证徽章颜色:本机监听下「未启用」是常态,用灰色;暴露到局域网才用橙色提醒。
     private var authBadgeColor: Color {
-        if model.config.listener.hasInboundAuth {
+        if !model.config.listener.authToken.isEmpty {
             return .green
         }
         return Self.isLoopback(model.config.listener.host) ? .secondary : .orange
@@ -316,12 +317,12 @@ struct SecurityPane: View {
     }
 
     private var authPanel: some View {
-        SectionPanel(title: "入站认证", hint: "启用后客户端需要携带对应 Token，适合局域网访问或多人共用。") {
+        SectionPanel(title: "默认入站 Token", hint: "启用后客户端需要携带对应 Token，适合局域网访问或多人共用。") {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 10) {
                     StatusBadge(
-                        text: model.config.listener.hasInboundAuth ? "已启用" : "未启用",
-                        systemImage: model.config.listener.hasInboundAuth ? "lock.fill" : "lock.open",
+                        text: !model.config.listener.authToken.isEmpty ? "已启用" : "未启用",
+                        systemImage: !model.config.listener.authToken.isEmpty ? "lock.fill" : "lock.open",
                         color: authBadgeColor
                     )
                     if !model.config.listener.authToken.isEmpty {
@@ -348,7 +349,7 @@ struct SecurityPane: View {
                     } label: {
                         Label("清除 Token", systemImage: "trash")
                     }
-                    .disabled(!model.config.listener.hasInboundAuth)
+                    .disabled(model.config.listener.authToken.isEmpty)
                 }
             }
         }

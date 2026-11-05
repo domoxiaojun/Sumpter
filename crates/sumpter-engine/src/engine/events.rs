@@ -234,6 +234,9 @@ impl Engine {
                     .cloned()
             };
             if let Some(client) = request_metadata {
+                if event.inbound_token.is_none() {
+                    event.inbound_token = client.inbound_token.clone();
+                }
                 if event.client_attribution.is_none() && client.client_attribution.is_some() {
                     event.client_kind = client.client_kind;
                     event.client_variant = client.client_variant.clone();
@@ -318,6 +321,9 @@ impl Engine {
         request_context: Option<InboundRequestContext>,
     ) {
         let event_id = new_event_id();
+        let inbound_token = request_context
+            .as_ref()
+            .and_then(|c| c.inbound_token.clone());
         let attribution = request_context.as_ref().and_then(|c| c.attribution.clone());
         let (
             request_method,
@@ -364,6 +370,7 @@ impl Engine {
             });
         let message = bounded_failure_detail(message);
         let mut event = RuntimeEvent {
+            inbound_token,
             request_kind: None,
             client_attribution: None,
             request_trace: None,
@@ -515,6 +522,7 @@ impl Engine {
         request_id: &str,
     ) -> RuntimeEvent {
         RuntimeEvent {
+            inbound_token: None,
             request_kind: None,
             client_attribution: None,
             request_trace: None,

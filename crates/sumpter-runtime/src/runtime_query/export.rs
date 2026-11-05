@@ -121,7 +121,7 @@ where
                 "seq,changeSeq,eventID,requestID,timestamp,kind,payloadJSON\n"
             }
             ExportScope::Events => {
-                "seq,changeSeq,eventID,requestID,timestamp,kind,outcome,statusCode,clientKind,requestPurpose,requestKind,clientAttribution,endpointID,endpointName,model,projectID,projectName,sessionID,failureKind,failurePhase,upstreamStatusCode,durationMS,ttfbMS,failover,inputTokens,outputTokens,cacheReadInputTokens,cacheCreationInputTokens,reasoningTokens,processedInputTokens,processedTotalTokens,clientVariant,agentRole,agentName,parentThreadID,parentTurnID,rootTurnID\n"
+                "seq,changeSeq,eventID,requestID,timestamp,kind,outcome,statusCode,clientKind,requestPurpose,requestKind,clientAttribution,endpointID,endpointName,model,projectID,projectName,sessionID,failureKind,failurePhase,upstreamStatusCode,durationMS,ttfbMS,failover,inputTokens,outputTokens,cacheReadInputTokens,cacheCreationInputTokens,reasoningTokens,processedInputTokens,processedTotalTokens,clientVariant,agentRole,agentName,parentThreadID,parentTurnID,rootTurnID,inboundTokenID,inboundTokenName\n"
             }
             ExportScope::Projects | ExportScope::Sessions => {
                 "key,name,source,requests,successes,failures,cancelled,failovers,inputTokens,outputTokens,cacheReadInputTokens,cacheCreationInputTokens,processedTotalTokens,firstSeen,lastSeen,relatedCount,workspacePaths\n"
@@ -226,7 +226,7 @@ where
                 project_id,project_name,session_key,failure_kind,failure_phase,\
                 upstream_status_code,duration_ms,ttfb_ms,failover,input_tokens,output_tokens,\
                 cache_read_input_tokens,cache_creation_input_tokens,reasoning_tokens,\
-                processed_input_tokens,processed_total_tokens,client_variant,agent_role,agent_name,parent_thread_id,parent_turn_id,root_turn_id,request_kind,client_attribution_json{payload_column} \
+                processed_input_tokens,processed_total_tokens,client_variant,agent_role,agent_name,parent_thread_id,parent_turn_id,root_turn_id,request_kind,client_attribution_json,CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.inboundToken.id') END,CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.inboundToken.name') END{payload_column} \
          FROM runtime_events{} ORDER BY seq ASC",
         builder.where_sql()
     );
@@ -271,7 +271,9 @@ where
             root_turn_id: row.get(34)?,
             request_kind: row.get(35)?,
             client_attribution_json: row.get(36)?,
-            payload_json: stored.then(|| row.get(37)).transpose()?,
+            inbound_token_id: row.get(37)?,
+            inbound_token_name: row.get(38)?,
+            payload_json: stored.then(|| row.get(39)).transpose()?,
         };
         let bytes = export_event_bytes(&event, query)?;
         export_send(sink, bytes, bytes_written)?;
@@ -332,6 +334,8 @@ fn export_event_bytes(event: &ExportEventRow, query: &ExportQuery) -> QueryResul
                 "processedTotalTokens": event.processed_total_tokens,
                 "requestKind": event.request_kind,
                 "clientAttribution": event.client_attribution_json.as_deref().and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok()),
+                "inboundTokenID": event.inbound_token_id,
+                "inboundTokenName": event.inbound_token_name,
                 "clientVariant": event.client_variant,
                 "agentRole": event.agent_role,
                 "agentName": redact_optional("agent", event.agent_name.as_deref(), query.privacy),
@@ -400,6 +404,8 @@ fn export_event_bytes(event: &ExportEventRow, query: &ExportQuery) -> QueryResul
                 .unwrap_or_default(),
             redact_optional("turn", event.root_turn_id.as_deref(), query.privacy)
                 .unwrap_or_default(),
+            event.inbound_token_id.clone().unwrap_or_default(),
+            event.inbound_token_name.clone().unwrap_or_default(),
         ]
     };
     Ok(csv_line(fields).into_bytes())

@@ -289,6 +289,7 @@ final class AppModel: ObservableObject {
     @Published var runtimeAnalyticsRange = "today"
     @Published var runtimeAnalyticsClientKind = ""
     @Published var runtimeAnalyticsRequestKind = ""
+    @Published var runtimeAnalyticsInboundTokenID = ""
     @Published var runtimeAnalyticsClientVariant = ""
     @Published var runtimeAnalyticsAgentRole = ""
     @Published var runtimeAnalyticsAgentName = ""

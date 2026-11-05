@@ -1,6 +1,6 @@
 # Sumpter 使用手册（Linux 发布包）
 
-适用版本：**0.4.67 / schema v7**。本文随发布包提供，可在解压目录阅读；安装入口见 [README](README.md)。
+适用版本：**0.4.68 / schema v7**。本文随发布包提供，可在解压目录阅读；安装入口见 [README](README.md)。
 
 <!-- BEGIN SUMPTER_CANONICAL_ONBOARDING -->
 
@@ -44,7 +44,11 @@
 
 ## 3. 设置访问权限
 
-在「安全」设置非空的代理入站 Token，并将同一个值填到客户端 API Key / Token 字段。这个 Token 由你管理，不必与任何 Provider Key 相同。
+在「安全」保留默认 Token，或在「多个入站客户端 API Token」中新增独立 Token、填写名称并保存。把对应凭据填到客户端 API Key / Token 字段；新凭据保存后只显示尾号，请先复制。每个客户端或项目可使用不同的 Token，它们不必与任何 Provider Key 相同。
+
+在「统计」选择「入站 Token」，请求、Token 用量、费用、项目/会话、错误和导出会应用同一筛选。统计按稳定 ID 关联，改名不拆分记录，删除仍保留历史；旧记录没有 Token 信息时显示「未记录 Token」，不会猜测归属。新增列表的全部 Token 停用且未配置默认 Token 时会拒绝请求；清除默认 Token 并删除所有新增 Token 后则关闭入站认证。
+
+配置沿用 schema v7，新增 `listener.authTokenName` 与 `listener.authTokens`（每项包含 `id`、`name`、`enabled`、`token`）。运行数据库仍为 schema 5 / projection 11，归属写入事件 JSON，不升级数据库或回填历史。
 
 `listener.allowedCIDRs` 是允许访问的 IP 网段列表，空数组表示不按网段限制。Compose 默认只将端口发布到宿主机回环地址；远程使用按部署教程设置 SSH 隧道、VPN 或 HTTPS 反向代理。
 

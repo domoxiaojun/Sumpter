@@ -233,6 +233,7 @@ impl Engine {
         let route_intent =
             route_intent_for_path(method, path_and_query, query_model.as_deref(), client_kind);
         InboundRequestContext {
+            inbound_token: super::context::matched_inbound_token(headers, &self.config().listener),
             attribution: Some(sumpter_core::client_attribution::observe(
                 method, &path, headers, None,
             )),
@@ -293,9 +294,7 @@ impl Engine {
                     "/v1/responses" | "/responses" | "/backend-api/codex/responses"
                 ))
         {
-            if config.listener.has_inbound_auth()
-                && !inbound_auth_ok(&headers, &config.listener.auth_token)
-            {
+            if config.listener.has_inbound_auth() && !inbound_auth_ok(&headers, &config.listener) {
                 self.record_rejected_client_with_metadata(
                     401,
                     message_tokens::INBOUND_AUTH_REQUIRED,
@@ -410,9 +409,7 @@ impl Engine {
         if is_openai_resource_tree(path, "models")
             && !super::protocol::is_gemini_generate_path(path)
         {
-            if config.listener.has_inbound_auth()
-                && !inbound_auth_ok(&headers, &config.listener.auth_token)
-            {
+            if config.listener.has_inbound_auth() && !inbound_auth_ok(&headers, &config.listener) {
                 let client_kind = detect_client_kind(&headers, true);
                 self.record_rejected_client_with_metadata(
                     401,
@@ -484,8 +481,7 @@ impl Engine {
                 | "/chat/completions"
         ) && let Some(encoding) = header_value(&headers, "content-encoding").map(str::to_owned)
             && !encoding.eq_ignore_ascii_case("identity")
-            && (!config.listener.has_inbound_auth()
-                || inbound_auth_ok(&headers, &config.listener.auth_token))
+            && (!config.listener.has_inbound_auth() || inbound_auth_ok(&headers, &config.listener))
         {
             let decoded = match read_inbound_body(body).await {
                 Ok(bytes) => {
@@ -809,9 +805,7 @@ impl Engine {
         let mut client_kind = detect_client_kind(&headers, false);
         let header_codex_metadata = CodexMetadata::from_request(&headers, None);
         // 入站 auth(仅本端点):x-api-key 精确或 Bearer;空 token 不校验。
-        if config.listener.has_inbound_auth()
-            && !inbound_auth_ok(&headers, &config.listener.auth_token)
-        {
+        if config.listener.has_inbound_auth() && !inbound_auth_ok(&headers, &config.listener) {
             self.record_rejected_client_with_metadata(
                 401,
                 message_tokens::INBOUND_AUTH_REQUIRED,
@@ -976,9 +970,7 @@ impl Engine {
             return method_not_allowed_response("POST");
         }
         let header_codex_metadata = CodexMetadata::from_request(&headers, None);
-        if config.listener.has_inbound_auth()
-            && !inbound_auth_ok(&headers, &config.listener.auth_token)
-        {
+        if config.listener.has_inbound_auth() && !inbound_auth_ok(&headers, &config.listener) {
             self.record_rejected_client_with_metadata(
                 401,
                 message_tokens::INBOUND_AUTH_REQUIRED,
@@ -1201,7 +1193,7 @@ impl Engine {
             && !is_realtime_client_secret_path(path_and_query)
             && self.realtime_client_secret_authorized(&headers);
         if config.listener.has_inbound_auth()
-            && !inbound_auth_ok(&headers, &config.listener.auth_token)
+            && !inbound_auth_ok(&headers, &config.listener)
             && !realtime_ephemeral_auth
         {
             self.record_rejected_client_with_metadata(
@@ -1218,6 +1210,15 @@ impl Engine {
                 StatusCode::UNAUTHORIZED,
                 &[("error", "inbound_auth_required")],
             );
+        }
+        if realtime_ephemeral_auth {
+            let identity = self.realtime_client_secret_inbound_token(&headers);
+            let _ = INBOUND_REQUEST_CONTEXT.try_with(|context| {
+                let mut context = context.borrow_mut();
+                if context.inbound_token.is_none() {
+                    context.inbound_token = identity;
+                }
+            });
         }
         if kind == PassthroughKind::GeminiGenerate
             && let Some((status, message)) = gemini_request_error(method, path_and_query)

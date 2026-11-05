@@ -191,8 +191,8 @@ fn attribution_script_response(
         );
     }
 
-    if !config.listener.auth_token.is_empty()
-        && !inbound_auth_ok(headers, &config.listener.auth_token)
+    if config.listener.has_inbound_auth()
+        && config.listener.matched_inbound_token(headers).is_none()
     {
         return Some(
             Response::builder()
@@ -226,22 +226,6 @@ fn attribution_script_response(
             .body(Body::from(script))
             .unwrap_or_else(|_| Response::new(Body::from(script))),
     )
-}
-
-fn inbound_auth_ok(headers: &[(String, String)], token: &str) -> bool {
-    headers.iter().any(|(name, value)| {
-        if name.eq_ignore_ascii_case("x-api-key") {
-            return value == token;
-        }
-        if name.eq_ignore_ascii_case("authorization") {
-            let value = value.trim();
-            return value
-                .get(..7)
-                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("bearer "))
-                && value[7..].trim() == token;
-        }
-        false
-    })
 }
 
 impl Deref for Engine {

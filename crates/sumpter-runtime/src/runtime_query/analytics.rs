@@ -380,6 +380,7 @@ pub fn analytics_view_on(
         filters_applied: true,
         filter_warning: None,
         applied_filters: AnalyticsAppliedFilters {
+            inbound_token_id: filters.inbound_token_id.clone(),
             request_kind: filters.request_kind.clone(),
             client_kind: filters.client_kind.clone(),
             client_variant: filters.client_variant.clone(),

@@ -282,7 +282,7 @@ impl Engine {
             remote.map(|ip| ip.to_string()).as_deref(),
             &config.listener.allowed_cidrs,
         ) && (!config.listener.has_inbound_auth()
-            || inbound_auth_ok(headers, &config.listener.auth_token)
+            || inbound_auth_ok(headers, &config.listener)
             || (allow_ephemeral && self.realtime_client_secret_authorized(headers)))
     }
 
@@ -378,6 +378,7 @@ impl Engine {
             upstream.request_path = Some(context.request_path.clone());
             upstream.route_intent = Some(context.route_intent.clone());
             upstream.source_ip = context.source_ip.clone();
+            upstream.inbound_token = context.inbound_token.clone();
             upstream.client_model = Some(context.model.clone());
             upstream.transport = Some(sumpter_core::events::RuntimeTransport::Websocket);
             upstream.effective_model = Some(context.model.clone());
@@ -466,6 +467,7 @@ impl Engine {
         upstream.request_path = Some(context.request_path.clone());
         upstream.route_intent = Some(context.route_intent.clone());
         upstream.source_ip = context.source_ip.clone();
+        upstream.inbound_token = context.inbound_token.clone();
         upstream.client_model = Some(context.model.clone());
         upstream.transport = Some(sumpter_core::events::RuntimeTransport::Websocket);
         upstream.effective_model = Some(context.model.clone());
@@ -588,7 +590,7 @@ impl Engine {
                 return Err(error);
             }
         };
-        let context = websocket_event_context(
+        let mut context = websocket_event_context(
             self.websocket_source_ip(remote, headers),
             path_and_query,
             headers,
@@ -596,6 +598,9 @@ impl Engine {
             intent,
             started,
         );
+        context.inbound_token =
+            super::context::matched_inbound_token(headers, &self.config().listener)
+                .or_else(|| self.realtime_client_secret_inbound_token(headers));
         match self
             .connect_native_websocket(path, path_and_query, headers, &request)
             .await

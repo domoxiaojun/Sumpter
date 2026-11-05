@@ -893,8 +893,6 @@ use axum::extract::Query;
 #[cfg(test)]
 use axum::http::header;
 #[cfg(test)]
-use std::collections::HashMap;
-#[cfg(test)]
 use sumpter_core::config::{Endpoint, SCHEMA_VERSION};
 
 #[cfg(test)]
@@ -2115,7 +2113,7 @@ mod tests {
             &mut cleared,
             SecretUpdates {
                 inbound_auth_token: Some(String::new()),
-                endpoints: HashMap::new(),
+                ..Default::default()
             },
         )
         .unwrap();

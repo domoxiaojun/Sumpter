@@ -271,6 +271,7 @@ export function toWireConfig(document) {
     }
   config.listener = config.listener || {};
   config.listener.authToken = '';
+  for (const entry of config.listener.authTokens || []) entry.token = '';
   delete config.listener.inboundDialectPassthrough;
   config.schemaVersion = 7;
   for (const rule of config.featureRules || []) {
@@ -362,7 +363,7 @@ class ApiService {
   }
   getRuntimeEventPage({
     page = 1, pageSize = RUNTIME_DEFAULT_PAGE_SIZE, snapshotSeq, snapshotChangeSeq, historyGeneration,
-    kind, outcome, clientKind, requestKind, clientVariant, agentRole, agentName, parentThreadID, parentTurnID, rootTurnID, requestPurpose, requestID, endpointID,
+    kind, outcome, clientKind, requestKind, inboundTokenID, clientVariant, agentRole, agentName, parentThreadID, parentTurnID, rootTurnID, requestPurpose, requestID, endpointID,
     model, projectID, project, sessionID, failureKind, failurePhase, from, to, signal,
   } = {}) {
     const query = new URLSearchParams({
@@ -371,7 +372,7 @@ class ApiService {
       pageSize: String(Number(pageSize) || RUNTIME_DEFAULT_PAGE_SIZE),
     });
     const filters = {
-      kind, outcome, clientKind, requestKind, clientVariant, agentRole, agentName, parentThreadID, parentTurnID, rootTurnID, requestPurpose, requestID, endpointID,
+      kind, outcome, clientKind, requestKind, inboundTokenID, clientVariant, agentRole, agentName, parentThreadID, parentTurnID, rootTurnID, requestPurpose, requestID, endpointID,
       model, projectID, project, sessionID, failureKind, failurePhase, from, to,
     };
     if (snapshotSeq != null) query.set('snapshotSeq', String(snapshotSeq));
@@ -432,7 +433,7 @@ class ApiService {
       ...value,
       apiVersion: Number(value?.apiVersion || 3),
       facets: {
-        ...Object.fromEntries(['requestKinds', 'clientVariants', 'agentRoles', 'agentNames', 'parentThreads', 'parentTurns', 'rootTurns'].map((key) => [key, Array.isArray(facets[key]) ? facets[key] : []])),
+        ...Object.fromEntries(['inboundTokens', 'requestKinds', 'clientVariants', 'agentRoles', 'agentNames', 'parentThreads', 'parentTurns', 'rootTurns'].map((key) => [key, Array.isArray(facets[key]) ? facets[key] : []])),
         clientKinds: Array.isArray(facets.clientKinds) ? facets.clientKinds : [],
         endpoints: Array.isArray(facets.endpoints) ? facets.endpoints : [],
         projects: Array.isArray(facets.projects) ? facets.projects : [],
@@ -538,8 +539,9 @@ class ApiService {
         config: toWireConfig(config),
         secretUpdates: {
           inboundAuthToken: secretUpdates.inboundAuthToken,
+          inboundTokens: secretUpdates.inboundTokens,
           endpoints: Object.fromEntries(Object.entries(secretUpdates)
-            .filter(([id]) => id !== 'inboundAuthToken')
+            .filter(([id]) => !['inboundAuthToken', 'inboundTokens'].includes(id))
             .map(([id, apiKey]) => [id, { apiKey }])),
         },
       }),

@@ -25,6 +25,7 @@ final class StatisticsFilterTests: XCTestCase {
         let model = AppModel(startServices: false)
         model.runtimeAnalyticsRange = "7d"
         model.runtimeAnalyticsClientKind = "codex"
+        model.runtimeAnalyticsInboundTokenID = "work"
         model.runtimeAnalyticsRequestKind = "review"
         model.runtimeAnalyticsClientVariant = "desktop"
         model.runtimeAnalyticsAgentRole = "subagent"
@@ -47,7 +48,7 @@ final class StatisticsFilterTests: XCTestCase {
         let actual = model.runtimeV2Filter(includeLocalProject: true, snapshot: snapshot)
         XCTAssertEqual(actual, expected)
         let wire = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(actual)) as? [String: Any])
-        for field in ["requestKind", "clientVariant", "agentRole", "agentName", "parentThreadID", "parentTurnID", "rootTurnID"] {
+        for field in ["inboundTokenID", "requestKind", "clientVariant", "agentRole", "agentName", "parentThreadID", "parentTurnID", "rootTurnID"] {
             XCTAssertNotNil(wire[field], field)
         }
         model.runtimeLocalProjectID = "unidentified_project"

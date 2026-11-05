@@ -85,6 +85,7 @@ mod tests {
 
     fn client_event(status: i64, ts: f64) -> RuntimeEvent {
         RuntimeEvent {
+            inbound_token: None,
             request_kind: None,
             client_attribution: None,
             request_trace: None,

@@ -69,7 +69,7 @@ pub fn events_page_on(
     values.push(SqlValue::Integer(request.page_size as i64));
     values.push(SqlValue::Integer(offset.min(i64::MAX as usize) as i64));
     let sql = format!(
-        "SELECT request_kind,client_attribution_json,seq,change_seq,event_id AS id,timestamp,kind,client_variant,agent_role,agent_name,parent_thread_id,parent_turn_id,root_turn_id,phase,outcome,status_code,\
+        "SELECT CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.inboundToken') END AS inbound_token_json,request_kind,client_attribution_json,seq,change_seq,event_id AS id,timestamp,kind,client_variant,agent_role,agent_name,parent_thread_id,parent_turn_id,root_turn_id,phase,outcome,status_code,\
                 request_id,session_key,session_source,client_kind,request_purpose,\
                 endpoint_id,endpoint_name,feature_rule_id,client_model,\
                 effective_model,upstream_model,failure_kind,failure_phase,\

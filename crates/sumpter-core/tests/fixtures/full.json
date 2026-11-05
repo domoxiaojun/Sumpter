@@ -34,6 +34,8 @@
       "10.0.0.0/8"
     ],
     "authToken": "sk-inbound-token",
+    "authTokenName": "默认 Token",
+    "authTokens": [{ "id": "work", "name": "工作电脑", "enabled": true, "token": "synthetic-work-token" }],
     "host": "0.0.0.0",
     "port": 57878,
     "trustedProxyCIDRs": [

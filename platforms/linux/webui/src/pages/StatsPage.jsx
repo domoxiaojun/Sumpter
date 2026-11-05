@@ -1,3 +1,4 @@
+import { inboundTokenOptions } from '../utils/inboundTokens.js';
 import { requestKindLabel, clientVariantLabel, agentRoleLabel } from '../utils/helpers.js';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AnalyticsWorkspace } from '../components/AnalyticsWorkspace.jsx';
@@ -188,6 +189,7 @@ export function StatsPage() {
   const {
     runtime,
     config,
+    secretStatus,
     runtimeAnalytics,
     runtimeFacets,
     analyticsRefreshSignal,
@@ -226,15 +228,16 @@ export function StatsPage() {
     return () => { active = false; };
   }, [loadRuntimeEvent, selectedEventID]);
 
-  const filters = analyticsFilters || { clientKind: '', requestKind: '', clientVariant: '', agentRole: '', agentName: '', parentThreadID: '', parentTurnID: '', rootTurnID: '', endpointID: '', project: '', projectID: '', sessionID: '', model: '', requestPurpose: '', outcome: '', failureKind: '', failurePhase: '' };
+  const filters = analyticsFilters || { inboundTokenID: '', clientKind: '', requestKind: '', clientVariant: '', agentRole: '', agentName: '', parentThreadID: '', parentTurnID: '', rootTurnID: '', endpointID: '', project: '', projectID: '', sessionID: '', model: '', requestPurpose: '', outcome: '', failureKind: '', failurePhase: '' };
   const advancedFilterLabels = [
     ['requestKind', '请求类型'], ['clientVariant', '客户端形态'], ['agentRole', '代理角色'], ['agentName', '代理名称'],
     ['parentThreadID', '父线程'], ['parentTurnID', '父回合'], ['rootTurnID', '根回合'],
     ['requestPurpose', '用途'], ['failureKind', '失败类型'], ['failurePhase', '失败阶段'],
   ].filter(([key]) => filters[key]).map(([key, label]) => `${label}=${filters[key]}`);
-  const activeFilterCount = [filters.clientKind, filters.requestKind, filters.clientVariant, filters.agentRole, filters.agentName, filters.parentThreadID, filters.parentTurnID, filters.rootTurnID, filters.endpointID, filters.projectID, filters.project, filters.sessionID, filters.model, filters.requestPurpose, filters.outcome, filters.failureKind, filters.failurePhase, selectedProject?.key, selectedSession?.key]
+  const activeFilterCount = [filters.inboundTokenID, filters.clientKind, filters.requestKind, filters.clientVariant, filters.agentRole, filters.agentName, filters.parentThreadID, filters.parentTurnID, filters.rootTurnID, filters.endpointID, filters.projectID, filters.project, filters.sessionID, filters.model, filters.requestPurpose, filters.outcome, filters.failureKind, filters.failurePhase, selectedProject?.key, selectedSession?.key]
     .filter((value) => String(value || '').trim()).length;
   const facets = useMemo(() => ({
+    inboundTokens: inboundTokenOptions(config, runtimeFacets?.facets, filters.inboundTokenID, secretStatus?.inboundAuthToken?.configured),
     clientKinds: facetOptions(runtimeFacets, 'clientKinds', filters.clientKind),
     requestKinds: facetOptions(runtimeFacets, 'requestKinds', filters.requestKind),
     clientVariants: facetOptions(runtimeFacets, 'clientVariants', filters.clientVariant),
@@ -250,7 +253,7 @@ export function StatsPage() {
     requestPurposes: facetOptions(runtimeFacets, 'requestPurposes', filters.requestPurpose),
     failureKinds: facetOptions(runtimeFacets, 'failureKinds', filters.failureKind),
     failurePhases: facetOptions(runtimeFacets, 'failurePhases', filters.failurePhase),
-  }), [config, runtime, runtimeFacets, filters.clientKind, filters.requestKind, filters.clientVariant, filters.agentRole, filters.agentName, filters.parentThreadID, filters.parentTurnID, filters.rootTurnID, filters.endpointID, filters.project, filters.sessionID, filters.model, filters.requestPurpose, filters.failureKind, filters.failurePhase]);
+  }), [config, secretStatus, runtime, runtimeFacets, filters.inboundTokenID, filters.clientKind, filters.requestKind, filters.clientVariant, filters.agentRole, filters.agentName, filters.parentThreadID, filters.parentTurnID, filters.rootTurnID, filters.endpointID, filters.project, filters.sessionID, filters.model, filters.requestPurpose, filters.failureKind, filters.failurePhase]);
 
   const updateFilter = (key, value) => {
     const next = {
@@ -275,7 +278,7 @@ export function StatsPage() {
 
   const clearAllFilters = () => {
     clearLocalDrilldowns();
-    loadRuntimeAnalytics(analyticsRange, { clientKind: '', requestKind: '', clientVariant: '', agentRole: '', agentName: '', parentThreadID: '', parentTurnID: '', rootTurnID: '', endpointID: '', project: '', projectID: '', sessionID: '', model: '', requestPurpose: '', outcome: '', failureKind: '', failurePhase: '' }).catch(() => null);
+    loadRuntimeAnalytics(analyticsRange, { inboundTokenID: '', clientKind: '', requestKind: '', clientVariant: '', agentRole: '', agentName: '', parentThreadID: '', parentTurnID: '', rootTurnID: '', endpointID: '', project: '', projectID: '', sessionID: '', model: '', requestPurpose: '', outcome: '', failureKind: '', failurePhase: '' }).catch(() => null);
   };
 
   const recreateDatabase = async () => {
@@ -363,6 +366,13 @@ export function StatsPage() {
             <select className="form-select" value={filters.sessionID || ''} onChange={(event) => updateFilter('sessionID', event.target.value)}>
               <option value="">全部</option>
               {facets.sessions.map((item) => <option key={item.value} value={item.value}>{sessionLabel(item.value)} · {formatNumber(item.count)}</option>)}
+            </select>
+          </label>
+          <label>
+            <span>入站 Token</span>
+            <select className="form-select" aria-label="入站 Token" value={filters.inboundTokenID || ''} onChange={e => updateFilter('inboundTokenID', e.target.value)}>
+              <option value="">全部 Token</option>
+              {facets.inboundTokens.map(item => <option key={item.value} value={item.value}>{item.label} · {formatNumber(item.count)}</option>)}
             </select>
           </label>
           <label>

@@ -4,6 +4,157 @@ use crate::database::{Connection, params};
 use crate::runtime_query::*;
 
 #[test]
+fn inbound_token_filters_keep_renames_history_costs_and_exports_without_schema_changes() {
+    let mut connection = test_connection();
+    for (index, identity) in [
+        Some(("work", "旧名称")),
+        Some(("work", "新名称")),
+        Some(("personal", "个人")),
+        None,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let request = format!("request-{index}");
+        for (offset, kind) in [(1, "client"), (2, "upstream")] {
+            let seq = index as i64 * 2 + offset;
+            insert_endpoint_test_event(
+                &connection,
+                seq,
+                kind,
+                Some(&request),
+                "succeeded",
+                200,
+                Some("codex"),
+                Some("completion"),
+                Some("endpoint-a"),
+                Some("Endpoint A"),
+            );
+            let payload = identity
+                .map(|(id, name)| serde_json::json!({"inboundToken": {"id": id, "name": name}}))
+                .unwrap_or(serde_json::json!({}))
+                .to_string();
+            connection.execute("UPDATE runtime_events SET timestamp=?1,payload_json=?2,effective_model='gpt-test',project_id='project-a',project_name='Project A',usage_present=1,input_tokens=1000000,output_tokens=0,cache_read_input_tokens=0,cache_creation_input_tokens=0,processed_input_tokens=1000000,processed_total_tokens=1000000,uncached_input_tokens=1000000,token_accounting_semantics='subset',token_accounting_quality='complete' WHERE seq=?1", params![seq, payload]).unwrap();
+        }
+    }
+    let filter = RuntimeFilter {
+        inbound_token_id: Some("work".into()),
+        ..Default::default()
+    };
+    let analytics = analytics_on(&mut connection, "all", &filter).unwrap();
+    assert_eq!(analytics.client_requests, 2);
+    let trends = trends_on(
+        &mut connection,
+        &TrendRequest {
+            from: 0.0,
+            to: 3600.0,
+            granularity: TrendGranularity::Hour,
+            snapshot_seq: None,
+            snapshot_change_seq: None,
+            history_generation: None,
+            filter: filter.clone(),
+        },
+    )
+    .unwrap();
+    assert_eq!(trends.totals.client_requests, 2);
+    assert_eq!(trends.totals.upstream_attempts, 2);
+    assert_eq!(trends.totals.tokens.input_tokens, 2_000_000);
+    assert_eq!(trends.totals.cost.priced_requests, 2);
+    assert_eq!(trends.totals.cost.estimated_cost_micros, 2_000_000);
+    let facets = facets_on(&mut connection, &filter).unwrap();
+    let work = facets
+        .facets
+        .inbound_tokens
+        .iter()
+        .find(|row| row.value == "work")
+        .unwrap();
+    assert_eq!((work.name.as_str(), work.count), ("新名称", 2));
+    assert!(
+        facets
+            .facets
+            .inbound_tokens
+            .iter()
+            .any(|row| row.value == "personal")
+    );
+    let mut client_filter = filter.clone();
+    client_filter.kind = Some("client".into());
+    let page = events_page_on(
+        &mut connection,
+        &EventPageRequest {
+            filter: client_filter.clone(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(page.total_count, 2);
+    assert!(
+        page.events
+            .iter()
+            .all(|row| row.inbound_token.as_ref().unwrap().id == "work")
+    );
+    let projects = dimension_page_on(
+        &mut connection,
+        DimensionKind::Project,
+        &DimensionPageQuery {
+            filter: client_filter.clone(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(projects.rows[0].requests, 2);
+    for privacy in [ExportPrivacy::Redacted, ExportPrivacy::Stored] {
+        for format in [ExportFormat::Jsonl, ExportFormat::Csv] {
+            let query = ExportQuery {
+                scope: ExportScope::Events,
+                format,
+                privacy,
+                confirm_stored: true,
+                snapshot_seq: None,
+                snapshot_change_seq: None,
+                history_generation: None,
+                filter: client_filter.clone(),
+            };
+            assert_eq!(
+                export_estimate_on(&mut connection, &query)
+                    .unwrap()
+                    .row_count,
+                2
+            );
+            let mut bytes = Vec::new();
+            stream_export_on(&mut connection, &query, |chunk| {
+                bytes.extend(chunk);
+                Ok(())
+            })
+            .unwrap();
+            let output = String::from_utf8(bytes).unwrap();
+            assert!(output.contains("work"));
+            assert!(!output.contains("personal"));
+            if format == ExportFormat::Csv {
+                assert_eq!(output.lines().count(), 3);
+            } else {
+                assert_eq!(output.lines().count(), 2);
+            }
+        }
+    }
+    let history = events_page_on(
+        &mut connection,
+        &EventPageRequest {
+            filter: RuntimeFilter {
+                inbound_token_id: Some("unrecorded".into()),
+                kind: Some("client".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(history.total_count, 1);
+    assert!(history.events[0].inbound_token.is_none());
+    assert_eq!(crate::runtime_store::SCHEMA_VERSION, 5);
+    assert_eq!(PROJECTION_VERSION, 11);
+}
+
+#[test]
 fn cache_sort_response_uses_accepted_query_keys() {
     assert_eq!(
         serde_json::to_value(DimensionSort::CacheReadTokens).unwrap(),

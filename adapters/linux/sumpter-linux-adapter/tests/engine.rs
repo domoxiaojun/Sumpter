@@ -6274,3 +6274,6 @@ mod design_safety;
 
 #[path = "../../../../tests/contracts/client_attribution.rs"]
 mod client_attribution;
+
+#[path = "../../../../tests/contracts/inbound_tokens.rs"]
+mod inbound_tokens;

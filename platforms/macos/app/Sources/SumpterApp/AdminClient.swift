@@ -825,6 +825,7 @@ public enum AdminWire {
     /// strings are omitted so an unselected SwiftUI Picker cannot accidentally
     /// become an exact-match filter.
     public struct RuntimeFilter: Codable, Equatable, Sendable {
+        public var inboundTokenID: String?
         public var kind: String?
         public var outcome: String?
         public var clientKind: String?
@@ -852,6 +853,7 @@ public enum AdminWire {
         public var to: Double?
 
         public init(
+            inboundTokenID: String? = nil,
             kind: String? = nil,
             outcome: String? = nil,
             requestKind: String? = nil,
@@ -869,6 +871,7 @@ public enum AdminWire {
             from: Double? = nil,
             to: Double? = nil
         ) {
+            self.inboundTokenID = inboundTokenID
             self.kind = kind
             self.outcome = outcome
             self.clientKind = clientKind
@@ -911,7 +914,7 @@ public enum AdminWire {
 
         fileprivate func add(to query: inout [String: String]) {
             let strings: [(String, String?)] = [
-                ("kind", kind), ("outcome", outcome), ("clientKind", clientKind),
+                ("inboundTokenID", inboundTokenID), ("kind", kind), ("outcome", outcome), ("clientKind", clientKind),
                 ("requestKind", requestKind), ("clientVariant", clientVariant), ("agentRole", agentRole), ("agentName", agentName),
                 ("parentThreadID", parentThreadID), ("parentTurnID", parentTurnID), ("rootTurnID", rootTurnID),
                 ("requestPurpose", requestPurpose), ("requestID", requestID),
@@ -1542,7 +1545,14 @@ public enum AdminWire {
         public let streamTerminals: [DimensionRow]?
         public let projects: [DimensionRow]?
         public let sessions: [DimensionRow]?
+        public struct InboundTokenFacet: Decodable, Equatable, Sendable, Identifiable {
+            public let value: String
+            public let name: String
+            public let count: Int
+            public var id: String { value }
+        }
         public struct Facets: Decodable, Equatable, Sendable {
+            public let inboundTokens: [InboundTokenFacet]?
             public let clientKinds: [FacetRow]?
             public let requestKinds: [FacetRow]?
             public let clientVariants: [FacetRow]?

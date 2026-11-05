@@ -132,6 +132,7 @@ extension AppModel {
         draft.endpoints[location.endpoint].enabled = enabled
         draft.pruneDanglingEndpointReferences()
         try draft.validateModelGroups()
+        try draft.listener.validateInboundTokens()
         config = draft
 
         do {
@@ -598,6 +599,7 @@ extension AppModel {
         // 增删、排序或改优先级后默认组都保持同步,入口库即唯一事实来源。
         draft.syncDefaultGroupBindings()
         try draft.validateModelGroups()
+        try draft.listener.validateInboundTokens()
         draft.normalizeBuiltInFeatureRules()
         config = draft
         do {

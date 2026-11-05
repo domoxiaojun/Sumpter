@@ -62,6 +62,7 @@ fn persistence_flush_slot() -> Arc<tokio::sync::Semaphore> {
 
 #[derive(Clone)]
 pub(super) struct RealtimeClientSecretEntry {
+    pub(super) inbound_token: Option<sumpter_core::config::InboundTokenIdentity>,
     pub(super) expires_at: f64,
     pub(super) endpoint_id: Option<String>,
     pub(super) model: Option<String>,
@@ -163,6 +164,7 @@ impl Engine {
         endpoint_id: Option<&str>,
         model: Option<&str>,
         session: Option<Value>,
+        inbound_token: Option<sumpter_core::config::InboundTokenIdentity>,
     ) {
         let token = token.trim();
         if !token.starts_with("ek_") || token.len() > 512 || token.chars().any(char::is_control) {
@@ -187,6 +189,7 @@ impl Engine {
         secrets.insert(
             token.to_string(),
             RealtimeClientSecretEntry {
+                inbound_token,
                 expires_at: expiry,
                 endpoint_id: endpoint_id
                     .map(str::trim)
@@ -208,9 +211,49 @@ impl Engine {
         let now = now_unix();
         let mut secrets = self.inner.realtime_client_secrets.lock().unwrap();
         secrets.retain(|_, value| value.expires_at > now);
+        let config = self.config();
         secrets
             .get(&token)
-            .is_some_and(|entry| entry.expires_at > now)
+            .is_some_and(|entry| match &entry.inbound_token {
+                Some(identity) if identity.id == "legacy" => !config.listener.auth_token.is_empty(),
+                Some(identity) => {
+                    config.listener.auth_tokens.iter().any(|item| {
+                        item.id == identity.id && item.enabled && !item.token.is_empty()
+                    })
+                }
+                None => !config.listener.has_inbound_auth(),
+            })
+    }
+
+    pub(super) fn realtime_client_secret_inbound_token(
+        &self,
+        headers: &[(String, String)],
+    ) -> Option<sumpter_core::config::InboundTokenIdentity> {
+        if !self.realtime_client_secret_authorized(headers) {
+            return None;
+        }
+        let token = realtime_ephemeral_token(headers)?;
+        let mut identity = self
+            .inner
+            .realtime_client_secrets
+            .lock()
+            .unwrap()
+            .get(&token)?
+            .inbound_token
+            .clone()?;
+        let config = self.config();
+        identity.name = if identity.id == "legacy" {
+            config.listener.auth_token_name.clone()
+        } else {
+            config
+                .listener
+                .auth_tokens
+                .iter()
+                .find(|entry| entry.id == identity.id)?
+                .name
+                .clone()
+        };
+        Some(identity)
     }
 
     pub(super) fn realtime_client_secret_endpoint(
@@ -254,6 +297,7 @@ impl Engine {
         endpoint_id: Option<&str>,
         model: Option<&str>,
         fallback_session: Option<Value>,
+        inbound_token: Option<sumpter_core::config::InboundTokenIdentity>,
     ) {
         let Ok(value) = serde_json::from_slice::<Value>(body) else {
             return;
@@ -292,7 +336,14 @@ impl Engine {
             })
             .or(fallback_session);
         if let Some((token, expires_at)) = candidate {
-            self.register_realtime_client_secret(token, expires_at, endpoint_id, model, session);
+            self.register_realtime_client_secret(
+                token,
+                expires_at,
+                endpoint_id,
+                model,
+                session,
+                inbound_token,
+            );
         }
     }
 

@@ -266,12 +266,39 @@ public struct ModelPattern: Codable, Equatable, Hashable, Sendable, ExpressibleB
     }
 }
 
+public struct InboundTokenIdentity: Codable, Equatable, Sendable {
+    public var id: String
+    public var name: String
+}
+
+public struct InboundTokenConfig: Codable, Equatable, Sendable, Identifiable {
+    public var id: String
+    public var name: String
+    public var enabled: Bool
+    public var token: String
+
+    public init(id: String = UUID().uuidString, name: String, enabled: Bool = true, token: String = "") {
+        self.id = id; self.name = name; self.enabled = enabled; self.token = token
+    }
+
+    enum CodingKeys: String, CodingKey { case id, name, enabled, token }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        token = try c.decodeIfPresent(String.self, forKey: .token) ?? ""
+    }
+}
+
 public struct ListenerConfig: Codable, Equatable, Sendable {
     public var host: String
     public var port: Int
     public var allowedCIDRs: [String]
     /// 入站 Auth Token;空 = 不校验(仅环回可达时的默认状态)。
     public var authToken: String
+    public var authTokenName: String
+    public var authTokens: [InboundTokenConfig]
     /// 已知反向代理 IP / CIDR。只用于 `X-Forwarded-For` 链的跳过判断;事件源 IP
     /// 按 X-Real-IP、X-Forwarded-For、TCP 对端取第一个合法值,不以此为前置条件。
     /// 鉴权与 allowedCIDRs 仍看 TCP 对端。空 = 链取最左侧。
@@ -281,7 +308,7 @@ public struct ListenerConfig: Codable, Equatable, Sendable {
         case host
         case port
         case allowedCIDRs
-        case authToken
+        case authToken, authTokenName, authTokens
         case trustedProxyCIDRs
     }
 
@@ -290,12 +317,16 @@ public struct ListenerConfig: Codable, Equatable, Sendable {
         port: Int = 57_878,
         allowedCIDRs: [String] = [],
         authToken: String = "",
+        authTokenName: String = "默认 Token",
+        authTokens: [InboundTokenConfig] = [],
         trustedProxyCIDRs: [String] = []
     ) {
         self.host = host
         self.port = port
         self.allowedCIDRs = allowedCIDRs
         self.authToken = authToken
+        self.authTokenName = authTokenName
+        self.authTokens = authTokens
         self.trustedProxyCIDRs = trustedProxyCIDRs
     }
 
@@ -305,11 +336,35 @@ public struct ListenerConfig: Codable, Equatable, Sendable {
         port = try keyed.decodeIfPresent(Int.self, forKey: .port) ?? 57_878
         allowedCIDRs = try keyed.decodeIfPresent([String].self, forKey: .allowedCIDRs) ?? []
         authToken = try keyed.decodeIfPresent(String.self, forKey: .authToken) ?? ""
+        authTokenName = try keyed.decodeIfPresent(String.self, forKey: .authTokenName) ?? "默认 Token"
+        authTokens = try keyed.decodeIfPresent([InboundTokenConfig].self, forKey: .authTokens) ?? []
         trustedProxyCIDRs = try keyed.decodeIfPresent([String].self, forKey: .trustedProxyCIDRs) ?? []
     }
 
+    public func validateInboundTokens() throws {
+        func validName(_ value: String) -> Bool {
+            !value.isEmpty && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
+                && value.utf8.count <= 128 && !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+        }
+        func invalid(_ message: String) -> NSError {
+            NSError(domain: "Sumpter.InboundTokens", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+        }
+        guard validName(authTokenName) else { throw invalid("默认 Token 名称无效") }
+        guard authTokens.count <= 128 else { throw invalid("入站 Token 最多 128 个") }
+        var ids = Set<String>()
+        var secrets = Set(authToken.isEmpty ? [] : [authToken])
+        for entry in authTokens {
+            guard !entry.id.isEmpty, entry.id.utf8.count <= 128,
+                  entry.id.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 95 }),
+                  !["legacy", "unrecorded"].contains(entry.id), ids.insert(entry.id).inserted else { throw invalid("入站 Token ID 无效或重复") }
+            guard validName(entry.name) else { throw invalid("Token 名称不能为空、含控制字符或超过 128 字节") }
+            guard (16...512).contains(entry.token.utf8.count), entry.token.utf8.allSatisfy({ (33...126).contains($0) }) else { throw invalid("Token 必须为 16–512 个可见 ASCII 字符，不能包含空格") }
+            guard secrets.insert(entry.token).inserted else { throw invalid("Token 凭据不能重复") }
+        }
+    }
+
     public var hasInboundAuth: Bool {
-        !authToken.isEmpty
+        !authToken.isEmpty || !authTokens.isEmpty
     }
 }
 

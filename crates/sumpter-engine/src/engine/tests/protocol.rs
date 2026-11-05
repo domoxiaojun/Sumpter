@@ -35,6 +35,7 @@ async fn realtime_root_live_bootstrap_is_the_only_root_that_registers_a_call() {
     INBOUND_REQUEST_CONTEXT
         .scope(
             RefCell::new(InboundRequestContext {
+                inbound_token: None,
                 attribution: None,
                 source_ip: None,
                 session_source: None,

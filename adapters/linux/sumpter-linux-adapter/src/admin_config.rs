@@ -46,6 +46,8 @@ pub(crate) struct PutConfigWireBody {
 pub(crate) struct SecretUpdates {
     pub(crate) inbound_auth_token: Option<String>,
     #[serde(default)]
+    pub(crate) inbound_tokens: HashMap<String, String>,
+    #[serde(default)]
     pub(crate) endpoints: HashMap<String, EndpointSecretUpdate>,
 }
 
@@ -53,6 +55,68 @@ pub(crate) struct SecretUpdates {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct EndpointSecretUpdate {
     api_key: Option<String>,
+}
+
+#[cfg(test)]
+mod inbound_token_tests {
+    use super::*;
+    use sumpter_core::config::InboundTokenConfig;
+
+    #[test]
+    fn inbound_tokens_redact_preserve_rotate_and_validate() {
+        let mut old = AppConfig::bootstrap();
+        old.listener.auth_tokens = vec![InboundTokenConfig {
+            id: "work".into(),
+            name: "工作".into(),
+            enabled: true,
+            token: "synthetic-work-token".into(),
+        }];
+        let view = config_view(&old, "test", None);
+        assert!(!view.to_string().contains("synthetic-work-token"));
+        assert_eq!(
+            view["secretStatus"]["inboundTokens"]["work"]["last4"],
+            "oken"
+        );
+        let mut draft: AppConfig = serde_json::from_value(view["config"].clone()).unwrap();
+        draft.listener.auth_tokens[0].name = "新名称".into();
+        apply_secrets(&old, &mut draft, SecretUpdates::default()).unwrap();
+        assert_eq!(
+            draft.listener.auth_tokens[0].token,
+            old.listener.auth_tokens[0].token
+        );
+        apply_secrets(
+            &old,
+            &mut draft,
+            SecretUpdates {
+                inbound_tokens: HashMap::from([("work".into(), "synthetic-rotated-token".into())]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            draft.listener.auth_tokens[0].token,
+            "synthetic-rotated-token"
+        );
+        assert!(
+            apply_secrets(
+                &old,
+                &mut draft,
+                SecretUpdates {
+                    inbound_tokens: HashMap::from([(
+                        "missing".into(),
+                        "synthetic-invalid-token".into()
+                    )]),
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
+        draft.listener.auth_tokens[0].id = "new".into();
+        assert!(apply_secrets(&old, &mut draft, SecretUpdates::default()).is_err());
+        draft.listener.auth_tokens.clear();
+        apply_secrets(&old, &mut draft, SecretUpdates::default()).unwrap();
+        assert!(draft.listener.auth_tokens.is_empty());
+    }
 }
 
 pub(crate) async fn put_config(
@@ -113,6 +177,9 @@ pub(crate) async fn reload(
 pub(crate) fn config_view(config: &AppConfig, generation: &str, extra: Option<Value>) -> Value {
     let mut redacted = config.clone();
     redacted.listener.auth_token.clear();
+    for entry in &mut redacted.listener.auth_tokens {
+        entry.token.clear();
+    }
     for endpoint in &mut redacted.endpoints {
         endpoint.api_key.clear();
     }
@@ -134,6 +201,7 @@ pub(crate) fn config_view(config: &AppConfig, generation: &str, extra: Option<Va
         "warnings": sumpter_core::warnings::evaluate(config),
         "secretStatus": {
             "inboundAuthToken": secret_status(&config.listener.auth_token),
+            "inboundTokens": config.listener.auth_tokens.iter().map(|entry| (entry.id.clone(), secret_status(&entry.token))).collect::<serde_json::Map<String, Value>>(),
             "endpoints": endpoints,
         },
     });
@@ -183,6 +251,29 @@ pub(crate) fn apply_secrets(
         return Err(format!("secretUpdates 引用了不存在的 endpoint: {unknown}"));
     }
 
+    if updates.inbound_tokens.keys().any(|id| {
+        !draft
+            .listener
+            .auth_tokens
+            .iter()
+            .any(|entry| &entry.id == id)
+    }) {
+        return Err("secretUpdates 引用了不存在的入站 Token".into());
+    }
+    for entry in &mut draft.listener.auth_tokens {
+        entry.token = updates
+            .inbound_tokens
+            .get(&entry.id)
+            .cloned()
+            .or_else(|| {
+                old.listener
+                    .auth_tokens
+                    .iter()
+                    .find(|old| old.id == entry.id)
+                    .map(|old| old.token.clone())
+            })
+            .unwrap_or_default();
+    }
     draft.listener.auth_token = updates
         .inbound_auth_token
         .unwrap_or_else(|| old.listener.auth_token.clone());
@@ -198,6 +289,7 @@ pub(crate) fn apply_secrets(
             })
             .unwrap_or_default();
     }
+    draft.listener.validate_inbound_tokens(true)?;
     Ok(())
 }
 
@@ -227,6 +319,7 @@ pub fn validate_config(config: &AppConfig) -> Result<(), String> {
     config.validate_model_groups()?;
     let _ = listener_address(config)?;
     config.listener.validate_cidr_lists()?;
+    config.listener.validate_inbound_tokens(true)?;
     if config.retry.max_deferred_rounds < 0
         || config.retry.max_retry_duration_seconds < 0.0
         || config.retry.max_500_retries < 0

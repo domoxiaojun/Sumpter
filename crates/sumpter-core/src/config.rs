@@ -465,12 +465,42 @@ fn normalized_group(raw: Option<String>) -> Option<String> {
     }
 }
 
+/// Metadata is safe to record; the credential itself stays in config only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InboundTokenIdentity {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InboundTokenConfig {
+    pub id: String,
+    pub name: String,
+    #[serde(default = "InboundTokenConfig::default_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub token: String,
+}
+
+impl InboundTokenConfig {
+    fn default_enabled() -> bool {
+        true
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ListenerConfig {
     #[serde(rename = "allowedCIDRs", default)]
     pub allowed_cidrs: Vec<String>,
     #[serde(rename = "authToken", default)]
     pub auth_token: String,
+    #[serde(
+        rename = "authTokenName",
+        default = "ListenerConfig::default_token_name"
+    )]
+    pub auth_token_name: String,
+    #[serde(rename = "authTokens", default)]
+    pub auth_tokens: Vec<InboundTokenConfig>,
     #[serde(default = "ListenerConfig::default_host")]
     pub host: String,
     /// Swift 侧为 Int,监听时才校验 u16 范围——此处保持宽容。
@@ -485,6 +515,9 @@ pub struct ListenerConfig {
 }
 
 impl ListenerConfig {
+    fn default_token_name() -> String {
+        "默认 Token".into()
+    }
     fn default_host() -> String {
         "127.0.0.1".into()
     }
@@ -493,7 +526,110 @@ impl ListenerConfig {
     }
 
     pub fn has_inbound_auth(&self) -> bool {
-        !self.auth_token.is_empty()
+        // All tokens disabled must deny requests, never silently open access.
+        !self.auth_token.is_empty() || !self.auth_tokens.is_empty()
+    }
+
+    /// Match only configured credentials; conflicting valid credentials are rejected.
+    pub fn matched_inbound_token(
+        &self,
+        headers: &[(String, String)],
+    ) -> Option<InboundTokenIdentity> {
+        fn token_matches(headers: &[(String, String)], token: &str) -> bool {
+            if token.is_empty() {
+                return false;
+            }
+            for (name, value) in headers {
+                if (name.eq_ignore_ascii_case("x-api-key")
+                    || name.eq_ignore_ascii_case("x-goog-api-key"))
+                    && value == token
+                {
+                    return true;
+                }
+                if name.eq_ignore_ascii_case("authorization") {
+                    let value = value.trim();
+                    if let Some(prefix) = value.get(..7)
+                        && prefix.eq_ignore_ascii_case("bearer ")
+                        && value[7..].trim() == token
+                    {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+
+        let mut matched = None;
+        if token_matches(headers, &self.auth_token) {
+            matched = Some(InboundTokenIdentity {
+                id: "legacy".into(),
+                name: self.auth_token_name.clone(),
+            });
+        }
+        for entry in &self.auth_tokens {
+            if entry.enabled && token_matches(headers, &entry.token) {
+                // Conflicting valid credentials cannot produce an ambiguous identity.
+                if matched.is_some() {
+                    return None;
+                }
+                matched = Some(InboundTokenIdentity {
+                    id: entry.id.clone(),
+                    name: entry.name.clone(),
+                });
+            }
+        }
+        matched
+    }
+
+    pub fn validate_inbound_tokens(&self, require_secrets: bool) -> Result<(), String> {
+        use std::collections::HashSet;
+        let valid_name = |name: &str| {
+            !name.trim().is_empty()
+                && name == name.trim()
+                && name.len() <= 128
+                && !name.chars().any(char::is_control)
+        };
+        if !valid_name(&self.auth_token_name) {
+            return Err("默认 Token 名称不能为空、含控制字符或超过 128 字节".into());
+        }
+        if self.auth_tokens.len() > 128 {
+            return Err("入站 Token 最多 128 个".into());
+        }
+        let mut ids = HashSet::new();
+        let mut secrets = HashSet::new();
+        if !self.auth_token.is_empty() {
+            secrets.insert(self.auth_token.as_str());
+        }
+        for entry in &self.auth_tokens {
+            if entry.id.is_empty()
+                || entry.id.len() > 128
+                || !entry
+                    .id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+                || matches!(entry.id.as_str(), "legacy" | "unrecorded")
+                || !ids.insert(&entry.id)
+            {
+                return Err("入站 Token ID 无效或重复".into());
+            }
+            if !valid_name(&entry.name) {
+                return Err("Token 名称不能为空、含控制字符或超过 128 字节".into());
+            }
+            if !entry.token.is_empty() || require_secrets {
+                if !(16..=512).contains(&entry.token.len())
+                    || entry.token != entry.token.trim()
+                    || !entry.token.bytes().all(|b| b.is_ascii_graphic())
+                {
+                    return Err(
+                        "入站 Token 必须为 16–512 字节的可见 ASCII 字符，不能包含空格".into(),
+                    );
+                }
+                if !secrets.insert(entry.token.as_str()) {
+                    return Err("入站 Token 凭据不能重复".into());
+                }
+            }
+        }
+        Ok(())
     }
 
     /// 校验两组 CIDR 列表的语法;供配置加载、Admin 保存和 macOS 保存共用,
@@ -518,6 +654,8 @@ impl Default for ListenerConfig {
         Self {
             allowed_cidrs: Vec::new(),
             auth_token: String::new(),
+            auth_token_name: Self::default_token_name(),
+            auth_tokens: Vec::new(),
             host: Self::default_host(),
             port: Self::default_port(),
             trusted_proxy_cidrs: Vec::new(),

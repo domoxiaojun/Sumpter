@@ -24,6 +24,7 @@ use sumpter_core::stream_terminal::SseDialect;
 /// path never contains a query string.
 #[derive(Clone)]
 pub(super) struct InboundRequestContext {
+    pub(super) inbound_token: Option<sumpter_core::config::InboundTokenIdentity>,
     pub(super) attribution: Option<sumpter_core::client_attribution::AttributedRequest>,
     pub(super) source_ip: Option<String>,
     pub(super) session_source: Option<String>,
@@ -213,24 +214,21 @@ pub(super) fn upstream_request_id(headers: &[(String, String)]) -> Option<String
     })
 }
 
-pub(super) fn inbound_auth_ok(headers: &[(String, String)], token: &str) -> bool {
-    for (name, value) in headers {
-        if (name.eq_ignore_ascii_case("x-api-key") || name.eq_ignore_ascii_case("x-goog-api-key"))
-            && value == token
-        {
-            return true;
-        }
-        if name.eq_ignore_ascii_case("authorization") {
-            let value = value.trim();
-            if let Some(prefix) = value.get(..7)
-                && prefix.eq_ignore_ascii_case("bearer ")
-                && value[7..].trim() == token
-            {
-                return true;
-            }
-        }
-    }
-    false
+pub(super) fn matched_inbound_token(
+    headers: &[(String, String)],
+    listener: &sumpter_core::config::ListenerConfig,
+) -> Option<sumpter_core::config::InboundTokenIdentity> {
+    listener.matched_inbound_token(headers)
+}
+
+pub(super) fn inbound_auth_ok(
+    headers: &[(String, String)],
+    listener: &sumpter_core::config::ListenerConfig,
+) -> bool {
+    let identity = matched_inbound_token(headers, listener);
+    let _ = INBOUND_REQUEST_CONTEXT
+        .try_with(|context| context.borrow_mut().inbound_token = identity.clone());
+    identity.is_some()
 }
 
 pub(super) fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
@@ -322,6 +320,9 @@ pub(super) fn apply_current_request_context(event: &mut RuntimeEvent) {
         && let Some(attribution) = &context.attribution
     {
         attribution.apply(event);
+    }
+    if event.inbound_token.is_none() {
+        event.inbound_token = context.inbound_token;
     }
     event.request_method.get_or_insert(context.method);
     event.request_path.get_or_insert(context.path);

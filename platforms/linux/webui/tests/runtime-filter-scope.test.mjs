@@ -8,7 +8,7 @@ import {
 globalThis.window = { location: { search: '' } };
 const { api } = await import('../src/services/api.js');
 const advanced = {
-  clientKind: 'codex', requestKind: 'review', clientVariant: 'desktop', agentRole: 'subagent',
+  inboundTokenID: 'work', clientKind: 'codex', requestKind: 'review', clientVariant: 'desktop', agentRole: 'subagent',
   agentName: 'reviewer', parentThreadID: 'parent', parentTurnID: 'turn', rootTurnID: 'root',
 };
 

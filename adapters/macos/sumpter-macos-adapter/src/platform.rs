@@ -233,6 +233,7 @@ impl Platform {
         };
 
         let event = RuntimeEvent {
+            inbound_token: None,
             request_kind: None,
             client_attribution: None,
             request_trace: None,

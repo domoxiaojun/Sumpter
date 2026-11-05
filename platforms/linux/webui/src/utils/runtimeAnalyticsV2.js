@@ -33,7 +33,7 @@ export function runtimeRangeFilter(range, now = new Date()) {
 }
 
 const runtimeFilterFields = [
-  'kind', 'outcome', 'clientKind', 'requestKind', 'clientVariant', 'agentRole', 'agentName',
+  'inboundTokenID', 'kind', 'outcome', 'clientKind', 'requestKind', 'clientVariant', 'agentRole', 'agentName',
   'parentThreadID', 'parentTurnID', 'rootTurnID', 'requestPurpose', 'requestID', 'endpointID',
   'model', 'projectID', 'project', 'sessionID', 'failureKind', 'failurePhase', 'from', 'to',
 ];

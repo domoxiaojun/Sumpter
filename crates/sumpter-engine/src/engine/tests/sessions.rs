@@ -9,6 +9,54 @@ use crate::engine::Engine;
 use crate::engine::events::new_event_id;
 
 #[test]
+fn inbound_tokens_realtime_secrets_inherit_identity_and_stop_when_owner_disabled() {
+    use sumpter_core::config::InboundTokenConfig;
+    let mut config = AppConfig::bootstrap();
+    config.listener.auth_token.clear();
+    config.listener.auth_tokens = vec![InboundTokenConfig {
+        id: "work".into(),
+        name: "工作".into(),
+        enabled: true,
+        token: "synthetic-work-token".into(),
+    }];
+    let identity = config
+        .listener
+        .matched_inbound_token(&[("x-api-key".into(), "synthetic-work-token".into())]);
+    let engine = Engine::new(
+        config.clone(),
+        None,
+        Arc::new(crate::outbound::ReqwestTransport::new()),
+    );
+    engine.register_realtime_client_secret("ek_synthetic", None, None, None, None, identity);
+    let headers = vec![("authorization".into(), "Bearer ek_synthetic".into())];
+    assert!(engine.realtime_client_secret_authorized(&headers));
+    assert_eq!(
+        engine
+            .realtime_client_secret_inbound_token(&headers)
+            .unwrap()
+            .id,
+        "work"
+    );
+    config.listener.auth_tokens[0].name = "新名称".into();
+    let _ = engine.replace_config(config.clone());
+    assert_eq!(
+        engine
+            .realtime_client_secret_inbound_token(&headers)
+            .unwrap()
+            .name,
+        "新名称"
+    );
+    config.listener.auth_tokens[0].enabled = false;
+    let _ = engine.replace_config(config);
+    assert!(!engine.realtime_client_secret_authorized(&headers));
+    assert!(
+        engine
+            .realtime_client_secret_inbound_token(&headers)
+            .is_none()
+    );
+}
+
+#[test]
 fn resource_bindings_survive_engine_restart_and_expired_entries_are_pruned() {
     let root = std::env::temp_dir().join(format!(
         "sumpter-engine-resource-bindings-{}",

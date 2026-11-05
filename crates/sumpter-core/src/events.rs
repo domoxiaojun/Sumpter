@@ -3041,6 +3041,8 @@ impl Default for DiagnosticCaptureSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeEvent {
+    #[serde(rename = "inboundToken", default, skip_serializing_if = "is_none")]
+    pub inbound_token: Option<crate::config::InboundTokenIdentity>,
     /// Observation-only, frozen at ingestion. None denotes a historical event.
     #[serde(rename = "requestKind", default, skip_serializing_if = "is_none")]
     pub request_kind: Option<crate::client_attribution::ObservedRequestKind>,
@@ -3543,6 +3545,7 @@ mod tests {
 
     fn event(id: &str, kind: &str, ts: f64) -> RuntimeEvent {
         RuntimeEvent {
+            inbound_token: None,
             request_kind: None,
             client_attribution: None,
             request_trace: None,

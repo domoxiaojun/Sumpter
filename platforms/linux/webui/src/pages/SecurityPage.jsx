@@ -1,3 +1,4 @@
+import { InboundTokensPanel } from '../components/InboundTokensPanel.jsx';
 import { StatusBadge } from '../components/StatusBadge.jsx';
 import { Icon } from '../utils/icons.jsx';
 import { UnifiedAttributionPanel } from '../components/UnifiedAttributionPanel.jsx';
@@ -86,7 +87,7 @@ export function SecurityPage() {
       return addToast('监听端口必须为 1-65535 的整数', 'warning');
     }
 
-    if (!isLoopback(host) && !secretStatus?.inboundAuthToken?.configured) {
+    if (!isLoopback(host) && !secretStatus?.inboundAuthToken?.configured && !(config?.listener?.authTokens || []).length) {
       const ok = confirm('当前未启用入站 Token。保存后代理将对外监听，局域网/公网设备可能直接访问。确认继续？');
       if (!ok) return;
     }
@@ -119,7 +120,7 @@ export function SecurityPage() {
   });
 
   const handleClearToken = () => run('config', async () => {
-    if (!confirm('清除入站 Token 后，客户端无需认证即可访问代理监听。确认继续？')) return;
+    if (!confirm('清除默认 Token 后，使用它的客户端将无法通过认证；如果没有其他 Token，代理会关闭认证。确认继续？')) return;
     try {
       await saveConfig((latest) => latest, { inboundAuthToken: '' });
       addToast('入站 Token 已清除', 'success');
@@ -229,7 +230,7 @@ export function SecurityPage() {
           <div className="panel-toolbar">
             <div className="panel-title">
               <Icon name="shield" size={18} style={{ color: 'var(--accent-cyan)' }} />
-              <span>入站客户端 API Token</span>
+              <span>默认入站客户端 API Token</span>
             </div>
             <StatusBadge
               text={secretStatus?.inboundAuthToken?.configured ? `已启用 (尾号 ${secretStatus.inboundAuthToken.last4 || '****'})` : '未启用'}
@@ -274,6 +275,8 @@ export function SecurityPage() {
           </div>
         </div>
       </div>
+
+      <InboundTokensPanel />
 
       {/* Proxy Listener Configuration */}
       <div className="glass-panel panel-padded-stack">

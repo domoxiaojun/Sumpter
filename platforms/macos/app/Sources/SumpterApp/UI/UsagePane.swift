@@ -922,8 +922,30 @@ struct UsagePane: View {
         .fixedSize(horizontal: true, vertical: false)
     }
 
+    private var inboundTokenRows: [(id: String, name: String, count: Int)] {
+        var rows = Dictionary(uniqueKeysWithValues: (facets?.inboundTokens ?? []).map { ($0.value, (id: $0.value, name: $0.name, count: $0.count)) })
+        for entry in model.config.listener.authTokens {
+            rows[entry.id] = (entry.id, entry.name + (entry.enabled ? "" : "（已停用）"), rows[entry.id]?.count ?? 0)
+        }
+        if rows["legacy"] != nil || !model.config.listener.authToken.isEmpty {
+            rows["legacy"] = ("legacy", model.config.listener.authTokenName, rows["legacy"]?.count ?? 0)
+        }
+        let selected = model.runtimeAnalyticsInboundTokenID
+        if !selected.isEmpty && rows[selected] == nil { rows[selected] = (selected, selected, 0) }
+        return rows.values.sorted { $0.id < $1.id }
+    }
+
     @ViewBuilder
     private var analyticsFilterPickers: some View {
+        Picker("入站 Token", selection: Binding(
+            get: { model.runtimeAnalyticsInboundTokenID },
+            set: { model.setRuntimeAnalyticsFilters(inboundTokenID: $0) }
+        )) {
+            Text("全部 Token").tag("")
+            ForEach(inboundTokenRows, id: \.id) { item in
+                Text("\(item.name) · \(item.count)").tag(item.id)
+            }
+        }
         Picker("入口", selection: Binding(
             get: { model.runtimeAnalyticsEndpointID },
             set: { model.setRuntimeAnalyticsFilters(endpointID: $0) }
@@ -1021,7 +1043,7 @@ struct UsagePane: View {
 
     private var clearAnalyticsFiltersButton: some View {
         Button("清除筛选") {
-            model.setRuntimeAnalyticsFilters(requestKind: "", clientKind: "", clientVariant: "", agentRole: "", agentName: "", parentThreadID: "", parentTurnID: "", rootTurnID: "", endpointID: "", project: "", sessionID: "", model: "", requestPurpose: "", outcome: "", failureKind: "", failurePhase: "")
+            model.setRuntimeAnalyticsFilters(inboundTokenID: "", requestKind: "", clientKind: "", clientVariant: "", agentRole: "", agentName: "", parentThreadID: "", parentTurnID: "", rootTurnID: "", endpointID: "", project: "", sessionID: "", model: "", requestPurpose: "", outcome: "", failureKind: "", failurePhase: "")
         }
         .disabled(!hasActiveRuntimeFilters)
     }
@@ -2699,6 +2721,7 @@ struct UsagePane: View {
     /// from the same control surface.
     private var hasActiveRuntimeFilters: Bool {
         let globalFilters = [
+            model.runtimeAnalyticsInboundTokenID,
             model.runtimeAnalyticsRequestKind,
             model.runtimeAnalyticsClientKind,
             model.runtimeAnalyticsClientVariant, model.runtimeAnalyticsAgentRole, model.runtimeAnalyticsAgentName, model.runtimeAnalyticsParentThreadID, model.runtimeAnalyticsParentTurnID, model.runtimeAnalyticsRootTurnID,

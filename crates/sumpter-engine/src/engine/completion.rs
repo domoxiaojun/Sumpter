@@ -355,6 +355,11 @@ impl CompletionGuard {
             .map(|attempt| &attempt.endpoint)
             .or(self.attempted_endpoint.as_ref());
         let mut event = RuntimeEvent {
+            inbound_token: self
+                .meta
+                .request_context
+                .as_ref()
+                .and_then(|context| context.inbound_token.clone()),
             request_kind: None,
             client_attribution: None,
             request_trace: Some(self.trace.clone()),
@@ -494,6 +499,7 @@ impl CompletionGuard {
         event.effective_model = Some(self.meta.effective_model.clone());
         event.feature_rule_id = self.meta.feature_rule_id.clone();
         if let Some(context) = &self.meta.request_context {
+            event.inbound_token = context.inbound_token.clone();
             if let Some(attribution) = &context.attribution {
                 attribution.apply(&mut event);
             }

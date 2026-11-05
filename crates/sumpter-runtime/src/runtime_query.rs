@@ -115,6 +115,8 @@ pub type QueryResult<T> = Result<T, RuntimeQueryError>;
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeFilter {
+    #[serde(rename = "inboundTokenID", skip_serializing_if = "Option::is_none")]
+    pub inbound_token_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_kind: Option<String>,
     pub kind: Option<String>,
@@ -164,6 +166,8 @@ pub struct RuntimeFilter {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalyticsAppliedFilters {
+    #[serde(rename = "inboundTokenID", skip_serializing_if = "Option::is_none")]
+    pub inbound_token_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_kind: Option<String>,
     pub client_kind: Option<String>,
@@ -229,6 +233,7 @@ impl RuntimeFilter {
             ));
         }
         Ok(Self {
+            inbound_token_id: string(&self.inbound_token_id, "inboundTokenID")?,
             request_kind: string(&self.request_kind, "requestKind")?,
             kind: string(&self.kind, "kind")?,
             outcome: string(&self.outcome, "outcome")?,
@@ -555,6 +560,7 @@ pub struct ToolCallRow {
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalyticsFacets {
+    pub inbound_tokens: Vec<InboundTokenFacet>,
     pub client_kinds: Vec<AnalyticsFacetRow>,
     pub client_variants: Vec<AnalyticsFacetRow>,
     pub agent_roles: Vec<AnalyticsFacetRow>,
@@ -575,6 +581,14 @@ pub struct AnalyticsFacets {
     pub failure_kinds: Vec<AnalyticsFacetRow>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failure_phases: Vec<AnalyticsFacetRow>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InboundTokenFacet {
+    pub value: String,
+    pub name: String,
+    pub count: i64,
 }
 
 /// Lightweight picker snapshot. Unlike `AnalyticsSummary` this response
@@ -1307,6 +1321,8 @@ struct TrendRow {
 }
 
 struct ExportEventRow {
+    inbound_token_id: Option<String>,
+    inbound_token_name: Option<String>,
     request_kind: Option<String>,
     client_attribution_json: Option<String>,
     seq: i64,
@@ -1357,6 +1373,7 @@ struct ExportEventRow {
 /// available through `/runtime/events/{id}`.
 #[derive(Debug, sea_orm::FromQueryResult)]
 struct EventListProjection {
+    inbound_token_json: Option<String>,
     request_kind: Option<String>,
     client_attribution_json: Option<String>,
     stream_trace_json: Option<String>,
@@ -1469,6 +1486,10 @@ fn event_list_item_from_projection(row: EventListProjection) -> RuntimeEventList
         row.upstream_ttfb_ms,
     );
     RuntimeEventListItem {
+        inbound_token: row
+            .inbound_token_json
+            .as_deref()
+            .and_then(|value| serde_json::from_str(value).ok()),
         request_kind: decode_projection_enum(row.request_kind),
         client_attribution: row
             .client_attribution_json
@@ -1746,7 +1767,10 @@ impl SqlFilter {
     }
 }
 
+const INBOUND_TOKEN_ID_SQL: &str = "COALESCE(CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.inboundToken.id') END,'unrecorded')";
+
 fn append_runtime_filter(builder: &mut SqlFilter, filter: &RuntimeFilter) {
+    builder.eq_text(INBOUND_TOKEN_ID_SQL, filter.inbound_token_id.as_deref());
     builder.eq_text("kind", filter.kind.as_deref());
     builder.eq_text("outcome", filter.outcome.as_deref());
     builder.eq_text("client_kind", filter.client_kind.as_deref());
@@ -1838,7 +1862,8 @@ fn analytics_upstream_builder(filter: &RuntimeFilter, snapshot: &HistorySnapshot
     } else {
         builder.raw("kind = 'upstream'");
     }
-    let has_client_selection = filter.has_agent_filter()
+    let has_client_selection = filter.inbound_token_id.is_some()
+        || filter.has_agent_filter()
         || filter.client_kind.is_some()
         || filter.project_id.is_some()
         || filter.project_name.is_some()

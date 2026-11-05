@@ -46,7 +46,8 @@ extension AppModel {
         refreshRuntimeV2(resetSnapshot: true)
     }
 
-    func setRuntimeAnalyticsFilters(requestKind: String? = nil, clientKind: String? = nil, clientVariant: String? = nil, agentRole: String? = nil, agentName: String? = nil, parentThreadID: String? = nil, parentTurnID: String? = nil, rootTurnID: String? = nil, endpointID: String? = nil, project: String? = nil, sessionID: String? = nil, model: String? = nil, requestPurpose: String? = nil, outcome: String? = nil, failureKind: String? = nil, failurePhase: String? = nil) {
+    func setRuntimeAnalyticsFilters(inboundTokenID: String? = nil, requestKind: String? = nil, clientKind: String? = nil, clientVariant: String? = nil, agentRole: String? = nil, agentName: String? = nil, parentThreadID: String? = nil, parentTurnID: String? = nil, rootTurnID: String? = nil, endpointID: String? = nil, project: String? = nil, sessionID: String? = nil, model: String? = nil, requestPurpose: String? = nil, outcome: String? = nil, failureKind: String? = nil, failurePhase: String? = nil) {
+        if let inboundTokenID { runtimeAnalyticsInboundTokenID = inboundTokenID }
         if let clientKind { runtimeAnalyticsClientKind = clientKind }
         if let requestKind { runtimeAnalyticsRequestKind = requestKind }
         if let clientVariant { runtimeAnalyticsClientVariant = clientVariant }
@@ -400,6 +401,7 @@ extension AppModel {
         calendar: Calendar = .autoupdatingCurrent
     ) -> AdminWire.RuntimeFilter {
         var base = AdminWire.RuntimeFilter(
+            inboundTokenID: runtimeAnalyticsInboundTokenID.isEmpty ? nil : runtimeAnalyticsInboundTokenID,
             outcome: runtimeAnalyticsOutcome.isEmpty ? nil : runtimeAnalyticsOutcome,
             requestKind: runtimeAnalyticsRequestKind.isEmpty ? nil : runtimeAnalyticsRequestKind,
             clientKind: runtimeAnalyticsClientKind.isEmpty ? nil : runtimeAnalyticsClientKind,

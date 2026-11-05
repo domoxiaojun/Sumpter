@@ -146,6 +146,7 @@ public struct ConfigStore: Sendable {
         // Validate the decoded values before normalization so malformed model
         // group entries cannot be silently repaired into an accepted config.
         try rawConfig.validateModelGroups()
+        try rawConfig.listener.validateInboundTokens()
         let config = rawConfig.normalizedBuiltInFeatureRules()
         return config
     }
@@ -341,6 +342,7 @@ public struct ConfigStore: Sendable {
         var stored = config
         stored.schemaVersion = AppConfig.currentSchemaVersion
         try stored.validateModelGroups()
+        try stored.listener.validateInboundTokens()
         return try encoder.encode(stored.normalizedBuiltInFeatureRules())
     }
 

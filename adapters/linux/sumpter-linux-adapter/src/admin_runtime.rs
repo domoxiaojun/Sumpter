@@ -37,7 +37,7 @@ pub(crate) async fn status(State(state): State<AdminState>) -> Response {
             "port": config.listener.port,
             "allowedCIDRs": config.listener.allowed_cidrs,
             "trustedProxyCIDRs": config.listener.trusted_proxy_cidrs,
-            "hasAuthToken": !config.listener.auth_token.is_empty(),
+            "hasAuthToken": config.listener.has_inbound_auth(),
         },
         "providers": config.endpoints.len(),
         "endpoints": config.endpoints.len(),
@@ -124,6 +124,8 @@ pub(crate) struct RuntimeEventsQuery {
     client_kind: Option<String>,
     #[serde(rename = "requestKind", alias = "request_kind")]
     request_kind: Option<String>,
+    #[serde(rename = "inboundTokenID", alias = "inbound_token_id")]
+    inbound_token_id: Option<String>,
     #[serde(rename = "clientVariant", alias = "client_variant")]
     client_variant: Option<String>,
     #[serde(rename = "agentRole", alias = "agent_role")]
@@ -229,6 +231,7 @@ pub(crate) fn runtime_filter_from_events_query(query: &RuntimeEventsQuery) -> Ru
         outcome: query.outcome.clone(),
         client_kind: query.client_kind.clone(),
         request_kind: query.request_kind.clone(),
+        inbound_token_id: query.inbound_token_id.clone(),
         client_variant: query.client_variant.clone(),
         agent_role: query.agent_role.clone(),
         agent_name: query.agent_name.clone(),
@@ -309,6 +312,8 @@ pub(crate) struct RuntimeFilterQuery {
     client_kind: Option<String>,
     #[serde(rename = "requestKind", alias = "request_kind")]
     request_kind: Option<String>,
+    #[serde(rename = "inboundTokenID", alias = "inbound_token_id")]
+    inbound_token_id: Option<String>,
     #[serde(rename = "clientVariant", alias = "client_variant")]
     client_variant: Option<String>,
     #[serde(rename = "agentRole", alias = "agent_role")]
@@ -356,6 +361,7 @@ impl From<RuntimeFilterQuery> for RuntimeFilter {
             outcome: query.outcome,
             client_kind: query.client_kind,
             request_kind: query.request_kind,
+            inbound_token_id: query.inbound_token_id,
             client_variant: query.client_variant,
             agent_role: query.agent_role,
             agent_name: query.agent_name,
@@ -1092,6 +1098,8 @@ pub(crate) struct RuntimeAnalyticsQuery {
     client_kind: Option<String>,
     #[serde(rename = "requestKind", alias = "request_kind")]
     request_kind: Option<String>,
+    #[serde(rename = "inboundTokenID", alias = "inbound_token_id")]
+    inbound_token_id: Option<String>,
     #[serde(rename = "clientVariant", alias = "client_variant")]
     client_variant: Option<String>,
     #[serde(rename = "agentRole", alias = "agent_role")]
@@ -1145,6 +1153,7 @@ pub(crate) async fn runtime_analytics(
         );
     }
     let filter = AnalyticsFilter {
+        inbound_token_id: analytics_filter_value(query.inbound_token_id),
         client_kind: analytics_filter_value(query.client_kind),
         request_kind: analytics_filter_value(query.request_kind),
         client_variant: analytics_filter_value(query.client_variant),

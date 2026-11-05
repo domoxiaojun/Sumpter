@@ -21,7 +21,7 @@ pub fn evaluate(config: &AppConfig) -> Vec<String> {
     }
 
     if !is_local_host(&config.listener.host)
-        && config.listener.auth_token.trim().is_empty()
+        && !config.listener.has_inbound_auth()
         && config.listener.allowed_cidrs.is_empty()
     {
         risks.push(format!(

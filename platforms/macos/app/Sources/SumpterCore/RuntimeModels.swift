@@ -664,6 +664,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
     public var requestKind: String? = nil
     public var clientAttribution: ClientAttribution? = nil
     public var requestTrace: RequestTrace? = nil
+    public var inboundToken: InboundTokenIdentity? = nil
     public var clientVariant: String? = nil
     public var agentRole: String? = nil
     public var agentName: String? = nil
@@ -761,7 +762,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case requestKind, clientAttribution
-        case clientVariant, agentRole, agentName, cacheRead, usageSummary, sessionSource, hookEvent, detailsOmitted, requestTrace
+        case inboundToken, clientVariant, agentRole, agentName, cacheRead, usageSummary, sessionSource, hookEvent, detailsOmitted, requestTrace
         case parentThreadID = "parentThreadId"
         case parentTurnID = "parentTurnId"
         case rootTurnID = "rootTurnId"
@@ -790,6 +791,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         requestKind = try c.decodeIfPresent(String.self, forKey: .requestKind)
         clientAttribution = try c.decodeIfPresent(ClientAttribution.self, forKey: .clientAttribution)
+        inboundToken = try c.decodeIfPresent(InboundTokenIdentity.self, forKey: .inboundToken)
         clientVariant = try c.decodeIfPresent(String.self, forKey: .clientVariant)
         requestTrace = try c.decodeIfPresent(RequestTrace.self, forKey: .requestTrace)
         agentRole = try c.decodeIfPresent(String.self, forKey: .agentRole)
@@ -859,6 +861,7 @@ public struct RuntimeEvent: Codable, Equatable, Sendable, Identifiable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encodeIfPresent(requestKind, forKey: .requestKind)
         try c.encodeIfPresent(clientAttribution, forKey: .clientAttribution)
+        try c.encodeIfPresent(inboundToken, forKey: .inboundToken)
         try c.encodeIfPresent(clientVariant, forKey: .clientVariant)
         try c.encodeIfPresent(agentRole, forKey: .agentRole)
         try c.encodeIfPresent(agentName, forKey: .agentName)
