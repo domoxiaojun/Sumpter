@@ -387,6 +387,7 @@ private struct RuntimeEventStatusPill: View {
         .foregroundStyle(color)
         .padding(.horizontal, 7)
         .padding(.vertical, 3)
+        .fixedSize(horizontal: true, vertical: false)
         .modifier(RuntimeEventStatusPillSurface(color: color, live: live))
     }
 }
@@ -423,6 +424,7 @@ private struct RuntimeEventStatusSummary: View {
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
                 .help(RuntimeEventDisplay.statusDetail(event))
             if includeUsage && event.kind != "notify" {
                 RuntimeEventUsageSummary(event: event)
@@ -477,22 +479,17 @@ private struct RuntimeEventColumnWidths {
     let usage: CGFloat
     let message: CGFloat
 
-    static func resolve(availableWidth: CGFloat) -> RuntimeEventColumnWidths {
-        let minimums: [CGFloat] = [180, 154, 88, 132, 190, 180]
-        let ideals: [CGFloat] = [230, 190, 90, 140, 230, 250]
-        let minimumTotal = minimums.reduce(0, +)
-        let idealTotal = ideals.reduce(0, +)
-        let available = max(1, availableWidth)
+    // 包含各列的左右内边距；低于可读下限时由容器切换为紧凑卡片。
+    private static let minimums: [CGFloat] = [200, 166, 132, 172, 224, 150]
+    static let minimumTableWidth = minimums.reduce(0, +) + 16
 
-        let widths: [CGFloat]
-        if available < minimumTotal {
-            let scale = available / minimumTotal
-            widths = minimums.map { $0 * scale }
-        } else {
-            let remainder = available - minimumTotal
-            widths = zip(minimums, ideals).map { minimum, ideal in
-                minimum + remainder * ideal / idealTotal
-            }
+    static func resolve(availableWidth: CGFloat) -> RuntimeEventColumnWidths {
+        let minimumTotal = minimums.reduce(0, +)
+        // 结果列保持完整的三行，额外空间优先给名称、耗时和 Token。
+        let weights: [CGFloat] = [0.28, 0.20, 0, 0.20, 0.24, 0.08]
+        let remainder = max(0, availableWidth - minimumTotal)
+        let widths = zip(minimums, weights).map { minimum, weight in
+            minimum + remainder * weight
         }
         return RuntimeEventColumnWidths(
             request: widths[0],
@@ -653,7 +650,7 @@ struct RecentEventsPanel: View {
                         liveCount: visibleLiveEvents.count
                     )
                 }
-                .frame(minWidth: 940)
+                .frame(minWidth: RuntimeEventColumnWidths.minimumTableWidth)
                 .frame(height: 28)
                 compactLiveHeading
             }
@@ -663,7 +660,7 @@ struct RecentEventsPanel: View {
                     selectedEventID = event.id
                 } label: {
                     ViewThatFits(in: .horizontal) {
-                        liveEventRow(event).frame(minWidth: 940)
+                        liveEventRow(event).frame(minWidth: RuntimeEventColumnWidths.minimumTableWidth)
                         compactEventRow(event)
                     }
                 }
@@ -993,6 +990,7 @@ struct RecentEventsPanel: View {
             HStack(alignment: .center, spacing: 6) {
                 Text(RuntimeEventDisplay.time(event.timestamp, includeDate: showEventDate))
                     .font(.subheadline.monospacedDigit().weight(.semibold))
+                    .fixedSize(horizontal: true, vertical: false)
                 if let project = RuntimeEventPresentation.projectAttribution(
                     eventKind: event.kind, metadata: event.codexMetadata, declared: event.clientDeclared,
                     projectedName: event.projectName, projectedSource: event.projectSource, projectedLocalUser: event.localUser
@@ -1079,19 +1077,7 @@ struct RecentEventsPanel: View {
             if event.kind == "notify" {
                 Text("通知事件").font(.subheadline)
             } else {
-                HStack(alignment: .center, spacing: 6) {
-                    RuntimeEventStatusPill(
-                        text: event.isInFlight ? "进行中" : RuntimeEventDisplay.outcome(event),
-                        color: RuntimeEventDisplay.statusColor(event),
-                        live: event.isInFlight,
-                        compact: true
-                    )
-                    Text(event.effectiveHTTPStatusCode == 0 ? "HTTP —" : RuntimeEventDisplay.httpStatus(event))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .help(RuntimeEventDisplay.statusDetail(event))
-                }
+                RuntimeEventStatusSummary(event: event, compact: true, includeUsage: false)
                 Text(RuntimeEventPresentation.transportDisplay(event.transport))
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(.secondary)
@@ -1110,10 +1096,12 @@ struct RecentEventsPanel: View {
                 Text("—").foregroundStyle(.secondary)
             } else {
                 VStack(alignment: .leading, spacing: 5) {
-                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    SumpterWrappingLayout(horizontalSpacing: 6, verticalSpacing: 3) {
                         RuntimeEventDurationText(event: event)
                             .font(.caption.monospacedDigit().weight(.medium))
                             .foregroundStyle(RuntimeEventDisplay.durationColor(event))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                         if let speed = event.outputTokensPerSecond, speed > 0 {
                             Text(String(format: "%.1f tok/s", speed))
                                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
@@ -1121,6 +1109,7 @@ struct RecentEventsPanel: View {
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 1)
                                 .background(palette.info.opacity(0.12), in: Capsule())
+                                .fixedSize(horizontal: true, vertical: false)
                         }
                     }
                     if !event.isInFlight && total > 0 {
@@ -1273,13 +1262,14 @@ struct RecentEventsPanel: View {
         let clientModel = RuntimeEventDisplay.displayedModelName(event.clientModel)
         let isMapped = clientModel != nil && logical != "—" && clientModel != logical
         return VStack(alignment: .leading, spacing: 5) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            SumpterWrappingLayout(horizontalSpacing: 12, verticalSpacing: 6) {
                 Text(RuntimeEventDisplay.time(event.timestamp, includeDate: showEventDate))
                     .font(.subheadline.monospacedDigit())
                 RuntimeEventStatusSummary(event: event, compact: true, includeUsage: false)
-                Spacer(minLength: 4)
                 RuntimeEventDurationText(event: event)
                     .font(.caption.monospacedDigit())
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                 if let speed = event.outputTokensPerSecond, speed > 0 {
                     Text(String(format: "%.1f tok/s", speed))
                         .font(.system(size: 10, weight: .semibold, design: .monospaced))
@@ -1287,6 +1277,7 @@ struct RecentEventsPanel: View {
                         .padding(.horizontal, 5)
                         .padding(.vertical, 1)
                         .background(palette.info.opacity(0.12), in: Capsule())
+                        .fixedSize(horizontal: true, vertical: false)
                 }
             }
             SumpterWrappingLayout(horizontalSpacing: 6, verticalSpacing: 4) {
@@ -1404,7 +1395,7 @@ struct RecentEventsPanel: View {
                 }
             }
         }
-        .frame(minWidth: 940)
+        .frame(minWidth: RuntimeEventColumnWidths.minimumTableWidth)
         .frame(maxWidth: .infinity)
         .frame(height: eventTableHeight)
         .background(palette.inset)

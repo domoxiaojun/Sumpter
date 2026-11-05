@@ -2,6 +2,57 @@ import AppKit
 import SumpterCore
 import SwiftUI
 
+/// 数字列按本页实际显示文本测量，预留表头排序箭头和单元格内边距。
+/// 名称列接收剩余空间；数据确实超宽时交给原生 Table 横向滚动。
+private enum StatisticsTableLayout {
+    static let bodySize = NSFont.systemFontSize
+    static let detailSize = NSFont.smallSystemFontSize
+
+    static func valueWidth(
+        _ title: String,
+        values: [String],
+        secondary: [String] = [],
+        sortable: Bool = true,
+        smallText: Bool = false
+    ) -> CGFloat {
+        let numberFont = NSFont.monospacedDigitSystemFont(ofSize: smallText ? detailSize : bodySize, weight: .regular)
+        let captionFont = NSFont.monospacedDigitSystemFont(ofSize: detailSize, weight: .regular)
+        let header = width(title, font: NSFont.systemFont(ofSize: bodySize)) + (sortable ? 20 : 0)
+        let primary = values.map { width($0, font: numberFont) }.max() ?? 0
+        let detail = secondary.map { width($0, font: captionFont) }.max() ?? 0
+        return ceil(max(header, max(primary, detail)) + 24)
+    }
+
+    static func nameWidth(_ values: [String], accessories: CGFloat = 0) -> CGFloat {
+        let font = NSFont.systemFont(ofSize: bodySize)
+        let content = values.map { width($0, font: font) }.max() ?? 0
+        return min(380, max(200 + accessories, ceil(content + accessories + 24)))
+    }
+
+    static func timestampWidth(_ title: String, sortable: Bool = true) -> CGFloat {
+        valueWidth(title, values: ["2000-00-00", "00:00:00"], sortable: sortable, smallText: true)
+    }
+
+    private static func width(_ text: String, font: NSFont) -> CGFloat {
+        (text as NSString).size(withAttributes: [.font: font]).width
+    }
+}
+
+private struct StatisticsTimestamp: View {
+    let referenceTime: TimeInterval
+
+    var body: some View {
+        let timestamp = RuntimeEventDisplay.dateTime(Date(timeIntervalSinceReferenceDate: referenceTime))
+        VStack(alignment: .leading, spacing: 2) {
+            Text(String(timestamp.prefix(10)))
+            Text(String(timestamp.suffix(8))).foregroundStyle(.secondary)
+        }
+        .font(.system(size: StatisticsTableLayout.detailSize).monospacedDigit())
+        .lineLimit(1)
+        .help(timestamp)
+    }
+}
+
 private extension AdminWire.RuntimeDimensionRow {
     var costValueForSorting: Int { cost?.estimatedCostMicros ?? -1 }
     /// The success-rate denominator follows the visible dashboard contract:
@@ -1351,50 +1402,78 @@ struct UsagePane: View {
     }
 
     private func runtimeOverviewUsageTable(_ page: AdminWire.RuntimeDimensionPage, kind: String, sortOrder: Binding<[KeyPathComparator<AdminWire.RuntimeDimensionRow>]>) -> some View {
+        let rows = page.rows
+        let requestsWidth = StatisticsTableLayout.valueWidth("请求", values: rows.map { tokenNumber($0.requests) })
+        let rateWidth = StatisticsTableLayout.valueWidth("成功率", values: rows.map { rateText($0.successRateForSorting >= 0 ? $0.successRateForSorting : nil) })
+        let failuresWidth = StatisticsTableLayout.valueWidth("失败", values: rows.map { tokenNumber($0.failures) })
+        let inputWidth = StatisticsTableLayout.valueWidth("输入 Token", values: rows.map { dimensionTokenText($0.inputTokens, related: $0.requests) })
+        let outputWidth = StatisticsTableLayout.valueWidth("输出 Token", values: rows.map { dimensionTokenText($0.outputTokens, related: $0.requests) })
+        let speedWidth = StatisticsTableLayout.valueWidth("输出速度", values: rows.map { RuntimeEventPresentation.outputSpeedDisplay($0.outputTokensPerSecond) })
+        let cacheWidth = StatisticsTableLayout.valueWidth("缓存读取", values: rows.map { dimensionTokenText($0.cacheReadInputTokens, related: $0.requests) }, secondary: rows.map { "Token 读占比 " + rateText(dimensionCacheTokenRate($0)) })
+        let durationWidth = StatisticsTableLayout.valueWidth("平均耗时", values: rows.map { $0.averageDurationMS.map { RuntimeEventPresentation.durationDisplay(Int($0.rounded())) } ?? "—" })
         return Table(page.rows, selection: runtimeOverviewTableSelection(page: page, kind: kind), sortOrder: sortOrder) {
-            TableColumn(runtimeDimensionLabel(kind), value: \.name) { row in runtimeOverviewDimensionName(row, kind: kind) }.width(min: 180, ideal: 240)
+            TableColumn(runtimeDimensionLabel(kind), value: \.name) { row in runtimeOverviewDimensionName(row, kind: kind) }
+                .width(min: runtimeDimensionNameMinimum(kind), ideal: runtimeDimensionNameWidth(rows, kind: kind))
             TableColumn("请求", value: \.requests) { row in
                 Text(tokenNumber(row.requests)).monospacedDigit()
-            }.width(min: 84, ideal: 98)
-            TableColumn("成功率", value: \.successRateForSorting) { row in Text(rateText(row.successRateForSorting >= 0 ? row.successRateForSorting : nil)).monospacedDigit() }.width(min: 92, ideal: 106)
-            TableColumn("失败", value: \.failures) { row in Text(tokenNumber(row.failures)).monospacedDigit() }.width(min: 76, ideal: 88)
+            }.width(requestsWidth)
+            TableColumn("成功率", value: \.successRateForSorting) { row in Text(rateText(row.successRateForSorting >= 0 ? row.successRateForSorting : nil)).monospacedDigit() }.width(rateWidth)
+            TableColumn("失败", value: \.failures) { row in Text(tokenNumber(row.failures)).monospacedDigit() }.width(failuresWidth)
             TableColumn("输入 Token", value: \.inputTokens) { row in
                 Text(dimensionTokenText(row.inputTokens, related: row.requests)).monospacedDigit()
-            }.width(min: 112, ideal: 130)
-            TableColumn("输出 Token", value: \.outputTokens) { row in Text(dimensionTokenText(row.outputTokens, related: row.requests)).monospacedDigit() }.width(min: 108, ideal: 126)
-            TableColumn("输出速度", value: \.outputSpeedForSorting) { row in Text(RuntimeEventPresentation.outputSpeedDisplay(row.outputTokensPerSecond)).monospacedDigit() }.width(min: 108, ideal: 126)
+            }.width(inputWidth)
+            TableColumn("输出 Token", value: \.outputTokens) { row in Text(dimensionTokenText(row.outputTokens, related: row.requests)).monospacedDigit() }.width(outputWidth)
+            TableColumn("输出速度", value: \.outputSpeedForSorting) { row in Text(RuntimeEventPresentation.outputSpeedDisplay(row.outputTokensPerSecond)).monospacedDigit() }.width(speedWidth)
             TableColumn("缓存读取", value: \.cacheReadInputTokens) { row in
                 VStack(alignment: .leading, spacing: 2) {
                     Text(dimensionTokenText(row.cacheReadInputTokens, related: row.requests)).monospacedDigit()
-                    Text("Token 读占比 " + rateText(dimensionCacheTokenRate(row))).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                    Text("Token 读占比 " + rateText(dimensionCacheTokenRate(row))).font(.system(size: StatisticsTableLayout.detailSize).monospacedDigit()).foregroundStyle(.secondary)
                 }
-            }.width(min: 114, ideal: 136)
-            TableColumn("平均耗时", value: \.averageDurationForSorting) { row in Text(row.averageDurationMS.map { RuntimeEventPresentation.durationDisplay(Int($0.rounded())) } ?? "—").monospacedDigit() }.width(min: 108, ideal: 126)
-            TableColumn("最近活动", value: \.lastSeen) { row in Text(RuntimeEventDisplay.dateTime(Date(timeIntervalSinceReferenceDate: row.lastSeen))).font(.caption.monospacedDigit()) }.width(min: 150, ideal: 174)
+            }.width(cacheWidth)
+            TableColumn("平均耗时", value: \.averageDurationForSorting) { row in Text(row.averageDurationMS.map { RuntimeEventPresentation.durationDisplay(Int($0.rounded())) } ?? "—").monospacedDigit() }.width(durationWidth)
+            TableColumn("最近活动", value: \.lastSeen) { row in StatisticsTimestamp(referenceTime: row.lastSeen) }.width(StatisticsTableLayout.timestampWidth("最近活动"))
         }
+        .font(.system(size: StatisticsTableLayout.bodySize))
+        .lineLimit(1)
         .onChange(of: sortOrder.wrappedValue) { _, order in applyRuntimeOverviewSort(order, kind: kind) }
         .sumpterTableSurface()
         .frame(maxWidth: .infinity)
-        .frame(height: min(280, max(96, CGFloat(page.rows.count) * 31 + 38)))
+        .frame(height: min(280, max(96, CGFloat(page.rows.count) * 34 + 38)))
     }
 
     private func runtimeOverviewCostTable(_ page: AdminWire.RuntimeDimensionPage, kind: String, sortOrder: Binding<[KeyPathComparator<AdminWire.RuntimeDimensionRow>]>) -> some View {
+        let rows = page.rows
+        let costWidth = StatisticsTableLayout.valueWidth("成本", values: rows.map { costText($0.cost?.estimatedCostMicros ?? 0, currency: $0.cost?.currency) }, sortable: false)
+        let requestsWidth = StatisticsTableLayout.valueWidth("请求", values: rows.map { tokenNumber($0.requests) })
+        let unpricedWidth = StatisticsTableLayout.valueWidth("暂无法计价", values: rows.map { tokenNumber(($0.cost?.unpricedRequests ?? 0) + ($0.cost?.unknownAccountingRequests ?? 0)) }, sortable: false)
         return Table(page.rows, selection: runtimeOverviewTableSelection(page: page, kind: kind), sortOrder: sortOrder) {
-            TableColumn(runtimeDimensionLabel(kind), value: \.name) { row in runtimeOverviewDimensionName(row, kind: kind) }.width(min: 180, ideal: 240)
+            TableColumn(runtimeDimensionLabel(kind), value: \.name) { row in runtimeOverviewDimensionName(row, kind: kind) }
+                .width(min: runtimeDimensionNameMinimum(kind), ideal: runtimeDimensionNameWidth(rows, kind: kind))
             // Cost is calculated after the server applies its supported
             // aggregate ordering; keep it read-only here instead of sorting
             // only the visible page on the client.
-            TableColumn("成本") { row in Text(costText(row.cost?.estimatedCostMicros ?? 0, currency: row.cost?.currency)).monospacedDigit() }.width(min: 110, ideal: 130)
+            TableColumn("成本") { row in Text(costText(row.cost?.estimatedCostMicros ?? 0, currency: row.cost?.currency)).monospacedDigit() }.width(costWidth)
             TableColumn("请求", value: \.requests) { row in
                 Text(tokenNumber(row.requests)).monospacedDigit()
-            }.width(min: 84, ideal: 98)
-            TableColumn("暂无法计价") { row in Text(tokenNumber((row.cost?.unpricedRequests ?? 0) + (row.cost?.unknownAccountingRequests ?? 0))).monospacedDigit() }.width(min: 110, ideal: 126)
-            TableColumn("最近活动", value: \.lastSeen) { row in Text(RuntimeEventDisplay.dateTime(Date(timeIntervalSinceReferenceDate: row.lastSeen))).font(.caption.monospacedDigit()) }.width(min: 150, ideal: 174)
+            }.width(requestsWidth)
+            TableColumn("暂无法计价") { row in Text(tokenNumber((row.cost?.unpricedRequests ?? 0) + (row.cost?.unknownAccountingRequests ?? 0))).monospacedDigit() }.width(unpricedWidth)
+            TableColumn("最近活动", value: \.lastSeen) { row in StatisticsTimestamp(referenceTime: row.lastSeen) }.width(StatisticsTableLayout.timestampWidth("最近活动"))
         }
+        .font(.system(size: StatisticsTableLayout.bodySize))
+        .lineLimit(1)
         .onChange(of: sortOrder.wrappedValue) { _, order in applyRuntimeOverviewSort(order, kind: kind) }
         .sumpterTableSurface()
         .frame(maxWidth: .infinity)
-        .frame(height: min(240, max(96, CGFloat(page.rows.count) * 31 + 38)))
+        .frame(height: min(240, max(96, CGFloat(page.rows.count) * 34 + 38)))
+    }
+
+    private func runtimeDimensionNameMinimum(_ kind: String) -> CGFloat {
+        kind == "session" ? 280 : kind == "project" ? 250 : 200
+    }
+
+    private func runtimeDimensionNameWidth(_ rows: [AdminWire.RuntimeDimensionRow], kind: String) -> CGFloat {
+        let accessories = runtimeDimensionNameMinimum(kind) - 200
+        return StatisticsTableLayout.nameWidth(rows.map { runtimeDimensionDisplayName($0.name, kind: kind) }, accessories: accessories)
     }
 
     private func runtimeOverviewDimensionHeading(kind: String, title: String, page: AdminWire.RuntimeDimensionPage?) -> some View {
@@ -1514,8 +1593,9 @@ struct UsagePane: View {
             dimensionSourceDisplayName(row.source, kind: kind)
         }
         let content = VStack(alignment: .leading, spacing: 2) {
-            Text(runtimeDimensionDisplayName(row.name, kind: kind)).lineLimit(1).help(row.key)
-            Text(subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            Text(runtimeDimensionDisplayName(row.name, kind: kind)).lineLimit(1)
+                .help(runtimeDimensionDisplayName(row.name, kind: kind) + "\n" + row.key)
+            Text(subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1).help(subtitle)
         }
         if kind == "project" {
             HStack(spacing: 6) {
@@ -2104,22 +2184,31 @@ struct UsagePane: View {
                     if !trend.points.isEmpty {
                         trendAreaChart(points: trend.points)
                         DisclosureGroup("查看时间桶明细（\(trend.points.count)）") {
+                            let points = trend.points
+                            let requestsWidth = StatisticsTableLayout.valueWidth("请求", values: points.map { tokenNumber($0.clientRequests) }, sortable: false)
+                            let successesWidth = StatisticsTableLayout.valueWidth("成功", values: points.map { tokenNumber($0.clientSuccesses) }, sortable: false)
+                            let failuresWidth = StatisticsTableLayout.valueWidth("失败", values: points.map { tokenNumber($0.clientFailures) }, sortable: false)
+                            let tokensWidth = StatisticsTableLayout.valueWidth("Token", values: points.map { tokenNumber($0.tokens.processedTotalTokens) }, sortable: false)
+                            let ttfbWidth = StatisticsTableLayout.valueWidth("平均首字节", values: points.map { latencyAverage($0.ttfbMS) }, sortable: false)
+                            let durationWidth = StatisticsTableLayout.valueWidth("平均完成耗时", values: points.map { latencyAverage($0.durationMS) }, sortable: false)
+                            let costWidth = StatisticsTableLayout.valueWidth("成本", values: points.map { costText($0.cost.estimatedCostMicros, currency: $0.cost.currency) }, sortable: false)
                             Table(trend.points) {
                                 TableColumn("时间") { point in
-                                    Text(RuntimeEventDisplay.dateTime(Date(timeIntervalSinceReferenceDate: point.bucketStart)))
-                                        .font(.caption.monospacedDigit())
-                                }.width(min: 150, ideal: 170)
-                                TableColumn("请求") { point in Text(tokenNumber(point.clientRequests)).monospacedDigit() }.width(min: 80, ideal: 90)
-                                TableColumn("成功") { point in Text(tokenNumber(point.clientSuccesses)).monospacedDigit() }.width(min: 80, ideal: 90)
-                                TableColumn("失败") { point in Text(tokenNumber(point.clientFailures)).monospacedDigit() }.width(min: 80, ideal: 90)
-                                TableColumn("Token") { point in Text(tokenNumber(point.tokens.processedTotalTokens)).monospacedDigit() }.width(min: 100, ideal: 120)
-                                TableColumn("平均首字节") { point in Text(latencyAverage(point.ttfbMS)).monospacedDigit() }.width(min: 108, ideal: 122)
-                                TableColumn("平均完成耗时") { point in Text(latencyAverage(point.durationMS)).monospacedDigit() }.width(min: 108, ideal: 122)
-                                TableColumn("成本") { point in Text(costText(point.cost.estimatedCostMicros, currency: point.cost.currency)).monospacedDigit() }.width(min: 110, ideal: 130)
+                                    StatisticsTimestamp(referenceTime: point.bucketStart)
+                                }.width(min: StatisticsTableLayout.timestampWidth("时间", sortable: false))
+                                TableColumn("请求") { point in Text(tokenNumber(point.clientRequests)).monospacedDigit() }.width(requestsWidth)
+                                TableColumn("成功") { point in Text(tokenNumber(point.clientSuccesses)).monospacedDigit() }.width(successesWidth)
+                                TableColumn("失败") { point in Text(tokenNumber(point.clientFailures)).monospacedDigit() }.width(failuresWidth)
+                                TableColumn("Token") { point in Text(tokenNumber(point.tokens.processedTotalTokens)).monospacedDigit() }.width(tokensWidth)
+                                TableColumn("平均首字节") { point in Text(latencyAverage(point.ttfbMS)).monospacedDigit() }.width(ttfbWidth)
+                                TableColumn("平均完成耗时") { point in Text(latencyAverage(point.durationMS)).monospacedDigit() }.width(durationWidth)
+                                TableColumn("成本") { point in Text(costText(point.cost.estimatedCostMicros, currency: point.cost.currency)).monospacedDigit() }.width(costWidth)
                             }
+                            .font(.system(size: StatisticsTableLayout.bodySize))
+                            .lineLimit(1)
                             .sumpterTableSurface()
                             .frame(maxWidth: .infinity)
-                            .frame(height: min(260, max(90, CGFloat(trend.points.count) * 26 + 34)))
+                            .frame(height: min(260, max(96, CGFloat(trend.points.count) * 34 + 38)))
                             .padding(.top, 8)
                         }
                         .font(.callout.weight(.medium))
@@ -2398,26 +2487,31 @@ struct UsagePane: View {
                     if page.groups.isEmpty {
                         EmptyStateView(title: "快照内没有结构化错误", systemImage: "checkmark.circle")
                     } else {
+                        let groups = page.groups
+                        let occurrencesWidth = StatisticsTableLayout.valueWidth("次数", values: groups.map { tokenNumber($0.occurrences) }, sortable: false)
+                        let requestsWidth = StatisticsTableLayout.valueWidth("请求", values: groups.map { tokenNumber($0.affectedRequests) }, sortable: false)
+                        let sessionsWidth = StatisticsTableLayout.valueWidth("会话", values: groups.map { tokenNumber($0.affectedSessions) }, sortable: false)
                         Table(page.groups) {
                             TableColumn("失败") { group in
-                                Text(errorFailureTitle(group)).lineLimit(2).help(group.id)
+                                Text(errorFailureTitle(group)).lineLimit(2).help(errorFailureTitle(group) + "\n" + group.id)
                             }.width(min: 170, ideal: 220)
                             TableColumn("入口 / 模型") { group in
-                                Text(errorRouteTitle(group)).lineLimit(2)
+                                Text(errorRouteTitle(group)).lineLimit(2).help(errorRouteTitle(group))
                             }.width(min: 180, ideal: 240)
-                            TableColumn("次数") { group in Text(tokenNumber(group.occurrences)).monospacedDigit() }.width(min: 72, ideal: 82)
-                            TableColumn("请求") { group in Text(tokenNumber(group.affectedRequests)).monospacedDigit() }.width(min: 72, ideal: 82)
-                            TableColumn("会话") { group in Text(tokenNumber(group.affectedSessions)).monospacedDigit() }.width(min: 72, ideal: 82)
+                            TableColumn("次数") { group in Text(tokenNumber(group.occurrences)).monospacedDigit().lineLimit(1) }.width(occurrencesWidth)
+                            TableColumn("请求") { group in Text(tokenNumber(group.affectedRequests)).monospacedDigit().lineLimit(1) }.width(requestsWidth)
+                            TableColumn("会话") { group in Text(tokenNumber(group.affectedSessions)).monospacedDigit().lineLimit(1) }.width(sessionsWidth)
                             TableColumn("样本") { group in
                                 errorSampleCell(group)
                             }.width(min: 150, ideal: 210)
                             TableColumn("最近") { group in
-                                Text(RuntimeEventDisplay.dateTime(Date(timeIntervalSinceReferenceDate: group.lastSeen))).font(.caption.monospacedDigit())
-                            }.width(min: 150, ideal: 170)
+                                StatisticsTimestamp(referenceTime: group.lastSeen)
+                            }.width(StatisticsTableLayout.timestampWidth("最近", sortable: false))
                         }
+                        .font(.system(size: StatisticsTableLayout.bodySize))
                         .sumpterTableSurface()
                         .frame(maxWidth: .infinity)
-                        .frame(height: min(240, max(90, CGFloat(page.groups.count) * 28 + 34)))
+                        .frame(height: min(240, max(96, CGFloat(page.groups.count) * 34 + 38)))
                     }
                     if let selectedID = selectedErrorSampleEventID,
                        let selectedEvent = model.runtimeEventDetail?.event ?? v2RequestChainEvents?.first(where: { $0.id == selectedID }) ?? historyEvents.first(where: { $0.id == selectedID }) {
@@ -3069,26 +3163,32 @@ struct UsagePane: View {
         if rows.isEmpty {
             EmptyStateView(title: emptyTitle, systemImage: "waveform.path.ecg")
         } else {
+            let attemptsWidth = StatisticsTableLayout.valueWidth("事件", values: rows.map { String($0.attempts) })
+            let successesWidth = StatisticsTableLayout.valueWidth("成功", values: rows.map { String($0.successes) })
+            let failuresWidth = StatisticsTableLayout.valueWidth("失败", values: rows.map { String($0.failures) })
+            let durationWidth = StatisticsTableLayout.valueWidth("平均耗时", values: rows.map { RuntimeEventPresentation.durationDisplay($0.averageMS) })
+            let failoversWidth = StatisticsTableLayout.valueWidth("FO", values: rows.map { String($0.failovers) })
             Table(rows.sorted(using: sort.wrappedValue), sortOrder: sort) {
                 TableColumn("维度", value: \.name) { row in
                     Text(row.name).lineLimit(2).help(row.name)
-                }
+                }.width(min: 180, ideal: StatisticsTableLayout.nameWidth(rows.map(\.name)))
                 TableColumn("事件", value: \.attempts) { row in
-                    Text("\(row.attempts)").monospacedDigit()
-                }
+                    Text("\(row.attempts)").monospacedDigit().lineLimit(1)
+                }.width(attemptsWidth)
                 TableColumn("成功", value: \.successes) { row in
-                    Text("\(row.successes)").monospacedDigit()
-                }
+                    Text("\(row.successes)").monospacedDigit().lineLimit(1)
+                }.width(successesWidth)
                 TableColumn("失败", value: \.failures) { row in
-                    Text("\(row.failures)").monospacedDigit()
-                }
+                    Text("\(row.failures)").monospacedDigit().lineLimit(1)
+                }.width(failuresWidth)
                 TableColumn("平均耗时", value: \.averageMS) { row in
-                    Text(RuntimeEventPresentation.durationDisplay(row.averageMS)).monospacedDigit()
-                }
+                    Text(RuntimeEventPresentation.durationDisplay(row.averageMS)).monospacedDigit().lineLimit(1)
+                }.width(durationWidth)
                 TableColumn("FO", value: \.failovers) { row in
-                    Text("\(row.failovers)").monospacedDigit()
-                }
+                    Text("\(row.failovers)").monospacedDigit().lineLimit(1)
+                }.width(failoversWidth)
             }
+            .font(.system(size: StatisticsTableLayout.bodySize))
             .sumpterTableSurface()
             .frame(height: adaptiveTableHeight(rows: rows.count, max: 240))
         }
