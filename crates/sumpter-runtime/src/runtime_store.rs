@@ -189,6 +189,7 @@ struct EventProjection {
     ttfb_ms: Option<i64>,
     upstream_duration_ms: Option<i64>,
     upstream_ttfb_ms: Option<i64>,
+    output_span_ms: Option<i64>,
     failover: i64,
     stream_terminal: Option<String>,
     codex_metadata_present: i64,
@@ -304,6 +305,10 @@ impl EventProjection {
             ttfb_ms: event.ttfb_ms,
             upstream_duration_ms: event.upstream_duration_ms,
             upstream_ttfb_ms: event.upstream_ttfb_ms,
+            output_span_ms: event
+                .stream_trace
+                .as_ref()
+                .and_then(|trace| trace.output_span_ms),
             failover: i64::from(event.failover),
             stream_terminal: event
                 .stream_trace

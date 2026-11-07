@@ -103,7 +103,7 @@ pub fn trends_on(connection: &mut Connection, request: &TrendRequest) -> QueryRe
                 effective_model,usage_present,input_tokens,output_tokens,\
                 cache_read_input_tokens,cache_creation_input_tokens,reasoning_tokens,\
                 uncached_input_tokens,processed_input_tokens,processed_total_tokens,\
-                token_accounting_semantics,token_accounting_quality \
+                token_accounting_semantics,token_accounting_quality,output_span_ms \
          FROM runtime_events{} ORDER BY timestamp ASC,seq ASC",
         builder.where_sql()
     );
@@ -127,8 +127,7 @@ pub fn trends_on(connection: &mut Connection, request: &TrendRequest) -> QueryRe
                 failover: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
                 duration_ms: row.get(4)?,
                 ttfb_ms: row.get(5)?,
-                upstream_duration_ms: row.get(6)?,
-                upstream_ttfb_ms: row.get(7)?,
+                output_span_ms: row.get(22)?,
                 request_purpose: row.get(8)?,
                 endpoint_id: row.get(9)?,
                 effective_model: row.get(10)?,

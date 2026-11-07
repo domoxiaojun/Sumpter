@@ -810,6 +810,7 @@ pub(super) fn websocket_trace(
     attempt_count: u64,
 ) -> StreamTrace {
     StreamTrace {
+        output_span_ms: None,
         tool_calls_truncated: false,
         cache_read_evidence: None,
         chunk_count: None,

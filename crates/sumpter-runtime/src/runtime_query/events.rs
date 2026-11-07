@@ -84,7 +84,7 @@ pub fn events_page_on(
                 CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.sourceIP') END AS source_ip, \
                 CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.streamTrace') END AS stream_trace_json, \
                 CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.failureDetail') END AS failure_detail, \
-                CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.message') END AS message \
+                CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.message') END AS message,output_span_ms \
          FROM runtime_events{where_sql} ORDER BY timestamp DESC, seq DESC LIMIT ? OFFSET ?"
     );
     let events = {

@@ -1102,7 +1102,7 @@ struct RecentEventsPanel: View {
                             .foregroundStyle(RuntimeEventDisplay.durationColor(event))
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
-                        if let speed = event.outputTokensPerSecond, speed > 0 {
+                        if let speed = event.outputTokensPerSecond, event.isSucceeded, speed.isFinite, speed >= 0 {
                             Text(String(format: "%.1f tok/s", speed))
                                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
                                 .foregroundStyle(palette.info)
@@ -1110,6 +1110,9 @@ struct RecentEventsPanel: View {
                                 .padding(.vertical, 1)
                                 .background(palette.info.opacity(0.12), in: Capsule())
                                 .fixedSize(horizontal: true, vertical: false)
+                        } else if event.kind == "client" && !event.isInFlight {
+                            Text("—").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                                .help("无法可靠测量输出速度")
                         }
                     }
                     if !event.isInFlight && total > 0 {
@@ -1270,7 +1273,7 @@ struct RecentEventsPanel: View {
                     .font(.caption.monospacedDigit())
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
-                if let speed = event.outputTokensPerSecond, speed > 0 {
+                if let speed = event.outputTokensPerSecond, event.isSucceeded, speed.isFinite, speed >= 0 {
                     Text(String(format: "%.1f tok/s", speed))
                         .font(.system(size: 10, weight: .semibold, design: .monospaced))
                         .foregroundStyle(palette.info)
@@ -1278,6 +1281,9 @@ struct RecentEventsPanel: View {
                         .padding(.vertical, 1)
                         .background(palette.info.opacity(0.12), in: Capsule())
                         .fixedSize(horizontal: true, vertical: false)
+                } else if event.kind == "client" && !event.isInFlight {
+                    Text("—").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        .help("无法可靠测量输出速度")
                 }
             }
             SumpterWrappingLayout(horizontalSpacing: 6, verticalSpacing: 4) {

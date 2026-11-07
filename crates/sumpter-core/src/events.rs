@@ -2827,6 +2827,11 @@ pub struct ResponseUsage {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StreamTrace {
+    /// Observed first-to-last incremental output span, before local buffering.
+    /// Absent for single-batch, sub-100ms, non-stream or unavailable observations.
+    /// This is a transfer/generation estimate, not provider-internal decoding time.
+    #[serde(rename = "outputSpanMS", default, skip_serializing_if = "is_none")]
+    pub output_span_ms: Option<i64>,
     #[serde(rename = "toolCallsTruncated", default)]
     pub tool_calls_truncated: bool,
     /// Cache field authority and bounded observation gaps, separate from usage totals.
@@ -4057,6 +4062,7 @@ mod tests {
     fn stream_trace_roundtrips_with_camel_case_wire_names() {
         let mut current = event("trace", KIND_CLIENT, 1.0);
         current.stream_trace = Some(StreamTrace {
+            output_span_ms: Some(1000),
             tool_calls_truncated: false,
             cache_read_evidence: None,
             chunk_count: Some(3),

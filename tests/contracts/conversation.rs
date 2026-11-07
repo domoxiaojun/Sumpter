@@ -300,6 +300,58 @@ async fn translated_directions_use_the_conversion_surface() {
 }
 
 #[tokio::test]
+async fn deepseek_cache_hits_reach_native_and_translated_events() {
+    use sumpter_core::cache_read::{CacheReadFinality, CacheReadState};
+
+    for client in [Wire::Chat, Wire::Responses] {
+        let fake = FakeTransport::new();
+        fake.push(
+            "a.example.com",
+            sse_ok(&[
+                "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":1,\"prompt_cache_hit_tokens\":2,\"prompt_cache_miss_tokens\":1}}\n\n",
+                "data: [DONE]\n\n",
+            ]),
+        );
+        let engine = engine_with(single_wire_config(Wire::Chat), fake.clone());
+        let (status, body) = call(
+            &engine,
+            loopback(),
+            &client.inbound_path("claude-opus-5"),
+            vec![("content-type".into(), "application/json".into())],
+            Bytes::from(serde_json::to_vec(&client.body()).unwrap()),
+        )
+        .await;
+        assert_eq!(status, 200, "{client:?}");
+        assert!(String::from_utf8_lossy(&body).contains(client.client_marker()));
+        assert_eq!(fake.requests().len(), 1);
+
+        let runtime = runtime_of(&engine).await;
+        for kind in ["client", "upstream"] {
+            let event = runtime
+                .recent_events
+                .iter()
+                .find(|event| event.kind == kind)
+                .expect("应记录客户端和上游事件");
+            assert!(!event.is_in_flight(), "{client:?} {kind}");
+            let usage = event
+                .stream_trace
+                .as_ref()
+                .and_then(|trace| trace.usage.as_ref())
+                .expect("事件应保留上游用量");
+            assert_eq!(usage.input_tokens, Some(3));
+            assert_eq!(usage.output_tokens, Some(1));
+            assert_eq!(usage.cache_read_input_tokens, Some(2));
+            assert_eq!(usage.cache_creation_input_tokens, None);
+            let cache = event.cache_read.as_ref().expect("事件应含缓存读取摘要");
+            assert_eq!(cache.state, CacheReadState::Hit);
+            assert_eq!(cache.read_tokens, Some(2));
+            assert_eq!(cache.finality, CacheReadFinality::Confirmed);
+        }
+    }
+}
+
+#[tokio::test]
 async fn codex_discovers_and_calls_configured_gemini_models() {
     for upstream in [Wire::Chat, Wire::Responses, Wire::Gemini] {
         let mut config = single_wire_config(upstream);
@@ -454,5 +506,58 @@ async fn instruction_messages_survive_failover_between_translated_protocols() {
                 }
             }
         }
+    }
+}
+
+#[tokio::test]
+async fn output_speed_observes_upstream_deltas_and_rejects_a_single_burst() {
+    for burst in [false, true] {
+        let fake = FakeTransport::new();
+        fake.push("a.example.com", Outcome::GatedSse);
+        let engine = engine_with(single_wire_config(Wire::Chat), fake.clone());
+        let response = engine
+            .handle_request(
+                loopback(),
+                "POST",
+                "/v1/chat/completions",
+                vec![("content-type".into(), "application/json".into())],
+                Bytes::from(serde_json::to_vec(&Wire::Chat.body()).unwrap()),
+            )
+            .await;
+        assert_eq!(response.status(), 200);
+        let tx = fake.gate_sender();
+        let mut stream = response.into_body().into_data_stream();
+        let delta = "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n";
+        let terminal = "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":10}}\n\ndata: [DONE]\n\n";
+        if burst {
+            tx.send(Ok(Bytes::from(format!("{delta}{delta}{terminal}"))))
+                .unwrap();
+        } else {
+            tx.send(Ok(Bytes::from(delta))).unwrap();
+            stream.next().await.unwrap().unwrap();
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            tx.send(Ok(Bytes::from(format!("{delta}{terminal}"))))
+                .unwrap();
+        }
+        drop(tx);
+        while let Some(chunk) = stream.next().await {
+            chunk.unwrap();
+        }
+        let runtime = runtime_of(&engine).await;
+        let event = runtime
+            .recent_events
+            .iter()
+            .find(|event| event.kind == "client")
+            .unwrap();
+        assert!(event.is_succeeded());
+        let span = event.stream_trace.as_ref().unwrap().output_span_ms;
+        if burst {
+            assert_eq!(span, None);
+        } else {
+            assert!(span.unwrap() >= 100);
+        }
+        let listed =
+            sumpter_engine::runtime_store::RuntimeEventListItem::from_change(1, 1, event.clone());
+        assert_eq!(listed.output_tokens_per_second.is_some(), !burst);
     }
 }

@@ -167,6 +167,7 @@ pub struct SseTerminalTracker {
     observation_truncated: bool,
     cache_read_evidence: CacheReadEvidence,
     gemini_terminal: Option<SseTerminal>,
+    output_events: u64,
 }
 
 impl SseTerminalTracker {
@@ -184,12 +185,18 @@ impl SseTerminalTracker {
             observation_truncated: false,
             cache_read_evidence: CacheReadEvidence::default(),
             gemini_terminal: None,
+            output_events: 0,
         }
     }
 
     /// 本轮流中已经观察到的实际工具调用名称；只来自响应事件，不来自 tools 声明。
     pub fn tool_calls(&self) -> &[String] {
         &self.tool_calls
+    }
+
+    /// Number of nonempty incremental output events; lifecycle and usage frames do not count.
+    pub fn output_events(&self) -> u64 {
+        self.output_events
     }
 
     pub fn tool_calls_truncated(&self) -> bool {
@@ -328,6 +335,9 @@ impl SseTerminalTracker {
             let Some(payload) = data_payload(&frame) else {
                 continue;
             };
+            if has_output_delta(self.dialect, &payload) {
+                self.output_events = self.output_events.saturating_add(1);
+            }
             observe_tool_call(
                 self.dialect,
                 &payload,
@@ -367,6 +377,72 @@ impl SseTerminalTracker {
             self.observation_truncated = true;
         }
         None
+    }
+}
+
+// A complete SSE event can span network chunks. Count semantic output only,
+// never headers, roles, heartbeat comments, usage, finish reasons or snapshots.
+fn has_output_delta(dialect: SseDialect, payload: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(payload) else {
+        return false;
+    };
+    let nonempty = |v: Option<&Value>| v.and_then(Value::as_str).is_some_and(|s| !s.is_empty());
+    match dialect {
+        SseDialect::Anthropic => {
+            value.get("type").and_then(Value::as_str) == Some("content_block_delta")
+                && ["/delta/text", "/delta/thinking", "/delta/partial_json"]
+                    .iter()
+                    .any(|path| nonempty(value.pointer(path)))
+        }
+        SseDialect::OpenAiResponses => {
+            matches!(
+                value.get("type").and_then(Value::as_str),
+                Some(
+                    "response.output_text.delta"
+                        | "response.refusal.delta"
+                        | "response.reasoning_text.delta"
+                        | "response.reasoning_summary_text.delta"
+                        | "response.function_call_arguments.delta"
+                        | "response.custom_tool_call_input.delta"
+                )
+            ) && nonempty(value.get("delta"))
+        }
+        SseDialect::OpenAiChat => {
+            value
+                .get("choices")
+                .and_then(Value::as_array)
+                .is_some_and(|choices| {
+                    choices.iter().any(|choice| {
+                        let Some(delta) = choice.get("delta") else {
+                            return false;
+                        };
+                        ["content", "reasoning_content", "reasoning", "refusal"]
+                            .iter()
+                            .any(|key| nonempty(delta.get(key)))
+                            || nonempty(delta.pointer("/function_call/arguments"))
+                            || delta
+                                .get("tool_calls")
+                                .and_then(Value::as_array)
+                                .is_some_and(|calls| {
+                                    calls
+                                        .iter()
+                                        .any(|call| nonempty(call.pointer("/function/arguments")))
+                                })
+                    })
+                })
+        }
+        SseDialect::Gemini => value
+            .get("candidates")
+            .and_then(Value::as_array)
+            .is_some_and(|candidates| {
+                candidates.iter().any(|candidate| {
+                    candidate
+                        .pointer("/content/parts")
+                        .and_then(Value::as_array)
+                        .is_some_and(|parts| parts.iter().any(|part| nonempty(part.get("text"))))
+                })
+            }),
+        SseDialect::OpenAiImages => false,
     }
 }
 
@@ -547,6 +623,7 @@ fn observe_cache_read(
             "/cache_read_input_tokens",
             "/cache_read_tokens",
             "/cached_tokens",
+            "/prompt_cache_hit_tokens",
             "/input_tokens_details/cached_tokens",
             "/input_tokens_details/cache_read_tokens",
             "/prompt_tokens_details/cached_tokens",

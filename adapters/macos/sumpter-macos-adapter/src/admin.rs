@@ -1619,6 +1619,22 @@ async fn recreate_runtime(State(engine): State<Engine>) -> Response {
     }
 }
 
+#[cfg(test)]
+#[path = "../../../../tests/contracts/runtime_sse.rs"]
+mod runtime_sse_contract;
+
+fn admin_sse_event(name: &str, mut data: Value) -> SseEvent {
+    if name == "runtime-change" {
+        crate::runtime_query::decorate_runtime_change_value(&mut data);
+    }
+    let event = SseEvent::default().event(name).data(data.to_string());
+    if name == "runtime-change" {
+        event.id(data["changeSeq"].as_i64().unwrap_or_default().to_string())
+    } else {
+        event
+    }
+}
+
 /// SSE 事件流:runtime_event / notify / config_reloaded / stats_reset。
 async fn events(
     State(engine): State<Engine>,
@@ -1705,12 +1721,7 @@ async fn events(
                                     json!({"catalog": catalog, "revision": revision}),
                                 ),
                             };
-                            let event = SseEvent::default().event(name).data(data.to_string());
-                            let event = if name == "runtime-change" {
-                                event.id(data["changeSeq"].as_i64().unwrap_or_default().to_string())
-                            } else {
-                                event
-                            };
+                            let event = admin_sse_event(name, data);
                             return Some((
                                 Ok::<_, Infallible>(event),
                                 (initial_migration_notice, rx),

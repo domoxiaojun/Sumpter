@@ -177,9 +177,11 @@ function RecentEventResultCell({ event, live = false }) {
 }
 
 function RecentEventSpeed({ event }) {
-  const speed = Number(eventField(event, 'outputTokensPerSecond', 'output_tokens_per_second'));
-  if (event.kind === 'notify' || !Number.isFinite(speed) || speed <= 0) return null;
-  return <span className="telemetry-speed-pill">{speed.toFixed(1)} tok/s</span>;
+  if (event.kind !== 'client' || eventIsInFlight(event)) return null;
+  const raw = eventField(event, 'outputTokensPerSecond', 'output_tokens_per_second');
+  const speed = raw == null ? NaN : Number(raw);
+  const measurable = eventOutcome(event) === 'succeeded' && Number.isFinite(speed) && speed >= 0;
+  return <span className="telemetry-speed-pill" title={measurable ? '根据上游有效输出区间估算的速度' : '无法可靠测量输出速度'}>{measurable ? `${speed.toFixed(1)} tok/s` : '—'}</span>;
 }
 
 function RecentEventDurationCell({ event }) {

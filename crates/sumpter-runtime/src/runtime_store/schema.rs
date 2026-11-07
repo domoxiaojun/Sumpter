@@ -52,9 +52,9 @@ pub(super) fn setup_connection(connection: &mut Connection) -> crate::database::
     crate::codex_observation::ensure(connection)?;
     refresh_codex_roles(connection)?;
     let hourly_rollup_meta_exists = meta_i64(connection, "hourly_rollup_complete")?.is_some();
-    // Schema stays at 5. The three output-speed columns are added in place;
-    // rebuild derived hourly buckets once so historical rates match raw scans.
-    let output_generation_ready = meta_i64(connection, "output_generation_rollup")? == Some(1);
+    // Schema stays at 5. Add the nullable observed span in place and rebuild
+    // derived hourly buckets once. Older events have no measured output span.
+    let output_generation_ready = meta_i64(connection, "output_generation_rollup")? == Some(2);
     let unprojected_exists = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM runtime_events
                        WHERE projection_version>=0 AND projection_version<>?1 LIMIT 1)",
@@ -148,7 +148,7 @@ pub(super) fn setup_connection(connection: &mut Connection) -> crate::database::
         )?;
     }
     set_meta(connection, "schema_version", SCHEMA_VERSION)?;
-    set_meta(connection, "output_generation_rollup", 1)?;
+    set_meta(connection, "output_generation_rollup", 2)?;
     set_meta(connection, "projection_version", PROJECTION_VERSION)?;
     if !unprojected_exists {
         set_meta(connection, "projection_backfill_complete", 1)?;
@@ -205,6 +205,10 @@ fn ensure_upstream_timing_columns(connection: &Connection) -> crate::database::R
         .query_map(crate::database::params![], |row| row.get::<_, String>(1))?
         .collect::<Result<HashSet<_>, _>>()?;
     for (name, ddl) in [
+        (
+            "output_span_ms",
+            "ALTER TABLE runtime_events ADD COLUMN output_span_ms INTEGER",
+        ),
         (
             "upstream_duration_ms",
             "ALTER TABLE runtime_events ADD COLUMN upstream_duration_ms INTEGER",
@@ -621,7 +625,7 @@ pub(super) fn rebuild_hourly_rollup_bucket(
                     input_tokens,output_tokens,cache_read_input_tokens,
                     cache_creation_input_tokens,reasoning_tokens,uncached_input_tokens,
                     processed_input_tokens,processed_total_tokens,
-                    token_accounting_semantics,token_accounting_quality,endpoint_id,timestamp,effective_model
+                    token_accounting_semantics,token_accounting_quality,endpoint_id,timestamp,effective_model,output_span_ms
              FROM runtime_events
              WHERE projection_version=?1 AND is_in_flight=0 AND kind IN ('client','upstream')
                AND timestamp>=?2 AND timestamp<?3
@@ -709,11 +713,11 @@ pub(super) fn rebuild_hourly_rollup_bucket(
             if outcome.as_deref() == Some("succeeded")
                 && let Some(sample) = crate::runtime_query::output_generation_sample(
                     "client",
+                    outcome.as_deref(),
                     false,
                     row.get::<_, Option<String>>(8)?.as_deref(),
                     output,
-                    row.get(6)?,
-                    row.get(7)?,
+                    row.get(23)?,
                 )
             {
                 accumulator.output_generation_tokens = accumulator

@@ -1252,11 +1252,11 @@ impl TrendAccumulator {
         if row.outcome.as_deref() == Some("succeeded") {
             self.output_speed.observe(output_generation_sample(
                 "client",
+                row.outcome.as_deref(),
                 false,
                 row.request_purpose.as_deref(),
                 row.output_tokens,
-                row.upstream_duration_ms,
-                row.upstream_ttfb_ms,
+                row.output_span_ms,
             ));
         }
         self.cost.add(row, prices);
@@ -1302,8 +1302,7 @@ struct TrendRow {
     failover: i64,
     duration_ms: Option<i64>,
     ttfb_ms: Option<i64>,
-    upstream_duration_ms: Option<i64>,
-    upstream_ttfb_ms: Option<i64>,
+    output_span_ms: Option<i64>,
     request_purpose: Option<String>,
     endpoint_id: Option<String>,
     effective_model: Option<String>,
@@ -1427,6 +1426,7 @@ struct EventListProjection {
     ttfb_ms: Option<i64>,
     upstream_duration_ms: Option<i64>,
     upstream_ttfb_ms: Option<i64>,
+    output_span_ms: Option<i64>,
     failover: i64,
     project_name: Option<String>,
     project_source: Option<String>,
@@ -1479,11 +1479,11 @@ fn event_list_item_from_projection(row: EventListProjection) -> RuntimeEventList
     let usage_present = usage != sumpter_core::events::ResponseUsage::default();
     let output_tokens_per_second = output_tokens_per_second(
         &row.kind,
+        row.outcome.as_deref(),
         row.phase.as_deref() == Some("inFlight"),
         row.request_purpose.as_deref(),
         row.output_tokens,
-        row.upstream_duration_ms,
-        row.upstream_ttfb_ms,
+        row.output_span_ms,
     );
     RuntimeEventListItem {
         inbound_token: row

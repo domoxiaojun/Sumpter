@@ -696,6 +696,22 @@ pub fn admin_router(state: AdminState) -> Router {
         .with_state(state)
 }
 
+#[cfg(test)]
+#[path = "../../../../tests/contracts/runtime_sse.rs"]
+mod runtime_sse_contract;
+
+fn admin_sse_event(name: &str, mut data: Value) -> SseEvent {
+    if name == "runtime-change" {
+        crate::runtime_query::decorate_runtime_change_value(&mut data);
+    }
+    let event = SseEvent::default().event(name).data(data.to_string());
+    if name == "runtime-change" {
+        event.id(data["changeSeq"].as_i64().unwrap_or_default().to_string())
+    } else {
+        event
+    }
+}
+
 pub(crate) async fn events(
     State(state): State<AdminState>,
 ) -> Sse<impl futures_util::Stream<Item = Result<SseEvent, Infallible>>> {
@@ -754,12 +770,7 @@ pub(crate) async fn events(
                                     json!({"catalog": catalog, "revision": revision}),
                                 ),
                             };
-                            let event = SseEvent::default().event(name).data(data.to_string());
-                            let event = if name == "runtime-change" {
-                                event.id(data["changeSeq"].as_i64().unwrap_or_default().to_string())
-                            } else {
-                                event
-                            };
+                            let event = admin_sse_event(name, data);
                             return Some((Ok::<_, Infallible>(event), receivers));
                         }
                         // A lagged receiver has an unknown gap. Close the SSE

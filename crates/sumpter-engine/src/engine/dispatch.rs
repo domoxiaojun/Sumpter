@@ -2224,6 +2224,9 @@ impl Engine {
                     drop(permit);
                 }
                 let attempt_ttfb_ms = attempt_started.elapsed().as_millis() as i64;
+                let output_timing = result.as_mut().ok().and_then(|response| {
+                    super::output_timing::observe(response, endpoint.protocol)
+                });
                 guard.trace(
                     "headers",
                     Some(&endpoint.endpoint_id),
@@ -2535,6 +2538,7 @@ impl Engine {
                         path_and_query,
                         attempt_started,
                         attempt_ttfb_ms,
+                        output_timing,
                         prefetched,
                         is_failover,
                         capture_attempt_id,

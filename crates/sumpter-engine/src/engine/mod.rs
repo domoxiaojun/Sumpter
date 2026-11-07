@@ -17,6 +17,7 @@ mod http_relay;
 mod http_response;
 pub mod inbound;
 pub mod lifecycle;
+mod output_timing;
 mod payload;
 mod performance;
 mod protocol;

@@ -26,6 +26,7 @@ pub(super) struct UpstreamAttempt {
     pub(super) started: Instant,
     /// 该次尝试自身的响应头延迟(ms):`started` → accepted。
     pub(super) ttfb_ms: i64,
+    pub(super) output_timing: Option<super::output_timing::ObservedOutputTiming>,
     pub(super) is_failover: bool,
     pub(super) upstream_request_id: Option<String>,
     pub(super) retry_after_seconds: Option<f64>,
@@ -85,6 +86,7 @@ impl StreamTraceState {
     fn snapshot(&self) -> Option<StreamTrace> {
         let started = self.started?;
         Some(StreamTrace {
+            output_span_ms: None,
             tool_calls_truncated: self.tool_calls_truncated,
             cache_read_evidence: self.cache_read_evidence.clone(),
             chunk_count: Some(self.chunk_count),
@@ -296,7 +298,7 @@ impl CompletionGuard {
                 })
             };
             if let Some(mut event) = upstream {
-                event.stream_trace = self.stream_trace.snapshot();
+                event.stream_trace = self.observed_stream_trace();
                 self.engine.record_event(event);
             }
         }
@@ -448,7 +450,7 @@ impl CompletionGuard {
             upstream_duration_ms: upstream
                 .map(|attempt| attempt.started.elapsed().as_millis() as i64),
             upstream_ttfb_ms: upstream.map(|attempt| attempt.ttfb_ms),
-            stream_trace: self.stream_trace.snapshot(),
+            stream_trace: self.observed_stream_trace(),
             timeout_ms: None,
             upstream_host: endpoint.and_then(|endpoint| host_of(&endpoint.base_url)),
             upstream_model: endpoint
@@ -466,6 +468,16 @@ impl CompletionGuard {
             attribution.apply(&mut event);
         }
         event
+    }
+
+    fn observed_stream_trace(&self) -> Option<StreamTrace> {
+        let mut trace = self.stream_trace.snapshot()?;
+        trace.output_span_ms = self
+            .upstream
+            .as_ref()
+            .and_then(|attempt| attempt.output_timing.as_ref())
+            .and_then(super::output_timing::span_ms);
+        Some(trace)
     }
 
     fn complete_upstream_event(
@@ -514,7 +526,7 @@ impl CompletionGuard {
         event.codex_metadata = self.meta.codex_metadata.clone();
         event.client_declared = self.meta.client_declared.clone();
         event.grok_metadata = self.meta.grok_metadata.clone();
-        event.stream_trace = self.stream_trace.snapshot();
+        event.stream_trace = self.observed_stream_trace();
         event.outcome = Some(outcome);
         event.upstream_status_code = (self.status > 0).then_some(self.status);
         event.upstream_request_id = attempt.upstream_request_id;
@@ -763,6 +775,7 @@ mod tests {
             },
             started: Instant::now(),
             ttfb_ms: 1,
+            output_timing: None,
             is_failover: false,
             upstream_request_id: None,
             retry_after_seconds: None,

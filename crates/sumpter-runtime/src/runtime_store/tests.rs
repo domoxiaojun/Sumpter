@@ -2697,10 +2697,11 @@ fn schema_five_keeps_events_when_output_speed_columns_are_added() {
     let connection = Connection::open(&path).unwrap();
     connection
         .execute_batch(
-            "ALTER TABLE runtime_hourly_rollups DROP COLUMN output_generation_tokens;
+            "ALTER TABLE runtime_events DROP COLUMN output_span_ms;
+             ALTER TABLE runtime_hourly_rollups DROP COLUMN output_generation_tokens;
              ALTER TABLE runtime_hourly_rollups DROP COLUMN output_generation_ms;
              ALTER TABLE runtime_hourly_rollups DROP COLUMN output_generation_requests;
-             DELETE FROM runtime_meta WHERE key='output_generation_rollup';
+             UPDATE runtime_meta SET value='1' WHERE key='output_generation_rollup';
              UPDATE runtime_meta SET value='5' WHERE key='schema_version';",
         )
         .unwrap();
@@ -2712,6 +2713,18 @@ fn schema_five_keeps_events_when_output_speed_columns_are_added() {
     drop(store);
 
     let connection = Connection::open(&path).unwrap();
+    assert_eq!(
+        meta_i64(&connection, "output_generation_rollup").unwrap(),
+        Some(2)
+    );
+    let span: Option<i64> = connection
+        .query_row(
+            "SELECT output_span_ms FROM runtime_events WHERE event_id='keep-me'",
+            crate::database::params![],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(span, None);
     let columns = connection
         .prepare("PRAGMA table_info(runtime_hourly_rollups)")
         .unwrap()
@@ -3355,6 +3368,7 @@ fn output_generation_speed_matches_across_raw_scan_and_hourly_rollup() {
     fast.effective_model = Some("speed-model".into());
     fast.request_purpose = Some(RequestPurpose::Standard);
     fast.stream_trace = serde_json::from_value(json!({
+        "outputSpanMS": 1000,
         "usage": {"inputTokens": 10, "outputTokens": 100}
     }))
     .ok();
@@ -3373,6 +3387,7 @@ fn output_generation_speed_matches_across_raw_scan_and_hourly_rollup() {
     slow.upstream_ttfb_ms = Some(100);
     slow.effective_model = Some("speed-model".into());
     slow.stream_trace = serde_json::from_value(json!({
+        "outputSpanMS": 9000,
         "usage": {"outputTokens": 100}
     }))
     .ok();
@@ -3391,6 +3406,7 @@ fn output_generation_speed_matches_across_raw_scan_and_hourly_rollup() {
     zero.upstream_ttfb_ms = Some(100);
     zero.effective_model = Some("speed-model".into());
     zero.stream_trace = serde_json::from_value(json!({
+        "outputSpanMS": 2000,
         "usage": {"outputTokens": 0}
     }))
     .ok();
@@ -3457,11 +3473,32 @@ fn output_generation_speed_matches_across_raw_scan_and_hourly_rollup() {
     failed.upstream_ttfb_ms = Some(100);
     failed.effective_model = Some("speed-model".into());
     failed.stream_trace = serde_json::from_value(json!({
+        "outputSpanMS": 1000,
         "usage": {"outputTokens": 10_000}
     }))
     .ok();
 
-    for value in [fast, slow, zero, probe, upstream, missing_ttfb, failed] {
+    let mut burst = fast.clone();
+    burst.id = "speed-burst".into();
+    burst.stream_trace.as_mut().unwrap().output_span_ms = Some(12);
+    let mut legacy = fast.clone();
+    legacy.id = "speed-legacy".into();
+    legacy.stream_trace.as_mut().unwrap().output_span_ms = None;
+    let mut cancelled = failed.clone();
+    cancelled.id = "speed-cancelled".into();
+    cancelled.outcome = Some(RuntimeEventOutcome::Cancelled);
+    for value in [
+        fast,
+        slow,
+        zero,
+        probe,
+        upstream,
+        missing_ttfb,
+        failed,
+        burst,
+        legacy,
+        cancelled,
+    ] {
         store.enqueue(value, RuntimeCounters::default()).unwrap();
     }
     store.flush().unwrap();
@@ -3498,6 +3535,19 @@ fn output_generation_speed_matches_across_raw_scan_and_hourly_rollup() {
             .output_tokens_per_second
             .is_none()
     );
+
+    for id in [
+        "speed-failed",
+        "speed-cancelled",
+        "speed-burst",
+        "speed-legacy",
+    ] {
+        let listed = page.events.iter().find(|event| event.id == id).unwrap();
+        assert!(listed.output_tokens_per_second.is_none(), "{id}");
+        let mut detail = serde_json::to_value(store.event(id).unwrap().unwrap()).unwrap();
+        crate::runtime_query::decorate_runtime_change_value(&mut detail);
+        assert!(detail["event"]["outputTokensPerSecond"].is_null(), "{id}");
+    }
 
     let mut unfiltered = TrendRequest {
         from: bucket as f64,
@@ -3557,6 +3607,7 @@ fn output_generation_speed_matches_across_raw_scan_and_hourly_rollup() {
     other.upstream_ttfb_ms = Some(100);
     other.effective_model = Some("other-model".into());
     other.stream_trace = serde_json::from_value(json!({
+        "outputSpanMS": 1000,
         "usage": {"outputTokens": 10}
     }))
     .ok();

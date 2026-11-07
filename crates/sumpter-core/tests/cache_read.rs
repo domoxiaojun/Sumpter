@@ -80,6 +80,104 @@ fn chat_and_gemini_explicit_final_zero_confirm_a_miss() {
 }
 
 #[test]
+fn deepseek_cache_hits_are_recorded_in_json_and_chunked_sse() {
+    for tokens in [0, 80] {
+        let payload = serde_json::to_vec(&json!({
+            "choices":[{"finish_reason":"stop"}],
+            "usage":{
+                "prompt_tokens":100, "completion_tokens":10,
+                "prompt_cache_hit_tokens":tokens, "prompt_cache_miss_tokens":100 - tokens
+            }
+        }))
+        .unwrap();
+        for streaming in [false, true] {
+            let mut tracker = SseTerminalTracker::new(SseDialect::OpenAiChat);
+            if streaming {
+                let mut stream = b"data: ".to_vec();
+                stream.extend_from_slice(&payload);
+                stream.extend_from_slice(b"\n\ndata: [DONE]\n\n");
+                for chunk in stream.chunks(7) {
+                    tracker.push(chunk);
+                }
+            } else {
+                tracker.observe_json(&payload);
+            }
+            let cache = summary(&tracker, "completed");
+            assert_eq!(
+                cache.state,
+                if tokens == 0 {
+                    CacheReadState::Miss
+                } else {
+                    CacheReadState::Hit
+                }
+            );
+            assert_eq!(cache.read_tokens, Some(tokens));
+            assert_eq!(cache.finality, CacheReadFinality::Confirmed);
+            assert_eq!(cache.reason, None);
+            let usage = tracker.usage().unwrap();
+            assert_eq!(usage.input_tokens, Some(100));
+            assert_eq!(usage.output_tokens, Some(10));
+            // Cache misses are ordinary input, not evidence of a cache write.
+            assert_eq!(usage.cache_creation_input_tokens, None);
+        }
+    }
+}
+
+#[test]
+fn deepseek_cache_aliases_agree_or_report_conflicting_evidence() {
+    for cached_tokens in [0, 80] {
+        let mut tracker = SseTerminalTracker::new(SseDialect::OpenAiChat);
+        tracker.observe_json(
+            &serde_json::to_vec(&json!({
+                "choices":[{"finish_reason":"stop"}],
+                "usage":{
+                    "prompt_tokens":100, "prompt_cache_hit_tokens":80,
+                    "prompt_tokens_details":{"cached_tokens":cached_tokens}
+                }
+            }))
+            .unwrap(),
+        );
+        let cache = summary(&tracker, "completed");
+        if cached_tokens == 80 {
+            assert_eq!(cache.read_tokens, Some(80));
+            assert_eq!(cache.finality, CacheReadFinality::Confirmed);
+            assert_eq!(cache.reason, None);
+        } else {
+            assert_eq!(cache.state, CacheReadState::Unknown);
+            assert_eq!(cache.read_tokens, None);
+            assert_eq!(cache.reason, Some(CacheReadReason::ConflictingEvidence));
+        }
+    }
+}
+
+#[test]
+fn deepseek_missing_or_invalid_cache_hits_stay_unknown() {
+    for (value, reason) in [
+        (json!(null), CacheReadReason::Unreported),
+        (json!(-1), CacheReadReason::InvalidValue),
+        (json!(1.5), CacheReadReason::InvalidValue),
+        (json!("80"), CacheReadReason::InvalidValue),
+        (json!(u64::MAX), CacheReadReason::InvalidValue),
+    ] {
+        let mut tracker = SseTerminalTracker::new(SseDialect::OpenAiChat);
+        tracker.observe_json(
+            &serde_json::to_vec(&json!({
+                "choices":[{"finish_reason":"stop"}],
+                "usage":{
+                    "prompt_tokens":100, "prompt_cache_miss_tokens":20,
+                    "prompt_cache_hit_tokens":value
+                }
+            }))
+            .unwrap(),
+        );
+        let cache = summary(&tracker, "completed");
+        assert_eq!(cache.state, CacheReadState::Unknown);
+        assert_eq!(cache.read_tokens, None);
+        assert_eq!(cache.reason, Some(reason));
+    }
+}
+
+#[test]
 fn invalid_and_conflicting_values_are_not_silently_normalized() {
     for value in [json!(-1), json!(1.5), json!("20")] {
         let mut tracker = SseTerminalTracker::new(SseDialect::OpenAiResponses);

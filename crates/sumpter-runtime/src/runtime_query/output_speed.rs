@@ -1,23 +1,17 @@
-//! Generation speed: output tokens divided by the post-upstream-TTFB window.
-//!
-//! The value is derived when a response is built. It is not stored in
-//! `payload_json`. Client rows use the final upstream attempt timing.
-//! Aggregates sum eligible tokens and generation milliseconds
-//! separately, then divide once. They are not an average of per-request rates.
+//! Output speed estimated from observed incremental output before buffering.
+//! Unknown historical spans are not inferred from response-header latency.
+//! Aggregates divide eligible token totals by eligible observed spans once.
 
 use serde_json::{Value, json};
-
 use sumpter_core::events::RuntimeEvent;
 use sumpter_core::routing::RequestPurpose;
 
-/// SQL predicate matching [`output_generation_sample`].
+/// Matches `output_generation_sample`; 100ms is the observation resolution.
 pub(crate) const OUTPUT_SPEED_PREDICATE: &str = "\
 kind='client' AND is_in_flight=0 AND outcome='succeeded' \
 AND (request_purpose IS NULL OR request_purpose!='token_count') \
 AND output_tokens IS NOT NULL AND output_tokens>=0 \
-AND upstream_duration_ms IS NOT NULL AND upstream_duration_ms>=0 \
-AND upstream_ttfb_ms IS NOT NULL AND upstream_ttfb_ms>=0 \
-AND upstream_duration_ms>upstream_ttfb_ms";
+AND output_span_ms IS NOT NULL AND output_span_ms>=100";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct OutputGenerationSample {
@@ -49,24 +43,22 @@ impl OutputSpeedTotals {
 
 pub(crate) fn output_generation_sample(
     kind: &str,
+    outcome: Option<&str>,
     in_flight: bool,
     request_purpose: Option<&str>,
     output_tokens: Option<i64>,
-    duration_ms: Option<i64>,
-    ttfb_ms: Option<i64>,
+    output_span_ms: Option<i64>,
 ) -> Option<OutputGenerationSample> {
-    if in_flight || kind != "client" || request_purpose == Some("token_count") {
+    if in_flight
+        || kind != "client"
+        || outcome != Some("succeeded")
+        || request_purpose == Some("token_count")
+    {
         return None;
     }
-    let output_tokens = output_tokens.filter(|value| *value >= 0)?;
-    let duration_ms = duration_ms.filter(|value| *value >= 0)?;
-    let ttfb_ms = ttfb_ms.filter(|value| *value >= 0)?;
-    let generation_ms = duration_ms
-        .checked_sub(ttfb_ms)
-        .filter(|value| *value > 0)?;
     Some(OutputGenerationSample {
-        output_tokens,
-        generation_ms,
+        output_tokens: output_tokens.filter(|value| *value >= 0)?,
+        generation_ms: output_span_ms.filter(|value| *value >= 100)?,
     })
 }
 
@@ -80,92 +72,71 @@ pub(crate) fn output_speed_rate(tokens: i64, generation_ms: i64) -> Option<f64> 
 
 pub(crate) fn output_tokens_per_second(
     kind: &str,
+    outcome: Option<&str>,
     in_flight: bool,
     request_purpose: Option<&str>,
     output_tokens: Option<i64>,
-    duration_ms: Option<i64>,
-    ttfb_ms: Option<i64>,
+    output_span_ms: Option<i64>,
 ) -> Option<f64> {
     output_generation_sample(
         kind,
+        outcome,
         in_flight,
         request_purpose,
         output_tokens,
-        duration_ms,
-        ttfb_ms,
+        output_span_ms,
     )
     .and_then(|sample| output_speed_rate(sample.output_tokens, sample.generation_ms))
 }
 
 pub(crate) fn output_tokens_per_second_for_event(event: &RuntimeEvent) -> Option<f64> {
-    if !event.is_succeeded() {
-        return None;
-    }
     let purpose = match event.request_purpose {
         Some(RequestPurpose::TokenCount) => Some("token_count"),
         Some(_) | None => None,
     };
-    let output_tokens = event
-        .stream_trace
-        .as_ref()
-        .and_then(|trace| trace.usage.as_ref())
-        .and_then(|usage| usage.output_tokens)
+    let trace = event.stream_trace.as_ref()?;
+    let output_tokens = trace
+        .usage
+        .as_ref()?
+        .output_tokens
         .and_then(|value| i64::try_from(value).ok());
     output_tokens_per_second(
         event.kind.as_str(),
+        event.is_succeeded().then_some("succeeded"),
         event.is_in_flight(),
         purpose,
         output_tokens,
-        event.upstream_duration_ms,
-        event.upstream_ttfb_ms,
+        trace.output_span_ms,
     )
 }
 
-/// Attach the computed field onto a runtime change or bare event object.
-/// Missing speed stays absent so older clients and stored payloads are unchanged.
+/// Explicit null clears a formerly valid speed on an updated live event.
+/// Stored event payloads remain free of the derived rate.
 pub fn decorate_runtime_change_value(value: &mut Value) {
-    if value.get("event").is_some() {
-        let speed = value
-            .get("event")
-            .and_then(output_tokens_per_second_from_json);
-        if let Some(speed) = speed
-            && let Some(event) = value.get_mut("event").and_then(Value::as_object_mut)
-        {
-            event.insert("outputTokensPerSecond".to_owned(), json!(speed));
-        }
-        return;
-    }
-    if let Some(speed) = output_tokens_per_second_from_json(value)
-        && let Some(event) = value.as_object_mut()
-    {
+    let event = if value.get("event").is_some() {
+        value.get_mut("event").expect("checked event")
+    } else {
+        value
+    };
+    let speed = output_tokens_per_second_from_json(event);
+    if let Some(event) = event.as_object_mut() {
         event.insert("outputTokensPerSecond".to_owned(), json!(speed));
     }
 }
 
 fn output_tokens_per_second_from_json(event: &Value) -> Option<f64> {
-    if event.get("outcome").and_then(Value::as_str) != Some("succeeded") {
-        return None;
-    }
     output_tokens_per_second(
         event.get("kind").and_then(Value::as_str).unwrap_or(""),
+        event.get("outcome").and_then(Value::as_str),
         event.get("phase").and_then(Value::as_str) == Some("inFlight"),
         event.get("requestPurpose").and_then(Value::as_str),
-        json_i64(
-            event
-                .get("streamTrace")
-                .and_then(|trace| trace.get("usage"))
-                .and_then(|usage| usage.get("outputTokens")),
-        ),
-        json_i64(event.get("upstreamDurationMS")),
-        json_i64(event.get("upstreamTTFBMS")),
+        event
+            .pointer("/streamTrace/usage/outputTokens")
+            .and_then(Value::as_i64),
+        event
+            .pointer("/streamTrace/outputSpanMS")
+            .and_then(Value::as_i64),
     )
-}
-
-fn json_i64(value: Option<&Value>) -> Option<i64> {
-    let value = value?;
-    value
-        .as_i64()
-        .or_else(|| value.as_u64().and_then(|number| i64::try_from(number).ok()))
 }
 
 #[cfg(test)]
@@ -173,104 +144,97 @@ mod tests {
     use super::*;
 
     #[test]
-    fn generation_speed_covers_the_eligibility_matrix() {
-        assert_eq!(
-            output_tokens_per_second("client", false, None, Some(100), Some(2_100), Some(100)),
-            Some(50.0)
-        );
+    fn observed_speed_requires_success_and_a_measurable_span() {
+        for (span, expected) in [
+            (None, None),
+            (Some(-1), None),
+            (Some(0), None),
+            (Some(5), None),
+            (Some(7), None),
+            (Some(12), None),
+            (Some(99), None),
+            (Some(100), Some(1000.0)),
+            (Some(2000), Some(50.0)),
+        ] {
+            assert_eq!(
+                output_tokens_per_second("client", Some("succeeded"), false, None, Some(100), span),
+                expected
+            );
+        }
+        for outcome in [None, Some("failed"), Some("cancelled")] {
+            assert_eq!(
+                output_tokens_per_second("client", outcome, false, None, Some(26), Some(1000)),
+                None
+            );
+        }
+        for (kind, in_flight, purpose, tokens) in [
+            ("upstream", false, None, Some(100)),
+            ("client", true, None, Some(100)),
+            ("client", false, Some("token_count"), Some(100)),
+            ("client", false, None, None),
+            ("client", false, None, Some(-1)),
+        ] {
+            assert_eq!(
+                output_tokens_per_second(
+                    kind,
+                    Some("succeeded"),
+                    in_flight,
+                    purpose,
+                    tokens,
+                    Some(1000)
+                ),
+                None
+            );
+        }
         assert_eq!(
             output_tokens_per_second(
                 "client",
+                Some("succeeded"),
                 false,
-                Some("standard"),
+                None,
                 Some(0),
-                Some(2_100),
-                Some(100)
+                Some(1000)
             ),
             Some(0.0)
-        );
-        assert_eq!(
-            output_tokens_per_second("client", false, None, None, Some(2_100), Some(100)),
-            None
-        );
-        assert_eq!(
-            output_tokens_per_second("client", false, None, Some(10), Some(2_100), None),
-            None
-        );
-        assert_eq!(
-            output_tokens_per_second("client", false, None, Some(10), Some(100), Some(100)),
-            None
-        );
-        assert_eq!(
-            output_tokens_per_second("client", false, None, Some(10), Some(50), Some(100)),
-            None
-        );
-        assert_eq!(
-            output_tokens_per_second("client", false, None, Some(-1), Some(2_100), Some(100)),
-            None
-        );
-        assert_eq!(
-            output_tokens_per_second("client", true, None, Some(10), Some(2_100), Some(100)),
-            None
-        );
-        assert_eq!(
-            output_tokens_per_second("upstream", false, None, Some(10), Some(2_100), Some(100)),
-            None
-        );
-        assert_eq!(
-            output_tokens_per_second(
-                "client",
-                false,
-                Some("token_count"),
-                Some(10),
-                Some(2_100),
-                Some(100)
-            ),
-            None
         );
     }
 
     #[test]
-    fn aggregate_speed_is_token_weighted_not_the_mean_of_rates() {
+    fn aggregate_speed_excludes_unknown_and_burst_samples() {
         let mut totals = OutputSpeedTotals::default();
-        totals.observe(output_generation_sample(
-            "client",
-            false,
-            None,
-            Some(100),
-            Some(1_100),
-            Some(100),
-        ));
-        totals.observe(output_generation_sample(
-            "client",
-            false,
-            None,
-            Some(100),
-            Some(9_100),
-            Some(100),
-        ));
-        totals.observe(output_generation_sample(
-            "client",
-            false,
-            Some("token_count"),
-            Some(9_000),
-            Some(2_000),
-            Some(100),
-        ));
-        totals.observe(output_generation_sample(
-            "upstream",
-            false,
-            None,
-            Some(9_000),
-            Some(2_000),
-            Some(100),
-        ));
+        for (tokens, span) in [
+            (100, Some(1000)),
+            (100, Some(9000)),
+            (490, Some(12)),
+            (229, None),
+        ] {
+            totals.observe(output_generation_sample(
+                "client",
+                Some("succeeded"),
+                false,
+                None,
+                Some(tokens),
+                span,
+            ));
+        }
         assert_eq!(totals.requests, 2);
         assert_eq!(totals.tokens, 200);
-        assert_eq!(totals.generation_ms, 10_000);
-        let weighted = totals.rate().unwrap();
-        let arithmetic_mean = (100.0 + (100.0 / 9.0)) / 2.0;
-        assert!((weighted - 20.0).abs() < 1e-9);
-        assert!((weighted - arithmetic_mean).abs() > 1.0);
+        assert_eq!(totals.generation_ms, 10000);
+        assert_eq!(totals.rate(), Some(20.0));
+    }
+
+    #[test]
+    fn missing_or_invalid_observation_clears_stale_live_speed() {
+        let mut event = json!({"kind":"client", "phase":"completed", "outcome":"succeeded",
+            "outputTokensPerSecond": 40833.3, "upstreamTTFBMS":8800, "upstreamDurationMS":8812,
+            "streamTrace":{"usage":{"outputTokens":490}}});
+        decorate_runtime_change_value(&mut event);
+        assert!(event["outputTokensPerSecond"].is_null());
+        event["streamTrace"]["outputSpanMS"] = json!(1000);
+        decorate_runtime_change_value(&mut event);
+        assert_eq!(event["outputTokensPerSecond"], 490.0);
+        event["outcome"] = json!("failed");
+        decorate_runtime_change_value(&mut event);
+        assert!(event["outputTokensPerSecond"].is_null());
     }
 }

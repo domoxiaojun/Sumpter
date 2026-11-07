@@ -453,8 +453,7 @@ struct EndpointProjectionRow {
     failover: i64,
     duration_ms: Option<i64>,
     ttfb_ms: Option<i64>,
-    upstream_duration_ms: Option<i64>,
-    upstream_ttfb_ms: Option<i64>,
+    output_span_ms: Option<i64>,
     request_purpose: Option<String>,
     usage_present: i64,
     input_tokens: Option<i64>,
@@ -478,7 +477,7 @@ fn load_endpoint_projection_rows(
                 request_purpose,usage_present,input_tokens,output_tokens,cache_read_input_tokens,\
                 cache_creation_input_tokens,reasoning_tokens,uncached_input_tokens,\
                 processed_input_tokens,processed_total_tokens,token_accounting_semantics,\
-                token_accounting_quality FROM runtime_events{} ORDER BY seq ASC",
+                token_accounting_quality,output_span_ms FROM runtime_events{} ORDER BY seq ASC",
         builder.where_sql()
     );
     let mut statement = transaction.prepare(&sql)?;
@@ -492,8 +491,7 @@ fn load_endpoint_projection_rows(
             failover: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
             duration_ms: row.get(6)?,
             ttfb_ms: row.get(7)?,
-            upstream_duration_ms: row.get(8)?,
-            upstream_ttfb_ms: row.get(9)?,
+            output_span_ms: row.get(22)?,
             request_purpose: row.get(10)?,
             usage_present: row.get::<_, Option<i64>>(11)?.unwrap_or(0),
             input_tokens: row.get(12)?,
@@ -542,8 +540,7 @@ impl EndpointAccumulator {
             failover: row.failover,
             duration_ms: row.duration_ms,
             ttfb_ms: row.ttfb_ms,
-            upstream_duration_ms: row.upstream_duration_ms,
-            upstream_ttfb_ms: row.upstream_ttfb_ms,
+            output_span_ms: row.output_span_ms,
             request_purpose: row.request_purpose.clone(),
             endpoint_id: None,
             effective_model: None,
@@ -562,11 +559,11 @@ impl EndpointAccumulator {
         if row.outcome.as_deref() == Some("succeeded") {
             self.output_speed.observe(super::output_generation_sample(
                 "client",
+                row.outcome.as_deref(),
                 false,
                 row.request_purpose.as_deref(),
                 row.output_tokens,
-                row.upstream_duration_ms,
-                row.upstream_ttfb_ms,
+                row.output_span_ms,
             ));
         }
     }
@@ -697,7 +694,7 @@ fn output_speed_totals(
 ) -> QueryResult<super::OutputSpeedTotals> {
     let sql = format!(
         "SELECT COALESCE(SUM(CASE WHEN {pred} THEN output_tokens ELSE 0 END),0),\
-                COALESCE(SUM(CASE WHEN {pred} THEN upstream_duration_ms - upstream_ttfb_ms ELSE 0 END),0),\
+                COALESCE(SUM(CASE WHEN {pred} THEN output_span_ms ELSE 0 END),0),\
                 COALESCE(SUM(CASE WHEN {pred} THEN 1 ELSE 0 END),0)\
          FROM runtime_events{}",
         base.where_sql(),
@@ -729,6 +726,7 @@ fn analytics_dimension(
         clauses.push(extra.into());
     }
     let where_sql = format!(" WHERE {}", clauses.join(" AND "));
+    let output_speed_predicate = super::OUTPUT_SPEED_PREDICATE;
     let sql = format!(
         r#"SELECT {expression} AS name,
                       COUNT(*),
@@ -792,9 +790,9 @@ fn analytics_dimension(
                       MAX(workspace_paths_json),
                       GROUP_CONCAT(DISTINCT COALESCE(project_name,project_id,'unidentified_project')),
                       GROUP_CONCAT(DISTINCT COALESCE(client_kind,'unrecorded_client')),
-                      SUM(CASE WHEN kind='client' AND outcome='succeeded' AND is_in_flight=0 AND (request_purpose IS NULL OR request_purpose!='token_count') AND output_tokens IS NOT NULL AND output_tokens>=0 AND upstream_duration_ms IS NOT NULL AND upstream_duration_ms>=0 AND upstream_ttfb_ms IS NOT NULL AND upstream_ttfb_ms>=0 AND upstream_duration_ms>upstream_ttfb_ms THEN output_tokens ELSE 0 END),
-                      SUM(CASE WHEN kind='client' AND outcome='succeeded' AND is_in_flight=0 AND (request_purpose IS NULL OR request_purpose!='token_count') AND output_tokens IS NOT NULL AND output_tokens>=0 AND upstream_duration_ms IS NOT NULL AND upstream_duration_ms>=0 AND upstream_ttfb_ms IS NOT NULL AND upstream_ttfb_ms>=0 AND upstream_duration_ms>upstream_ttfb_ms THEN upstream_duration_ms - upstream_ttfb_ms ELSE 0 END),
-                      SUM(CASE WHEN kind='client' AND outcome='succeeded' AND is_in_flight=0 AND (request_purpose IS NULL OR request_purpose!='token_count') AND output_tokens IS NOT NULL AND output_tokens>=0 AND upstream_duration_ms IS NOT NULL AND upstream_duration_ms>=0 AND upstream_ttfb_ms IS NOT NULL AND upstream_ttfb_ms>=0 AND upstream_duration_ms>upstream_ttfb_ms THEN 1 ELSE 0 END)
+                      SUM(CASE WHEN {output_speed_predicate} THEN output_tokens ELSE 0 END),
+                      SUM(CASE WHEN {output_speed_predicate} THEN output_span_ms ELSE 0 END),
+                      SUM(CASE WHEN {output_speed_predicate} THEN 1 ELSE 0 END)
                FROM runtime_events{where_sql}
               GROUP BY name
               ORDER BY COUNT(*) DESC, name ASC
@@ -888,7 +886,7 @@ fn analytics_token_metrics(
                 usage_present,input_tokens,output_tokens,cache_read_input_tokens,\
                 cache_creation_input_tokens,reasoning_tokens,uncached_input_tokens,\
                 processed_input_tokens,processed_total_tokens,token_accounting_semantics,\
-                token_accounting_quality FROM runtime_events WHERE {}",
+                token_accounting_quality,output_span_ms FROM runtime_events WHERE {}",
         clauses.join(" AND ")
     );
     let mut accumulator = TokenAccumulator::default();
@@ -902,8 +900,7 @@ fn analytics_token_metrics(
             failover: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
             duration_ms: row.get(3)?,
             ttfb_ms: row.get(4)?,
-            upstream_duration_ms: row.get(5)?,
-            upstream_ttfb_ms: row.get(6)?,
+            output_span_ms: row.get(20)?,
             request_purpose: row.get(7)?,
             endpoint_id: None,
             effective_model: row.get(8)?,

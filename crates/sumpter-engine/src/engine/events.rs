@@ -31,6 +31,7 @@ pub fn comparable_event(event: &RuntimeEvent) -> RuntimeEvent {
     if let Some(trace) = normalized.stream_trace.as_mut() {
         trace.max_chunk_gap_ms = None;
         trace.last_chunk_at_ms = None;
+        trace.output_span_ms = None;
     }
     normalized
 }
