@@ -4,6 +4,35 @@ use super::{
 };
 use serde_json::json;
 
+#[test]
+fn binary_and_legacy_compressed_exports_do_not_bypass_redaction() {
+    let source = json!({
+        "inboundBody":"c2VjcmV0", "inboundBodyEncoding":"base64",
+        "attempts":[{
+            "outboundBody":"c2VjcmV0", "outboundBodyEncoding":"base64",
+            "responseHeaders":[{"name":"Content-Encoding","value":"gzip"}],
+            "upstreamChunks":[{"data":"c2VjcmV0","dataEncoding":"base64"},{"data":"legacy compressed text"}]
+        }],
+        "clientChunks":[{"data":"c2VjcmV0","dataEncoding":"base64"}]
+    });
+    let mut exported = source.clone();
+    redact_capture_value(&mut exported);
+    assert_eq!(exported["inboundBody"], "");
+    assert_eq!(exported["inboundBodyRedacted"], true);
+    assert_eq!(exported["attempts"][0]["outboundBodyRedacted"], true);
+    for chunk in exported["attempts"][0]["upstreamChunks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(exported["clientChunks"].as_array().unwrap())
+    {
+        assert_eq!(chunk["data"], "");
+        assert_eq!(chunk["redacted"], true);
+    }
+    assert!(!exported.to_string().contains("c2VjcmV0"));
+    assert!(source.to_string().contains("c2VjcmV0"));
+}
+
 #[tokio::test]
 async fn every_export_scope_applies_privacy_and_keeps_raw_source() {
     use axum::extract::{Query, State};

@@ -12,6 +12,9 @@ mod conversation;
 #[path = "../../../../tests/contracts/gemini.rs"]
 mod gemini;
 
+#[path = "../../../../tests/contracts/compressed_response.rs"]
+mod compressed_response;
+
 #[path = "../../../../tests/contracts/model_scope.rs"]
 mod model_scope;
 

@@ -689,6 +689,7 @@ fn failure_kind_message(kind: RuntimeFailureKind) -> String {
         RuntimeFailureKind::InvalidResponse => "上游响应无效，回合未完成".into(),
         RuntimeFailureKind::UpstreamHttpStatus => "上游返回错误状态，回合未完成".into(),
         RuntimeFailureKind::StreamIdleTimeout => "上游响应长时间无数据，回合未完成".into(),
+        RuntimeFailureKind::ResponseObservationFailed => "无法确认响应完成".into(),
         RuntimeFailureKind::StreamInterrupted => "上游响应流中断，回合未完成".into(),
         RuntimeFailureKind::UpstreamResponseIncomplete => "上游响应不完整，回合未完成".into(),
         RuntimeFailureKind::UpstreamResponseFailed => "上游响应失败，回合未完成".into(),

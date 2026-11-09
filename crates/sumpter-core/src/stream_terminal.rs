@@ -238,6 +238,17 @@ impl SseTerminalTracker {
     /// Whether the bounded non-stream observer had to drop body bytes. This is
     /// intentionally kept as an observer-quality signal rather than inferred
     /// as a successful zero-usage response.
+    /// Decoding/observation failed; retain reported values as provisional only.
+    pub fn mark_observation_incomplete(&mut self) {
+        self.cache_read_evidence.complete = false;
+        self.cache_read_evidence.finality = if self.usage.cache_read_input_tokens.is_some() {
+            CacheReadFinality::Provisional
+        } else {
+            CacheReadFinality::Unknown
+        };
+        self.cache_read_evidence.issue = Some(CacheReadReason::InsufficientEvidence);
+    }
+
     pub fn observation_truncated(&self) -> bool {
         self.observation_truncated
     }

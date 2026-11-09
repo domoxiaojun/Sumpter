@@ -22,6 +22,7 @@ mod output_timing;
 mod payload;
 mod performance;
 mod protocol;
+mod response_decode;
 mod runtime_api;
 mod sessions;
 mod state;

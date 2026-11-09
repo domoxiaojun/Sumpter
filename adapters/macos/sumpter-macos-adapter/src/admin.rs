@@ -1949,6 +1949,7 @@ fn redact_capture_value(value: &mut Value) {
             }
         }
         Value::Object(object) => {
+            sumpter_core::diagnostic_capture::redact_binary_payloads(object);
             for (key, child) in object.iter_mut() {
                 match key.as_str() {
                     "inboundHeaders" | "outboundHeaders" | "responseHeaders" => {
@@ -1971,7 +1972,7 @@ fn redact_capture_value(value: &mut Value) {
                             }
                         }
                     }
-                    "inboundBody" | "outboundBody" => {
+                    "inboundBody" | "outboundBody" | "data" => {
                         if let Some(text) = child.as_str() {
                             *child = Value::String(redact_body_text(text));
                         }

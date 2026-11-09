@@ -472,6 +472,8 @@ public enum RuntimeEventPresentation {
                 return "流中断（\(durationSeconds(timeoutMS)) 未收到新数据）"
             }
             return "流中断（吐字空闲超时）"
+        case .responseObservationFailed:
+            return "无法确认响应完成"
         case .streamInterrupted:
             return "流中断（上游传输异常）"
         case .upstreamResponseIncomplete:
@@ -813,6 +815,7 @@ public enum RuntimeEventPresentation {
         case .invalidResponse: "响应无法解析"
         case .upstreamHTTPStatus: "上游 HTTP 错误"
         case .streamIdleTimeout: "流空闲超时"
+        case .responseObservationFailed: "无法确认响应完成"
         case .streamInterrupted: "流传输中断"
         case .upstreamResponseIncomplete: "上游响应未完整"
         case .upstreamResponseFailed: "上游响应失败"

@@ -145,6 +145,7 @@ pub enum RuntimeFailureKind {
     UpstreamHttpStatus,
     StreamIdleTimeout,
     StreamInterrupted,
+    ResponseObservationFailed,
     UpstreamResponseIncomplete,
     UpstreamResponseFailed,
     EndpointsExhausted,
@@ -165,6 +166,7 @@ impl RuntimeFailureKind {
             Self::UpstreamHttpStatus => "upstream_http_status",
             Self::StreamIdleTimeout => "stream_idle_timeout",
             Self::StreamInterrupted => "stream_interrupted",
+            Self::ResponseObservationFailed => "response_observation_failed",
             Self::UpstreamResponseIncomplete => "upstream_response_incomplete",
             Self::UpstreamResponseFailed => "upstream_response_failed",
             Self::EndpointsExhausted => "endpoints_exhausted",
@@ -2928,6 +2930,24 @@ pub struct DiagnosticHeader {
     pub value: String,
 }
 
+/// Reversible payload encoding. Missing on legacy text-only captures.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DiagnosticDataEncoding {
+    #[default]
+    Utf8,
+    Base64,
+}
+
+impl DiagnosticDataEncoding {
+    pub fn is_utf8(&self) -> bool {
+        *self == Self::Utf8
+    }
+    pub fn storage_bytes(self) -> usize {
+        if self == Self::Base64 { 6 } else { 0 }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticChunk {
@@ -2935,6 +2955,8 @@ pub struct DiagnosticChunk {
     pub at_ms: i64,
     pub bytes: u64,
     pub data: std::sync::Arc<str>,
+    #[serde(default, skip_serializing_if = "DiagnosticDataEncoding::is_utf8")]
+    pub data_encoding: DiagnosticDataEncoding,
     #[serde(default)]
     pub truncated: bool,
 }
@@ -2960,6 +2982,8 @@ pub struct DiagnosticAttemptCapture {
     pub outbound_url: String,
     pub outbound_headers: Vec<DiagnosticHeader>,
     pub outbound_body: std::sync::Arc<str>,
+    #[serde(default, skip_serializing_if = "DiagnosticDataEncoding::is_utf8")]
+    pub outbound_body_encoding: DiagnosticDataEncoding,
     pub outbound_body_bytes: u64,
     #[serde(default)]
     pub outbound_body_truncated: bool,
@@ -2986,6 +3010,8 @@ pub struct DiagnosticRequestCapture {
     pub path: String,
     pub inbound_headers: Vec<DiagnosticHeader>,
     pub inbound_body: std::sync::Arc<str>,
+    #[serde(default, skip_serializing_if = "DiagnosticDataEncoding::is_utf8")]
+    pub inbound_body_encoding: DiagnosticDataEncoding,
     pub inbound_body_bytes: u64,
     #[serde(default)]
     pub inbound_body_truncated: bool,

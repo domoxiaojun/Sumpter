@@ -20,6 +20,8 @@ Sumpter 的核心边界是“客户端请求进入一个地址，代理按配置
 
 HTTP/SSE 按请求及业务终态结算；Realtime/Live WebSocket 保留连接与关闭诊断，握手成功不等于模型生成成功。一个客户端请求可包含多次上游尝试，RuntimeEvent 用同一 request ID 关联它们，界面分别展示客户端最终结果和上游尝试链。
 
+HTTP 响应观察支持 identity、gzip、br、zlib 格式的 deflate 与 zstd，最多四层组合编码按逆序增量解码。原生转发及原始捕获保留线上字节和 Content-Encoding；协议观察及转换读取解码视图。压缩响应必须转发尾部并在 EOF 校验后结算，Gemini 终态后的用量帧继续计入。观察块最多 64 KiB，每次响应累计解码观察上限 64 MiB；未知编码、非法压缩、压缩截断或超限以 response_observation_failed 表示“无法确认响应完成”，保留 HTTP 状态和明确原因，不伪装成网络中断或成功。原生响应继续转发，已开始的响应不重放；协议转换遇到解码失败时停止产生转换正文，不合成完成或错误帧。
+
 Responses 仅支持 HTTP/SSE；通过鉴权的 WS 升级探测在共享入站层返回 426，不建立上游连接、不计推理事件。两个 adapter 只为 Realtime/Live 路径进行 WS 升级。模型目录始终输出 `prefer_websockets=false`，与上游模板或能力缓存无关；不提供重新开启 Responses WS 的配置开关。
 
 历史 `websocketTrace.requests` 结构和 `runtime_codex_requests` 计数投影继续用于旧记录的读取、查询与导出；新 HTTP/SSE 请求沿用逐请求投影。移除入口不迁移或清空数据库，不回填历史缺失字段。运行汇总 API v1 移除可选的 `responsesWebSocketConnections`，两端界面不再用连接合成请求行。
@@ -35,6 +37,8 @@ Responses 仅支持 HTTP/SSE；通过鉴权的 WS 升级探测在共享入站层
 `sumpter-runtime` 使用 bundled SQLite、WAL 和有界后台写入。内存快照让请求热路径不等待每次数据库写入；Admin 通过 runtime 层异步查询 API 等待结果，最多 4 个专用查询工作器执行同步 SQLite 操作，不占用代理 Tokio 工作线程；客户端取消会停止查询/导出游标，已接纳的写操作完成提交与内存对账后才释放名额。存储退化和 backpressure 通过 Admin 状态暴露。运行统计、会话删除、清理、重置和重建是不同操作，文档不得混用。
 
 统计只从客户端完成事件的上游 usage 聚合，pending 单独计数；缓存 Token 按协议口径保留原始值。存储计数按事件状态变更维护，并叠加有界待提交增量；保留策略删去的计数不会被旧 Engine 累计快照写回。诊断捕获独立于统计，默认关闭，可能包含未脱敏正文和凭据。SQLite 写入背压是统计降级状态，不会关闭代理数据面；事件以零游标通知客户端重新同步，Admin 仍展示 backpressure 和最后错误。
+
+诊断 Body/Chunk 保留字符串字段，并使用可选的 inboundBodyEncoding、outboundBodyEncoding、dataEncoding 区分 utf8 与 base64；缺省是旧文本格式。二进制、压缩数据及跨块不完整的 UTF-8 使用 Base64 无损保存，容量计入编码后的长度，截断只保存可逆的原始字节前缀。索引不携带正文，详情与大块展示按需读取。原始导出保留编码；脱敏副本移除编码／压缩载荷并增加 redacted 或相应 BodyRedacted 标记，不修改源记录。旧文本捕获已经损失的二进制无法恢复，旧事件不重算；配置和数据库 schema 不变。
 
 分页快照同时使用 `snapshotSeq`、`snapshotChangeSeq` 与 `historyGeneration`。事件入队 `seq` 不变，首次完成水位固定快照的已完成集合；后续补充 metadata 不改变该水位。缺少完成水位的旧 token 明确失效，由客户端重取快照，不静默产生重复行或漏行。数据库以补列和回填方式兼容现有事件，不重建历史。
 

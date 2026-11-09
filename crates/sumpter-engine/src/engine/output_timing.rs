@@ -7,6 +7,7 @@ use futures_util::{StreamExt, stream};
 use sumpter_core::config::ProviderProtocol;
 use sumpter_core::stream_terminal::{SseDialect, SseTerminalTracker};
 
+use super::response_decode::ResponseDecoder;
 use crate::outbound::UpstreamResponse;
 
 pub(super) type ObservedOutputTiming = Arc<Mutex<OutputWindow>>;
@@ -69,23 +70,39 @@ pub(super) fn observe(
     let timing = Arc::new(Mutex::new(OutputWindow::default()));
     let shared = timing.clone();
     let started = Instant::now();
-    let mut tracker = SseTerminalTracker::new(dialect);
+    let tracker = SseTerminalTracker::new(dialect);
     let upstream = std::mem::replace(&mut response.stream, stream::empty().boxed());
-    response.stream = upstream
-        .map(move |item| {
-            if let Ok(chunk) = &item {
-                let _ = tracker.push(chunk);
+    let decoder = ResponseDecoder::new(&response.headers);
+    response.stream = stream::unfold(
+        (upstream, decoder, tracker),
+        move |(mut upstream, mut decoder, mut tracker)| {
+            let shared = shared.clone();
+            async move {
+                let item = upstream.next().await;
+                let at_ms = started.elapsed().as_millis().min(i64::MAX as u128) as i64;
+                match &item {
+                    Some(Ok(chunk)) => decoder.feed(chunk, |data| {
+                        let _ = tracker.push(data);
+                    }),
+                    None => decoder.finish(|data| {
+                        let _ = tracker.push(data);
+                    }),
+                    Some(Err(_)) => {}
+                }
                 if let Ok(mut window) = shared.lock() {
                     window.observe(
                         tracker.output_events(),
-                        started.elapsed().as_millis().min(i64::MAX as u128) as i64,
-                        tracker.observation_truncated(),
+                        at_ms,
+                        tracker.observation_truncated()
+                            || decoder.issue().is_some()
+                            || matches!(item, Some(Err(_))),
                     );
                 }
+                item.map(|item| (item, (upstream, decoder, tracker)))
             }
-            item
-        })
-        .boxed();
+        },
+    )
+    .boxed();
     Some(timing)
 }
 
@@ -94,6 +111,78 @@ mod tests {
     use super::*;
     use bytes::Bytes;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn gzip_timing_uses_output_arrival_not_delayed_usage_or_trailer() {
+        use std::io::Write;
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut wire_offset = 0;
+        let mut chunks = Vec::new();
+        for (delay, frame) in [
+            (
+                0,
+                "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"one\"}]}}]}\n\n",
+            ),
+            (
+                150,
+                "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"two\"}]},\"finishReason\":\"STOP\"}]}\n\n",
+            ),
+            (
+                200,
+                "data: {\"usageMetadata\":{\"candidatesTokenCount\":2}}\n\n",
+            ),
+        ] {
+            encoder.write_all(frame.as_bytes()).unwrap();
+            encoder.flush().unwrap();
+            chunks.push((
+                delay,
+                Bytes::copy_from_slice(&encoder.get_ref()[wire_offset..]),
+            ));
+            wire_offset = encoder.get_ref().len();
+        }
+        let wire = encoder.finish().unwrap();
+        chunks.push((200, Bytes::copy_from_slice(&wire[wire_offset..])));
+        for corrupt in [false, true] {
+            let mut case_chunks = chunks.clone();
+            let mut expected_wire = wire.clone();
+            if corrupt {
+                let crc = expected_wire.len() - 8;
+                expected_wire[crc] ^= 1;
+                let last = &mut case_chunks.last_mut().unwrap().1;
+                let mut tail = last.to_vec();
+                let crc = tail.len() - 8;
+                tail[crc] ^= 1;
+                *last = Bytes::from(tail);
+            }
+            let mut response = UpstreamResponse {
+                status: 200,
+                headers: vec![
+                    ("content-type".into(), "text/event-stream".into()),
+                    ("content-encoding".into(), "gzip".into()),
+                ],
+                stream: stream::iter(case_chunks)
+                    .then(|(delay, bytes)| async move {
+                        tokio::time::sleep(Duration::from_millis(delay)).await;
+                        Ok(bytes)
+                    })
+                    .boxed(),
+            };
+            let timing = observe(&mut response, ProviderProtocol::Gemini).unwrap();
+            let mut returned = Vec::new();
+            for _ in 0..2 {
+                returned.extend_from_slice(&response.stream.next().await.unwrap().unwrap());
+            }
+            let before_usage = span_ms(&timing).expect("two separated output batches");
+            while let Some(item) = response.stream.next().await {
+                returned.extend_from_slice(&item.unwrap());
+            }
+            assert_eq!(returned, expected_wire);
+            assert_eq!(
+                span_ms(&timing),
+                if corrupt { None } else { Some(before_usage) }
+            );
+        }
+    }
 
     #[tokio::test]
     async fn timing_survives_buffering_and_ignores_delayed_usage() {

@@ -14,11 +14,12 @@ use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
+use base64::Engine as _;
 use serde_json::{Value, json};
 
 use sumpter_core::events::{
-    ClientDeclaredMetadata, DiagnosticAttemptCapture, DiagnosticChunk, DiagnosticHeader,
-    RuntimeEvent,
+    ClientDeclaredMetadata, DiagnosticAttemptCapture, DiagnosticChunk, DiagnosticDataEncoding,
+    DiagnosticHeader, RuntimeEvent,
 };
 use sumpter_core::routing::PlannedEndpoint;
 
@@ -73,6 +74,7 @@ fn record_size(record: &DiagnosticRequestCapture) -> usize {
         + record.failure_detail.as_ref().map_or(0, String::len)
         + websocket_capture_size(record.websocket_trace.as_ref())
         + record.inbound_body.len()
+        + record.inbound_body_encoding.storage_bytes()
         + record
             .inbound_headers
             .iter()
@@ -86,7 +88,7 @@ fn record_size(record: &DiagnosticRequestCapture) -> usize {
         + record
             .client_chunks
             .iter()
-            .map(|chunk| chunk.data.len())
+            .map(|chunk| chunk.data.len() + chunk.data_encoding.storage_bytes())
             .sum::<usize>()
 }
 
@@ -109,6 +111,7 @@ fn diagnostic_attempt_size(attempt: &DiagnosticAttemptCapture) -> usize {
         + attempt.outbound_method.len()
         + attempt.outbound_url.len()
         + attempt.outbound_body.len()
+        + attempt.outbound_body_encoding.storage_bytes()
         + attempt.error.as_ref().map_or(0, String::len)
         + attempt
             .outbound_headers
@@ -123,7 +126,7 @@ fn diagnostic_attempt_size(attempt: &DiagnosticAttemptCapture) -> usize {
         + attempt
             .upstream_chunks
             .iter()
-            .map(|chunk| chunk.data.len())
+            .map(|chunk| chunk.data.len() + chunk.data_encoding.storage_bytes())
             .sum::<usize>()
 }
 
@@ -223,6 +226,50 @@ fn diagnostic_text(bytes: &[u8], remaining: usize) -> (String, bool) {
     (text, take < bytes.len())
 }
 
+fn encoded_headers(headers: &[DiagnosticHeader]) -> bool {
+    headers.iter().any(|header| {
+        header.name.eq_ignore_ascii_case("content-encoding")
+            && header
+                .value
+                .split(',')
+                .any(|encoding| !encoding.trim().eq_ignore_ascii_case("identity"))
+    })
+}
+
+fn diagnostic_payload(
+    bytes: &[u8],
+    remaining: usize,
+    binary: bool,
+) -> (String, DiagnosticDataEncoding, bool) {
+    if bytes.is_empty() {
+        return (String::new(), DiagnosticDataEncoding::Utf8, false);
+    }
+    let text = std::str::from_utf8(bytes).ok().filter(|text| {
+        !binary
+            && text
+                .chars()
+                .all(|c| !c.is_control() || matches!(c, '\n' | '\r' | '\t'))
+    });
+    if let Some(text) = text {
+        let mut take = remaining.min(text.len());
+        while !text.is_char_boundary(take) {
+            take -= 1;
+        }
+        return (
+            text[..take].to_owned(),
+            DiagnosticDataEncoding::Utf8,
+            take < bytes.len(),
+        );
+    }
+    // Charge the encoding tag and padded Base64 length before copying bytes.
+    let take = bytes.len().min(remaining.saturating_sub(6) / 4 * 3);
+    if take == 0 {
+        return (String::new(), DiagnosticDataEncoding::Utf8, true);
+    }
+    let data = base64::engine::general_purpose::STANDARD.encode(&bytes[..take]);
+    (data, DiagnosticDataEncoding::Base64, take < bytes.len())
+}
+
 fn diagnostic_headers(
     headers: &[(String, String)],
     remaining: usize,
@@ -243,6 +290,43 @@ fn diagnostic_headers(
         }
     }
     (out, false)
+}
+
+#[cfg(test)]
+mod payload_tests {
+    use super::*;
+
+    fn restore(text: &str, encoding: DiagnosticDataEncoding) -> Vec<u8> {
+        match encoding {
+            DiagnosticDataEncoding::Utf8 => text.as_bytes().to_vec(),
+            DiagnosticDataEncoding::Base64 => base64::engine::general_purpose::STANDARD
+                .decode(text)
+                .unwrap(),
+        }
+    }
+
+    #[test]
+    fn payloads_preserve_binary_and_unicode_prefixes_within_capacity() {
+        for bytes in [
+            b"hello".as_slice(),
+            "中文".as_bytes(),
+            &[0, 0x1f, 0x8b, 0xff],
+            &"中".as_bytes()[..2],
+        ] {
+            for binary in [true, false] {
+                for remaining in 0..32 {
+                    let (data, encoding, truncated) = diagnostic_payload(bytes, remaining, binary);
+                    assert!(data.len() + encoding.storage_bytes() <= remaining);
+                    let restored = restore(&data, encoding);
+                    assert!(bytes.starts_with(&restored));
+                    assert_eq!(truncated, restored.len() < bytes.len());
+                }
+            }
+        }
+        let (data, encoding, truncated) = diagnostic_payload(&[0, 0x8b, 0xff], 64, true);
+        assert_eq!(restore(&data, encoding), [0, 0x8b, 0xff]);
+        assert!(!truncated);
+    }
 }
 
 fn refresh_capture_usage(capture: &mut DiagnosticCaptureState, truncated: bool) {
@@ -525,8 +609,11 @@ impl Engine {
             .map(|header| header.name.len() + header.value.len())
             .sum::<usize>();
         let _timer = super::performance::StageTimer::new("capture_inbound", body.len());
-        let (inbound_body, body_truncated) =
-            diagnostic_text(body, remaining.saturating_sub(header_bytes));
+        let (inbound_body, inbound_body_encoding, body_truncated) = diagnostic_payload(
+            body,
+            remaining.saturating_sub(header_bytes),
+            encoded_headers(&inbound_headers),
+        );
         let truncated = headers_truncated || body_truncated;
         let record = DiagnosticRequestCapture {
             websocket_trace: None,
@@ -536,6 +623,7 @@ impl Engine {
             path: path.into(),
             inbound_headers,
             inbound_body: inbound_body.into(),
+            inbound_body_encoding,
             inbound_body_bytes: body.len() as u64,
             inbound_body_truncated: body_truncated,
             client_kind: meta.client_kind,
@@ -608,8 +696,11 @@ impl Engine {
             .map(|header| header.name.len() + header.value.len())
             .sum::<usize>();
         let _timer = super::performance::StageTimer::new("capture_outbound", request.body.len());
-        let (outbound_body, body_truncated) =
-            diagnostic_text(&request.body, remaining.saturating_sub(header_bytes));
+        let (outbound_body, outbound_body_encoding, body_truncated) = diagnostic_payload(
+            &request.body,
+            remaining.saturating_sub(header_bytes),
+            encoded_headers(&outbound_headers),
+        );
         let truncated = url_truncated || headers_truncated || body_truncated;
         let attempt = DiagnosticAttemptCapture {
             id: id.clone(),
@@ -624,6 +715,7 @@ impl Engine {
             outbound_url,
             outbound_headers,
             outbound_body: outbound_body.into(),
+            outbound_body_encoding,
             outbound_body_bytes: request.body.len() as u64,
             outbound_body_truncated: body_truncated,
             response_status: None,
@@ -748,16 +840,22 @@ impl Engine {
         else {
             return;
         };
-        let (data, truncated) = diagnostic_text(bytes, remaining);
+        let binary = encoded_headers(
+            &capture.records[record_index].attempts[attempt_index].response_headers,
+        );
+        let (data, data_encoding, truncated) = diagnostic_payload(bytes, remaining, binary);
         capture.records[record_index].truncated |= truncated;
         if !data.is_empty() {
-            capture.captured_bytes = capture.captured_bytes.saturating_add(data.len());
+            capture.captured_bytes = capture
+                .captured_bytes
+                .saturating_add(data.len() + data_encoding.storage_bytes());
             capture.records[record_index].attempts[attempt_index]
                 .upstream_chunks
                 .push(DiagnosticChunk {
                     at_ms,
                     bytes: bytes.len() as u64,
                     data: data.into(),
+                    data_encoding,
                     truncated,
                 });
         }
@@ -779,16 +877,24 @@ impl Engine {
         else {
             return;
         };
-        let (data, truncated) = diagnostic_text(bytes, remaining);
+        let record = &capture.records[record_index];
+        let binary = record.attempts.last().is_some_and(|attempt| {
+            attempt.route_mode == Some(sumpter_core::routing::RouteMode::Native)
+                && encoded_headers(&attempt.response_headers)
+        });
+        let (data, data_encoding, truncated) = diagnostic_payload(bytes, remaining, binary);
         capture.records[record_index].truncated |= truncated;
         if !data.is_empty() {
-            capture.captured_bytes = capture.captured_bytes.saturating_add(data.len());
+            capture.captured_bytes = capture
+                .captured_bytes
+                .saturating_add(data.len() + data_encoding.storage_bytes());
             capture.records[record_index]
                 .client_chunks
                 .push(DiagnosticChunk {
                     at_ms,
                     bytes: bytes.len() as u64,
                     data: data.into(),
+                    data_encoding,
                     truncated,
                 });
         }

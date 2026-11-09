@@ -15,7 +15,7 @@ use sumpter_core::bridge_in::{self, ClientDialect};
 use sumpter_core::config::{AppConfig, ProviderProtocol};
 use sumpter_core::events::{RuntimeEventPhase, message_tokens};
 use sumpter_core::routing::PlannedEndpoint;
-use sumpter_core::stream_terminal::{SseDialect, SseTerminalTracker};
+use sumpter_core::stream_terminal::{SseDialect, SseTerminal, SseTerminalTracker};
 
 use crate::outbound::TransportError;
 use crate::request_build::PassthroughKind;
@@ -31,6 +31,7 @@ use super::protocol::{
     is_live_bootstrap_request, is_videos_create_request, live_call_id_from_headers,
     live_call_id_from_payload, video_id_from_headers, video_id_from_payload,
 };
+use super::response_decode::{ObservationIssue, ResponseDecoder};
 use crate::http_headers::{connection_fields, is_hop_by_hop};
 
 struct RelayState {
@@ -42,6 +43,10 @@ struct RelayState {
     terminal_tracker: Option<SseTerminalTracker>,
     /// 观察协议转换前的上游响应，保证 usage 是 Provider 实际返回值。
     upstream_summary_tracker: Option<SseTerminalTracker>,
+    response_decoder: Option<ResponseDecoder>,
+    compressed: bool,
+    observation_issue: Option<ObservationIssue>,
+    deferred_terminal: Option<SseTerminal>,
     observe_sse: bool,
     upstream_observe_sse: bool,
     /// 严格协议边界：流式响应必须有 SSE 终止事件，严格非流式对话 JSON
@@ -66,6 +71,73 @@ struct RelayState {
 }
 
 impl RelayState {
+    fn observe_client_bytes(&mut self, data: &[u8]) {
+        let terminal = self.terminal_tracker.as_mut().and_then(|tracker| {
+            if self.observe_sse {
+                tracker.push(data)
+            } else {
+                tracker.observe_json(data)
+            }
+        });
+        if let Some(terminal) = terminal {
+            self.deferred_terminal = Some(terminal);
+        }
+        if let Some(tracker) = &self.terminal_tracker {
+            self.guard.set_tool_calls(tracker.tool_calls());
+        }
+    }
+
+    fn process_decoded(&mut self, data: &[u8], output: &mut Vec<u8>) {
+        if let Some(tracker) = &mut self.upstream_summary_tracker {
+            if self.upstream_observe_sse {
+                let _ = tracker.push(data);
+            } else {
+                tracker.observe_json(data);
+            }
+            self.guard.record_response_summary(tracker);
+        }
+        if self.bridge.is_some() || self.client_bridge.is_some() {
+            let mut out = self
+                .bridge
+                .as_mut()
+                .map_or_else(|| data.to_vec(), |bridge| bridge.feed(data));
+            if let Some(client) = &mut self.client_bridge {
+                out = client.feed(&out);
+            }
+            self.observe_client_bytes(&out);
+            output.extend_from_slice(&out);
+        } else {
+            // Native relay: inspect the decoded view but forward the wire view.
+            self.observe_client_bytes(data);
+        }
+    }
+
+    fn decode_observation(&mut self, wire: Option<&Bytes>) -> Vec<u8> {
+        let mut output = Vec::new();
+        if let Some(mut decoder) = self.response_decoder.take() {
+            match wire {
+                Some(bytes) => decoder.feed(bytes, |data| self.process_decoded(data, &mut output)),
+                None => decoder.finish(|data| self.process_decoded(data, &mut output)),
+            }
+            self.observation_issue = decoder.issue();
+            self.response_decoder = Some(decoder);
+        }
+        if self.observation_issue.is_some() {
+            self.mark_observation_incomplete();
+        }
+        output
+    }
+
+    fn mark_observation_incomplete(&mut self) {
+        if let Some(tracker) = &mut self.upstream_summary_tracker {
+            tracker.mark_observation_incomplete();
+            self.guard.record_response_summary(tracker);
+        }
+        if let Some(tracker) = &mut self.terminal_tracker {
+            tracker.mark_observation_incomplete();
+        }
+    }
+
     /// Inspect a newly received resource chunk as soon as it arrives.  Live
     /// and Video providers are not consistent about framing: some return one
     /// JSON object, others emit SSE/NDJSON and may split the id across many
@@ -446,8 +518,17 @@ impl Engine {
             } else {
                 passthrough && client_stream
             };
+        let response_decoder = (!raw_passthrough && response.status == 200)
+            .then(|| ResponseDecoder::new(&response.headers));
+        let compressed = response_decoder
+            .as_ref()
+            .is_some_and(ResponseDecoder::is_compressed);
         let state = RelayState {
             upstream: response.stream,
+            response_decoder,
+            compressed,
+            observation_issue: None,
+            deferred_terminal: None,
             bridge,
             client_bridge,
             terminal_tracker,
@@ -532,31 +613,18 @@ impl Engine {
                                 st.guard.started.elapsed().as_millis() as i64,
                             );
                         }
-                        if let Some(tracker) = &mut st.upstream_summary_tracker {
-                            if st.upstream_observe_sse {
-                                let _ = tracker.push(&chunk);
-                            } else {
-                                tracker.observe_json(&chunk);
-                            }
-                            st.guard.record_response_summary(tracker);
-                        }
-                        let mut out = match &mut st.bridge {
-                            Some(bridge) => Bytes::from(bridge.feed(&chunk)),
-                            None => chunk,
+                        let transformed = st.bridge.is_some() || st.client_bridge.is_some();
+                        let decoded_output = st.decode_observation(Some(&chunk));
+                        let out = if transformed {
+                            Bytes::from(decoded_output)
+                        } else {
+                            chunk
                         };
-                        if let Some(client) = &mut st.client_bridge {
-                            out = Bytes::from(client.feed(&out));
-                        }
-                        let terminal = st.terminal_tracker.as_mut().and_then(|tracker| {
-                            if st.observe_sse {
-                                tracker.push(&out)
-                            } else {
-                                tracker.observe_json(&out)
-                            }
-                        });
-                        if let Some(tracker) = &st.terminal_tracker {
-                            st.guard.set_tool_calls(tracker.tool_calls());
-                        }
+                        let terminal = if !st.compressed && st.observation_issue.is_none() {
+                            st.deferred_terminal.take()
+                        } else {
+                            None
+                        };
                         if let Some(terminal) = terminal {
                             // 协议终止事件已经包含在本次返回给客户端的字节中。先完成
                             // 记账，再让下一次 poll 结束 body；客户端此时释放流不再是 499。
@@ -583,6 +651,7 @@ impl Engine {
                     }
                     Ok(None) => {
                         st.finished = true;
+                        let mut decoded_tail = st.decode_observation(None);
                         st.finalize_response_metadata();
                         if let Some(tracker) = &mut st.upstream_summary_tracker {
                             let _ = tracker.finish();
@@ -590,8 +659,13 @@ impl Engine {
                         }
                         // EOF is a transport boundary; finalize the protocol before
                         // committing conversation state from this attempt.
-                        let mut tail = st.bridge.as_mut().map(|b| b.finish()).unwrap_or_default();
-                        if let Some(session) = st.guard.meta.session_id.clone()
+                        let mut tail = if st.observation_issue.is_none() {
+                            st.bridge.as_mut().map(|b| b.finish()).unwrap_or_default()
+                        } else {
+                            Vec::new()
+                        };
+                        if st.observation_issue.is_none()
+                            && let Some(session) = st.guard.meta.session_id.clone()
                             && st.bridge.as_ref().is_some_and(|bridge| {
                                 matches!(bridge.terminal(), bridge::BridgeTerminal::Completed)
                             })
@@ -606,27 +680,32 @@ impl Engine {
                                 parts,
                             );
                         }
-                        if let Some(client) = &mut st.client_bridge {
+                        if st.observation_issue.is_none()
+                            && let Some(client) = &mut st.client_bridge
+                        {
                             let mut client_tail = client.feed(&tail);
                             client_tail.extend(client.finish());
                             tail = client_tail;
                         }
-                        let terminal = st.terminal_tracker.as_mut().and_then(|tracker| {
-                            if st.observe_sse {
-                                tracker.push(&tail)
-                            } else {
-                                tracker.observe_json(&tail)
-                            }
-                        });
-                        let terminal = terminal.or_else(|| {
+                        st.observe_client_bytes(&tail);
+                        let terminal = st.deferred_terminal.take().or_else(|| {
                             st.terminal_tracker
                                 .as_mut()
                                 .and_then(SseTerminalTracker::finish)
                         });
+                        decoded_tail.extend_from_slice(&tail);
+                        tail = decoded_tail;
                         if let Some(tracker) = &st.terminal_tracker {
                             st.guard.set_tool_calls(tracker.tool_calls());
                         }
-                        if let Some(terminal) = terminal {
+                        if let Some(issue) = st.observation_issue.filter(|_| {
+                            st.strict_terminal || st.bridge.is_some() || st.client_bridge.is_some()
+                        }) {
+                            st.mark_observation_incomplete();
+                            st.guard.complete_from_stream(Some(
+                                StreamReadError::ObservationFailed(issue.token()),
+                            ));
+                        } else if let Some(terminal) = terminal {
                             st.guard.record_stream_terminal(&terminal);
                             st.guard.complete_from_protocol_terminal(terminal);
                         } else if st.strict_terminal
@@ -657,6 +736,7 @@ impl Engine {
                     }
                     Err(e) => {
                         st.finished = true;
+                        st.mark_observation_incomplete();
                         // If a provider closed after sending a complete JSON
                         // object but before a protocol terminal/EOF, the
                         // bounded parsers can still recover a resource ID.

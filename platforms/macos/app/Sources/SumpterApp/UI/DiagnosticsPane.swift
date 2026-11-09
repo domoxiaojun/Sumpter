@@ -847,7 +847,7 @@ struct DiagnosticsPane: View {
                                 diagnosticDisclosure("错误 · \(detail.failureKind ?? "unknown")", text: previewText(failure))
                             }
                             diagnosticDisclosure("入站请求 Headers", text: headersText(detail.inboundHeaders))
-                            diagnosticDisclosure("入站原始 Body · \(detail.inboundBodyBytes) bytes", text: previewText(detail.inboundBody))
+                            diagnosticDisclosure("入站原始 Body · \(detail.inboundBodyBytes) bytes", text: payloadPreview(detail.inboundBody, encoding: detail.inboundBodyEncoding, redacted: detail.inboundBodyRedacted))
                             ForEach(Array(detail.attempts.enumerated()), id: \.element.id) { index, attempt in
                                 LazyRowDisclosure(label: {
                                     Text("上游尝试 #\(index + 1) · \(attempt.endpointName) · \(attempt.responseStatus.map(String.init) ?? attempt.error ?? "等待响应")")
@@ -857,14 +857,14 @@ struct DiagnosticsPane: View {
                                 }) {
                                     VStack(alignment: .leading, spacing: 10) {
                                         diagnosticDisclosure("\(attempt.outboundMethod) \(attempt.outboundURL) Headers", text: headersText(attempt.outboundHeaders))
-                                        diagnosticDisclosure("出站原始 Body · \(attempt.outboundBodyBytes) bytes", text: previewText(attempt.outboundBody))
+                                        diagnosticDisclosure("出站原始 Body · \(attempt.outboundBodyBytes) bytes", text: payloadPreview(attempt.outboundBody, encoding: attempt.outboundBodyEncoding, redacted: attempt.outboundBodyRedacted))
                                         diagnosticDisclosure("上游响应 Headers", text: headersText(attempt.responseHeaders))
-                                        diagnosticDisclosure("原始上游 Chunks", text: chunksText(attempt.upstreamChunks))
+                                        diagnosticDisclosure("原始上游 Chunks", text: chunksText(attempt.upstreamChunks, compressed: compressedHeaders(attempt.responseHeaders)))
                                         if let error = attempt.error { diagnosticDisclosure("尝试错误", text: previewText(error)) }
                                     }.padding(.top, 8)
                                 }
                             }
-                            diagnosticDisclosure("桥接后客户端 Chunks", text: chunksText(detail.clientChunks))
+                            diagnosticDisclosure("桥接后客户端 Chunks", text: chunksText(detail.clientChunks, compressed: detail.routeMode != .translated && detail.attempts.contains { compressedHeaders($0.responseHeaders) }))
                         }
                     }
                 } else if model.diagnosticCapture != nil {
@@ -1018,16 +1018,44 @@ struct DiagnosticsPane: View {
         return previewSuffix(output, truncated: truncated)
     }
 
-    private func chunksText(_ chunks: [AdminWire.DiagnosticChunk]) -> String {
+    private func compressedHeaders(_ headers: [AdminWire.DiagnosticHeader]) -> Bool {
+        headers.contains { header in
+            header.name.lowercased() == "content-encoding" && header.value.split(separator: ",").contains { $0.trimmingCharacters(in: .whitespaces).lowercased() != "identity" }
+        }
+    }
+
+    private func payloadPreview(_ text: String, encoding: String?, redacted: Bool?) -> String {
+        if redacted == true { return "(已脱敏：原始数据已移除)" }
         var output = ""
         var used = 0
         var truncated = false
+        if let encoding, encoding != "utf8" {
+            appendLimited(encoding == "base64" ? "[Base64 · 二进制原始字节]\n" : "[未知编码：\(encoding)]\n", to: &output, used: &used, truncated: &truncated)
+        }
+        appendLimited(text, to: &output, used: &used, truncated: &truncated)
+        return previewSuffix(output, truncated: truncated)
+    }
+
+    private func chunksText(_ chunks: [AdminWire.DiagnosticChunk], compressed: Bool = false) -> String {
+        var output = ""
+        var used = 0
+        var truncated = false
+        if compressed && chunks.contains(where: { $0.dataEncoding == nil && $0.redacted != true }) {
+            appendLimited("旧格式文本捕获：压缩字节可能已丢失，无法保证还原。\n\n", to: &output, used: &used, truncated: &truncated)
+        }
         for (index, chunk) in chunks.enumerated() {
             if index > 0 {
                 appendLimited("\n\n", to: &output, used: &used, truncated: &truncated)
             }
             appendLimited("[+\(chunk.atMS)ms · \(chunk.bytes) bytes\(chunk.truncated ? " · 已截断" : "")]\n", to: &output, used: &used, truncated: &truncated)
-            appendLimited(chunk.data, to: &output, used: &used, truncated: &truncated)
+            if chunk.redacted == true {
+                appendLimited("(已脱敏：原始数据已移除)", to: &output, used: &used, truncated: &truncated)
+            } else {
+                if let encoding = chunk.dataEncoding, encoding != "utf8" {
+                    appendLimited(encoding == "base64" ? "[Base64 · 二进制原始字节]\n" : "[未知编码：\(encoding)]\n", to: &output, used: &used, truncated: &truncated)
+                }
+                appendLimited(chunk.data, to: &output, used: &used, truncated: &truncated)
+            }
             guard !truncated else { break }
         }
         return previewSuffix(output, truncated: truncated)

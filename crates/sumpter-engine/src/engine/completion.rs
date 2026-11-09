@@ -600,7 +600,11 @@ impl CompletionGuard {
                     .complete_client(event, failure.and_then(|failure| failure.detail));
             }
             Some(err) => {
-                let interrupted = format!("{}{err}", message_tokens::STREAM_INTERRUPTED_PREFIX);
+                let interrupted = if matches!(err, StreamReadError::ObservationFailed(_)) {
+                    err.to_string()
+                } else {
+                    format!("{}{err}", message_tokens::STREAM_INTERRUPTED_PREFIX)
+                };
                 let client_message =
                     message_tokens::join(&[bridged.clone(), Some(interrupted.clone()), unmatched])
                         .unwrap_or_else(|| interrupted.clone());
