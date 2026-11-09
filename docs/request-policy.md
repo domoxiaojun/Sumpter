@@ -8,12 +8,14 @@ WebUI 和 macOS 的“Claude Code 路由”页面提供“全客户端请求策�
 
 ## 默认值和交互预设
 
-旧配置没有 requestPolicy 时仍采用原有重试次数和完整缓冲模式。并发和 RPM 默认不限；缓冲新增共享预算，避免并发长流逐一占满单流上限。
+旧配置没有 requestPolicy 时仍采用原有总尝试预算和完整缓冲模式，并启用连续无响应保护（同一入口连续 3 次，拦截 300 秒）。这是首响应前连接失败或超时的默认行为变化；显式设置 maxConsecutiveNoResponse=0 可关闭。并发和 RPM 默认不限；缓冲有共享预算，避免并发长流逐一占满单流上限。
 
 | 字段 | 默认值 | 含义 |
 | --- | --- | --- |
 | maxTotalAttempts | 0 | 沿用原 retry 预算；设为正整数后限制一个 HTTP 请求的总发送次数，包含粘性、换入口、500、SSE 和跨轮重试 |
 | responseWaitTimeoutSeconds | 0 | 从转发开始到客户端响应头提交的总等待上限，包含排队、重试、退避和缓冲；0 不限，已开始交付的长流不截断 |
+| maxConsecutiveNoResponse | 3 | 同一会话、同一请求在同一入口连续未收到响应头的失败上限；含连接错误与单次响应头超时，跨 CLI 重发累计；0 关闭，最大 100 |
+| noResponseCooldownSeconds | 300 | 达到连续无响应上限后，相同请求在该入口的拦截秒数；1–3600，拦截期间重复请求不延长截止 |
 | global.maxConcurrent | 0 | 全局同时处理的上游请求；0 不限，名额保留至上游流结束或取消 |
 | global.maxQueued | 128 | 最多等待请求数；0 立即返回本地 429 |
 | global.queueTimeoutSeconds | 30 | 最长排队等待秒数 |
@@ -36,17 +38,27 @@ WebUI 和 macOS 的“Claude Code 路由”页面提供“全客户端请求策�
 
 responseWaitTimeoutSeconds 可设为 0–86400 秒，默认 0 禁用。显式开启后，从路由完成开始转发计时，排队、上游连接与响应头等待、错误正文探测、退避和 Responses 缓冲共用截止；到时取消未完成工作，返回本地 HTTP 504，failureKind=response_wait_timeout、timeoutMS=配置值，不冒充上游 504 或客户端取消。提交客户端响应后解除这个截止，正常长回答不截断；WebSocket 不受影响。
 
-retry.responseTimeoutSeconds 则是每次上游请求的响应头超时，超时后仍按重试策略继续；retry.maxRetryDurationSeconds 只在重试边界检查，不强制截断正在等待的尝试。无限循环可保持 maxDeferredRounds、maxRetryDurationSeconds、maxTotalAttempts 和 responseWaitTimeoutSeconds 均为 0。显式正值限制仍会结束重试；客户端关闭连接也会终止当前工作。
+retry.responseTimeoutSeconds 则是每次上游请求的响应头超时，超时后仍按重试策略继续；retry.maxRetryDurationSeconds 只在重试边界检查，不强制截断正在等待的尝试。显式选择无限循环时，将 maxDeferredRounds、maxRetryDurationSeconds、maxTotalAttempts、responseWaitTimeoutSeconds 和 maxConsecutiveNoResponse 均设为 0。显式正值限制仍会结束重试；客户端关闭连接也会终止当前工作。
 
 HTTP 请求处理或响应体提前释放记为 client_disconnected，保留 499 和 cancelled 计数兼容性，两端显示“连接中断（原因未确定）”。它不能证明用户主动取消，也可能来自客户端超时/自动重试、连接丢失或服务取消；旧 client_cancelled 记录不迁移、不删除。
 
 运行页选中请求链后持续更新进行中请求；终态停止，暂停刷新或离开页面停止读取。快照按 changeSeq 合并，不覆盖较新的事件；最多显示 512 条，超出时显示“至少”及截断提示。客户端计时不是模型已经开始输出的证据。
 
+## 连续无响应与重复请求保护
+
+对 Messages、Chat Completions、Completions、Responses（含 compact）和 Gemini 会话生成的 POST 请求，代理按入口累计首响应前连接失败与响应头超时。默认同一入口连续失败 3 次即停止在本次请求中向它重发，继续检查未耗尽的后备入口；没有可继续尝试的候选时，结束客户端请求。收到任何实际 HTTP 响应即清零该入口的首响应前失败计数，包括 429/503；这些 HTTP 错误继续使用原重试策略。已提交响应的长流、文件/视频/Realtime 等资源操作以及 WebSocket 不使用这项保护。
+
+达到保护阈值后，返回本地 HTTP 422，error.code 和 failureKind 为 no_response_retry_exhausted，failurePhase=before_response、scope=local、retryable=false，附 x-should-retry: false 和 cache-control: no-store。cooldownSeconds 表示最早可重新尝试的受保护入口剩余秒数；响应不附自动重试等待头。原有单次上游尝试仍记为连接失败/响应超时和本地 502，不伪造上游 HTTP 状态或上下文超限。两端请求详情与时间线显示“连续未收到响应，已停止重试”。客户端应结束自动重发，检查网关或调整上下文后重新发起请求；自行忽略终止提示的客户端仍可能继续显示忙，但命中保护的请求不会发送到该入口。
+
+保护按配置快照、入站 Token 身份、客户端来源、会话、请求路径、协议相关头、入口和实际出站正文摘要隔离。客户端更换 request ID 不会清零，修改正文、切换会话或更新凭据/路由配置可重新尝试。没有明确会话标识时使用既有会话指纹与请求来源。正文不会为恢复重试而自动压缩或删减；工具调用和签名保留原有转发规则。内存中只保留摘要与计数，最多 2048 项，未达到阈值的跨请求失败记录空闲 30 分钟后过期；保护重启后清空，容量淘汰也可能提前解除跨请求保护，不写运行数据库。单次请求内已经耗尽的入口仍保持耗尽。
+
+外部监控应分开记录重试活动和有效进展：失败事件、退避结束、连接建立及生命周期帧不能重置“无有效输出”计时。有效进展需来自实际输出或工具执行/结果；HTTP 200 与日志数量增长不足以证明进展。原故障的“约 60 秒 TLS EOF”仍需要目标实例的上游/网关日志确认原因，不能仅据旧请求较长就认定超出模型上下文上限。
+
 ## 重试和流式恢复
 
 仅识别可确认的结构化错误用于诊断：insufficient_quota、billing_hard_limit_reached、Google 日额度等仍按 429/503 的首响应前重试策略留在代理内部，不向客户端透传中间错误；已知 invalid_api_key / authentication_error / invalid_grant 与模型不支持仍停止同入口重试。无法确认的错误保持原状态码策略。Codex Live 的既有鉴权隔离和有界 bootstrap 行为保留。
 
-Retry-After、retry-after-ms 和 Google RetryInfo 统一取有效等待提示，并加正向抖动。等待仍受既有 300 秒提示上限和请求重试预算约束；超大提示不会导致等待数小时。总尝试预算只统计 Sumpter 的请求，不能限制客户端或 CPA 内部再次重试。
+Retry-After、retry-after-ms 和 Google RetryInfo 统一取有效等待提示，并加正向抖动。等待仍受既有 300 秒提示上限和请求重试预算约束；超大提示不会导致等待数小时。总尝试预算只统计单个入站请求内 Sumpter 的尝试；连续无响应保护可跨客户端重发，但都不能控制 CPA 在一次上游连接内部的重试。
 
 Responses SSE 仅在 retry.maxStreamErrorRetries > 0 或 retry.failoverOnStreamError=true 时启用保护。background 请求和压缩流不进入这条回放缓冲路径。
 

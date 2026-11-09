@@ -684,6 +684,7 @@ fn failure_kind_message(kind: RuntimeFailureKind) -> String {
     match kind {
         RuntimeFailureKind::ResponseTimeout => "上游响应超时，回合未完成".into(),
         RuntimeFailureKind::ResponseWaitTimeout => "代理响应等待达到上限，回合未完成".into(),
+        RuntimeFailureKind::NoResponseRetryExhausted => "连续未收到上游响应，已停止重试".into(),
         RuntimeFailureKind::ConnectionFailed => "无法连接上游，回合未完成".into(),
         RuntimeFailureKind::InvalidResponse => "上游响应无效，回合未完成".into(),
         RuntimeFailureKind::UpstreamHttpStatus => "上游返回错误状态，回合未完成".into(),

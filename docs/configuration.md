@@ -16,7 +16,7 @@ Sumpter 使用一份 JSON 配置文件，Linux 和 macOS 共用格式。新用�
 | `schemaVersion` | `7` | 当前格式版本，保存时必须明确为 7 |
 | `listener` | 对象 | 代理数据面监听和入站访问控制 |
 | `retry` | 对象 | 超时、重试、退避和失败响应行为 |
-| `requestPolicy` | 对象或省略 | HTTP/SSE 并发、排队、RPM、总尝试预算、Responses 缓冲和兼容声明；见[请求策略](request-policy.md) |
+| `requestPolicy` | 对象或省略 | HTTP/SSE 并发、排队、RPM、总尝试预算、连续无响应保护、Responses 缓冲和兼容声明；连续无响应默认同入口 3 次后拦截相同请求 300 秒，见[请求策略](request-policy.md) |
 | `endpoints` | 数组 | Provider 地址、凭据、协议标签和入口映射 |
 | `modelGroups` | 数组或省略 | 统一地址开放哪些模型，以及入口绑定和调度 |
 | `featureRules` | 数组 | WebSearch、WebFetch、安全分类器等子请求分流 |

@@ -34,6 +34,14 @@ struct RequestPolicySheet: View {
                         draft.maxTotalAttempts = 6; draft.global.maxConcurrent = 8
                         draft.global.maxQueued = 16; draft.global.queueTimeoutSeconds = 15
                     }
+                    GroupBox("连续无响应保护") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            number("同一入口连续无响应上限（0 = 关闭）", $draft.maxConsecutiveNoResponse, 0...100)
+                            number("相同请求拦截时长（秒）", $draft.noResponseCooldownSeconds, 1...3600)
+                            Text("同一会话、同一正文在某个入口连续连接失败或首响应超时后，停止向该入口重发；CLI 重新发送也受保护。仍可尝试后备入口，修改正文后可重新请求。全部候选耗尽时返回本地 422 并提示停止自动重试。收到实际 HTTP 响应会清零该入口的计数，已开始响应的长回答不受影响。")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }.padding(8)
+                    }
                     GroupBox("Responses 流保护") {
                         VStack(alignment: .leading, spacing: 12) {
                             Picker("流式策略", selection: $draft.streamProtection) {

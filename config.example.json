@@ -27,6 +27,8 @@
   "requestPolicy": {
     "maxTotalAttempts": 6,
     "responseWaitTimeoutSeconds": 0,
+    "maxConsecutiveNoResponse": 3,
+    "noResponseCooldownSeconds": 300,
     "streamProtection": "complete",
     "streamBufferMib": 16,
     "streamBufferChunks": 8192,

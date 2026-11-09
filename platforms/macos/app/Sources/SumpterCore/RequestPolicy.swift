@@ -41,6 +41,8 @@ public struct EndpointRequestPolicy: Codable, Equatable, Sendable {
 public struct RequestPolicy: Codable, Equatable, Sendable {
     public var maxTotalAttempts = 0
     public var responseWaitTimeoutSeconds = 0
+    public var maxConsecutiveNoResponse = 3
+    public var noResponseCooldownSeconds = 300
     public var streamProtection = "complete"
     public var streamBufferMiB = 16
     public var streamBufferChunks = 8192
@@ -51,6 +53,7 @@ public struct RequestPolicy: Codable, Equatable, Sendable {
     public init() {}
     enum CodingKeys: String, CodingKey {
         case maxTotalAttempts, responseWaitTimeoutSeconds, streamProtection, streamBufferChunks, streamBufferSeconds, global, endpoints
+        case maxConsecutiveNoResponse, noResponseCooldownSeconds
         case streamBufferMiB = "streamBufferMib"
         case maxBufferedMiB = "maxBufferedMib"
     }
@@ -58,6 +61,8 @@ public struct RequestPolicy: Codable, Equatable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         maxTotalAttempts = try c.decodeIfPresent(Int.self, forKey: .maxTotalAttempts) ?? 0
         responseWaitTimeoutSeconds = try c.decodeIfPresent(Int.self, forKey: .responseWaitTimeoutSeconds) ?? 0
+        maxConsecutiveNoResponse = try c.decodeIfPresent(Int.self, forKey: .maxConsecutiveNoResponse) ?? 3
+        noResponseCooldownSeconds = try c.decodeIfPresent(Int.self, forKey: .noResponseCooldownSeconds) ?? 300
         streamProtection = try c.decodeIfPresent(String.self, forKey: .streamProtection) ?? "complete"
         streamBufferMiB = try c.decodeIfPresent(Int.self, forKey: .streamBufferMiB) ?? 16
         streamBufferChunks = try c.decodeIfPresent(Int.self, forKey: .streamBufferChunks) ?? 8192
@@ -93,6 +98,7 @@ public struct RequestTraceStep: Codable, Equatable, Sendable {
          "quota_exhausted": "额度耗尽", "credential": "鉴权错误", "model_unsupported": "模型不支持",
          "rate_limit": "暂时限流", "upstream_error": "上游错误", "queue_full": "队列已满", "queue_timeout": "排队超时",
          "attempt_budget": "达到总尝试上限", "response_wait_timeout": "代理响应等待达到上限", "backoff": "退避", "wait_completed": "等待结束",
+         "no_response_retry_exhausted": "连续未收到响应，已停止向该入口重试",
          "same_group_capacity": "优先选择同组空闲入口", "session_group": "从当前会话调度组开始",
          "idle_timeout": "缓冲期间流空闲超时", "missing_terminal": "上游未发送终态",
          "retryable_terminal": "可重试的协议错误", "failed": "失败", "finished": "结束", "cancelled": "已取消"][detail] ?? detail

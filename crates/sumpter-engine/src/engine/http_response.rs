@@ -111,6 +111,42 @@ pub(super) fn proxy_failure_response(
     response
 }
 
+/// This is a local request-policy rejection, not an upstream HTTP status.
+/// Use a terminal 4xx and an explicit retry veto, rather than another retryable 502.
+pub(super) fn no_response_failure_response(
+    request_id: &str,
+    failure: &FailureInfo,
+    cooldown_seconds: u64,
+) -> Response {
+    let mut response = json_response(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        &serde_json::json!({
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "code": failure.kind.as_str(),
+                "message": failure.detail,
+            },
+            "requestID": request_id,
+            "scope": "local",
+            "failureKind": failure.kind.as_str(),
+            "failurePhase": failure.phase.as_str(),
+            "retryable": false,
+            "cooldownSeconds": cooldown_seconds,
+        }),
+    );
+    response
+        .headers_mut()
+        .insert("x-should-retry", HeaderValue::from_static("false"));
+    response
+        .headers_mut()
+        .insert("cache-control", HeaderValue::from_static("no-store"));
+    if let Ok(value) = HeaderValue::from_str(request_id) {
+        response.headers_mut().insert("x-sumpter-request-id", value);
+    }
+    response
+}
+
 pub fn json_response(status: StatusCode, body: &Value) -> Response {
     Response::builder()
         .status(status)

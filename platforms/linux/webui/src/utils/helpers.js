@@ -1220,6 +1220,7 @@ export function failureKindLabel(kind) {
   const map = {
     response_timeout: '响应超时 (Response Timeout)',
     response_wait_timeout: '代理响应等待超时',
+    no_response_retry_exhausted: '连续未收到响应，已停止重试',
     connection_failed: '连接失败 (Connection Failed)',
     invalid_response: '上游响应格式异常 (Invalid Response)',
     upstream_http_status: '上游返回 HTTP 错误状态',

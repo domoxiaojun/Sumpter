@@ -16,6 +16,307 @@ fn reply(status: u16, body: &[u8]) -> Outcome {
     }
 }
 
+#[tokio::test(start_paused = true)]
+async fn no_response_guard_stops_transport_loop_and_client_resends() {
+    for (path, payload) in [
+        ("/v1/messages", body()),
+        ("/v1/responses", codex_responses_body()),
+    ] {
+        let transport = FakeTransport::new();
+        transport.push(
+            "a.example.com",
+            Outcome::Error("peer closed without close_notify".into()),
+        );
+        transport.push("a.example.com", Outcome::Timeout);
+        transport.push("a.example.com", Outcome::Error("peer closed again".into()));
+        transport.push("a.example.com", reply(200, br#"{"ok":true}"#));
+        let mut c = config();
+        c.retry.max_deferred_rounds = 0;
+        c.retry.session_sticky_retries = 10;
+        let engine = engine_with(c, transport.clone());
+        let response = tokio::time::timeout(
+            Duration::from_secs(30),
+            engine.handle_request(
+                loopback(),
+                "POST",
+                path,
+                session_header("stalled"),
+                payload.clone(),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), 422, "{path}");
+        assert_eq!(response.headers()["x-should-retry"], "false");
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        assert!(!response.headers().contains_key("retry-after"));
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["scope"], "local");
+        assert_eq!(json["error"]["code"], "no_response_retry_exhausted");
+        assert_eq!(json["retryable"], false);
+        assert_eq!(json["cooldownSeconds"], 300);
+        assert!(json.get("upstreamStatusCode").is_none());
+        assert_eq!(transport.requests().len(), 3);
+        let sent = transport.requests();
+        assert!(
+            sent.iter().all(|request| request.body == sent[0].body),
+            "retries must not truncate context"
+        );
+        let snapshot = engine.runtime_snapshot();
+        let client = snapshot
+            .recent_events
+            .iter()
+            .find(|e| e.kind == "client")
+            .unwrap();
+        assert_eq!(client.phase, Some(RuntimeEventPhase::Completed));
+        assert_eq!(client.outcome, Some(RuntimeEventOutcome::Failed));
+        assert_eq!(
+            client.failure_kind,
+            Some(RuntimeFailureKind::NoResponseRetryExhausted)
+        );
+        assert_eq!(
+            client.failure_phase,
+            Some(RuntimeFailurePhase::BeforeResponse)
+        );
+        assert_eq!(client.ttfb_ms, None);
+        assert!(
+            client
+                .request_trace
+                .as_ref()
+                .unwrap()
+                .steps
+                .iter()
+                .any(|step| step.action == "stop" && step.detail == "no_response_retry_exhausted")
+        );
+
+        tokio::time::advance(Duration::from_secs(299)).await;
+        let mut headers = session_header("stalled");
+        headers.push(("x-request-id".into(), "new-client-request-id".into()));
+        let (status, bytes) = call(&engine, loopback(), path, headers, payload.clone()).await;
+        assert_eq!(status, 422);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&bytes).unwrap()["cooldownSeconds"],
+            1
+        );
+        assert_eq!(
+            transport.requests().len(),
+            3,
+            "resends must not send or extend the block"
+        );
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert_eq!(
+            call(
+                &engine,
+                loopback(),
+                path,
+                session_header("stalled"),
+                payload
+            )
+            .await
+            .0,
+            200
+        );
+        assert_eq!(transport.requests().len(), 4);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn no_response_guard_counts_failures_across_inbound_attempt_budgets() {
+    let transport = FakeTransport::new();
+    for _ in 0..3 {
+        transport.push("a.example.com", Outcome::Timeout);
+    }
+    let mut c = config();
+    c.retry.max_deferred_rounds = 0;
+    c.request_policy.max_total_attempts = 1;
+    let engine = engine_with(c, transport.clone());
+    for expected in [502, 502, 422, 422] {
+        assert_eq!(
+            call(
+                &engine,
+                loopback(),
+                "/v1/messages",
+                session_header("same-turn"),
+                body()
+            )
+            .await
+            .0,
+            expected
+        );
+    }
+    assert_eq!(transport.requests().len(), 3);
+}
+
+#[tokio::test(start_paused = true)]
+async fn no_response_guard_exhausts_only_the_failing_endpoint_and_allows_backup() {
+    let transport = FakeTransport::new();
+    for _ in 0..3 {
+        transport.push("a.example.com", Outcome::Timeout);
+    }
+    transport.push("b.example.com", reply(200, br#"{"ok":true}"#));
+    let mut c = two_endpoint_config();
+    c.endpoints[1].sticky_group = Some("backup".into());
+    c.retry.max_deferred_rounds = 0;
+    c.retry.session_sticky_retries = 10;
+    let engine = engine_with(c, transport.clone());
+    assert_eq!(
+        call(
+            &engine,
+            loopback(),
+            "/v1/messages",
+            session_header("fallback"),
+            body()
+        )
+        .await
+        .0,
+        200
+    );
+    assert_eq!(
+        transport
+            .requests()
+            .iter()
+            .map(|request| request.host.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "a.example.com",
+            "a.example.com",
+            "a.example.com",
+            "b.example.com"
+        ]
+    );
+    assert!(
+        !engine
+            .runtime_snapshot()
+            .recent_events
+            .iter()
+            .any(|e| e.kind == "client"
+                && e.failure_kind == Some(RuntimeFailureKind::NoResponseRetryExhausted))
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn no_response_guard_isolates_body_session_token_and_configuration() {
+    for dimension in ["body", "session", "token", "configuration"] {
+        let transport = FakeTransport::new();
+        transport.push("a.example.com", Outcome::Timeout);
+        transport.push("a.example.com", reply(200, br#"{"ok":true}"#));
+        let mut c = config();
+        c.request_policy.max_consecutive_no_response = 1;
+        c.listener.auth_tokens = vec![
+            InboundTokenConfig {
+                id: "first".into(),
+                name: "first".into(),
+                enabled: true,
+                token: "synthetic-first".into(),
+            },
+            InboundTokenConfig {
+                id: "second".into(),
+                name: "second".into(),
+                enabled: true,
+                token: "synthetic-second".into(),
+            },
+        ];
+        let engine = engine_with(c.clone(), transport.clone());
+        let mut headers = session_header("original");
+        headers.push(("x-api-key".into(), "synthetic-first".into()));
+        assert_eq!(
+            call(&engine, loopback(), "/v1/messages", headers.clone(), body())
+                .await
+                .0,
+            422,
+            "{dimension}"
+        );
+        let mut payload = body();
+        match dimension {
+            "body" => payload = body_for("claude-opus-5", "shorter context"),
+            "session" => headers[0].1 = "different-session".into(),
+            "token" => headers[1].1 = "synthetic-second".into(),
+            "configuration" => {
+                c.endpoints[0].api_key = "synthetic-changed-upstream".into();
+                engine.replace_config(c);
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            call(&engine, loopback(), "/v1/messages", headers, payload)
+                .await
+                .0,
+            200,
+            "{dimension}"
+        );
+        assert_eq!(transport.requests().len(), 2, "{dimension}");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn no_response_guard_resets_on_actual_http_responses_including_errors() {
+    let transport = FakeTransport::new();
+    for outcome in [
+        Outcome::Timeout,
+        Outcome::Timeout,
+        reply(429, b"busy"),
+        reply(503, b"unavailable"),
+        reply(400, b"bad request"),
+        Outcome::Timeout,
+        Outcome::Timeout,
+        reply(200, br#"{"ok":true}"#),
+    ] {
+        transport.push("a.example.com", outcome);
+    }
+    let mut c = config();
+    c.request_policy.max_total_attempts = 1;
+    let engine = engine_with(c, transport.clone());
+    for expected in [502, 502, 429, 503, 400, 502, 502, 200] {
+        assert_eq!(
+            call(&engine, loopback(), "/v1/messages", vec![], body())
+                .await
+                .0,
+            expected
+        );
+    }
+    assert_eq!(transport.requests().len(), 8);
+}
+
+#[tokio::test(start_paused = true)]
+async fn no_response_guard_can_be_disabled_for_explicit_unlimited_recovery() {
+    let transport = FakeTransport::new();
+    for _ in 0..4 {
+        transport.push("a.example.com", Outcome::Timeout);
+    }
+    transport.push("a.example.com", reply(200, br#"{"ok":true}"#));
+    let mut c = config();
+    c.retry.max_deferred_rounds = 0;
+    c.request_policy.max_consecutive_no_response = 0;
+    let engine = engine_with(c, transport.clone());
+    assert_eq!(
+        call(&engine, loopback(), "/v1/messages", vec![], body())
+            .await
+            .0,
+        200
+    );
+    assert_eq!(transport.requests().len(), 5);
+}
+
+#[tokio::test(start_paused = true)]
+async fn no_response_guard_rechecks_after_waiting_for_an_admission_permit() {
+    let transport = FakeTransport::new();
+    transport.set_delay(Duration::from_secs(2));
+    transport.push("a.example.com", Outcome::Timeout);
+    let mut c = config();
+    c.request_policy.max_consecutive_no_response = 1;
+    c.request_policy.global.max_concurrent = 1;
+    let engine = engine_with(c, transport.clone());
+    let (first, queued) = tokio::join!(
+        call(&engine, loopback(), "/v1/messages", vec![], body()),
+        call(&engine, loopback(), "/v1/messages", vec![], body()),
+    );
+    assert_eq!((first.0, queued.0), (422, 422));
+    assert_eq!(transport.requests().len(), 1);
+}
+
 #[tokio::test]
 async fn versioned_native_client_fixtures_preserve_tool_and_signature_payloads() {
     let fixtures: Value =

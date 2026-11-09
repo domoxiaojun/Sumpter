@@ -1,4 +1,4 @@
-//! Optional request governance. Defaults preserve routing and retry selection.
+//! Request governance, including bounded recovery from repeated transport failures.
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -137,6 +137,9 @@ pub struct RequestPolicy {
     pub max_total_attempts: u32,
     /// Forwarding through client response commit, including retries; 0 disables it.
     pub response_wait_timeout_seconds: u32,
+    /// Consecutive failures before headers for the same request and endpoint; 0 disables it.
+    pub max_consecutive_no_response: u32,
+    pub no_response_cooldown_seconds: u32,
     pub stream_protection: StreamProtection,
     pub stream_buffer_mib: u32,
     pub stream_buffer_chunks: u32,
@@ -151,6 +154,8 @@ impl Default for RequestPolicy {
         Self {
             max_total_attempts: 0,
             response_wait_timeout_seconds: 0,
+            max_consecutive_no_response: 3,
+            no_response_cooldown_seconds: 300,
             stream_protection: StreamProtection::Complete,
             stream_buffer_mib: 16,
             stream_buffer_chunks: 8192,
@@ -170,6 +175,8 @@ impl RequestPolicy {
     pub fn normalize(&mut self) {
         self.max_total_attempts = self.max_total_attempts.min(10_000);
         self.response_wait_timeout_seconds = self.response_wait_timeout_seconds.min(86_400);
+        self.max_consecutive_no_response = self.max_consecutive_no_response.min(100);
+        self.no_response_cooldown_seconds = self.no_response_cooldown_seconds.clamp(1, 3600);
         self.stream_buffer_mib = self.stream_buffer_mib.clamp(1, 256);
         self.stream_buffer_chunks = self.stream_buffer_chunks.clamp(16, 65_536);
         self.stream_buffer_seconds = self.stream_buffer_seconds.min(3600);
@@ -341,6 +348,33 @@ impl RequestTrace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_response_defaults_explicit_disable_and_bounds_round_trip() {
+        let defaults: RequestPolicy = serde_json::from_str("{}").unwrap();
+        assert_eq!(defaults.max_consecutive_no_response, 3);
+        assert_eq!(defaults.no_response_cooldown_seconds, 300);
+        let mut disabled: RequestPolicy = serde_json::from_str(
+            r#"{"maxConsecutiveNoResponse":0,"noResponseCooldownSeconds":60}"#,
+        )
+        .unwrap();
+        disabled.normalize();
+        assert_eq!(disabled.max_consecutive_no_response, 0);
+        assert_eq!(
+            serde_json::to_value(&disabled).unwrap()["noResponseCooldownSeconds"],
+            60
+        );
+        assert_eq!(
+            serde_json::from_value::<RequestPolicy>(serde_json::to_value(&disabled).unwrap())
+                .unwrap(),
+            disabled
+        );
+        disabled.max_consecutive_no_response = u32::MAX;
+        disabled.no_response_cooldown_seconds = 0;
+        disabled.normalize();
+        assert_eq!(disabled.max_consecutive_no_response, 100);
+        assert_eq!(disabled.no_response_cooldown_seconds, 1);
+    }
     #[test]
     fn distinguishes_daily_quota_from_temporary_throttle() {
         let hard = br#"{"error":{"details":[{"violations":[{"quotaId":"RequestsPerDay"}]}]}}"#;

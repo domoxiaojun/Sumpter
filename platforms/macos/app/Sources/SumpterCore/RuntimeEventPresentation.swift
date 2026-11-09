@@ -457,6 +457,8 @@ public enum RuntimeEventPresentation {
             return "首响应超时（尚未收到上游响应头）"
         case .responseWaitTimeout:
             return "代理响应等待达到上限"
+        case .noResponseRetryExhausted:
+            return "连续未收到响应，已停止重试"
         case .clientDisconnected:
             return "连接中断（原因未确定）"
         case .connectionFailed:
@@ -806,6 +808,7 @@ public enum RuntimeEventPresentation {
         switch kind {
         case .responseTimeout: "首响应超时"
         case .responseWaitTimeout: "代理响应等待超时"
+        case .noResponseRetryExhausted: "连续无响应保护"
         case .connectionFailed: "连接失败"
         case .invalidResponse: "响应无法解析"
         case .upstreamHTTPStatus: "上游 HTTP 错误"

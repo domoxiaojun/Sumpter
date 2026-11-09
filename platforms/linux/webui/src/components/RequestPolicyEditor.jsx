@@ -45,6 +45,12 @@ export function RequestPolicyEditor() {
     {number('代理响应等待上限（秒，0 = 不限）', draft.responseWaitTimeoutSeconds, v => change(next => { next.responseWaitTimeoutSeconds = v; }), 0, 86400)}
     <p>从代理开始转发到向客户端交付响应，包含排队、所有入口尝试、退避和缓冲；到时返回 504。0 保持原重试策略；已开始交付的长回答不受影响。</p>
     <button type="button" className="btn btn-secondary" onClick={() => change(next => { next.maxTotalAttempts = 6; next.global = { ...next.global, maxConcurrent: 8, maxQueued: 16, queueTimeoutSeconds: 15 }; })}>填入交互预设</button>
+    <h3>连续无响应保护</h3>
+    <div className="request-policy-grid">
+      {number('同一入口连续无响应上限（0 = 关闭）', draft.maxConsecutiveNoResponse, v => change(next => { next.maxConsecutiveNoResponse = v; }), 0, 100)}
+      {number('相同请求拦截时长（秒）', draft.noResponseCooldownSeconds, v => change(next => { next.noResponseCooldownSeconds = v; }), 1, 3600)}
+    </div>
+    <p>同一会话、同一正文在某个入口连续连接失败或首响应超时后，停止向该入口重发；CLI 重新发送也受保护。仍可尝试后备入口，修改正文后可重新请求。全部候选耗尽时返回本地 422 并提示停止自动重试。收到实际 HTTP 响应会清零该入口的计数，已开始响应的长回答不受影响。</p>
     <h3>Responses 流保护</h3>
     <label className="request-policy-field">流式策略<select className="form-select" value={draft.streamProtection} onChange={e => change(next => { next.streamProtection = e.target.value; })}>
       <option value="complete">完整缓冲：支持中途断流恢复</option><option value="prelude">前奏保护：更早开始输出</option>

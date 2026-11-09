@@ -209,6 +209,20 @@ impl FailureInfo {
         }
     }
 
+    pub(super) fn no_response_retry_exhausted(cooldown_seconds: u64) -> Self {
+        Self {
+            kind: RuntimeFailureKind::NoResponseRetryExhausted,
+            phase: RuntimeFailurePhase::BeforeResponse,
+            detail: Some(format!(
+                "Automatic retries stopped after repeated connection failures or timeouts before upstream response headers. Check the upstream gateway or reduce the request context before retrying. The earliest blocked route can be retried after {cooldown_seconds} seconds."
+            )),
+            timeout_ms: None,
+            upstream_status_code: None,
+            upstream_request_id: None,
+            retry_after_seconds: None,
+        }
+    }
+
     pub(super) fn apply_to(&self, event: &mut RuntimeEvent) {
         event.outcome = Some(RuntimeEventOutcome::Failed);
         event.failure_kind = Some(self.kind);

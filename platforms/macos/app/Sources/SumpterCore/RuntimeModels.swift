@@ -27,6 +27,7 @@ public enum RuntimeEventOutcome: String, Codable, Sendable {
 public enum RuntimeFailureKind: String, Codable, Sendable {
     case responseTimeout = "response_timeout"
     case responseWaitTimeout = "response_wait_timeout"
+    case noResponseRetryExhausted = "no_response_retry_exhausted"
     case connectionFailed = "connection_failed"
     case invalidResponse = "invalid_response"
     case upstreamHTTPStatus = "upstream_http_status"

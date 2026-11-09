@@ -29,12 +29,13 @@ use super::Engine;
 use super::catalog::is_media_only_conversation_model;
 use super::completion::CompletionGuard;
 use super::context::{
-    ClientMeta, ClientOut, current_request_context, observe_request_session,
+    ClientMeta, ClientOut, current_request_context, header_value, observe_request_session,
     retain_codex_metadata_for_client, upstream_request_id,
 };
 use super::events::new_event_id;
 use super::failure::FailureInfo;
 use super::http_response::{error_response, proxy_failure_response};
+use super::no_response::{BlockedRequest, Fingerprint, fingerprint};
 use super::payload::realtime_client_secret_request_session;
 use super::performance::StageTimer;
 use super::protocol::{
@@ -1850,6 +1851,47 @@ impl Engine {
         let realtime_request = client_out
             .as_ref()
             .is_some_and(|client| client.passthrough_kind == PassthroughKind::Realtime);
+        let no_response_scope = (config.request_policy.max_consecutive_no_response > 0
+            && method == "POST"
+            && client_out.as_ref().is_none_or(|client| {
+                matches!(
+                    client.passthrough_kind,
+                    PassthroughKind::Chat
+                        | PassthroughKind::Completions
+                        | PassthroughKind::Responses
+                        | PassthroughKind::ResponsesCompact
+                        | PassthroughKind::GeminiSession
+                )
+            }))
+        .then(|| {
+            // Use this request's configuration snapshot: an old in-flight failure
+            // must not poison requests using changed credentials or routes.
+            let generation = super::state::config_generation(config);
+            let context = guard.meta.request_context.as_ref();
+            let token = context.and_then(|context| context.inbound_token.as_ref());
+            fingerprint(&[
+                generation.as_bytes(),
+                session_key.value.as_bytes(),
+                token.map_or("", |token| token.id.as_str()).as_bytes(),
+                context
+                    .and_then(|context| context.source_ip.as_deref())
+                    .unwrap_or("")
+                    .as_bytes(),
+                guard.meta.client_kind.as_str().as_bytes(),
+                guard.meta.source_format.token().as_bytes(),
+                method.as_bytes(),
+                path_and_query.as_bytes(),
+                header_value(headers, "anthropic-version")
+                    .unwrap_or("")
+                    .as_bytes(),
+                header_value(headers, "anthropic-beta")
+                    .unwrap_or("")
+                    .as_bytes(),
+                header_value(headers, "openai-beta")
+                    .unwrap_or("")
+                    .as_bytes(),
+            ])
+        });
         // Only a Codex Live/Quicksilver bootstrap is safe to replay inside
         // the same admitted request.  Public Realtime control/sideband
         // requests must remain single-shot because replaying them can create
@@ -1944,6 +1986,8 @@ impl Engine {
         // passes caused by unrelated HTTP failures on another endpoint.
         let mut stream_error_retries: HashMap<String, i64> = HashMap::new();
         let mut exhausted_stream_endpoints = HashSet::new();
+        let mut no_response_blocked: HashMap<String, BlockedRequest> = HashMap::new();
+        let mut no_response_failures: HashMap<String, (Fingerprint, u32)> = HashMap::new();
         // chat 桥 stop_reason 回映射依据(见 bridge::OpenAiStreamBridge)。
         let declared_stop_sequences = request
             .raw
@@ -2005,6 +2049,10 @@ impl Engine {
                     && endpoint_index == round_sticky_endpoint_count
                     && sticky_retry_number < sticky_retry_limit
                     && round_state.sticky_retryable_failures > sticky_pass_checkpoint
+                    && round_ordered
+                        .iter()
+                        .take(round_sticky_endpoint_count)
+                        .any(|endpoint| !exhausted_stream_endpoints.contains(&endpoint.endpoint_id))
                 {
                     sticky_retry_number += 1;
                     let delay =
@@ -2163,6 +2211,29 @@ impl Engine {
                         continue;
                     }
                 }
+                // Hash the actual outgoing body, so changing context or a replayed
+                // signature can recover without inheriting the previous payload's block.
+                let no_response_key = no_response_scope.map(|scope| {
+                    fingerprint(&[
+                        &scope,
+                        endpoint.endpoint_id.as_bytes(),
+                        endpoint.protocol.token().as_bytes(),
+                        &build.request.body,
+                    ])
+                });
+                if let Some(blocked) = no_response_key
+                    .and_then(|key| self.inner.no_response.lock().unwrap().blocked(&key))
+                {
+                    exhausted_stream_endpoints.insert(endpoint.endpoint_id.clone());
+                    no_response_blocked.insert(endpoint.endpoint_id.clone(), blocked);
+                    guard.trace(
+                        "skip",
+                        Some(&endpoint.endpoint_id),
+                        "no_response_retry_exhausted",
+                        None,
+                    );
+                    continue;
+                }
                 let queue_started = Instant::now();
                 let permit = match self
                     .inner
@@ -2197,6 +2268,22 @@ impl Engine {
                         return response;
                     }
                 };
+                // Another identical request may have opened the guard while this
+                // attempt was queued. Release its permit without sending upstream.
+                if let Some(blocked) = no_response_key
+                    .and_then(|key| self.inner.no_response.lock().unwrap().blocked(&key))
+                {
+                    exhausted_stream_endpoints.insert(endpoint.endpoint_id.clone());
+                    no_response_blocked.insert(endpoint.endpoint_id.clone(), blocked);
+                    guard.trace(
+                        "skip",
+                        Some(&endpoint.endpoint_id),
+                        "no_response_retry_exhausted",
+                        None,
+                    );
+                    drop(permit);
+                    continue;
+                }
                 guard.trace(
                     "queue",
                     Some(&endpoint.endpoint_id),
@@ -2218,6 +2305,38 @@ impl Engine {
                     response_timeout,
                 )
                 .await;
+                let blocked_after_failure = no_response_key.and_then(|key| {
+                    let mut protection = self.inner.no_response.lock().unwrap();
+                    match &result {
+                        Err(error) if error.is_retryable_before_response() => {
+                            let (previous, failures) = no_response_failures
+                                .entry(endpoint.endpoint_id.clone())
+                                .or_insert((key, 0));
+                            if *previous != key {
+                                *previous = key;
+                                *failures = 0;
+                            }
+                            *failures = failures.saturating_add(1);
+                            protection.note_failure(key, &config.request_policy, *failures)
+                        }
+                        Ok(_) => {
+                            no_response_failures.remove(&endpoint.endpoint_id);
+                            protection.note_response(&key);
+                            None
+                        }
+                        Err(_) => None,
+                    }
+                });
+                if let Some(blocked) = blocked_after_failure {
+                    exhausted_stream_endpoints.insert(endpoint.endpoint_id.clone());
+                    no_response_blocked.insert(endpoint.endpoint_id.clone(), blocked);
+                    guard.trace(
+                        "failure",
+                        Some(&endpoint.endpoint_id),
+                        "no_response_retry_exhausted",
+                        None,
+                    );
+                }
                 if let Ok(response) = &mut result {
                     super::admission::hold_response(response, permit);
                 } else {
@@ -2508,7 +2627,9 @@ impl Engine {
                         &mut round_state,
                     )
                 };
-                if decision.is_some_and(|d| !d.retry_same) && !live_bootstrap_request {
+                if (decision.is_some_and(|d| !d.retry_same) && !live_bootstrap_request)
+                    || blocked_after_failure.is_some()
+                {
                     (
                         round_state.retryable_failures,
                         round_state.sticky_retryable_failures,
@@ -2559,6 +2680,9 @@ impl Engine {
                 {
                     break;
                 }
+                if blocked_after_failure.is_some() {
+                    continue;
+                }
                 // HTTP 500 使用独立的入口内重试次数，不参与 sessionStickyRetries。
                 // 达到次数后默认继续遍历下一个入口；关闭 failoverOn500 时在当前入口终止。
                 let last_was_500 = round_state
@@ -2600,6 +2724,10 @@ impl Engine {
                     && endpoint_index == round_sticky_endpoint_count
                     && sticky_retry_number < sticky_retry_limit
                     && round_state.sticky_retryable_failures > sticky_pass_checkpoint
+                    && round_ordered
+                        .iter()
+                        .take(round_sticky_endpoint_count)
+                        .any(|endpoint| !exhausted_stream_endpoints.contains(&endpoint.endpoint_id))
                 {
                     sticky_retry_number += 1;
                     let delay =
@@ -2646,6 +2774,27 @@ impl Engine {
             let mut failure = round_state
                 .last_failure
                 .unwrap_or_else(FailureInfo::endpoints_exhausted);
+            if ((!request_replay_safe
+                && last_attempt_endpoint
+                    .as_ref()
+                    .is_some_and(|endpoint| no_response_blocked.contains_key(endpoint)))
+                || candidates
+                    .iter()
+                    .all(|endpoint| exhausted_stream_endpoints.contains(&endpoint.endpoint_id)))
+                && let Some(blocked) = no_response_blocked
+                    .values()
+                    .min_by_key(|blocked| blocked.until)
+            {
+                let cooldown_seconds = blocked.remaining_seconds();
+                let failure = FailureInfo::no_response_retry_exhausted(cooldown_seconds);
+                guard.trace("stop", None, "no_response_retry_exhausted", None);
+                guard.complete(422, failure.detail.clone(), failure.clone());
+                return super::http_response::no_response_failure_response(
+                    &request_id,
+                    &failure,
+                    cooldown_seconds,
+                );
+            }
             if total_attempts == 0
                 && let Some(field) = policy_rejection
             {

@@ -139,6 +139,7 @@ pub enum RuntimeEventOutcome {
 pub enum RuntimeFailureKind {
     ResponseTimeout,
     ResponseWaitTimeout,
+    NoResponseRetryExhausted,
     ConnectionFailed,
     InvalidResponse,
     UpstreamHttpStatus,
@@ -158,6 +159,7 @@ impl RuntimeFailureKind {
         match self {
             Self::ResponseTimeout => "response_timeout",
             Self::ResponseWaitTimeout => "response_wait_timeout",
+            Self::NoResponseRetryExhausted => "no_response_retry_exhausted",
             Self::ConnectionFailed => "connection_failed",
             Self::InvalidResponse => "invalid_response",
             Self::UpstreamHttpStatus => "upstream_http_status",

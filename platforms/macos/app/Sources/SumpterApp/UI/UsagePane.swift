@@ -2045,6 +2045,7 @@ struct UsagePane: View {
                 "client_cancelled": "客户端断开或取消",
                 "client_disconnected": "连接中断（原因未确定）",
                 "response_wait_timeout": "代理响应等待超时",
+                "no_response_retry_exhausted": "连续无响应保护",
                 "client_request_rejected": "客户端请求被代理拒绝",
             ]
             return labels[value] ?? (value.isEmpty ? "未分类" : value)
