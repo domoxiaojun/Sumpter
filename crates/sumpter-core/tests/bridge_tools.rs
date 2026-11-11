@@ -36,14 +36,14 @@ fn request(discovered: Option<bool>) -> RoutingRequest {
 }
 
 #[test]
-fn deferred_tools_load_only_after_successful_discovery_across_targets() {
+fn declared_tools_survive_missing_or_failed_discovery_history_across_targets() {
     for discovered in [None, Some(false), Some(true)] {
         let req = request(discovered);
         let original = req.raw.clone();
         let chat = try_make_openai_chat_body(&req, "synthetic", None, false).unwrap();
         let responses = try_make_responses_body(&req, "synthetic", None, false).unwrap();
         let gemini = try_make_gemini_body(&req, None, None).unwrap();
-        let expected = if discovered == Some(true) { 2 } else { 1 };
+        let expected = 2;
         assert_eq!(chat["tools"].as_array().unwrap().len(), expected);
         assert_eq!(responses["tools"].as_array().unwrap().len(), expected);
         assert_eq!(
@@ -66,7 +66,7 @@ fn deferred_tools_load_only_after_successful_discovery_across_targets() {
 }
 
 #[test]
-fn unknown_references_and_unloaded_forced_tools_are_rejected() {
+fn unknown_references_and_undeclared_forced_tools_are_rejected() {
     let mut value = Value::Object(request(Some(true)).raw);
     value["messages"][2]["content"][0]["content"][1]["tool_name"] = json!("unknown");
     let unknown = RoutingRequest::from_value(&value).unwrap();
@@ -75,7 +75,7 @@ fn unknown_references_and_unloaded_forced_tools_are_rejected() {
     assert!(try_make_gemini_body(&unknown, None, None).is_err());
 
     let mut value = Value::Object(request(None).raw);
-    value["tool_choice"] = json!({"type": "tool", "name": "Monitor"});
+    value["tool_choice"] = json!({"type": "tool", "name": "Missing"});
     let unloaded = RoutingRequest::from_value(&value).unwrap();
     assert!(try_make_responses_body(&unloaded, "m", None, false).is_err());
     assert!(try_make_gemini_body(&unloaded, None, None).is_err());

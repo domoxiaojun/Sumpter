@@ -18,9 +18,9 @@ Sumpter 的核心边界是“客户端请求进入一个地址，代理按配置
 
 转换面按「能力检查 + 构造」同源实现。目标协议表达不了的项（服务端工具、provider 文件引用、Responses 没有等价参数的 `stop_sequences` 等）显式拒绝并回报具体字段，不静默降级。Chat/Responses 的 JSON Schema 约束及工具结果中的图片只转换到能保留其语义的目标；Responses 的 `previous_response_id` 等服务端上下文引用不能跨协议还原时拒绝转换，原生请求不受此限制。Gemini SSE 文本按增量拼接，工具调用的流式与非流式结束原因保持一致。
 
-客户端工具的 `defer_loading` 在转换时按发现状态处理：成功的用户工具结果通过 `tool_reference` 引用已声明工具后，该工具才加入目标协议的工具定义，引用正文保留名称与原位置。Chat/Responses 保留显式 `strict`，Anthropic 未设置时输出 `strict:false`，避免 Responses 默认严格化改变可选参数；并发限制映射到 `parallel_tool_calls`。Gemini 无法表达的 `strict:true` 和禁用并发调用明确拒绝；非直接 `allowed_callers` 约束也不跨协议降级。原生 Anthropic 转发保留工具定义和引用块。
+客户端工具以本轮 `tools` 声明为准：即使带有 `defer_loading:true` 且历史发现结果已被压缩，真实工具仍加入目标协议的工具定义；仅剔除带该标记的 `DeferredToolPlaceholder` 占位符。`tool_reference` 保留名称与原位置，未知引用或强制调用未声明工具仍明确拒绝，不从摘要文字推断或重建工具。Chat/Responses 保留显式 `strict`，Anthropic 未设置时输出 `strict:false`，避免 Responses 默认严格化改变可选参数；并发限制映射到 `parallel_tool_calls`。Gemini 无法表达的 `strict:true` 和禁用并发调用明确拒绝；非直接 `allowed_callers` 约束也不跨协议降级。原生 Anthropic 转发保留工具定义和引用块。
 
-Responses 参数按 item ID / output index 关联，接收增量及 `function_call_arguments.done`、`output_item.done`、`response.completed.output` 的完整快照；快照只补齐缺少的后缀，冲突、歧义和畸形 JSON 明确失败。反向桥共用 Anthropic 工具块校验，保留起始 `input` 和无参数调用。各桥接方向在调用完成前验证参数为完整 JSON 对象，失败后不再接受后续成功终态，不把截断参数替换成 `{}`。
+Responses 参数按 item ID / output index 关联，接收增量及 `function_call_arguments.done`、`output_item.done`、`response.completed.output` 的完整快照；稳定前缀实时发送，使 JSON 闭合的分片暂缓至工具项或响应结束；期间快照可将 `{}` 或较短对象补齐为更多字段。已有字段值和稳定前缀不可改写，工具项结束后已提交的参数不可变更；冲突、歧义和畸形 JSON 明确失败。反向桥共用 Anthropic 工具块校验，保留起始 `input` 和无参数调用。各桥接方向在调用完成前验证参数为完整 JSON 对象，失败后不再接受后续成功终态，不把截断参数替换成 `{}`。
 
 HTTP/SSE 按请求及业务终态结算；Realtime/Live WebSocket 保留连接与关闭诊断，握手成功不等于模型生成成功。一个客户端请求可包含多次上游尝试，RuntimeEvent 用同一 request ID 关联它们，界面分别展示客户端最终结果和上游尝试链。
 
