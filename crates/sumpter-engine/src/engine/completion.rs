@@ -270,6 +270,16 @@ impl CompletionGuard {
         }
     }
 
+    pub(super) fn mark_output_timing_incomplete(&mut self) {
+        if let Some(timing) = self
+            .upstream
+            .as_ref()
+            .and_then(|attempt| attempt.output_timing.as_ref())
+        {
+            super::output_timing::mark_incomplete(timing);
+        }
+    }
+
     pub(super) fn record_response_summary(&mut self, tracker: &SseTerminalTracker) {
         let previous = self.stream_trace.snapshot().map(|trace| {
             (

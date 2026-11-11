@@ -4,6 +4,8 @@
 
 历史记录不重算。`requestKind` / `clientAttribution` 缺失表示“未记录”；新请求的 `unknown` 表示已执行识别但证据不足。客户端名称已识别不代表其内部任务或入口形态也已识别。
 
+客户端产品与 API 协议分别记录。只有已知 OpenAI API 路径在缺少产品身份时使用 `openai_compat`；Gemini、Anthropic 与未知透传路径保留 `unknown`，不会仅凭 SDK 名称或模型名称猜测产品。Gemini API 请求不等于 Gemini CLI：只有明确的 CLI 身份信号才显示 Gemini CLI。正常请求和读取正文前的拒绝事件使用相同的路径兜底；界面中的来源/目标协议仍由实际请求路径和路由决定。
+
 ## 字段与声明
 
 | 字段 | 用途 |

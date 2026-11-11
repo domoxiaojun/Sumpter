@@ -217,6 +217,12 @@ impl SseTerminalTracker {
         evidence
     }
 
+    /// A complete Gemini terminal already seen on the wire, before EOF and
+    /// any late usage frames. Reading this does not finalize usage evidence.
+    pub fn pending_terminal(&self) -> Option<&SseTerminal> {
+        self.gemini_terminal.as_ref()
+    }
+
     /// Gemini may send usage-only frames after finishReason. Observe until
     /// transport EOF so those frames reach the client and the accounting.
     pub fn finish(&mut self) -> Option<SseTerminal> {

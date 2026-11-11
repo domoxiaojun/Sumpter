@@ -46,6 +46,12 @@ pub(super) fn span_ms(timing: &ObservedOutputTiming) -> Option<i64> {
     timing.lock().ok()?.span_ms()
 }
 
+pub(super) fn mark_incomplete(timing: &ObservedOutputTiming) {
+    if let Ok(mut window) = timing.lock() {
+        window.incomplete = true;
+    }
+}
+
 pub(super) fn observe(
     response: &mut UpstreamResponse,
     protocol: ProviderProtocol,

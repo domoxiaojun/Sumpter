@@ -10,7 +10,7 @@ use super::context::INBOUND_REQUEST_CONTEXT;
 use super::context::InboundRequestContext;
 use super::context::bounded_request_method;
 use super::context::bounded_request_path;
-use super::context::detect_client_kind;
+use super::context::detect_client_kind_for_path as detect_client_kind;
 use super::context::header_value;
 use super::context::inbound_auth_ok;
 use super::context::observed_session_id;
@@ -223,7 +223,7 @@ impl Engine {
         headers: &[(String, String)],
     ) -> InboundRequestContext {
         let path = bounded_request_path(path_without_query(path_and_query));
-        let client_kind = detect_client_kind(headers, true);
+        let client_kind = detect_client_kind(headers, path_and_query);
         let query_model = path_and_query
             .split_once('?')
             .and_then(|(_, query)| decoded_query_value(query, "model"));
@@ -284,6 +284,7 @@ impl Engine {
             .map_or(path_and_query, |(path, _)| path);
         let query = path_and_query.split_once('?').map(|(_, query)| query);
         let remote_text = remote.map(|ip| ip.to_string());
+        let source_format = super::protocol::source_format_for_inbound_path(path);
 
         // CIDR 对所有路径最先执行;环回恒放行。
         let config = self.config();
@@ -293,10 +294,10 @@ impl Engine {
                 "client_forbidden",
                 None,
                 Some(RequestPurpose::Standard),
-                detect_client_kind(&headers, true),
+                detect_client_kind(&headers, path_and_query),
                 CodexMetadata::from_request(&headers, None),
                 ClientDeclaredMetadata::from_headers(&headers),
-                Some(ProviderProtocol::OpenAI),
+                source_format,
             );
             return error_response(StatusCode::FORBIDDEN, &[("error", "client_forbidden")]);
         }
@@ -317,10 +318,10 @@ impl Engine {
                     message_tokens::INBOUND_AUTH_REQUIRED,
                     None,
                     Some(RequestPurpose::Standard),
-                    detect_client_kind(&headers, true),
+                    detect_client_kind(&headers, path_and_query),
                     CodexMetadata::from_request(&headers, None),
                     ClientDeclaredMetadata::from_headers(&headers),
-                    Some(ProviderProtocol::OpenAI),
+                    source_format,
                 );
                 return error_response(
                     StatusCode::UNAUTHORIZED,
@@ -379,10 +380,10 @@ impl Engine {
                 self.inner.platform.status_denied_error(),
                 None,
                 Some(RequestPurpose::Standard),
-                detect_client_kind(&headers, true),
+                detect_client_kind(&headers, path_and_query),
                 CodexMetadata::from_request(&headers, None),
                 ClientDeclaredMetadata::from_headers(&headers),
-                Some(ProviderProtocol::OpenAI),
+                source_format,
             );
             return error_response(
                 StatusCode::FORBIDDEN,
@@ -406,10 +407,10 @@ impl Engine {
                 message,
                 None,
                 Some(RequestPurpose::Standard),
-                detect_client_kind(&headers, true),
+                detect_client_kind(&headers, path_and_query),
                 CodexMetadata::from_request(&headers, None),
                 ClientDeclaredMetadata::from_headers(&headers),
-                Some(ProviderProtocol::OpenAI),
+                source_format,
             );
             return error_response(status, &[("error", code), ("message", message)]);
         }
@@ -427,7 +428,7 @@ impl Engine {
             && !super::protocol::is_gemini_generate_path(path)
         {
             if config.listener.has_inbound_auth() && !inbound_auth_ok(&headers, &config.listener) {
-                let client_kind = detect_client_kind(&headers, true);
+                let client_kind = detect_client_kind(&headers, path_and_query);
                 self.record_rejected_client_with_metadata(
                     401,
                     message_tokens::INBOUND_AUTH_REQUIRED,
@@ -436,7 +437,7 @@ impl Engine {
                     client_kind,
                     CodexMetadata::from_request(&headers, None),
                     ClientDeclaredMetadata::from_headers(&headers),
-                    Some(ProviderProtocol::OpenAI),
+                    source_format,
                 );
                 return error_response(
                     StatusCode::UNAUTHORIZED,
@@ -449,10 +450,10 @@ impl Engine {
                     "model path not found",
                     None,
                     Some(RequestPurpose::Standard),
-                    detect_client_kind(&headers, true),
+                    detect_client_kind(&headers, path_and_query),
                     CodexMetadata::from_request(&headers, None),
                     ClientDeclaredMetadata::from_headers(&headers),
-                    Some(ProviderProtocol::OpenAI),
+                    source_format,
                 );
                 return error_response(
                     StatusCode::NOT_FOUND,
@@ -465,10 +466,10 @@ impl Engine {
                     "method not allowed for models",
                     None,
                     Some(RequestPurpose::Standard),
-                    detect_client_kind(&headers, true),
+                    detect_client_kind(&headers, path_and_query),
                     CodexMetadata::from_request(&headers, None),
                     ClientDeclaredMetadata::from_headers(&headers),
-                    Some(ProviderProtocol::OpenAI),
+                    source_format,
                 );
                 return method_not_allowed_response("GET");
             }
@@ -525,7 +526,7 @@ impl Engine {
                         message,
                         None,
                         None,
-                        detect_client_kind(&headers, path != "/v1/messages"),
+                        detect_client_kind(&headers, path_and_query),
                         CodexMetadata::from_request(&headers, None),
                         ClientDeclaredMetadata::from_headers(&headers),
                         Some(if path == "/v1/messages" {
@@ -556,7 +557,7 @@ impl Engine {
                         message,
                         None,
                         Some(RequestPurpose::Standard),
-                        detect_client_kind(&headers, true),
+                        detect_client_kind(&headers, path_and_query),
                         CodexMetadata::from_request(&headers, None),
                         ClientDeclaredMetadata::from_headers(&headers),
                         Some(ProviderProtocol::Gemini),
@@ -827,7 +828,7 @@ impl Engine {
         headers: Vec<(String, String)>,
         body: Body,
     ) -> Response {
-        let mut client_kind = detect_client_kind(&headers, false);
+        let mut client_kind = detect_client_kind(&headers, path_and_query);
         let header_codex_metadata = CodexMetadata::from_request(&headers, None);
         // 入站 auth(仅本端点):x-api-key 精确或 Bearer;空 token 不校验。
         if config.listener.has_inbound_auth() && !inbound_auth_ok(&headers, &config.listener) {
@@ -974,7 +975,7 @@ impl Engine {
         headers: Vec<(String, String)>,
         body: Body,
     ) -> Response {
-        let mut client_kind = detect_client_kind(&headers, true);
+        let mut client_kind = detect_client_kind(&headers, path_and_query);
         let source_format = match dialect {
             ClientDialect::Chat => ProviderProtocol::OpenAI,
             ClientDialect::Responses => ProviderProtocol::OpenAIResponses,
@@ -1071,7 +1072,7 @@ impl Engine {
             client_kind = ClientKind::detect_with_originator(
                 header_value(&headers, "user-agent"),
                 Some(originator),
-                true,
+                sumpter_core::client_attribution::uses_openai_client_fallback(path_and_query),
             );
         }
         // Gemini 的流式意图在 URL 上(`:streamGenerateContent`),请求体里没有。
@@ -1210,8 +1211,7 @@ impl Engine {
         headers: Vec<(String, String)>,
         body: Body,
     ) -> Response {
-        let mut client_kind =
-            detect_client_kind(&headers, kind != PassthroughKind::ClaudeCountTokens);
+        let mut client_kind = detect_client_kind(&headers, path_and_query);
         let source_format = source_format_for_passthrough(kind);
         let header_codex_metadata = CodexMetadata::from_request(&headers, None);
         let realtime_ephemeral_auth = kind == PassthroughKind::Realtime
@@ -1343,7 +1343,7 @@ impl Engine {
             client_kind = ClientKind::detect_with_originator(
                 header_value(&headers, "user-agent"),
                 Some(originator),
-                kind != PassthroughKind::ClaudeCountTokens,
+                sumpter_core::client_attribution::uses_openai_client_fallback(path_and_query),
             );
         }
         // An ephemeral client secret is scoped to the model requested when it

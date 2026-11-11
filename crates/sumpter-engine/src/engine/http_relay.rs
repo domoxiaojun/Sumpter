@@ -47,6 +47,10 @@ struct RelayState {
     compressed: bool,
     observation_issue: Option<ObservationIssue>,
     deferred_terminal: Option<SseTerminal>,
+    /// Only terminals in output already yielded to the client can settle Drop.
+    delivered_terminal: Option<SseTerminal>,
+    /// Converted terminal output waits for validation of the compressed source.
+    held_bridge_output: Vec<u8>,
     observe_sse: bool,
     upstream_observe_sse: bool,
     /// 严格协议边界：流式响应必须有 SSE 终止事件，严格非流式对话 JSON
@@ -71,6 +75,29 @@ struct RelayState {
 }
 
 impl RelayState {
+    fn observed_client_terminal(&self) -> Option<SseTerminal> {
+        self.deferred_terminal.clone().or_else(|| {
+            self.terminal_tracker
+                .as_ref()
+                .and_then(|tracker| tracker.pending_terminal().cloned())
+        })
+    }
+
+    fn bridge_observation_error(&mut self) -> Option<std::io::Error> {
+        if self.bridge.is_none() && self.client_bridge.is_none() {
+            return None;
+        }
+        let issue = self.observation_issue?;
+        self.finished = true;
+        self.held_bridge_output.clear();
+        self.mark_observation_incomplete();
+        self.finalize_response_metadata();
+        let error = StreamReadError::ObservationFailed(issue.token());
+        let detail = error.to_string();
+        self.guard.complete_from_stream(Some(error));
+        Some(std::io::Error::other(detail))
+    }
+
     fn observe_client_bytes(&mut self, data: &[u8]) {
         let terminal = self.terminal_tracker.as_mut().and_then(|tracker| {
             if self.observe_sse {
@@ -105,7 +132,19 @@ impl RelayState {
                 out = client.feed(&out);
             }
             self.observe_client_bytes(&out);
-            output.extend_from_slice(&out);
+            if self.compressed && self.observed_client_terminal().is_some() {
+                // Do not send a converted success marker before a late CRC or
+                // truncated trailer can turn this attempt into a decode error.
+                const MAX_HELD_BYTES: usize = 64 * 1024 * 1024;
+                if out.len() > MAX_HELD_BYTES.saturating_sub(self.held_bridge_output.len()) {
+                    self.observation_issue
+                        .get_or_insert(ObservationIssue::BridgeOutputLimitExceeded);
+                } else {
+                    self.held_bridge_output.extend_from_slice(&out);
+                }
+            } else {
+                output.extend_from_slice(&out);
+            }
         } else {
             // Native relay: inspect the decoded view but forward the wire view.
             self.observe_client_bytes(data);
@@ -119,7 +158,7 @@ impl RelayState {
                 Some(bytes) => decoder.feed(bytes, |data| self.process_decoded(data, &mut output)),
                 None => decoder.finish(|data| self.process_decoded(data, &mut output)),
             }
-            self.observation_issue = decoder.issue();
+            self.observation_issue = self.observation_issue.or(decoder.issue());
             self.response_decoder = Some(decoder);
         }
         if self.observation_issue.is_some() {
@@ -248,6 +287,51 @@ async fn read_next(state: &mut RelayState) -> Result<Option<Bytes>, StreamReadEr
         None => next.await.transpose().map_err(StreamReadError::Upstream),
     }
 }
+impl Drop for RelayState {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        let Some(terminal) = self.delivered_terminal.take() else {
+            return; // CompletionGuard retains the genuine mid-stream cancellation path.
+        };
+        // Validate only bytes already received. Never read more upstream data,
+        // invent HTTP EOF, or observe additional output the client did not get.
+        let mut issue = self.observation_issue;
+        if issue.is_none()
+            && self.compressed
+            && let Some(decoder) = &mut self.response_decoder
+        {
+            decoder.finish(|_| {});
+            issue = decoder.issue().map(|error| match error {
+                ObservationIssue::TruncatedCompressedData => {
+                    ObservationIssue::ClientClosedBeforeValidation
+                }
+                other => other,
+            });
+        }
+        self.mark_observation_incomplete();
+        self.guard.mark_output_timing_incomplete();
+        self.guard.trace(
+            "client_closed_after_terminal",
+            None,
+            issue.map_or(
+                "received_bytes_validated_without_http_eof",
+                ObservationIssue::token,
+            ),
+            None,
+        );
+        self.guard.record_stream_terminal(&terminal);
+        self.finalize_response_metadata();
+        if let Some(issue) = issue {
+            self.guard
+                .complete_from_stream(Some(StreamReadError::ObservationFailed(issue.token())));
+        } else {
+            self.guard.complete_from_protocol_terminal(terminal);
+        }
+    }
+}
+
 impl Engine {
     /// accepted 之后的 relay:直连剥 hop-by-hop 原样转;桥接改写 200 + SSE 头。
     /// 完成/中断/断开的记账全部挂在响应体流的生命周期上。
@@ -529,6 +613,8 @@ impl Engine {
             compressed,
             observation_issue: None,
             deferred_terminal: None,
+            delivered_terminal: None,
+            held_bridge_output: Vec::new(),
             bridge,
             client_bridge,
             terminal_tracker,
@@ -615,6 +701,9 @@ impl Engine {
                         }
                         let transformed = st.bridge.is_some() || st.client_bridge.is_some();
                         let decoded_output = st.decode_observation(Some(&chunk));
+                        if let Some(error) = st.bridge_observation_error() {
+                            return Some((Err(error), st));
+                        }
                         let out = if transformed {
                             Bytes::from(decoded_output)
                         } else {
@@ -647,11 +736,20 @@ impl Engine {
                         if out.is_empty() {
                             continue;
                         }
+                        // A converted terminal may be held while an earlier
+                        // decoded block from this same wire chunk is yielded.
+                        if !transformed {
+                            st.delivered_terminal = st.observed_client_terminal();
+                        }
                         return Some((Ok(out), st));
                     }
                     Ok(None) => {
                         st.finished = true;
                         let mut decoded_tail = st.decode_observation(None);
+                        if let Some(error) = st.bridge_observation_error() {
+                            return Some((Err(error), st));
+                        }
+                        decoded_tail.extend(std::mem::take(&mut st.held_bridge_output));
                         st.finalize_response_metadata();
                         if let Some(tracker) = &mut st.upstream_summary_tracker {
                             let _ = tracker.finish();

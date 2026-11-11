@@ -352,6 +352,34 @@ fn ua_variant(kind: ClientKind, ua: &str) -> Option<&'static str> {
     }
 }
 
+/// A protocol fallback is not a product identity. Only known OpenAI API paths
+/// justify `openai_compat`; Gemini, Anthropic and opaque paths stay unknown.
+pub fn uses_openai_client_fallback(path: &str) -> bool {
+    let path = path.split('?').next().unwrap_or(path);
+    let path = path
+        .strip_prefix("/v1")
+        .filter(|rest| rest.starts_with('/'))
+        .unwrap_or(path);
+    path == "/models"
+        || [
+            "/chat/completions",
+            "/responses",
+            "/backend-api/codex/responses",
+            "/completions",
+            "/images",
+            "/files",
+            "/videos",
+            "/realtime",
+        ]
+        .iter()
+        .any(|prefix| {
+            path == *prefix
+                || path
+                    .strip_prefix(*prefix)
+                    .is_some_and(|rest| rest.starts_with('/'))
+        })
+}
+
 pub fn observe(
     method: &str,
     path: &str,
@@ -437,15 +465,10 @@ pub fn observe(
             );
         }
     }
-    let fallback = if path
-        .split('?')
-        .next()
-        .unwrap_or(path)
-        .starts_with("/v1/messages")
-    {
-        "unknown"
-    } else {
+    let fallback = if uses_openai_client_fallback(path) {
         "openai_compat"
+    } else {
+        "unknown"
     };
     let selected = signals.resolve("clientKind", fallback, &mut report);
     let kind = client(&selected).unwrap_or(if selected == "openai_compat" {

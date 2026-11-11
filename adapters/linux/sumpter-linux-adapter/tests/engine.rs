@@ -15,6 +15,9 @@ mod gemini;
 #[path = "../../../../tests/contracts/compressed_response.rs"]
 mod compressed_response;
 
+#[path = "../../../../tests/contracts/response_observation_edges.rs"]
+mod response_observation_edges;
+
 #[path = "../../../../tests/contracts/model_scope.rs"]
 mod model_scope;
 

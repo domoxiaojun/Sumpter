@@ -24,7 +24,11 @@ Responses 参数按 item ID / output index 关联，接收增量及 `function_ca
 
 HTTP/SSE 按请求及业务终态结算；Realtime/Live WebSocket 保留连接与关闭诊断，握手成功不等于模型生成成功。一个客户端请求可包含多次上游尝试，RuntimeEvent 用同一 request ID 关联它们，界面分别展示客户端最终结果和上游尝试链。
 
-HTTP 响应观察支持 identity、gzip、br、zlib 格式的 deflate 与 zstd，最多四层组合编码按逆序增量解码。原生转发及原始捕获保留线上字节和 Content-Encoding；协议观察及转换读取解码视图。压缩响应必须转发尾部并在 EOF 校验后结算，Gemini 终态后的用量帧继续计入。观察块最多 64 KiB，每次响应累计解码观察上限 64 MiB；未知编码、非法压缩、压缩截断或超限以 response_observation_failed 表示“无法确认响应完成”，保留 HTTP 状态和明确原因，不伪装成网络中断或成功。原生响应继续转发，已开始的响应不重放；协议转换遇到解码失败时停止产生转换正文，不合成完成或错误帧。
+HTTP 响应观察支持 identity、gzip、br、zlib 格式的 deflate 与 zstd，最多四层组合编码按逆序增量解码。原生转发及原始捕获保留线上字节和 Content-Encoding；协议观察及转换读取解码视图。正常读取继续转发压缩尾部，在 EOF 校验后结算，Gemini 终态后的用量帧继续计入。观察块最多 64 KiB，每次响应累计解码观察上限 64 MiB；未知编码、非法压缩、压缩截断或超限以 response_observation_failed 表示“无法确认响应完成”，保留 HTTP 状态和明确原因，不伪装成网络中断或成功。原生响应继续转发，已开始的响应不重放。
+
+客户端在已收到协议终态后关闭响应时，只验证已收到的压缩字节，不后台继续读取上游。已收到完整压缩成员且校验通过时按真实协议终态结算；压缩尾部尚未收到时记录 response_observation_failed / compressed_tail_unverified_after_terminal，保留已观察到的协议终态，不记为中途取消。已知 CRC 错误和真实读取错误仍报失败；没有协议终态的中途关闭仍记 499。所有未取得 HTTP EOF 的这类收尾均保留用量值，但将缓存证据标为不完整并停用 TPS 采样，避免把可能缺少末尾用量的响应当作完整统计。
+
+跨协议转换依赖解码结果。解压失败会立即向客户端返回响应体读取错误，不能以空 JSON 或正常 EOF 掩盖失败；已经发送的 HTTP 状态不改写。压缩源生成的成功结束输出在源校验完成前暂存，最多 64 MiB，校验失败时丢弃，不发送虚假的成功结束帧。正常正文增量继续流式发送；原生透传不采用这项结束输出暂存。
 
 Responses 仅支持 HTTP/SSE；通过鉴权的 WS 升级探测在共享入站层返回 426，不建立上游连接、不计推理事件。两个 adapter 只为 Realtime/Live 路径进行 WS 升级。模型目录始终输出 `prefer_websockets=false`，与上游模板或能力缓存无关；不提供重新开启 Responses WS 的配置开关。
 

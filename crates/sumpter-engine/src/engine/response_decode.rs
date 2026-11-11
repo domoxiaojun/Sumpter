@@ -19,6 +19,8 @@ pub(super) enum ObservationIssue {
     InvalidCompressedData,
     TruncatedCompressedData,
     DecompressionLimitExceeded,
+    ClientClosedBeforeValidation,
+    BridgeOutputLimitExceeded,
 }
 
 impl ObservationIssue {
@@ -28,6 +30,8 @@ impl ObservationIssue {
             Self::InvalidCompressedData => "invalid_compressed_data",
             Self::TruncatedCompressedData => "truncated_compressed_data",
             Self::DecompressionLimitExceeded => "decoded_observation_limit_exceeded",
+            Self::ClientClosedBeforeValidation => "compressed_tail_unverified_after_terminal",
+            Self::BridgeOutputLimitExceeded => "bridge_terminal_buffer_limit_exceeded",
         }
     }
 }
