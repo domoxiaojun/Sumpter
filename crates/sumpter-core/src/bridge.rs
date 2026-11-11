@@ -143,11 +143,22 @@ fn validate_anthropic_content(content: Option<&Value>, path: &str) -> Result<(),
                         }
                     }
                     "tool_use" => {
-                        if !object.get("id").is_some_and(Value::is_string)
-                            || !object.get("name").is_some_and(Value::is_string)
+                        if !object
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .is_some_and(|id| !id.is_empty())
+                            || !object
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .is_some_and(|name| !name.is_empty())
                         {
                             return Err(TranslationError::InvalidInput(format!(
                                 "{path}[{index}] tool_use requires string id and name"
+                            )));
+                        }
+                        if !object.get("input").is_some_and(Value::is_object) {
+                            return Err(TranslationError::InvalidInput(format!(
+                                "{path}[{index}].input must be an object"
                             )));
                         }
                     }
@@ -179,6 +190,8 @@ fn validate_anthropic_request(
     target: ProviderProtocol,
     websearch: bool,
 ) -> Result<(), TranslationError> {
+    crate::bridge_tools::validate_tools(request, target)?;
+    crate::bridge_tools::validate_choice(request)?;
     if let Some(system) = request.system.as_ref() {
         validate_text_content(Some(system), "system", &["text"], true)?;
     }
@@ -422,6 +435,9 @@ fn validate_tool_result_content(
             for (index, block) in blocks.iter().enumerate() {
                 let block_path = format!("{path}[{index}]");
                 match block.get("type").and_then(Value::as_str) {
+                    // 名称和声明关系由 validate_tools 统一校验；工具定义会在本轮
+                    // tools 中展开，结果正文保留发现位置和名称。
+                    Some("tool_reference") => {}
                     Some("text") => validate_text_content(
                         Some(&Value::Array(vec![block.clone()])),
                         &block_path,
@@ -471,6 +487,9 @@ fn responses_tool_result(content: Option<&Value>) -> Value {
             .iter()
             .filter_map(|block| match block.get("type")?.as_str()? {
                 "text" => Some(json!({"type": "input_text", "text": block.get("text")?})),
+                "tool_reference" => Some(json!({
+                    "type": "input_text", "text": crate::bridge_tools::reference_text(block)?
+                })),
                 "image" => Some(
                     json!({"type": "input_image", "image_url": image_url(block.as_object()?)?}),
                 ),
@@ -713,6 +732,9 @@ pub fn make_openai_chat_body(
     let tools = chat_tools_from_anthropic(request);
     if !tools.is_empty() {
         body.insert("tools".into(), Value::Array(tools));
+        if let Some(parallel) = crate::bridge_tools::parallel_tool_calls(request) {
+            body.insert("parallel_tool_calls".into(), json!(parallel));
+        }
         if let Some(choice) = chat_tool_choice(request) {
             body.insert("tool_choice".into(), choice);
         }
@@ -780,6 +802,9 @@ pub fn make_responses_body(
             .iter()
             .any(|tool| tool.get("type").and_then(Value::as_str) == Some("function"));
         body.insert("tools".into(), Value::Array(tools));
+        if let Some(parallel) = crate::bridge_tools::parallel_tool_calls(request) {
+            body.insert("parallel_tool_calls".into(), json!(parallel));
+        }
         if has_client_tools && let Some(choice) = responses_tool_choice(request) {
             body.insert("tool_choice".into(), choice);
         }
@@ -802,9 +827,7 @@ fn tool_arguments_json(input: Option<&Value>) -> String {
 /// 只保留客户端自定义工具。服务端工具由上游执行,其 schema 与 function 不同,
 /// 映射过去会被上游拒绝或当成同名 function 误调。
 fn client_tools(request: &RoutingRequest) -> impl Iterator<Item = &Map<String, Value>> {
-    request.tools.iter().filter(|tool| {
-        inspector::is_client_tool_type(tool.get("type").and_then(Value::as_str).unwrap_or(""))
-    })
+    crate::bridge_tools::active_tools(request).into_iter()
 }
 
 /// Anthropic 工具定义 → OpenAI chat `{type:"function", function:{...}}`。
@@ -818,6 +841,10 @@ fn chat_tools_from_anthropic(request: &RoutingRequest) -> Vec<Value> {
                 function.insert("description".into(), json!(description));
             }
             function.insert("parameters".into(), tool_parameters(tool));
+            function.insert(
+                "strict".into(),
+                json!(tool.get("strict").and_then(Value::as_bool).unwrap_or(false)),
+            );
             Some(json!({"type": "function", "function": Value::Object(function)}))
         })
         .collect()
@@ -835,6 +862,11 @@ fn responses_tools_from_anthropic(request: &RoutingRequest) -> Vec<Value> {
                 item.insert("description".into(), json!(description));
             }
             item.insert("parameters".into(), tool_parameters(tool));
+            // Responses 缺省会尝试严格化；显式 false 才保留源工具的可选字段。
+            item.insert(
+                "strict".into(),
+                json!(tool.get("strict").and_then(Value::as_bool).unwrap_or(false)),
+            );
             Some(Value::Object(item))
         })
         .collect()
@@ -1118,6 +1150,9 @@ fn flatten_text(value: &Value) -> String {
                     return String::new();
                 };
                 match object.get("type").and_then(Value::as_str) {
+                    Some("tool_reference") => {
+                        crate::bridge_tools::reference_text(block).unwrap_or_default()
+                    }
                     Some("text") => object
                         .get("text")
                         .and_then(Value::as_str)
@@ -1348,6 +1383,7 @@ pub(crate) fn data_payload(block: &str) -> Option<String> {
 /// 这里攒到 name 齐了才开块,`emitted` 记住已发出的参数前缀,开块后一次补齐。
 #[derive(Default)]
 struct ChatToolCallState {
+    seen: bool,
     id: String,
     name: String,
     arguments: String,
@@ -1487,40 +1523,86 @@ impl OpenAiStreamBridge {
                 "type": "tool_use",
                 "id": state.id,
                 "name": state.name,
-                // arguments 是上游拼出来的 JSON 文本;截断或畸形时给空对象,
-                // 保留调用本身而不是整块丢掉(客户端至少知道模型想调什么)。
-                "input": serde_json::from_str::<Value>(&state.arguments)
-                    .unwrap_or_else(|_| json!({})),
+                "input": crate::bridge_tools::parse_arguments(&state.arguments)
+                    .expect("completed chat tool arguments were validated"),
             }));
         }
         Value::Array(content)
     }
 
     /// 累积上游 `delta.tool_calls`,并在 name 齐备后开块、补发参数增量。
-    fn handle_tool_call_deltas(&mut self, choice: Option<&Value>, events: &mut Vec<SseEvent>) {
+    fn handle_tool_call_deltas(
+        &mut self,
+        choice: Option<&Value>,
+        events: &mut Vec<SseEvent>,
+    ) -> Result<(), &'static str> {
+        if choice
+            .and_then(|choice| choice.pointer("/delta/tool_calls"))
+            .is_some_and(|calls| !calls.is_array())
+        {
+            return Err("chat tool calls must be an array");
+        }
         let Some(deltas) = choice
             .and_then(|choice| choice.get("delta"))
             .and_then(|delta| delta.get("tool_calls"))
             .and_then(Value::as_array)
             .cloned()
         else {
-            return;
+            return Ok(());
         };
         for delta in &deltas {
-            // 同一次调用的多个片段靠 `index` 关联;缺省按第 0 个处理。
-            let slot = delta.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+            if !delta.is_object()
+                || delta.get("id").is_some_and(|id| !id.is_string())
+                || delta
+                    .pointer("/function/name")
+                    .is_some_and(|name| !name.is_string())
+            {
+                return Err("invalid chat tool call identity");
+            }
+            // 缺索引只在唯一调用时兼容，不能把并行调用的参数混进第一个工具。
+            let slot = match delta.get("index") {
+                Some(index) => index.as_u64().ok_or("invalid chat tool call index")?,
+                None if deltas.len() == 1 && self.tool_calls.len() <= 1 => 0,
+                None => return Err("ambiguous chat tool call index"),
+            };
+            if slot >= 4096 {
+                return Err("chat tool call index exceeds limit");
+            }
+            let slot = slot as usize;
             while self.tool_calls.len() <= slot {
                 self.tool_calls.push(ChatToolCallState::default());
             }
+            self.tool_calls[slot].seen = true;
             if let Some(id) = delta.get("id").and_then(Value::as_str)
                 && !id.is_empty()
             {
+                if self
+                    .tool_calls
+                    .iter()
+                    .enumerate()
+                    .any(|(index, state)| index != slot && state.id == id)
+                {
+                    return Err("duplicate chat tool call id");
+                }
+                if self.tool_calls[slot].block_index.is_some() && self.tool_calls[slot].id != id {
+                    return Err("chat tool call id changed after emission");
+                }
                 self.tool_calls[slot].id = id.to_string();
             }
             if let Some(name) = delta.pointer("/function/name").and_then(Value::as_str)
                 && !name.is_empty()
             {
+                if self.tool_calls[slot].block_index.is_some() && self.tool_calls[slot].name != name
+                {
+                    return Err("chat tool name changed after emission");
+                }
                 self.tool_calls[slot].name = name.to_string();
+            }
+            if delta
+                .pointer("/function/arguments")
+                .is_some_and(|arguments| !arguments.is_string())
+            {
+                return Err("chat tool argument delta must be a string");
             }
             if let Some(fragment) = delta
                 .pointer("/function/arguments")
@@ -1532,6 +1614,7 @@ impl OpenAiStreamBridge {
             self.open_tool_block(slot, events);
             self.flush_tool_arguments(slot, events);
         }
+        Ok(())
     }
 
     /// name 齐备时开工具块。开块前先关文本块,保证内容块不交错。
@@ -1665,8 +1748,24 @@ impl OpenAiStreamBridge {
         if self.finished {
             return Vec::new();
         }
+        for state in &self.tool_calls {
+            if !state.seen {
+                continue;
+            }
+            if state.name.is_empty() {
+                return self.fail("upstream tool call is missing its name");
+            }
+            if let Err(detail) = crate::bridge_tools::parse_arguments(&state.arguments) {
+                return self.fail(detail);
+            }
+        }
         self.finished = true;
         self.terminal = BridgeTerminal::Completed;
+        if self.stop_reason == "end_turn"
+            && self.tool_calls.iter().any(|call| !call.name.is_empty())
+        {
+            self.stop_reason = "tool_use";
+        }
         let mut events = Vec::new();
         if !self.started {
             events.extend(start_events(&self.message_id, &self.model));
@@ -1713,6 +1812,9 @@ impl OpenAiStreamBridge {
     }
 
     fn handle_block(&mut self, block: &str) -> Vec<SseEvent> {
+        if self.finished {
+            return Vec::new();
+        }
         let Some(payload) = data_payload(block) else {
             return Vec::new();
         };
@@ -1725,7 +1827,7 @@ impl OpenAiStreamBridge {
             return self.fail("upstream emitted chat stream error");
         }
         let Ok(chunk) = serde_json::from_str::<Value>(&payload) else {
-            return Vec::new();
+            return self.fail("upstream emitted malformed chat JSON");
         };
         let mut events = Vec::new();
         if !self.started {
@@ -1763,7 +1865,10 @@ impl OpenAiStreamBridge {
                 events.push(text_delta_event(text, index));
             }
         }
-        self.handle_tool_call_deltas(choice, &mut events);
+        if let Err(detail) = self.handle_tool_call_deltas(choice, &mut events) {
+            events.extend(self.fail(detail));
+            return events;
+        }
         if let Some(finish) = choice
             .and_then(|c| c.get("finish_reason"))
             .and_then(Value::as_str)
@@ -1862,11 +1967,13 @@ impl SseBridge for OpenAiStreamBridge {
 #[derive(Default)]
 struct ResponsesToolCallState {
     item_id: String,
+    output_index: Option<u64>,
     call_id: String,
     name: String,
     arguments: String,
     emitted: usize,
     block_index: Option<usize>,
+    finalized: bool,
 }
 
 /// 事件识别以 data JSON 里的 `type` 字段为准(比依赖 `event:` 行更稳)。
@@ -2020,23 +2127,31 @@ impl ResponsesStreamBridge {
     /// `response.output_item.added` / `.done`(function_call)→ 开 tool_use 块。
     /// 同一个 `item_id` 只开一次,所以 added 与 done 都能安全调用(非流式聚合的
     /// 上游只发 done)。
-    fn open_function_call_block(&mut self, item: &Value, events: &mut Vec<SseEvent>) {
+    fn open_function_call_block(
+        &mut self,
+        item: &Value,
+        output_index: Option<u64>,
+        finalized: bool,
+        events: &mut Vec<SseEvent>,
+    ) -> Result<(), &'static str> {
+        for field in ["id", "call_id", "name"] {
+            if item.get(field).is_some_and(|value| !value.is_string()) {
+                return Err("invalid Responses tool call identity");
+            }
+        }
         let name = item
             .get("name")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
         if name.is_empty() {
-            return;
+            return Err("upstream tool call is missing its name");
         }
         let item_id = item
             .get("id")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
-        if !item_id.is_empty() && self.tool_calls.iter().any(|state| state.item_id == item_id) {
-            return;
-        }
         // 客户端用 call_id 把 tool_result 配回调用;上游省略时退到 item_id。
         let call_id = item
             .get("call_id")
@@ -2045,21 +2160,79 @@ impl ResponsesStreamBridge {
             .filter(|id| !id.is_empty())
             .or_else(|| (!item_id.is_empty()).then(|| item_id.clone()))
             .unwrap_or_else(|| format!("toolu_bridge_{}", self.tool_calls.len()));
+        let mut matching = self
+            .tool_calls
+            .iter()
+            .enumerate()
+            .filter(|(_, state)| {
+                (!item_id.is_empty() && state.item_id == item_id)
+                    || (output_index.is_some() && state.output_index == output_index)
+                    || item.get("call_id").and_then(Value::as_str) == Some(state.call_id.as_str())
+            })
+            .map(|(index, _)| index);
+        let slot = matching.next();
+        if matching.next().is_some() {
+            return Err("conflicting Responses tool call identity");
+        }
+        if let Some(slot) = slot {
+            let state = &self.tool_calls[slot];
+            if state.name != name
+                || item
+                    .get("call_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| id != state.call_id)
+                || (!item_id.is_empty() && !state.item_id.is_empty() && item_id != state.item_id)
+                || (output_index.is_some()
+                    && state.output_index.is_some()
+                    && output_index != state.output_index)
+            {
+                return Err("Responses tool identity changed after emission");
+            }
+            let state = &mut self.tool_calls[slot];
+            if state.item_id.is_empty() {
+                state.item_id = item_id;
+            }
+            if state.output_index.is_none() {
+                state.output_index = output_index;
+            }
+            if finalized {
+                let arguments = item
+                    .get("arguments")
+                    .and_then(Value::as_str)
+                    .ok_or("final Responses tool arguments must be a string")?;
+                self.reconcile_function_arguments(slot, arguments, events)?;
+            }
+            return Ok(());
+        }
+        if self.tool_calls.len() >= 4096 {
+            return Err("Responses tool call count exceeds limit");
+        }
+        if item
+            .get("arguments")
+            .is_some_and(|arguments| !arguments.is_string())
+        {
+            return Err("Responses tool arguments must be a string");
+        }
+        let arguments = item
+            .get("arguments")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if finalized {
+            crate::bridge_tools::parse_arguments(arguments)?;
+        }
         self.close_text_block(events);
         let index = self.next_block_index;
         self.next_block_index += 1;
         self.tool_calls.push(ResponsesToolCallState {
             item_id,
+            output_index,
             call_id: call_id.clone(),
             name: name.clone(),
             // done 事件已带完整参数;added 通常是空串,靠后续 delta 补。
-            arguments: item
-                .get("arguments")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
+            arguments: arguments.to_string(),
             emitted: 0,
             block_index: Some(index),
+            finalized,
         });
         if self.stream {
             events.push(SseEvent {
@@ -2078,30 +2251,87 @@ impl ResponsesStreamBridge {
         }
         let slot = self.tool_calls.len() - 1;
         self.flush_tool_arguments(slot, events);
+        Ok(())
     }
 
-    fn push_function_call_arguments(&mut self, object: &Value, events: &mut Vec<SseEvent>) {
-        let Some(fragment) = object
-            .get("delta")
-            .and_then(Value::as_str)
-            .filter(|fragment| !fragment.is_empty())
-        else {
-            return;
-        };
+    fn function_call_slot(&self, object: &Value) -> Result<usize, &'static str> {
+        if object
+            .get("item_id")
+            .is_some_and(|value| !value.is_string())
+            || object
+                .get("output_index")
+                .is_some_and(|value| value.as_u64().is_none())
+        {
+            return Err("invalid Responses tool call identity");
+        }
         let item_id = object
             .get("item_id")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        // 上游省略 item_id 时落到最后一个已开的调用:Responses 的工具项是顺序发出的。
-        let Some(slot) = self
+        let output_index = object.get("output_index").and_then(Value::as_u64);
+        let slot = self
             .tool_calls
             .iter()
-            .rposition(|state| item_id.is_empty() || state.item_id == item_id)
-        else {
-            return;
-        };
+            .position(|state| {
+                if !item_id.is_empty() {
+                    state.item_id == item_id
+                } else if output_index.is_some() {
+                    state.output_index == output_index
+                } else {
+                    self.tool_calls.len() == 1
+                }
+            })
+            .ok_or("Responses tool arguments have no unambiguous call identity")?;
+        if let (Some(given), Some(expected)) = (output_index, self.tool_calls[slot].output_index)
+            && given != expected
+        {
+            return Err("conflicting Responses tool call identity");
+        }
+        Ok(slot)
+    }
+
+    fn push_function_call_arguments(
+        &mut self,
+        object: &Value,
+        events: &mut Vec<SseEvent>,
+    ) -> Result<(), &'static str> {
+        let fragment = object
+            .get("delta")
+            .and_then(Value::as_str)
+            .ok_or("Responses tool argument delta must be a string")?;
+        let slot = self.function_call_slot(object)?;
+        if fragment.is_empty() {
+            return Ok(());
+        }
+        if self.tool_calls[slot].finalized {
+            return Err("Responses tool arguments changed after completion");
+        }
         self.tool_calls[slot].arguments.push_str(fragment);
         self.flush_tool_arguments(slot, events);
+        Ok(())
+    }
+
+    /// 完整结束快照只补发尚未发出的后缀；不得重复拼接，也不得覆盖已发送的参数。
+    fn reconcile_function_arguments(
+        &mut self,
+        slot: usize,
+        arguments: &str,
+        events: &mut Vec<SseEvent>,
+    ) -> Result<(), &'static str> {
+        let complete = crate::bridge_tools::parse_arguments(arguments)?;
+        let state = &mut self.tool_calls[slot];
+        if arguments.starts_with(state.arguments.as_str()) {
+            state.arguments = arguments.to_string();
+        } else if crate::bridge_tools::parse_arguments(&state.arguments)
+            .ok()
+            .as_ref()
+            != Some(&complete)
+        {
+            return Err("final Responses tool arguments conflict with emitted deltas");
+        }
+        state.finalized = true;
+        self.flush_tool_arguments(slot, events);
+        Ok(())
     }
 
     /// 把尚未发出的参数尾巴作为一次 `input_json_delta` 发出。
@@ -2148,9 +2378,8 @@ impl ResponsesStreamBridge {
                 "type": "tool_use",
                 "id": state.call_id,
                 "name": state.name,
-                // 参数被截断时给空对象,保住调用本身。
-                "input": serde_json::from_str::<Value>(&state.arguments)
-                    .unwrap_or_else(|_| json!({})),
+                "input": crate::bridge_tools::parse_arguments(&state.arguments)
+                    .expect("completed Responses tool arguments were validated"),
             }));
         }
         Value::Array(content)
@@ -2213,6 +2442,9 @@ impl ResponsesStreamBridge {
     }
 
     fn handle_block(&mut self, block: &str) -> Vec<SseEvent> {
+        if self.finished {
+            return Vec::new();
+        }
         let Some(payload) = data_payload(block) else {
             return Vec::new();
         };
@@ -2220,7 +2452,7 @@ impl ResponsesStreamBridge {
             return Vec::new();
         }
         let Ok(object) = serde_json::from_str::<Value>(&payload) else {
-            return Vec::new();
+            return self.fail("upstream emitted malformed Responses JSON");
         };
         let mut events = Vec::new();
         match object.get("type").and_then(Value::as_str).unwrap_or("") {
@@ -2247,7 +2479,22 @@ impl ResponsesStreamBridge {
                     .to_string();
                 if item_type == "function_call" {
                     self.ensure_message_started(&mut events);
-                    self.open_function_call_block(&item, &mut events);
+                    if object
+                        .get("output_index")
+                        .is_some_and(|index| index.as_u64().is_none())
+                    {
+                        events.extend(self.fail("invalid Responses tool output index"));
+                        return events;
+                    }
+                    if let Err(detail) = self.open_function_call_block(
+                        &item,
+                        object.get("output_index").and_then(Value::as_u64),
+                        object.get("type").and_then(Value::as_str)
+                            == Some("response.output_item.done"),
+                        &mut events,
+                    ) {
+                        events.extend(self.fail(detail));
+                    }
                 } else if self.websearch
                     && item_type == "web_search_call"
                     && object.get("type").and_then(Value::as_str)
@@ -2260,7 +2507,21 @@ impl ResponsesStreamBridge {
             }
             "response.function_call_arguments.delta" => {
                 self.ensure_message_started(&mut events);
-                self.push_function_call_arguments(&object, &mut events);
+                if let Err(detail) = self.push_function_call_arguments(&object, &mut events) {
+                    events.extend(self.fail(detail));
+                }
+            }
+            "response.function_call_arguments.done" => {
+                let result = self.function_call_slot(&object).and_then(|slot| {
+                    let arguments = object
+                        .get("arguments")
+                        .and_then(Value::as_str)
+                        .ok_or("final Responses tool arguments must be a string")?;
+                    self.reconcile_function_arguments(slot, arguments, &mut events)
+                });
+                if let Err(detail) = result {
+                    events.extend(self.fail(detail));
+                }
             }
             "response.output_text.delta" => {
                 let Some(delta) = object.get("delta").and_then(Value::as_str) else {
@@ -2300,6 +2561,31 @@ impl ResponsesStreamBridge {
                         "upstream response failed".into()
                     };
                     return self.fail(detail);
+                }
+                self.ensure_message_started(&mut events);
+                if let Some(output) = response
+                    .and_then(|r| r.get("output"))
+                    .and_then(Value::as_array)
+                {
+                    for (index, item) in output.iter().enumerate() {
+                        if item.get("type").and_then(Value::as_str) == Some("function_call")
+                            && let Err(detail) = self.open_function_call_block(
+                                item,
+                                Some(index as u64),
+                                true,
+                                &mut events,
+                            )
+                        {
+                            events.extend(self.fail(detail));
+                            return events;
+                        }
+                    }
+                }
+                for call in &self.tool_calls {
+                    if let Err(detail) = crate::bridge_tools::parse_arguments(&call.arguments) {
+                        events.extend(self.fail(detail));
+                        return events;
+                    }
                 }
                 if let Some(model) = response
                     .and_then(|r| r.get("model"))
@@ -3014,7 +3300,7 @@ mod tests {
     }
 
     #[test]
-    fn chat_bridge_handles_parallel_calls_and_truncated_arguments() {
+    fn chat_bridge_rejects_truncated_parallel_arguments() {
         let mut bridge =
             OpenAiStreamBridge::new_with_stream("msg_p".into(), "up".into(), false, false, false);
         let mut out = Vec::new();
@@ -3026,14 +3312,8 @@ mod tests {
         }
         out.extend(bridge.feed(b"data: [DONE]\n\n"));
         let body: Value = serde_json::from_slice(&out).unwrap();
-        let content = body["content"].as_array().unwrap();
-        // 无文本时 content 只有两个工具块,按上游 index 顺序。
-        assert_eq!(content.len(), 2);
-        assert_eq!(content[0]["name"], "Read");
-        assert_eq!(content[0]["input"], json!({"path": "a"}));
-        // 参数被截断的调用仍保留,input 退化成空对象而不是丢掉整个调用。
-        assert_eq!(content[1]["name"], "Grep");
-        assert_eq!(content[1]["input"], json!({}));
+        assert_eq!(body["type"], "error");
+        assert!(matches!(bridge.terminal(), BridgeTerminal::Failed(_)));
     }
 
     #[test]

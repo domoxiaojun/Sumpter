@@ -55,6 +55,12 @@ Linux systemd 查看 `journalctl`；Compose 查看 `docker compose logs`。确�
 
 先用新会话复测，再检查运行详情中的会话粘性和上游尝试。加密推理状态跨 Provider 可能不兼容；不要把一次继续请求的错误当作所有入口都不可用。确认后可在运行页清除项目或会话粘性，再发新请求。
 
+### Claude Code 跨会话工具出现 Invalid tool parameters
+
+Claude Code 的普通视图可能把工具未加载、JSON 解析失败和 schema 校验失败统一显示为 `Invalid tool parameters`。先展开第一条失败的详细输出（例如 2.1.322 使用 Ctrl+O），记录工具名、脱敏后的参数和 `InputValidationError` 原因，再核对该请求实际使用的 Sumpter 入口协议；界面的模型名称不能证明走了 Anthropic 原生路径。
+
+转换链路会保持延迟工具的发现状态、可选参数和并发约束，并用参数结束快照补齐 Responses 增量。遇到未知 `tool_reference`、无法保持的约束、关联冲突或无效参数时，查看 Sumpter 返回的具体字段或桥接失败原因。若走 Anthropic 原生路径，工具定义、引用和响应流直接保留，需继续核对客户端与上游实际参数。消息送达或空闲通知成功只能证明对应操作成功，不能替代监控工具的参数校验。转换边界见 [架构说明](architecture.md)。
+
 ### 统计缺失、待定或 Token 不一致
 
 统计按客户端完成事件和上游 usage 记录；进行中的请求计入 pending，不会算作失败。缓存 Token 的口径随协议不同，failover 尝试不会重复计入客户端汇总。检查项目归因是否安装在运行客户端的机器，而不是只运行代理的服务器。
