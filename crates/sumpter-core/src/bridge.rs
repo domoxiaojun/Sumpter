@@ -143,14 +143,14 @@ fn validate_anthropic_content(content: Option<&Value>, path: &str) -> Result<(),
                         }
                     }
                     "tool_use" => {
-                        if !object
+                        if object
                             .get("id")
                             .and_then(Value::as_str)
-                            .is_some_and(|id| !id.is_empty())
-                            || !object
+                            .is_none_or(|id| id.is_empty())
+                            || object
                                 .get("name")
                                 .and_then(Value::as_str)
-                                .is_some_and(|name| !name.is_empty())
+                                .is_none_or(|name| name.is_empty())
                         {
                             return Err(TranslationError::InvalidInput(format!(
                                 "{path}[{index}] tool_use requires string id and name"
