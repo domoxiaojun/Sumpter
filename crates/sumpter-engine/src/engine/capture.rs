@@ -292,43 +292,6 @@ fn diagnostic_headers(
     (out, false)
 }
 
-#[cfg(test)]
-mod payload_tests {
-    use super::*;
-
-    fn restore(text: &str, encoding: DiagnosticDataEncoding) -> Vec<u8> {
-        match encoding {
-            DiagnosticDataEncoding::Utf8 => text.as_bytes().to_vec(),
-            DiagnosticDataEncoding::Base64 => base64::engine::general_purpose::STANDARD
-                .decode(text)
-                .unwrap(),
-        }
-    }
-
-    #[test]
-    fn payloads_preserve_binary_and_unicode_prefixes_within_capacity() {
-        for bytes in [
-            b"hello".as_slice(),
-            "中文".as_bytes(),
-            &[0, 0x1f, 0x8b, 0xff],
-            &"中".as_bytes()[..2],
-        ] {
-            for binary in [true, false] {
-                for remaining in 0..32 {
-                    let (data, encoding, truncated) = diagnostic_payload(bytes, remaining, binary);
-                    assert!(data.len() + encoding.storage_bytes() <= remaining);
-                    let restored = restore(&data, encoding);
-                    assert!(bytes.starts_with(&restored));
-                    assert_eq!(truncated, restored.len() < bytes.len());
-                }
-            }
-        }
-        let (data, encoding, truncated) = diagnostic_payload(&[0, 0x8b, 0xff], 64, true);
-        assert_eq!(restore(&data, encoding), [0, 0x8b, 0xff]);
-        assert!(!truncated);
-    }
-}
-
 fn refresh_capture_usage(capture: &mut DiagnosticCaptureState, truncated: bool) {
     if truncated || capture.captured_bytes >= capture.max_bytes {
         capture.enabled = false;
@@ -1027,5 +990,42 @@ impl Engine {
             },
             Err(error) => Err(format!("diagnostic_capture.json 落盘失败: {error}")),
         }
+    }
+}
+
+#[cfg(test)]
+mod payload_tests {
+    use super::*;
+
+    fn restore(text: &str, encoding: DiagnosticDataEncoding) -> Vec<u8> {
+        match encoding {
+            DiagnosticDataEncoding::Utf8 => text.as_bytes().to_vec(),
+            DiagnosticDataEncoding::Base64 => base64::engine::general_purpose::STANDARD
+                .decode(text)
+                .unwrap(),
+        }
+    }
+
+    #[test]
+    fn payloads_preserve_binary_and_unicode_prefixes_within_capacity() {
+        for bytes in [
+            b"hello".as_slice(),
+            "中文".as_bytes(),
+            &[0, 0x1f, 0x8b, 0xff],
+            &"中".as_bytes()[..2],
+        ] {
+            for binary in [true, false] {
+                for remaining in 0..32 {
+                    let (data, encoding, truncated) = diagnostic_payload(bytes, remaining, binary);
+                    assert!(data.len() + encoding.storage_bytes() <= remaining);
+                    let restored = restore(&data, encoding);
+                    assert!(bytes.starts_with(&restored));
+                    assert_eq!(truncated, restored.len() < bytes.len());
+                }
+            }
+        }
+        let (data, encoding, truncated) = diagnostic_payload(&[0, 0x8b, 0xff], 64, true);
+        assert_eq!(restore(&data, encoding), [0, 0x8b, 0xff]);
+        assert!(!truncated);
     }
 }
