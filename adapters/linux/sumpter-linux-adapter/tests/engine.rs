@@ -290,7 +290,11 @@ fn set_all_endpoint_protocols(config: &mut AppConfig, protocol: EndpointProtocol
 }
 
 fn engine_with(config: AppConfig, fake: Arc<FakeTransport>) -> Engine {
-    Engine::new(config, None, fake)
+    engine_with_transport(config, fake)
+}
+
+fn engine_with_transport(config: AppConfig, transport: Arc<dyn UpstreamTransport>) -> Engine {
+    Engine::new(config, None, transport)
 }
 
 fn temp_config_dir(tag: &str) -> sumpter_core::config_store::ConfigDir {

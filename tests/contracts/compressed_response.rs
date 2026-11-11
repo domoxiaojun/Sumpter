@@ -62,9 +62,8 @@ async fn actual_transport_interruption_takes_precedence_over_decoder_eof() {
         prefix: prefix.clone(),
         calls: std::sync::atomic::AtomicUsize::new(0),
     });
-    let engine = Engine::new(
+    let engine = engine_with_transport(
         config(EndpointProtocolMode::Gemini).normalized(),
-        None,
         transport.clone(),
     );
     let response = engine
