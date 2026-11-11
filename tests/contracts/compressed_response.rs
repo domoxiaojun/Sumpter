@@ -252,7 +252,14 @@ async fn gzip_json_completion_and_binary_capture_round_trip() {
         assert_eq!(restored, wire);
     }
     let loaded = dir.load_diagnostic_capture().unwrap();
-    assert_eq!(loaded.records[0], *record);
+    let mut persisted = loaded.records[0].clone();
+    // JSON's decimal float parser may round fractional wall-clock seconds by
+    // one ULP. Payloads, integer timings and all remaining metadata stay exact.
+    assert!(
+        (persisted.timestamp - record.timestamp).abs() <= record.timestamp.abs() * f64::EPSILON
+    );
+    persisted.timestamp = record.timestamp;
+    assert_eq!(persisted, *record);
     drop(engine);
     let _ = std::fs::remove_dir_all(dir.root);
 }
