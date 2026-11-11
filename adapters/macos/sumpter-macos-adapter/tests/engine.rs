@@ -32,6 +32,8 @@ mod request_policy;
 
 #[path = "../../../../tests/contracts/pi.rs"]
 mod pi;
+#[path = "../../../../tests/contracts/tool_bridge.rs"]
+mod tool_bridge;
 
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, SocketAddr};

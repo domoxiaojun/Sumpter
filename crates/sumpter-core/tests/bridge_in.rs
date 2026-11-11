@@ -71,7 +71,7 @@ fn chat_parallel_tool_calls_maps_to_anthropic_flag() {
 }
 
 #[test]
-fn chat_accepts_strict_tools_as_visible_degradation() {
+fn chat_preserves_explicit_strict_tools() {
     let body = json!({
         "model": "m",
         "messages": [{"role": "user", "content": "hi"}],
@@ -79,9 +79,10 @@ fn chat_accepts_strict_tools_as_visible_degradation() {
                    "parameters": {"type": "object"}}}],
     });
     assert!(check_chat_to_anthropic(&body).is_ok());
-    // schema 仍然照原样前送 —— 被降级的只有采样保证。
+    // schema 和采样约束都照原样前送。
     let tools = chat_to_anthropic(&body).unwrap()["tools"].clone();
     assert_eq!(tools[0]["input_schema"], json!({"type": "object"}));
+    assert_eq!(tools[0]["strict"], true);
 }
 
 #[test]
@@ -439,8 +440,7 @@ fn translator_checker_handles_tool_choice_without_tools_and_include() {
             .contains("content is required")
     );
 
-    // strict 是采样保证,Anthropic 没有等价开关但 schema 照原样前送 →
-    // 按 thinking 块的同一口径放行;非布尔值仍然拒绝。
+    // 显式 strict 与 schema 一并保留；非布尔值仍然拒绝。
     let strict_tool = json!({
         "model": "m",
         "input": "hi",

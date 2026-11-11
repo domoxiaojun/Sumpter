@@ -5,6 +5,7 @@ pub mod access;
 pub mod bridge;
 pub mod bridge_gemini;
 pub mod bridge_in;
+mod bridge_tools;
 pub mod cache_read;
 pub mod capability;
 pub mod client_attribution;
