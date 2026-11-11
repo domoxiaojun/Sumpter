@@ -198,7 +198,9 @@ async fn validated_terminal_then_client_close_is_not_a_499() {
         (
             EndpointProtocolMode::OpenAI,
             "/v1/chat/completions",
-            Bytes::from_static(br#"{"model":"demo","stream":true,"messages":[]}"#),
+            Bytes::from_static(
+                br#"{"model":"demo","stream":true,"messages":[{"role":"user","content":"hi"}]}"#,
+            ),
             "text/event-stream",
             "data: [DONE]\n\n",
         ),
@@ -216,6 +218,7 @@ async fn validated_terminal_then_client_close_is_not_a_499() {
             let response = engine
                 .handle_request(loopback(), "POST", path, vec![], request.clone())
                 .await;
+            assert_eq!(response.status(), 200, "{protocol:?}/{split_trailer}");
             let mut stream = response.into_body().into_data_stream();
             let wire = gzip(payload.as_bytes());
             let chunks = if split_trailer {
