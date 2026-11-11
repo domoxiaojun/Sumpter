@@ -83,7 +83,6 @@ pub fn redact_binary_payloads(object: &mut Map<String, Value>) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::events::{DiagnosticChunk, DiagnosticDataEncoding};
     use serde_json::json;
 

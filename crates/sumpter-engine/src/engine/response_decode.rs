@@ -21,128 +21,6 @@ pub(super) enum ObservationIssue {
     DecompressionLimitExceeded,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use async_compression::tokio::write::{BrotliEncoder, GzipEncoder, ZlibEncoder, ZstdEncoder};
-    use tokio::io::AsyncWriteExt;
-
-    async fn encode(kind: &str, data: &[u8]) -> Vec<u8> {
-        macro_rules! encoded {
-            ($encoder:ident) => {{
-                let mut encoder = $encoder::new(Vec::new());
-                encoder.write_all(data).await.unwrap();
-                encoder.shutdown().await.unwrap();
-                encoder.into_inner()
-            }};
-        }
-        match kind {
-            "gzip" => encoded!(GzipEncoder),
-            "br" => encoded!(BrotliEncoder),
-            "deflate" => encoded!(ZlibEncoder),
-            "zstd" => encoded!(ZstdEncoder),
-            _ => data.to_vec(),
-        }
-    }
-
-    fn restore(coding: &str, wire: &[u8], split: usize) -> (Vec<u8>, Option<ObservationIssue>) {
-        let mut decoder = ResponseDecoder::new(&[("Content-Encoding".into(), coding.into())]);
-        let mut out = Vec::new();
-        for bytes in wire.chunks(split) {
-            decoder.feed(&Bytes::copy_from_slice(bytes), |data| {
-                assert!(data.len() <= BLOCK_BYTES);
-                out.extend_from_slice(data);
-            });
-        }
-        decoder.finish(|data| out.extend_from_slice(data));
-        (out, decoder.issue())
-    }
-
-    #[tokio::test]
-    async fn codecs_and_nested_codings_preserve_arbitrary_split_bytes() {
-        let data = "data: {\"text\":\"分块中文\"}\n\n".repeat(128).into_bytes();
-        for coding in ["identity", "gzip", "br", "deflate", "zstd"] {
-            let wire = encode(coding, &data).await;
-            for split in [1, 7, 65536] {
-                let (out, issue) = restore(coding, &wire, split);
-                assert_eq!(issue, None, "{coding}/{split}");
-                assert_eq!(out, data, "{coding}/{split}");
-            }
-        }
-        let large = vec![b'x'; BLOCK_BYTES + 17];
-        assert_eq!(restore("identity", &large, large.len()), (large, None));
-        let wire = encode("br", &encode("gzip", &data).await).await;
-        assert_eq!(restore("GZIP, br", &wire, 3), (data.clone(), None));
-        for codings in [
-            vec!["br", "gzip"],
-            vec!["deflate", "gzip"],
-            vec!["br", "deflate", "zstd", "gzip"],
-        ] {
-            let mut wire = data.clone();
-            for coding in &codings {
-                wire = encode(coding, &wire).await;
-            }
-            assert_eq!(restore(&codings.join(", "), &wire, 1), (data.clone(), None));
-        }
-        let mut wire = encode("gzip", &encode("br", &data).await).await;
-        let crc = wire.len() - 8;
-        wire[crc] ^= 1;
-        assert_eq!(
-            restore("br, gzip", &wire, 1).1,
-            Some(ObservationIssue::InvalidCompressedData)
-        );
-    }
-
-    #[tokio::test]
-    async fn gzip_members_limits_and_invalid_streams_are_distinct() {
-        let first = encode("gzip", b"one").await;
-        let second = encode("gzip", b"two").await;
-        assert_eq!(
-            restore("gzip", &[first, second].concat(), 1),
-            (b"onetwo".to_vec(), None)
-        );
-        let mut wire = encode("gzip", b"hello").await;
-        assert_eq!(
-            restore("gzip", &wire[..wire.len() - 4], 1).1,
-            Some(ObservationIssue::TruncatedCompressedData)
-        );
-        let crc = wire.len() - 8;
-        wire[crc] ^= 1;
-        assert_eq!(
-            restore("gzip", &wire, 1).1,
-            Some(ObservationIssue::InvalidCompressedData)
-        );
-        assert_eq!(
-            restore("future", &wire, 1).1,
-            Some(ObservationIssue::UnsupportedEncoding)
-        );
-        assert_eq!(
-            restore("identity,identity,identity,identity,identity", &wire, 1).1,
-            Some(ObservationIssue::UnsupportedEncoding)
-        );
-        let wire = encode("gzip", b"too much").await;
-        let mut compressed = ResponseDecoder::new(&[("content-encoding".into(), "gzip".into())]);
-        compressed.limit = 4;
-        compressed.feed(&Bytes::from(wire), |_| {
-            panic!("over-budget compressed output")
-        });
-        compressed.finish(|_| panic!("disabled observer"));
-        assert_eq!(
-            compressed.issue(),
-            Some(ObservationIssue::DecompressionLimitExceeded)
-        );
-        let mut decoder = ResponseDecoder::new(&[]);
-        decoder.limit = 4;
-        decoder.feed(&Bytes::from_static(b"too much"), |_| {
-            panic!("over-budget block must not reach observers")
-        });
-        assert_eq!(
-            decoder.issue(),
-            Some(ObservationIssue::DecompressionLimitExceeded)
-        );
-    }
-}
-
 impl ObservationIssue {
     pub(super) fn token(self) -> &'static str {
         match self {
@@ -378,5 +256,127 @@ impl ResponseDecoder {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_compression::tokio::write::{BrotliEncoder, GzipEncoder, ZlibEncoder, ZstdEncoder};
+    use tokio::io::AsyncWriteExt;
+
+    async fn encode(kind: &str, data: &[u8]) -> Vec<u8> {
+        macro_rules! encoded {
+            ($encoder:ident) => {{
+                let mut encoder = $encoder::new(Vec::new());
+                encoder.write_all(data).await.unwrap();
+                encoder.shutdown().await.unwrap();
+                encoder.into_inner()
+            }};
+        }
+        match kind {
+            "gzip" => encoded!(GzipEncoder),
+            "br" => encoded!(BrotliEncoder),
+            "deflate" => encoded!(ZlibEncoder),
+            "zstd" => encoded!(ZstdEncoder),
+            _ => data.to_vec(),
+        }
+    }
+
+    fn restore(coding: &str, wire: &[u8], split: usize) -> (Vec<u8>, Option<ObservationIssue>) {
+        let mut decoder = ResponseDecoder::new(&[("Content-Encoding".into(), coding.into())]);
+        let mut out = Vec::new();
+        for bytes in wire.chunks(split) {
+            decoder.feed(&Bytes::copy_from_slice(bytes), |data| {
+                assert!(data.len() <= BLOCK_BYTES);
+                out.extend_from_slice(data);
+            });
+        }
+        decoder.finish(|data| out.extend_from_slice(data));
+        (out, decoder.issue())
+    }
+
+    #[tokio::test]
+    async fn codecs_and_nested_codings_preserve_arbitrary_split_bytes() {
+        let data = "data: {\"text\":\"分块中文\"}\n\n".repeat(128).into_bytes();
+        for coding in ["identity", "gzip", "br", "deflate", "zstd"] {
+            let wire = encode(coding, &data).await;
+            for split in [1, 7, 65536] {
+                let (out, issue) = restore(coding, &wire, split);
+                assert_eq!(issue, None, "{coding}/{split}");
+                assert_eq!(out, data, "{coding}/{split}");
+            }
+        }
+        let large = vec![b'x'; BLOCK_BYTES + 17];
+        assert_eq!(restore("identity", &large, large.len()), (large, None));
+        let wire = encode("br", &encode("gzip", &data).await).await;
+        assert_eq!(restore("GZIP, br", &wire, 3), (data.clone(), None));
+        for codings in [
+            vec!["br", "gzip"],
+            vec!["deflate", "gzip"],
+            vec!["br", "deflate", "zstd", "gzip"],
+        ] {
+            let mut wire = data.clone();
+            for coding in &codings {
+                wire = encode(coding, &wire).await;
+            }
+            assert_eq!(restore(&codings.join(", "), &wire, 1), (data.clone(), None));
+        }
+        let mut wire = encode("gzip", &encode("br", &data).await).await;
+        let crc = wire.len() - 8;
+        wire[crc] ^= 1;
+        assert_eq!(
+            restore("br, gzip", &wire, 1).1,
+            Some(ObservationIssue::InvalidCompressedData)
+        );
+    }
+
+    #[tokio::test]
+    async fn gzip_members_limits_and_invalid_streams_are_distinct() {
+        let first = encode("gzip", b"one").await;
+        let second = encode("gzip", b"two").await;
+        assert_eq!(
+            restore("gzip", &[first, second].concat(), 1),
+            (b"onetwo".to_vec(), None)
+        );
+        let mut wire = encode("gzip", b"hello").await;
+        assert_eq!(
+            restore("gzip", &wire[..wire.len() - 4], 1).1,
+            Some(ObservationIssue::TruncatedCompressedData)
+        );
+        let crc = wire.len() - 8;
+        wire[crc] ^= 1;
+        assert_eq!(
+            restore("gzip", &wire, 1).1,
+            Some(ObservationIssue::InvalidCompressedData)
+        );
+        assert_eq!(
+            restore("future", &wire, 1).1,
+            Some(ObservationIssue::UnsupportedEncoding)
+        );
+        assert_eq!(
+            restore("identity,identity,identity,identity,identity", &wire, 1).1,
+            Some(ObservationIssue::UnsupportedEncoding)
+        );
+        let wire = encode("gzip", b"too much").await;
+        let mut compressed = ResponseDecoder::new(&[("content-encoding".into(), "gzip".into())]);
+        compressed.limit = 4;
+        compressed.feed(&Bytes::from(wire), |_| {
+            panic!("over-budget compressed output")
+        });
+        compressed.finish(|_| panic!("disabled observer"));
+        assert_eq!(
+            compressed.issue(),
+            Some(ObservationIssue::DecompressionLimitExceeded)
+        );
+        let mut decoder = ResponseDecoder::new(&[]);
+        decoder.limit = 4;
+        decoder.feed(&Bytes::from_static(b"too much"), |_| {
+            panic!("over-budget block must not reach observers")
+        });
+        assert_eq!(
+            decoder.issue(),
+            Some(ObservationIssue::DecompressionLimitExceeded)
+        );
     }
 }
