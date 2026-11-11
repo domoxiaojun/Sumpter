@@ -2949,7 +2949,7 @@ mod tests {
         // Responses 工具定义是扁平的。
         assert_eq!(
             body["tools"],
-            json!([{"type": "function", "name": "Read", "parameters": {"type": "object"}}])
+            json!([{"type": "function", "name": "Read", "parameters": {"type": "object"}, "strict": false}])
         );
         let input = body["input"].as_array().unwrap();
         assert_eq!(input.len(), 3);
