@@ -333,7 +333,7 @@ mod tests {
                     to_vec(&serde_json::json!({"text":"a bounded copy"})).unwrap_or_default(),
                 )
             },
-            Some,
+            |body| Some(body),
         )
         .unwrap();
         let retry = bytes.clone();
@@ -344,7 +344,7 @@ mod tests {
         let result = build_bytes(
             Quota::new(8),
             || Bytes::from(to_vec(&serde_json::json!({"text":"too large"})).unwrap_or_default()),
-            Some,
+            |body| Some(body),
         );
         assert_eq!(result, Err(BUSY));
     }

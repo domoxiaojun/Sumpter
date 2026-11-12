@@ -685,6 +685,7 @@ mod security_tests {
                 at_ms: 1,
                 bytes: text.len() as u64,
                 data: (*text).into(),
+                data_encoding: sumpter_core::events::DiagnosticDataEncoding::Utf8,
                 truncated: false,
             })
             .collect()

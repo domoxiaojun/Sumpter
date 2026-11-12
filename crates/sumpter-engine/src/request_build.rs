@@ -1413,7 +1413,7 @@ mod tests {
         let result = crate::ingress::build_bytes(
             crate::ingress::Quota::new(8),
             || super::rewrite_gemini_body_models(&original, "client", "upstream-model"),
-            Some,
+            |body| Some(body),
         );
         assert_eq!(result, Err(crate::ingress::BUSY));
     }

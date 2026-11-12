@@ -1797,7 +1797,7 @@ impl Engine {
                         &fields.model,
                     )
                 },
-                Some,
+                |body| Some(body),
             ) {
                 Ok(body) => body,
                 Err(reason) => {
