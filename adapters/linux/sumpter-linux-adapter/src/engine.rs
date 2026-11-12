@@ -8,7 +8,6 @@
 use std::ops::Deref;
 use std::sync::Arc;
 
-use axum::response::Response;
 use sumpter_core::config::AppConfig;
 use sumpter_core::config_store::ConfigDir;
 use sumpter_core::events::{RuntimeEvent, RuntimeSnapshot};
