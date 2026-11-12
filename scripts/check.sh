@@ -10,7 +10,7 @@ fi
 check_docs() {
     uv run scripts/maintenance/sync-usage-docs.py --check
     node scripts/maintenance/sync-project-metadata.mjs --check
-    node scripts/maintenance/sync-client-attribution.mjs --check
+    node scripts/maintenance/sync-client-registry.mjs --check
     node --test scripts/tests/repository-contracts.test.mjs scripts/tests/export-source.test.mjs
 }
 check_rust() {
@@ -21,7 +21,6 @@ check_rust() {
 }
 check_web() {
     npm test --prefix platforms/linux/webui
-    node --test scripts/tests/pi-project-attribution.test.mjs scripts/tests/client-attribution.test.mjs scripts/tests/codex-attribution.test.mjs scripts/tests/attribution-boundaries.test.mjs
     npm run build --prefix platforms/linux/webui
     git diff --exit-code -- platforms/linux/web
     if [[ -n "$(git ls-files --others --exclude-standard -- platforms/linux/web)" ]]; then

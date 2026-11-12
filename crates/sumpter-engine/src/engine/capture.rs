@@ -360,8 +360,7 @@ impl Engine {
 
     /// 以记录为单位遍历当前捕获快照。调用方可以在每条记录后把字节写入
     /// 背压流，因此不会把整个 512 MiB 捕获再次聚合到一个 `Vec`。锁会在
-    /// 导出期间保持，以确保新增/淘汰不会让同一次导出的记录顺序漂移；
-    /// 导出是显式的低频操作，捕获写入只会短暂等待客户端背压。
+    /// 克隆 Arc 正文句柄后释放；慢下载与脱敏不会阻塞捕获写入。
     pub fn with_diagnostic_capture_records<F>(&self, mut visit: F) -> Result<(), String>
     where
         F: FnMut(&DiagnosticRequestCapture) -> Result<(), String>,
@@ -371,7 +370,11 @@ impl Engine {
             .capture
             .lock()
             .map_err(|_| "诊断捕获锁不可用".to_string())?;
-        for record in &capture.records {
+        // Body/chunk contents are Arc<str>: clone handles and metadata only,
+        // then release the capture lock before parsing or network backpressure.
+        let records = capture.records.clone();
+        drop(capture);
+        for record in &records {
             visit(record)?;
         }
         Ok(())

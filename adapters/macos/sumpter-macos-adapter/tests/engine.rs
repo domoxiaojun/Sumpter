@@ -30,6 +30,9 @@ mod request_policy;
 #[path = "../../../../tests/contracts/pi.rs"]
 mod pi;
 
+#[path = "../../../../tests/contracts/tool_bridge.rs"]
+mod tool_bridge;
+
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -2119,13 +2122,27 @@ async fn control_endpoints_require_token_and_status_masks_auth() {
         .expect("notify event");
     assert_eq!(notify.phase, Some(RuntimeEventPhase::Completed));
 
-    // status:环回放行,authToken 脱敏。
-    let (status, resp) = call(&engine, loopback(), "/__status", vec![], Bytes::new()).await;
+    // 已配置入站 Token 时，环回也不能免凭据读取状态。
+    let (status, denied) = call(&engine, loopback(), "/__status", vec![], Bytes::new()).await;
+    assert_eq!(status, 401);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&denied).unwrap()["error"],
+        "inbound_auth_required"
+    );
+    let (status, resp) = call(
+        &engine,
+        loopback(),
+        "/__status",
+        vec![("x-api-key".into(), "secret-inbound".into())],
+        Bytes::new(),
+    )
+    .await;
     assert_eq!(status, 200);
     let json: Value = serde_json::from_slice(&resp).unwrap();
     assert_eq!(json["running"], json!(true));
     assert_eq!(json["endpoints"], json!(2));
     assert_eq!(json["listener"]["authToken"], "***");
+    assert!(json["runtime"].get("recentEvents").is_none());
 
     // 非环回无 token:status 403。
     let (status, _) = call(
@@ -2244,7 +2261,13 @@ async fn ingress_preflight_never_polls_rejected_or_bodyless_request_bodies() {
         (loopback(), "/unknown", vec![], 404),
         (external, "/__status", vec![], 403),
         (external, "/__notify", vec![], 403),
-        (loopback(), "/__status", vec![], 200),
+        (loopback(), "/__status", vec![], 401),
+        (
+            loopback(),
+            "/__status",
+            vec![("x-api-key".into(), "secret-inbound".into())],
+            200,
+        ),
     ] {
         let polled = Arc::new(AtomicBool::new(false));
         let response = engine
@@ -3927,8 +3950,7 @@ async fn unknown_path_404_shape() {
     assert_eq!(json["error"], "not_found");
     assert_eq!(json["path"], "/v1/unknown");
 
-    // The listener-download helper is intentionally Linux-only; macOS embeds
-    // the script in the App and must not expose a remote copy endpoint.
+    // Retired collector downloads remain unavailable after upgrading.
     let response = engine
         .handle_request(
             loopback(),
@@ -7107,3 +7129,6 @@ mod client_attribution;
 
 #[path = "../../../../tests/contracts/inbound_tokens.rs"]
 mod inbound_tokens;
+
+#[path = "../../../../tests/contracts/security_ingress.rs"]
+mod security_ingress;

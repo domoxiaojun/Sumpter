@@ -9,29 +9,7 @@ use crate::events::{
 };
 use crate::routing::{RequestPurpose, RoutingRequest, inspector};
 
-pub const CLIENTS: &[ClientKind] = &[
-    ClientKind::Codex,
-    ClientKind::ClaudeCode,
-    ClientKind::GeminiCli,
-    ClientKind::GrokBuild,
-    ClientKind::Pi,
-    ClientKind::Cursor,
-    ClientKind::Cline,
-    ClientKind::RooCode,
-    ClientKind::Continue,
-    ClientKind::Aider,
-    ClientKind::OpenCode,
-    ClientKind::Goose,
-    ClientKind::OpenWebUi,
-    ClientKind::Windsurf,
-    ClientKind::KiloCode,
-    ClientKind::LiteLlm,
-    ClientKind::Ollama,
-    ClientKind::LmStudio,
-    ClientKind::Chatbox,
-    ClientKind::DeepSeekHarness,
-    ClientKind::WorkBuddy,
-];
+pub use crate::client_registry::CLIENTS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -93,6 +71,8 @@ pub struct AttributionEvidence {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientAttribution {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<crate::client_identity::ObservedIdentity>,
     pub version: u8,
     pub evidence: Vec<AttributionEvidence>,
     pub conflicts: Vec<String>,
@@ -128,32 +108,10 @@ pub fn client(value: &str) -> Option<ClientKind> {
 }
 
 pub fn variant(value: &str) -> Option<&'static str> {
-    [
-        "cli",
-        "tui",
-        "desktop",
-        "ide",
-        "vscode",
-        "web",
-        "sdk",
-        "backend",
-        "exec",
-        "work_desktop",
-        "work_web",
-        "work_mobile",
-        "work_cca",
-        "chatgpt_cca",
-        "chatgpt_atlas",
-        "chatgpt_desktop",
-        "chatgpt_android_remote",
-        "chatgpt_ios_remote",
-        "app_server",
-        "app_server_sdk",
-        "mcp_server",
-        "unknown",
-    ]
-    .into_iter()
-    .find(|v| v.eq_ignore_ascii_case(value))
+    crate::client_registry::VARIANTS
+        .iter()
+        .copied()
+        .find(|v| v.eq_ignore_ascii_case(value))
 }
 
 pub fn role(value: &str) -> Option<&'static str> {
@@ -243,6 +201,14 @@ fn headers<'a>(
 /// Native product tokens must occur at UA product boundaries, not in comments
 /// or unrelated names. Keep the legacy detector for routing compatibility.
 fn ua_client(ua: &str) -> Option<ClientKind> {
+    if let Some(kind) = crate::client_registry::product(ua)
+        .as_deref()
+        .and_then(crate::client_registry::kind_for_product)
+    {
+        if !matches!(kind, ClientKind::Pi | ClientKind::ClaudeCode) {
+            return Some(kind);
+        }
+    }
     let value = ua.to_ascii_lowercase();
     let first = value.split_whitespace().next()?;
     if first.starts_with("grok-shell/")
@@ -359,7 +325,8 @@ pub fn observe(
     body: Option<&Value>,
 ) -> AttributedRequest {
     let mut report = ClientAttribution {
-        version: 1,
+        version: 2,
+        identity: None,
         evidence: vec![],
         conflicts: vec![],
         issues: vec![],
@@ -447,6 +414,18 @@ pub fn observe(
     } else {
         "openai_compat"
     };
+    let ua = unique_label(all, "user-agent", 4096)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let codex_headers = unique_label(all, "x-codex-window-id", 128).is_some()
+        || codex
+            .as_ref()
+            .is_some_and(|m| !m.malformed && !m.truncated && m.has_request_identity());
+    let hosted =
+        ua.starts_with("vscode_agent_host/") || (ua.starts_with("claude code/") && codex_headers);
+    if hosted {
+        signals.add(3, "clientKind", "native", "hosted-codex", "codex");
+    }
     let selected = signals.resolve("clientKind", fallback, &mut report);
     let kind = client(&selected).unwrap_or(if selected == "openai_compat" {
         ClientKind::OpenaiCompat
@@ -588,6 +567,32 @@ pub fn observe(
             );
         }
     }
+    if kind == ClientKind::ClaudeCode {
+        let ids = headers(all, "x-claude-code-agent-id", &mut report);
+        if ids.len() == 1 && !ids[0].is_empty() && ids[0].len() <= 128 {
+            signals.add(3, "agentRole", "native", "claude-agent-id", "subagent");
+        }
+    }
+    if let Some(metadata) = &codex {
+        for raw in [
+            metadata.request_kind.as_deref(),
+            metadata.thread_source.as_deref(),
+            metadata.subagent_header.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if kind == ClientKind::Codex
+                && metadata
+                    .request_kind
+                    .as_deref()
+                    .is_none_or(|v| ObservedRequestKind::parse(v).is_none())
+                && let Some(task) = native_task(raw)
+            {
+                signals.add(3, "requestKind", "native", "codex-task-alias", task);
+            }
+        }
+    }
     let path = path.split('?').next().unwrap_or(path).trim_end_matches('/');
     if method.eq_ignore_ascii_case("POST") || method.eq_ignore_ascii_case("GET") {
         let endpoint_kind = match path {
@@ -618,6 +623,34 @@ pub fn observe(
     let request_kind =
         ObservedRequestKind::parse(&signals.resolve("requestKind", "unknown", &mut report))
             .unwrap_or(ObservedRequestKind::Unknown);
+    let ua = unique_label(all, "user-agent", 4096).unwrap_or_default();
+    let mut identity = crate::client_identity::ObservedIdentity {
+        product: crate::client_registry::product(&ua),
+        ..Default::default()
+    };
+    if kind == ClientKind::ClaudeCode {
+        identity.agent_id = unique_label(all, "x-claude-code-agent-id", 128);
+        identity.parent_agent_id = identity
+            .agent_id
+            .as_ref()
+            .and_then(|_| unique_label(all, "x-claude-code-parent-agent-id", 128));
+    }
+    if identity.product.as_deref() == Some("vscode_agent_host")
+        || (ua.to_ascii_lowercase().starts_with("claude code/") && codex_headers)
+    {
+        identity.host = Some(
+            if identity.product.as_deref() == Some("vscode_agent_host") {
+                "vscode"
+            } else {
+                "claude_code"
+            }
+            .into(),
+        );
+        identity.engine = Some("codex".into());
+    } else if kind == ClientKind::Codex {
+        identity.engine = Some("codex".into());
+    }
+    report.identity = Some(identity);
     AttributedRequest {
         client_kind: kind,
         client_variant,
@@ -874,4 +907,199 @@ fn bounded_json(value: &Value, depth: usize, budget: &mut usize) -> bool {
         }),
         _ => true,
     }
+}
+
+fn unique_label(all: &[(String, String)], name: &str, max: usize) -> Option<String> {
+    let values: Vec<_> = all
+        .iter()
+        .filter(|(n, _)| n.eq_ignore_ascii_case(name))
+        .map(|(_, v)| v.trim())
+        .collect();
+    if values.len() != 1 {
+        return None;
+    }
+    let v = values[0];
+    (!v.is_empty() && v.len() <= max && !v.chars().any(char::is_control)).then(|| v.to_owned())
+}
+pub(crate) fn native_task(value: &str) -> Option<&'static str> {
+    Some(match value {
+        "compact" | "compaction" => "compaction",
+        "title" | "thread_title" | "thread_title_reconsideration" | "title_generation" => {
+            "session_title"
+        }
+        "memory" | "memgen" | "memory_consolidation" => "memory",
+        "review" | "automated_review" | "auto_review" | "guardian" | "guardian_review" => "review",
+        "web_search" => "websearch",
+        _ => return None,
+    })
+}
+/// The caller supplies the identity of a successfully matched enabled token.
+/// Neither token strings nor unauthenticated relay headers grant attribution.
+pub fn observe_configured(
+    method: &str,
+    path: &str,
+    all: &[(String, String)],
+    body: Option<&Value>,
+    settings: &crate::client_identity::ClientIdentitySettings,
+    token: Option<&crate::config::InboundTokenIdentity>,
+) -> AttributedRequest {
+    let mut result = observe(method, path, all, body);
+    let product = result
+        .attribution
+        .identity
+        .as_ref()
+        .and_then(|i| i.product.as_deref());
+    let alias = product.and_then(|p| settings.ua_aliases.get(p));
+    let binding = token.and_then(|t| settings.token_bindings.get(&t.id));
+    let candidate = binding
+        .map(|b| b.client.as_str())
+        .or(alias.map(String::as_str));
+    if let Some(candidate) = candidate {
+        let can_fill = matches!(
+            result.client_kind,
+            ClientKind::Unknown | ClientKind::OpenaiCompat
+        ) && !result
+            .attribution
+            .conflicts
+            .iter()
+            .any(|v| v == "clientKind");
+        if can_fill {
+            if let Some(kind) = client(candidate) {
+                fill_known_client(&mut result, kind, method, path, all, body);
+            }
+            let identity = result
+                .attribution
+                .identity
+                .get_or_insert_with(Default::default);
+            if binding.is_some() {
+                identity.raw_product = identity.product.clone();
+                identity.product = Some(candidate.into());
+            }
+        } else if client(candidate) != Some(result.client_kind) {
+            result.attribution.conflicts.push("clientKind".into());
+        }
+        if let Some(b) = binding {
+            if (can_fill || client(&b.client) == Some(result.client_kind))
+                && result.client_variant == "unknown"
+                && !result
+                    .attribution
+                    .conflicts
+                    .iter()
+                    .any(|v| v == "clientVariant")
+            {
+                if let Some(v) = &b.variant {
+                    result.client_variant = v.clone();
+                }
+            }
+        }
+        result.attribution.evidence.push(AttributionEvidence {
+            field: "clientKind".into(),
+            source: if binding.is_some() {
+                "token_binding"
+            } else {
+                "configured_ua"
+            }
+            .into(),
+            rule: "server-config".into(),
+            value: candidate.into(),
+        });
+    }
+    let has_forwarded = all.iter().any(|(n, _)| {
+        n.to_ascii_lowercase().starts_with("x-sumpter-forwarded-")
+            || n.eq_ignore_ascii_case("x-sumpter-relay-source")
+    });
+    if has_forwarded {
+        let source = binding.and_then(|b| b.relay_source.as_deref());
+        let declared_source = unique_label(all, "x-sumpter-relay-source", 64);
+        let forwarded = unique_label(all, "x-sumpter-forwarded-client", 64)
+            .filter(|v| crate::client_registry::valid_product(v));
+        if let (Some(source), Some(product)) = (source, forwarded) {
+            if declared_source.as_deref() == Some(source) {
+                let can_fill = matches!(
+                    result.client_kind,
+                    ClientKind::Unknown | ClientKind::OpenaiCompat
+                ) && !result
+                    .attribution
+                    .conflicts
+                    .iter()
+                    .any(|v| v == "clientKind");
+                if can_fill {
+                    if let Some(kind) = client(&product) {
+                        fill_known_client(&mut result, kind, method, path, all, body);
+                    }
+                    let identity = result
+                        .attribution
+                        .identity
+                        .get_or_insert_with(Default::default);
+                    if identity.raw_product.is_none() {
+                        identity.raw_product = identity.product.clone();
+                    }
+                    identity.product = Some(product.clone());
+                } else if client(&product) != Some(result.client_kind) {
+                    result.attribution.conflicts.push("clientKind".into());
+                }
+                let identity = result
+                    .attribution
+                    .identity
+                    .get_or_insert_with(Default::default);
+                identity.relay_source = Some(source.into());
+                identity.session_id = unique_label(all, "x-sumpter-forwarded-session", 128)
+                    .map(|id| format!("relay:{source}:{id}"));
+                result.attribution.evidence.push(AttributionEvidence {
+                    field: "clientKind".into(),
+                    source: "trusted_relay".into(),
+                    rule: "authenticated-relay-token".into(),
+                    value: product,
+                });
+            } else {
+                result.attribution.issues.push("relaySourceMismatch".into());
+            }
+        } else {
+            result.attribution.issues.push("untrustedRelay".into());
+        }
+    }
+    result.attribution.conflicts.sort();
+    result.attribution.conflicts.dedup();
+    result
+}
+
+/// Apply product-specific native rules only after a missing identity was filled.
+fn fill_known_client(
+    result: &mut AttributedRequest,
+    kind: ClientKind,
+    method: &str,
+    path: &str,
+    all: &[(String, String)],
+    body: Option<&Value>,
+) {
+    result.client_kind = kind;
+    let mut declared = all.to_vec();
+    declared.retain(|(n, _)| !n.eq_ignore_ascii_case("x-sumpter-client"));
+    declared.push(("x-sumpter-client".into(), kind.as_str().into()));
+    let recovered = observe(method, path, &declared, body);
+    result.client_variant = recovered.client_variant;
+    result.agent_role = recovered.agent_role;
+    result.agent_name = recovered.agent_name;
+    result.request_kind = recovered.request_kind;
+    if let Some(identity) = result.attribution.identity.as_mut() {
+        if let Some(native) = recovered.attribution.identity {
+            identity.engine = native.engine;
+            identity.agent_id = native.agent_id;
+            identity.parent_agent_id = native.parent_agent_id;
+        }
+    }
+    for e in recovered
+        .attribution
+        .evidence
+        .into_iter()
+        .filter(|e| e.field != "clientKind")
+    {
+        if !result.attribution.evidence.contains(&e) {
+            result.attribution.evidence.push(e);
+        }
+    }
+    result
+        .attribution
+        .conflicts
+        .extend(recovered.attribution.conflicts);
 }

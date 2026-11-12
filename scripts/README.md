@@ -19,11 +19,11 @@ uv run scripts/maintenance/sync-usage-docs.py --check
 uv run scripts/maintenance/sync-usage-docs.py --write
 ```
 
-`sync-project-metadata.mjs` 同步配置、许可证和更新记录；`sync-client-attribution.mjs` 检查客户端归因资源副本。WebUI 改动后必须构建并审阅 `platforms/linux/web/`。
+`sync-project-metadata.mjs` 同步配置、许可证和更新记录；`sync-client-registry.mjs --check` 检查原生客户端目录副本。WebUI 改动后必须构建并审阅 `platforms/linux/web/`。
 
 ## 目录说明
 
-- `clients/`：归因维护源和 Gemini wrapper。
+- `clients/`：归因维护源、Gemini wrapper 和 [Codex 桌面网关原型](../docs/codex-desktop-gateway.md)。
 - `maintenance/`：同步、源码导出和仓库维护工具。
 - `tests/`：Node 与 Compose / Docker 契约测试；`tests/source-ip-container-selftest.sh` 在 Linux CI 用真实容器验证事件源 IP 的直连、反代与 NAT 路径，本机不运行。
 - `build-macos-dmg.sh`：调用 macOS App 打包脚本。

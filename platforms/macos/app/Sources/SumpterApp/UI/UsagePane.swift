@@ -1343,8 +1343,6 @@ struct UsagePane: View {
                 }
             }
             if kind == "project" {
-                v3AttributionHints(page?.rows ?? [])
-                piAttributionStatus(page?.rows ?? [])
             }
             if let page {
                 if page.rows.isEmpty {
@@ -1361,43 +1359,6 @@ struct UsagePane: View {
             } else {
                 EmptyStateView(title: "暂无" + runtimeDimensionLabel(kind) + "使用数据", systemImage: "chart.bar")
             }
-        }
-    }
-
-    @ViewBuilder
-    private func v3AttributionHints(_ rows: [AdminWire.RuntimeDimensionRow]) -> some View {
-        let hintRows = rows.map {
-            ClaudeAttributionHint.ProjectRow(
-                name: $0.name,
-                projectSource: $0.source,
-                clientKinds: $0.clientKinds ?? [],
-                attempts: $0.requests
-            )
-        }
-        if ClaudeAttributionHint.shouldPrompt(projects: hintRows) {
-            attributionHintCard(
-                title: "Claude Code 项目归因未配置",
-                message: ClaudeAttributionHint.message,
-                command: ClaudeAttributionHint.command
-            )
-        }
-        if GrokAttributionHint.shouldPrompt(projects: hintRows) {
-            attributionHintCard(
-                title: "Grok Build 项目归因未配置",
-                message: GrokAttributionHint.message,
-                command: GrokAttributionHint.command
-            )
-        }
-    }
-
-    private func piAttributionStatus(_ rows: [AdminWire.RuntimeDimensionRow]) -> some View {
-        let state = PiAttributionHint.state(projects: rows.map {
-            .init(name: $0.name, projectSource: $0.source, clientKinds: $0.clientKinds ?? [], attempts: $0.requests)
-        })
-        return VStack(alignment: .leading, spacing: 6) {
-            Text("pi 项目归因：" + state.message).font(.caption).foregroundStyle(.secondary)
-            Link("pi 接入说明", destination: URL(string: "https://github.com/domoxiaojun/sumpter/blob/main/USAGE.md#pi-客户端")!)
-                .font(.caption)
         }
     }
 
@@ -1937,36 +1898,6 @@ struct UsagePane: View {
         case (nil, nil):
             return "未设置自动条件"
         }
-    }
-
-    @ViewBuilder
-    private func attributionHintCard(title: String, message: String, command: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: "info.circle")
-                Text(title)
-                    .font(.caption.weight(.semibold))
-            }
-            Text(message)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 8) {
-                Text(command)
-                    .font(.caption2.monospaced())
-                    .textSelection(.enabled)
-                Button("复制命令") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(command, forType: .string)
-                }
-                .controlSize(.small)
-            }
-            Text("配置器在仓库 platforms/macos/scripts/ 下（跨平台通用）。装完要新开一个终端才生效。")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-        }
-        .padding(8)
-        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
     }
 
     private func projectDisplayName(_ value: String) -> String {

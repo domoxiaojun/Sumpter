@@ -1343,3 +1343,115 @@ fn event_page_keeps_late_completion_and_websocket_diagnostics() {
         Some("websocket relay interrupted")
     );
 }
+
+#[test]
+fn reporting_aliases_are_reversible_across_queries_and_exports_without_rewriting_events() {
+    let mut connection = test_connection();
+    insert_endpoint_test_event(
+        &connection,
+        1,
+        "client",
+        Some("request-raw"),
+        "succeeded",
+        200,
+        Some("openai_compat"),
+        Some("completion"),
+        Some("endpoint-a"),
+        Some("Endpoint A"),
+    );
+    let attribution = serde_json::json!({"version":2,"identity":{"product":"custom-bridge","agentId":"private-child","parentAgentId":"private-parent","sessionId":"private-session"},"evidence":[],"conflicts":[],"issues":[]});
+    let payload = serde_json::json!({"clientKind":"openai_compat","clientAttribution":attribution});
+    connection.execute("UPDATE runtime_events SET timestamp=1,client_attribution_json=?1,payload_json=?2 WHERE seq=1", params![attribution.to_string(),payload.to_string()]).unwrap();
+    let mut filter = RuntimeFilter {
+        client_kind: Some("codex".into()),
+        ..Default::default()
+    };
+    assert_eq!(
+        analytics_on(&mut connection, "all", &filter)
+            .unwrap()
+            .client_requests,
+        0
+    );
+    filter
+        .reporting_aliases
+        .insert("custom-bridge".into(), "codex".into());
+    let analytics = analytics_on(&mut connection, "all", &filter).unwrap();
+    assert_eq!(analytics.client_requests, 1);
+    assert_eq!(analytics.client_kinds[0].name, "codex");
+    let facets = facets_on(&mut connection, &filter).unwrap();
+    assert!(
+        facets
+            .facets
+            .client_kinds
+            .iter()
+            .any(|r| r.value == "codex")
+    );
+    let dimensions = dimension_page_on(
+        &mut connection,
+        DimensionKind::ClientKind,
+        &DimensionPageQuery {
+            filter: filter.clone(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(dimensions.rows[0].name, "codex");
+    let trends = trends_on(
+        &mut connection,
+        &TrendRequest {
+            from: 0.0,
+            to: 3600.0,
+            granularity: TrendGranularity::Hour,
+            snapshot_seq: None,
+            snapshot_change_seq: None,
+            history_generation: None,
+            filter: filter.clone(),
+        },
+    )
+    .unwrap();
+    assert_eq!(trends.totals.client_requests, 1);
+    for privacy in [ExportPrivacy::Redacted, ExportPrivacy::Stored] {
+        let query = ExportQuery {
+            scope: ExportScope::Events,
+            format: ExportFormat::Jsonl,
+            privacy,
+            confirm_stored: true,
+            snapshot_seq: None,
+            snapshot_change_seq: None,
+            history_generation: None,
+            filter: filter.clone(),
+        };
+        let mut bytes = Vec::new();
+        stream_export_on(&mut connection, &query, |chunk| {
+            bytes.extend(chunk);
+            Ok(())
+        })
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["reportedClientKind"], "codex");
+        if privacy == ExportPrivacy::Stored {
+            assert_eq!(value["event"]["clientKind"], "openai_compat");
+        } else {
+            assert_eq!(value["clientKind"], "openai_compat");
+            assert!(!String::from_utf8(bytes).unwrap().contains("private-child"));
+        }
+    }
+    let raw: String = connection
+        .query_row(
+            "SELECT client_attribution_json FROM runtime_events WHERE seq=1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&raw).unwrap(),
+        attribution
+    );
+    filter.reporting_aliases.clear();
+    assert_eq!(
+        analytics_on(&mut connection, "all", &filter)
+            .unwrap()
+            .client_requests,
+        0
+    );
+}

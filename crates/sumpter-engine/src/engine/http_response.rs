@@ -13,7 +13,13 @@ pub fn error_response(status: StatusCode, pairs: &[(&str, &str)]) -> Response {
     for (k, v) in pairs {
         map.insert((*k).to_string(), Value::String((*v).to_string()));
     }
-    json_response(status, &Value::Object(map))
+    let mut response = json_response(status, &Value::Object(map));
+    if status == StatusCode::TOO_MANY_REQUESTS {
+        response
+            .headers_mut()
+            .insert("retry-after", HeaderValue::from_static("1"));
+    }
+    response
 }
 
 pub(super) fn method_not_allowed_response(allow: &str) -> Response {

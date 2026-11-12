@@ -5,6 +5,31 @@ import { mergeRuntimeEvent } from '../src/utils/runtimeEvents.js';
 import { failureKindLabel } from '../src/utils/helpers.js';
 import { traceReasons } from '../src/utils/requestPolicy.js';
 
+test('入站与 WebSocket 额度采用安全默认值、深合并并拒绝非法组合', () => {
+  const original = { ingress: { maxPreprocessing: 3 }, websocket: { maxConnections: 8 } };
+  const draft = requestPolicy(original);
+  assert.equal(draft.ingress.maxBodyMib, 256);
+  assert.equal(draft.ingress.maxDecodedBodyMib, 256);
+  assert.equal(draft.ingress.maxBufferedMib, 1024);
+  assert.equal(draft.websocket.maxFrameMib, 256);
+  assert.equal(draft.websocket.maxMessageMib, 256);
+  assert.equal(draft.ingress.maxPreprocessing, 3);
+  draft.websocket.maxConnections = 2;
+  assert.equal(original.websocket.maxConnections, 8);
+  assert.deepEqual(validateRequestPolicy(requestPolicy(JSON.parse(JSON.stringify(draft)))) , draft);
+  for (const group of ['ingress', 'websocket']) {
+    for (const key of Object.keys(draft[group])) {
+      for (const invalid of [0, -1, 1.5, Infinity, NaN, '']) {
+        const changed = requestPolicy(draft); changed[group][key] = invalid;
+        assert.throws(() => validateRequestPolicy(changed), `${group}.${key}=${invalid}`);
+      }
+    }
+  }
+  for (const values of [{ ingress: { maxBufferedMib: 511 } }, { ingress: { bodyReadTimeoutSeconds: 29 } }, { websocket: { maxFrameMib: 257 } }]) {
+    assert.throws(() => validateRequestPolicy(requestPolicy(values)));
+  }
+});
+
 test('策略默认值启用连续无响应保护，合并局部设置并保留协议声明', () => {
   const source = { endpoints: { a: { limits: { maxConcurrent: 2 }, protocolModels: { 'openai-responses': { m: { strictTools: false } } } } } };
   const draft = requestPolicy(source);

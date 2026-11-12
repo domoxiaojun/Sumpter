@@ -731,7 +731,7 @@ export function RunPage() {
           {/* Detailed Info Matrix matching macOS */}
           <dl className="run-detail-grid">
             <div className="run-detail-listener">
-              <dt>监听地址</dt>
+              <dt>HTTP 监听地址</dt>
               <dd className="run-listener-row">
                 <span className="mono-cell run-listener-address">
                   {status?.listener ? `${status.listener.host}:${status.listener.port}` : '127.0.0.1:57878'}
@@ -746,6 +746,17 @@ export function RunPage() {
                   <span>复制</span>
                 </button>
               </dd>
+              {status?.listener?.httpsPort != null && <>
+                <dt>HTTPS 监听地址</dt>
+                <dd className="run-listener-row">
+                  <span className="mono-cell run-listener-address">{status.listener.host}:{status.listener.httpsPort}</span>
+                  <button type="button" className="btn btn-ghost btn-compact run-copy-address"
+                    title="复制 HTTPS 地址"
+                    onClick={() => copyText(`https://${status.listener.host.includes(':') ? `[${status.listener.host}]` : status.listener.host}:${status.listener.httpsPort}`, 'HTTPS 地址')}>
+                    <Icon name="copy" size={14} />
+                  </button>
+                </dd>
+              </>}
             </div>
             <div>
               <dt>配置版本</dt>

@@ -22,11 +22,6 @@ let package = Package(
             dependencies: [
                 "SumpterCore",
                 .product(name: "Sparkle", package: "Sparkle")
-            ],
-            resources: [
-                .copy("Resources/pi-project-attribution.ts"),
-                .copy("Resources/gemini-sumpter-wrapper.mjs"),
-                .copy("Resources/client-attribution.mjs"),
             ]
         ),
         .testTarget(

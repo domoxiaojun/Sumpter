@@ -1,6 +1,6 @@
+import { ClientIdentityPanel } from '../components/ClientIdentityPanel.jsx';
 import { InboundTokensPanel } from '../components/InboundTokensPanel.jsx';
 import { Icon } from '../utils/icons.jsx';
-import { UnifiedAttributionPanel } from '../components/UnifiedAttributionPanel.jsx';
 import { useState, useEffect, useRef } from 'react';
 import { useAppControls } from '../context/AppContext.jsx';
 import { QuickToggle } from '../components/QuickToggle.jsx';
@@ -21,6 +21,10 @@ export function SecurityPage() {
   const [port, setPort] = useState(config?.listener?.port || 57878);
   const [cidrs, setCidrs] = useState((config?.listener?.allowedCIDRs || []).join(', '));
   const [trustedProxies, setTrustedProxies] = useState((config?.listener?.trustedProxyCIDRs || []).join(', '));
+  const [tlsEnabled, setTlsEnabled] = useState(Boolean(config?.listener?.tls?.enabled));
+  const [httpsPort, setHttpsPort] = useState(config?.listener?.tls?.port ?? 57880);
+  const [certificatePath, setCertificatePath] = useState(config?.listener?.tls?.certificatePath || '');
+  const [privateKeyPath, setPrivateKeyPath] = useState(config?.listener?.tls?.privateKeyPath || '');
 
   // Admin password change state
   const [currentPass, setCurrentPass] = useState('');
@@ -29,9 +33,9 @@ export function SecurityPage() {
   const [adminUser, setAdminUser] = useState(auth?.username || 'admin');
   const [autostartLoading, setAutostartLoading] = useState(false);
   const [savedAdminUser, setSavedAdminUser] = useState(auth?.username || 'admin');
-  const listenerValues = value => [value?.host || '127.0.0.1', String(value?.port || 57878), (value?.allowedCIDRs || []).join(', '), (value?.trustedProxyCIDRs || []).join(', ')];
+  const listenerValues = value => [value?.host || '127.0.0.1', String(value?.port || 57878), (value?.allowedCIDRs || []).join(', '), (value?.trustedProxyCIDRs || []).join(', '), Boolean(value?.tls?.enabled), value?.tls?.certificatePath || '', value?.tls?.privateKeyPath || '', String(value?.tls?.port ?? 57880)];
   const [listenerBaseline, setListenerBaseline] = useState(() => JSON.stringify(listenerValues(config?.listener)));
-  const listenerDirty = JSON.stringify([host, String(port), cidrs, trustedProxies]) !== listenerBaseline;
+  const listenerDirty = JSON.stringify([host, String(port), cidrs, trustedProxies, tlsEnabled, certificatePath, privateKeyPath, String(httpsPort)]) !== listenerBaseline;
   useUnsavedChanges(listenerDirty || Boolean(currentPass || newPass || confirmPass) || adminUser !== savedAdminUser,
     Boolean(pending.config || pending.admin || (pending.autostart && !autostartLoading)));
   useEffect(() => {
@@ -39,6 +43,8 @@ export function SecurityPage() {
     listenerSource.current = configDoc;
     const values = listenerValues(config?.listener);
     setHost(values[0]); setPort(values[1]); setCidrs(values[2]); setTrustedProxies(values[3]);
+    setTlsEnabled(values[4]); setCertificatePath(values[5]); setPrivateKeyPath(values[6]);
+    setHttpsPort(values[7]);
     setListenerBaseline(JSON.stringify(values));
   }, [configDoc, listenerDirty]);
 
@@ -84,6 +90,13 @@ export function SecurityPage() {
     if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
       return addToast('监听端口必须为 1-65535 的整数', 'warning');
     }
+    if (tlsEnabled && [certificatePath, privateKeyPath].some(path => !path.trim().startsWith('/') || /[\u0000-\u001f\u007f]/u.test(path) || new TextEncoder().encode(path.trim()).length > 4096)) {
+      return addToast('HTTPS 证书链和私钥必须填写 daemon 所在主机的有效绝对路径', 'warning');
+    }
+    const tlsPortNum = Number(httpsPort);
+    if (tlsEnabled && (!Number.isInteger(tlsPortNum) || tlsPortNum < 1 || tlsPortNum > 65535 || tlsPortNum === portNum)) {
+      return addToast('HTTPS 端口必须为 1-65535 的整数，且不能与 HTTP 端口相同', 'warning');
+    }
 
     if (!isLoopback(host) && !secretStatus?.inboundAuthToken?.configured && !(config?.listener?.authTokens || []).length) {
       const ok = confirm('当前未启用入站 Token。保存后代理将对外监听，局域网/公网设备可能直接访问。确认继续？');
@@ -96,9 +109,16 @@ export function SecurityPage() {
       nextConfig.listener.port = portNum;
       nextConfig.listener.allowedCIDRs = parseList(cidrs);
       nextConfig.listener.trustedProxyCIDRs = parseList(trustedProxies);
+      if (tlsEnabled || certificatePath.trim() || privateKeyPath.trim()) {
+        nextConfig.listener.tls = { enabled: tlsEnabled, port: Number.isInteger(tlsPortNum) ? tlsPortNum : 57880, certificatePath: certificatePath.trim(), privateKeyPath: privateKeyPath.trim() };
+      } else {
+        delete nextConfig.listener.tls;
+      }
       listenerSource.current = await saveConfig(nextConfig, {}, listenerSource.current);
       const values = listenerValues(listenerSource.current.config.listener);
       setHost(values[0]); setPort(values[1]); setCidrs(values[2]); setTrustedProxies(values[3]);
+      setTlsEnabled(values[4]); setCertificatePath(values[5]); setPrivateKeyPath(values[6]);
+      setHttpsPort(values[7]);
       setListenerBaseline(JSON.stringify(values));
     } catch (err) {
       addToast(`保存监听失败: ${err.message}`, 'error');
@@ -138,6 +158,7 @@ export function SecurityPage() {
       </div>
 
       <InboundTokensPanel />
+      <ClientIdentityPanel />
 
       <details className="glass-panel security-admin-panel">
         <summary>控制台登录凭据<span className="form-hint">修改管理员用户名或密码</span></summary>
@@ -246,6 +267,29 @@ export function SecurityPage() {
         </div>
 
         <div className="form-group">
+          <QuickToggle label="启用 HTTPS / WSS" checked={tlsEnabled}
+            disabled={Boolean(pending.config)} onChange={setTlsEnabled} />
+          {tlsEnabled && <div className="grid-3col">
+            <div className="form-group">
+              <label className="form-label" htmlFor="security-https-port">HTTPS 端口</label>
+              <input id="security-https-port" type="number" className="form-input" value={httpsPort}
+                disabled={Boolean(pending.config)} onChange={event => setHttpsPort(event.target.value)} placeholder="57880" />
+            </div>
+            <div className="form-group">
+              <label className="form-label" htmlFor="security-tls-cert">证书链 PEM</label>
+              <input id="security-tls-cert" className="form-input" value={certificatePath}
+                disabled={Boolean(pending.config)} onChange={event => setCertificatePath(event.target.value)} placeholder="证书链的绝对路径" />
+            </div>
+            <div className="form-group">
+              <label className="form-label" htmlFor="security-tls-key">私钥 PEM</label>
+              <input id="security-tls-key" className="form-input" value={privateKeyPath}
+                disabled={Boolean(pending.config)} onChange={event => setPrivateKeyPath(event.target.value)} placeholder="未加密私钥的绝对路径" />
+            </div>
+          </div>}
+          <p className="form-hint">HTTPS 使用独立端口，HTTP 继续可用。允许自签名，不额外检查证书信任、域名或有效期；TLS 库仍需可加载的证书及匹配私钥。文件路径属于 daemon 所在主机；客户端的证书校验由客户端决定。保存监听修改会重启监听，Admin 管理端口不受影响。</p>
+        </div>
+
+        <div className="form-group">
           <label className="form-label" htmlFor="security-trusted-proxies">可信代理 IP / CIDR</label>
           <input disabled={Boolean(pending.config)} id="security-trusted-proxies"
             type="text"
@@ -310,7 +354,6 @@ export function SecurityPage() {
         </div>
       </div>
 
-      <UnifiedAttributionPanel />
     </div>
   );
 }

@@ -1,10 +1,34 @@
 # 请求策略与客户端诊断
 
-代理入站正文（包括 gzip/zstd 解压后的正文）最多 128 MiB；超限返回 HTTP 413，压缩解码不会绕过该上限。Admin 登录端点单独限制为 2 MiB，并在 JSON 解析和密码计算前拒绝超大正文；已认证的配置、诊断和导出控制请求保持原有大正文兼容。网络读取错误继续返回 400，错误码为 `request_body_read_failed`，不会与大小限制混淆。
+代理 HTTP 单请求体与解压输出默认均为 **256 MiB**，入站受控缓冲共享 **1024 MiB**，最多 **4** 个请求同时读体、解压与解析，最多 **2** 个同时解压。读体空闲 **30 秒**、总时限 **300 秒**。鉴权先于资源申请与读体，超大小返回 413，读体超时返回 408，资源不足返回 429 并附 Retry-After，网络读取或压缩格式错误返回 400。这些是入站保护，不限制正常上游生成或 SSE 长流时长。
+
+`requestPolicy.ingress` 与 `requestPolicy.websocket` 的所有值都必须是有限正整数。旧 schema v7 配置省略字段时使用安全默认值，无数据库迁移。HTTP 缓冲按需申请，覆盖仍存活的原始体、解压输出与正文重写副本；Bytes 的共享引用只计一次，排队、重试和响应期间仍保留的正文不会提前归还预算。它是受控字节缓冲预算，不是整个进程 RSS 上限；解析器对象、TLS/网络栈等仍有额外开销。增长期间新旧缓冲同时计账，因此额度紧张时可能在达到单体上限前返回 429。
+
+Admin 登录正文独立限制为 2 MiB，密码计算前还执行全局和真实 TCP 来源令牌桶，并最多同时运行两个密码 worker。429 响应携带等待秒数，登录页显示倒计时。客户端转发头不作为限速来源。
 
 Responses 流式重试只适用于可证明可重放的请求。含 MCP、shell、computer-use 或未知服务端工具的请求，以及文件/视频等写资源请求，不会在上游已经产生输出后透明重发；客户端工具和明确只读工具仍可按原策略保护。
 
-WebUI 和 macOS 的“Claude Code 路由”页面提供“全客户端请求策略”，此面板对所有客户端生效。策略应用于普通 HTTP/SSE 的实际上游尝试；模型目录刷新、健康探测和 WebSocket 连接不计入此限额。路由授权仍由模型组及入口映射决定。无需迁移或清空运行数据库。
+WebUI 和 macOS 的“Claude Code 路由”页面提供“全客户端请求策略”，此面板对所有客户端生效。策略应用于普通 HTTP/SSE 的实际上游尝试；模型目录刷新、健康探测和 WebSocket 连接不计入 HTTP 上游尝试额度；WS 使用单独的连接配额。路由授权仍由模型组及入口映射决定。无需迁移或清空运行数据库。
+
+## 入站安全额度
+
+| 字段（位于 requestPolicy） | 默认值 | 允许范围 |
+| --- | --- | --- |
+| ingress.maxBodyMib | 256 | 1–1024 MiB |
+| ingress.maxDecodedBodyMib | 256 | 1–1024 MiB |
+| ingress.maxBufferedMib | 1024 | 1–16384 MiB，至少等于上述两项之和 |
+| ingress.maxPreprocessing | 4 | 1–64 |
+| ingress.maxDecompressions | 2 | 1–64 |
+| ingress.bodyIdleTimeoutSeconds | 30 | 1–3600 秒 |
+| ingress.bodyReadTimeoutSeconds | 300 | 1–86400 秒，不得小于空闲时限 |
+| websocket.maxFrameMib | 256 | 1–1024 MiB，不得超过消息上限 |
+| websocket.maxMessageMib | 256 | 1–1024 MiB，累计所有分片 |
+| websocket.maxConnections | 4 | 1–1024 |
+| websocket.firstMessageTimeoutSeconds | 30 | 1–3600 秒 |
+
+WebSocket 在连接上游前申请共享连接配额，超额返回 429 + Retry-After；两个方向和固定 IP 上游连接都使用同一份消息/帧限制。超大帧或累计分片超限发送 1009，释放中继和配额。握手后必须在期限内收到第一个客户端业务消息，Ping/Pong 和上游问候不能延长期限；之后沿用原有空闲策略。超过 64 MiB、仍在配置上限内的正常消息保持可用。
+
+配置保存影响新请求与新连接；既有 WS 保留握手时的消息大小上限。降低共享额度不强杀现有工作；在占用回落前，新申请快速返回 429，由客户端依 Retry-After 重试。响应回放的 maxBufferedMib 和上述 ingress.maxBufferedMib 是分别记账的预算。
 
 ## 默认值和交互预设
 
@@ -110,21 +134,11 @@ Responses SSE 仅在 retry.maxStreamErrorRetries > 0 或 retry.failoverOnStreamE
 
 客户端 TTFB 包含本地等待、重试和缓冲；最终上游 TTFB 与输出速度仍使用既有独立字段。trace 不增加提示词、工具参数或凭据；正文仍仅通过原有按需诊断捕获。
 
-## 只读客户端诊断
+## 客户端识别诊断
 
-在运行客户端的机器、对应终端环境执行：
+在安全页检查客户端身份绑定，并在运行页核对最近请求的归因依据。客户端接入诊断以实际请求记录为依据；没有观察到请求时保持未知，代理地址配置成功并不证明实际流量或协议可用。
 
-```bash
-node client-attribution.mjs doctor all --proxy-url http://127.0.0.1:57878
-```
-
-发行包脚本位于 scripts 目录；统一安装器的私有副本位于 ~/.local/share/sumpter/attribution/client-attribution.mjs（可由 XDG_DATA_HOME 改变）。可将 all 改为 claude、codex、gemini、pi、grok。
-
-doctor 只显示可见配置中的脱敏地址、安装状态、实际已安装包装器版本和 pi 显式标记；不访问鉴权存储、不执行客户端或模型请求、不写文件。项目配置、启动参数和其它进程环境可能覆盖这些来源，因此不能把“未观察到”当成“绕过代理”。地址同源只说明主机和端口匹配，不证明实际流量或协议可用。
-
-macOS 诊断页可执行本机配置检查，但 Finder 启动的 App 无法读取另一个终端当前的环境；WebUI 显示近期已观察到的客户端流量并提供命令，浏览器不读取远程客户端文件。
-
-pi 项目归因必须显式配置 X-Sumpter-Client: pi。Chat Completions SDK 的额外会话亲和头通过 model.compat.sendSessionAffinityHeaders=true 启用；localhost/127.0.0.1 不再自动代表 Sumpter。项目根目录和 Git remote 缓存最多 64 个工作目录、TTL 30 秒，合并在途读取；CWD 换键即重新读取，失败不缓存，会话与请求来源仍逐次取值。
+客户端识别直接读取请求的原生标记。缺少产品标记的客户端使用独立入站 Token 绑定；缺少项目或会话证据时保持未知。脚本退役与迁移说明见 [客户端归因](client-attribution.md)。
 
 ## 客户端来源与验证矩阵
 
@@ -133,11 +147,9 @@ pi 项目归因必须显式配置 X-Sumpter-Client: pi。Chat Completions SDK �
 | 参考项目 | 固定提交 | 本次验证边界 |
 | --- | --- | --- |
 | Codex CLI | 5e769a1cda | 原生 Responses 工具/turn-state 形态、预热与 append/steer/interrupt 观察；grammar 的有损桥接拒绝 |
-| pi | 1f78cea7a + 本地定制 | 原生工具 ID/结果；归因钩子、短期缓存与只读诊断；本地 SDK 显式亲和配置及 Responses cacheRetention=none |
+| pi | 1f78cea7a + 本地定制 | 原生工具 ID/结果；本地 SDK 显式亲和配置及 Responses cacheRetention=none |
 | Gemini CLI | b633c0703 | 原生多轮 functionCall/thoughtSignature；既有双 adapter 签名回放和协议转换合同继续运行 |
 | CLIProxyAPI | 8289ec4c + 本地定制 | 仅作为设计参照；其 fidelity hook 不能假定所有 CPA 安装都有 |
 | magpie | 244d80e23 | 仅作为并发、队列与诊断设计参照 |
-
-pi 的 ctx.streamSimple/requestSource 是此工作区的本地扩展；Sumpter 归因仍兼容未提供该来源字段的 before_provider_headers 钩子。独立调用 SDK 的后台扩展不保证经过会话钩子。上级 pi 源码修改需在该仓库单独构建/发布后才影响其安装版本，Sumpter 发布不会分发 pi SDK 补丁。
 
 夹具位于 [client_contracts_v1.json](../tests/fixtures/client_contracts_v1.json)，双 adapter 入口为 [request_policy.rs](../tests/contracts/request_policy.rs)。正常 CI 离线执行；真实供应商、已安装客户端和设备验收需单独进行。

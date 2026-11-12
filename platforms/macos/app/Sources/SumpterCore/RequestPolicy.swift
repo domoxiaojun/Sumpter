@@ -38,7 +38,80 @@ public struct EndpointRequestPolicy: Codable, Equatable, Sendable {
     }
 }
 
+public struct IngressPolicy: Codable, Equatable, Sendable {
+    public var maxBodyMiB = 256
+    public var maxDecodedBodyMiB = 256
+    public var maxBufferedMiB = 1024
+    public var maxPreprocessing = 4
+    public var maxDecompressions = 2
+    public var bodyIdleTimeoutSeconds = 30
+    public var bodyReadTimeoutSeconds = 300
+    public init() {}
+    enum CodingKeys: String, CodingKey {
+        case maxBodyMiB = "maxBodyMib"
+        case maxDecodedBodyMiB = "maxDecodedBodyMib"
+        case maxBufferedMiB = "maxBufferedMib"
+        case maxPreprocessing
+        case maxDecompressions
+        case bodyIdleTimeoutSeconds
+        case bodyReadTimeoutSeconds
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        maxBodyMiB = try c.decodeIfPresent(Int.self, forKey: .maxBodyMiB) ?? 256
+        maxDecodedBodyMiB = try c.decodeIfPresent(Int.self, forKey: .maxDecodedBodyMiB) ?? 256
+        maxBufferedMiB = try c.decodeIfPresent(Int.self, forKey: .maxBufferedMiB) ?? 1024
+        maxPreprocessing = try c.decodeIfPresent(Int.self, forKey: .maxPreprocessing) ?? 4
+        maxDecompressions = try c.decodeIfPresent(Int.self, forKey: .maxDecompressions) ?? 2
+        bodyIdleTimeoutSeconds = try c.decodeIfPresent(Int.self, forKey: .bodyIdleTimeoutSeconds) ?? 30
+        bodyReadTimeoutSeconds = try c.decodeIfPresent(Int.self, forKey: .bodyReadTimeoutSeconds) ?? 300
+        try validate()
+    }
+    public func validate() throws {
+        guard (1...1024).contains(maxBodyMiB) else { throw InputValidationError("HTTP 单请求体（MiB）必须为 1–1024") }
+        guard (1...1024).contains(maxDecodedBodyMiB) else { throw InputValidationError("解压输出上限（MiB）必须为 1–1024") }
+        guard (1...16384).contains(maxBufferedMiB) else { throw InputValidationError("入站受控缓冲总预算（MiB）必须为 1–16384") }
+        guard (1...64).contains(maxPreprocessing) else { throw InputValidationError("同时读体、解压、解析必须为 1–64") }
+        guard (1...64).contains(maxDecompressions) else { throw InputValidationError("同时解压必须为 1–64") }
+        guard (1...3600).contains(bodyIdleTimeoutSeconds) else { throw InputValidationError("读体空闲时限（秒）必须为 1–3600") }
+        guard (1...86400).contains(bodyReadTimeoutSeconds) else { throw InputValidationError("读体总时限（秒）必须为 1–86400") }
+        guard maxBufferedMiB >= maxBodyMiB + maxDecodedBodyMiB else { throw InputValidationError("入站总缓冲必须容纳原始体上限与解压输出上限之和") }
+        guard bodyReadTimeoutSeconds >= bodyIdleTimeoutSeconds else { throw InputValidationError("读体总时限不得小于空闲时限") }
+    }
+}
+
+public struct WebSocketPolicy: Codable, Equatable, Sendable {
+    public var maxFrameMiB = 256
+    public var maxMessageMiB = 256
+    public var maxConnections = 4
+    public var firstMessageTimeoutSeconds = 30
+    public init() {}
+    enum CodingKeys: String, CodingKey {
+        case maxFrameMiB = "maxFrameMib"
+        case maxMessageMiB = "maxMessageMib"
+        case maxConnections
+        case firstMessageTimeoutSeconds
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        maxFrameMiB = try c.decodeIfPresent(Int.self, forKey: .maxFrameMiB) ?? 256
+        maxMessageMiB = try c.decodeIfPresent(Int.self, forKey: .maxMessageMiB) ?? 256
+        maxConnections = try c.decodeIfPresent(Int.self, forKey: .maxConnections) ?? 4
+        firstMessageTimeoutSeconds = try c.decodeIfPresent(Int.self, forKey: .firstMessageTimeoutSeconds) ?? 30
+        try validate()
+    }
+    public func validate() throws {
+        guard (1...1024).contains(maxFrameMiB) else { throw InputValidationError("单帧上限（MiB）必须为 1–1024") }
+        guard (1...1024).contains(maxMessageMiB) else { throw InputValidationError("累计分片消息上限（MiB）必须为 1–1024") }
+        guard (1...1024).contains(maxConnections) else { throw InputValidationError("业务连接上限必须为 1–1024") }
+        guard (1...3600).contains(firstMessageTimeoutSeconds) else { throw InputValidationError("首个业务消息期限（秒）必须为 1–3600") }
+        guard maxFrameMiB <= maxMessageMiB else { throw InputValidationError("WebSocket 帧上限不得超过消息上限") }
+    }
+}
+
 public struct RequestPolicy: Codable, Equatable, Sendable {
+    public var ingress = IngressPolicy()
+    public var websocket = WebSocketPolicy()
     public var maxTotalAttempts = 0
     public var responseWaitTimeoutSeconds = 0
     public var maxConsecutiveNoResponse = 3
@@ -52,6 +125,7 @@ public struct RequestPolicy: Codable, Equatable, Sendable {
     public var endpoints: [String: EndpointRequestPolicy] = [:]
     public init() {}
     enum CodingKeys: String, CodingKey {
+        case ingress, websocket
         case maxTotalAttempts, responseWaitTimeoutSeconds, streamProtection, streamBufferChunks, streamBufferSeconds, global, endpoints
         case maxConsecutiveNoResponse, noResponseCooldownSeconds
         case streamBufferMiB = "streamBufferMib"
@@ -59,6 +133,8 @@ public struct RequestPolicy: Codable, Equatable, Sendable {
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        ingress = try c.decodeIfPresent(IngressPolicy.self, forKey: .ingress) ?? IngressPolicy()
+        websocket = try c.decodeIfPresent(WebSocketPolicy.self, forKey: .websocket) ?? WebSocketPolicy()
         maxTotalAttempts = try c.decodeIfPresent(Int.self, forKey: .maxTotalAttempts) ?? 0
         responseWaitTimeoutSeconds = try c.decodeIfPresent(Int.self, forKey: .responseWaitTimeoutSeconds) ?? 0
         maxConsecutiveNoResponse = try c.decodeIfPresent(Int.self, forKey: .maxConsecutiveNoResponse) ?? 3

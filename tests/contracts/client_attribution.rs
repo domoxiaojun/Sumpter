@@ -178,7 +178,7 @@ async fn all_declared_clients_preserve_native_body_and_strip_private_attribution
             assert_eq!(event.request_kind, Some(ObservedRequestKind::Memory));
             assert_eq!(event.client_variant.as_deref(), Some("sdk"));
             assert_eq!(event.agent_role.as_deref(), Some("memory"));
-            assert_eq!(event.client_attribution.as_ref().unwrap().version, 1);
+            assert_eq!(event.client_attribution.as_ref().unwrap().version, 2);
             let declared = event.client_declared.as_ref().unwrap();
             assert_eq!(declared.source_id.as_deref(), Some("synthetic-host-a"));
             assert_eq!(declared.collector_version.as_deref(), Some("2.0.0-test"));
@@ -295,4 +295,119 @@ async fn rejection_and_native_body_metadata_are_observed_before_normalization() 
         .unwrap();
     assert_eq!(event.request_kind, Some(ObservedRequestKind::Compaction));
     assert_eq!(event.agent_role.as_deref(), Some("subagent"));
+}
+
+#[tokio::test]
+async fn token_binding_and_relay_forwarding_preserve_body_and_native_session() {
+    use sumpter_core::client_identity::ClientBinding;
+    for relay in [false, true] {
+        let fake = FakeTransport::new();
+        fake.push(
+            "a.example.com",
+            sse_ok(&["data: {\"type\":\"message_stop\"}\n\n"]),
+        );
+        let mut c = config();
+        c.listener.auth_token = "synthetic-bound-key".into();
+        c.listener.auth_token_enabled = true;
+        c.listener.client_identity.token_bindings.insert(
+            "legacy".into(),
+            ClientBinding {
+                client: "codex".into(),
+                variant: Some("sdk".into()),
+                relay_source: Some("office".into()),
+            },
+        );
+        if relay {
+            c.listener
+                .client_identity
+                .relay_endpoints
+                .insert(c.endpoints[0].id.clone(), "home".into());
+        }
+        let engine = engine_with(c, fake.clone());
+        let original = body();
+        let (status, _) = call(
+            &engine,
+            loopback(),
+            "/v1/messages",
+            vec![
+                ("authorization".into(), "Bearer synthetic-bound-key".into()),
+                ("user-agent".into(), "openai/1".into()),
+                ("session_id".into(), "native-session".into()),
+                ("x-sumpter-relay-source".into(), "office".into()),
+                ("x-sumpter-forwarded-client".into(), "codex".into()),
+                (
+                    "x-sumpter-forwarded-session".into(),
+                    "remote-session".into(),
+                ),
+            ],
+            original.clone(),
+        )
+        .await;
+        assert_eq!(status, 200);
+        let captured = fake.requests();
+        assert_eq!(captured[0].body, original.as_ref());
+        let private: Vec<_> = captured[0]
+            .headers
+            .iter()
+            .filter(|(n, _)| n.to_ascii_lowercase().starts_with("x-sumpter-"))
+            .collect();
+        if relay {
+            assert_eq!(private.len(), 3);
+            for (name, value) in [
+                ("x-sumpter-relay-source", "home"),
+                ("x-sumpter-forwarded-client", "codex"),
+                ("x-sumpter-forwarded-session", "native-session"),
+            ] {
+                assert!(private.iter().any(|(n, v)| n == name && v == value));
+            }
+        } else {
+            assert!(private.is_empty());
+        }
+        for event in engine
+            .runtime_snapshot()
+            .recent_events
+            .iter()
+            .filter(|e| e.kind == "client" || e.kind == "upstream")
+        {
+            assert_eq!(event.client_kind, Some(ClientKind::Codex));
+            assert_eq!(event.session_id.as_deref(), Some("native-session"));
+            assert_eq!(event.inbound_token.as_ref().unwrap().id, "legacy");
+        }
+    }
+}
+
+#[tokio::test]
+async fn native_session_headers_work_without_a_collector() {
+    for (ua, name) in [
+        ("opencode/1", "x-opencode-session"),
+        ("workbuddy/1", "x-conversation-id"),
+        ("deepseek-harness/1", "x-deepseek-harness-session-id"),
+    ] {
+        let fake = FakeTransport::new();
+        fake.push(
+            "a.example.com",
+            sse_ok(&["data: {\"type\":\"message_stop\"}\n\n"]),
+        );
+        let engine = engine_with(config(), fake);
+        let (status, _) = call(
+            &engine,
+            loopback(),
+            "/v1/messages",
+            vec![
+                ("user-agent".into(), ua.into()),
+                (name.into(), "native-only".into()),
+            ],
+            body(),
+        )
+        .await;
+        assert_eq!(status, 200);
+        for event in engine
+            .runtime_snapshot()
+            .recent_events
+            .iter()
+            .filter(|e| e.kind == "client" || e.kind == "upstream")
+        {
+            assert_eq!(event.session_id.as_deref(), Some("native-only"));
+        }
+    }
 }

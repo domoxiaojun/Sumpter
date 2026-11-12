@@ -153,7 +153,7 @@ ssh -N \
 
 需要局域网或 VPN 访问时，可将端口映射的宿主机地址改成相应网卡 IP，并配置防火墙和入站 Token。公开管理页应通过 HTTPS 反向代理，通常保留宿主机管理端口为回环地址。仓库及 Linux 包提供 `deploy/nginx-sumpter-admin.conf.example`；只有两份模板的独立部署目录需另外下载该反代示例。
 
-反代要保留 Cookie，设置 `X-Forwarded-Proto`，对事件流关闭 buffering。另行反代代理端口时，还需支持长响应及 WebSocket Upgrade；仓库提供 `deploy/nginx-sumpter-proxy.conf.example` 作为数据面反代示例。
+反代要保留 Cookie，设置 `X-Forwarded-Proto`，对事件流关闭 buffering。另行反代代理端口时，还需支持长响应及 WebSocket Upgrade；仓库提供 `deploy/nginx-sumpter-proxy.conf.example` 作为数据面反代示例。该示例不把 `/__status` 和其他 `/__` 控制路径转到 daemon。
 
 ### 事件中的客户端 IP
 
@@ -214,7 +214,7 @@ sudo docker compose logs --tail 100 init sumpter
 | 新端口不生效 | 修改的是宿主机映射还是容器监听；Compose 改动需重新 `up` |
 | 事件源 IP 都是 `172.x` 网关或代理地址 | 见「事件中的客户端 IP」：让代理传递 `X-Real-IP` 或 `X-Forwarded-For`，或改用保留源地址的网络路径 |
 
-模板里的 `init` 只创建缺失文件，不覆盖已有配置或密码。按本教程准备好文件时，它不会生成新密码；若未准备密码而依赖它自动初始化，初始密码会输出到 init 日志，仅在可信终端查看日志。
+模板里的 `init` 只创建缺失文件，不覆盖已有配置或密码。自动初始化只在日志中提示密码文件位置；请在可信的宿主机终端查看 `./config/admin-password`。旧版本曾写入日志的初始密码不会因更新模板自动失效，请登录后主动改密；不要把历史日志发到公开渠道。
 
 忘记管理密码时，先停止 `sumpter`，备份 `config/admin-password`，将它改为新的非空单行密码并保持 root 所有、0600 权限，再启动服务。用户名会恢复为 `kkl`；登录后重新设置凭据。
 
@@ -227,3 +227,10 @@ sudo docker compose -f compose.yaml -f compose.build.example.yaml up -d --build 
 ```
 
 构建覆盖文件使用独立的 `sumpter:local` 镜像名，避免覆盖本地官方镜像标签。镜像构建、容器启动与真实请求应分别验证。
+
+
+## 管理会话隔离
+
+建议给 Admin 配置独立 hostname，并用 HTTPS 访问；浏览器 Cookie 按域名和路径隔离，不按端口隔离。业务数据面保留 `/admin` 及其子路径并返回 404，HTTP/WS 转发会移除 Cookie 中的 sumpter_admin_session；其它合法业务 Cookie 保留，无法安全解析的 Cookie 头整体丢弃。
+
+登录在密码计算前按全局（突发 10、每 2 秒恢复 1）及真实 TCP 来源（突发 5、每 6 秒恢复 1）限速，来源记录最多 4096 条、空闲 15 分钟清理。反向代理后的来源是代理 TCP 地址，客户端伪造 X-Forwarded-For 不会增加额度。登出撤销当前会话，改密撤销全部旧会话，过期和淘汰也会终止已有管理 SSE，包括空闲连接。

@@ -8,11 +8,13 @@ Gemini 原生入口的模型列表、分页鉴权、文件/缓存/批处理、In
 
 | 端口 | 用途 | 典型检查 |
 | --- | --- | --- |
-| 57878 | 客户端代理数据面 | `curl --noproxy '*' http://127.0.0.1:57878/__status` |
+| 57878 | 客户端代理数据面 | 本机 `curl --noproxy '*' http://127.0.0.1:57878/__status`；已设置入站 Token 时加上 `Authorization: Bearer <token>` |
 | 57879 | Linux Admin / WebUI | `curl --noproxy '*' -i http://127.0.0.1:57879/healthz` |
 | SSH 隧道左侧端口 | 本机转发端口 | 检查 `ssh -L` 左侧是否被占用 |
 
 `/healthz` 返回 204 只证明 Admin listener 存活。未登录的 `/admin/api/status` 返回 401 是正常鉴权结果；管理页能打开也不代表上游可用。
+
+`/__status` 在未配置入站 Token 时只接受环回对端。配置 Token 后，环回访问也要带该凭据，否则返回 401。响应不含近期事件；事件详情在登录后的管理 API。公网 Nginx 示例不转发 `/__status`。
 
 ## 按现象检查
 
@@ -49,15 +51,40 @@ Linux systemd 查看 `journalctl`；Compose 查看 `docker compose logs`。确�
 
 ### Live / Realtime / Video 失败
 
-这些能力需要上游真实支持。Codex Live 与标准 Realtime 由入口级 `capabilities: ["live"]` 声明，方法、路径和负载原样透传；不要求 `gpt-live-1-codex` 或 `gpt-realtime-2.1` 出现在模型 mapping、模型组或 `/v1/models`。普通文本 mapping 不会自动授予 Live 能力。能获取模型列表不等于能完成 WebSocket 握手或异步资源后续请求。
+这些能力需要上游真实支持。Codex Live 与标准 Realtime 由入口级 `capabilities: ["live"]` 声明，保留方法、SDP、会话字段和查询参数；不要求 `gpt-live-1-codex`、`gpt-live-1.1-codex` 或 `gpt-realtime-2.1` 出现在模型 mapping、模型组或 `/v1/models`。显式 GPT-Live 模型不会被降为旧默认名；缺省模型和误带的聊天模型仍使用 Live 默认路由。普通文本 mapping 不会自动授予 Live 能力。能获取模型列表不等于能完成 WebSocket 握手或异步资源后续请求。
+
+Codex 的 `/wham/realtime/calls` 与 `/backend-api/wham/realtime/calls` 在 Sumpter 中归入 Live 创建接口，出站规范化为上游 `/v1/realtime/calls`。创建成功后从 `Location` 或响应体提取 call ID 并绑定原入口；后续 `/v1/live/{call_id}` 或 calls 子路径继续使用该入口。入站仍使用 Sumpter 客户端 Token，出站使用入口凭据，不将 ChatGPT 登录凭据作为代理鉴权的替代品。
+
+**410 与创建链路分离**：如果客户端日志先出现 `Created client-owned realtime voice call`，随后以 `existingCall` 启动控制连接，而 Sumpter 只有 GET、没有对应的创建 POST，说明会话创建绕过了代理。未知 call ID 在本地拒绝时，上游尝试为 0，不代表上游返回了 410；新版记录为 `client_request_rejected`、`before_response`，不填上游 HTTP 状态。旧历史记录可能仍误标为上游错误。
+
+对于确实通过 app-server 的 `transport: webrtc` 创建会话、且支持以下实验配置的客户端，创建与控制地址应同时指向 Sumpter（凭据沿用已配置的代理 Provider）：
+
+```toml
+experimental_realtime_webrtc_call_base_url = "http://127.0.0.1:57878/v1"
+experimental_realtime_ws_base_url = "http://127.0.0.1:57878/v1"
+```
+
+截至 2026-11-09 检查的桌面版 26.1103.60933（随附 core 0.167.0-alpha.3.2），语音界面通过自己的 ChatGPT HTTP 客户端调用 `/wham/realtime/calls`，然后才通知 app-server 接入 `existingCall`；这个分支不读取上述创建地址覆盖。仅增加这两行或升级 Sumpter 不能改变其创建目标。[Codex 上游同类问题](https://github.com/openai/codex/issues/53463)和 [DSCodex 的关闭说明](https://github.com/fish2lab/DSCodex/pull/21#issuecomment-5748970448)也记录了创建请求绕过代理的情况；第三方报告的版本不能替代当前安装版本的核对。
+
+桌面包另有 `CODEX_API_BASE_URL` 启动环境变量，[其他代理的桌面接入](https://github.com/nicosuave/comradex#optional-desktop-backend-compatibility)使用过这个入口。但它覆盖整个桌面后端，并非语音专用配置。当前包的 `performDesktopFetch` 还会读取 `account/read` 返回的 `workspaceRouting`，用其中的 `backendOrigin` 再次替换目标 origin。对已安装包路由函数使用合成输入验证：即使初始地址为本地 Sumpter，只要 workspace 后端仍是 ChatGPT，最终地址仍会回到 ChatGPT。这是静态函数验证，不是抓取真实账户路由或实机语音成功证据；不能把设置环境变量直接写成已验证的修复方案。
+
+要让语音使用 CPA 账户，客户端接入必须让创建请求携带 Sumpter Token 进入代理，并将该创建结果用于 SDP 协商及后续控制连接。可由客户端增加语音专用路由，或由经过完整验证的桌面后端网关处理；后者还涉及账户路由、非语音 API 及 WebSocket 的兼容。Sumpter 的 Live 路径兼容本身没有实现这个桌面网关。不要取消未知会话校验或伪造绑定，CPA 也需要拥有同一会话。仅删除 WS 覆盖也不是等价方案：Provider 的显式代理凭据仍可能被控制连接沿用，且语音不再使用 CPA 账户。源码合同测试不代表已完成真实桌面语音、CPA 账户与媒体链路验收。
+
+后续已增加独立的 [Codex 桌面网关原型](codex-desktop-gateway.md)：对于官方账户发现明确返回无约束的账户，可继续验证 HTTPS 网关与两项启动地址同时配置的路线，无需改客户端安装包。原型没有集成进已安装 Sumpter；证书信任、客户端重启、真实语音和非语音功能仍需验收。
 
 ### 只有某个会话失败
 
 先用新会话复测，再检查运行详情中的会话粘性和上游尝试。加密推理状态跨 Provider 可能不兼容；不要把一次继续请求的错误当作所有入口都不可用。确认后可在运行页清除项目或会话粘性，再发新请求。
 
+### Claude Code 跨会话工具出现 Invalid tool parameters
+
+Claude Code 的普通视图可能把工具未加载、JSON 解析失败和 schema 校验失败统一显示为 `Invalid tool parameters`。先展开第一条失败的详细输出（例如 2.1.322 使用 Ctrl+O），记录工具名、脱敏后的参数和 `InputValidationError` 原因，再核对该请求实际使用的 Sumpter 入口协议；界面的模型名称不能证明走了 Anthropic 原生路径。
+
+转换链路会保持延迟工具的发现状态、可选参数和并发约束，并用参数结束快照补齐 Responses 增量。遇到未知 `tool_reference`、无法保持的约束、关联冲突或无效参数时，查看 Sumpter 返回的具体字段或桥接失败原因。若走 Anthropic 原生路径，工具定义、引用和响应流直接保留，需继续核对客户端与上游实际参数。消息送达或空闲通知成功只能证明对应操作成功，不能替代监控工具的参数校验。转换边界见 [架构说明](architecture.md)。
+
 ### 统计缺失、待定或 Token 不一致
 
-统计按客户端完成事件和上游 usage 记录；进行中的请求计入 pending，不会算作失败。缓存 Token 的口径随协议不同，failover 尝试不会重复计入客户端汇总。检查项目归因是否安装在运行客户端的机器，而不是只运行代理的服务器。
+统计按客户端完成事件和上游 usage 记录；进行中的请求计入 pending，不会算作失败。缓存 Token 的口径随协议不同，failover 尝试不会重复计入客户端汇总。客户端显示未知时，检查请求原生标记和独立入站 Token 的身份绑定；项目和会话缺少原生证据时仍保持未知。
 
 ### 存储降级或数据库错误
 

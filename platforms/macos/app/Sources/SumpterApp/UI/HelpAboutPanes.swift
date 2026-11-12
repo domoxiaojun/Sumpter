@@ -118,7 +118,6 @@ struct HelpPane: View {
                 }
             }
 
-            UnifiedAttributionPanel(model: model)
 
             SectionPanel(title: "配置与接入", hint: "两端均使用当前 schema 的 config.json；旧版本迁移会先创建备份。") {
                 VStack(alignment: .leading, spacing: 10) {

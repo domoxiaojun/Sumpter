@@ -56,7 +56,6 @@ cp "$ROOT/deploy/sumpter.service" "$TEST_PACKAGE/sumpter.service"
 cp "$ROOT/deploy/sumpter-system.service" "$TEST_PACKAGE/sumpter-system.service"
 cp -R "$ROOT/web/." "$TEST_PACKAGE/web/"
 cp "$ROOT/scripts/"*.sh "$TEST_PACKAGE/scripts/"
-cp "$ROOT/scripts/"*.mjs "$ROOT/scripts/"*.ts "$TEST_PACKAGE/scripts/"
 chmod 0755 "$TEST_PACKAGE/scripts/"*.sh
 printf '%s\n' 'synthetic-admin-password' >"$ADMIN_PASSWORD_FILE"
 chmod 0600 "$ADMIN_PASSWORD_FILE"
@@ -146,8 +145,6 @@ exercise_user_scope() {
     fi
     run_user install.sh
     [[ -x "$USER_HOME/.local/share/sumpter/sumpterd" ]]
-    [[ -x "$USER_HOME/.local/share/sumpter/scripts/cc-project-attribution.sh" ]]
-    [[ -x "$USER_HOME/.local/share/sumpter/scripts/grok-project-attribution.sh" ]]
     [[ -f "$USER_HOME/.config/sumpter/config.json" ]]
     [[ -s "$USER_HOME/.config/sumpter/admin-password" ]]
     [[ "$(wc -l <"$USER_HOME/.config/sumpter/admin-password")" -eq 1 ]]
@@ -236,8 +233,6 @@ exercise_system_scope() {
     reset_package_binary "$TRUE_BIN"
     run_system install.sh
     [[ -x "$SYSTEM_ROOT/opt/sumpter/sumpterd" ]]
-    [[ -x "$SYSTEM_ROOT/opt/sumpter/scripts/cc-project-attribution.sh" ]]
-    [[ -x "$SYSTEM_ROOT/opt/sumpter/scripts/grok-project-attribution.sh" ]]
     [[ -f "$SYSTEM_ROOT/var/lib/sumpter/config.json" ]]
     [[ -s "$SYSTEM_ROOT/var/lib/sumpter/admin-password" ]]
     [[ "$(wc -l <"$SYSTEM_ROOT/var/lib/sumpter/admin-password")" -eq 1 ]]

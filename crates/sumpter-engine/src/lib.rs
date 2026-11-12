@@ -8,6 +8,8 @@
 pub mod boundary;
 pub mod health;
 mod http_headers;
+pub mod inbound_tls;
+pub(crate) mod ingress;
 pub mod model_catalog;
 pub mod outbound;
 pub mod replay;
@@ -33,3 +35,6 @@ pub use engine::{Engine, EngineNotice, MAX_BODY_BYTES};
 pub use replay::{
     ReplayDifference, ReplayObservation, ReplayReply, ReplayRequest, ReplayTransport,
 };
+
+pub mod diagnostic_export;
+pub mod diagnostic_redaction;

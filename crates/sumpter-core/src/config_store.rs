@@ -748,11 +748,17 @@ fn validate_current_wire_secrets(value: &Value, require_secrets: bool) -> Result
                 .map_err(|error| format!("modelCatalog 格式无效: {error}"))?;
         settings.validate()?;
     }
+    if let Some(value) = root.get("requestPolicy") {
+        let policy: crate::request_policy::RequestPolicy = serde_json::from_value(value.clone())
+            .map_err(|error| format!("requestPolicy 格式无效: {error}"))?;
+        policy.validate_security_limits()?;
+    }
     if let Some(listener) = root.get("listener") {
         // 非法 CIDR 在加载与保存时就拒绝,而不是等到首个请求悄悄匹配失败。
         let listener: crate::config::ListenerConfig = serde_json::from_value(listener.clone())
             .map_err(|error| format!("listener 格式无效: {error}"))?;
         listener.validate_cidr_lists()?;
+        listener.validate_tls()?;
         listener.validate_inbound_tokens(require_secrets)?;
     }
     if root.contains_key("pools") {

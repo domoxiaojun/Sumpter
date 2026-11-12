@@ -1,14 +1,21 @@
+export const DEFAULT_INGRESS = { maxBodyMib: 256, maxDecodedBodyMib: 256, maxBufferedMib: 1024, maxPreprocessing: 4, maxDecompressions: 2, bodyIdleTimeoutSeconds: 30, bodyReadTimeoutSeconds: 300 };
+export const DEFAULT_WEBSOCKET = { maxFrameMib: 256, maxMessageMib: 256, maxConnections: 4, firstMessageTimeoutSeconds: 30 };
 export const DEFAULT_LIMITS = { maxConcurrent: 0, maxQueued: 128, queueTimeoutSeconds: 30, requestsPerMinute: 0 };
-export const DEFAULT_REQUEST_POLICY = { maxTotalAttempts: 0, responseWaitTimeoutSeconds: 0, maxConsecutiveNoResponse: 3, noResponseCooldownSeconds: 300, streamProtection: 'complete', streamBufferMib: 16, streamBufferChunks: 8192, streamBufferSeconds: 0, maxBufferedMib: 128, global: DEFAULT_LIMITS, endpoints: {} };
+export const DEFAULT_REQUEST_POLICY = { ingress: DEFAULT_INGRESS, websocket: DEFAULT_WEBSOCKET, maxTotalAttempts: 0, responseWaitTimeoutSeconds: 0, maxConsecutiveNoResponse: 3, noResponseCooldownSeconds: 300, streamProtection: 'complete', streamBufferMib: 16, streamBufferChunks: 8192, streamBufferSeconds: 0, maxBufferedMib: 128, global: DEFAULT_LIMITS, endpoints: {} };
 
 export function requestPolicy(value = {}) {
-  const result = structuredClone({ ...DEFAULT_REQUEST_POLICY, ...value, global: { ...DEFAULT_LIMITS, ...value.global } });
+  const result = structuredClone({ ...DEFAULT_REQUEST_POLICY, ...value, ingress: { ...DEFAULT_INGRESS, ...value.ingress }, websocket: { ...DEFAULT_WEBSOCKET, ...value.websocket }, global: { ...DEFAULT_LIMITS, ...value.global } });
   for (const [id, endpoint] of Object.entries(result.endpoints)) result.endpoints[id] = { ...endpoint, limits: { ...DEFAULT_LIMITS, ...endpoint.limits }, models: { ...endpoint.models } };
   return result;
 }
 
 export function validateRequestPolicy(value) {
   const check = (v, min, max, label) => { if (!Number.isInteger(v) || v < min || v > max) throw new Error(`${label}必须是 ${min}–${max} 的整数`); };
+  for (const [key, max] of Object.entries({ maxBodyMib: 1024, maxDecodedBodyMib: 1024, maxBufferedMib: 16384, maxPreprocessing: 64, maxDecompressions: 64, bodyIdleTimeoutSeconds: 3600, bodyReadTimeoutSeconds: 86400 })) check(value.ingress?.[key], 1, max, `入站 ${key}`);
+  for (const [key, max] of Object.entries({ maxFrameMib: 1024, maxMessageMib: 1024, maxConnections: 1024, firstMessageTimeoutSeconds: 3600 })) check(value.websocket?.[key], 1, max, `WebSocket ${key}`);
+  if (value.ingress.maxBufferedMib < value.ingress.maxBodyMib + value.ingress.maxDecodedBodyMib) throw new Error('入站总缓冲必须容纳原始体上限与解压输出上限之和');
+  if (value.ingress.bodyReadTimeoutSeconds < value.ingress.bodyIdleTimeoutSeconds) throw new Error('读体总时限不得小于空闲时限');
+  if (value.websocket.maxFrameMib > value.websocket.maxMessageMib) throw new Error('WebSocket 帧上限不得超过消息上限');
   check(value.maxTotalAttempts, 0, 10000, '总尝试上限');
   check(value.responseWaitTimeoutSeconds, 0, 86400, '代理响应等待上限');
   check(value.maxConsecutiveNoResponse, 0, 100, '连续无响应上限');

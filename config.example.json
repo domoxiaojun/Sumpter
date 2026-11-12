@@ -8,7 +8,13 @@
     "authTokenName": "默认 Token",
     "authTokenEnabled": true,
     "authTokens": [],
-    "trustedProxyCIDRs": []
+    "trustedProxyCIDRs": [],
+    "tls": {
+      "enabled": false,
+      "port": 57880,
+      "certificatePath": "",
+      "privateKeyPath": ""
+    }
   },
   "retry": {
     "maxStreamErrorRetries": 0,
@@ -40,7 +46,22 @@
       "queueTimeoutSeconds": 15,
       "requestsPerMinute": 0
     },
-    "endpoints": {}
+    "endpoints": {},
+    "ingress": {
+      "maxBodyMib": 256,
+      "maxDecodedBodyMib": 256,
+      "maxBufferedMib": 1024,
+      "maxPreprocessing": 4,
+      "maxDecompressions": 2,
+      "bodyIdleTimeoutSeconds": 30,
+      "bodyReadTimeoutSeconds": 300
+    },
+    "websocket": {
+      "maxFrameMib": 256,
+      "maxMessageMib": 256,
+      "maxConnections": 4,
+      "firstMessageTimeoutSeconds": 30
+    }
   },
   "featureRules": [
     {

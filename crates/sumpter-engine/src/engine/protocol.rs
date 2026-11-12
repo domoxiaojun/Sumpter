@@ -246,6 +246,8 @@ pub(super) fn json_timestamp(value: &Value) -> Option<f64> {
 
 pub(super) fn is_realtime_http_path(path: &str) -> bool {
     [
+        "/wham/realtime/calls",
+        "/backend-api/wham/realtime/calls",
         "/v1/realtime",
         "/realtime",
         "/openai/v1/realtime",
@@ -373,8 +375,9 @@ pub(super) fn gemini_model_from_path(path: &str) -> Option<String> {
     ) {
         return None;
     }
-    (!model.contains('/') && crate::request_build::valid_gemini_model(model))
-        .then(|| model.to_string())
+    let model = strict_percent_decode(model, false)?;
+    (!model.starts_with("models/") && crate::request_build::valid_gemini_model(&model))
+        .then_some(model)
 }
 
 /// Project resources have no conversational model. Keep Google versioned
@@ -404,7 +407,10 @@ pub(super) fn is_gemini_resource_path(path: &str) -> bool {
     if root == "models" {
         return rest == "models"
             || rest.strip_prefix("models/").is_some_and(|model| {
-                !model.contains('/') && crate::request_build::valid_gemini_model(model)
+                strict_percent_decode(model, false).is_some_and(|model| {
+                    !model.starts_with("models/")
+                        && crate::request_build::valid_gemini_model(&model)
+                })
             });
     }
     matches!(
@@ -835,8 +841,9 @@ pub(super) fn realtime_route_model(
                 .or(secret_model)
                 .unwrap_or_else(|| request_build::DEFAULT_CODEX_LIVE_MODEL.to_string());
         }
-        // `/v1/live` and a model-less quicksilver bootstrap are always bound
-        // to the private Codex Live model.  A client-secret call may instead
+        // A model-less quicksilver bootstrap uses the legacy private model.
+        // Explicit GPT-Live snapshots must survive newer Desktop protocols.
+        // A client-secret call may instead
         // carry a standard model such as `gpt-4o`; CPA keeps that logical
         // model and only rewrites it through the configured mapping.  Keep
         // that distinction here so the secret scope check does not compare a
@@ -849,6 +856,9 @@ pub(super) fn realtime_route_model(
             return request_build::DEFAULT_CODEX_LIVE_MODEL.to_string();
         };
         let cleaned = sumpter_core::model_name::clean(&candidate);
+        if cleaned.starts_with("gpt-live-") {
+            return candidate;
+        }
         return if is_codex_live_family_path(path_without_query(path_and_query))
             || cleaned == request_build::DEFAULT_REALTIME_MODEL
             || cleaned.starts_with("gpt-realtime-")
@@ -1060,6 +1070,8 @@ pub(super) fn validate_realtime_call_target(
 ) -> Result<Option<RealtimeCallTarget>, RealtimeCallPathError> {
     let path = path_without_query(path_and_query);
     for prefix in [
+        "/wham/realtime/calls/",
+        "/backend-api/wham/realtime/calls/",
         "/v1/realtime/calls/",
         "/realtime/calls/",
         "/openai/v1/realtime/calls/",
@@ -1178,6 +1190,8 @@ pub(super) fn strict_percent_decode(value: &str, plus_as_space: bool) -> Option<
 
 pub(super) fn is_realtime_call_path_prefix(path: &str) -> bool {
     [
+        "/wham/realtime/calls/",
+        "/backend-api/wham/realtime/calls/",
         "/v1/realtime/calls/",
         "/realtime/calls/",
         "/openai/v1/realtime/calls/",
@@ -1225,7 +1239,9 @@ pub(super) fn is_realtime_control_path(path: &str) -> bool {
 pub(super) fn is_realtime_call_bootstrap_path(path: &str) -> bool {
     matches!(
         path,
-        "/v1/realtime/calls"
+        "/wham/realtime/calls"
+            | "/backend-api/wham/realtime/calls"
+            | "/v1/realtime/calls"
             | "/realtime/calls"
             | "/openai/v1/realtime/calls"
             | "/backend-api/codex/realtime/calls"

@@ -4,7 +4,7 @@
 #   A2. 直连并自行声明 X-Real-IP               → 直接记录声明值，不需要登记可信代理
 #   B. 经 Nginx 反代（示例用 $remote_addr 覆盖客户端自带头）→ 记录客户端容器 IP
 #   C. 宿主机访问发布端口（Docker NAT）、不带转发头 → 记录网关地址，不伪造真实 IP
-#   D. 转发头不改变 /__status 的环回限制
+#   D. 转发头不改变直连 /__status 的环回限制；示例 Nginx 不反代该路径
 #   E. 重启容器后历史事件仍带解析结果
 # 只在 Linux CI 运行，需要 docker compose v2、curl、jq 与已构建的镜像（SUMPTER_TEST_IMAGE）。
 set -Eeuo pipefail
@@ -72,7 +72,7 @@ own_config
 
 # Nginx 配置直接来自仓库示例：map 留在 http 级，location 包进 server；后端改为服务名。
 awk '
-    /^location \/ \{/ && !wrapped { print "server {"; print "    listen 80;"; wrapped = 1 }
+    /^location / && !wrapped { print "server {"; print "    listen 80;"; wrapped = 1 }
     { print }
     END { if (wrapped) print "}" }
 ' "$PROXY_EXAMPLE" | sed 's#proxy_pass http://127.0.0.1:57878#proxy_pass http://sumpter:57878#' >"$WORK/nginx/sumpter.conf"
@@ -204,17 +204,25 @@ else
     fail "NAT 场景 sourceIP=$nat_ip，不应缺失或等于未声明的值"
 fi
 
-note "D. 转发头不改变 /__status 的环回限制"
-for target in "http://sumpter:57878/__status" "http://nginx/__status"; do
-    code="$(docker compose -p "$PROJECT" -f "$WORK/compose.yaml" exec -T client \
-        curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
-        -H 'X-Forwarded-For: 127.0.0.1' -H 'X-Real-IP: 127.0.0.1' "$target")"
-    if [[ "$code" == "403" ]]; then
-        note "✓ 声明环回地址访问 $target 仍 403"
-    else
-        fail "$target 应 403，实际 $code"
-    fi
-done
+note "D. 转发头不改变直连 /__status 的环回限制；公网反代不转发该路径"
+code="$(docker compose -p "$PROJECT" -f "$WORK/compose.yaml" exec -T client \
+    curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+    -H 'X-Forwarded-For: 127.0.0.1' -H 'X-Real-IP: 127.0.0.1' \
+    "http://sumpter:57878/__status")"
+if [[ "$code" == "403" ]]; then
+    note "✓ 直连 daemon 并声明环回地址仍 403"
+else
+    fail "直连 /__status 应 403，实际 $code"
+fi
+code="$(docker compose -p "$PROJECT" -f "$WORK/compose.yaml" exec -T client \
+    curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+    -H 'X-Forwarded-For: 127.0.0.1' -H 'X-Real-IP: 127.0.0.1' \
+    "http://nginx/__status")"
+if [[ "$code" == "404" ]]; then
+    note "✓ Nginx 示例对 /__status 返回 404"
+else
+    fail "经 Nginx 的 /__status 应 404，实际 $code"
+fi
 
 note "E. 重启容器后历史事件保留解析结果"
 docker compose -p "$PROJECT" -f "$WORK/compose.yaml" restart sumpter

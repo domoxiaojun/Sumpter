@@ -413,23 +413,11 @@ input[type="checkbox"]:not(.switch-input):disabled { opacity: 0.45; cursor: not-
 .runtime-v2-pricing-table .form-input { min-width: 104px; }
 .runtime-v2-pricing-table input[type="datetime-local"] { min-width: 220px; }
 .runtime-v2-pricing-table .form-select { min-width: 180px; }
-
-.attribution-panel { gap: 20px; }
-.attribution-panel > p { line-height: 1.65; color: var(--text-secondary); }
-.attribution-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
-.attribution-options label { display: grid; gap: 8px; }
-.attribution-code { border: 1px solid var(--border-medium); border-radius: var(--radius-md); background: var(--bg-page); }
-.attribution-code pre { min-width: 0; padding: 16px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; font-size: 0.86rem; }
-.panel-description, .form-hint, .attribution-panel p { overflow-wrap: anywhere; }
+.panel-description, .form-hint { overflow-wrap: anywhere; }
 .runtime-v2-hint-command code, .cc-guide-checks code, .cc-guide-command code, .diagnostics-journal-command {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.attribution-command { display: flex; align-items: center; gap: 16px 24px; padding: 16px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-surface-glass); }
-.attribution-command > div { flex: 1; min-width: 0; }
-.attribution-command strong { display: block; margin-bottom: 8px; }
-.attribution-command pre { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; font-size: 0.86rem; }
-.attribution-command > button { flex: none; }
 
 @container (max-width: 760px) {
   .model-group-card-settings { display: grid; grid-template-columns: 1fr auto auto; }
@@ -450,15 +438,12 @@ input[type="checkbox"]:not(.switch-input):disabled { opacity: 0.45; cursor: not-
 @media (max-width: 600px) {
   .topbar-refresh-select { flex-basis: 72px; width: 72px; min-width: 72px; }
   .panel-header, .pagination-bar, .model-group-overview, .model-group-workspace { padding: 16px; }
-  .attribution-options, .analytics-v3-filter-grid { grid-template-columns: minmax(0, 1fr); }
+  .analytics-v3-filter-grid { grid-template-columns: minmax(0, 1fr); }
   .pagination-summary { flex: 0 1 auto; }
   .pagination-controls { gap: 12px; }
   .model-groups-page .page-title { font-size: 1.6rem; }
   .model-group-binding-toolbar label { flex-basis: 100%; }
   .model-group-binding-toolbar select { width: auto; }
-  .attribution-command { align-items: flex-start; flex-direction: column; }
-  .attribution-command > div { flex: none; width: 100%; }
-  .attribution-command > button { align-self: flex-end; }
 }
 @media (pointer: coarse), (max-width: 600px) {
   .table-scroll-step { flex-basis: 44px; min-height: 44px; }
@@ -475,9 +460,3 @@ input[type="checkbox"]:not(.switch-input):disabled { opacity: 0.45; cursor: not-
   .run-events-panel .btn, .run-events-panel .form-input,
   .run-events-panel .form-select, .run-events-panel .telemetry-filter-button { min-height: 44px; }
 }
-
-.attribution-panel > label { display: grid; gap: 8px; }
-.attribution-panel button, .attribution-panel select, .attribution-panel input { min-height: 44px; }
-.attribution-panel summary { min-height: 44px; padding-block: 12px; cursor: pointer; }
-.attribution-panel details > .attribution-command { margin-block: 12px; }
-.attribution-panel details p { line-height: 1.65; color: var(--text-secondary); }

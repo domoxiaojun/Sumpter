@@ -29,6 +29,179 @@ fn headers() -> Vec<(String, String)> {
 }
 
 #[tokio::test]
+async fn gateway_model_catalogs_are_local_and_keep_protocol_shapes() {
+    for (model, root, vendor_header, field, expected) in [
+        (
+            "google-vertex-al-ultra/gemini-4-argon",
+            "/v1beta/models",
+            None,
+            "name",
+            "models/google-vertex-al-ultra/gemini-4-argon",
+        ),
+        (
+            "anthropic/claude-opus-5",
+            "/v1/models",
+            Some(("anthropic-version", "2023-06-01")),
+            "type",
+            "model",
+        ),
+        (
+            "xai/grok-4.7",
+            "/v1/models",
+            Some(("user-agent", "grok-shell/1")),
+            "api_backend",
+            "responses",
+        ),
+    ] {
+        let mut config = config();
+        config.endpoints[0].protocol = EndpointProtocolMode::Auto;
+        config.endpoints[0].mappings[0].client_pattern = model.into();
+        config.endpoints[0].mappings[0].upstream_model = "private-upstream-model".into();
+        let mut second = config.endpoints[0].clone();
+        second.id = "another-gateway".into();
+        config.endpoints.push(second);
+        let fake = FakeTransport::new();
+        let engine = engine_with(config, fake.clone());
+        let mut hs = headers();
+        if let Some((name, value)) = vendor_header {
+            hs.retain(|(key, _)| key != name);
+            hs.push((name.into(), value.into()));
+        }
+        let response = engine
+            .handle_request(loopback(), "GET", root, hs.clone(), Bytes::new())
+            .await;
+        assert_eq!(response.status().as_u16(), 200);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let list: Value = serde_json::from_slice(&bytes).unwrap();
+        let rows = list
+            .get("models")
+            .or_else(|| list.get("data"))
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][field], expected);
+        assert!(!String::from_utf8_lossy(&bytes).contains("private-upstream-model"));
+        for id in [model.to_string(), model.replace('/', "%2F")] {
+            let response = engine
+                .handle_request(
+                    loopback(),
+                    "GET",
+                    &format!("{root}/{id}"),
+                    hs.clone(),
+                    Bytes::new(),
+                )
+                .await;
+            assert_eq!(response.status().as_u16(), 200);
+            let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let detail: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(detail[field], expected);
+            if field != "name" {
+                assert_eq!(detail["id"], model);
+            }
+        }
+        let response = engine
+            .handle_request(
+                loopback(),
+                "GET",
+                &format!("{root}/missing/model"),
+                hs,
+                Bytes::new(),
+            )
+            .await;
+        assert_eq!(response.status().as_u16(), 404);
+        assert!(fake.requests().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn gateway_model_catalog_rejects_auth_methods_and_unsafe_paths_locally() {
+    for (method, path, auth, expected) in [
+        ("GET", "/v1beta/models", false, 401),
+        ("POST", "/v1beta/models", true, 405),
+        ("GET", "/v1beta/models?%6bey=synthetic", true, 400),
+        ("GET", "/v1beta/models/provider/%2e%2e/model", true, 404),
+        ("GET", "/v1/models/provider//model", true, 404),
+        ("GET", "/v1/models/provider%3Fkey=x", true, 404),
+        (
+            "POST",
+            "/v1beta/models/provider/%2e%2e/model:generateContent",
+            true,
+            404,
+        ),
+    ] {
+        let fake = FakeTransport::new();
+        let engine = engine_with(config(), fake.clone());
+        let mut hs = headers();
+        if !auth {
+            hs.retain(|(name, _)| name != "x-goog-api-key");
+        }
+        let response = engine
+            .handle_request(loopback(), method, path, hs, Bytes::new())
+            .await;
+        assert_eq!(response.status().as_u16(), expected, "{path}");
+        assert!(fake.requests().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn gateway_gemini_auxiliary_mapping_preserves_namespace_and_user_content() {
+    let mut config = config();
+    config.endpoints[0].mappings[0].client_pattern = "gateway/models/alias".into();
+    config.endpoints[0].mappings[0].upstream_model =
+        "models/google-vertex-al-ultra/gemini-4-argon".into();
+    let fake = FakeTransport::new();
+    let upstream = br#"{"embeddings":[{"values":[0.1]}]}"#;
+    fake.push(
+        "a.example.com",
+        Outcome::Status {
+            status: 200,
+            headers: vec![("content-type".into(), "application/json".into())],
+            chunks: vec![upstream.to_vec()],
+        },
+    );
+    let engine = engine_with(config, fake.clone());
+    let input = br#"{"requests":[{"model":"models/gateway/models/alias","content":{"parts":[{"text":"models/gateway/models/alias"}]}}]}"#;
+    let (status, response) = call(
+        &engine,
+        loopback(),
+        "/v1beta/models/gateway%2Fmodels%2Falias:batchEmbedContents?trace=a%2Fb",
+        headers(),
+        Bytes::from_static(input),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(response.as_slice(), upstream.as_slice());
+    let sent = fake.requests();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(
+        sent[0].path,
+        "/v1beta/models/google-vertex-al-ultra/gemini-4-argon:batchEmbedContents?trace=a%2Fb"
+    );
+    let body: Value = serde_json::from_slice(&sent[0].body).unwrap();
+    assert_eq!(
+        body["requests"][0]["model"],
+        "models/google-vertex-al-ultra/gemini-4-argon"
+    );
+    assert_eq!(
+        body["requests"][0]["content"]["parts"][0]["text"],
+        "models/gateway/models/alias"
+    );
+    assert!(
+        sent[0]
+            .headers
+            .iter()
+            .any(|(name, value)| name == "x-goog-api-key" && value == "provider-secret")
+    );
+    assert!(
+        !sent[0]
+            .headers
+            .iter()
+            .any(|(_, value)| value == "listener-secret")
+    );
+}
+
+#[tokio::test]
 async fn gemini_native_stream_preserves_bytes_and_accounts_late_usage() {
     let fake = FakeTransport::new();
     let engine = engine_with(config(), fake.clone());
@@ -445,6 +618,12 @@ async fn gemini_native_auxiliary_methods_and_json_array_stream() {
 async fn gemini_native_resources_preserve_method_body_headers_and_upload_handoff() {
     for (method, path, body, response) in [
         ("GET", "/v1beta/models", "", "{\"models\":[]}"),
+        (
+            "GET",
+            "/v1beta/models/provider%2Fgemini-test",
+            "",
+            "{\"name\":\"models/provider/gemini-test\"}",
+        ),
         ("GET", "/v1beta/files/demo", "", "{\"name\":\"files/demo\"}"),
         ("DELETE", "/v1beta/files/demo", "", "{}"),
         (
@@ -492,6 +671,9 @@ async fn gemini_native_resources_preserve_method_body_headers_and_upload_handoff
         let engine = engine_with(config, fake.clone());
         let mut incoming = headers();
         incoming.retain(|(name, _)| name != "content-type");
+        if path.starts_with("/v1beta/models") {
+            incoming.push(("x-sumpter-endpoint-id".into(), "a".into()));
+        }
         incoming.extend([
             ("host".into(), "proxy.example.invalid".into()),
             ("content-type".into(), "application/octet-stream".into()),

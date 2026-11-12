@@ -33,9 +33,13 @@ async fn every_export_scope_applies_privacy_and_keeps_raw_source() {
             "protocol": "anthropic", "startedAtMS": 1, "outboundMethod": "POST",
             "outboundURL": "https://upstream.invalid/v1/messages?KEY=synthetic-outbound",
             "outboundHeaders": [], "outboundBody": "{}", "outboundBodyBytes": 2,
-            "responseHeaders": [], "upstreamChunks": []
+            "responseHeaders": [{"name":"content-type","value":"application/json"}],
+            "upstreamChunks": [
+                {"atMS":1,"bytes":18,"data":"{\"password\":\"cross","truncated":false},
+                {"atMS":2,"bytes":8,"data":"-chunk\"}","truncated":false}
+            ]
         }],
-        "clientChunks": []
+        "clientChunks": [{"atMS":3,"bytes":26,"data":"{\"password\":\"cross-chunk\"}","truncated":false}]
     }))
     .unwrap();
     let persisted = dir
@@ -56,6 +60,7 @@ async fn every_export_scope_applies_privacy_and_keeps_raw_source() {
                         format: Some(format.into()),
                         privacy: Some(privacy.into()),
                         confirm_raw: privacy == "raw",
+                        max_parse_mib: None,
                         request_id: (scope == "selected").then(|| "synthetic-request".into()),
                     }),
                 )
@@ -73,6 +78,28 @@ async fn every_export_scope_applies_privacy_and_keeps_raw_source() {
                 if scope != "current" {
                     assert_eq!(text.contains("synthetic-outbound"), privacy == "raw");
                     assert!(text.contains("ordinary-key"));
+                    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                    let record = if scope == "all" && format == "json" {
+                        &value["records"][0]
+                    } else {
+                        &value
+                    };
+                    if privacy == "redacted" {
+                        assert!(
+                            record["attempts"][0]["upstreamChunks"][0]
+                                .get("data")
+                                .is_none()
+                        );
+                        assert_eq!(
+                            record["attempts"][0]["redactedResponseBody"]["status"],
+                            "complete"
+                        );
+                        assert_eq!(record["redactedClientBody"]["status"], "complete");
+                        assert!(!text.contains("cross-chunk"));
+                    } else {
+                        assert!(text.contains("cross-chunk"));
+                        assert!(record.get("redactedClientBody").is_none());
+                    }
                 }
                 assert!(text.contains("trace=keep"));
             }

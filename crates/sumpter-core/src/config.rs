@@ -488,8 +488,46 @@ impl InboundTokenConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListenerTlsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "ListenerTlsConfig::default_port")]
+    pub port: i64,
+    #[serde(default)]
+    pub certificate_path: String,
+    #[serde(default)]
+    pub private_key_path: String,
+}
+
+impl ListenerTlsConfig {
+    fn default_port() -> i64 {
+        57880
+    }
+}
+
+impl Default for ListenerTlsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: Self::default_port(),
+            certificate_path: String::new(),
+            private_key_path: String::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ListenerConfig {
+    #[serde(
+        rename = "clientIdentity",
+        default,
+        skip_serializing_if = "crate::client_identity::ClientIdentitySettings::is_default"
+    )]
+    pub client_identity: crate::client_identity::ClientIdentitySettings,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls: Option<ListenerTlsConfig>,
     #[serde(rename = "allowedCIDRs", default)]
     pub allowed_cidrs: Vec<String>,
     #[serde(rename = "authToken", default)]
@@ -520,6 +558,35 @@ pub struct ListenerConfig {
 }
 
 impl ListenerConfig {
+    pub fn https_port(&self) -> Option<i64> {
+        self.tls
+            .as_ref()
+            .filter(|tls| tls.enabled)
+            .map(|tls| tls.port)
+    }
+
+    pub fn validate_tls(&self) -> Result<(), String> {
+        let Some(tls) = self.tls.as_ref().filter(|tls| tls.enabled) else {
+            return Ok(());
+        };
+        if !(1..=65535).contains(&tls.port) || tls.port == self.port {
+            return Err("HTTPS 端口必须为 1...65535，且不能与 HTTP 端口相同".into());
+        }
+        for (name, value) in [
+            ("certificatePath", &tls.certificate_path),
+            ("privateKeyPath", &tls.private_key_path),
+        ] {
+            if value.len() > 4096
+                || value.chars().any(char::is_control)
+                || value.trim() != value
+                || !std::path::Path::new(value).is_absolute()
+            {
+                return Err(format!("listener.tls.{name} 必须为有效的绝对文件路径"));
+            }
+        }
+        Ok(())
+    }
+
     fn default_token_name() -> String {
         "默认 Token".into()
     }
@@ -587,6 +654,7 @@ impl ListenerConfig {
     }
 
     pub fn validate_inbound_tokens(&self, require_secrets: bool) -> Result<(), String> {
+        self.client_identity.validate()?;
         use std::collections::HashSet;
         let valid_name = |name: &str| {
             !name.trim().is_empty()
@@ -657,6 +725,8 @@ impl ListenerConfig {
 impl Default for ListenerConfig {
     fn default() -> Self {
         Self {
+            client_identity: Default::default(),
+            tls: None,
             allowed_cidrs: Vec::new(),
             auth_token: String::new(),
             auth_token_name: Self::default_token_name(),

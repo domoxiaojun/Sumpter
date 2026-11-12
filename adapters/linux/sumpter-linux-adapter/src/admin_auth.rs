@@ -30,6 +30,7 @@ pub struct AdminAuth {
 
 struct AdminAuthInner {
     workers: Arc<tokio::sync::Semaphore>,
+    login_limits: Mutex<LoginLimits>,
     credentials: RwLock<AdminCredentials>,
     credential_updates: Mutex<()>,
     sessions: Mutex<HashMap<String, StoredSession>>,
@@ -49,8 +50,10 @@ enum StoredPassword {
     Argon2(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct StoredSession {
+    revoked: tokio_util::sync::CancellationToken,
+    deadline: tokio::time::Instant,
     username: String,
     csrf_token: String,
     created_at: u64,
@@ -60,9 +63,84 @@ struct StoredSession {
 
 #[derive(Debug, Clone)]
 pub struct AuthenticatedSession {
+    pub(crate) revoked: tokio_util::sync::CancellationToken,
+    pub(crate) deadline: tokio::time::Instant,
     pub username: String,
     pub csrf_token: String,
     pub expires_at: u64,
+}
+
+impl Drop for StoredSession {
+    fn drop(&mut self) {
+        self.revoked.cancel();
+    }
+}
+impl AuthenticatedSession {
+    pub(crate) fn is_active(&self) -> bool {
+        if tokio::time::Instant::now() >= self.deadline || unix_seconds() >= self.expires_at {
+            self.revoked.cancel();
+        }
+        !self.revoked.is_cancelled()
+    }
+}
+
+struct LoginBucket {
+    tokens: f64,
+    updated: tokio::time::Instant,
+    last_seen: tokio::time::Instant,
+}
+impl LoginBucket {
+    fn new(burst: u32, now: tokio::time::Instant) -> Self {
+        Self {
+            tokens: burst.into(),
+            updated: now,
+            last_seen: now,
+        }
+    }
+    fn refill(&mut self, burst: u32, interval: f64, now: tokio::time::Instant) {
+        self.tokens = (self.tokens
+            + now.saturating_duration_since(self.updated).as_secs_f64() / interval)
+            .min(burst.into());
+        self.updated = now;
+    }
+    fn wait(&self, interval: f64) -> u64 {
+        ((1.0 - self.tokens).max(0.0) * interval).ceil() as u64
+    }
+}
+struct LoginLimits {
+    global: LoginBucket,
+    peers: HashMap<std::net::IpAddr, LoginBucket>,
+}
+impl LoginLimits {
+    fn new() -> Self {
+        Self {
+            global: LoginBucket::new(10, tokio::time::Instant::now()),
+            peers: HashMap::new(),
+        }
+    }
+    fn admit(&mut self, peer: std::net::IpAddr, now: tokio::time::Instant) -> Result<(), u64> {
+        self.peers
+            .retain(|_, bucket| now.saturating_duration_since(bucket.last_seen).as_secs() < 900);
+        self.global.refill(10, 2.0, now);
+        if self.global.tokens < 1.0 {
+            return Err(self.global.wait(2.0).max(1));
+        }
+        if !self.peers.contains_key(&peer) && self.peers.len() >= 4096 {
+            return Err(6);
+        }
+        let source = self
+            .peers
+            .entry(peer)
+            .or_insert_with(|| LoginBucket::new(5, now));
+        source.refill(5, 6.0, now);
+        source.last_seen = now;
+        if source.tokens < 1.0 {
+            return Err(source.wait(6.0).max(1));
+        }
+        source.tokens -= 1.0;
+        self.global.tokens -= 1.0;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -179,6 +257,7 @@ impl AdminAuth {
         Self {
             inner: Arc::new(AdminAuthInner {
                 workers: Arc::new(tokio::sync::Semaphore::new(2)),
+                login_limits: Mutex::new(LoginLimits::new()),
                 credentials: RwLock::new(credentials),
                 credential_updates: Mutex::new(()),
                 sessions: Mutex::new(HashMap::new()),
@@ -228,7 +307,7 @@ impl AdminAuth {
         if !(username_ok & password_ok) {
             return None;
         }
-        Some(self.create_session(&credentials, secure_cookie))
+        self.create_session(&credentials, secure_cookie)
     }
 
     pub fn authenticate(&self, headers: &HeaderMap) -> Option<AuthenticatedSession> {
@@ -242,13 +321,18 @@ impl AdminAuth {
             .lock()
             .unwrap_or_else(|lock| lock.into_inner());
         sessions.retain(|_, session| {
-            session.expires_at > now && session.credential_revision == credentials.revision
+            session.expires_at > now
+                && session.credential_revision == credentials.revision
+                && !session.revoked.is_cancelled()
+                && session.deadline > tokio::time::Instant::now()
         });
         let session = sessions.get(&token_digest)?;
         if session.username != credentials.username {
             return None;
         }
         Some(AuthenticatedSession {
+            revoked: session.revoked.clone(),
+            deadline: session.deadline,
             username: session.username.clone(),
             csrf_token: session.csrf_token.clone(),
             expires_at: session.expires_at,
@@ -313,7 +397,9 @@ impl AdminAuth {
             .unwrap_or_else(|lock| lock.into_inner())
             .clear();
         Ok(CredentialUpdate {
-            grant: self.create_session(&next, secure_cookie),
+            grant: self
+                .create_session(&next, secure_cookie)
+                .ok_or("登录凭据已变化，请重新登录")?,
             durability_warning,
         })
     }
@@ -325,12 +411,31 @@ impl AdminAuth {
         )
     }
 
-    fn create_session(&self, credentials: &AdminCredentials, secure_cookie: bool) -> SessionGrant {
+    fn create_session(
+        &self,
+        credentials: &AdminCredentials,
+        secure_cookie: bool,
+    ) -> Option<SessionGrant> {
+        // Keep the revision read locked until insertion. A password worker
+        // finishing after a credential change must never evict newer sessions.
+        let current = self
+            .inner
+            .credentials
+            .read()
+            .unwrap_or_else(|lock| lock.into_inner());
+        if current.revision != credentials.revision {
+            return None;
+        }
         let raw_token = random_token();
         let csrf_token = random_token();
         let now = unix_seconds();
         let expires_at = now.saturating_add(SESSION_TTL_SECONDS);
+        let revoked = tokio_util::sync::CancellationToken::new();
+        let deadline =
+            tokio::time::Instant::now() + std::time::Duration::from_secs(SESSION_TTL_SECONDS);
         let stored = StoredSession {
+            revoked: revoked.clone(),
+            deadline,
             username: credentials.username.clone(),
             csrf_token: csrf_token.clone(),
             created_at: now,
@@ -343,7 +448,10 @@ impl AdminAuth {
             .lock()
             .unwrap_or_else(|lock| lock.into_inner());
         sessions.retain(|_, session| {
-            session.expires_at > now && session.credential_revision == credentials.revision
+            session.expires_at > now
+                && session.credential_revision == credentials.revision
+                && !session.revoked.is_cancelled()
+                && session.deadline > tokio::time::Instant::now()
         });
         if sessions.len() >= MAX_SESSIONS
             && let Some(oldest) = sessions
@@ -354,8 +462,10 @@ impl AdminAuth {
             sessions.remove(&oldest);
         }
         sessions.insert(token_digest(&raw_token), stored);
-        SessionGrant {
+        Some(SessionGrant {
             session: AuthenticatedSession {
+                revoked,
+                deadline,
                 username: credentials.username.clone(),
                 csrf_token,
                 expires_at,
@@ -364,7 +474,16 @@ impl AdminAuth {
                 "{SESSION_COOKIE_NAME}={raw_token}; Path=/admin; Max-Age={SESSION_TTL_SECONDS}; HttpOnly; SameSite=Strict{}",
                 if secure_cookie { "; Secure" } else { "" }
             ),
-        }
+        })
+    }
+
+    /// TCP peer only; usernames and forwarded headers never key limiter state.
+    pub(crate) fn admit_login(&self, peer: std::net::IpAddr) -> Result<(), u64> {
+        self.inner
+            .login_limits
+            .lock()
+            .unwrap_or_else(|lock| lock.into_inner())
+            .admit(peer, tokio::time::Instant::now())
     }
 
     fn credentials_snapshot(&self) -> AdminCredentials {
@@ -560,6 +679,82 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn login_buckets_recover_without_lockouts_and_bound_peer_state() {
+        let mut limits = LoginLimits::new();
+        let start = tokio::time::Instant::now();
+        let a = "192.0.2.1".parse().unwrap();
+        let b = "192.0.2.2".parse().unwrap();
+        for _ in 0..5 {
+            assert_eq!(limits.admit(a, start), Ok(()));
+        }
+        assert_eq!(limits.admit(a, start), Err(6));
+        for _ in 0..5 {
+            assert_eq!(limits.admit(b, start), Ok(()));
+        }
+        assert_eq!(limits.admit("192.0.2.3".parse().unwrap(), start), Err(2));
+        assert_eq!(
+            limits.admit(a, start + std::time::Duration::from_secs(6)),
+            Ok(())
+        );
+        // Distinct TCP sources cannot create more than 4096 records.
+        limits.peers = (0..4096_u32)
+            .map(|n| {
+                (
+                    std::net::IpAddr::V4((0x0a000000 + n).into()),
+                    LoginBucket::new(5, start),
+                )
+            })
+            .collect();
+        limits.global = LoginBucket::new(10, start);
+        assert_eq!(limits.admit(a, start), Err(6));
+        assert_eq!(limits.peers.len(), 4096);
+        assert_eq!(
+            limits.admit(a, start + std::time::Duration::from_secs(900)),
+            Ok(())
+        );
+        assert_eq!(limits.peers.len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn session_handles_revoke_on_logout_eviction_expiry_and_password_change() {
+        let auth = AdminAuth::password(b"synthetic-password").unwrap();
+        let grant = auth
+            .login(DEFAULT_ADMIN_USERNAME, "synthetic-password", false)
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            grant.set_cookie.split(';').next().unwrap().parse().unwrap(),
+        );
+        let authenticated = auth.authenticate(&headers).unwrap();
+        auth.logout(&headers);
+        assert!(authenticated.revoked.is_cancelled());
+        let expired = auth
+            .login(DEFAULT_ADMIN_USERNAME, "synthetic-password", false)
+            .unwrap();
+        tokio::time::advance(std::time::Duration::from_secs(SESSION_TTL_SECONDS)).await;
+        assert!(!expired.session.is_active());
+        let old: Vec<_> = (0..MAX_SESSIONS)
+            .map(|_| {
+                auth.login(DEFAULT_ADMIN_USERNAME, "synthetic-password", false)
+                    .unwrap()
+            })
+            .collect();
+        let _new = auth
+            .login(DEFAULT_ADMIN_USERNAME, "synthetic-password", false)
+            .unwrap();
+        assert!(old.iter().any(|grant| grant.session.revoked.is_cancelled()));
+        auth.change_credentials(
+            "synthetic-password",
+            "new-admin",
+            "synthetic-new-password",
+            false,
+        )
+        .unwrap();
+        assert!(old.iter().all(|grant| grant.session.revoked.is_cancelled()));
+    }
 
     fn temp_path(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(

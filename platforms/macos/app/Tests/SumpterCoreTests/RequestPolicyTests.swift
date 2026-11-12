@@ -3,6 +3,21 @@ import XCTest
 @testable import SumpterCore
 
 final class RequestPolicyTests: XCTestCase {
+    func testSecurityDefaultsRoundTripAndInvalidLimitsAreRejected() throws {
+        let policy = try JSONDecoder().decode(RequestPolicy.self, from: Data("{}".utf8))
+        XCTAssertEqual(policy.ingress.maxBodyMiB, 256)
+        XCTAssertEqual(policy.ingress.maxDecodedBodyMiB, 256)
+        XCTAssertEqual(policy.ingress.maxBufferedMiB, 1024)
+        XCTAssertEqual(policy.websocket.maxConnections, 4)
+        var edited = policy
+        edited.ingress.maxPreprocessing = 3
+        edited.websocket.maxConnections = 8
+        XCTAssertEqual(try JSONDecoder().decode(RequestPolicy.self, from: JSONEncoder().encode(edited)), edited)
+        for invalid in [#"{"ingress":{"maxBodyMib":0}}"#, #"{"ingress":{"maxBufferedMib":511}}"#, #"{"ingress":{"bodyReadTimeoutSeconds":29}}"#, #"{"websocket":{"maxFrameMib":257}}"#, #"{"websocket":{"maxConnections":0}}"#] {
+            XCTAssertThrowsError(try JSONDecoder().decode(RequestPolicy.self, from: Data(invalid.utf8)))
+        }
+    }
+
     func testOldConfigKeepsDefaultsAndScopedProfilesRoundTrip() throws {
         let legacy = try JSONDecoder().decode(AppConfig.self, from: Data(#"{"schemaVersion":7}"#.utf8))
         XCTAssertEqual(legacy.requestPolicy, RequestPolicy())

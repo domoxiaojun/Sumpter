@@ -442,6 +442,8 @@ pub fn try_make_gemini_body(
     effort: Option<ReasoningEffort>,
     replay: Option<&GeminiReplay>,
 ) -> Result<Value, TranslationError> {
+    crate::bridge_tools::validate_tools(request, crate::config::ProviderProtocol::Gemini)?;
+    crate::bridge_tools::validate_choice(request)?;
     crate::bridge::validate_output_config_for_target(
         request,
         crate::config::ProviderProtocol::Gemini,
@@ -745,12 +747,17 @@ fn anthropic_blocks_to_parts(
                         let name = object.get("name").and_then(Value::as_str).ok_or_else(|| {
                             TranslationError::InvalidInput(format!("{block_path}.name is required"))
                         })?;
+                        let input = object
+                            .get("input")
+                            .filter(|input| input.is_object())
+                            .ok_or_else(|| {
+                                TranslationError::InvalidInput(format!(
+                                    "{block_path}.input must be an object"
+                                ))
+                            })?;
                         let mut call = Map::new();
                         call.insert("name".into(), json!(name));
-                        call.insert(
-                            "args".into(),
-                            object.get("input").cloned().unwrap_or_else(|| json!({})),
-                        );
+                        call.insert("args".into(), input.clone());
                         if let Some(id) = object.get("id").and_then(Value::as_str) {
                             call.insert("id".into(), json!(id));
                         }
@@ -838,8 +845,16 @@ fn tool_result_text(content: Option<&Value>) -> Result<Value, TranslationError> 
     match content {
         Value::String(text) => Ok(json!(text)),
         Value::Array(blocks) => {
+            let blocks: Vec<Value> = blocks
+                .iter()
+                .map(|block| {
+                    crate::bridge_tools::reference_text(block)
+                        .map(|text| json!({"type": "text", "text": text}))
+                        .unwrap_or_else(|| block.clone())
+                })
+                .collect();
             crate::bridge::validate_text_content(
-                Some(content),
+                Some(&Value::Array(blocks.clone())),
                 "tool_result.content",
                 &["text"],
                 true,
@@ -863,9 +878,7 @@ fn anthropic_tools_to_gemini(request: &RoutingRequest) -> Result<Vec<Value>, Tra
     if request.tools.is_empty() {
         return Ok(Vec::new());
     }
-    let mut declarations = Vec::new();
-    for (index, tool) in request.tools.iter().enumerate() {
-        let path = format!("tools[{index}]");
+    for tool in &request.tools {
         // 服务端工具(web_search 等)由上游执行,不是 function。把它们伪装成
         // functionDeclaration 会让模型以为自己有检索能力却永远拿不到结果 —— 与
         // bridge.rs 对同一字段的口径一致:没有等价位置就拒绝。
@@ -873,12 +886,14 @@ fn anthropic_tools_to_gemini(request: &RoutingRequest) -> Result<Vec<Value>, Tra
         if !crate::routing::inspector::is_client_tool_type(tool_type) {
             return Err(TranslationError::UnsupportedTool(tool_type.to_string()));
         }
+    }
+    let mut declarations = Vec::new();
+    for tool in crate::bridge_tools::active_tools(request) {
         let name = tool
             .get("name")
             .and_then(Value::as_str)
-            .map(str::trim)
             .filter(|name| !name.is_empty())
-            .ok_or_else(|| TranslationError::InvalidInput(format!("{path}.name is required")))?;
+            .ok_or_else(|| TranslationError::InvalidInput("tools[].name is required".into()))?;
         let mut declaration = Map::new();
         declaration.insert("name".into(), json!(name));
         if let Some(description) = tool.get("description").and_then(Value::as_str) {
@@ -895,7 +910,11 @@ fn anthropic_tools_to_gemini(request: &RoutingRequest) -> Result<Vec<Value>, Tra
         }
         declarations.push(Value::Object(declaration));
     }
-    Ok(vec![json!({"functionDeclarations": declarations})])
+    if declarations.is_empty() {
+        Ok(Vec::new())
+    } else {
+        Ok(vec![json!({"functionDeclarations": declarations})])
+    }
 }
 
 /// Anthropic → Gemini 的可转换能力检查。
@@ -1157,6 +1176,9 @@ impl GeminiStreamBridge {
             {
                 for part in parts {
                     self.handle_part(part, &mut events);
+                    if self.finished {
+                        return events;
+                    }
                 }
                 // 保留前面分片里的调用；文本不属于工具签名回放状态。
                 self.collect_replay_calls(parts);
@@ -1171,6 +1193,9 @@ impl GeminiStreamBridge {
     }
 
     fn handle_part(&mut self, part: &Value, events: &mut Vec<SseEvent>) {
+        if self.finished {
+            return;
+        }
         let Some(object) = part.as_object() else {
             return;
         };
@@ -1185,16 +1210,25 @@ impl GeminiStreamBridge {
             self.push_text(text, events);
             return;
         }
-        if let Some(call) = object.get("functionCall").and_then(Value::as_object) {
+        if let Some(call) = object.get("functionCall") {
+            let Some(call) = call.as_object() else {
+                events.extend(self.fail("upstream functionCall must be an object"));
+                return;
+            };
             let name = call
                 .get("name")
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string();
             if name.is_empty() {
+                events.extend(self.fail("upstream tool call is missing its name"));
                 return;
             }
             let args = call.get("args").cloned().unwrap_or_else(|| json!({}));
+            if !args.is_object() {
+                events.extend(self.fail("upstream tool arguments must be a JSON object"));
+                return;
+            }
             self.open_tool_block(&name, &args, events);
         }
     }
@@ -1248,7 +1282,7 @@ impl GeminiStreamBridge {
                         "id": block.id,
                         "name": block.name,
                         "input": serde_json::from_str::<Value>(&block.args)
-                            .unwrap_or_else(|_| json!({})),
+                            .expect("Gemini tool arguments were serialized from an object"),
                     }));
                 }
                 crate::bridge::canonical_json(&json!({
@@ -1350,6 +1384,7 @@ impl SseBridge for GeminiStreamBridge {
 /// Anthropic SSE → 客户端 Gemini SSE / 非流式 JSON。
 pub struct GeminiClientBridge {
     buffer: SseBlockBuffer,
+    tool_stream: crate::bridge_tools::AnthropicToolStream,
     stream: bool,
     finished: bool,
     terminal: BridgeTerminal,
@@ -1368,6 +1403,7 @@ impl GeminiClientBridge {
     pub fn new(model: String, stream: bool) -> Self {
         Self {
             buffer: SseBlockBuffer::new(),
+            tool_stream: Default::default(),
             stream,
             finished: false,
             terminal: BridgeTerminal::Pending,
@@ -1421,7 +1457,8 @@ impl GeminiClientBridge {
             call.insert("name".into(), json!(tool.name));
             call.insert(
                 "args".into(),
-                serde_json::from_str::<Value>(&tool.args).unwrap_or_else(|_| json!({})),
+                crate::bridge_tools::parse_arguments(&tool.args)
+                    .expect("Anthropic tool arguments were validated before message_stop"),
             );
             parts.push(json!({"functionCall": Value::Object(call)}));
         }
@@ -1439,6 +1476,25 @@ impl GeminiClientBridge {
     }
 
     fn handle_event(&mut self, event: &Value) -> Vec<u8> {
+        if self.finished {
+            return Vec::new();
+        }
+        let events = match self.tool_stream.normalize(event.clone()) {
+            Ok(events) => events,
+            Err(detail) => {
+                return self.handle_normalized_event(
+                    &json!({"type": "error", "error": {"message": detail}}),
+                );
+            }
+        };
+        let mut out = Vec::new();
+        for event in events {
+            out.extend(self.handle_normalized_event(&event));
+        }
+        out
+    }
+
+    fn handle_normalized_event(&mut self, event: &Value) -> Vec<u8> {
         match event.get("type").and_then(Value::as_str).unwrap_or("") {
             "error" => {
                 let detail = event
@@ -1578,7 +1634,10 @@ impl SseBridge for GeminiClientBridge {
                 continue;
             };
             let Ok(event) = serde_json::from_str::<Value>(&payload) else {
-                continue;
+                output.extend(self.handle_event(&json!({"type": "error", "error": {
+                    "message": "upstream emitted malformed Anthropic JSON"
+                }})));
+                break;
             };
             output.extend(self.handle_event(&event));
         }

@@ -30,11 +30,101 @@ fn gemini_native_paths_extract_model_and_stream_shape() {
 }
 use crate::request_build;
 
+#[test]
+fn gemini_gateway_paths_keep_namespaces_and_validate_decoded_segments() {
+    for version in ["v1", "v1alpha", "v1beta"] {
+        for model in [
+            "google-vertex-al-ultra/gemini-4-argon",
+            "google-vertex-al-ultra%2Fgemini-4-argon",
+            "gateway/models/gemini-4-argon",
+        ] {
+            let path = format!("/{version}/models/{model}:streamGenerateContent");
+            assert_eq!(
+                gemini_model_from_path(&path),
+                Some(model.replace("%2F", "/"))
+            );
+            assert!(gemini_stream_path(&path));
+        }
+    }
+    for model in [
+        "provider//gemini",
+        "provider/./gemini",
+        "provider/../gemini",
+        "provider/%2e%2e/gemini",
+        "provider/%252e%252e/gemini",
+        "provider%3Fkey=x/gemini",
+        "provider%5cgemini",
+        "provider%2",
+        "models/gemini",
+    ] {
+        assert!(
+            gemini_model_from_path(&format!("/v1beta/models/{model}:generateContent")).is_none(),
+            "{model}"
+        );
+    }
+    assert!(
+        gemini_model_from_path("/v1beta/google-vertex-al-ultra/gemini-4-argon:generateContent")
+            .is_none()
+    );
+    assert!(
+        gemini_model_from_path(
+            "/v1/projects/p/locations/l/publishers/google/models/gemini:generateContent"
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn codex_wham_calls_share_validation_and_register_only_on_post() {
+    for root in ["/wham/realtime/calls", "/backend-api/wham/realtime/calls"] {
+        assert!(is_live_bootstrap_request("POST", root));
+        assert!(!is_live_bootstrap_request("GET", root));
+        assert!(!is_live_bootstrap_request(
+            "POST",
+            &format!("{root}/rtc_1/hangup")
+        ));
+        assert_eq!(
+            live_call_id_from_headers(&[(
+                "Location".into(),
+                format!("https://provider.invalid{root}/rtc_1")
+            )]),
+            Some("rtc_1".into())
+        );
+        assert_eq!(
+            validate_realtime_call_target(&format!("{root}/rtc%2F1")),
+            Err(RealtimeCallPathError::InvalidId)
+        );
+        assert_eq!(
+            validate_realtime_call_target(&format!("{root}/rtc_1/content")),
+            Err(RealtimeCallPathError::UnsupportedAction)
+        );
+    }
+}
+
+#[test]
+fn explicit_current_codex_live_model_is_preserved_without_adopting_text_models() {
+    for path in ["/v1/live", "/wham/realtime/calls", "/v1/realtime/calls"] {
+        assert_eq!(
+            realtime_voice_route_model("POST", path, Some("gpt-live-1.1-codex".into()), None, None),
+            "gpt-live-1.1-codex"
+        );
+        assert_eq!(
+            realtime_voice_route_model("POST", path, Some("claude-fable-5".into()), None, None),
+            request_build::DEFAULT_CODEX_LIVE_MODEL
+        );
+    }
+}
+
 #[tokio::test]
 async fn realtime_root_live_bootstrap_is_the_only_root_that_registers_a_call() {
     INBOUND_REQUEST_CONTEXT
         .scope(
             RefCell::new(InboundRequestContext {
+                identity_settings: Default::default(),
+                resources: crate::ingress::RequestResources::new(
+                    Default::default(),
+                    &crate::ingress::Resources::new(&Default::default()),
+                ),
                 public_origin: None,
                 inbound_token: None,
                 attribution: None,

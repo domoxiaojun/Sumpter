@@ -218,6 +218,8 @@ pub struct ProxyStatus {
 pub(crate) struct ProxyRuntime {
     task: Option<server::ServerHandle>,
     local: Option<SocketAddr>,
+    tls: Option<sumpter_engine::inbound_tls::LoadedTls>,
+    https_local: Option<SocketAddr>,
 }
 
 #[derive(Clone)]
@@ -233,6 +235,8 @@ impl ProxySupervisor {
             runtime: Arc::new(tokio::sync::Mutex::new(ProxyRuntime {
                 task: None,
                 local: None,
+                tls: None,
+                https_local: None,
             })),
         }
     }
@@ -252,12 +256,20 @@ impl ProxySupervisor {
         }
         let config = self.engine.config();
         let address = listener_address(&config)?;
-        let (local, listener) = server::bind_listener(address)
+        let https = sumpter_engine::inbound_tls::prepare_https(address, &config.listener)
+            .map_err(|error| error.to_string())?;
+        let tls = https.as_ref().map(|(_, tls)| tls.clone());
+        let listeners = sumpter_engine::inbound_tls::bind_proxy_listeners(address, https)
             .await
-            .map_err(|error| format!("proxy 监听失败 {address}: {error}"))?;
-        let task = server::serve_bound_router(server::router(self.engine.clone()), listener);
+            .map_err(|error| format!("proxy 监听失败: {error}"))?;
+        let (local, https_local) = listeners.addresses().map_err(|error| error.to_string())?;
         runtime.local = Some(local);
-        runtime.task = Some(task);
+        runtime.https_local = https_local;
+        runtime.tls = tls;
+        runtime.task = Some(server::serve_bound_proxy(
+            server::router(self.engine.clone()),
+            listeners,
+        ));
         let status = Self::snapshot(&runtime);
         self.publish(&status);
         Ok(status)
@@ -269,89 +281,93 @@ impl ProxySupervisor {
             task.shutdown().await;
         }
         runtime.local = None;
+        runtime.https_local = None;
+        runtime.tls = None;
         let status = Self::snapshot(&runtime);
         self.publish(&status);
         status
     }
 
-    /// 在旧 listener 仍接入时先 bind 新地址；只有 bind 成功才替换 Engine 并切换 task。
+    /// Validate TLS first. Bind a new pair before switching when ports do not
+    /// overlap; otherwise stop and restore the complete old pair on failure.
     pub async fn apply_config(
         &self,
         config: AppConfig,
     ) -> Result<(String, Vec<String>, ProxyStatus), String> {
         let desired = listener_address(&config)?;
+        let https = sumpter_engine::inbound_tls::prepare_https(desired, &config.listener)
+            .map_err(|error| error.to_string())?;
+        let desired_https = https.as_ref().map(|(address, _)| *address);
+        let tls = https.as_ref().map(|(_, tls)| tls.clone());
         let mut runtime = self.runtime.lock().await;
         Self::discard_finished(&mut runtime);
-        let needs_rebind = runtime.task.is_some() && runtime.local != Some(desired);
-        let current = runtime.local;
-        let overlaps_current =
-            needs_rebind && current.is_some_and(|address| address.port() == desired.port());
-
-        // 同端口 host 变化（例如 127.0.0.1 → 0.0.0.0）通常无法预绑定。
-        // 先停旧 task 再 bind；失败时立即按旧地址恢复，Engine 此时仍是旧配置。
-        if overlaps_current {
-            if let Some(old_task) = runtime.task.take() {
-                old_task.shutdown().await;
+        let rebind = runtime.task.is_some()
+            && (runtime.local != Some(desired)
+                || runtime.https_local != desired_https
+                || !sumpter_engine::inbound_tls::same_tls(runtime.tls.as_ref(), tls.as_ref()));
+        if !rebind {
+            let (generation, warnings) = self.engine.replace_config(config);
+            return Ok((generation, warnings, Self::snapshot(&runtime)));
+        }
+        let previous_http = runtime.local;
+        let previous_https = runtime.https_local.zip(runtime.tls.clone());
+        let overlap = [Some(desired), desired_https]
+            .into_iter()
+            .flatten()
+            .any(|next| {
+                [runtime.local, runtime.https_local]
+                    .into_iter()
+                    .flatten()
+                    .any(|previous| previous.port() == next.port())
+            });
+        if overlap {
+            if let Some(task) = runtime.task.take() {
+                task.shutdown().await;
             }
             runtime.local = None;
-            match server::bind_listener(desired).await {
-                Ok((local, listener)) => {
-                    let (generation, warnings) = self.engine.replace_config(config);
-                    runtime.task = Some(server::serve_bound_router(
-                        server::router(self.engine.clone()),
-                        listener,
-                    ));
-                    runtime.local = Some(local);
-                    let status = Self::snapshot(&runtime);
-                    self.publish(&status);
-                    return Ok((generation, warnings, status));
-                }
-                Err(error) => {
-                    let restore = match current {
-                        Some(old_address) => match server::bind_listener(old_address).await {
-                            Ok((local, listener)) => {
-                                runtime.task = Some(server::serve_bound_router(
-                                    server::router(self.engine.clone()),
-                                    listener,
-                                ));
-                                runtime.local = Some(local);
-                                "旧 listener 已恢复".to_string()
-                            }
-                            Err(restore_error) => {
-                                format!("旧 listener 恢复失败: {restore_error}")
-                            }
-                        },
-                        None => "旧 listener 地址缺失".to_string(),
-                    };
-                    self.publish(&Self::snapshot(&runtime));
-                    return Err(format!("新 proxy 监听失败 {desired}: {error}；{restore}"));
-                }
-            }
+            runtime.https_local = None;
         }
-
-        let prepared = if needs_rebind {
-            Some(
-                server::bind_listener(desired)
-                    .await
-                    .map_err(|error| format!("新 proxy 监听失败 {desired}: {error}"))?,
-            )
-        } else {
-            None
+        let listeners = match sumpter_engine::inbound_tls::bind_proxy_listeners(desired, https)
+            .await
+        {
+            Ok(listeners) => listeners,
+            Err(error) => {
+                let mut message = format!("新 proxy 监听失败: {error}");
+                if overlap && let Some(address) = previous_http {
+                    match sumpter_engine::inbound_tls::bind_proxy_listeners(address, previous_https)
+                        .await
+                    {
+                        Ok(listeners) => {
+                            let (local, https_local) =
+                                listeners.addresses().map_err(|error| error.to_string())?;
+                            runtime.local = Some(local);
+                            runtime.https_local = https_local;
+                            runtime.task = Some(server::serve_bound_proxy(
+                                server::router(self.engine.clone()),
+                                listeners,
+                            ));
+                            message.push_str("；旧 HTTP/HTTPS listener 已恢复");
+                        }
+                        Err(restore) => {
+                            message.push_str(&format!("；旧 listener 恢复失败: {restore}"))
+                        }
+                    }
+                }
+                self.publish(&Self::snapshot(&runtime));
+                return Err(message);
+            }
         };
-
+        let (local, https_local) = listeners.addresses().map_err(|error| error.to_string())?;
         let (generation, warnings) = self.engine.replace_config(config);
-        if let Some((local, listener)) = prepared {
-            let new_task =
-                server::serve_bound_router(server::router(self.engine.clone()), listener);
-            if let Some(old_task) = runtime.task.replace(new_task) {
-                old_task.shutdown().await;
-            }
-            runtime.local = Some(local);
+        let task = server::serve_bound_proxy(server::router(self.engine.clone()), listeners);
+        if let Some(previous) = runtime.task.replace(task) {
+            previous.shutdown().await;
         }
+        runtime.local = Some(local);
+        runtime.https_local = https_local;
+        runtime.tls = tls;
         let status = Self::snapshot(&runtime);
-        if needs_rebind {
-            self.publish(&status);
-        }
+        self.publish(&status);
         Ok((generation, warnings, status))
     }
 
@@ -359,6 +375,8 @@ impl ProxySupervisor {
         if runtime.task.as_ref().is_some_and(|task| task.is_finished()) {
             runtime.task = None;
             runtime.local = None;
+            runtime.https_local = None;
+            runtime.tls = None;
         }
     }
 
@@ -714,6 +732,7 @@ fn admin_sse_event(name: &str, mut data: Value) -> SseEvent {
 
 pub(crate) async fn events(
     State(state): State<AdminState>,
+    axum::Extension(session): axum::Extension<crate::admin_auth::AuthenticatedSession>,
 ) -> Sse<impl futures_util::Stream<Item = Result<SseEvent, Infallible>>> {
     struct Receivers {
         engine: tokio::sync::broadcast::Receiver<EngineNotice>,
@@ -726,9 +745,16 @@ pub(crate) async fn events(
     let inner = state.inner.clone();
     let stream = futures_util::stream::unfold(receiver, move |mut receivers| {
         let inner = inner.clone();
+        let session = session.clone();
         async move {
             loop {
+                if !session.is_active() {
+                    return None;
+                }
                 tokio::select! {
+                    biased;
+                    _ = session.revoked.cancelled() => return None,
+                    _ = tokio::time::sleep_until(session.deadline) => { session.revoked.cancel(); return None; },
                     result = receivers.engine.recv() => match result {
                         Ok(notice) => {
                             let (name, data) = match notice {
@@ -771,6 +797,7 @@ pub(crate) async fn events(
                                 ),
                             };
                             let event = admin_sse_event(name, data);
+                            if !session.is_active() { return None; }
                             return Some((Ok::<_, Infallible>(event), receivers));
                         }
                         // A lagged receiver has an unknown gap. Close the SSE
@@ -785,6 +812,7 @@ pub(crate) async fn events(
                             let event = SseEvent::default()
                                 .event("config-migrated")
                                 .data(data.to_string());
+                            if !session.is_active() { return None; }
                             return Some((Ok::<_, Infallible>(event), receivers));
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => return None,
@@ -913,6 +941,108 @@ use sumpter_core::config::{Endpoint, SCHEMA_VERSION};
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn security_test_state(auth: AdminAuth) -> AdminState {
+        let engine = Engine::new(
+            AppConfig::bootstrap(),
+            None,
+            Arc::new(crate::outbound::ReqwestTransport::new()),
+        );
+        AdminState::new(
+            engine.clone(),
+            ProxySupervisor::new(engine),
+            ConfigDir::new(
+                std::env::temp_dir().join(format!("sumpter-security-{}", rand::random::<u64>())),
+            ),
+            None,
+            AdminListen::default(),
+            auth,
+        )
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn security_sse_keeps_wire_format_and_revokes_idle_streams() {
+        use futures_util::StreamExt;
+        for reason in ["logout", "password", "expiry"] {
+            let auth = AdminAuth::password(b"synthetic-password").unwrap();
+            let grant = auth
+                .login(DEFAULT_ADMIN_USERNAME, "synthetic-password", false)
+                .unwrap();
+            let state = security_test_state(auth.clone());
+            let engine = state.inner.engine.clone();
+            let response = events(State(state), axum::Extension(grant.session.clone()))
+                .await
+                .into_response();
+            let mut stream = response.into_body().into_data_stream();
+            engine.publish_proxy_state(true, Some("127.0.0.1".into()), Some(57878));
+            let frame = stream.next().await.unwrap().unwrap();
+            assert!(
+                std::str::from_utf8(&frame)
+                    .unwrap()
+                    .contains("event: proxy-state")
+            );
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(1), stream.next())
+                    .await
+                    .is_err()
+            );
+            match reason {
+                "logout" => {
+                    let mut headers = axum::http::HeaderMap::new();
+                    headers.insert(
+                        header::COOKIE,
+                        grant.set_cookie.split(';').next().unwrap().parse().unwrap(),
+                    );
+                    auth.logout(&headers);
+                }
+                "password" => {
+                    auth.change_credentials(
+                        "synthetic-password",
+                        "new-admin",
+                        "synthetic-new-password",
+                        false,
+                    )
+                    .unwrap();
+                }
+                _ => tokio::time::advance(std::time::Duration::from_secs(24 * 60 * 60)).await,
+            }
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_secs(1), stream.next())
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "{reason}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn security_login_uses_tcp_peer_despite_forged_forwarding_headers() {
+        let auth = AdminAuth::password(b"synthetic-password").unwrap();
+        let peer = "127.0.0.1".parse().unwrap();
+        for _ in 0..5 {
+            auth.admit_login(peer).unwrap();
+        }
+        let (address, server) = crate::server::serve_router(
+            admin_router(security_test_state(auth)),
+            "127.0.0.1:0".parse().unwrap(),
+        )
+        .await
+        .unwrap();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let response = client
+            .post(format!("http://{address}/admin/api/auth/login"))
+            .header("content-type", "application/json")
+            .header("x-forwarded-for", "192.0.2.100")
+            .header("x-real-ip", "192.0.2.101")
+            .body(r#"{"username":"kkl","password":"synthetic-password"}"#)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 429);
+        assert!(response.headers().contains_key("retry-after"));
+        server.shutdown().await;
+    }
 
     #[tokio::test]
     async fn inbound_token_secret_requires_session_csrf_and_current_generation() {

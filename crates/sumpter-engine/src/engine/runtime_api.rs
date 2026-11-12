@@ -21,6 +21,65 @@ use super::Engine;
 use super::events::{EngineNotice, RuntimeSnapshot, runtime_outcome_token};
 
 impl Engine {
+    pub(super) fn identity_filter(&self, filter: &RuntimeFilter) -> RuntimeFilter {
+        let mut filter = filter.clone();
+        filter.reporting_aliases = self
+            .config()
+            .listener
+            .client_identity
+            .reporting_aliases
+            .clone();
+        filter
+    }
+    pub(super) fn identity_query_value<T: serde::Serialize>(
+        &self,
+        value: T,
+    ) -> Result<Value, RuntimeQueryError> {
+        let config = self.config();
+        Self::identity_query_value_with_aliases(
+            value,
+            &config.listener.client_identity.reporting_aliases,
+        )
+    }
+    pub(super) fn identity_query_value_with_aliases<T: serde::Serialize>(
+        value: T,
+        aliases: &std::collections::BTreeMap<String, String>,
+    ) -> Result<Value, RuntimeQueryError> {
+        let mut value = Self::runtime_query_value(value)?;
+        fn decorate(value: &mut Value, aliases: &std::collections::BTreeMap<String, String>) {
+            match value {
+                Value::Array(values) => {
+                    for v in values {
+                        decorate(v, aliases)
+                    }
+                }
+                Value::Object(object) => {
+                    let product = object
+                        .get("clientAttribution")
+                        .and_then(|a| a.pointer("/identity/product"))
+                        .and_then(Value::as_str)
+                        .or_else(|| object.get("clientKind").and_then(Value::as_str));
+                    if let Some(target) = product.and_then(|p| aliases.get(p)).cloned() {
+                        object.insert("reportedClientKind".into(), Value::String(target.clone()));
+                        if let Some(identity) = object
+                            .get_mut("clientAttribution")
+                            .and_then(|v| v.pointer_mut("/identity"))
+                            .and_then(Value::as_object_mut)
+                        {
+                            identity.insert("reportedAs".into(), Value::String(target));
+                        }
+                    }
+                    for v in object.values_mut() {
+                        decorate(v, aliases)
+                    }
+                }
+                _ => {}
+            }
+        }
+        decorate(&mut value, aliases);
+        Ok(value)
+    }
+
     pub fn runtime_snapshot(&self) -> RuntimeSnapshot {
         let mut snapshot = self.inner.state.lock().unwrap().runtime.clone();
         if let Some(store) = self.inner.runtime_store.get() {
@@ -148,7 +207,12 @@ impl Engine {
 
     pub fn runtime_events_page(&self, query: &EventPageQuery) -> Result<Value, RuntimeQueryError> {
         let path = self.runtime_query_path()?;
-        Self::runtime_query_value(runtime_query::events_page(path, query)?)
+        let mut query = query.clone();
+        query.filter = self.identity_filter(&query.filter);
+        Self::identity_query_value_with_aliases(
+            runtime_query::events_page(path, &query)?,
+            &query.filter.reporting_aliases,
+        )
     }
 
     pub fn runtime_request_chain(&self, request_id: &str) -> Result<Value, RuntimeQueryError> {
@@ -158,7 +222,7 @@ impl Engine {
             .get()
             .ok_or_else(|| RuntimeQueryError::NotFound("runtime.sqlite3 不可用".into()))?;
         let recent = store.recent_changes_for_request(request_id);
-        Self::runtime_query_value(runtime_query::request_chain_with_recent(
+        self.identity_query_value(runtime_query::request_chain_with_recent(
             store.database_path(),
             request_id,
             &recent,
@@ -167,17 +231,31 @@ impl Engine {
 
     pub fn runtime_trends(&self, query: &TrendQuery) -> Result<Value, RuntimeQueryError> {
         let path = self.runtime_query_path()?;
-        Self::runtime_query_value(runtime_query::trends(path, query)?)
+        let mut query = query.clone();
+        query.filter = self.identity_filter(&query.filter);
+        Self::identity_query_value_with_aliases(
+            runtime_query::trends(path, &query)?,
+            &query.filter.reporting_aliases,
+        )
     }
 
     pub fn runtime_facets(&self, filter: &RuntimeFilter) -> Result<Value, RuntimeQueryError> {
         let path = self.runtime_query_path()?;
-        Self::runtime_query_value(runtime_query::facets(path, filter)?)
+        let filter = self.identity_filter(filter);
+        Self::identity_query_value_with_aliases(
+            runtime_query::facets(path, &filter)?,
+            &filter.reporting_aliases,
+        )
     }
 
     pub fn runtime_error_groups(&self, query: &ErrorPageQuery) -> Result<Value, RuntimeQueryError> {
         let path = self.runtime_query_path()?;
-        Self::runtime_query_value(runtime_query::error_groups(path, query)?)
+        let mut query = query.clone();
+        query.filter = self.identity_filter(&query.filter);
+        Self::identity_query_value_with_aliases(
+            runtime_query::error_groups(path, &query)?,
+            &query.filter.reporting_aliases,
+        )
     }
 
     pub fn runtime_dimension_page(
@@ -186,22 +264,32 @@ impl Engine {
         query: &DimensionPageQuery,
     ) -> Result<Value, RuntimeQueryError> {
         let path = self.runtime_query_path()?;
-        Self::runtime_query_value(runtime_query::dimension_page(path, kind, query)?)
+        let mut query = query.clone();
+        query.filter = self.identity_filter(&query.filter);
+        Self::identity_query_value_with_aliases(
+            runtime_query::dimension_page(path, kind, &query)?,
+            &query.filter.reporting_aliases,
+        )
     }
 
     pub fn runtime_storage_details(&self) -> Result<Value, RuntimeQueryError> {
         let path = self.runtime_query_path()?;
-        Self::runtime_query_value(runtime_query::storage_details(path)?)
+        self.identity_query_value(runtime_query::storage_details(path)?)
     }
 
     pub fn runtime_pricing(&self) -> Result<Value, RuntimeQueryError> {
         let path = self.runtime_query_path()?;
-        Self::runtime_query_value(runtime_query::pricing(path)?)
+        self.identity_query_value(runtime_query::pricing(path)?)
     }
 
     pub fn runtime_export_estimate(&self, query: &ExportQuery) -> Result<Value, RuntimeQueryError> {
         let path = self.runtime_query_path()?;
-        Self::runtime_query_value(runtime_query::export_estimate(path, query)?)
+        let mut query = query.clone();
+        query.filter = self.identity_filter(&query.filter);
+        Self::identity_query_value_with_aliases(
+            runtime_query::export_estimate(path, &query)?,
+            &query.filter.reporting_aliases,
+        )
     }
 
     pub fn runtime_stream_export<F>(
@@ -213,7 +301,11 @@ impl Engine {
         F: FnMut(Vec<u8>) -> Result<(), String>,
     {
         let path = self.runtime_query_path()?;
-        runtime_query::stream_export(path, query, sink)
+        {
+            let mut query = query.clone();
+            query.filter = self.identity_filter(&query.filter);
+            runtime_query::stream_export(path, &query, sink)
+        }
     }
 
     pub fn runtime_set_retention(&self, update: RuntimeRetentionUpdate) -> Result<Value, String> {
@@ -265,7 +357,7 @@ impl Engine {
                 change.map(|value| {
                     let mut value = serde_json::to_value(value).unwrap_or(Value::Null);
                     sumpter_runtime::runtime_query::decorate_runtime_change_value(&mut value);
-                    value
+                    self.identity_query_value(value).unwrap_or(Value::Null)
                 })
             });
         }
@@ -277,7 +369,7 @@ impl Engine {
             .map(|event| {
                 let mut value = json!({"seq": 0, "changeSeq": 0, "event": event});
                 sumpter_runtime::runtime_query::decorate_runtime_change_value(&mut value);
-                value
+                self.identity_query_value(value).unwrap_or(Value::Null)
             }))
     }
 
@@ -375,10 +467,13 @@ impl Engine {
     ) -> Result<Value, String> {
         let filter = filter.normalized();
         if let Some(store) = self.inner.runtime_store.get() {
-            let query_filter = filter.to_runtime_filter();
+            let query_filter = self.identity_filter(&filter.to_runtime_filter());
             return runtime_query::analytics(store.database_path(), range, &query_filter)
                 .map_err(|error| error.to_string())
-                .and_then(|value| serde_json::to_value(value).map_err(|error| error.to_string()));
+                .and_then(|value| {
+                    Self::identity_query_value_with_aliases(value, &query_filter.reporting_aliases)
+                        .map_err(|error| error.to_string())
+                });
         }
         let counters = RuntimeCounters::from_snapshot(&self.runtime_snapshot());
         let filtered = filter.is_active();

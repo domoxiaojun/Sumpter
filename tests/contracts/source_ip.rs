@@ -238,8 +238,9 @@ async fn forwarded_header_precedence_applies_to_whole_request() {
 }
 
 /// Forwarded headers never change authentication, the CIDR allow-list or the
-/// loopback-only `/__status` policy: those keep evaluating the TCP peer, while
-/// the rejection event still records the declared client.
+/// `/__status` peer check: those keep evaluating the TCP peer, while the
+/// rejection event still records the declared client. A configured inbound
+/// token is still required for `/__status` after the peer check.
 #[tokio::test]
 async fn forwarded_headers_do_not_affect_access_control() {
     // 1. allowedCIDRs rejects the peer even though an allow-listed client is
@@ -299,4 +300,83 @@ async fn forwarded_headers_do_not_affect_access_control() {
         ),
         "forwarded headers must not satisfy inbound auth"
     );
+}
+
+/// `/__status` keeps the platform peer check, then requires a configured
+/// inbound token. The data-plane body is a counter summary, not recent events.
+#[tokio::test]
+async fn status_requires_inbound_token_and_omits_recent_events() {
+    let engine = engine_with(two_endpoint_config(), FakeTransport::new());
+    let (status, open) = call(&engine, loopback(), "/__status", vec![], Bytes::new()).await;
+    assert_eq!(status, 200);
+    let open: serde_json::Value = serde_json::from_slice(&open).unwrap();
+    assert_eq!(open["listener"]["authToken"], "");
+    assert!(open["runtime"].get("recentEvents").is_none());
+    assert!(open["runtime"]["clientRequests"].is_number());
+
+    let mut config = two_endpoint_config();
+    config.listener.auth_token = "status-secret".into();
+    let engine = engine_with(config, FakeTransport::new());
+    let _ = call(
+        &engine,
+        loopback(),
+        "/v1/messages",
+        vec![("authorization".into(), "Bearer status-secret".into())],
+        body(),
+    )
+    .await;
+    assert!(!engine.runtime_snapshot().recent_events.is_empty());
+
+    let (status, denied) = call(
+        &engine,
+        loopback(),
+        "/__status",
+        vec![("x-real-ip".into(), "127.0.0.1".into())],
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(status, 401);
+    let denied: serde_json::Value = serde_json::from_slice(&denied).unwrap();
+    assert_eq!(denied["error"], "inbound_auth_required");
+    assert!(denied.get("runtime").is_none());
+
+    let (status, _) = call(
+        &engine,
+        loopback(),
+        "/__status",
+        vec![("authorization".into(), "Bearer wrong-secret".into())],
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(status, 401);
+
+    let (status, _) = call(
+        &engine,
+        Some("10.0.0.9".parse().unwrap()),
+        "/__status",
+        vec![
+            ("x-api-key".into(), "status-secret".into()),
+            ("x-forwarded-for".into(), "127.0.0.1".into()),
+        ],
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(status, 403);
+
+    let (status, ok) = call(
+        &engine,
+        loopback(),
+        "/__status",
+        vec![("authorization".into(), "Bearer status-secret".into())],
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let ok: serde_json::Value = serde_json::from_slice(&ok).unwrap();
+    assert_eq!(ok["listener"]["authToken"], "***");
+    assert!(ok["runtime"].get("recentEvents").is_none());
+    let rendered = ok.to_string();
+    assert!(!rendered.contains("recentEvents"));
+    assert!(!rendered.contains("sessionID"));
+    assert!(!rendered.contains("sourceIP"));
 }

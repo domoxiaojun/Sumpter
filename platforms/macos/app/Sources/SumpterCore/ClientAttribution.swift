@@ -7,6 +7,11 @@ public struct ClientAttribution: Codable, Equatable, Sendable {
         public let rule: String
         public let value: String
     }
+    public struct Identity: Codable, Equatable, Sendable {
+        public let rawProduct, product, host, engine, relaySource, reportedAs, agentID, parentAgentID, sessionID: String?
+        enum CodingKeys: String, CodingKey { case rawProduct, product, host, engine, relaySource, reportedAs; case agentID = "agentId", parentAgentID = "parentAgentId", sessionID = "sessionId" }
+    }
+    public let identity: Identity?
     public let version: Int
     public let evidence: [Evidence]
     public let conflicts: [String]
@@ -37,9 +42,12 @@ extension RuntimeEventPresentation {
     public static func clientAttribution(_ attribution: ClientAttribution?) -> String {
         guard let attribution else { return "未记录" }
         let fields = ["clientKind": "客户端", "clientVariant": "形态", "agentRole": "角色", "requestKind": "请求类型"]
-        let sources = ["declared": "客户端声明", "native": "原生标记", "endpoint": "专用接口", "user_agent": "产品 UA", "fingerprint": "固定指纹"]
+        let sources = ["declared": "客户端声明", "native": "原生标记", "endpoint": "专用接口", "user_agent": "产品 UA", "fingerprint": "固定指纹", "token_binding": "Token 绑定", "configured_ua": "配置别名", "trusted_relay": "可信中继"]
         var lines = attribution.evidence.map { e in
             "\(fields[e.field] ?? e.field)：\(sources[e.source] ?? e.source) / \(e.rule) → \(e.value)"
+        }
+        if let i = attribution.identity {
+            for (name,value) in [("原始产品",i.rawProduct),("产品",i.product),("统计归属",i.reportedAs),("宿主",i.host),("引擎",i.engine),("中继",i.relaySource),("子代理ID",i.agentID),("父代理ID",i.parentAgentID)] { if let value { lines.append(name + "：" + value) } }
         }
         if !attribution.conflicts.isEmpty {
             lines.append("信号冲突：" + attribution.conflicts.map { fields[$0] ?? $0 }.joined(separator: "、"))

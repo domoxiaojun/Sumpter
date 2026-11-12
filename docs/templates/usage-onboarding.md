@@ -21,6 +21,8 @@
 
 `127.0.0.1` 指当前这台机器。客户端连接远程服务器时，使用服务器的可达地址或 SSH 隧道。不要把监听用的 `0.0.0.0` 填成客户端访问地址。
 
+安全设置可额外启用 HTTPS/WSS 监听（默认端口 57880），原 HTTP 端口继续可用。填写服务主机上的 PEM 证书链和私钥绝对路径；Sumpter 允许自签名，不额外检查证书信任、域名或有效期，客户端仍按自身规则校验证书。配置字段见 {{configuration_link}}。
+
 ## 2. 配好第一个上游
 
 先完成一条普通文本请求，再逐项启用其它能力。
@@ -92,19 +94,19 @@ codex
 
 ### Grok Build
 
-在 Grok Build 的模型连接设置中，将 API 地址改为 Sumpter 的 `/v1` 地址，API Key 改为代理入站 Token，模型改为已开放的客户端模型名。保留 Grok 原有的其它配置。项目归因使用下一节的统一安装器。
+在 Grok Build 的模型连接设置中，将 API 地址改为 Sumpter 的 `/v1` 地址，API Key 改为代理入站 Token，模型改为已开放的客户端模型名。保留 Grok 原有的其它配置。客户端身份可在安全页绑定独立 Token；项目需要原生工作区证据。
 
 ### Gemini CLI
 
-先安装 Gemini CLI 和下一节的归因包装器，再设置并启动：
+在 Gemini CLI 选择 Gemini API Key 接入方式，再设置原生连接并启动：
 
 ```bash
-export SUMPTER_GEMINI_BASE_URL='http://127.0.0.1:57878'
-export SUMPTER_AUTH_TOKEN='你的代理入站 Token'
+export GOOGLE_GEMINI_BASE_URL='http://127.0.0.1:57878'
+export GEMINI_API_KEY='你的代理入站 Token'
 gemini --model your-enabled-model
 ```
 
-包装器使用 Gemini Developer API 原生路径并注入连接配置。需要单独运行时，也可调用随包提供的 `gemini-sumpter-wrapper.mjs`。Vertex、Code Assist、OAuth 和 Service Account 不是这条接入方式。`SUMPTER_GEMINI_PROJECT` 可覆盖默认项目名。
+此配置使用 Gemini Developer API 原生路径。Vertex、Code Assist、OAuth 和 Service Account 需要各自的连接配置。
 
 ### pi
 
@@ -137,38 +139,13 @@ pi --provider sumpter --model your-enabled-model
 
 按实际模型补充上下文、输出上限和 reasoning 能力。若本机明确关闭入站认证，要求非空 Key 的客户端可以填非空占位值 `sumpter`。
 
-## 5. 让统计识别项目和会话
+## 5. 让统计识别客户端、项目和会话
 
-归因脚本收集客户端明确提供的项目、用户和会话信息，让统计能够按项目分组。**在运行客户端的机器安装**；仅运行代理的服务器不需要安装它。包装器面向已经连接 Sumpter 的客户端。
+客户端原生身份与会话自动观测。UA 只有 SDK 名称或未发送身份时，在“安全 → 客户端识别”为独立入站 Token 绑定客户端。也可配置精确 UA 别名与可撤销的统计分组映射。详见 {{client_attribution_link}}。
 
-macOS 本机用户在 App「安全」页选择客户端并安装配置。其它情况可在客户端终端执行，无需 `sudo`：
+项目仅根据原生请求中的工作区信息识别；没有证据保持未知。无需安装归因脚本。已安装旧包装器的电脑需手动移除 Shell 注册及显式加载的 Pi 扩展，再重启客户端；升级不会修改客户端机器上的文件或历史数据。
 
-```bash
-curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh \
-  https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/setup-client-attribution.sh
-bash setup-client-attribution.sh status all
-bash setup-client-attribution.sh install all
-```
-
-也可以将 `all` 换成 `claude`、`grok`、`gemini`、`codex` 或 `pi`，用 `--shell bash` 或 `--shell zsh` 选择终端。安装后新开终端，并重新启动客户端。
-
-安装器管理终端启动包装器。Claude 和 Grok 的配置环境覆盖可能与其冲突，按安装器提示处理；不要在不清楚作用时删除已有配置。
-
-pi 包装器会自动加载私有 `pi-project-attribution.ts`，保存在 `${XDG_DATA_HOME:-~/.local/share}/sumpter/attribution/`。Provider 须带 `X-Sumpter-Client: pi`，pi 版本须支持 `before_provider_headers`。包管理命令仍直接交给 pi。`/reload` 不能加载新的 shell 配置；后台插件直接调用模型 SDK 的请求也不一定经过 pi 的会话钩子。
-
-只读连接诊断：在客户端所在机器运行 `node client-attribution.mjs doctor all --proxy-url http://127.0.0.1:57878`（发行包 scripts 目录或上述私有副本）。它检查可见地址、包装器实际版本与 pi 显式标记，不改配置、不请求模型。两端诊断页同时显示近期流量；“未见请求”表示未知。localhost 本身不是 Sumpter 标记。
-
-Codex 包装器用于 CLI/TUI，自定义 Provider 的连接设置保持原有内容；它不会注入已运行的会话或 Codex Desktop 图形进程。客户端自带的结构化 workspace 信息仍优先使用。
-
-要撤销某个客户端的包装器：
-
-```bash
-bash setup-client-attribution.sh restore pi
-```
-
-发送请求后，在「运行」检查客户端、项目和会话，再在「统计」按这些维度筛选。没有请求时，“暂无可判定数据”并不表示安装失败；没有可靠项目证据时保留“未识别”。
-
-`X-Sumpter-Workspace` 等 `X-Sumpter-*` 归因头会在发往上游前剥离。常规统计使用经过清洗的投影；诊断捕获可能包含原始正文、路径和凭据，不应直接分享。
+发送请求后在“运行”检查产品、宿主、引擎、角色、用途与依据。没有请求表示暂无证据。`X-Sumpter-Workspace` 等旧声明仍兼容，所有私有头默认在出站前剥离；仅明确配置的 Sumpter 中继目标接收有界来源标签。
 
 ## 6. 配置多个入口和模型组
 
@@ -203,7 +180,7 @@ bash setup-client-attribution.sh restore pi
 
 上游 `Retry-After` 的单次上限为 300 秒，显式设置的 `maxRetryDurationSeconds` 优先：若剩余预算容纳不下等待，就返回最终响应。HTTP 头和本地产生的错误提示也使用此上限；原生 SSE/WebSocket 业务帧保持原样。指数退避基数最多 30 秒，再加不超过 20% 且最多 1 秒的正向抖动。429/503 即使带额度字段也继续按重试预算处理；其它明确硬额度和凭据错误仍停止同入口重试。
 
-“Claude Code 路由 → 全客户端请求策略”可设置所有客户端的 HTTP/SSE 并发、排队、RPM 和总尝试上限。默认不限并发/RPM，完整缓冲保留，单流默认 16 MiB/8192 块、总缓冲 128 MiB；可选择前奏保护以提前输出，提交后不再透明重放。请求详情提供排队、重试、缓冲和失败原因时间线。Realtime/Live WebSocket 请求级配额不在此范围内。
+“Claude Code 路由 → 全客户端请求策略”可设置所有客户端的 HTTP/SSE 并发、排队、RPM 和总尝试上限。默认不限并发/RPM，完整缓冲保留，单流默认 16 MiB/8192 块、总缓冲 128 MiB；可选择前奏保护以提前输出，提交后不再透明重放。请求详情提供排队、重试、缓冲和失败原因时间线。入站 HTTP 默认原始/解压各 256 MiB、共享缓冲 1024 MiB；Realtime/Live WebSocket 使用独立的 256 MiB 帧/消息上限与 4 条连接配额，安全额度可在同一面板调整。
 
 收到上游错误后，代理按重试策略处理并尽量保留最终上游状态和错误内容。尚未发往上游的认证、路由、存储或连接问题仍可能产生本地错误。
 
@@ -222,10 +199,12 @@ Codex 目录中的工具搜索、网页搜索和服务等级按实际有效路�
 | 图片、文件、视频 | 上游实现对应资源接口；异步资源后续请求依赖原入口绑定 |
 | Responses 传输 | 使用 POST 与 HTTP/SSE；WS 升级返回 426，引导兼容客户端回退，且不计推理请求 |
 | Realtime/Live WebSocket | 仅已声明实时路径可升级，先完成上游握手；保留原生帧转发 |
-| Codex Live | 入口声明 `capabilities: ["live"]`；`/v1/live` / Quicksilver 原样透传，不要求私有模型出现在 mapping 或模型目录 |
+| Codex Live | 入口声明 `capabilities: ["live"]`；保留显式 Live 模型、SDP 与会话字段；`/wham/realtime/calls`（含 `/backend-api` 前缀）适配至上游 `/v1/realtime/calls`，不要求私有模型出现在 mapping 或模型目录 |
 | 标准 Realtime | 同一入口级 `live` 能力承接；保留客户端公开模型名，由 CPA 内部选择 Codex OAuth 凭据 |
 
 没有可用 Live 入口时会出现 `no_live_provider`。能发送普通文本请求不代表上游支持语音、视频或所有资源接口；更改协议标签也不会补齐这些能力。
+
+语音会话的创建请求与后续控制连接必须经过同一 Sumpter 实例。支持 app-server 创建会话的客户端需要同时配置创建地址与 WebSocket 地址；当前桌面版自行创建的 `existingCall` 流程不读取 app-server 的创建地址覆盖，只设置 WebSocket 地址会出现未知会话 410。服务端接口兼容不代表该桌面流程已接通，具体边界见 {{troubleshooting_link}}。
 
 「Claude Code 路由」中的 WebSearch、WebFetch 和安全分类器分流识别独立子请求，可为其选择目标模型和入口。第一次配置可先全部关闭。字段细节见 {{configuration_link}}。
 

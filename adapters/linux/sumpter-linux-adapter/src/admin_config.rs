@@ -366,6 +366,8 @@ pub(crate) fn validate_config_identity(config: &AppConfig) -> Result<(), String>
 }
 
 pub fn validate_config(config: &AppConfig) -> Result<(), String> {
+    config.request_policy.validate_security_limits()?;
+    config.listener.validate_tls()?;
     config.validate_user_agents()?;
     config.validate_resolve_ips()?;
     validate_config_identity(config)?;

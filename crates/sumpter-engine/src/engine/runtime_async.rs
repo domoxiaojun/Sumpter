@@ -10,36 +10,43 @@ impl Engine {
         query: &EventPageQuery,
     ) -> Result<Value, RuntimeQueryError> {
         let path = self.runtime_query_path()?.to_path_buf();
-        let query = query.clone();
+        let mut query = query.clone();
+        query.filter = self.identity_filter(&query.filter);
+        let aliases = query.filter.reporting_aliases.clone();
         let value = runtime_query::asynchronous::events_page(path, query).await?;
-        Self::runtime_query_value(value)
+        Self::identity_query_value_with_aliases(value, &aliases)
     }
     pub async fn runtime_trends_async(
         &self,
         query: &TrendQuery,
     ) -> Result<Value, RuntimeQueryError> {
         let path = self.runtime_query_path()?.to_path_buf();
-        let query = query.clone();
+        let mut query = query.clone();
+        query.filter = self.identity_filter(&query.filter);
+        let aliases = query.filter.reporting_aliases.clone();
         let value = runtime_query::asynchronous::trends(path, query).await?;
-        Self::runtime_query_value(value)
+        Self::identity_query_value_with_aliases(value, &aliases)
     }
     pub async fn runtime_facets_async(
         &self,
         filter: &RuntimeFilter,
     ) -> Result<Value, RuntimeQueryError> {
         let path = self.runtime_query_path()?.to_path_buf();
-        let filter = filter.clone();
+        let filter = self.identity_filter(filter);
+        let aliases = filter.reporting_aliases.clone();
         let value = runtime_query::asynchronous::facets(path, filter).await?;
-        Self::runtime_query_value(value)
+        Self::identity_query_value_with_aliases(value, &aliases)
     }
     pub async fn runtime_error_groups_async(
         &self,
         query: &ErrorPageQuery,
     ) -> Result<Value, RuntimeQueryError> {
         let path = self.runtime_query_path()?.to_path_buf();
-        let query = query.clone();
+        let mut query = query.clone();
+        query.filter = self.identity_filter(&query.filter);
+        let aliases = query.filter.reporting_aliases.clone();
         let value = runtime_query::asynchronous::error_groups(path, query).await?;
-        Self::runtime_query_value(value)
+        Self::identity_query_value_with_aliases(value, &aliases)
     }
     pub async fn runtime_dimension_page_async(
         &self,
@@ -47,30 +54,46 @@ impl Engine {
         query: &DimensionPageQuery,
     ) -> Result<Value, RuntimeQueryError> {
         let path = self.runtime_query_path()?.to_path_buf();
-        let query = query.clone();
+        let mut query = query.clone();
+        query.filter = self.identity_filter(&query.filter);
+        let aliases = query.filter.reporting_aliases.clone();
         let value = runtime_query::asynchronous::dimension_page(path, kind, query).await?;
-        Self::runtime_query_value(value)
+        Self::identity_query_value_with_aliases(value, &aliases)
     }
     pub async fn runtime_storage_details_async(&self) -> Result<Value, RuntimeQueryError> {
         let path = self.runtime_query_path()?.to_path_buf();
 
+        let aliases = self
+            .config()
+            .listener
+            .client_identity
+            .reporting_aliases
+            .clone();
         let value = runtime_query::asynchronous::storage_details(path).await?;
-        Self::runtime_query_value(value)
+        Self::identity_query_value_with_aliases(value, &aliases)
     }
     pub async fn runtime_pricing_async(&self) -> Result<Value, RuntimeQueryError> {
         let path = self.runtime_query_path()?.to_path_buf();
 
+        let aliases = self
+            .config()
+            .listener
+            .client_identity
+            .reporting_aliases
+            .clone();
         let value = runtime_query::asynchronous::pricing(path).await?;
-        Self::runtime_query_value(value)
+        Self::identity_query_value_with_aliases(value, &aliases)
     }
     pub async fn runtime_export_estimate_async(
         &self,
         query: &ExportQuery,
     ) -> Result<Value, RuntimeQueryError> {
         let path = self.runtime_query_path()?.to_path_buf();
-        let query = query.clone();
+        let mut query = query.clone();
+        query.filter = self.identity_filter(&query.filter);
+        let aliases = query.filter.reporting_aliases.clone();
         let value = runtime_query::asynchronous::export_estimate(path, query).await?;
-        Self::runtime_query_value(value)
+        Self::identity_query_value_with_aliases(value, &aliases)
     }
     pub async fn runtime_request_chain_async(
         &self,
@@ -83,7 +106,7 @@ impl Engine {
             .get()
             .map(|store| store.recent_changes_for_request(request_id))
             .unwrap_or_default();
-        Self::runtime_query_value(
+        self.identity_query_value(
             runtime_query::asynchronous::request_chain_with_recent(
                 path,
                 request_id.to_owned(),
@@ -102,7 +125,11 @@ impl Engine {
     {
         runtime_query::asynchronous::stream_export(
             self.runtime_query_path()?.to_path_buf(),
-            query.clone(),
+            {
+                let mut query = query.clone();
+                query.filter = self.identity_filter(&query.filter);
+                query
+            },
             sink,
         )
         .await
@@ -113,7 +140,7 @@ impl Engine {
                 change.map(|value| {
                     let mut value = serde_json::to_value(value).unwrap_or(Value::Null);
                     sumpter_runtime::runtime_query::decorate_runtime_change_value(&mut value);
-                    value
+                    self.identity_query_value(value).unwrap_or(Value::Null)
                 })
             });
         }
@@ -134,15 +161,20 @@ impl Engine {
         diagnostics_only: bool,
     ) -> Result<Value, String> {
         if let Some(store) = self.inner.runtime_store.get() {
+            let filter = self.identity_filter(&filter.normalized().to_runtime_filter());
+            let aliases = filter.reporting_aliases.clone();
             return runtime_query::asynchronous::analytics_view(
                 store.database_path().to_path_buf(),
                 range.to_owned(),
-                filter.normalized().to_runtime_filter(),
+                filter,
                 diagnostics_only,
             )
             .await
             .map_err(|error| error.to_string())
-            .and_then(|value| serde_json::to_value(value).map_err(|error| error.to_string()));
+            .and_then(|value| {
+                Self::identity_query_value_with_aliases(value, &aliases)
+                    .map_err(|error| error.to_string())
+            });
         }
         self.runtime_analytics_filtered(range, filter)
     }

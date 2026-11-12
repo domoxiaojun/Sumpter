@@ -332,6 +332,8 @@ class ApiService {
       if (response.status === 401) markUnauthenticated();
       const error = new Error(data.message || data.error || `HTTP ${response.status}`);
       error.status = response.status;
+      const retryAfter = Number(response.headers.get('Retry-After'));
+      error.retryAfterSeconds = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.ceil(retryAfter) : 0;
       error.code = data.error || data.code;
       throw error;
     }
@@ -575,10 +577,12 @@ class ApiService {
   getDiagnosticCaptureDetail(requestID, options = {}) {
     return this.request(`/diagnostic-capture/${encodeURIComponent(requestID)}`, options);
   }
-  downloadDiagnosticCapture({ scope = 'selected', format = 'jsonl', privacy = 'raw', confirmRaw = false, requestID = '' } = {}) {
+  downloadDiagnosticCapture({ scope = 'selected', format = 'jsonl', privacy = 'raw', confirmRaw = false, requestID = '', maxParseMib = 64 } = {}) {
     const query = new URLSearchParams({ scope, format, privacy });
     if (confirmRaw) query.set('confirmRaw', 'true');
     if (requestID) query.set('requestID', requestID);
+    if (!Number.isInteger(maxParseMib) || maxParseMib < 1 || maxParseMib > 256) throw new Error('脱敏解析上限必须为 1–256 MiB 的整数');
+    if (privacy === 'redacted') query.set('maxParseMib', String(maxParseMib));
     const path = `/diagnostic-capture/export?${query.toString()}`;
     if (isMock) return this.request(path);
     const anchor = document.createElement('a');

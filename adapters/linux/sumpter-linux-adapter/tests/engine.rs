@@ -30,6 +30,9 @@ mod request_policy;
 #[path = "../../../../tests/contracts/pi.rs"]
 mod pi;
 
+#[path = "../../../../tests/contracts/tool_bridge.rs"]
+mod tool_bridge;
+
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -2096,13 +2099,27 @@ async fn linux_data_plane_has_no_control_or_notify_write_endpoints() {
         assert_eq!(status, 404, "{path} 应在 Linux 数据面不存在");
     }
 
-    // status:环回放行,authToken 脱敏。
-    let (status, resp) = call(&engine, loopback(), "/__status", vec![], Bytes::new()).await;
+    // 已配置入站 Token 时，环回也不能免凭据读取状态。
+    let (status, denied) = call(&engine, loopback(), "/__status", vec![], Bytes::new()).await;
+    assert_eq!(status, 401);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&denied).unwrap()["error"],
+        "inbound_auth_required"
+    );
+    let (status, resp) = call(
+        &engine,
+        loopback(),
+        "/__status",
+        vec![("x-api-key".into(), "secret-inbound".into())],
+        Bytes::new(),
+    )
+    .await;
     assert_eq!(status, 200);
     let json: Value = serde_json::from_slice(&resp).unwrap();
     assert_eq!(json["running"], json!(true));
     assert_eq!(json["endpoints"], json!(2));
     assert_eq!(json["listener"]["authToken"], "***");
+    assert!(json["runtime"].get("recentEvents").is_none());
 
     // 非环回 status 403。
     let (status, _) = call(
@@ -2114,194 +2131,6 @@ async fn linux_data_plane_has_no_control_or_notify_write_endpoints() {
     )
     .await;
     assert_eq!(status, 403);
-}
-
-#[tokio::test]
-async fn linux_listener_serves_builtin_attribution_script() {
-    let fake = FakeTransport::new();
-    let engine = engine_with(two_endpoint_config(), fake);
-
-    let response = engine
-        .handle_request(
-            loopback(),
-            "GET",
-            sumpter_linux_adapter::engine::ATTRIBUTION_SCRIPT_PATH,
-            vec![],
-            Body::from("request body must not be read"),
-        )
-        .await;
-    assert_eq!(response.status(), 200);
-    assert_eq!(response.headers().get("cache-control").unwrap(), "no-store");
-    assert_eq!(
-        response.headers().get("content-type").unwrap(),
-        "text/x-shellscript; charset=utf-8"
-    );
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    assert!(body.starts_with(b"#!/usr/bin/env bash\n"));
-    assert!(
-        body.windows(b"X-Sumpter-Project".len())
-            .any(|window| { window == b"X-Sumpter-Project" })
-    );
-
-    let response = engine
-        .handle_request(
-            loopback(),
-            "POST",
-            sumpter_linux_adapter::engine::ATTRIBUTION_SCRIPT_PATH,
-            vec![],
-            Bytes::new(),
-        )
-        .await;
-    assert_eq!(response.status(), 405);
-    assert_eq!(response.headers().get("allow").unwrap(), "GET");
-}
-
-#[tokio::test]
-async fn linux_listener_serves_builtin_grok_attribution_script() {
-    let fake = FakeTransport::new();
-    let engine = engine_with(two_endpoint_config(), fake);
-
-    let response = engine
-        .handle_request(
-            loopback(),
-            "GET",
-            sumpter_linux_adapter::engine::GROK_ATTRIBUTION_SCRIPT_PATH,
-            vec![],
-            Body::from("request body must not be read"),
-        )
-        .await;
-    assert_eq!(response.status(), 200);
-    assert_eq!(response.headers().get("cache-control").unwrap(), "no-store");
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    assert!(body.starts_with(b"#!/usr/bin/env bash\n"));
-    assert!(
-        body.windows(b"GROK_CONFIG".len())
-            .any(|window| window == b"GROK_CONFIG")
-    );
-}
-
-#[tokio::test]
-async fn pi_and_gemini_attribution_script_download_uses_listener_access_policy() {
-    let mut config = two_endpoint_config();
-    config.listener.auth_token = "listener-secret".into();
-    config.listener.allowed_cidrs = vec!["127.0.0.0/8".into()];
-    let engine = engine_with(config, FakeTransport::new());
-    for (path, expected) in [
-        (
-            sumpter_linux_adapter::engine::CLIENT_ATTRIBUTION_SETUP_PATH,
-            include_bytes!("../../../../platforms/linux/scripts/setup-client-attribution.sh")
-                .as_slice(),
-        ),
-        (
-            sumpter_linux_adapter::engine::PI_ATTRIBUTION_SCRIPT_PATH,
-            include_bytes!("../../../../scripts/clients/pi-project-attribution.ts").as_slice(),
-        ),
-        (
-            sumpter_linux_adapter::engine::GEMINI_WRAPPER_SCRIPT_PATH,
-            include_bytes!("../../../../scripts/clients/gemini-sumpter-wrapper.mjs").as_slice(),
-        ),
-        (
-            sumpter_linux_adapter::engine::CLIENT_ATTRIBUTION_SCRIPT_PATH,
-            include_bytes!("../../../../scripts/clients/client-attribution.mjs").as_slice(),
-        ),
-    ] {
-        assert_eq!(
-            engine
-                .handle_request(
-                    Some("192.0.2.10".parse().unwrap()),
-                    "GET",
-                    path,
-                    vec![("authorization".into(), "Bearer listener-secret".into())],
-                    Body::empty(),
-                )
-                .await
-                .status(),
-            403
-        );
-        assert_eq!(
-            engine
-                .handle_request(loopback(), "GET", path, vec![], Body::empty())
-                .await
-                .status(),
-            401
-        );
-        assert_eq!(
-            engine
-                .handle_request(loopback(), "POST", path, vec![], Body::empty())
-                .await
-                .status(),
-            405
-        );
-        let response = engine
-            .handle_request(
-                loopback(),
-                "GET",
-                path,
-                vec![("authorization".into(), "Bearer listener-secret".into())],
-                Body::empty(),
-            )
-            .await;
-        assert_eq!(response.status(), 200);
-        assert_eq!(
-            response.headers()["content-type"],
-            if path.ends_with(".sh") {
-                "text/x-shellscript; charset=utf-8"
-            } else {
-                "text/plain; charset=utf-8"
-            }
-        );
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        assert_eq!(body.as_ref(), expected);
-    }
-}
-
-#[tokio::test]
-async fn linux_attribution_script_obeys_listener_access_policy() {
-    let fake = FakeTransport::new();
-    let mut config = two_endpoint_config();
-    config.listener.allowed_cidrs = vec!["10.0.0.0/8".into()];
-    config.listener.auth_token = "secret-inbound".into();
-    let engine = engine_with(config, fake);
-    let path = sumpter_linux_adapter::engine::ATTRIBUTION_SCRIPT_PATH;
-
-    let response = engine
-        .handle_request(
-            Some("192.0.2.10".parse().unwrap()),
-            "GET",
-            path,
-            vec![("authorization".into(), "Bearer secret-inbound".into())],
-            Bytes::new(),
-        )
-        .await;
-    assert_eq!(response.status(), 403);
-
-    let response = engine
-        .handle_request(
-            Some("10.0.0.10".parse().unwrap()),
-            "GET",
-            path,
-            vec![],
-            Bytes::new(),
-        )
-        .await;
-    assert_eq!(response.status(), 401);
-
-    let response = engine
-        .handle_request(
-            Some("10.0.0.10".parse().unwrap()),
-            "GET",
-            path,
-            vec![("authorization".into(), "Bearer secret-inbound".into())],
-            Bytes::new(),
-        )
-        .await;
-    assert_eq!(response.status(), 200);
 }
 
 #[tokio::test]
@@ -2320,7 +2149,13 @@ async fn ingress_preflight_never_polls_rejected_or_bodyless_request_bodies() {
         (loopback(), "/unknown", vec![], 404),
         (external, "/__status", vec![], 403),
         (external, "/__notify", vec![], 404),
-        (loopback(), "/__status", vec![], 200),
+        (loopback(), "/__status", vec![], 401),
+        (
+            loopback(),
+            "/__status",
+            vec![("x-api-key".into(), "secret-inbound".into())],
+            200,
+        ),
     ] {
         let polled = Arc::new(AtomicBool::new(false));
         let response = engine
@@ -6279,3 +6114,6 @@ mod client_attribution;
 
 #[path = "../../../../tests/contracts/inbound_tokens.rs"]
 mod inbound_tokens;
+
+#[path = "../../../../tests/contracts/security_ingress.rs"]
+mod security_ingress;

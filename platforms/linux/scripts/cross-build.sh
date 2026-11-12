@@ -134,12 +134,6 @@ check_file "$ROOT/scripts/stop.sh"
 check_file "$ROOT/scripts/smoke.sh"
 check_file "$ROOT/scripts/install.sh"
 check_file "$ROOT/scripts/uninstall.sh"
-check_file "$ROOT/scripts/cc-project-attribution.sh"
-check_file "$ROOT/scripts/grok-project-attribution.sh"
-check_file "$ROOT/scripts/pi-project-attribution.ts"
-check_file "$ROOT/scripts/gemini-sumpter-wrapper.mjs"
-check_file "$ROOT/scripts/client-attribution.mjs"
-check_file "$ROOT/scripts/setup-client-attribution.sh"
 check_directory "$ROOT/web"
 check_file "$ROOT/web/index.html"
 for docker_file in compose.yaml DOCKER.md; do
@@ -202,17 +196,10 @@ for entry in "${TARGETS[@]}"; do
     chmod 0755 "$stage/sumpterd"
     cp -R "$ROOT/web/." "$stage/web/"
     for script in start.sh stop.sh smoke.sh install.sh bootstrap-install.sh uninstall.sh \
-        bootstrap-uninstall.sh migrate-kekulv.sh cc-project-attribution.sh grok-project-attribution.sh; do
+        bootstrap-uninstall.sh migrate-kekulv.sh; do
         cp "$ROOT/scripts/$script" "$stage/scripts/$script"
         chmod 0755 "$stage/scripts/$script"
     done
-    cp "$ROOT/scripts/pi-project-attribution.ts" "$stage/scripts/pi-project-attribution.ts"
-    cp "$ROOT/scripts/gemini-sumpter-wrapper.mjs" "$stage/scripts/gemini-sumpter-wrapper.mjs"
-    chmod 0755 "$stage/scripts/gemini-sumpter-wrapper.mjs"
-    cp "$ROOT/scripts/client-attribution.mjs" "$stage/scripts/client-attribution.mjs"
-    chmod 0755 "$stage/scripts/client-attribution.mjs"
-    cp "$ROOT/scripts/setup-client-attribution.sh" "$stage/scripts/setup-client-attribution.sh"
-    chmod 0755 "$stage/scripts/setup-client-attribution.sh"
     cp "$ROOT/deploy/sumpter.service" "$stage/sumpter.service"
     cp "$ROOT/deploy/sumpter-system.service" "$stage/sumpter-system.service"
     cp "$ROOT/deploy/nginx-sumpter-admin.conf.example" \

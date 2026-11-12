@@ -54,6 +54,7 @@ pub(super) struct EngineState {
 }
 
 pub struct EngineInner {
+    pub(crate) ingress: crate::ingress::Resources,
     pub(super) admission: Arc<super::admission::Admission>,
     pub(super) buffer_budget: Arc<super::admission::BufferBudget>,
     pub(super) no_response: Mutex<super::no_response::NoResponseGuard>,
@@ -238,6 +239,7 @@ impl Engine {
         let (notices, _) = tokio::sync::broadcast::channel(512);
         let engine = Self {
             inner: Arc::new(EngineInner {
+                ingress: crate::ingress::Resources::new(&config.request_policy),
                 admission: Arc::default(),
                 buffer_budget: Arc::default(),
                 no_response: Mutex::default(),

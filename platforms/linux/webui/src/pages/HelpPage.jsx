@@ -98,10 +98,10 @@ export function HelpPage() {
 
       <section className="glass-panel help-panel help-attribution-entry">
         <div className="panel-title"><Icon name="shield" size={18} style={{ color: 'var(--status-good)' }} /><span>客户端项目归因</span></div>
-        <p>归因安装、状态检查和还原统一在“安全”页完成。请在启动 Claude Code、Grok、Gemini、Codex 或 pi 的那台主机执行，浏览器和 daemon 主机不会代替客户端修改配置。</p>
+        <p>客户端原生标记自动识别。缺少产品标记时，在“安全 → 客户端识别”为独立入站 Token 绑定客户端；项目和会话仍以请求证据为准。</p>
         <div className="help-links">
           <button type="button" className="btn btn-primary" onClick={() => navigate('security')}><Icon name="shield" size={16} />打开安全页配置</button>
-          <a className="btn btn-secondary" href={`${docsURL}#linuxmacos-客户端归因脚本统一安装`} target="_blank" rel="noreferrer"><Icon name="book" size={16} />查看完整安装说明</a>
+          <a className="btn btn-secondary" href={`${docsURL}#5-让统计识别客户端项目和会话`} target="_blank" rel="noreferrer"><Icon name="book" size={16} />查看客户端识别说明</a>
         </div>
       </section>
 
@@ -140,10 +140,9 @@ export function HelpPage() {
         <div className="panel-title"><Icon name="terminal" size={18} /><span>pi 客户端与项目归因</span></div>
         <p>在 pi 所在主机编辑 <code>~/.pi/agent/models.json</code>，为 Sumpter provider 配置 API、Base URL、入站 Token 与已启用的客户端模型名，并添加 <code>{'"headers": { "X-Sumpter-Client": "pi" }'}</code>。</p>
         <p>OpenAI Responses / Chat 使用 <code>/v1</code>；Anthropic 使用根地址；Gemini 使用 <code>/v1beta</code>。Token 可通过 <code>"apiKey": "$SUMPTER_API_KEY"</code> 引用环境变量。</p>
-        <p>归因包装器的安装、状态检查和还原请前往“安全”页；操作后新开终端并重新启动 pi，<code>/reload</code> 不会加载 shell 配置。运行中的 listener 仍提供 <code>/__sumpter/pi-project-attribution.ts</code>。</p>
-        <p>扩展随当前项目和会话更新归因。发送请求后，在“运行”查看客户端 pi、项目和会话，再按 pi 筛选统计；暂无数据不能说明扩展未安装。</p>
+        <p>客户端身份可通过安全页的 Token 绑定补充。项目仅在原生请求提供工作区时识别；未提供时保持未知。</p>
         <div className="help-links">
-          <button type="button" className="btn btn-secondary" onClick={() => navigate('security')}><Icon name="shield" size={16} />前往安全页安装归因</button>
+          <button type="button" className="btn btn-secondary" onClick={() => navigate('security')}><Icon name="shield" size={16} />前往安全页绑定客户端</button>
           <a className="btn btn-secondary" href={`${docsURL}#pi-客户端`} target="_blank" rel="noreferrer">完整 pi 配置说明</a>
         </div>
       </section>

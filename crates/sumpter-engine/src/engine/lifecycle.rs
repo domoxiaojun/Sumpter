@@ -200,6 +200,7 @@ impl Engine {
         // TTL 等调度参数跟随配置替换即时生效；粘性归属本身不动，
         // 只影响后续的周期淘汰。
         let session_sticky_ttl_secs = config.session_sticky_ttl_secs();
+        self.inner.ingress.update(&config.request_policy);
         *self.inner.config.write().unwrap() = Arc::new(config);
         {
             let config = self.config();

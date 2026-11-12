@@ -133,7 +133,111 @@ pub struct EndpointPolicy {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
+pub struct IngressPolicy {
+    pub max_body_mib: u32,
+    pub max_decoded_body_mib: u32,
+    pub max_buffered_mib: u32,
+    pub max_preprocessing: u32,
+    pub max_decompressions: u32,
+    pub body_idle_timeout_seconds: u32,
+    pub body_read_timeout_seconds: u32,
+}
+
+impl Default for IngressPolicy {
+    fn default() -> Self {
+        Self {
+            max_body_mib: 256,
+            max_decoded_body_mib: 256,
+            max_buffered_mib: 1024,
+            max_preprocessing: 4,
+            max_decompressions: 2,
+            body_idle_timeout_seconds: 30,
+            body_read_timeout_seconds: 300,
+        }
+    }
+}
+
+impl IngressPolicy {
+    pub fn validate(&self) -> Result<(), String> {
+        for (name, value, max) in [
+            ("maxBodyMib", self.max_body_mib, 1024),
+            ("maxDecodedBodyMib", self.max_decoded_body_mib, 1024),
+            ("maxBufferedMib", self.max_buffered_mib, 16384),
+            ("maxPreprocessing", self.max_preprocessing, 64),
+            ("maxDecompressions", self.max_decompressions, 64),
+            (
+                "bodyIdleTimeoutSeconds",
+                self.body_idle_timeout_seconds,
+                3600,
+            ),
+            (
+                "bodyReadTimeoutSeconds",
+                self.body_read_timeout_seconds,
+                86400,
+            ),
+        ] {
+            if value == 0 || value > max {
+                return Err(format!("requestPolicy.ingress.{name} 必须为 1–{max}"));
+            }
+        }
+        if self.max_buffered_mib < self.max_body_mib + self.max_decoded_body_mib {
+            return Err("入站总缓冲必须容纳原始体上限与解压输出上限之和".into());
+        }
+        if self.body_read_timeout_seconds < self.body_idle_timeout_seconds {
+            return Err("读体总时限不得小于空闲时限".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WebSocketPolicy {
+    pub max_frame_mib: u32,
+    pub max_message_mib: u32,
+    pub max_connections: u32,
+    pub first_message_timeout_seconds: u32,
+}
+
+impl Default for WebSocketPolicy {
+    fn default() -> Self {
+        Self {
+            max_frame_mib: 256,
+            max_message_mib: 256,
+            max_connections: 4,
+            first_message_timeout_seconds: 30,
+        }
+    }
+}
+
+impl WebSocketPolicy {
+    pub fn validate(&self) -> Result<(), String> {
+        for (name, value, max) in [
+            ("maxFrameMib", self.max_frame_mib, 1024),
+            ("maxMessageMib", self.max_message_mib, 1024),
+            ("maxConnections", self.max_connections, 1024),
+            (
+                "firstMessageTimeoutSeconds",
+                self.first_message_timeout_seconds,
+                3600,
+            ),
+        ] {
+            if value == 0 || value > max {
+                return Err(format!("requestPolicy.websocket.{name} 必须为 1–{max}"));
+            }
+        }
+        if self.max_frame_mib > self.max_message_mib {
+            return Err("WebSocket 帧上限不得超过消息上限".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct RequestPolicy {
+    pub ingress: IngressPolicy,
+    pub websocket: WebSocketPolicy,
     pub max_total_attempts: u32,
     /// Forwarding through client response commit, including retries; 0 disables it.
     pub response_wait_timeout_seconds: u32,
@@ -152,6 +256,8 @@ pub struct RequestPolicy {
 impl Default for RequestPolicy {
     fn default() -> Self {
         Self {
+            ingress: IngressPolicy::default(),
+            websocket: WebSocketPolicy::default(),
             max_total_attempts: 0,
             response_wait_timeout_seconds: 0,
             max_consecutive_no_response: 3,
@@ -168,6 +274,11 @@ impl Default for RequestPolicy {
 }
 
 impl RequestPolicy {
+    pub fn validate_security_limits(&self) -> Result<(), String> {
+        self.ingress.validate()?;
+        self.websocket.validate()
+    }
+
     pub fn is_default(&self) -> bool {
         self == &Self::default()
     }
@@ -348,6 +459,31 @@ impl RequestTrace {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn old_configs_use_safe_defaults_and_new_fields_round_trip() {
+        let policy: RequestPolicy = serde_json::from_str("{}").unwrap();
+        assert_eq!(policy.ingress.max_body_mib, 256);
+        assert_eq!(policy.ingress.max_decoded_body_mib, 256);
+        assert_eq!(policy.ingress.max_buffered_mib, 1024);
+        assert_eq!(policy.websocket.max_message_mib, 256);
+        assert_eq!(policy.websocket.max_connections, 4);
+        assert_eq!(
+            serde_json::from_str::<RequestPolicy>(&serde_json::to_string(&policy).unwrap())
+                .unwrap(),
+            policy
+        );
+        assert!(policy.validate_security_limits().is_ok());
+        for json in [
+            r#"{"ingress":{"maxBodyMib":0}}"#,
+            r#"{"ingress":{"maxBufferedMib":511}}"#,
+            r#"{"ingress":{"bodyReadTimeoutSeconds":29}}"#,
+            r#"{"websocket":{"maxFrameMib":257}}"#,
+            r#"{"websocket":{"maxConnections":0}}"#,
+        ] {
+            let policy: RequestPolicy = serde_json::from_str(json).unwrap();
+            assert!(policy.validate_security_limits().is_err(), "{json}");
+        }
+    }
 
     #[test]
     fn no_response_defaults_explicit_disable_and_bounds_round_trip() {

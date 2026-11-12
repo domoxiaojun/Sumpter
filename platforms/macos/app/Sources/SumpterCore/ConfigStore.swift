@@ -341,6 +341,8 @@ public struct ConfigStore: Sendable {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         var stored = config
         stored.schemaVersion = AppConfig.currentSchemaVersion
+        try stored.requestPolicy.ingress.validate()
+        try stored.requestPolicy.websocket.validate()
         try stored.validateModelGroups()
         try stored.listener.validateInboundTokens()
         return try encoder.encode(stored.normalizedBuiltInFeatureRules())

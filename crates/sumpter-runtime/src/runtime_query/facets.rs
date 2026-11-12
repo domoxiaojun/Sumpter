@@ -106,13 +106,13 @@ pub(super) fn analytics_facets_for_filter(
     base.ge_real("timestamp", filters.from);
     base.le_real("timestamp", filters.to);
     let sql = format!(
-        "SELECT outcome,client_kind,request_purpose,request_id,endpoint_id,
+        "SELECT outcome,{reported_client},request_purpose,request_id,endpoint_id,
                 effective_model,project_id,project_name,session_key,
                 failure_kind,failure_phase,client_variant,agent_role,agent_name,parent_thread_id,parent_turn_id,root_turn_id,
                 attribution_scope,timestamp,request_kind,
                 {token_id}, CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.inboundToken.name') END
            FROM runtime_events{}",
-        base.where_sql(), token_id = super::INBOUND_TOKEN_ID_SQL
+        base.where_sql(), token_id = super::INBOUND_TOKEN_ID_SQL, reported_client=filters.reported_client_expression()
     );
     let mut statement = transaction.prepare(&sql)?;
     let rows = statement.query_map(params_from_iter(base.values.iter()), |row| {

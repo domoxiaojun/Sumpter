@@ -13,7 +13,7 @@ use crate::model_catalog::{
 
 use super::context::header_value;
 use super::http_response::{error_response, json_response};
-use super::protocol::decoded_query_value;
+use super::protocol::{decoded_query_value, strict_percent_decode};
 
 #[path = "codex_client_catalog.rs"]
 pub(crate) mod codex_client_catalog;
@@ -40,40 +40,50 @@ pub(super) fn supports_extended_reasoning_levels(client_version: &str) -> bool {
     (major, minor, patch) >= (0, 144, 0)
 }
 
+pub(super) fn is_gemini_models_tree(path: &str) -> bool {
+    ["/v1beta/models", "/v1alpha/models"].iter().any(|root| {
+        path.strip_prefix(root)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    })
+}
+
 pub(super) fn is_local_models_path(path: &str) -> bool {
     if [
         "/v1/models",
         "/models",
         "/openai/v1/models",
         "/backend-api/codex/models",
+        "/v1beta/models",
+        "/v1alpha/models",
     ]
     .contains(&path)
     {
         return true;
     }
-    [
-        "/v1/models/",
-        "/models/",
-        "/openai/v1/models/",
-        "/backend-api/codex/models/",
-    ]
-    .iter()
-    .any(|prefix| {
-        path.strip_prefix(prefix)
-            .is_some_and(|id| !id.is_empty() && !id.contains('/'))
-    })
+    local_model_id_from_path(path).is_some()
 }
 
-pub(super) fn local_model_id_from_path(path: &str) -> Option<&str> {
+pub(super) fn local_model_id_from_path(path: &str) -> Option<String> {
     [
         "/v1/models/",
         "/models/",
         "/openai/v1/models/",
         "/backend-api/codex/models/",
+        "/v1beta/models/",
+        "/v1alpha/models/",
     ]
     .iter()
     .find_map(|prefix| path.strip_prefix(prefix))
-    .filter(|id| !id.is_empty() && !id.contains('/'))
+    .and_then(|id| strict_percent_decode(id, false))
+    .filter(|id| {
+        !id.chars()
+            .any(|ch| ch.is_control() || matches!(ch, '?' | '#' | '\\' | '%'))
+            && id
+                .split('/')
+                .all(|segment| !segment.is_empty() && !matches!(segment, "." | ".."))
+            && (!is_gemini_models_tree(path)
+                || (!id.starts_with("models/") && crate::request_build::valid_gemini_model(id)))
+    })
 }
 
 #[derive(Clone)]
@@ -330,6 +340,15 @@ pub(super) fn anthropic_model_object(model: &LocalModelEntry) -> Value {
     })
 }
 
+fn gemini_model_object(model: &LocalModelEntry) -> Value {
+    json!({
+        "name": format!("models/{}", model.id),
+        "baseModelId": model.id,
+        "displayName": model.id,
+        "supportedGenerationMethods": ["generateContent", "streamGenerateContent"],
+    })
+}
+
 #[cfg(test)]
 pub(super) fn local_models_json(
     config: &AppConfig,
@@ -358,12 +377,42 @@ pub(super) fn local_models_json_with_capabilities(
             _ => None,
         });
     let requested_id = local_model_id_from_path(path);
-    let models = collect_local_models(config, requested_capability, requested_id, ledger);
+    let mut models = collect_local_models(
+        config,
+        requested_capability,
+        requested_id.as_deref(),
+        ledger,
+    );
+    let gemini = is_gemini_models_tree(path);
+    let user_agent = header_value(headers, "user-agent").unwrap_or("");
+    let grok_shell = user_agent.to_ascii_lowercase().contains("grok-shell");
+    let claude_cli = user_agent.starts_with("claude-cli/")
+        || header_value(headers, "anthropic-version").is_some();
+    if gemini {
+        models.retain(|model| {
+            model
+                .capabilities
+                .contains(&sumpter_core::capability::ModelCapability::Text)
+                && !model.id.starts_with("models/")
+                && crate::request_build::valid_gemini_model(&model.id)
+        });
+    }
     if let Some(id) = requested_id {
         let Some(model) = models.iter().find(|model| model.id == id) else {
             return Err(StatusCode::NOT_FOUND);
         };
-        return Ok(openai_model_object(model));
+        return Ok(if gemini {
+            gemini_model_object(model)
+        } else if grok_shell {
+            grok_model_object(model)
+        } else if claude_cli {
+            anthropic_model_object(model)
+        } else {
+            openai_model_object(model)
+        });
+    }
+    if gemini {
+        return Ok(json!({"models": models.iter().map(gemini_model_object).collect::<Vec<_>>()}));
     }
     if let Some(client_version) =
         query.and_then(|query| decoded_query_value(query, "client_version"))
@@ -375,10 +424,6 @@ pub(super) fn local_models_json_with_capabilities(
         }
         return Ok(payload);
     }
-    let user_agent = header_value(headers, "user-agent").unwrap_or("");
-    let grok_shell = user_agent.to_ascii_lowercase().contains("grok-shell");
-    let claude_cli = user_agent.starts_with("claude-cli/")
-        || header_value(headers, "anthropic-version").is_some();
     if grok_shell {
         return Ok(json!({
             "object": "list",

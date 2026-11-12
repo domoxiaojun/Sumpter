@@ -52,11 +52,6 @@ if [[ -f "$ROOT/../../../Cargo.toml" && -d "$ROOT/../../../crates" ]]; then
   REPO_ROOT="$(cd "$ROOT/../../.." && pwd -P)"
   RUST_DIR="$REPO_ROOT"
   DEFAULT_VERSION_SOURCE="$REPO_ROOT/Cargo.toml"
-  DEFAULT_CC_ATTRIBUTION_SCRIPT="$REPO_ROOT/platforms/macos/scripts/cc-project-attribution.sh"
-  DEFAULT_GROK_ATTRIBUTION_SCRIPT="$REPO_ROOT/platforms/macos/scripts/grok-project-attribution.sh"
-  DEFAULT_GEMINI_WRAPPER="$REPO_ROOT/platforms/macos/scripts/gemini-sumpter-wrapper.mjs"
-  DEFAULT_CLIENT_ATTRIBUTION="$REPO_ROOT/platforms/macos/scripts/client-attribution.mjs"
-  DEFAULT_PI_ATTRIBUTION="$REPO_ROOT/platforms/macos/scripts/pi-project-attribution.ts"
   SHARED_WORKSPACE=1
   SIDECAR_BIN="sumpterd-macos"
 else
@@ -65,11 +60,6 @@ else
   REPO_ROOT="$(cd "$ROOT/../.." && pwd -P)"
   RUST_DIR="$ROOT/.."
   DEFAULT_VERSION_SOURCE="$RUST_DIR/Cargo.toml"
-  DEFAULT_CC_ATTRIBUTION_SCRIPT="$REPO_ROOT/scripts/cc-project-attribution.sh"
-  DEFAULT_GROK_ATTRIBUTION_SCRIPT="$REPO_ROOT/scripts/grok-project-attribution.sh"
-  DEFAULT_GEMINI_WRAPPER="$REPO_ROOT/scripts/gemini-sumpter-wrapper.mjs"
-  DEFAULT_CLIENT_ATTRIBUTION="$REPO_ROOT/scripts/client-attribution.mjs"
-  DEFAULT_PI_ATTRIBUTION="$REPO_ROOT/scripts/pi-project-attribution.ts"
   SHARED_WORKSPACE=0
   SIDECAR_BIN="sumpterd-macos"
 fi
@@ -83,8 +73,6 @@ BUNDLE_ID="${BUNDLE_ID:-org.kkl.sumpter}"
 DIST_DIR="${DIST_DIR:-}"
 VERSION_SOURCE="${VERSION_SOURCE:-$DEFAULT_VERSION_SOURCE}"
 ICON_PATH="${ICON_PATH:-$ROOT/../icon.icns}"
-CC_ATTRIBUTION_SCRIPT="${CC_ATTRIBUTION_SCRIPT:-}"
-GROK_ATTRIBUTION_SCRIPT="${GROK_ATTRIBUTION_SCRIPT:-}"
 SHORT_VERSION="${SHORT_VERSION:-}"
 BUILD_VERSION="${BUILD_VERSION:-${BUILD_NUMBER:-1}}"
 SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-}"
@@ -161,16 +149,6 @@ fi
 if [[ "$DIST_DIR" != /* ]]; then DIST_DIR="$ROOT/$DIST_DIR"; fi
 if [[ "$VERSION_SOURCE" != /* ]]; then VERSION_SOURCE="$ROOT/$VERSION_SOURCE"; fi
 if [[ "$ICON_PATH" != /* ]]; then ICON_PATH="$ROOT/$ICON_PATH"; fi
-if [[ -z "$CC_ATTRIBUTION_SCRIPT" ]]; then
-  CC_ATTRIBUTION_SCRIPT="$DEFAULT_CC_ATTRIBUTION_SCRIPT"
-elif [[ "$CC_ATTRIBUTION_SCRIPT" != /* ]]; then
-  CC_ATTRIBUTION_SCRIPT="$ROOT/$CC_ATTRIBUTION_SCRIPT"
-fi
-if [[ -z "$GROK_ATTRIBUTION_SCRIPT" ]]; then
-  GROK_ATTRIBUTION_SCRIPT="$DEFAULT_GROK_ATTRIBUTION_SCRIPT"
-elif [[ "$GROK_ATTRIBUTION_SCRIPT" != /* ]]; then
-  GROK_ATTRIBUTION_SCRIPT="$ROOT/$GROK_ATTRIBUTION_SCRIPT"
-fi
 [[ "$DIST_DIR" != "/" && "$DIST_DIR" != "$ROOT" ]] \
   || die "DIST_DIR 不能是文件系统根或源码根目录: $DIST_DIR"
 
@@ -486,14 +464,6 @@ verify_app() {
   [[ -x "$sidecar" ]] || die "Sumpter sidecar 缺失或不可执行: $sidecar"
   [[ -f "$info" ]] || die "Info.plist 缺失: $info"
   [[ -f "$app/Contents/Resources/AppIcon.icns" ]] || die "App 图标缺失"
-  [[ -f "$app/Contents/Resources/cc-project-attribution.sh" ]] \
-    || die "CC 归因配置器未打进 App"
-  [[ -f "$app/Contents/Resources/grok-project-attribution.sh" ]] \
-    || die "Grok 归因配置器未打进 App"
-  [[ -f "$app/Contents/Resources/pi-project-attribution.ts" ]] || die "pi attribution extension missing"
-  [[ -f "$app/Contents/Resources/client-attribution.mjs" ]] || die "统一归因脚本未打进 App"
-  [[ -f "$app/Contents/Resources/gemini-sumpter-wrapper.mjs" ]] \
-    || die "Gemini CLI wrapper 未打进 App"
   [[ -f "$sparkle_bin" ]] || die "Sparkle 主二进制缺失: $sparkle_bin"
   "$PLUTIL_BIN" -lint "$info" >/dev/null
   executable_name="$("$PLUTIL_BIN" -extract CFBundleExecutable raw -o - "$info")"
@@ -539,10 +509,6 @@ cd "$ROOT"
 [[ -f "$ICON_PATH" ]] || die "未找到图标文件: $ICON_PATH"
 [[ -f "$INSTALL_COMMAND" && -f "$INSTALL_README" ]] \
   || die "DMG 安装说明或安装脚本缺失"
-[[ -f "$CC_ATTRIBUTION_SCRIPT" ]] \
-  || die "CC 归因配置器缺失: $CC_ATTRIBUTION_SCRIPT"
-[[ -f "$GROK_ATTRIBUTION_SCRIPT" ]] \
-  || die "Grok 归因配置器缺失: $GROK_ATTRIBUTION_SCRIPT"
 [[ -f "$RUST_DIR/Cargo.toml" ]] || die "macOS Rust workspace 缺失: $RUST_DIR/Cargo.toml"
 [[ -f "$ROOT/Package.swift" ]] || die "Swift Package.swift 缺失: $ROOT/Package.swift"
 
@@ -706,15 +672,6 @@ else
 fi
 
 "$DITTO_BIN" "$ICON_PATH" "$STAGED_RESOURCES/AppIcon.icns"
-"$DITTO_BIN" "$CC_ATTRIBUTION_SCRIPT" "$STAGED_RESOURCES/cc-project-attribution.sh"
-chmod 0755 "$STAGED_RESOURCES/cc-project-attribution.sh"
-"$DITTO_BIN" "$GROK_ATTRIBUTION_SCRIPT" "$STAGED_RESOURCES/grok-project-attribution.sh"
-chmod 0755 "$STAGED_RESOURCES/grok-project-attribution.sh"
-"$DITTO_BIN" "$DEFAULT_PI_ATTRIBUTION" "$STAGED_RESOURCES/pi-project-attribution.ts"
-"$DITTO_BIN" "$DEFAULT_CLIENT_ATTRIBUTION" "$STAGED_RESOURCES/client-attribution.mjs"
-chmod 0755 "$STAGED_RESOURCES/client-attribution.mjs"
-"$DITTO_BIN" "$DEFAULT_GEMINI_WRAPPER" "$STAGED_RESOURCES/gemini-sumpter-wrapper.mjs"
-chmod 0755 "$STAGED_RESOURCES/gemini-sumpter-wrapper.mjs"
 create_info_plist "$STAGED_CONTENTS/Info.plist"
 
 if [[ "$CODESIGN_IDENTITY" == "-" ]]; then

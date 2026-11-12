@@ -6,9 +6,7 @@ import { PaginationBar } from './PaginationBar.jsx';
 import { StatusBadge } from './StatusBadge.jsx';
 import { Icon } from '../utils/icons.jsx';
 import { api } from '../services/api.js';
-import { piAttributionState, PI_ATTRIBUTION_COPY } from '../utils/piAttribution.js';
-import { requestKindLabel, clientVariantLabel, agentRoleLabel, CC_ATTRIBUTION_HINT, formatDuration, formatTimestamp, formatTokenCount, normalizeTimestampMS, clientKindLabel, failureKindLabel, failurePhaseLabel, shouldPromptCCAttribution, projectLabelText, projectClientKindsLabel, projectSourceLabel, purposeLabel } from '../utils/helpers.js';
-import { copyWithToast } from '../utils/clipboard.js';
+import { requestKindLabel, clientVariantLabel, agentRoleLabel, formatDuration, formatTimestamp, formatTokenCount, normalizeTimestampMS, clientKindLabel, failureKindLabel, failurePhaseLabel, projectLabelText, projectClientKindsLabel, projectSourceLabel, purposeLabel } from '../utils/helpers.js';
 import { isRuntimeSnapshotError, normalizeRuntimePagedResult, observeRuntimeDay, persistRuntimeAnalyticsPageSize, readRuntimeAnalyticsPageSize, runtimeDimensionSortState, runtimeAnalyticsFilters, runtimeAppleTimestamp, runtimeCacheRate, runtimeCostAmount, runtimeDateTimeLocal, runtimeFilterValues, runtimeSnapshotFilters, runtimeTodayBounds, runtimePriceInput, runtimePriceMicros, runtimeV2ErrorMessage } from '../utils/runtimeAnalyticsV2.js';
 import { formatOutputTokensPerSecond, outputSpeedDetail } from '../utils/outputSpeed.js';
 
@@ -643,23 +641,7 @@ function AdvancedDiagnosticsPanel({ analytics, loading, error, onRetry }) {
   );
 }
 
-function CCAttributionHint({ addToast }) {
-  return (
-    <div className="runtime-v2-inline-hint" role="note">
-      <strong>{CC_ATTRIBUTION_HINT.title}</strong>
-      <p>{CC_ATTRIBUTION_HINT.message}</p>
-      <div className="runtime-v2-hint-command">
-        <code>{CC_ATTRIBUTION_HINT.command}</code>
-        <button
-          type="button"
-          className="btn btn-secondary btn-sm"
-          onClick={() => copyWithToast(CC_ATTRIBUTION_HINT.command, '配置命令', addToast)}
-        >复制命令</button>
-      </div>
-      <small>{CC_ATTRIBUTION_HINT.hint}</small>
-    </div>
-  );
-}
+
 
 function dimensionSuccessRate(row) {
   const completed = safeNumber(row?.successes) + safeNumber(row?.failures) + safeNumber(row?.cancelled);
@@ -684,9 +666,6 @@ function DimensionTable({ page, loading, onPageChange, onPageSizeChange, onSearc
   useEffect(() => setSearchDraft(page?.search || ''), [page?.search, kind]);
   if (!page) return null;
   const rows = page.rows || [];
-  // 提示只在项目维度出现:症状("未识别项目"行)就在这张表里。
-  const showAttributionHint = kind === 'project'
-    && shouldPromptCCAttribution(rows, clientKindFacets);
   const identityColumn = {
     title: dimensionLabel(kind), key: 'name', type: 'text', minWidth: '180px', sortable: true,
     render: (row) => <div className="runtime-v2-cell-stack"><strong className="runtime-v2-ellipsis" title={row.name}>{dimensionValueLabel(row.name, kind)}</strong><small>{kind === 'project' ? projectClientKindsLabel(row.clientKinds) : (kind === 'session' ? projectSourceLabel(row.source) : dimensionLabel(kind))}</small></div>,
@@ -760,11 +739,6 @@ function DimensionTable({ page, loading, onPageChange, onPageSizeChange, onSearc
   }
   return (
     <>
-      {showAttributionHint && <CCAttributionHint addToast={addToast} />}
-      {kind === 'project' && <div className="help-warning" data-pi-attribution={piAttributionState(rows)}>
-        <span>pi 项目归因：{PI_ATTRIBUTION_COPY[piAttributionState(rows)]} </span>
-        <a href="https://github.com/domoxiaojun/sumpter/blob/main/USAGE.md#pi-客户端" target="_blank" rel="noreferrer">接入说明</a>
-      </div>}
       <form className="runtime-v2-search-label" onSubmit={(event) => { event.preventDefault(); if (!loading) onSearchSubmit(searchDraft.trim()); }}>
         <label htmlFor={`runtime-v2-${kind}-search`}>搜索{dimensionLabel(kind)}</label>
         <div className="runtime-v2-search-controls">

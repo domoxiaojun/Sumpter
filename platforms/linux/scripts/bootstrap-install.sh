@@ -33,9 +33,6 @@ usage() {
 从 GitHub Release 下载当前 Linux 架构的 sumpter 发布包，再运行包内安装器。
 默认地址: https://github.com/domoxiaojun/sumpter/releases/latest/download
 下载路径: <base-url>/sumpter-linux-<x86_64|aarch64>.tar.gz
-归因配置器也随包安装到 `/opt/sumpter/scripts/`（普通用户安装则在
-`~/.local/share/sumpter/scripts/`）。客户端主机也可从仓库 raw 下载统一安装器：
-https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/setup-client-attribution.sh
 
 需要钉死版本时，请使用 scripts/install.sh --repo domoxiaojun/sumpter [--version vX.Y.Z]，
 不要把 --repo/--version 加在本脚本后。
@@ -47,8 +44,7 @@ https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scrip
 其余参数原样传给包内 scripts/install.sh，例如（高级路径覆盖）:
   --admin-password-file /absolute/path/admin-password
 
-注意：这里的 `--base-url` 只用于下载 Linux 发布包。归因脚本默认从 GitHub 仓库 raw 获取，
-与本引导安装器的发布包地址不是同一个 URL。
+注意：这里的 `--base-url` 只用于下载 Linux 发布包。
 
 示例:
   bash sumpter-install.sh
@@ -224,10 +220,6 @@ package_root="$WORK_DIR/extracted/$package_name"
     || die "发布包缺少顶层目录:$package_name"
 [[ -f "$package_root/scripts/install.sh" && ! -L "$package_root/scripts/install.sh" ]] \
     || die "发布包缺少包内安装器:scripts/install.sh"
-[[ -f "$package_root/scripts/cc-project-attribution.sh" && ! -L "$package_root/scripts/cc-project-attribution.sh" ]] \
-    || die "发布包缺少 Claude Code 项目归因配置器:scripts/cc-project-attribution.sh"
-[[ -f "$package_root/scripts/grok-project-attribution.sh" && ! -L "$package_root/scripts/grok-project-attribution.sh" ]] \
-    || die "发布包缺少 Grok Build 项目归因配置器:scripts/grok-project-attribution.sh"
 
 # 首次安装时，包内安装器会先探测旧 unit 的状态。Fedora/systemd 对不存在的
 # unit 会把这条正常探测结果写到 stderr；只过滤这一条固定文案，保留安装器的

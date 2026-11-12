@@ -134,6 +134,10 @@ struct SecurityPane: View {
     @State private var draftPort = ""
     @State private var draftCIDRs = ""
     @State private var draftTrustedProxies = ""
+    @State private var draftTLSEnabled = false
+    @State private var draftHTTPSPort = "57880"
+    @State private var draftCertificatePath = ""
+    @State private var draftPrivateKeyPath = ""
     @State private var draftLoaded = false
     @State private var listenerError: String?
     @State private var confirmRestartListener = false
@@ -142,9 +146,9 @@ struct SecurityPane: View {
     var body: some View {
         SettingsPage(title: SettingsSection.security.title, subtitle: SettingsSection.security.subtitle) {
             InboundTokensPanel(model: model)
+            ClientIdentityPanel(model: model)
             listenerPanel
             launchPanel
-            UnifiedAttributionPanel(model: model)
         }
         .onAppear { loadDraftIfNeeded() }
         // 外部变更(/__reload 或手改文件)后同步草稿,避免拿旧值覆盖。
@@ -171,6 +175,21 @@ struct SecurityPane: View {
                 FormLine(title: "Port") {
                     TextField("57878", text: $draftPort)
                         .frame(width: 120)
+                }
+                Toggle("启用 HTTPS / WSS", isOn: $draftTLSEnabled)
+                if draftTLSEnabled {
+                    FormLine(title: "HTTPS Port") {
+                        TextField("57880", text: $draftHTTPSPort).frame(width: 120)
+                    }
+                    FormLine(title: "证书链 PEM") {
+                        TextField("证书链的绝对路径", text: $draftCertificatePath)
+                    }
+                    FormLine(title: "私钥 PEM") {
+                        TextField("未加密私钥的绝对路径", text: $draftPrivateKeyPath)
+                    }
+                    Text("HTTPS 使用独立端口，HTTP 继续可用。允许自签名，不额外检查证书信任、域名或有效期；TLS 库仍需可加载的证书及匹配私钥。客户端的证书校验由客户端决定。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 FormLine(title: "CIDR") {
                     TextField("192.168.31.0/24, 10.0.0.0/8", text: $draftCIDRs)
@@ -222,6 +241,10 @@ struct SecurityPane: View {
         draftPort = String(model.config.listener.port)
         draftCIDRs = model.config.listener.allowedCIDRs.joined(separator: ", ")
         draftTrustedProxies = model.config.listener.trustedProxyCIDRs.joined(separator: ", ")
+        draftTLSEnabled = model.config.listener.tls?.enabled ?? false
+        draftHTTPSPort = String(model.config.listener.tls?.port ?? 57_880)
+        draftCertificatePath = model.config.listener.tls?.certificatePath ?? ""
+        draftPrivateKeyPath = model.config.listener.tls?.privateKeyPath ?? ""
         listenerError = nil
     }
 
@@ -230,6 +253,10 @@ struct SecurityPane: View {
             || parsedTrustedProxies != model.config.listener.trustedProxyCIDRs
             || draftHost != model.config.listener.host
             || draftPort != String(model.config.listener.port)
+            || draftTLSEnabled != (model.config.listener.tls?.enabled ?? false)
+            || draftHTTPSPort != String(model.config.listener.tls?.port ?? 57_880)
+            || draftCertificatePath != (model.config.listener.tls?.certificatePath ?? "")
+            || draftPrivateKeyPath != (model.config.listener.tls?.privateKeyPath ?? "")
     }
 
     /// 逗号/空白分隔;保留用户输入顺序,过滤空片段(输入中途的尾随逗号不再被吞)。
@@ -261,6 +288,13 @@ struct SecurityPane: View {
         guard (1...65535).contains(port) else {
             return "Port 必须在 1-65535 之间"
         }
+        var listener = model.config.listener
+        if draftTLSEnabled && Int(draftHTTPSPort.trimmingCharacters(in: .whitespaces)) == nil {
+            return "HTTPS Port 必须是数字"
+        }
+        listener.port = port
+        listener.tls = draftTLS
+        do { try listener.validateTLS() } catch { return error.localizedDescription }
         for cidr in parsedCIDRs where !ClientAccessControl.isValidCIDR(cidr) {
             return "CIDR 格式不正确:\(cidr)"
         }
@@ -289,8 +323,17 @@ struct SecurityPane: View {
             host: draftHost.trimmingCharacters(in: .whitespaces),
             port: Int(draftPort.trimmingCharacters(in: .whitespaces)) ?? model.config.listener.port,
             allowedCIDRs: parsedCIDRs,
-            trustedProxyCIDRs: parsedTrustedProxies
+            trustedProxyCIDRs: parsedTrustedProxies,
+            tls: draftTLS
         )
+    }
+
+    private var draftTLS: ListenerTLSConfig? {
+        if !draftTLSEnabled && draftCertificatePath.isEmpty && draftPrivateKeyPath.isEmpty { return nil }
+        return ListenerTLSConfig(enabled: draftTLSEnabled,
+                                 port: Int(draftHTTPSPort.trimmingCharacters(in: .whitespaces)) ?? 57_880,
+                                 certificatePath: draftCertificatePath.trimmingCharacters(in: .whitespacesAndNewlines),
+                                 privateKeyPath: draftPrivateKeyPath.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     private static func isLoopback(_ host: String) -> Bool {
@@ -542,6 +585,7 @@ struct DiagnosticsPane: View {
     @State private var pendingRawDetailAction: CaptureJSONAction?
     @State private var detailLoadRequestedID: String?
     @State private var diagnosticExportPrivacy = "raw"
+    @State private var diagnosticMaxParseMiB = 64
     @State private var confirmRawCaptureExport = false
 
     private enum CaptureJSONAction {
@@ -559,7 +603,6 @@ struct DiagnosticsPane: View {
 
     var body: some View {
         SettingsPage(title: SettingsSection.diagnostics.title, subtitle: SettingsSection.diagnostics.subtitle) {
-            ClientConnectionDiagnostics(model: model)
             diagnosticCapturePanel
             diagnosticsPanel
             claudeSettingsPanel
@@ -914,11 +957,16 @@ struct DiagnosticsPane: View {
             Text("脱敏副本").tag("redacted")
         }
         .labelsHidden()
+        if diagnosticExportPrivacy == "redacted" {
+            Stepper("JSON / 单个 SSE 事件：\(diagnosticMaxParseMiB) MiB", value: $diagnosticMaxParseMiB, in: 1...256)
+            Text("SSE 逐事件脱敏；解析失败或截断时省略正文并说明原因。规则不能识别所有自然语言机密，分享前需检查。")
+                .font(.caption).foregroundStyle(.secondary)
+        }
         Button {
             if diagnosticExportPrivacy == "raw" {
                 confirmRawCaptureExport = true
             } else {
-                model.exportDiagnosticCapture(privacy: "redacted")
+                model.exportDiagnosticCapture(privacy: "redacted", maxParseMib: diagnosticMaxParseMiB)
             }
         } label: {
             Label(diagnosticExportPrivacy == "raw" ? "导出源数据…" : "导出脱敏副本", systemImage: "arrow.down.doc")

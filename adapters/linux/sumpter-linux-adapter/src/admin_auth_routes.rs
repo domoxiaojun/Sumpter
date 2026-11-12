@@ -134,6 +134,7 @@ pub(crate) async fn auth_session(State(state): State<AdminState>, headers: Heade
 
 pub(crate) async fn auth_login(
     State(state): State<AdminState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     payload: JsonPayload<LoginBody>,
 ) -> Response {
@@ -147,6 +148,18 @@ pub(crate) async fn auth_login(
             "invalid_credentials",
             "用户名或密码格式无效",
         );
+    }
+    if let Err(seconds) = state.inner.admin_auth.admit_login(peer.ip()) {
+        let mut response = api_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "login_rate_limited",
+            &format!("登录尝试过于频繁，请等待 {seconds} 秒后重试"),
+        );
+        response.headers_mut().insert(
+            header::RETRY_AFTER,
+            header::HeaderValue::from_str(&seconds.to_string()).expect("seconds"),
+        );
+        return response;
     }
     let secure_cookie = request_uses_https(&headers);
     let grant = match state

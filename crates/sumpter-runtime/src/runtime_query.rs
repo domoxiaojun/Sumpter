@@ -115,6 +115,8 @@ pub type QueryResult<T> = Result<T, RuntimeQueryError>;
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeFilter {
+    #[serde(skip)]
+    pub reporting_aliases: BTreeMap<String, String>,
     #[serde(rename = "inboundTokenID", skip_serializing_if = "Option::is_none")]
     pub inbound_token_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -196,6 +198,26 @@ pub struct AnalyticsAppliedFilters {
 }
 
 impl RuntimeFilter {
+    pub fn reported_client_expression(&self) -> String {
+        if self.reporting_aliases.is_empty() {
+            return "client_kind".into();
+        }
+        let aliases: BTreeMap<_, _> = self
+            .reporting_aliases
+            .iter()
+            .filter(|(k, v)| {
+                sumpter_core::client_registry::valid_product(k)
+                    && sumpter_core::client_attribution::client(v).is_some()
+            })
+            .collect();
+        let json = serde_json::to_string(&aliases)
+            .unwrap_or_else(|_| "{}".into())
+            .replace("'", "''");
+        format!(
+            "COALESCE((SELECT value FROM json_each('{json}') WHERE key=COALESCE(CASE WHEN json_valid(client_attribution_json) THEN json_extract(client_attribution_json,'$.identity.product') END,client_kind) LIMIT 1),client_kind)"
+        )
+    }
+
     fn has_agent_filter(&self) -> bool {
         self.request_kind.is_some()
             || self.client_variant.is_some()
@@ -233,6 +255,7 @@ impl RuntimeFilter {
             ));
         }
         Ok(Self {
+            reporting_aliases: self.reporting_aliases.clone(),
             inbound_token_id: string(&self.inbound_token_id, "inboundTokenID")?,
             request_kind: string(&self.request_kind, "requestKind")?,
             kind: string(&self.kind, "kind")?,
@@ -1713,6 +1736,7 @@ impl CostAccumulator {
 
 #[derive(Default, Clone)]
 struct SqlFilter {
+    client_expression: Option<String>,
     clauses: Vec<String>,
     values: Vec<SqlValue>,
 }
@@ -1773,7 +1797,13 @@ fn append_runtime_filter(builder: &mut SqlFilter, filter: &RuntimeFilter) {
     builder.eq_text(INBOUND_TOKEN_ID_SQL, filter.inbound_token_id.as_deref());
     builder.eq_text("kind", filter.kind.as_deref());
     builder.eq_text("outcome", filter.outcome.as_deref());
-    builder.eq_text("client_kind", filter.client_kind.as_deref());
+    builder.client_expression = Some(filter.reported_client_expression());
+    if let Some(value) = &filter.client_kind {
+        builder.text_values(
+            format!("{} = ?", filter.reported_client_expression()),
+            [value.clone()],
+        );
+    }
     builder.eq_text(
         "COALESCE(client_variant,'unknown')",
         filter.client_variant.as_deref(),

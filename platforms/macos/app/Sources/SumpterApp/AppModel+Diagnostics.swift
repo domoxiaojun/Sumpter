@@ -109,9 +109,11 @@ extension AppModel {
         confirmRaw: Bool = false,
         format: String = "jsonl",
         scope: String = "all",
-        requestID: String? = nil
+        requestID: String? = nil,
+        maxParseMib: Int = 64
     ) {
         guard !diagnosticCaptureExportBusy else { return }
+        guard (1...256).contains(maxParseMib) else { flash("脱敏解析上限必须为 1–256 MiB"); return }
         guard let admin, (diagnosticCapture?.recordCount ?? 0) > 0 else {
             flash("暂无可导出的诊断捕获")
             return
@@ -147,7 +149,8 @@ extension AppModel {
                         confirmRaw: confirmRaw,
                         scope: scope,
                         format: format,
-                        requestID: requestID
+                        requestID: requestID,
+                        maxParseMib: maxParseMib
                     )
                 }
                 try await withTaskCancellationHandler(operation: {

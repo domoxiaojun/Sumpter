@@ -118,10 +118,10 @@ where
     if query.format == ExportFormat::Csv {
         let header = match query.scope {
             ExportScope::Events if query.privacy == ExportPrivacy::Stored => {
-                "seq,changeSeq,eventID,requestID,timestamp,kind,payloadJSON\n"
+                "seq,changeSeq,eventID,requestID,timestamp,kind,payloadJSON,reportedClientKind\n"
             }
             ExportScope::Events => {
-                "seq,changeSeq,eventID,requestID,timestamp,kind,outcome,statusCode,clientKind,requestPurpose,requestKind,clientAttribution,endpointID,endpointName,model,projectID,projectName,sessionID,failureKind,failurePhase,upstreamStatusCode,durationMS,ttfbMS,failover,inputTokens,outputTokens,cacheReadInputTokens,cacheCreationInputTokens,reasoningTokens,processedInputTokens,processedTotalTokens,clientVariant,agentRole,agentName,parentThreadID,parentTurnID,rootTurnID,inboundTokenID,inboundTokenName\n"
+                "seq,changeSeq,eventID,requestID,timestamp,kind,outcome,statusCode,clientKind,requestPurpose,requestKind,clientAttribution,endpointID,endpointName,model,projectID,projectName,sessionID,failureKind,failurePhase,upstreamStatusCode,durationMS,ttfbMS,failover,inputTokens,outputTokens,cacheReadInputTokens,cacheCreationInputTokens,reasoningTokens,processedInputTokens,processedTotalTokens,clientVariant,agentRole,agentName,parentThreadID,parentTurnID,rootTurnID,inboundTokenID,inboundTokenName,reportedClientKind\n"
             }
             ExportScope::Projects | ExportScope::Sessions => {
                 "key,name,source,requests,successes,failures,cancelled,failovers,inputTokens,outputTokens,cacheReadInputTokens,cacheCreationInputTokens,processedTotalTokens,firstSeen,lastSeen,relatedCount,workspacePaths\n"
@@ -283,13 +283,28 @@ where
 }
 
 fn export_event_bytes(event: &ExportEventRow, query: &ExportQuery) -> QueryResult<Vec<u8>> {
+    let attribution = event
+        .client_attribution_json
+        .as_deref()
+        .and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok());
+    let product = attribution
+        .as_ref()
+        .and_then(|v| v.pointer("/identity/product"))
+        .and_then(serde_json::Value::as_str)
+        .or(event.client_kind.as_deref());
+    let reported = product
+        .and_then(|p| query.filter.reporting_aliases.get(p))
+        .map(String::as_str)
+        .or(event.client_kind.as_deref())
+        .unwrap_or("");
+    let safe_attribution = redact_identity(attribution, query.privacy);
     let event_id = match query.privacy {
         ExportPrivacy::Redacted => stable_mask("event", &event.event_id),
         ExportPrivacy::Stored => event.event_id.clone(),
     };
     let request_id = redact_optional("request", event.request_id.as_deref(), query.privacy);
     if query.format == ExportFormat::Jsonl {
-        let value = if query.privacy == ExportPrivacy::Stored {
+        let mut value = if query.privacy == ExportPrivacy::Stored {
             let payload_json =
                 event
                     .payload_json
@@ -333,7 +348,7 @@ fn export_event_bytes(event: &ExportEventRow, query: &ExportQuery) -> QueryResul
                 "processedInputTokens": event.processed_input_tokens,
                 "processedTotalTokens": event.processed_total_tokens,
                 "requestKind": event.request_kind,
-                "clientAttribution": event.client_attribution_json.as_deref().and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok()),
+                "clientAttribution": safe_attribution,
                 "inboundTokenID": event.inbound_token_id,
                 "inboundTokenName": event.inbound_token_name,
                 "clientVariant": event.client_variant,
@@ -345,12 +360,13 @@ fn export_event_bytes(event: &ExportEventRow, query: &ExportQuery) -> QueryResul
 
             })
         };
+        value["reportedClientKind"] = serde_json::Value::String(reported.into());
         let mut bytes = serde_json::to_vec(&value)
             .map_err(|error| RuntimeQueryError::Output(error.to_string()))?;
         bytes.push(b'\n');
         return Ok(bytes);
     }
-    let fields = if query.privacy == ExportPrivacy::Stored {
+    let mut fields = if query.privacy == ExportPrivacy::Stored {
         vec![
             event.seq.to_string(),
             event.change_seq.to_string(),
@@ -373,7 +389,7 @@ fn export_event_bytes(event: &ExportEventRow, query: &ExportQuery) -> QueryResul
             event.client_kind.clone().unwrap_or_default(),
             event.request_purpose.clone().unwrap_or_default(),
             event.request_kind.clone().unwrap_or_default(),
-            event.client_attribution_json.clone().unwrap_or_default(),
+            safe_attribution.map(|v| v.to_string()).unwrap_or_default(),
             event.endpoint_id.clone().unwrap_or_default(),
             event.endpoint_name.clone().unwrap_or_default(),
             event.effective_model.clone().unwrap_or_default(),
@@ -408,7 +424,13 @@ fn export_event_bytes(event: &ExportEventRow, query: &ExportQuery) -> QueryResul
             event.inbound_token_name.clone().unwrap_or_default(),
         ]
     };
-    Ok(csv_line(fields).into_bytes())
+    fields.push(reported.into());
+    let scalars: &[usize] = if query.privacy == ExportPrivacy::Stored {
+        &[0, 1, 4]
+    } else {
+        &[0, 1, 4, 7, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+    };
+    Ok(csv_line(typed_csv_fields(fields, scalars)).into_bytes())
 }
 
 fn stream_dimension_rows<F>(
@@ -490,7 +512,11 @@ where
             workspace_paths,
         ];
         let bytes = if query.format == ExportFormat::Csv {
-            csv_line(fields).into_bytes()
+            csv_line(typed_csv_fields(
+                fields,
+                &[3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+            ))
+            .into_bytes()
         } else {
             let value = serde_json::json!({
                 "key": fields[0], "name": fields[1], "source": fields[2],
@@ -540,15 +566,47 @@ fn option_csv<T: ToString>(value: Option<T>) -> String {
     value.map(|value| value.to_string()).unwrap_or_default()
 }
 
-fn csv_line(fields: Vec<String>) -> String {
+enum CsvCell {
+    Text(String),
+    Scalar(String),
+}
+
+// Types follow the fixed export column schemas, never the appearance of an
+// untrusted string: a text value "-1" still requires spreadsheet protection.
+fn typed_csv_fields(fields: Vec<String>, scalar_columns: &[usize]) -> Vec<CsvCell> {
+    fields
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| {
+            if scalar_columns.contains(&index) {
+                CsvCell::Scalar(value)
+            } else {
+                CsvCell::Text(value)
+            }
+        })
+        .collect()
+}
+
+fn csv_line(fields: Vec<CsvCell>) -> String {
     let mut line = fields
         .into_iter()
-        .map(|value| {
+        .map(|field| {
+            let mut value = match field {
+                CsvCell::Scalar(value) => value,
+                CsvCell::Text(mut value) => {
+                    let start = value.trim_start_matches(|c: char| {
+                        c.is_whitespace() || c.is_control() || matches!(c, '\u{feff}' | '\u{00ad}' | '\u{061c}' | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{206f}')
+                    });
+                    if start.starts_with(['=', '+', '-', '@', '＝', '＋', '－', '＠']) {
+                        value.insert(0, '\'');
+                    }
+                    value
+                }
+            };
             if value.contains([',', '"', '\n', '\r']) {
-                format!("\"{}\"", value.replace('"', "\"\""))
-            } else {
-                value
+                value = format!("\"{}\"", value.replace('"', "\"\""));
             }
+            value
         })
         .collect::<Vec<_>>()
         .join(",");
@@ -562,4 +620,66 @@ where
 {
     *bytes_written = bytes_written.saturating_add(bytes.len() as u64);
     sink(bytes).map_err(RuntimeQueryError::Output)
+}
+
+#[cfg(test)]
+mod csv_security_tests {
+    use super::*;
+    #[test]
+    fn text_formula_prefixes_and_csv_escaping_are_independent_of_numbers() {
+        for text in [
+            "=1+1",
+            "+cmd",
+            "-1",
+            "@SUM(A1)",
+            "  \t\r=1",
+            "\u{feff}＝1",
+            "\u{202e}\u{200b}=1",
+            "＋1",
+            "－1",
+            "＠SUM(A1)",
+        ] {
+            let encoded = csv_line(vec![CsvCell::Text(text.into())]);
+            assert!(
+                encoded.starts_with("'") || encoded.starts_with("\"'"),
+                "{encoded:?}"
+            );
+        }
+        assert_eq!(
+            csv_line(vec![
+                CsvCell::Scalar("-1".into()),
+                CsvCell::Text("-1".into())
+            ]),
+            "-1,'-1\n"
+        );
+        assert_eq!(
+            csv_line(vec![CsvCell::Text("=SUM(1,\"2\")".into())]),
+            "\"'=SUM(1,\"\"2\"\")\"\n"
+        );
+        assert_eq!(
+            csv_line(vec![CsvCell::Text("hello\nworld".into())]),
+            "\"hello\nworld\"\n"
+        );
+    }
+}
+
+fn redact_identity(
+    mut value: Option<serde_json::Value>,
+    privacy: ExportPrivacy,
+) -> Option<serde_json::Value> {
+    if privacy == ExportPrivacy::Redacted
+        && let Some(identity) = value
+            .as_mut()
+            .and_then(|v| v.pointer_mut("/identity"))
+            .and_then(serde_json::Value::as_object_mut)
+    {
+        for field in ["agentId", "parentAgentId", "sessionId"] {
+            if let Some(v) = identity.get_mut(field)
+                && let Some(text) = v.as_str()
+            {
+                *v = serde_json::Value::String(stable_mask(field, text));
+            }
+        }
+    }
+    value
 }

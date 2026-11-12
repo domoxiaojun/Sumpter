@@ -47,7 +47,7 @@ test('shared onboarding facts stay in both USAGE files', () => {
   // 避免只更新一侧（历史上 randomSticky、Live 选路与 Gemini wrapper 就只写了一侧）。
   const topics = [
     'randomSticky', 'roundRobinSticky', 'failoverTimeoutSeconds', 'passThroughRetryDelay',
-    'no_live_provider', 'X-Sumpter-Workspace', 'gemini-sumpter-wrapper.mjs', 'overrides',
+    'no_live_provider', 'X-Sumpter-Workspace', 'GOOGLE_GEMINI_BASE_URL', 'overrides',
   ];
   for (const path of ['USAGE.md', 'platforms/linux/USAGE.md']) {
     const document = text(path);

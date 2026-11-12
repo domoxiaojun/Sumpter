@@ -3,6 +3,7 @@
 //! protocol-specific normalization preserves the existing transport contract.
 
 use super::Engine;
+use super::catalog::is_gemini_models_tree;
 use super::catalog::is_local_models_path;
 use super::catalog::local_models_response;
 use super::context::ClientOut;
@@ -108,11 +109,8 @@ pub fn header_pairs(headers: &HeaderMap) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Bounded request bodies keep parsing and protocol conversion from becoming
-/// an unaccounted memory allocation. Large contexts can still use 64 MiB;
-/// callers exceeding it receive a deterministic 413 before JSON conversion.
-pub const MAX_BODY_BYTES: usize = 128 * 1024 * 1024;
-const MAX_DECOMPRESSED_BODY_BYTES: usize = MAX_BODY_BYTES;
+/// Default body limit. Live requests use their ingress policy snapshot.
+pub const MAX_BODY_BYTES: usize = 256 * 1024 * 1024;
 /// Gemini 入站的公共约束:模型操作必须 POST、凭据不能走 query。
 /// 会话与辅助操作共用,避免两条路径的判定漂移。
 fn gemini_request_error(method: &str, path_and_query: &str) -> Option<(i64, &'static str)> {
@@ -207,6 +205,7 @@ impl Engine {
             );
         }
         let context = self.inbound_request_context(remote, method, path_and_query, &headers);
+        let _cancel_on_drop = context.resources.cancel.clone().drop_guard();
         INBOUND_REQUEST_CONTEXT
             .scope(
                 RefCell::new(context),
@@ -222,6 +221,8 @@ impl Engine {
         path_and_query: &str,
         headers: &[(String, String)],
     ) -> InboundRequestContext {
+        let config = self.config();
+        let inbound_token = super::context::matched_inbound_token(headers, &config.listener);
         let path = bounded_request_path(path_without_query(path_and_query));
         let client_kind = detect_client_kind(headers, true);
         let query_model = path_and_query
@@ -230,6 +231,11 @@ impl Engine {
         let route_intent =
             route_intent_for_path(method, path_and_query, query_model.as_deref(), client_kind);
         InboundRequestContext {
+            identity_settings: config.listener.client_identity.clone(),
+            resources: crate::ingress::RequestResources::new(
+                config.request_policy.ingress.clone(),
+                &self.inner.ingress,
+            ),
             public_origin: header_value(headers, "host").and_then(|host| {
                 let config = self.config();
                 let trusted = remote.is_some_and(|peer| {
@@ -250,16 +256,21 @@ impl Engine {
                     && url.fragment().is_none())
                 .then(|| url.origin().ascii_serialization())
             }),
-            inbound_token: super::context::matched_inbound_token(headers, &self.config().listener),
-            attribution: Some(sumpter_core::client_attribution::observe(
-                method, &path, headers, None,
+            inbound_token: inbound_token.clone(),
+            attribution: Some(sumpter_core::client_attribution::observe_configured(
+                method,
+                &path,
+                headers,
+                None,
+                &config.listener.client_identity,
+                inbound_token.as_ref(),
             )),
             // 事件来源在入口只算一次:X-Real-IP / X-Forwarded-For 声明的客户端替换
-            // TCP 对端,没有合法头时仍是对端。鉴权、白名单与 /__status 继续用 `remote`。
+            // TCP 对端,没有合法头时仍是对端。鉴权、白名单与 /__status 的网络边界继续用 `remote`。
             source_ip: access::resolve_client_ip_text(
                 remote,
                 headers,
-                &self.config().listener.trusted_proxy_cidrs,
+                &config.listener.trusted_proxy_cidrs,
             ),
             session_source: super::context::observed_session(headers)
                 .map(|(_, source)| source.to_owned()),
@@ -301,6 +312,9 @@ impl Engine {
             return error_response(StatusCode::FORBIDDEN, &[("error", "client_forbidden")]);
         }
 
+        if crate::http_headers::is_admin_path(path) {
+            return error_response(StatusCode::NOT_FOUND, &[("error", "not_found")]);
+        }
         // Transport negotiation is local, before body reads and provider routing.
         // A 426 selects the client's HTTP/SSE fallback and is not an inference.
         if method.eq_ignore_ascii_case("GET")
@@ -363,31 +377,49 @@ impl Engine {
                 .await;
         }
 
-        // `/__status` is the one control read shared by both binaries.  Its
-        // policy (loopback on Linux, loopback-or-control-token on macOS) is
-        // injected by the platform file; no platform branch appears in the
-        // request router below.
-        if path == "/__status"
-            && self.inner.platform.authorize_status(&ControlRequestMeta {
+        // `/__status` is the one control read shared by both binaries.  The
+        // platform policy (loopback on Linux, loopback-or-control-token on
+        // macOS) still uses the TCP peer.  A configured inbound token is
+        // required after that, including for loopback, because a same-host
+        // reverse proxy would otherwise look like loopback.
+        if path == "/__status" {
+            if self.inner.platform.authorize_status(&ControlRequestMeta {
                 remote_ip: remote,
                 query,
                 headers: &headers,
             }) == AccessDecision::Deny
-        {
-            self.record_rejected_client_with_metadata(
-                403,
-                self.inner.platform.status_denied_error(),
-                None,
-                Some(RequestPurpose::Standard),
-                detect_client_kind(&headers, true),
-                CodexMetadata::from_request(&headers, None),
-                ClientDeclaredMetadata::from_headers(&headers),
-                Some(ProviderProtocol::OpenAI),
-            );
-            return error_response(
-                StatusCode::FORBIDDEN,
-                &[("error", self.inner.platform.status_denied_error())],
-            );
+            {
+                self.record_rejected_client_with_metadata(
+                    403,
+                    self.inner.platform.status_denied_error(),
+                    None,
+                    Some(RequestPurpose::Standard),
+                    detect_client_kind(&headers, true),
+                    CodexMetadata::from_request(&headers, None),
+                    ClientDeclaredMetadata::from_headers(&headers),
+                    Some(ProviderProtocol::OpenAI),
+                );
+                return error_response(
+                    StatusCode::FORBIDDEN,
+                    &[("error", self.inner.platform.status_denied_error())],
+                );
+            }
+            if config.listener.has_inbound_auth() && !inbound_auth_ok(&headers, &config.listener) {
+                self.record_rejected_client_with_metadata(
+                    401,
+                    message_tokens::INBOUND_AUTH_REQUIRED,
+                    None,
+                    Some(RequestPurpose::Standard),
+                    detect_client_kind(&headers, true),
+                    CodexMetadata::from_request(&headers, None),
+                    ClientDeclaredMetadata::from_headers(&headers),
+                    Some(ProviderProtocol::OpenAI),
+                );
+                return error_response(
+                    StatusCode::UNAUTHORIZED,
+                    &[("error", "inbound_auth_required")],
+                );
+            }
         }
 
         // Runtime persistence is an observability sink. Its bounded queue may
@@ -423,9 +455,18 @@ impl Engine {
         // Claim the complete models route tree here. Otherwise POST
         // `/v1/models` and malformed nested paths fall through to the generic
         // resource/raw dispatcher and can leak a request to a Provider.
-        if is_openai_resource_tree(path, "models")
+        // Gemini discovery uses the same configured directory by default.
+        // An explicit endpoint selector retains the native project catalog.
+        let local_gemini_catalog = is_gemini_models_tree(path)
+            && header_value(&headers, "x-sumpter-endpoint-id").is_none();
+        if (is_openai_resource_tree(path, "models") || local_gemini_catalog)
             && !super::protocol::is_gemini_generate_path(path)
         {
+            let catalog_protocol = if local_gemini_catalog {
+                ProviderProtocol::Gemini
+            } else {
+                ProviderProtocol::OpenAI
+            };
             if config.listener.has_inbound_auth() && !inbound_auth_ok(&headers, &config.listener) {
                 let client_kind = detect_client_kind(&headers, true);
                 self.record_rejected_client_with_metadata(
@@ -436,11 +477,25 @@ impl Engine {
                     client_kind,
                     CodexMetadata::from_request(&headers, None),
                     ClientDeclaredMetadata::from_headers(&headers),
-                    Some(ProviderProtocol::OpenAI),
+                    Some(catalog_protocol),
                 );
                 return error_response(
                     StatusCode::UNAUTHORIZED,
                     &[("error", "inbound_auth_required")],
+                );
+            }
+            if local_gemini_catalog
+                && query.is_some_and(|query| decoded_query_value(query, "key").is_some())
+            {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    &[
+                        ("error", "invalid_gemini_request"),
+                        (
+                            "message",
+                            "use x-goog-api-key or Bearer for inbound authentication, not a query key",
+                        ),
+                    ],
                 );
             }
             if !is_local_models_path(path) {
@@ -452,7 +507,7 @@ impl Engine {
                     detect_client_kind(&headers, true),
                     CodexMetadata::from_request(&headers, None),
                     ClientDeclaredMetadata::from_headers(&headers),
-                    Some(ProviderProtocol::OpenAI),
+                    Some(catalog_protocol),
                 );
                 return error_response(
                     StatusCode::NOT_FOUND,
@@ -468,7 +523,7 @@ impl Engine {
                     detect_client_kind(&headers, true),
                     CodexMetadata::from_request(&headers, None),
                     ClientDeclaredMetadata::from_headers(&headers),
-                    Some(ProviderProtocol::OpenAI),
+                    Some(catalog_protocol),
                 );
                 return method_not_allowed_response("GET");
             }
@@ -503,16 +558,16 @@ impl Engine {
             && (!config.listener.has_inbound_auth() || inbound_auth_ok(&headers, &config.listener))
         {
             let decoded = match read_inbound_body(body).await {
-                Ok(bytes) => {
-                    tokio::task::spawn_blocking(move || decode_inference_body(&bytes, &encoding))
-                        .await
-                        .unwrap_or(Err("request_decompression_failed"))
-                }
-                Err(_) => Err("request_body_read_failed"),
+                Ok(bytes) => decode_inference_body_async(bytes, encoding).await,
+                Err(error) => Err(error),
             };
             match decoded {
                 Ok(bytes) => {
-                    body = Body::from(bytes);
+                    // Reuse the decoded owner; never read/copy or charge it twice.
+                    INBOUND_REQUEST_CONTEXT.with(|context| {
+                        *context.borrow().resources.decoded.lock().unwrap() = Some(bytes);
+                    });
+                    body = Body::empty();
                     headers.retain(|(name, _)| {
                         !name.eq_ignore_ascii_case("content-encoding")
                             && !name.eq_ignore_ascii_case("content-length")
@@ -795,7 +850,8 @@ impl Engine {
 
     fn handle_status(&self, config: &AppConfig) -> Response {
         let state = self.inner.state.lock().unwrap();
-        // 【Rust 修正】authToken 脱敏,不回明文。
+        let runtime = &state.runtime;
+        // 数据面状态只给运维探活。近期事件含来源、会话和工作区，留在已登录的管理 API。
         let body = json!({
             "running": true,
             "runtimeApiVersion": 1,
@@ -804,11 +860,19 @@ impl Engine {
                 "port": config.listener.port,
                 "allowedCIDRs": config.listener.allowed_cidrs,
                 "trustedProxyCIDRs": config.listener.trusted_proxy_cidrs,
-                "authToken": if config.listener.auth_token.is_empty() { "" } else { "***" },
+                "authToken": if config.listener.has_inbound_auth() { "***" } else { "" },
             },
             "providers": config.endpoints.len(),
             "endpoints": config.endpoints.len(),
-            "runtime": state.runtime,
+            "runtime": {
+                "clientFailures": runtime.client_failures,
+                "clientRequests": runtime.client_requests,
+                "clientSuccesses": runtime.client_successes,
+                "failovers": runtime.failovers,
+                "upstreamAttempts": runtime.upstream_attempts,
+                "upstreamFailures": runtime.upstream_failures,
+                "upstreamSuccesses": runtime.upstream_successes,
+            },
             "lastError": state.last_error,
             "generation": *self.inner.generation.read().unwrap(),
         });
@@ -1390,30 +1454,40 @@ impl Engine {
             && is_realtime_call_bootstrap_path(path_without_query(path_and_query))
             && let Some(session) = self.realtime_client_secret_session(&headers)
         {
-            let (normalized_body, normalized_content_type) =
-                match apply_realtime_client_secret_session(
-                    &body,
-                    content_type.as_deref().unwrap_or(""),
-                    &session,
-                ) {
-                    Ok(value) => value,
-                    Err(reason) => {
-                        self.record_rejected_client_with_metadata(
-                            400,
-                            reason,
-                            None,
-                            Some(purpose),
-                            client_kind,
-                            codex_metadata.clone(),
-                            ClientDeclaredMetadata::from_headers(&headers),
-                            Some(source_format),
-                        );
-                        return error_response(
-                            StatusCode::BAD_REQUEST,
-                            &[("error", "invalid_request"), ("message", reason)],
-                        );
+            let (normalized_body, normalized_content_type) = match crate::ingress::build_bytes(
+                self.inner.ingress.buffers.clone(),
+                || {
+                    apply_realtime_client_secret_session(
+                        &body,
+                        content_type.as_deref().unwrap_or(""),
+                        &session,
+                    )
+                },
+                |result| result.as_mut().ok().map(|value| &mut value.0),
+            )
+            .unwrap_or_else(Err)
+            {
+                Ok(value) => value,
+                Err(reason) => {
+                    if reason == crate::ingress::BUSY {
+                        return error_response(StatusCode::TOO_MANY_REQUESTS, &[("error", reason)]);
                     }
-                };
+                    self.record_rejected_client_with_metadata(
+                        400,
+                        reason,
+                        None,
+                        Some(purpose),
+                        client_kind,
+                        codex_metadata.clone(),
+                        ClientDeclaredMetadata::from_headers(&headers),
+                        Some(source_format),
+                    );
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        &[("error", "invalid_request"), ("message", reason)],
+                    );
+                }
+            };
             body = normalized_body;
             content_type = Some(normalized_content_type);
         }
@@ -1714,11 +1788,22 @@ impl Engine {
                 .as_deref()
                 .is_some_and(content_type_is_multipart)
         {
-            body = rewrite_realtime_multipart_model(
-                &body,
-                content_type.as_deref().unwrap_or_default(),
-                &fields.model,
-            );
+            body = match crate::ingress::build_bytes(
+                self.inner.ingress.buffers.clone(),
+                || {
+                    rewrite_realtime_multipart_model(
+                        &body,
+                        content_type.as_deref().unwrap_or_default(),
+                        &fields.model,
+                    )
+                },
+                Some,
+            ) {
+                Ok(body) => body,
+                Err(reason) => {
+                    return error_response(StatusCode::TOO_MANY_REQUESTS, &[("error", reason)]);
+                }
+            };
         }
         let routing_value = json!({
             "model": fields.model,
@@ -1770,29 +1855,77 @@ impl Engine {
 }
 
 // Error strings never include request bytes or arbitrary header values.
-fn decode_inference_body(raw: &[u8], encoding: &str) -> Result<Vec<u8>, &'static str> {
+async fn decode_inference_body_async(
+    raw: bytes::Bytes,
+    encoding: String,
+) -> Result<bytes::Bytes, &'static str> {
+    let resources = INBOUND_REQUEST_CONTEXT.with(|context| context.borrow().resources.clone());
+    let permit = resources.decompression.acquire(1)?;
+    let deadline = resources.deadline();
+    let worker = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        decode_inference_body_limited(&raw, &encoding, &resources)
+    });
+    tokio::time::timeout_at(deadline, worker)
+        .await
+        .map_err(|_| "request_body_timeout")?
+        .map_err(|_| "request_decompression_failed")?
+}
+
+fn decode_inference_body_limited(
+    raw: &[u8],
+    encoding: &str,
+    resources: &crate::ingress::RequestResources,
+) -> Result<bytes::Bytes, &'static str> {
     use std::io::Read;
-    let decoder: Box<dyn Read + '_> = match encoding.trim().to_ascii_lowercase().as_str() {
+    let mut decoder: Box<dyn Read + '_> = match encoding.trim().to_ascii_lowercase().as_str() {
         "zstd" => {
-            Box::new(zstd::stream::read::Decoder::new(raw).map_err(|_| "invalid_zstd_request")?)
+            let mut decoder =
+                zstd::stream::read::Decoder::new(raw).map_err(|_| "invalid_zstd_request")?;
+            let max_output = u64::from(resources.policy.max_decoded_body_mib) * 1024 * 1024;
+            decoder
+                .window_log_max(64 - max_output.saturating_sub(1).leading_zeros())
+                .map_err(|_| "invalid_zstd_request")?;
+            Box::new(decoder)
         }
         "gzip" => Box::new(flate2::read::MultiGzDecoder::new(raw)),
         _ => return Err("unsupported_request_content_encoding"),
     };
-    let mut decoded = Vec::new();
-    let mut limited = decoder.take((MAX_DECOMPRESSED_BODY_BYTES + 1) as u64);
-    limited
-        .read_to_end(&mut decoded)
-        .map_err(|_| "invalid_compressed_request")?;
-    if decoded.len() > MAX_DECOMPRESSED_BODY_BYTES {
-        return Err("request_body_too_large");
+    let mut decoded = crate::ingress::Buffer::new(
+        resources.buffers.clone(),
+        resources.policy.max_decoded_body_mib as usize * crate::ingress::MIB,
+    );
+    let mut chunk = [0_u8; 64 * 1024];
+    let _scratch = resources.buffers.acquire(chunk.len())?;
+    loop {
+        if resources.cancel.is_cancelled() {
+            return Err("request_cancelled");
+        }
+        if tokio::time::Instant::now() >= resources.deadline() {
+            return Err("request_body_timeout");
+        }
+        let length = decoder
+            .read(&mut chunk)
+            .map_err(|_| "invalid_compressed_request")?;
+        if length == 0 {
+            return Ok(decoded.into_bytes());
+        }
+        decoded.append(&chunk[..length])?;
     }
-    Ok(decoded)
 }
 
-async fn read_inbound_body(body: Body) -> Result<bytes::Bytes, axum::Error> {
+#[cfg(test)]
+fn decode_inference_body(raw: &[u8], encoding: &str) -> Result<Vec<u8>, &'static str> {
+    let policy = sumpter_core::request_policy::RequestPolicy::default();
+    let resources = crate::ingress::Resources::new(&policy);
+    let request = crate::ingress::RequestResources::new(policy.ingress, &resources);
+    decode_inference_body_limited(raw, encoding, &request).map(|bytes| bytes.to_vec())
+}
+
+async fn read_inbound_body(body: Body) -> Result<bytes::Bytes, &'static str> {
+    let resources = INBOUND_REQUEST_CONTEXT.with(|context| context.borrow().resources.clone());
     let mut timer = StageTimer::new("body_read", 0);
-    let result = axum::body::to_bytes(body, MAX_BODY_BYTES).await;
+    let result = resources.read(body).await;
     if let Ok(bytes) = &result {
         timer.set_bytes(bytes.len());
     }
@@ -1806,6 +1939,10 @@ fn inbound_body_status(message: &str) -> StatusCode {
         || normalized.contains("too_large")
     {
         StatusCode::PAYLOAD_TOO_LARGE
+    } else if message == "request_body_timeout" {
+        StatusCode::REQUEST_TIMEOUT
+    } else if message == crate::ingress::BUSY {
+        StatusCode::TOO_MANY_REQUESTS
     } else {
         StatusCode::BAD_REQUEST
     }
@@ -1816,7 +1953,9 @@ fn inbound_body_error_code(message: &str) -> &str {
         "request_body_too_large"
     } else if matches!(
         message,
-        "invalid_zstd_request"
+        "request_body_timeout"
+            | "ingress_capacity_exhausted"
+            | "invalid_zstd_request"
             | "invalid_compressed_request"
             | "unsupported_request_content_encoding"
     ) {

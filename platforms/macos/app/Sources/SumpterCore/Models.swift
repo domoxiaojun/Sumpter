@@ -291,7 +291,34 @@ public struct InboundTokenConfig: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+public struct ListenerTLSConfig: Codable, Equatable, Sendable {
+    public var enabled: Bool
+    public var port: Int
+    public var certificatePath: String
+    public var privateKeyPath: String
+
+    public init(enabled: Bool = false, port: Int = 57_880, certificatePath: String = "", privateKeyPath: String = "") {
+        self.enabled = enabled
+        self.port = port
+        self.certificatePath = certificatePath
+        self.privateKeyPath = privateKeyPath
+    }
+
+    enum CodingKeys: String, CodingKey { case enabled, port, certificatePath, privateKeyPath }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try values.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        port = try values.decodeIfPresent(Int.self, forKey: .port) ?? 57_880
+        certificatePath = try values.decodeIfPresent(String.self, forKey: .certificatePath) ?? ""
+        privateKeyPath = try values.decodeIfPresent(String.self, forKey: .privateKeyPath) ?? ""
+    }
+}
+
 public struct ListenerConfig: Codable, Equatable, Sendable {
+    public var clientIdentity: ClientIdentitySettings?
+    public var tls: ListenerTLSConfig?
+    public var httpsPort: Int? { tls?.enabled == true ? tls?.port : nil }
     public var host: String
     public var port: Int
     public var allowedCIDRs: [String]
@@ -306,6 +333,7 @@ public struct ListenerConfig: Codable, Equatable, Sendable {
     public var trustedProxyCIDRs: [String]
 
     enum CodingKeys: String, CodingKey {
+        case tls, clientIdentity
         case host
         case port
         case allowedCIDRs
@@ -321,7 +349,9 @@ public struct ListenerConfig: Codable, Equatable, Sendable {
         authTokenName: String = "默认 Token",
         authTokenEnabled: Bool = true,
         authTokens: [InboundTokenConfig] = [],
-        trustedProxyCIDRs: [String] = []
+        trustedProxyCIDRs: [String] = [],
+        tls: ListenerTLSConfig? = nil,
+        clientIdentity: ClientIdentitySettings? = nil
     ) {
         self.host = host
         self.port = port
@@ -331,6 +361,8 @@ public struct ListenerConfig: Codable, Equatable, Sendable {
         self.authTokenEnabled = authTokenEnabled
         self.authTokens = authTokens
         self.trustedProxyCIDRs = trustedProxyCIDRs
+        self.tls = tls
+        self.clientIdentity = clientIdentity
     }
 
     public init(from decoder: Decoder) throws {
@@ -343,9 +375,29 @@ public struct ListenerConfig: Codable, Equatable, Sendable {
         authTokenEnabled = try keyed.decodeIfPresent(Bool.self, forKey: .authTokenEnabled) ?? true
         authTokens = try keyed.decodeIfPresent([InboundTokenConfig].self, forKey: .authTokens) ?? []
         trustedProxyCIDRs = try keyed.decodeIfPresent([String].self, forKey: .trustedProxyCIDRs) ?? []
+        tls = try keyed.decodeIfPresent(ListenerTLSConfig.self, forKey: .tls)
+        clientIdentity = try keyed.decodeIfPresent(ClientIdentitySettings.self, forKey: .clientIdentity)
+    }
+
+    public func validateTLS() throws {
+        guard let tls, tls.enabled else { return }
+        guard (1...65535).contains(tls.port), tls.port != port else {
+            throw NSError(domain: "Sumpter.ListenerTLS", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "HTTPS 端口必须为 1...65535，且不能与 HTTP 端口相同"])
+        }
+        for (name, path) in [("证书链", tls.certificatePath), ("私钥", tls.privateKeyPath)] {
+            guard (path as NSString).isAbsolutePath,
+                  path == path.trimmingCharacters(in: .whitespacesAndNewlines),
+                  path.utf8.count <= 4096,
+                  !path.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
+                throw NSError(domain: "Sumpter.ListenerTLS", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "HTTPS \(name)必须填写绝对文件路径"])
+            }
+        }
     }
 
     public func validateInboundTokens() throws {
+        try clientIdentity?.validate()
         func validName(_ value: String) -> Bool {
             !value.isEmpty && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
                 && value.utf8.count <= 128 && !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)

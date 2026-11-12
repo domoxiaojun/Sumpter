@@ -149,10 +149,7 @@ fn validate_tool_definition(
             "{function_path}.parameters must be an object"
         )));
     }
-    // `strict: true` 是「参数一定符合 schema」的采样保证;Anthropic 侧没有等价开关,
-    // 但工具 schema 本身照原样前送,所以约束没有被丢掉,只是少了那层硬保证。
-    // 按同文件对 thinking 块的处理:能用但有损的降级属于 Translated 路由的可见性
-    // 问题,不是拒绝面 —— 为它拒绝整条请求会让带 strict 工具的客户端完全无法使用。
+    // 当前 Anthropic 自定义工具也支持 strict，保留显式布尔值和原 schema。
     if let Some(strict) = function.get("strict")
         && !strict.is_null()
         && !strict.is_boolean()
@@ -1261,6 +1258,9 @@ fn anthropic_tool(function: &Value) -> Option<Value> {
         .cloned()
         .unwrap_or_else(|| json!({"type": "object"}));
     tool.insert("input_schema".into(), schema);
+    if let Some(strict) = function.get("strict").and_then(Value::as_bool) {
+        tool.insert("strict".into(), Value::Bool(strict));
+    }
     Some(Value::Object(tool))
 }
 
@@ -1375,6 +1375,7 @@ pub struct ChatClientBridge {
     created: i64,
     model: String,
     buffer: SseBlockBuffer,
+    tool_stream: crate::bridge_tools::AnthropicToolStream,
     role_sent: bool,
     items: Vec<(i64, OutItem)>,
     tool_count: usize,
@@ -1393,6 +1394,7 @@ impl ChatClientBridge {
             created: unix_now(),
             model,
             buffer: SseBlockBuffer::new(),
+            tool_stream: Default::default(),
             role_sent: false,
             items: Vec::new(),
             tool_count: 0,
@@ -1422,12 +1424,27 @@ impl ChatClientBridge {
     }
 
     fn handle_block(&mut self, block: &str) -> Vec<u8> {
+        if self.finished {
+            return Vec::new();
+        }
         let Some(payload) = data_payload(block) else {
             return Vec::new();
         };
         let Ok(event) = serde_json::from_str::<Value>(&payload) else {
-            return Vec::new();
+            return self.emit_failure("upstream emitted malformed Anthropic JSON");
         };
+        let events = match self.tool_stream.normalize(event) {
+            Ok(events) => events,
+            Err(detail) => return self.emit_failure(detail),
+        };
+        let mut out = Vec::new();
+        for event in events {
+            out.extend(self.handle_event(&event));
+        }
+        out
+    }
+
+    fn handle_event(&mut self, event: &Value) -> Vec<u8> {
         let mut out = Vec::new();
         match event.get("type").and_then(Value::as_str).unwrap_or("") {
             "error" => {
@@ -1764,6 +1781,7 @@ pub struct ResponsesClientBridge {
     created: i64,
     model: String,
     buffer: SseBlockBuffer,
+    tool_stream: crate::bridge_tools::AnthropicToolStream,
     created_sent: bool,
     items: Vec<(i64, String, OutItem)>,
     input_tokens: i64,
@@ -1781,6 +1799,7 @@ impl ResponsesClientBridge {
             created: unix_now(),
             model,
             buffer: SseBlockBuffer::new(),
+            tool_stream: Default::default(),
             created_sent: false,
             items: Vec::new(),
             input_tokens: 0,
@@ -1868,12 +1887,27 @@ impl ResponsesClientBridge {
     }
 
     fn handle_block(&mut self, block: &str) -> Vec<u8> {
+        if self.finished {
+            return Vec::new();
+        }
         let Some(payload) = data_payload(block) else {
             return Vec::new();
         };
         let Ok(event) = serde_json::from_str::<Value>(&payload) else {
-            return Vec::new();
+            return self.emit_failure("upstream emitted malformed Anthropic JSON");
         };
+        let events = match self.tool_stream.normalize(event) {
+            Ok(events) => events,
+            Err(detail) => return self.emit_failure(detail),
+        };
+        let mut out = Vec::new();
+        for event in events {
+            out.extend(self.handle_event(&event));
+        }
+        out
+    }
+
+    fn handle_event(&mut self, event: &Value) -> Vec<u8> {
         let mut out = Vec::new();
         match event.get("type").and_then(Value::as_str).unwrap_or("") {
             "error" => {

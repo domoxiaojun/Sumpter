@@ -60,9 +60,9 @@ pub const MAX_FORWARDED_CHAIN_ENTRIES: usize = 32;
 /// 3. 两个头都缺失或不合法(空、主机名、端口、超过 4 KiB 或 32 项)→ TCP 对端;
 ///    对端也未知 → `None`。
 ///
-/// 转发头由请求方声明,这里不校验其来源:结果只用于事件 `sourceIP`,鉴权、
-/// `allowedCIDRs` 与 `/__status` 继续只看 TCP 对端。IPv4-mapped IPv6 折叠为 IPv4,
-/// 返回值已是规范文本形式。
+/// 转发头由请求方声明,这里不校验其来源:结果只用于事件 `sourceIP`。入站鉴权、
+/// `allowedCIDRs` 与 `/__status` 的网络边界继续只看 TCP 对端；配置了入站 Token 时
+/// `/__status` 还要匹配该凭据。IPv4-mapped IPv6 折叠为 IPv4,返回值已是规范文本形式。
 pub fn resolve_client_ip(
     peer: Option<IpAddr>,
     headers: &[(String, String)],

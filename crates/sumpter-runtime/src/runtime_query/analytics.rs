@@ -232,7 +232,10 @@ pub fn analytics_view_on(
             analytics_dimension(
                 &transaction,
                 &client_builder,
-                "COALESCE(client_kind,'unrecorded_client')",
+                &format!(
+                    "COALESCE({},'unrecorded_client')",
+                    filters.reported_client_expression()
+                ),
                 Some("kind='client'"),
             )?
         },
@@ -718,7 +721,7 @@ fn output_speed_totals(
 fn analytics_dimension(
     transaction: &Transaction<'_>,
     base: &SqlFilter,
-    expression: &'static str,
+    expression: &str,
     extra: Option<&'static str>,
 ) -> QueryResult<Vec<AnalyticsDimensionRow>> {
     let mut clauses = base.clauses.clone();
@@ -727,6 +730,7 @@ fn analytics_dimension(
     }
     let where_sql = format!(" WHERE {}", clauses.join(" AND "));
     let output_speed_predicate = super::OUTPUT_SPEED_PREDICATE;
+    let reported_client = base.client_expression.as_deref().unwrap_or("client_kind");
     let sql = format!(
         r#"SELECT {expression} AS name,
                       COUNT(*),
@@ -789,7 +793,7 @@ fn analytics_dimension(
                       MAX(project_source),
                       MAX(workspace_paths_json),
                       GROUP_CONCAT(DISTINCT COALESCE(project_name,project_id,'unidentified_project')),
-                      GROUP_CONCAT(DISTINCT COALESCE(client_kind,'unrecorded_client')),
+                      GROUP_CONCAT(DISTINCT COALESCE({reported_client},'unrecorded_client')),
                       SUM(CASE WHEN {output_speed_predicate} THEN output_tokens ELSE 0 END),
                       SUM(CASE WHEN {output_speed_predicate} THEN output_span_ms ELSE 0 END),
                       SUM(CASE WHEN {output_speed_predicate} THEN 1 ELSE 0 END)

@@ -864,6 +864,9 @@ impl Engine {
         client_kind: ClientKind,
         codex_metadata: Option<CodexMetadata>,
     ) -> Response {
+        if let Some(context) = super::context::current_request_context() {
+            context.resources.finish_preprocessing();
+        }
         let route_timer = StageTimer::new("route_check", inbound_body.len());
         let observed_session = observe_request_session(client_kind, &headers, &request.raw);
         let purpose = purpose_override.unwrap_or_else(|| inspector::request_purpose(&request));
@@ -1070,7 +1073,7 @@ impl Engine {
             endpoint.protocol == ProviderProtocol::Gemini
                 && !request_build::valid_gemini_model(&endpoint.upstream_model)
         }) {
-            let message = "Gemini upstream model must be a model ID or models/<ID>";
+            let message = "Gemini upstream model must be a safe model ID or namespace/model ID, optionally prefixed with models/";
             self.record_rejected_client_with_metadata(
                 400,
                 message,
@@ -2183,18 +2186,42 @@ impl Engine {
                     None
                 };
                 let mut outbound_timer = StageTimer::new("outbound_build", 0);
-                let build = request_build::build_outbound_with_json(
-                    endpoint,
-                    request,
-                    headers,
-                    method,
-                    path_and_query,
-                    &api_key,
-                    guard.meta.purpose,
-                    passthrough,
-                    gemini_replay.as_ref(),
-                    parsed_json,
-                );
+                let mut build = match crate::ingress::build_bytes(
+                    self.inner.ingress.buffers.clone(),
+                    || {
+                        request_build::build_outbound_with_json(
+                            endpoint,
+                            request,
+                            headers,
+                            method,
+                            path_and_query,
+                            &api_key,
+                            guard.meta.purpose,
+                            passthrough,
+                            gemini_replay.as_ref(),
+                            parsed_json,
+                        )
+                    },
+                    |build| Some(&mut build.request.body),
+                ) {
+                    Ok(build) => build,
+                    Err(reason) => {
+                        let mut failure = FailureInfo::endpoints_exhausted();
+                        failure.kind =
+                            sumpter_core::events::RuntimeFailureKind::LocalAdmissionRejected;
+                        failure.detail = Some(reason.into());
+                        guard.complete(429, Some(reason.into()), failure);
+                        return error_response(StatusCode::TOO_MANY_REQUESTS, &[("error", reason)]);
+                    }
+                };
+                if let Some(source) = config
+                    .listener
+                    .client_identity
+                    .relay_endpoints
+                    .get(&endpoint.endpoint_id)
+                {
+                    super::context::forward_client_identity(&mut build.request.headers, source);
+                }
                 outbound_timer.set_bytes(build.request.body.len());
                 drop(outbound_timer);
                 if let Some(profile) = config.request_policy.profile(

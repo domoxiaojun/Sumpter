@@ -49,7 +49,7 @@ use tokio_tungstenite::tungstenite::Error as WsError;
 #[derive(Clone)]
 pub(super) struct WebSocketEventContext {
     pub(super) inbound_token: Option<sumpter_core::config::InboundTokenIdentity>,
-    attribution: sumpter_core::client_attribution::AttributedRequest,
+    pub(super) attribution: sumpter_core::client_attribution::AttributedRequest,
     pub(super) client_upgraded: bool,
     pub(super) first_message_wait_ms: Option<i64>,
     pub(super) source_ip: Option<String>,
@@ -67,6 +67,9 @@ pub(super) struct WebSocketEventContext {
 
 #[derive(Default)]
 pub(super) struct WebSocketRelayCounters {
+    first_client_message: AtomicBool,
+    first_client_notify: tokio::sync::Notify,
+    terminated: tokio_util::sync::CancellationToken,
     pub(super) bytes_sent: AtomicU64,
     pub(super) bytes_received: AtomicU64,
     pub(super) client_message_count: AtomicU64,
@@ -117,6 +120,10 @@ enum RelayData {
 }
 
 enum ControlWrite {
+    Terminate {
+        code: u16,
+        done: oneshot::Sender<()>,
+    },
     Frame(WebSocketMessage),
     // Tungstenite already queued the Pong/Close reply. Flush, never replace it
     // with a manually generated Pong (which can overwrite the automatic reply).
@@ -191,6 +198,7 @@ pub(super) async fn relay_native_websocket(
     upstream: NativeWebSocket,
     shutdown: tokio_util::sync::CancellationToken,
     idle_timeout: Option<Duration>,
+    first_message_timeout: Duration,
 ) -> WebSocketRelayMetrics {
     let started = Instant::now();
     let counters = Arc::new(WebSocketRelayCounters::default());
@@ -256,6 +264,12 @@ pub(super) async fn relay_native_websocket(
         biased;
         _ = shutdown.cancelled() => counters.record_transport_error("server_shutdown", "server", "server_shutdown"),
         _ = cancellation.cancelled() => {},
+        _ = counters.terminated.cancelled() => {},
+        _ = async {
+            wait_for_first_message(&counters, first_message_timeout).await;
+            counters.record_transport_error("first_message_timeout", "server", "timed_out");
+            close_both(&client_queue, &upstream_queue, 1008).await;
+        } => {},
         _ = wait_for_idle(activity_rx, idle_timeout) => {
             *counters.idle_timeout_ms.lock().unwrap() = idle_timeout.map(|timeout| timeout.as_millis().min(i64::MAX as u128) as i64);
             counters.record_transport_error("idle_timeout", "relay_error", "idle_timeout");
@@ -264,6 +278,39 @@ pub(super) async fn relay_native_websocket(
     }
     // Dropping all four futures releases sockets even if send/flush is blocked.
     counters.snapshot(started)
+}
+
+async fn close_both(a: &RelayQueue, b: &RelayQueue, code: u16) {
+    // Bound teardown even when a peer stops reading. Both writers get a chance
+    // to send 1009 before the sockets and the shared connection lease are freed.
+    let _ = tokio::time::timeout(Duration::from_secs(1), async {
+        let (a_done, a_rx) = oneshot::channel();
+        let (b_done, b_rx) = oneshot::channel();
+        let _ = a
+            .control
+            .send(ControlWrite::Terminate { code, done: a_done })
+            .await;
+        let _ = b
+            .control
+            .send(ControlWrite::Terminate { code, done: b_done })
+            .await;
+        let _ = tokio::join!(a_rx, b_rx);
+    })
+    .await;
+}
+
+async fn wait_for_first_message(counters: &WebSocketRelayCounters, timeout: Duration) {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if counters.first_client_message.load(Ordering::Acquire) {
+            return std::future::pending().await;
+        }
+        tokio::select! {
+            biased;
+            _ = counters.first_client_notify.notified() => {},
+            _ = tokio::time::sleep_until(deadline) => return,
+        }
+    }
 }
 
 fn mark_activity(activity: &watch::Sender<Option<tokio::time::Instant>>, business: bool) {
@@ -315,6 +362,11 @@ async fn relay_reader<R>(
             next => {
                 let kind = next.and_then(Result::err).unwrap_or("eof_without_close");
                 counters.record_transport_error(peer.read_error(), peer.name(), kind);
+                if kind == "capacity_error" {
+                    close_both(local, remote, 1009).await;
+                    counters.terminated.cancel();
+                    return;
+                }
                 // Deliver already-read frames before reporting a transport end.
                 // Otherwise a fast EOF can discard the final response chunk. A
                 // peer that disappears without a WebSocket Close must not make
@@ -341,6 +393,13 @@ async fn relay_reader<R>(
             ),
         );
         if matches!(peer, Peer::Client) {
+            if matches!(
+                message,
+                WebSocketMessage::Text(_) | WebSocketMessage::Binary(_)
+            ) {
+                counters.first_client_message.store(true, Ordering::Release);
+                counters.first_client_notify.notify_one();
+            }
             counters.observe_client_request(&message);
         } else {
             counters.observe_upstream_event(&message);
@@ -410,6 +469,18 @@ async fn relay_writer<S>(
             else => return,
         };
         let message = match command {
+            ControlWrite::Terminate { code, done } => {
+                let _ = sink
+                    .send(WebSocketMessage::Close(Some(
+                        axum::extract::ws::CloseFrame {
+                            code,
+                            reason: "websocket resource limit".into(),
+                        },
+                    )))
+                    .await;
+                let _ = done.send(());
+                return;
+            }
             ControlWrite::Flush(done) => {
                 if let Err(kind) = sink.flush().await {
                     // A completed automatic Close reply is a normal library result.
@@ -770,9 +841,19 @@ pub(super) fn websocket_event_context(
         "websocket"
     };
     let client_kind = detect_client_kind(headers, true);
+    let attribution = super::context::current_request_context()
+        .and_then(|c| c.attribution)
+        .unwrap_or_else(|| sumpter_core::client_attribution::observe("GET", path, headers, None));
+    let session_id = observed_session_id(headers).or_else(|| {
+        attribution
+            .attribution
+            .identity
+            .as_ref()
+            .and_then(|i| i.session_id.clone())
+    });
     WebSocketEventContext {
         inbound_token: None,
-        attribution: sumpter_core::client_attribution::observe("GET", path, headers, None),
+        attribution,
         client_upgraded: false,
         first_message_wait_ms: None,
         source_ip,
@@ -787,7 +868,7 @@ pub(super) fn websocket_event_context(
         ),
         client_declared: ClientDeclaredMetadata::from_headers(headers),
         grok_metadata: GrokMetadata::from_headers(headers),
-        session_id: observed_session_id(headers),
+        session_id,
         started,
     }
 }
@@ -854,7 +935,21 @@ pub(super) fn websocket_client_event(
         client_attribution: None,
         request_trace: None,
         source_ip: context.source_ip.clone(),
-        session_source: None,
+        session_source: context.session_id.as_ref().map(|_| {
+            if context
+                .attribution
+                .attribution
+                .identity
+                .as_ref()
+                .and_then(|i| i.session_id.as_ref())
+                == context.session_id.as_ref()
+            {
+                "trusted_relay"
+            } else {
+                "header"
+            }
+            .into()
+        }),
         hook_event: None,
         cache_read: None,
         client_kind: Some(context.client_kind),
@@ -955,6 +1050,27 @@ pub(super) fn websocket_message_to_tungstenite(
 #[cfg(test)]
 mod relay_tests {
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn first_business_deadline_is_not_extended_by_upstream_or_heartbeats() {
+        let counters = WebSocketRelayCounters::default();
+        counters.observe_upstream_event(&WebSocketMessage::Text("{}".into()));
+        tokio::time::timeout(
+            Duration::from_secs(31),
+            wait_for_first_message(&counters, Duration::from_secs(30)),
+        )
+        .await
+        .unwrap();
+        counters.first_client_message.store(true, Ordering::Release);
+        assert!(
+            tokio::time::timeout(
+                Duration::from_secs(60),
+                wait_for_first_message(&counters, Duration::from_secs(30))
+            )
+            .await
+            .is_err()
+        );
+    }
 
     #[tokio::test(start_paused = true)]
     async fn idle_deadline_is_optional_waits_for_business_and_resets_on_control_activity() {

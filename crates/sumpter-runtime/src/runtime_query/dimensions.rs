@@ -29,6 +29,9 @@ pub fn dimension_page_on(
 ) -> QueryResult<DimensionPage> {
     validate_page(request.page, request.page_size)?;
     let filters = request.filter.normalized()?;
+    let reported_client = filters.reported_client_expression();
+    let client_group = format!("COALESCE({reported_client},'legacy_client_kind_missing')");
+    let client_missing = format!("COALESCE({reported_client},'missing_client_kind_metadata')");
     let search = request
         .search
         .as_deref()
@@ -73,9 +76,9 @@ pub fn dimension_page_on(
             "",
         ),
         DimensionKind::ClientKind => (
-            "COALESCE(client_kind,'legacy_client_kind_missing')",
-            "COALESCE(client_kind,'legacy_client_kind_missing')",
-            "COALESCE(client_kind,'missing_client_kind_metadata')",
+            client_group.as_str(),
+            client_group.as_str(),
+            client_missing.as_str(),
             "project_id",
             "NULL",
             "",
@@ -84,7 +87,7 @@ pub fn dimension_page_on(
             "COALESCE(request_kind,'unrecorded')",
             "COALESCE(request_kind,'unrecorded')",
             "COALESCE(request_kind,'unrecorded')",
-            "client_kind",
+            reported_client.as_str(),
             "NULL",
             "",
         ),
@@ -342,7 +345,7 @@ pub fn dimension_page_on(
                       AVG(CASE WHEN ttfb_ms >= 0 THEN ttfb_ms END) AS average_ttfb_ms,
                       COUNT(DISTINCT {related_expression}) AS related_count,
                       {workspace_expr} AS workspace_paths_json,
-                      GROUP_CONCAT(DISTINCT COALESCE(client_kind,'unrecorded_client')) AS client_kinds,
+                      GROUP_CONCAT(DISTINCT COALESCE({reported_client},'unrecorded_client')) AS client_kinds,
                       SUM(CASE WHEN {output_speed_predicate} THEN output_tokens ELSE 0 END) AS output_generation_tokens,
                       SUM(CASE WHEN {output_speed_predicate} THEN output_span_ms ELSE 0 END) AS output_generation_ms,
                       SUM(CASE WHEN {output_speed_predicate} THEN 1 ELSE 0 END) AS output_speed_requests

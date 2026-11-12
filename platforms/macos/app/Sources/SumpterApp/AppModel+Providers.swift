@@ -558,7 +558,7 @@ extension AppModel {
     /// 提交监听配置(安全页草稿的唯一落地入口)。
     /// 走 mutateConfig 统一管线:归一化 → 落盘 → 推给引擎(必要时重启进程)。
     /// 端口变更时同步重写通知 hook 脚本(脚本内嵌端口,不重写会静默失联)。
-    func updateListener(host: String, port: Int, allowedCIDRs: [String], trustedProxyCIDRs: [String]) {
+    func updateListener(host: String, port: Int, allowedCIDRs: [String], trustedProxyCIDRs: [String], tls: ListenerTLSConfig? = nil) {
         Task {
             do {
                 let portChanged = port != config.listener.port
@@ -567,6 +567,7 @@ extension AppModel {
                     draft.listener.port = port
                     draft.listener.allowedCIDRs = allowedCIDRs
                     draft.listener.trustedProxyCIDRs = trustedProxyCIDRs
+                    draft.listener.tls = tls
                 }
                 if portChanged {
                     do {
@@ -600,6 +601,7 @@ extension AppModel {
         draft.syncDefaultGroupBindings()
         try draft.validateModelGroups()
         try draft.listener.validateInboundTokens()
+        try draft.listener.validateTLS()
         draft.normalizeBuiltInFeatureRules()
         config = draft
         do {

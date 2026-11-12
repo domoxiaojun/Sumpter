@@ -38,11 +38,32 @@ Sumpter 使用一份 JSON 配置文件，Linux 和 macOS 共用格式。新用�
 
 `host` 和 `port` 是客户端访问的代理数据面。空 `authToken` 表示不校验入站 Token；生产环境建议设置随机非空值。`allowedCIDRs` 非空时只允许列出的 IP 网段。
 
-`trustedProxyCIDRs` 是已知反向代理的 IP 或 CIDR 列表，默认空，省略时按空处理。请求事件的 `sourceIP` 按 `X-Real-IP`（单个纯 IP）、`X-Forwarded-For`、TCP 对端的顺序取第一个合法值，不要求对端命中该列表；列表只影响 `X-Forwarded-For` 链的取法：为空时取最左侧地址，非空时从右向左跳过所列代理，取第一个非代理地址。含主机名或端口、超过 4 KiB 或 32 项的头视为不合法，跳到下一来源。转发头由请求方声明，Sumpter 不校验其来源，直连客户端因此可以自行声明来源地址；它只影响事件记录：入站 Token、`allowedCIDRs` 与 `/__status` 的回环限制继续检查 TCP 对端，转发给上游的请求头也不改写。两组列表里的非法条目会在加载和保存时报错。部署方式见 [Compose 教程](../platforms/linux/DOCKER.md)。
+`trustedProxyCIDRs` 是已知反向代理的 IP 或 CIDR 列表，默认空，省略时按空处理。请求事件的 `sourceIP` 按 `X-Real-IP`（单个纯 IP）、`X-Forwarded-For`、TCP 对端的顺序取第一个合法值，不要求对端命中该列表；列表只影响 `X-Forwarded-For` 链的取法：为空时取最左侧地址，非空时从右向左跳过所列代理，取第一个非代理地址。含主机名或端口、超过 4 KiB 或 32 项的头视为不合法，跳到下一来源。转发头由请求方声明，Sumpter 不校验其来源，直连客户端因此可以自行声明来源地址；它只影响事件记录。入站 Token、`allowedCIDRs` 与 `/__status` 的网络边界继续检查 TCP 对端，转发给上游的请求头也不改写。配置了入站 Token 时，`/__status` 还要携带同一凭据；响应只含计数和监听摘要，近期事件仍在登录后的管理 API。同机 Nginx 示例不反代 `/__status` 和其他 `/__` 控制路径。两组列表里的非法条目会在加载和保存时报错。部署方式见 [Compose 教程](../platforms/linux/DOCKER.md)。
 
 Compose 特例：容器内 `host` 应为 `0.0.0.0`，容器端口保持 57878；宿主机暴露地址和端口由 Compose `ports` 决定。Linux systemd / macOS 本机通常使用 `127.0.0.1`。
 
 Linux Admin 是独立监听，默认 `127.0.0.1:57879`，由 CLI 参数或环境变量设置，不写入 `listener`：`--admin-host`、`--admin-port`、`SUMPTER_ADMIN_HOST`、`SUMPTER_ADMIN_PORT`。管理密码默认是配置目录的 `admin-password`，可由 `--admin-password-file` 或 `SUMPTER_ADMIN_PASSWORD_FILE` 覆盖。
+
+### 同时启用 HTTPS
+
+HTTP 的 `listener.port` 保持运行。可在同一 `host` 上增加独立 HTTPS/WSS 端口，两端设置页均提供对应字段：
+
+```json
+"tls": {
+  "enabled": true,
+  "port": 57880,
+  "certificatePath": "/absolute/path/server-chain.pem",
+  "privateKeyPath": "/absolute/path/server-key.pem"
+}
+```
+
+以上对象放在 `listener` 内。省略 `tls` 或将 `enabled` 设为 `false` 时仅启用原 HTTP 端口；HTTPS 默认端口为 57880，不能与 HTTP 端口相同。客户端可同时使用 `http://127.0.0.1:57878/v1` 和 `https://127.0.0.1:57880/v1`。两者共用入站 Token、CIDR、路由和流式/Realtime 管线，Admin 管理监听保持独立。
+
+`certificatePath` 是服务进程所在主机的 PEM 证书链绝对路径（服务器证书在前），`privateKeyPath` 是未加密 PEM 私钥绝对路径。支持 TLS 1.2/1.3 与 HTTP/1.1（含 SSE、WebSocket 升级）。Sumpter 接受自签名证书，不额外检查信任链、域名或有效期；TLS 库仍必须能解析证书、加载私钥并确认二者匹配。无法加载时明确报错，不把 HTTPS 端口退回明文。
+
+保存监听变更会重启代理监听并中断当前连接。Linux 在新绑定失败时恢复旧 HTTP/HTTPS 监听和配置，证书加载失败不会停止旧监听；macOS 沿用 App 的保存/重启回滚流程。替换同路径证书后，Linux 可重载配置，macOS 请停止并重新启动代理。客户端是否信任证书由客户端自身决定，Sumpter 不安装信任，也不关闭上游 HTTPS 的证书校验。
+
+原生 HTTPS 只提供加密入站，不自动接管 Codex 的桌面后端 API；桌面语音完整接入仍需[桌面网关适配](codex-desktop-gateway.md)。网关原型与原生 HTTPS 默认都使用 57880，如同时运行须为其中一个指定其他端口。
 
 ## endpoints
 
@@ -70,7 +91,7 @@ Linux Admin 是独立监听，默认 `127.0.0.1:57879`，由 CLI 参数或环境
 | 字段 | 说明 |
 | --- | --- |
 | `id` | 唯一 ID，也是统计聚合键；修改会切断历史入口统计 |
-| `baseURL` | Provider API 根地址；不要填控制台网页地址 |
+| `baseURL` | Provider API 根地址；Anthropic、Chat Completions、Responses 兼容根地址和末尾带 `/v1` 的地址，不会重复拼接版本段；不要填控制台网页地址 |
 | `apiKey` | 发往该 Provider 的凭据，绝不与配置示例一起提交 |
 | `protocol` | `auto`、`anthropic`、`openai`、`openai-responses` 或 `gemini`；只描述入口能力 |
 | `enabled` | false 时不参与路由 |
@@ -85,6 +106,8 @@ Linux Admin 是独立监听，默认 `127.0.0.1:57879`，由 CLI 参数或环境
 
 
 「获取模型」按明确的目录协议身份探测，在总期限和数量上限内合并去重；OpenAI/Responses 默认不附带 Anthropic 目录头。Anthropic 入口另尝试通用目录，避免 CPA 的 Claude 专用别名遮住 Gemini 原始 ID。显式 UA 设置仍被保留。刷新目录不会修改 mapping 或模型组，旧目录缓存需重新获取。
+
+模型匹配和转发保留供应商前缀，例如 `anthropic/claude-opus-5`、`xai/grok-4.7`。`grok-*` 不会自动匹配 `xai/grok-*`，映射应填写完整模式。WebSearch / WebFetch 分流按模型名最后一段识别 Grok 家族，带前缀时仍要求 Responses 目标协议；普通聊天不会因此自动联网。客户端模型详情支持完整路径或将模型名里的 `/` 编码为 `%2F`，并按 Anthropic / Grok / OpenAI 客户端身份返回对应格式。
 
 Auto/OpenAI/Responses 入口在目录成功后，还会以相同身份和凭据尝试 `client_version=cpa` 能力目录。此可选请求最多 3 秒，并受剩余目录探测时间约束；失败不丢弃已取得的模型 ID，也不从扩展结果新增模型。明确的不支持不能被另一份目录的支持声明覆盖。
 
@@ -156,3 +179,12 @@ WebUI 保存使用 generation-safe PUT，防止两个页面互相覆盖。手工
 开启后，Responses SSE 默认在代理内缓存到 `response.completed` 等协议终态；在终态前遇到上游断流、限流或服务器错误时丢弃半截响应并按预算重跑。单流正文默认 16 MiB、8192 块，总回放缓冲默认 128 MiB；达到额度后恢复普通实时转发，此后的断流不重放。`requestPolicy` 可调整额度、设置缓冲时限或选用前奏保护，详见[请求策略](request-policy.md)。客户端断开会取消等待和上游请求。后台 Responses、Realtime、非 SSE 和压缩流不参与。重试耗尽后保留最后实际响应或返回明确的代理错误。每次失败保留真实上游状态及请求 ID。
 
 例如可设置 `maxStreamErrorRetries: 2`、`failoverOnStreamError: true` 和 `maxRetryDurationSeconds: 60`。默认次数 0 且切换关闭，流错误重试关闭；0 不表示无限次数。
+
+
+## 入站资源保护与诊断导出
+
+requestPolicy.ingress 默认限制单请求及解压输出各 256 MiB、共享缓冲 1024 MiB、预处理并发 4、解压并发 2、读体空闲/总时限 30/300 秒；requestPolicy.websocket 默认帧与消息各 256 MiB、连接数 4、首个客户端业务消息期限 30 秒。两端请求策略面板可编辑，字段范围、动态降低额度和生命周期见[请求策略](request-policy.md#入站安全额度)。保持 schema v7，省略字段的旧配置使用这些默认值，不迁移数据库。
+
+诊断导出的 maxParseMib 仅影响脱敏，默认 64，允许 1–256。JSON 限制单份正文，SSE 限制单个完整事件，累计流大小继续由捕获容量约束。脱敏副本的响应正文与处理状态在 redactedResponseBody（每次上游尝试）及 redactedClientBody（客户端输出），原始 Chunk 只带大小、时序和截断标记。解析失败、超限、捕获缺口、无效编码与不可还原的压缩数据都会明确省略，不退回原文。最多两个处理任务、四个等待任务，等待不超过 30 秒；繁忙返回 429。原始捕获和 raw 导出保持原样。规则不能识别所有自然语言机密，分享前需检查。
+
+CSV 导出将事件、项目、会话中的危险文本字段加前置单引号，再做 CSV 引用和转义；数值保持原有表示。包含前导空白、控制字符与全角公式符号的危险文本同样处理。数据库与 JSONL 不受影响；程序交换建议使用 JSONL。CSV 防护不保证被表格软件再次编辑、保存后仍然存在。

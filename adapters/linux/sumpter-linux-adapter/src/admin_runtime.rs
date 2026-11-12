@@ -33,6 +33,7 @@ pub(crate) async fn status(State(state): State<AdminState>) -> Response {
         "generation": state.inner.engine.generation(),
         "uptimeSeconds": state.inner.engine.uptime_seconds(),
         "listener": {
+            "httpsPort": config.listener.https_port(),
             "host": config.listener.host,
             "port": config.listener.port,
             "allowedCIDRs": config.listener.allowed_cidrs,
@@ -227,6 +228,7 @@ pub(crate) async fn runtime_events(
 
 pub(crate) fn runtime_filter_from_events_query(query: &RuntimeEventsQuery) -> RuntimeFilter {
     RuntimeFilter {
+        reporting_aliases: Default::default(),
         kind: query.kind.clone(),
         outcome: query.outcome.clone(),
         client_kind: query.client_kind.clone(),
@@ -357,6 +359,7 @@ pub(crate) struct RuntimeFilterQuery {
 impl From<RuntimeFilterQuery> for RuntimeFilter {
     fn from(query: RuntimeFilterQuery) -> Self {
         Self {
+            reporting_aliases: Default::default(),
             kind: query.kind,
             outcome: query.outcome,
             client_kind: query.client_kind,

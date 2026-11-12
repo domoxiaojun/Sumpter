@@ -39,6 +39,24 @@ export function RequestPolicyEditor() {
   return <form onSubmit={save} className="request-policy-form">
     <fieldset disabled={saving} className="route-editor-fields">
     <p>适用于所有客户端的 HTTP/SSE 请求。并发名额保持到上游响应结束；重试也计入每分钟额度。WebSocket 不按连接数等同为请求数。</p>
+    <h3>HTTP 入站保护</h3>
+    <div className="request-policy-grid">
+      {number('HTTP 单请求体（MiB）', draft.ingress.maxBodyMib, v => change(next => { next.ingress.maxBodyMib = v; }), 1, 1024)}
+      {number('解压输出上限（MiB）', draft.ingress.maxDecodedBodyMib, v => change(next => { next.ingress.maxDecodedBodyMib = v; }), 1, 1024)}
+      {number('入站受控缓冲总预算（MiB）', draft.ingress.maxBufferedMib, v => change(next => { next.ingress.maxBufferedMib = v; }), 1, 16384)}
+      {number('同时读体、解压、解析', draft.ingress.maxPreprocessing, v => change(next => { next.ingress.maxPreprocessing = v; }), 1, 64)}
+      {number('同时解压', draft.ingress.maxDecompressions, v => change(next => { next.ingress.maxDecompressions = v; }), 1, 64)}
+      {number('读体空闲时限（秒）', draft.ingress.bodyIdleTimeoutSeconds, v => change(next => { next.ingress.bodyIdleTimeoutSeconds = v; }), 1, 3600)}
+      {number('读体总时限（秒）', draft.ingress.bodyReadTimeoutSeconds, v => change(next => { next.ingress.bodyReadTimeoutSeconds = v; }), 1, 86400)}
+    </div>
+    <h3>WebSocket 保护</h3>
+    <div className="request-policy-grid">
+      {number('单帧上限（MiB）', draft.websocket.maxFrameMib, v => change(next => { next.websocket.maxFrameMib = v; }), 1, 1024)}
+      {number('累计分片消息上限（MiB）', draft.websocket.maxMessageMib, v => change(next => { next.websocket.maxMessageMib = v; }), 1, 1024)}
+      {number('业务连接上限', draft.websocket.maxConnections, v => change(next => { next.websocket.maxConnections = v; }), 1, 1024)}
+      {number('首个业务消息期限（秒）', draft.websocket.firstMessageTimeoutSeconds, v => change(next => { next.websocket.firstMessageTimeoutSeconds = v; }), 1, 3600)}
+    </div>
+    <p>安全额度必须为正整数。入站总预算至少等于原始体与解压上限之和，按实际缓冲占用申请。保存后新请求和连接生效，降低共享额度不强杀已有工作。读体期限不限制正常响应或 SSE 长流。</p>
     <h3>全局请求限制</h3>
     {limits(draft.global, (k, v) => change(next => { next.global[k] = v; }))}
     {number('一次请求最多尝试（0 = 沿用原有重试限制）', draft.maxTotalAttempts, v => change(next => { next.maxTotalAttempts = v; }), 0, 10000)}

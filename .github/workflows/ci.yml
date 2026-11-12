@@ -61,15 +61,6 @@ jobs:
         working-directory: platforms/linux/webui
         run: npm test
 
-      - name: Test pi attribution extension and packaged copies
-        run: node --test scripts/tests/pi-project-attribution.test.mjs
-
-      - name: Test unified client attribution and packaged copies
-        run: node --test scripts/tests/client-attribution.test.mjs scripts/tests/attribution-boundaries.test.mjs
-
-      - name: Test Codex attribution and packaged copies
-        run: node --test scripts/tests/codex-attribution.test.mjs
-
       - name: Verify generated WebUI is synchronized
         run: |
           set -euo pipefail
@@ -89,14 +80,6 @@ jobs:
         run: |
           ./platforms/linux/scripts/installer-selftest.sh
           node --test scripts/tests/kekulv-migration.test.mjs
-
-      # Claude Code 项目归因配置器。runner 上没有 zsh,显式只跑 bash 分支——
-      # 不依赖 runner 恰好装了什么。zsh 与 bash 3.2 的覆盖在 macOS 本地跑。
-      # 两个 OS 条件分支都由假 uname 覆盖,所以在 Linux 上跑结论一样。
-      - name: Run Claude Code attribution installer self-test
-        run: ./platforms/linux/scripts/cc-project-attribution-selftest.sh
-        env:
-          SUMPTER_TEST_SHELLS: /bin/bash
 
   macos:
     name: macOS App

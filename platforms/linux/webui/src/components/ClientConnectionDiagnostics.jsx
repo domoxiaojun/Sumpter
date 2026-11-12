@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { useAppControls } from '../context/AppContext.jsx';
 import { api } from '../services/api.js';
 import { CLIENT_KIND_LABELS, formatTimestamp } from '../utils/helpers.js';
-import { copyWithToast } from '../utils/clipboard.js';
 
 const clients = Object.entries(CLIENT_KIND_LABELS);
 
@@ -31,9 +30,6 @@ export function ClientConnectionDiagnostics() {
       return <div key={kind}><dt>{label}</dt><dd>{event ? `已观察到请求 · ${formatTimestamp(event.timestamp)}` : missing}</dd></div>;
     })}</dl>
     <button className="btn btn-secondary" disabled={observation.state === 'loading'} onClick={() => setRefresh(value => value + 1)}>刷新请求观察</button>
-    <p>终端配置检查支持 Claude Code、Codex、Gemini CLI、pi 和 Grok Build。在运行这些客户端的机器上执行归因脚本的只读诊断，检查可见地址、环境变量、包装器状态与 pi 显式标记。浏览器无法读取另一台机器的客户端配置。</p>
-    <code>node client-attribution.mjs doctor all</code>
-    <p>远程代理可追加 <code>--proxy-url 实际代理地址</code>。命令不读取鉴权存储、不发起模型请求、不修改配置。</p>
-    <button className="btn btn-secondary" onClick={() => copyWithToast('node client-attribution.mjs doctor all', addToast)}>复制诊断命令</button>
+    <p>客户端身份绑定在安全页配置；这里只展示当前服务收到的请求。</p>
   </section>;
 }

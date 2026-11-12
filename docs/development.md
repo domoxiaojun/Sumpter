@@ -45,7 +45,7 @@ cargo run --locked -p sumpterd-linux -- --config-dir /tmp/sumpter-dev --no-web
 | --- | --- | --- |
 | `docs/templates/usage-onboarding.md` + path matrix | `uv run scripts/maintenance/sync-usage-docs.py --write` | 根和 Linux `USAGE.md` 标记块 |
 | 根配置、许可证、更新记录 | `node scripts/maintenance/sync-project-metadata.mjs --write` | Linux / macOS 配置副本和包元数据 |
-| `scripts/clients/` | `node scripts/maintenance/sync-client-attribution.mjs` | Linux 脚本、macOS Resources、Gemini 资源 |
+| 客户端原生能力目录 | `node scripts/maintenance/sync-client-registry.mjs` | Web / Swift 客户端目录 |
 | WebUI 源码 | `npm run build --prefix platforms/linux/webui` | `platforms/linux/web/` |
 
 检查模式不会写文件。修改共享行为时同时核对两个 adapter、两个客户端手册和配置示例；修改部署模板时同时更新 Compose 教程与数据目录说明。

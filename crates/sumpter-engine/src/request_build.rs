@@ -12,7 +12,7 @@ use sumpter_core::config::{
 use sumpter_core::model_name::{self, ReasoningEffort};
 use sumpter_core::routing::{PlannedEndpoint, RequestPurpose, RoutingRequest};
 
-use crate::outbound::{OutboundRequest, join_paths};
+use crate::outbound::OutboundRequest;
 
 /// Claude Code 指纹 UA:入站 UA 透传优先,仅在客户端未带 UA 时作回落
 /// (无 UA 探针打 DashScope 会 405,回落保住指纹放行面)。
@@ -344,8 +344,7 @@ pub fn server_retrieval_enabled(
     request: &RoutingRequest,
     purpose: RequestPurpose,
 ) -> bool {
-    let routed_model = model_name::clean(&endpoint.routed_model).to_ascii_lowercase();
-    let is_grok = routed_model.starts_with("grok-");
+    let is_grok = model_name::is_grok(&endpoint.routed_model);
     match purpose {
         RequestPurpose::WebSearch => true,
         RequestPurpose::WebFetch => is_grok && request_contains_url(request),
@@ -429,8 +428,10 @@ pub(crate) fn build_outbound_with_json(
         .or_else(|| model_name::reasoning_effort(&request.model));
     let server_retrieval = server_retrieval_enabled(endpoint, request, purpose);
     let protocol = endpoint.protocol;
-    // 1. 透传非黑名单 header。旧桥接路径会在这里去重；Raw 路径随后从
-    // 原始 header 对重建，保留可转发字段的顺序与重复值。
+    let safe_inbound_headers = crate::http_headers::without_admin_cookie(inbound_headers);
+    let inbound_headers = safe_inbound_headers.as_slice();
+    // 1. 桥接路径透传非黑名单 header 并去重；Raw 路径在下方从
+    // 已清理 Cookie 的 header 对重建，保留可转发字段的顺序与重复值。
     let connection_fields = crate::http_headers::connection_fields(inbound_headers);
     let mut headers: Vec<(String, String)> = Vec::new();
     for (name, value) in inbound_headers {
@@ -556,7 +557,7 @@ pub(crate) fn build_outbound_with_json(
             };
         let path_and_query = if passthrough.kind == PassthroughKind::Realtime {
             rewrite_realtime_model_query(
-                &openai_resource_path(&base_path, inbound_path_and_query),
+                &realtime_resource_path(&base_path, inbound_path_and_query),
                 &request.model,
                 &endpoint.upstream_model,
             )
@@ -566,10 +567,13 @@ pub(crate) fn build_outbound_with_json(
             passthrough.kind,
             PassthroughKind::GeminiGenerate | PassthroughKind::GeminiSession
         ) {
-            rewrite_gemini_model_path(
-                &gemini_resource_path(&base_path, inbound_path_and_query),
-                &request.model,
-                &endpoint.upstream_model,
+            gemini_resource_path(
+                &base_path,
+                &rewrite_gemini_model_path(
+                    inbound_path_and_query,
+                    &request.model,
+                    &endpoint.upstream_model,
+                ),
             )
         } else if let Some(suffix) = passthrough.kind.canonical_suffix() {
             // 会话/资源别名（`/backend-api/codex/...`、无 `/v1` 前缀）规范化到
@@ -652,14 +656,17 @@ pub(crate) fn build_outbound_with_json(
                     server_retrieval,
                 },
             );
-            (join_paths(&base_path, &messages_path), Bytes::from(body))
+            (
+                openai_resource_path(&base_path, &messages_path),
+                Bytes::from(body),
+            )
         }
         ProviderProtocol::OpenAI => {
             set_header(&mut headers, "accept", "text/event-stream");
             (
                 openai_suffix_path(&base_path, "/chat/completions"),
                 Bytes::from(
-                    serde_json::to_vec(&bridge::make_openai_chat_body(
+                    crate::ingress::to_vec(&bridge::make_openai_chat_body(
                         request,
                         &endpoint.upstream_model,
                         effort,
@@ -679,7 +686,7 @@ pub(crate) fn build_outbound_with_json(
             );
             (
                 openai_suffix_path(&base_path, "/responses"),
-                Bytes::from(serde_json::to_vec(&body).unwrap_or_default()),
+                Bytes::from(crate::ingress::to_vec(&body).unwrap_or_default()),
             )
         }
         ProviderProtocol::Gemini => {
@@ -696,7 +703,7 @@ pub(crate) fn build_outbound_with_json(
                 &format!("/v1beta/models/{model}:streamGenerateContent?alt=sse"),
             );
             let body = bridge_gemini::try_make_gemini_body(request, effort, gemini_replay)
-                .map(|body| Bytes::from(serde_json::to_vec(&body).unwrap_or_default()))
+                .map(|body| Bytes::from(crate::ingress::to_vec(&body).unwrap_or_default()))
                 // checker 已用同一份映射校验过这条请求,构建失败在正常路径上不可达。
                 .unwrap_or_default();
             (path, body)
@@ -759,7 +766,7 @@ fn sanitize_alpha_search_body(raw: &Bytes) -> Bytes {
     if !removed {
         return raw.clone();
     }
-    serde_json::to_vec(&value)
+    crate::ingress::to_vec(&value)
         .map(Bytes::from)
         .unwrap_or_else(|_| raw.clone())
 }
@@ -890,7 +897,7 @@ fn rewrite_passthrough_model(
             object.insert("model".into(), json!(upstream_model));
         }
     }
-    serde_json::to_vec(&value)
+    crate::ingress::to_vec(&value)
         .map(Bytes::from)
         .unwrap_or_else(|_| raw.clone())
 }
@@ -950,6 +957,28 @@ pub fn openai_resource_path(base_path: &str, inbound_path_and_query: &str) -> St
         Some(query) if !query.is_empty() => format!("{output}?{query}"),
         _ => output,
     }
+}
+
+/// Codex Desktop creates client-owned calls through the ChatGPT `wham`
+/// surface. Provider gateways expose the equivalent call API under `/v1`.
+/// Normalize only this call family; preserve its query and every other path.
+pub(crate) fn realtime_resource_path(base_path: &str, target: &str) -> String {
+    let (path, query) = target
+        .split_once('?')
+        .map_or((target, None), |(path, query)| (path, Some(query)));
+    for prefix in ["/wham/realtime/calls", "/backend-api/wham/realtime/calls"] {
+        if let Some(suffix) = path.strip_prefix(prefix)
+            && (suffix.is_empty() || suffix.starts_with('/'))
+        {
+            let mut canonical = format!("/v1/realtime/calls{suffix}");
+            if let Some(query) = query {
+                canonical.push('?');
+                canonical.push_str(query);
+            }
+            return openai_resource_path(base_path, &canonical);
+        }
+    }
+    openai_resource_path(base_path, target)
 }
 
 /// Anthropic 上游的目标路径。
@@ -1055,16 +1084,21 @@ pub(crate) fn gemini_upload_handoff_url(
     Some(format!("{origin}{path}{query}"))
 }
 
-/// Gemini Developer API model path segments are intentionally narrower than a
-/// general URL path. This prevents mappings from escaping the `models/` tree.
+/// Accept gateway namespaces without letting any segment escape `models/`.
+/// A leading `models/` is the optional Google resource prefix, not a namespace.
 pub fn valid_gemini_model(model: &str) -> bool {
     let model = model.strip_prefix("models/").unwrap_or(model);
     !model.is_empty()
         && model.len() <= 256
-        && model
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-        && !model.contains("..")
+        && !model.starts_with("models/")
+        && model.split('/').all(|segment| {
+            !segment.is_empty()
+                && segment != "."
+                && !segment.contains("..")
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        })
 }
 
 /// Only model fields defined by the native auxiliary/resource schemas may
@@ -1105,7 +1139,7 @@ fn rewrite_gemini_body_models(raw: &Bytes, client_model: &str, upstream_model: &
         }
     }
     if changed {
-        Bytes::from(serde_json::to_vec(&value).expect("JSON value"))
+        Bytes::from(crate::ingress::to_vec(&value).unwrap_or_default())
     } else {
         raw.clone()
     }
@@ -1122,7 +1156,7 @@ fn rewrite_gemini_model_path(
     let (path, query) = path_and_query
         .split_once('?')
         .map_or((path_and_query, None), |(path, query)| (path, Some(query)));
-    let Some((prefix, rest)) = path.rsplit_once("/models/") else {
+    let Some((prefix, rest)) = path.split_once("/models/") else {
         return path_and_query.into();
     };
     let Some((_, operation)) = rest.split_once(':') else {
@@ -1325,10 +1359,7 @@ fn rewrite_anthropic_body(
                 }]),
             );
         }
-        if model_name::clean(options.routed_model)
-            .to_ascii_lowercase()
-            .starts_with("grok-")
-        {
+        if model_name::is_grok(options.routed_model) {
             body.insert("tool_choice".into(), json!({"type": "any"}));
         }
     }
@@ -1360,7 +1391,7 @@ fn rewrite_anthropic_body(
             ThinkingMode::Passthrough => {}
         },
     }
-    serde_json::to_vec(&Value::Object(body)).unwrap_or_default()
+    crate::ingress::to_vec(&Value::Object(body)).unwrap_or_default()
 }
 
 fn remove_output_config_effort(body: &mut serde_json::Map<String, Value>) {
@@ -1376,6 +1407,17 @@ fn remove_output_config_effort(body: &mut serde_json::Map<String, Value>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn gemini_rewrite_capacity_failure_is_returned_before_dispatch() {
+        let original = bytes::Bytes::from_static(br#"{"model":"client"}"#);
+        let result = crate::ingress::build_bytes(
+            crate::ingress::Quota::new(8),
+            || super::rewrite_gemini_body_models(&original, "client", "upstream-model"),
+            Some,
+        );
+        assert_eq!(result, Err(crate::ingress::BUSY));
+    }
+
     #[test]
     fn gemini_versioned_paths_and_upload_handoffs() {
         for (base, inbound, expected) in [
@@ -2551,6 +2593,91 @@ mod tests {
     }
 
     #[test]
+    fn gateway_models_accept_safe_segments_and_reject_path_injection() {
+        for model in [
+            "gemini-4-argon",
+            "google-vertex-al-ultra/gemini-4-argon",
+            "models/gateway/models/gemini-4-argon",
+        ] {
+            assert!(valid_gemini_model(model), "{model}");
+        }
+        for model in [
+            "",
+            ".",
+            "..",
+            "/gemini",
+            "provider/",
+            "provider//gemini",
+            "provider/./gemini",
+            "provider/../gemini",
+            "provider/%2e%2e/gemini",
+            "provider/gemini?key=x",
+            "provider/gemini#fragment",
+            "provider\\gemini",
+            "https://host/model",
+            "models/models/gemini",
+        ] {
+            assert!(!valid_gemini_model(model), "{model}");
+        }
+        assert!(!valid_gemini_model(&"g".repeat(257)));
+        assert_eq!(
+            rewrite_gemini_model_path(
+                "/v1beta/models/gateway/models/alias:countTokens?trace=a%2Fb",
+                "gateway/models/alias",
+                "models/provider/gemini-4-argon"
+            ),
+            "/v1beta/models/provider/gemini-4-argon:countTokens?trace=a%2Fb"
+        );
+    }
+
+    #[test]
+    fn namespaced_grok_retrieval_preserves_upstream_alias_and_tool_choice() {
+        for protocol in [
+            ProviderProtocol::Anthropic,
+            ProviderProtocol::OpenAI,
+            ProviderProtocol::OpenAIResponses,
+        ] {
+            let mut ep = endpoint(protocol, ContextMode::Standard, ThinkingMode::Passthrough);
+            ep.routed_model = "gateway/xai/GROK-4.7[1m]".into();
+            ep.upstream_model = "provider/opaque-model".into();
+            for (req, purpose) in [
+                (websearch_request(), RequestPurpose::WebSearch),
+                (webfetch_request(), RequestPurpose::WebFetch),
+            ] {
+                assert!(server_retrieval_enabled(&ep, &req, purpose));
+                let built = build_outbound(
+                    &ep,
+                    &req,
+                    &[],
+                    "POST",
+                    "/v1/messages",
+                    "k",
+                    purpose,
+                    None,
+                    None,
+                );
+                let body: Value = serde_json::from_slice(&built.request.body).unwrap();
+                assert_eq!(body["model"], "provider/opaque-model");
+                match protocol {
+                    ProviderProtocol::Anthropic => {
+                        assert_eq!(body["tool_choice"], json!({"type":"any"}))
+                    }
+                    ProviderProtocol::OpenAI => assert_eq!(body["web_search_options"], json!({})),
+                    ProviderProtocol::OpenAIResponses => {
+                        assert_eq!(body["tools"], json!([{"type":"web_search"}]))
+                    }
+                    ProviderProtocol::Gemini => unreachable!(),
+                }
+            }
+            assert!(!server_retrieval_enabled(
+                &ep,
+                &webfetch_request(),
+                RequestPurpose::Standard
+            ));
+        }
+    }
+
+    #[test]
     fn gemini_native_path_and_auth_preserve_body() {
         let mut target = endpoint(
             ProviderProtocol::Gemini,
@@ -2737,6 +2864,35 @@ mod tests {
                 "upstream",
             ),
             "/v1/realtime?model=upstream&model=upstream"
+        );
+    }
+
+    #[test]
+    fn codex_wham_call_paths_normalize_only_the_call_family() {
+        for prefix in ["/wham/realtime/calls", "/backend-api/wham/realtime/calls"] {
+            assert_eq!(
+                realtime_resource_path(
+                    "/proxy/v1",
+                    &format!("{prefix}?intent=quicksilver&architecture=avas&trace=a%2Bb")
+                ),
+                "/proxy/v1/realtime/calls?intent=quicksilver&architecture=avas&trace=a%2Bb"
+            );
+            assert_eq!(
+                realtime_resource_path("", &format!("{prefix}/rtc_1/hangup")),
+                "/v1/realtime/calls/rtc_1/hangup"
+            );
+            assert_eq!(
+                realtime_resource_path("", &format!("{prefix}-other")),
+                format!("{prefix}-other")
+            );
+        }
+        assert_eq!(
+            realtime_resource_path("", "/wham/realtime/sessions"),
+            "/wham/realtime/sessions"
+        );
+        assert_eq!(
+            realtime_resource_path("/v1", "/v1/live/rtc_1"),
+            "/v1/live/rtc_1"
         );
     }
 

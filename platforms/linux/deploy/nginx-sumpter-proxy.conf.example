@@ -11,6 +11,8 @@
 #      X-Forwarded-For 链就会从右向左跳过它们。
 #   3. 入站 Token 与 allowedCIDRs 仍按 Sumpter 看到的 TCP 对端(本 Nginx)判定;
 #      需要限制客户端网段时请在 Nginx 用 allow/deny,或让 allowedCIDRs 只包含代理。
+#   4. `/__status` 与其他 `/__` 控制路径不从公网反代进入。同机 Nginx 的对端是
+#      环回,daemon 不能据此把状态快照交给公网客户端。
 #
 # 本 Nginx 直接面对客户端,所以 X-Forwarded-For / X-Real-IP 都用 $remote_addr
 # 覆盖,丢弃客户端自带的值。若本 Nginx 前面还有一层代理(CDN、负载均衡),
@@ -20,6 +22,19 @@
 map $http_upgrade $sumpter_connection_upgrade {
     default upgrade;
     ""      "";
+}
+
+# 控制路径只允许本机直连 daemon。公网反代统一 404,不把请求送到环回对端。
+location = /__status {
+    return 404;
+}
+
+location ^~ /__sumpter/ {
+    return 404;
+}
+
+location ^~ /__ {
+    return 404;
 }
 
 location / {

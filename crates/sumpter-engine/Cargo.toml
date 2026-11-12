@@ -25,6 +25,7 @@ bytes = { workspace = true }
 futures-util = { workspace = true }
 reqwest = { workspace = true }
 tokio-tungstenite = { workspace = true }
+tokio-rustls = { workspace = true }
 tracing = { workspace = true }
 rand = { workspace = true }
 md-5 = { workspace = true }

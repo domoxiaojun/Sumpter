@@ -10,6 +10,9 @@ mod websocket_size;
 #[path = "../../../../tests/contracts/realtime_websocket.rs"]
 mod realtime_websocket;
 
+#[path = "../../../../tests/contracts/https_listener.rs"]
+mod https_listener;
+
 #[path = "../../../../tests/contracts/gemini_websocket.rs"]
 mod gemini_websocket;
 

@@ -226,10 +226,14 @@ struct OverviewPane: View {
                 color: model.sidecarState.isActive ? palette.success : palette.warning
             )
             StatusBadge(
-                text: "\(model.config.listener.host):\(model.config.listener.port)",
+                text: "HTTP \(model.config.listener.host):\(model.config.listener.port)",
                 systemImage: "network",
                 color: palette.info
             )
+            if let httpsPort = model.config.listener.httpsPort {
+                StatusBadge(text: "HTTPS \(model.config.listener.host):\(httpsPort)",
+                            systemImage: "lock.shield", color: palette.info)
+            }
             if let storage = model.runtimeSummary?.storage {
                 StatusBadge(
                     text: "SQLite \(storage.state) · 待写 \(storage.pendingEvents)",

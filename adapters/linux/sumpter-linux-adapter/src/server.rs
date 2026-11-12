@@ -149,9 +149,6 @@ async fn dispatch(
                 }))
                 .unwrap_or_else(|_| Response::new(Body::empty()));
         }
-        let upgrade = select_websocket_protocol(upgrade, &pairs)
-            .max_frame_size(usize::MAX)
-            .max_message_size(usize::MAX);
         let prepared = match engine
             .prepare_realtime_websocket(remote_ip, &path_and_query, &pairs)
             .await
@@ -161,6 +158,9 @@ async fn dispatch(
                 return sumpter_engine::engine::websocket_prepare_error_response(&error);
             }
         };
+        let upgrade = select_websocket_protocol(upgrade, &pairs)
+            .max_frame_size(prepared.max_frame_bytes())
+            .max_message_size(prepared.max_message_bytes());
         let ws_engine = engine.clone();
         return upgrade.on_upgrade(move |socket| async move {
             let _guard = websocket_guard;
@@ -256,7 +256,10 @@ pub async fn serve(
     engine: Engine,
     address: SocketAddr,
 ) -> std::io::Result<(SocketAddr, ServerHandle)> {
-    serve_router(router(engine), address).await
+    let https = sumpter_engine::inbound_tls::prepare_https(address, &engine.config().listener)?;
+    let listeners = sumpter_engine::inbound_tls::bind_proxy_listeners(address, https).await?;
+    let (local, _) = listeners.addresses()?;
+    Ok((local, serve_bound_proxy(router(engine), listeners)))
 }
 
 /// 通用 Router 监听(admin listener 复用)。
@@ -279,6 +282,19 @@ pub async fn bind_listener(
 }
 
 pub fn serve_bound_router(app: Router, listener: tokio::net::TcpListener) -> ServerHandle {
+    serve_bound_proxy(
+        app,
+        sumpter_engine::inbound_tls::BoundProxyListeners {
+            http: listener,
+            https: None,
+        },
+    )
+}
+
+pub fn serve_bound_proxy(
+    app: Router,
+    listeners: sumpter_engine::inbound_tls::BoundProxyListeners,
+) -> ServerHandle {
     let shutdown = CancellationToken::new();
     let websockets = WebSocketShutdown {
         cancellation: shutdown.clone(),
@@ -291,12 +307,8 @@ pub fn serve_bound_router(app: Router, listener: tokio::net::TcpListener) -> Ser
     }));
     let serve_shutdown = shutdown.clone();
     let task = tokio::spawn(async move {
-        let _ = axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .with_graceful_shutdown(serve_shutdown.cancelled_owned())
-        .await;
+        let _ =
+            sumpter_engine::inbound_tls::serve_proxy_bound(app, listeners, serve_shutdown).await;
     });
     ServerHandle {
         shutdown,

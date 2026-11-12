@@ -13,6 +13,24 @@ use crate::engine::websocket_relay::{
 use crate::request_build;
 
 #[test]
+fn websocket_cookie_cleanup_preserves_other_business_cookies() {
+    let headers = websocket_upstream_headers(&[
+        (
+            "Cookie".into(),
+            "first=one; sumpter_admin_session=synthetic-admin".into(),
+        ),
+        ("cookie".into(), "second=two".into()),
+        ("Cookie".into(), "broken".into()),
+    ]);
+    let values: Vec<_> = headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("cookie"))
+        .map(|(_, value)| value.as_str())
+        .collect();
+    assert_eq!(values, ["first=one", "second=two"]);
+}
+
+#[test]
 fn websocket_close_metrics_have_one_byte_contract_and_eof_is_failure() {
     let axum_close = WebSocketMessage::Close(Some(axum::extract::ws::CloseFrame {
         code: 1000,

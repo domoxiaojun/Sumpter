@@ -2,11 +2,13 @@
   "root": {
     "installation_links": "[Compose](platforms/linux/DOCKER.md)、[Linux systemd](platforms/linux/README.md)、[macOS App](platforms/macos/README.md)",
     "configuration_link": "[配置参考](docs/configuration.md)",
-    "troubleshooting_link": "[故障排查](docs/troubleshooting.md)"
+    "troubleshooting_link": "[故障排查](docs/troubleshooting.md)",
+    "client_attribution_link": "[客户端归因](docs/client-attribution.md)"
   },
   "linux": {
     "installation_links": "[Compose](DOCKER.md)、[Linux systemd](README.md)",
     "configuration_link": "[本文的配置步骤](#2-配好第一个上游)",
-    "troubleshooting_link": "[Linux 安装与维护](README.md#故障排查) 或 [Compose 排障](DOCKER.md#故障排查)"
+    "troubleshooting_link": "[Linux 安装与维护](README.md#故障排查) 或 [Compose 排障](DOCKER.md#故障排查)",
+    "client_attribution_link": "[客户端归因](../../docs/client-attribution.md)"
   }
 }

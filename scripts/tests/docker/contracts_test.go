@@ -48,7 +48,6 @@ func TestBuildContextIsolation(t *testing.T) {
 		{"source", ".dockerignore", []string{
 			"Cargo.toml", "Cargo.lock", "crates/sumpter-core/src/lib.rs",
 			"adapters/linux/sumpter-linux-adapter/src/engine.rs", "apps/linux/sumpterd/src/main.rs",
-			"platforms/linux/scripts/setup-client-attribution.sh", "platforms/linux/scripts/client-attribution.mjs",
 			"platforms/linux/web/index.html", "platforms/linux/web/assets/synthetic.js", "platforms/linux/config.example.json",
 		}, []string{
 			"target/debug/sumpterd", "platforms/linux/target/debug/sumpterd", ".git/config", ".env",
@@ -422,9 +421,8 @@ func TestInitCreatesPrivateFilesAndPreservesState(t *testing.T) {
 	}
 }
 
-// 首次启动要直接把初始密码写进日志：容器里没有安装器那样的交互终端，让用户去宿主机
-// cat 文件是最大的首次使用摩擦点。约束是“只打印一次”：重启不得重复刷已有密码。
-func TestInitPrintsPasswordOnceOnFirstRun(t *testing.T) {
+// 初始化日志仅给出受控文件位置，首次启动和重启都不能输出密码。
+func TestInitNeverPrintsPassword(t *testing.T) {
 	dir := t.TempDir()
 	script := initScript(t)
 	run := func() string {
@@ -442,8 +440,8 @@ func TestInitPrintsPasswordOnceOnFirstRun(t *testing.T) {
 	if len(password) != 64 {
 		t.Fatalf("expected 64 hex chars, got %d", len(password))
 	}
-	if !strings.Contains(first, password) {
-		t.Fatalf("首次启动必须在日志里给出初始密码: %s", first)
+	if strings.Contains(first, password) {
+		t.Fatal("首次启动日志泄露初始密码")
 	}
 	if !strings.Contains(first, "admin-password") || !strings.Contains(first, "WebUI") {
 		t.Fatalf("日志必须给出凭据路径与改密提醒: %s", first)

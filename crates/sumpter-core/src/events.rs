@@ -1519,13 +1519,30 @@ pub fn codex_agent_role(metadata: &CodexMetadata) -> &'static str {
 
 /// Bounded request-purpose dimension, independent of routing RequestPurpose.
 pub fn codex_request_kind(metadata: Option<&CodexMetadata>) -> &'static str {
-    match metadata.and_then(|m| m.request_kind.as_deref()) {
-        Some("prewarm") => "prewarm",
-        Some("turn") => "turn",
-        Some("compaction") => "compaction",
-        Some("memory") => "memory",
-        _ => "unknown",
+    let Some(m) = metadata else {
+        return "unknown";
+    };
+    if let Some(kind) = m
+        .request_kind
+        .as_deref()
+        .and_then(crate::client_attribution::ObservedRequestKind::parse)
+        && kind != crate::client_attribution::ObservedRequestKind::Unknown
+    {
+        return kind.as_str();
     }
+    for raw in [
+        m.request_kind.as_deref(),
+        m.thread_source.as_deref(),
+        m.subagent_header.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Some(kind) = crate::client_attribution::native_task(raw) {
+            return kind;
+        }
+    }
+    "unknown"
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]

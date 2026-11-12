@@ -100,6 +100,16 @@ pub fn reasoning_effort(model: &str) -> Option<ReasoningEffort> {
     parse(model).effort
 }
 
+/// 只按最后一段识别模型家族；供应商前缀仍参与路由匹配并完整发给上游。
+pub fn is_grok(model: &str) -> bool {
+    clean(model)
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .starts_with("grok-")
+}
+
 /// 客户端模型匹配:精确名或 `claude-opus-*` 前缀通配;双方先 clean。
 /// 空 pattern 恒不命中。对齐 Swift `ModelPattern.matches`。
 pub fn pattern_matches(pattern: &str, model: &str) -> bool {
@@ -118,6 +128,23 @@ pub fn pattern_matches(pattern: &str, model: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grok_family_uses_leaf_but_routing_keeps_the_namespace() {
+        for model in ["grok-4.7", "xai/grok-4.7", "gateway/xai/GROK-4.7(high)[1m]"] {
+            assert!(is_grok(model), "{model}");
+        }
+        for model in [
+            "grok-provider/claude-opus-5",
+            "xai/not-grok-4.7",
+            "xai/grok-4.7/",
+        ] {
+            assert!(!is_grok(model), "{model}");
+        }
+        assert_eq!(clean("xai/grok-4.7(high)"), "xai/grok-4.7");
+        assert!(pattern_matches("xai/grok-*", "xai/grok-4.7"));
+        assert!(!pattern_matches("grok-*", "xai/grok-4.7"));
+    }
 
     #[test]
     fn strips_bracket_and_effort_suffix() {

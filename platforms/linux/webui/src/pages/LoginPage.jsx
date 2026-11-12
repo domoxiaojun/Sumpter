@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAppControls } from '../context/AppContext.jsx';
 
 import donkeyHead from '../assets/donkey-logo.png';
@@ -9,13 +9,28 @@ export function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [retryAt, setRetryAt] = useState(0);
+  const [now, setNow] = useState(Date.now());
+  const waitSeconds = Math.max(0, Math.ceil((retryAt - now) / 1000));
+  useEffect(() => {
+    if (!retryAt) return undefined;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [retryAt]);
 
   const submit = async (event) => {
     event.preventDefault();
+    if (busy || waitSeconds > 0) return;
     if (!username.trim() || !password) return setError('请输入用户名和密码');
     setBusy(true); setError('');
     try { await login(username.trim(), password); setPassword(''); }
-    catch (loginError) { setError(loginError.message || '登录失败，请检查凭据和 Admin 地址'); }
+    catch (loginError) {
+      setError(loginError.message || '登录失败，请检查凭据和 Admin 地址');
+      if (loginError.retryAfterSeconds > 0) {
+        const timestamp = Date.now(); setNow(timestamp);
+        setRetryAt(timestamp + loginError.retryAfterSeconds * 1000);
+      }
+    }
     finally { setBusy(false); }
   };
 
@@ -35,8 +50,8 @@ export function LoginPage() {
             <input id="admin-password" className="form-input" type="password" value={password} autoComplete="current-password" onChange={(event) => setPassword(event.target.value)} />
           </div>
           {error ? <p className="form-error" role="alert">{error}</p> : null}
-          <button type="submit" className="btn btn-primary login-submit" disabled={busy} aria-busy={busy || undefined}>
-            {busy ? '登录中…' : '登录'}
+          <button type="submit" className="btn btn-primary login-submit" disabled={busy || waitSeconds > 0} aria-busy={busy || undefined}>
+            {waitSeconds > 0 ? `请等待 ${waitSeconds} 秒` : busy ? '登录中…' : '登录'}
           </button>
         </form>
       </section>

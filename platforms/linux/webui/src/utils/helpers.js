@@ -1,4 +1,5 @@
 // Helper utilities for formatters, models, request chains, and telemetry events
+import { CLIENT_CATALOG } from './clientRegistry.js';
 import { routeModeLabel, sourceFormatLabel } from './protocols.js';
 
 // randomUUID is missing on plain HTTP LAN origins (not a secure context).
@@ -450,225 +451,6 @@ export function codexWorkspaceSummary(metadataOrEvent) {
     entry.commit ? `提交 ${entry.commit}` : null,
   ].filter(Boolean).join(' · ')).join('；');
 }
-
-// Claude Code 项目归因未配置的判定。与 macOS 侧 SumpterCore/ClaudeAttributionHint
-// 保持同一口径:只看分析数据,不去读 shell 配置或 settings.json —— 用户可能用
-// direnv / per-project settings 配好了,读那些只会误判。
-//
-// 成立条件:存在未识别项目行,且确实由 Claude Code 贡献。一旦出现任何
-// client_declared 行就闭嘴 —— 说明已经配好了,剩下的未识别行是配置生效前的历史
-// 事件,继续提示只是噪音。
-export const CC_ATTRIBUTION_HINT = {
-  title: 'Claude Code 项目归因未配置',
-  message: '这些 Claude Code 请求没有项目归因。Linux 常见是浏览器在本机、daemon 在远程服务器；wrapper 必须装在 Claude Code 实际运行的那台机器，让它随请求带上项目名。会话统计不受影响。',
-  command: 'curl --proto \'=https\' --tlsv1.2 -fLo setup-client-attribution.sh https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/setup-client-attribution.sh\nbash setup-client-attribution.sh status claude\nbash setup-client-attribution.sh install claude',
-  hint: '从远程 WebUI 复制后，先 SSH/进入 Claude Code 主机执行。脚本默认从 GitHub 仓库下载配套文件。若 CC 与 daemon 不同机，确认 ANTHROPIC_BASE_URL 指向 daemon 的可达地址；装完要新开终端。',
-};
-
-// 安全页面的完整引导。与统计页的小提示卡(CC_ATTRIBUTION_HINT)分开:那里是"发现症状后的
-// 一句话 + 命令",这里是"从零配完"的全流程。两侧 UI 共用这份文案 —— macOS 侧的等价物在
-// SumpterCore/ClaudeAttributionHint.guide,关键串由两边的测试各自钉死。
-export const CC_ATTRIBUTION_GUIDE = {
-  title: 'Claude Code 项目归因',
-  subtitle: '让统计能按项目区分 Claude Code 请求。只影响项目维度，会话维度零配置就有。',
-  statusLabels: {
-    configured: '已生效',
-    unconfigured: '未配置',
-    unknown: '暂无法判定',
-  },
-  statusDetails: {
-    configured: '统计里已出现「客户端声明」来源的项目行，归因链路是通的。',
-    unconfigured: '有 Claude Code 请求落进「未识别项目」，且没有任何一行来自客户端声明。',
-    unknown: '当前时间窗口内没有 Claude Code 流量，或分析数据还没取到 —— 无法判定。',
-  },
-  why: 'Claude Code 不把工作目录放进请求（cwd / project_dir 只给本机 statusLine 和 hook 用），所以默认所有 CC 请求都堆在「未识别项目」里。要分项目，就让 CC 把项目名随请求带上：Sumpter认 X-Sumpter-Project / X-Sumpter-Workspace / X-Sumpter-Git-Remote 三个入站 header，读完即从出站剥离。会话维度不受影响 —— CC 无条件发 X-Claude-Code-Session-Id。',
-  whereToRun: '先分清三台机器：WebUI/浏览器所在设备只负责打开管理页；daemon 所在 Linux 主机负责接收请求和保存统计；Claude Code 所在主机才需要安装 wrapper。配置命令必须在跑 CC 的主机执行，不是打开 WebUI 或运行 daemon 的机器。若 CC 与 daemon 不同机，先 SSH/进入 CC 主机，并确认 ANTHROPIC_BASE_URL 指向 daemon 的可达地址；daemon 只监听 127.0.0.1 时要使用 SSH 隧道或安全内网地址，不要直接暴露无认证监听。每台跑 CC 的机器各配一次。',
-  steps: [
-    {
-      title: '只读体检',
-      command: 'bash setup-client-attribution.sh status claude',
-      note: '在 Claude Code 实际运行主机执行；远程 WebUI 场景先 SSH 登录该主机，再 cd 到脚本所在目录。看当前 shell、要改哪个 rc 文件、有没有 settings.json 覆盖陷阱，不改任何文件。',
-    },
-    {
-      title: '安装 wrapper',
-      command: 'bash setup-client-attribution.sh install claude',
-      note: '仍在 Claude Code 主机执行，不能装到只运行 daemon 的服务器上。想先预演就加 --dry-run；装前自动给 rc 打时间戳备份，改动是一段带标记的 source 块，可精确移除。',
-    },
-    {
-      title: '新开终端验证',
-      command: '',
-      note: 'wrapper 是 shell 函数，只对之后启动的 shell 生效。在同一台 CC 主机新开终端，进任意项目发一条消息；回本页看状态变成「已生效」。若 daemon 在另一台机器，不要在 daemon 主机重复安装，只需保证 Base URL 可达。',
-    },
-  ],
-  remoteMachines: [
-    { label: 'WebUI / 浏览器', detail: '只负责打开管理页，可以在本地电脑或任意跳板机；不会执行配置，也不决定归因归属。' },
-    { label: 'daemon / Linux 服务', detail: '接收 Claude Code 请求并写入统计。它可以是远程服务器或容器；这里通常不安装 CC wrapper。' },
-    { label: 'Claude Code 运行主机', detail: '真正启动 claude 进程的机器。wrapper 脚本、shell 环境、项目目录和 Base URL 都以这台机器为准。' },
-  ],
-  remoteScenarios: [
-    { title: 'CC 与 daemon 同机', detail: '在这台 Linux 主机执行 status/install；Claude Code 可使用 http://127.0.0.1:57878 访问 daemon。' },
-    { title: '本地电脑调用远程 daemon', detail: '在运行 Claude Code 的本地电脑安装统一安装器，不要只在远程 daemon 服务器安装；从 GitHub 仓库 raw 下载 setup-client-attribution.sh。ANTHROPIC_BASE_URL 指向远程 daemon 的安全可达地址。' },
-    { title: '远程开发机调用另一台 daemon', detail: '先 SSH/进入远程开发机，再执行配置器；让该机的 ANTHROPIC_BASE_URL 指向 daemon。若 daemon 仅监听 127.0.0.1，使用 SSH 隧道、反向代理或安全内网，不要裸露无认证端口。' },
-  ],
-  remoteDownload: {
-    command: "curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/setup-client-attribution.sh\nbash setup-client-attribution.sh install claude",
-    note: '默认从 GitHub 仓库下载。无法访问 GitHub 且代理已运行时，可改用 listener 的 /__sumpter/setup-client-attribution.sh（入站认证非空时带 Bearer）。脚本只在 Claude Code 客户端本地执行。',
-  },
-  remoteChecks: [
-    { command: 'hostname', note: '确认当前终端确实是 Claude Code 将要运行的主机。' },
-    { command: 'whoami', note: '确认 wrapper 会写入启动 Claude Code 的那个用户，而不是 root 或另一账号。' },
-    { command: 'pwd', note: '确认当前目录是要归因的项目目录；wrapper 按启动时目录生成项目名。' },
-    { command: 'printf \'%s\\n\' "$ANTHROPIC_BASE_URL"', note: '确认 Claude Code 访问的是 daemon 的可达地址；跨机时不要误留 127.0.0.1。' },
-  ],
-  platformMatrix: [
-    { label: '配置器位置', macos: 'App 内 Resources/（源码构建则在 macos/scripts/）', linux: '部署包解包后 scripts/（安装后 /opt/sumpter/scripts/）' },
-    { label: '默认 shell', macos: '通常 zsh → ~/.zshrc', linux: '视发行版，zsh 或 bash 都常见' },
-    { label: 'bash 用哪个 rc', macos: '~/.bash_profile（登录 shell 不读 .bashrc）', linux: '~/.bashrc' },
-    { label: 'CC 与 daemon', macos: '通常同机', linux: 'CC 常在别的机器上连远程 daemon' },
-    { label: 'fish', macos: 'fish-snippet 手动粘贴（未实测）', linux: '同左' },
-  ],
-  pitfalls: [
-    {
-      title: '值必须是纯 ASCII',
-      detail: 'CC 见到含非 ASCII 的 ANTHROPIC_CUSTOM_HEADERS 会直接报错退出 —— 不是归因缺失，是整个会话起不来。中文目录名会让 claude 在该项目完全不可用。配置器已内置 ASCII 守卫，跳过不安全的值而不是硬塞。',
-    },
-    {
-      title: '别写进 settings.json 的 env',
-      detail: '那里的值会覆盖进程环境变量，且不做插值（$PWD、${CLAUDE_PROJECT_DIR} 全部字面传出）。一旦写死，shell wrapper 永久失效，且只能固定一个项目名。配置器检出该键会拒绝安装。',
-    },
-    {
-      title: '进程级，启动时读一次',
-      detail: '归因的是「启动 CC 时所在的项目」，会话内 cd 不更新。--print / SDK / CI 这些非交互场景不走 shell 函数，需要自行显式设环境变量。',
-    },
-  ],
-  rollback: [
-    { command: 'bash setup-client-attribution.sh restore claude', note: '还原所选客户端的归因配置' },
-  ],
-  privacy: 'header 会被代理从出站剥离，上游中转站看不到。但同一请求的 body 本来就带工作目录绝对路径、CLAUDE.md 全文和 git status —— 配这三个 header 不增不减外泄面，只决定能否按项目统计。',
-};
-
-// 三态判定的内核。安全页面的引导要区分「已配好」「确实没配」「说不清」——统计页那个
-// Bool 只需要知道该不该提示,不够用。两者共用同一内核,避免两处口径漂移。
-//
-// rows: 项目维度行(v3 DimensionRow,只有 name/source/requests,没有 clientKinds);
-// clientKindFacets: analytics.facets.clientKinds,用来确认这批流量里确实有 CC。
-// 分成两个入参是因为 v3 的项目行不带客户端类型 —— 只看项目行会把 Codex 的未识别
-// 行也算成"CC 没配",只看 facets 又不知道未识别的是谁,两者必须合起来判。
-export const CC_ATTRIBUTION_STATE = {
-  configured: 'configured',
-  unconfigured: 'unconfigured',
-  unknown: 'unknown',
-};
-
-function rowHasClientKind(row, kind) {
-  const kinds = Array.isArray(row?.clientKinds) ? row.clientKinds.map(cleanText) : [];
-  return kinds.includes(kind);
-}
-
-export function ccAttributionState(rows, clientKindFacets) {
-  const list = Array.isArray(rows) ? rows : [];
-  // 纯项目名声明仍是 client_declared；wrapper 带工作区后升格 workspace_local。
-  if (list.some((row) => cleanText(row?.source ?? row?.projectSource) === 'client_declared')) {
-    return CC_ATTRIBUTION_STATE.configured;
-  }
-  if (list.some((row) => (
-    cleanText(row?.source ?? row?.projectSource) === 'workspace_local'
-      && rowHasClientKind(row, 'claude_code')
-  ))) {
-    return CC_ATTRIBUTION_STATE.configured;
-  }
-  const facets = Array.isArray(clientKindFacets) ? clientKindFacets : [];
-  const facetsHaveClaudeCode = facets.some(
-    (item) => cleanText(item?.value) === 'claude_code' && Number(item?.count ?? 0) > 0,
-  );
-  const unidentified = list.filter((row) => {
-    const name = cleanText(row?.name);
-    const source = cleanText(row?.source ?? row?.projectSource);
-    const requests = Number(row?.requests ?? row?.attempts ?? 0);
-    return requests > 0
-      && (name === 'unidentified_project' || source === 'missing_workspace_metadata');
-  });
-  // 行自带 clientKinds(analytics.projects 的行)时以行为准 —— 比全局 facets 精确:
-  // 未归因的那行全是 Codex 时不能说 CC 没配。v3 分页行不带 kinds,才回退看 facets。
-  // 这也让两侧口径对齐:macOS 的 ClaudeAttributionHint 一直是按行内 kinds 判的。
-  const hasUnattributedClaudeCode = unidentified.some((row) => {
-    const kinds = Array.isArray(row?.clientKinds) ? row.clientKinds.map(cleanText) : null;
-    return kinds ? kinds.includes('claude_code') : facetsHaveClaudeCode;
-  });
-  // 没有未归因的 CC 请求 → 说不清(窗口内没有 CC 流量,或都已归因),不能说"没配"。
-  return hasUnattributedClaudeCode
-    ? CC_ATTRIBUTION_STATE.unconfigured
-    : CC_ATTRIBUTION_STATE.unknown;
-}
-
-export function shouldPromptCCAttribution(rows, clientKindFacets) {
-  return ccAttributionState(rows, clientKindFacets) === CC_ATTRIBUTION_STATE.unconfigured;
-}
-
-export function grokAttributionState(rows, clientKindFacets) {
-  const list = Array.isArray(rows) ? rows : [];
-  if (list.some((row) => (
-    (cleanText(row?.source ?? row?.projectSource) === 'client_declared'
-      || cleanText(row?.source ?? row?.projectSource) === 'workspace_local')
-    && rowHasClientKind(row, 'grok_build')
-  ))) {
-    return CC_ATTRIBUTION_STATE.configured;
-  }
-  const facets = Array.isArray(clientKindFacets) ? clientKindFacets : [];
-  const facetsHaveGrok = facets.some(
-    (item) => cleanText(item?.value) === 'grok_build' && Number(item?.count ?? 0) > 0,
-  );
-  const unidentified = list.filter((row) => {
-    const name = cleanText(row?.name);
-    const source = cleanText(row?.source ?? row?.projectSource);
-    const requests = Number(row?.requests ?? row?.attempts ?? 0);
-    return requests > 0
-      && (name === 'unidentified_project' || source === 'missing_workspace_metadata');
-  });
-  const hasUnattributedGrok = unidentified.some((row) => {
-    const kinds = Array.isArray(row?.clientKinds) ? row.clientKinds.map(cleanText) : null;
-    return kinds ? kinds.includes('grok_build') : facetsHaveGrok;
-  });
-  return hasUnattributedGrok
-    ? CC_ATTRIBUTION_STATE.unconfigured
-    : CC_ATTRIBUTION_STATE.unknown;
-}
-
-export const GROK_ATTRIBUTION_GUIDE = {
-  title: 'Grok Build 项目归因',
-  subtitle: '让统计能按项目区分 Grok Build 请求。只影响项目维度。',
-  statusLabels: CC_ATTRIBUTION_GUIDE.statusLabels,
-  statusDetails: {
-    configured: '统计里已出现 Grok Build 的本地项目行，归因链路是通的。',
-    unconfigured: '有 Grok Build 请求落进「未识别项目」，且没有任何一行来自 Grok 的工作区声明。',
-    unknown: '当前时间窗口内没有 Grok Build 流量，或分析数据还没取到 —— 无法判定。',
-  },
-  whereToRun: '配置必须在启动 grok 的那台机器执行，不是只运行 sidecar/daemon 的机器。每台跑 Grok Build 的主机各装一次；装完要新开终端。',
-  steps: [
-    {
-      title: '只读体检',
-      command: 'bash setup-client-attribution.sh status grok',
-      note: '在运行 grok 的主机执行。看当前 shell、要改哪个 rc、GROK_CONFIG_PATH 会不会挡住 overlay。',
-    },
-    {
-      title: '安装 wrapper',
-      command: 'bash setup-client-attribution.sh install grok',
-      note: '仍在 grok 主机执行。想先预演加 --dry-run。装前自动备份 rc。',
-    },
-    {
-      title: '新开终端验证',
-      command: '',
-      note: 'wrapper 是 grok() 函数。新开终端后再启动 grok，进项目发一条消息，回本页看状态变成「已生效」。',
-    },
-  ],
-  remoteDownload: {
-    command: "curl --proto '=https' --tlsv1.2 -fLo setup-client-attribution.sh https://raw.githubusercontent.com/domoxiaojun/sumpter/main/platforms/linux/scripts/setup-client-attribution.sh\nbash setup-client-attribution.sh install grok",
-    note: '默认从 GitHub 仓库下载。脚本只在 Grok Build 客户端本地执行。',
-  },
-  rollback: [
-    { command: 'bash setup-client-attribution.sh restore grok', note: '还原所选客户端的归因配置' },
-  ],
-};
 
 // 投影里的合成桶名是机器可读的,展示前翻成中文,与 StatsPage 的 projectLabel 一致。
 export function projectLabelText(value) {
@@ -1130,36 +912,18 @@ export function agentRoleLabel(value) {
 
 export function clientAttributionSummary(attribution) {
   if (!attribution) return '未记录';
-  const sources = { declared: '客户端声明', native: '原生标记', endpoint: '专用接口', user_agent: '产品 UA', fingerprint: '固定指纹' };
+  const sources = { declared: '客户端声明', native: '原生标记', endpoint: '专用接口', user_agent: '产品 UA', fingerprint: '固定指纹', token_binding: 'Token 绑定', configured_ua: '配置别名', trusted_relay: '可信中继' };
   const fields = { clientKind: '客户端', clientVariant: '形态', agentRole: '角色', requestKind: '请求类型' };
   const evidence = (attribution.evidence || []).map((e) => `${fields[e.field] || e.field}：${sources[e.source] || e.source} / ${e.rule} → ${e.value}`);
+  const identity=attribution.identity;
+  if(identity) for(const [key,label] of [['rawProduct','原始产品'],['product','产品'],['reportedAs','统计归属'],['host','宿主'],['engine','引擎'],['relaySource','中继'],['agentId','子代理ID'],['parentAgentId','父代理ID']]) if(identity[key]) evidence.push(label+'：'+identity[key]);
   if (attribution.conflicts?.length) evidence.push(`信号冲突：${attribution.conflicts.map((f) => fields[f] || f).join('、')}`);
   if (attribution.issues?.length) evidence.push(`已忽略无效字段：${attribution.issues.join('、')}`);
   return evidence.join('；') || '未识别（缺少有效依据）';
 }
 
 export const CLIENT_KIND_LABELS = Object.freeze({
-  claude_code: 'Claude Code',
-  codex: 'Codex',
-  gemini_cli: 'Gemini CLI',
-  pi: 'pi',
-  grok_build: 'Grok Build',
-  cursor: 'Cursor',
-  cline: 'Cline',
-  roo_code: 'Roo Code',
-  continue: 'Continue',
-  aider: 'Aider',
-  open_code: 'OpenCode',
-  goose: 'Goose',
-  open_web_ui: 'Open WebUI',
-  windsurf: 'Windsurf',
-  kilo_code: 'Kilo Code',
-  lite_llm: 'LiteLLM',
-  ollama: 'Ollama',
-  lm_studio: 'LM Studio',
-  chatbox: 'Chatbox',
-  deepseek_harness: 'DeepSeek Harness',
-  workbuddy: 'WorkBuddy',
+  ...Object.fromEntries(CLIENT_CATALOG.map(c => [c.id,c.name])),
   openai_compat: 'OpenAI 兼容客户端',
   unknown: '未知客户端',
 });

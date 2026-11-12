@@ -109,6 +109,7 @@ export function DiagnosticsPage() {
   // 本地诊断的首要用途是复盘源请求链；索引/详情/导出默认使用源数据。
   // 脱敏仍可主动选择，raw 全量导出继续保留风险确认。
   const [captureExportPrivacy, setCaptureExportPrivacy] = useState('raw');
+  const [maxParseMib, setMaxParseMib] = useState(64);
   const [captureExportConfirmRaw, setCaptureExportConfirmRaw] = useState(false);
   const [captureExportBusy, setCaptureExportBusy] = useState(false);
   const [captureCapacityMB, setCaptureCapacityMB] = useState('512');
@@ -444,6 +445,7 @@ export function DiagnosticsPage() {
         privacy: captureExportPrivacy,
         confirmRaw: captureExportConfirmRaw,
         requestID,
+        maxParseMib,
       });
       addToast(`已开始${captureExportPrivacy === 'raw' ? '未脱敏' : '脱敏'}诊断导出`, 'success');
     } catch (error) {
@@ -529,8 +531,10 @@ export function DiagnosticsPage() {
                       <label><span>范围</span><select className="form-select" value={captureExportScope} onChange={(event) => setCaptureExportScope(event.target.value)}><option value="selected">当前选中请求</option><option value="all">全部捕获（服务端流式）</option></select></label>
                       <label><span>格式</span><select className="form-select" value={captureExportFormat} onChange={(event) => setCaptureExportFormat(event.target.value)}><option value="jsonl">JSONL（逐条）</option><option value="json">JSON</option></select></label>
                       <label><span>数据</span><select className="form-select" value={captureExportPrivacy} onChange={(event) => { setCaptureExportPrivacy(event.target.value); setCaptureExportConfirmRaw(false); }}><option value="raw">源数据（默认）</option><option value="redacted">脱敏副本</option></select></label>
+                      {captureExportPrivacy === 'redacted' && <label><span>JSON / 单个 SSE 事件解析上限（MiB）</span><input className="form-input" type="number" min="1" max="256" step="1" value={maxParseMib} onChange={event => setMaxParseMib(event.target.value === '' ? '' : Number(event.target.value))} /></label>}
                       <button type="button" className="btn btn-primary diagnostics-export-button" disabled={captureExportBusy || (captureExportScope !== 'all' && !selectedCaptureID)} onClick={startCaptureExport}>{captureExportBusy ? '准备导出…' : '开始流式导出'}</button>
                     </div>
+                    {captureExportPrivacy === 'redacted' && <p className="diagnostics-helper">JSON 默认 64 MiB，可调至 256 MiB；SSE 逐事件处理，累计流大小不受此值限制。原始 Chunk 仅保留元数据，可解析正文放在 redactedResponseBody / redactedClientBody；失败或截断时省略并说明原因。规则脱敏不能识别所有自然语言机密，分享前仍需检查。</p>}
                     {captureExportPrivacy === 'raw' && <label className="diagnostics-raw-confirm"><input type="checkbox" checked={captureExportConfirmRaw} onChange={(event) => setCaptureExportConfirmRaw(event.target.checked)} /> <span>我确认导出可能包含鉴权头、Cookie、URL 密钥、请求体和响应正文，并承担泄露风险。</span></label>}
                   </div>
                   {captureDetailLoading ? <p style={{ color: 'var(--text-secondary)' }}>正在读取选中请求详情…</p> : captureDetailError ? <div role="alert" className="diagnostics-index-preview"><span style={{ color: 'var(--status-warning)' }}>{captureDetailError}</span><button type="button" className="btn btn-secondary" onClick={loadCaptureDetail}>重试读取</button></div> : captureDetailMatchesSelection ? (

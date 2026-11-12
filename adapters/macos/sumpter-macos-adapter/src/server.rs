@@ -80,9 +80,6 @@ async fn dispatch(
                 }))
                 .unwrap_or_else(|_| Response::new(Body::empty()));
         }
-        let upgrade = select_websocket_protocol(upgrade, &pairs)
-            .max_frame_size(usize::MAX)
-            .max_message_size(usize::MAX);
         let prepared = match engine
             .prepare_realtime_websocket(remote_ip, &path_and_query, &pairs)
             .await
@@ -92,6 +89,9 @@ async fn dispatch(
                 return sumpter_engine::engine::websocket_prepare_error_response(&error);
             }
         };
+        let upgrade = select_websocket_protocol(upgrade, &pairs)
+            .max_frame_size(prepared.max_frame_bytes())
+            .max_message_size(prepared.max_message_bytes());
         let ws_engine = engine.clone();
         return upgrade.on_upgrade(move |socket| async move {
             ws_engine
@@ -181,7 +181,9 @@ pub async fn serve(
     engine: Engine,
     address: SocketAddr,
 ) -> std::io::Result<(SocketAddr, tokio::task::JoinHandle<()>)> {
-    serve_router(router(engine), address).await
+    let https = sumpter_engine::inbound_tls::prepare_https(address, &engine.config().listener)?;
+    let listeners = sumpter_engine::inbound_tls::bind_proxy_listeners(address, https).await?;
+    serve_bound_proxy_router(router(engine), listeners)
 }
 
 /// 通用 Router 监听(admin listener 复用)。
@@ -189,20 +191,23 @@ pub async fn serve_router(
     app: Router,
     address: SocketAddr,
 ) -> std::io::Result<(SocketAddr, tokio::task::JoinHandle<()>)> {
-    let listener = tokio::net::TcpListener::bind(address).await?;
-    let local = listener.local_addr()?;
+    let listeners = sumpter_engine::inbound_tls::bind_proxy_listeners(address, None).await?;
+    serve_bound_proxy_router(app, listeners)
+}
+
+fn serve_bound_proxy_router(
+    app: Router,
+    listeners: sumpter_engine::inbound_tls::BoundProxyListeners,
+) -> std::io::Result<(SocketAddr, tokio::task::JoinHandle<()>)> {
+    let (local, _) = listeners.addresses()?;
     // Upgraded callbacks outlive axum's listener task. Abort must also wake
     // first-message waits and active relays instead of leaving orphan sockets.
     let shutdown = tokio_util::sync::CancellationToken::new();
     let app = app.layer(axum::Extension(shutdown.clone()));
-    let guard = shutdown.drop_guard();
+    let guard = shutdown.clone().drop_guard();
     let handle = tokio::spawn(async move {
         let _guard = guard;
-        let _ = axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await;
+        let _ = sumpter_engine::inbound_tls::serve_proxy_bound(app, listeners, shutdown).await;
     });
     Ok((local, handle))
 }

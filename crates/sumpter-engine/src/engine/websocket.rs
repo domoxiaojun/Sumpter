@@ -66,6 +66,7 @@ pub(super) const MAX_WEBSOCKET_METADATA_FRAME_BYTES: usize = 64 * 1024;
 async fn connect_upstream_websocket(
     request: tokio_tungstenite::tungstenite::handshake::client::Request,
     resolve_ip: &str,
+    policy: &sumpter_core::request_policy::WebSocketPolicy,
 ) -> Result<
     (
         NativeWebSocket,
@@ -74,8 +75,8 @@ async fn connect_upstream_websocket(
     tokio_tungstenite::tungstenite::Error,
 > {
     let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
-        .max_frame_size(None)
-        .max_message_size(None);
+        .max_frame_size(Some(policy.max_frame_mib as usize * crate::ingress::MIB))
+        .max_message_size(Some(policy.max_message_mib as usize * crate::ingress::MIB));
     if resolve_ip.trim().is_empty() {
         return tokio_tungstenite::connect_async_with_config(request, Some(config), false).await;
     }
@@ -112,8 +113,19 @@ pub(super) type NativeWebSocket =
 /// Adapters hold the downstream upgrade until this value is ready, matching
 /// CPA's behavior for upstream 401/404/429 responses.
 pub struct PreparedWebSocket {
+    policy: sumpter_core::request_policy::WebSocketPolicy,
+    _permit: crate::ingress::Lease,
     connection: ConnectedWebSocket,
     context: WebSocketEventContext,
+}
+
+impl PreparedWebSocket {
+    pub fn max_frame_bytes(&self) -> usize {
+        self.policy.max_frame_mib as usize * crate::ingress::MIB
+    }
+    pub fn max_message_bytes(&self) -> usize {
+        self.policy.max_message_mib as usize * crate::ingress::MIB
+    }
 }
 
 struct ConnectedWebSocket {
@@ -229,6 +241,8 @@ fn websocket_http_headers(headers: &[(String, String)]) -> Vec<(String, String)>
 /// the selected endpoint below; omitting them also prevents duplicate
 /// `Authorization` headers when the client used the same name for both hops.
 pub(super) fn websocket_upstream_headers(headers: &[(String, String)]) -> Vec<(String, String)> {
+    let safe_headers = crate::http_headers::without_admin_cookie(headers);
+    let headers = safe_headers.as_slice();
     let mut forwarded = websocket_http_headers(headers);
     // Subprotocol is part of the WebSocket handshake contract (Realtime
     // providers may use it for version negotiation), unlike the hop-by-hop
@@ -258,7 +272,7 @@ pub(super) fn websocket_url(base_url: &str, path_and_query: &str) -> Option<Stri
     let path = if is_gemini_live_path(path_without_query(path_and_query)) {
         request_build::gemini_resource_path(parsed.path(), path_and_query)
     } else {
-        request_build::openai_resource_path(parsed.path(), path_and_query)
+        request_build::realtime_resource_path(parsed.path(), path_and_query)
     };
     Some(format!("{scheme}://{host}{port}{path}"))
 }
@@ -310,11 +324,25 @@ impl Engine {
         } else {
             i64::from(error.status)
         };
-        // Keep the upstream event's status at zero when no HTTP handshake
-        // response existed. The client still receives a conventional 502,
-        // but diagnostics must not claim that the provider returned HTTP 502.
-        let upstream_status = i64::from(error.status);
-        let mut failure = if error.status > 0 {
+        // Local route/session rejection has no upstream HTTP response. Keep
+        // it distinct from both provider rejection and transport failure.
+        let attempted = error.endpoint.is_some();
+        let upstream_status = if attempted {
+            i64::from(error.status)
+        } else {
+            0
+        };
+        let mut failure = if !attempted {
+            FailureInfo {
+                kind: RuntimeFailureKind::ClientRequestRejected,
+                phase: RuntimeFailurePhase::BeforeResponse,
+                detail: Some(error.message.clone()),
+                timeout_ms: None,
+                upstream_status_code: None,
+                upstream_request_id: None,
+                retry_after_seconds: None,
+            }
+        } else if error.status > 0 {
             FailureInfo::upstream_http(error.status, None)
         } else {
             FailureInfo {
@@ -330,9 +358,13 @@ impl Engine {
         failure.detail = Some(error.message.clone());
         failure.retry_after_seconds = error.retry_after_seconds;
         let trace = websocket_trace(
-            error.status.into(),
+            upstream_status,
             context.client_upgraded.then_some(101),
-            "upstream_handshake",
+            if attempted {
+                "upstream_handshake"
+            } else {
+                "local_rejection"
+            },
             context.first_message_wait_ms,
             0,
             0,
@@ -622,11 +654,40 @@ impl Engine {
         context.inbound_token =
             super::context::matched_inbound_token(headers, &self.config().listener)
                 .or_else(|| self.realtime_client_secret_inbound_token(headers));
+        context.attribution = sumpter_core::client_attribution::observe_configured(
+            "GET",
+            path,
+            headers,
+            None,
+            &self.config().listener.client_identity,
+            context.inbound_token.as_ref(),
+        );
+        context.session_id = super::context::observed_session_id(headers).or_else(|| {
+            context
+                .attribution
+                .attribution
+                .identity
+                .as_ref()
+                .and_then(|i| i.session_id.clone())
+        });
+        let policy = self.config().request_policy.websocket.clone();
+        let permit = self.inner.ingress.websocket.acquire(1).map_err(|_| {
+            let mut error = WebSocketPrepareError::new(
+                429,
+                "websocket_capacity_exhausted",
+                "too many active WebSocket connections",
+            );
+            error.retry_after_seconds = Some(1.0);
+            self.record_websocket_prepare_failure(&context, &error);
+            error
+        })?;
         match self
-            .connect_native_websocket(path, path_and_query, headers, &request)
+            .connect_native_websocket(path, path_and_query, headers, &request, &policy)
             .await
         {
             Ok(connection) => Ok(PreparedWebSocket {
+                policy,
+                _permit: permit,
                 connection,
                 context,
             }),
@@ -669,8 +730,14 @@ impl Engine {
             .upstream
             .take()
             .expect("prepared websocket owns an upstream connection");
-        let metrics =
-            relay_native_websocket(socket, upstream, shutdown, self.websocket_idle_timeout()).await;
+        let metrics = relay_native_websocket(
+            socket,
+            upstream,
+            shutdown,
+            self.websocket_idle_timeout(),
+            Duration::from_secs(prepared.policy.first_message_timeout_seconds.into()),
+        )
+        .await;
         self.record_websocket_completion(&prepared.context, &connection, &metrics);
         let _ = remote;
     }
@@ -688,6 +755,7 @@ impl Engine {
         path_and_query: &str,
         headers: &[(String, String)],
         request: &RoutingRequest,
+        policy: &sumpter_core::request_policy::WebSocketPolicy,
     ) -> Result<ConnectedWebSocket, WebSocketPrepareError> {
         if let Err(error) = validate_realtime_call_target(path_and_query) {
             let (status, code, message) = realtime_call_path_error(error);
@@ -913,6 +981,31 @@ impl Engine {
                 }
             };
             let mut upstream_headers = websocket_upstream_headers(headers);
+            let identity_config = self.config();
+            if let Some(source) = identity_config
+                .listener
+                .client_identity
+                .relay_endpoints
+                .get(&endpoint.endpoint_id)
+            {
+                let token =
+                    super::context::matched_inbound_token(headers, &identity_config.listener)
+                        .or_else(|| self.realtime_client_secret_inbound_token(headers));
+                let observed = sumpter_core::client_attribution::observe_configured(
+                    "GET",
+                    path,
+                    headers,
+                    None,
+                    &identity_config.listener.client_identity,
+                    token.as_ref(),
+                );
+                super::context::append_forwarded_identity(
+                    &mut upstream_headers,
+                    &observed,
+                    super::context::observed_session_id(headers),
+                    source,
+                );
+            }
             request_build::apply_user_agent(
                 &mut upstream_headers,
                 &endpoint.user_agent,
@@ -962,7 +1055,7 @@ impl Engine {
             }
             let connect_result = tokio::time::timeout(
                 Duration::from_secs_f64(REALTIME_WEBSOCKET_CONNECT_TIMEOUT_SECS),
-                connect_upstream_websocket(upstream_request, &endpoint.resolve_ip),
+                connect_upstream_websocket(upstream_request, &endpoint.resolve_ip, policy),
             )
             .await;
             match connect_result {

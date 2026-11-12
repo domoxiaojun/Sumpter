@@ -25,6 +25,27 @@ struct RequestPolicySheet: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("适用于 HTTP/SSE。并发名额保持到上游响应结束；重试也计入每分钟额度。WebSocket 不按连接数等同为请求数。")
                         .font(.caption).foregroundStyle(.secondary)
+                    GroupBox("HTTP 入站保护") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            number("HTTP 单请求体（MiB）", $draft.ingress.maxBodyMiB, 1...1024)
+                            number("解压输出上限（MiB）", $draft.ingress.maxDecodedBodyMiB, 1...1024)
+                            number("入站受控缓冲总预算（MiB）", $draft.ingress.maxBufferedMiB, 1...16384)
+                            number("同时读体、解压、解析", $draft.ingress.maxPreprocessing, 1...64)
+                            number("同时解压", $draft.ingress.maxDecompressions, 1...64)
+                            number("读体空闲时限（秒）", $draft.ingress.bodyIdleTimeoutSeconds, 1...3600)
+                            number("读体总时限（秒）", $draft.ingress.bodyReadTimeoutSeconds, 1...86400)
+                        }.padding(8)
+                    }
+                    GroupBox("WebSocket 保护") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            number("单帧上限（MiB）", $draft.websocket.maxFrameMiB, 1...1024)
+                            number("累计分片消息上限（MiB）", $draft.websocket.maxMessageMiB, 1...1024)
+                            number("业务连接上限", $draft.websocket.maxConnections, 1...1024)
+                            number("首个业务消息期限（秒）", $draft.websocket.firstMessageTimeoutSeconds, 1...3600)
+                        }.padding(8)
+                    }
+                    Text("安全额度必须为正整数。按需申请入站缓冲，新请求和连接使用保存后的配置；降低共享额度不会强杀已有工作。读体期限不限制正常响应或 SSE 长流。")
+                        .font(.caption).foregroundStyle(.secondary)
                     GroupBox("全局请求限制") { limits($draft.global) }
                     number("一次请求最多尝试（0 = 沿用原有重试限制）", $draft.maxTotalAttempts, 0...10_000)
                     number("代理响应等待上限（秒，0 = 不限）", $draft.responseWaitTimeoutSeconds, 0...86_400)
@@ -92,6 +113,8 @@ struct RequestPolicySheet: View {
                     Task { @MainActor in
                         defer { saving = false }
                         do {
+                            try draft.ingress.validate()
+                            try draft.websocket.validate()
                             try await model.mutateConfig { config in
                                 guard config.requestPolicy == original else { throw AppModelError.invalidInput("请求策略已被其它操作修改，请关闭后重新打开。") }
                                 config.requestPolicy = draft

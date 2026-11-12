@@ -98,6 +98,7 @@ impl AnalyticsFilter {
     pub fn to_runtime_filter(&self) -> crate::runtime_query::RuntimeFilter {
         let filter = self.normalized();
         crate::runtime_query::RuntimeFilter {
+            reporting_aliases: Default::default(),
             inbound_token_id: filter.inbound_token_id,
             request_kind: filter.request_kind,
             client_kind: filter.client_kind,

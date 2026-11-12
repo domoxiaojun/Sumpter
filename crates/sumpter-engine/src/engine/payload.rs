@@ -105,7 +105,8 @@ pub(super) fn apply_realtime_client_secret_session(
             return Err("Realtime call request requires an SDP offer");
         }
         let value = json!({"sdp": sdp, "session": session});
-        let encoded = serde_json::to_vec(&value).map_err(|_| "Realtime session encoding failed")?;
+        let encoded =
+            crate::ingress::to_vec(&value).map_err(|_| "Realtime session encoding failed")?;
         return Ok((Bytes::from(encoded), "application/json".into()));
     }
     if media_type.is_empty() || media_type == "application/json" {
@@ -115,7 +116,8 @@ pub(super) fn apply_realtime_client_secret_session(
             .as_object_mut()
             .ok_or("Realtime call request body must be an object")?;
         object.insert("session".into(), session.clone());
-        let encoded = serde_json::to_vec(&value).map_err(|_| "Realtime session encoding failed")?;
+        let encoded =
+            crate::ingress::to_vec(&value).map_err(|_| "Realtime session encoding failed")?;
         return Ok((Bytes::from(encoded), "application/json".into()));
     }
     Err("Realtime client secrets require an SDP or JSON call request")
@@ -436,15 +438,15 @@ pub(super) fn rewrite_realtime_multipart_model(
     target: &str,
 ) -> Bytes {
     if target.trim().is_empty() {
-        return Bytes::copy_from_slice(body);
+        return crate::ingress::copy_parts([body]);
     }
     let Ok(parts) = multipart_part_ranges(body, content_type) else {
         // Let the upstream parser report malformed multipart framing.  This
         // helper is observational unless a valid JSON/model field is found.
-        return Bytes::copy_from_slice(body);
+        return crate::ingress::copy_parts([body]);
     };
 
-    let mut replacements: Vec<(std::ops::Range<usize>, Vec<u8>)> = Vec::new();
+    let mut replacements: Vec<(std::ops::Range<usize>, Bytes)> = Vec::new();
     for part in parts {
         let name = multipart_field_name(&body[part.headers.clone()]);
         match name.as_deref() {
@@ -459,11 +461,12 @@ pub(super) fn rewrite_realtime_multipart_model(
                     .rposition(|byte| !byte.is_ascii_whitespace())
                     .map_or(trimmed_start, |index| index + 1);
                 if trimmed_start < trimmed_end {
-                    let mut replacement = Vec::with_capacity(value.len());
-                    replacement.extend_from_slice(&value[..trimmed_start]);
-                    replacement.extend_from_slice(target.as_bytes());
-                    replacement.extend_from_slice(&value[trimmed_end..]);
-                    replacements.push((part.content, replacement));
+                    let replacement = crate::ingress::copy_parts([
+                        &value[..trimmed_start],
+                        target.as_bytes(),
+                        &value[trimmed_end..],
+                    ]);
+                    replacements.push((part.content, Bytes::from(replacement)));
                 }
             }
             Some("session") => {
@@ -481,36 +484,30 @@ pub(super) fn rewrite_realtime_multipart_model(
                     continue;
                 }
                 object.insert("model".into(), json!(target));
-                let Ok(replacement) = serde_json::to_vec(&session) else {
+                let Ok(replacement) = crate::ingress::to_vec(&session) else {
                     continue;
                 };
-                replacements.push((part.content, replacement));
+                replacements.push((part.content, Bytes::from(replacement)));
             }
             _ => {}
         }
     }
     if replacements.is_empty() {
-        return Bytes::copy_from_slice(body);
+        return crate::ingress::copy_parts([body]);
     }
     replacements.sort_by_key(|(range, _)| range.start);
-    let mut output = Vec::with_capacity(
-        body.len()
-            + replacements
-                .iter()
-                .map(|(range, replacement)| replacement.len().saturating_sub(range.len()))
-                .sum::<usize>(),
-    );
+    let mut slices: Vec<&[u8]> = Vec::new();
     let mut cursor = 0;
-    for (range, replacement) in replacements {
+    for (range, replacement) in &replacements {
         if range.start < cursor || range.end > body.len() {
-            return Bytes::copy_from_slice(body);
+            return crate::ingress::copy_parts([body]);
         }
-        output.extend_from_slice(&body[cursor..range.start]);
-        output.extend_from_slice(&replacement);
+        slices.push(&body[cursor..range.start]);
+        slices.push(replacement);
         cursor = range.end;
     }
-    output.extend_from_slice(&body[cursor..]);
-    Bytes::from(output)
+    slices.push(&body[cursor..]);
+    crate::ingress::copy_parts(slices)
 }
 
 pub(super) fn next_multipart_delimiter(

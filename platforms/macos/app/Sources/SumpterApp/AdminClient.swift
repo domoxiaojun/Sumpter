@@ -571,9 +571,12 @@ public struct AdminClient: Sendable {
         confirmRaw: Bool = false,
         scope: String = "all",
         format: String = "jsonl",
-        requestID: String? = nil
+        requestID: String? = nil,
+        maxParseMib: Int = 64
     ) async throws {
+        guard (1...256).contains(maxParseMib) else { throw AdminError.badStatus(400, "脱敏解析上限必须为 1–256 MiB") }
         var query = ["privacy": privacy, "scope": scope, "format": format]
+        if privacy == "redacted" { query["maxParseMib"] = String(maxParseMib) }
         if confirmRaw { query["confirmRaw"] = "true" }
         if let requestID, !requestID.isEmpty { query["requestID"] = requestID }
         var value = request("/admin/diagnostic-capture/export", query: query)

@@ -3,6 +3,7 @@
 use crate::request_build::PassthroughKind;
 use bytes::Bytes;
 use std::cell::RefCell;
+use std::sync::Arc;
 use sumpter_core::bridge_in::ClientDialect;
 use sumpter_core::config::ProviderProtocol;
 use sumpter_core::events::ClientDeclaredMetadata;
@@ -24,6 +25,8 @@ use sumpter_core::stream_terminal::SseDialect;
 /// path never contains a query string.
 #[derive(Clone)]
 pub(super) struct InboundRequestContext {
+    pub(super) identity_settings: sumpter_core::client_identity::ClientIdentitySettings,
+    pub(crate) resources: Arc<crate::ingress::RequestResources>,
     pub(super) public_origin: Option<String>,
     pub(super) inbound_token: Option<sumpter_core::config::InboundTokenIdentity>,
     pub(super) attribution: Option<sumpter_core::client_attribution::AttributedRequest>,
@@ -337,6 +340,16 @@ pub(super) fn apply_current_request_context(event: &mut RuntimeEvent) {
     if event.session_source.is_none() {
         event.session_source = context.session_source;
     }
+    if event.session_id.is_none() {
+        event.session_id = event
+            .client_attribution
+            .as_ref()
+            .and_then(|a| a.identity.as_ref())
+            .and_then(|i| i.session_id.clone());
+        if event.session_id.is_some() {
+            event.session_source = Some("trusted_relay".into());
+        }
+    }
     if event.grok_metadata.is_none() {
         event.grok_metadata = context.grok_metadata;
     }
@@ -345,11 +358,13 @@ pub(super) fn apply_current_request_context(event: &mut RuntimeEvent) {
 pub(super) fn observe_request_attribution(headers: &[(String, String)], body: &serde_json::Value) {
     let _ = INBOUND_REQUEST_CONTEXT.try_with(|context| {
         let mut context = context.borrow_mut();
-        context.attribution = Some(sumpter_core::client_attribution::observe(
+        context.attribution = Some(sumpter_core::client_attribution::observe_configured(
             &context.method,
             &context.path,
             headers,
             Some(body),
+            &context.identity_settings,
+            context.inbound_token.as_ref(),
         ));
     });
 }
@@ -388,6 +403,9 @@ pub(super) fn observed_session(headers: &[(String, String)]) -> Option<(String, 
         "x-grok-conv-id",
         "x-session-id",
         "x-session-affinity",
+        "x-opencode-session",
+        "x-conversation-id",
+        "x-deepseek-harness-session-id",
         "x-sumpter-session-id",
     ]
     .iter()
@@ -482,6 +500,54 @@ mod session_observation_tests {
                 observe_request_session(ClientKind::ClaudeCode, &[], &raw),
                 None
             );
+        }
+    }
+}
+
+/// Only explicitly configured Sumpter relay endpoints receive these labels.
+/// All incoming private headers were stripped before this function is called.
+pub(super) fn forward_client_identity(headers: &mut Vec<(String, String)>, source: &str) {
+    let Some(context) = current_request_context() else {
+        return;
+    };
+    let Some(observation) = context.attribution else {
+        return;
+    };
+    append_forwarded_identity(headers, &observation, context.session_id, source);
+}
+
+pub(super) fn append_forwarded_identity(
+    headers: &mut Vec<(String, String)>,
+    observation: &sumpter_core::client_attribution::AttributedRequest,
+    session: Option<String>,
+    source: &str,
+) {
+    let product = if matches!(
+        observation.client_kind,
+        ClientKind::Unknown | ClientKind::OpenaiCompat
+    ) {
+        observation
+            .attribution
+            .identity
+            .as_ref()
+            .and_then(|i| i.product.clone())
+    } else {
+        Some(observation.client_kind.as_str().into())
+    };
+    if let Some(product) = product.filter(|v| sumpter_core::client_registry::valid_product(v)) {
+        headers.push(("x-sumpter-relay-source".into(), source.into()));
+        headers.push(("x-sumpter-forwarded-client".into(), product));
+        let session = session.or_else(|| {
+            observation
+                .attribution
+                .identity
+                .as_ref()
+                .and_then(|i| i.session_id.clone())
+        });
+        if let Some(id) = session
+            .filter(|id| !id.is_empty() && id.len() <= 128 && !id.chars().any(char::is_control))
+        {
+            headers.push(("x-sumpter-forwarded-session".into(), id));
         }
     }
 }
