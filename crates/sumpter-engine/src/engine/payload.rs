@@ -466,7 +466,7 @@ pub(super) fn rewrite_realtime_multipart_model(
                         target.as_bytes(),
                         &value[trimmed_end..],
                     ]);
-                    replacements.push((part.content, Bytes::from(replacement)));
+                    replacements.push((part.content, replacement));
                 }
             }
             Some("session") => {

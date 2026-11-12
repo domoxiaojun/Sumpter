@@ -622,6 +622,27 @@ where
     sink(bytes).map_err(RuntimeQueryError::Output)
 }
 
+fn redact_identity(
+    mut value: Option<serde_json::Value>,
+    privacy: ExportPrivacy,
+) -> Option<serde_json::Value> {
+    if privacy == ExportPrivacy::Redacted
+        && let Some(identity) = value
+            .as_mut()
+            .and_then(|v| v.pointer_mut("/identity"))
+            .and_then(serde_json::Value::as_object_mut)
+    {
+        for field in ["agentId", "parentAgentId", "sessionId"] {
+            if let Some(v) = identity.get_mut(field)
+                && let Some(text) = v.as_str()
+            {
+                *v = serde_json::Value::String(stable_mask(field, text));
+            }
+        }
+    }
+    value
+}
+
 #[cfg(test)]
 mod csv_security_tests {
     use super::*;
@@ -661,25 +682,4 @@ mod csv_security_tests {
             "\"hello\nworld\"\n"
         );
     }
-}
-
-fn redact_identity(
-    mut value: Option<serde_json::Value>,
-    privacy: ExportPrivacy,
-) -> Option<serde_json::Value> {
-    if privacy == ExportPrivacy::Redacted
-        && let Some(identity) = value
-            .as_mut()
-            .and_then(|v| v.pointer_mut("/identity"))
-            .and_then(serde_json::Value::as_object_mut)
-    {
-        for field in ["agentId", "parentAgentId", "sessionId"] {
-            if let Some(v) = identity.get_mut(field)
-                && let Some(text) = v.as_str()
-            {
-                *v = serde_json::Value::String(stable_mask(field, text));
-            }
-        }
-    }
-    value
 }

@@ -463,54 +463,6 @@ pub(super) fn observe_request_session(
     observed
 }
 
-#[cfg(test)]
-mod session_observation_tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn claude_native_session_is_bounded_and_header_identity_keeps_priority() {
-        let raw = json!({"metadata":{"user_id": "{\"device_id\":\"device\",\"account_uuid\":\"account\",\"session_id\":\"native-session\"}"}}).as_object().unwrap().clone();
-        assert_eq!(
-            observe_request_session(ClientKind::ClaudeCode, &[], &raw),
-            Some(("native-session".into(), "claude_metadata"))
-        );
-        assert_eq!(
-            observe_request_session(
-                ClientKind::Pi,
-                &[
-                    ("x-sumpter-session-id".into(), "legacy".into()),
-                    ("session_id".into(), "native".into())
-                ],
-                &json!({}).as_object().unwrap().clone()
-            ),
-            Some(("native".into(), "header"))
-        );
-        assert_eq!(
-            observe_request_session(
-                ClientKind::ClaudeCode,
-                &[("x-sumpter-session-id".into(), "explicit".into())],
-                &raw
-            ),
-            Some(("explicit".into(), "sumpter_attribution"))
-        );
-        assert_eq!(
-            observe_request_session(ClientKind::GrokBuild, &[], &raw),
-            None
-        );
-        for id in ["".to_owned(), "bad\nvalue".into(), "x".repeat(257)] {
-            let raw = json!({"metadata":{"user_id": json!({"session_id":id}).to_string()}})
-                .as_object()
-                .unwrap()
-                .clone();
-            assert_eq!(
-                observe_request_session(ClientKind::ClaudeCode, &[], &raw),
-                None
-            );
-        }
-    }
-}
-
 /// Only explicitly configured Sumpter relay endpoints receive these labels.
 /// All incoming private headers were stripped before this function is called.
 pub(super) fn forward_client_identity(headers: &mut Vec<(String, String)>, source: &str) {
@@ -555,6 +507,54 @@ pub(super) fn append_forwarded_identity(
             .filter(|id| !id.is_empty() && id.len() <= 128 && !id.chars().any(char::is_control))
         {
             headers.push(("x-sumpter-forwarded-session".into(), id));
+        }
+    }
+}
+
+#[cfg(test)]
+mod session_observation_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn claude_native_session_is_bounded_and_header_identity_keeps_priority() {
+        let raw = json!({"metadata":{"user_id": "{\"device_id\":\"device\",\"account_uuid\":\"account\",\"session_id\":\"native-session\"}"}}).as_object().unwrap().clone();
+        assert_eq!(
+            observe_request_session(ClientKind::ClaudeCode, &[], &raw),
+            Some(("native-session".into(), "claude_metadata"))
+        );
+        assert_eq!(
+            observe_request_session(
+                ClientKind::Pi,
+                &[
+                    ("x-sumpter-session-id".into(), "legacy".into()),
+                    ("session_id".into(), "native".into())
+                ],
+                &json!({}).as_object().unwrap().clone()
+            ),
+            Some(("native".into(), "header"))
+        );
+        assert_eq!(
+            observe_request_session(
+                ClientKind::ClaudeCode,
+                &[("x-sumpter-session-id".into(), "explicit".into())],
+                &raw
+            ),
+            Some(("explicit".into(), "sumpter_attribution"))
+        );
+        assert_eq!(
+            observe_request_session(ClientKind::GrokBuild, &[], &raw),
+            None
+        );
+        for id in ["".to_owned(), "bad\nvalue".into(), "x".repeat(257)] {
+            let raw = json!({"metadata":{"user_id": json!({"session_id":id}).to_string()}})
+                .as_object()
+                .unwrap()
+                .clone();
+            assert_eq!(
+                observe_request_session(ClientKind::ClaudeCode, &[], &raw),
+                None
+            );
         }
     }
 }
