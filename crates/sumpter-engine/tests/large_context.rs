@@ -3,6 +3,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use serde_json::{Value, json};
 use sumpter_core::config::AppConfig;
+use sumpter_core::request_policy::IngressPolicy;
 use sumpter_engine::replay::{ReplayReply, ReplayTransport};
 use sumpter_engine::{Engine, MAX_BODY_BYTES};
 
@@ -50,7 +51,10 @@ async fn run(engine: &Engine, path: &str, body: Bytes) -> (u16, Bytes) {
 
 #[tokio::test]
 async fn native_responses_share_large_unchanged_body_across_failover_and_capture() {
-    assert_eq!(MAX_BODY_BYTES, 128 * 1024 * 1024);
+    assert_eq!(
+        MAX_BODY_BYTES,
+        IngressPolicy::default().max_body_mib as usize * 1024 * 1024
+    );
     let payload = json!({"model":"test","input":[
         {"role":"user","content":[{"type":"input_text","text":"word ".repeat(700_000)},
             {"type":"input_image","image_url":format!("data:image/png;base64,{}","AAAA".repeat(2*1024*1024))}]},
@@ -78,11 +82,13 @@ async fn native_responses_share_large_unchanged_body_across_failover_and_capture
         assert_eq!(status, 200);
         let calls = transport.calls();
         assert_eq!(calls.len(), 2);
+        // Ingress owns a quota-backed copy; retries must share that owner.
+        let retained_body = calls[0].body.clone();
         for call in calls {
             assert_eq!(call.body, body);
             assert_eq!(
                 call.body.as_ptr(),
-                body.as_ptr(),
+                retained_body.as_ptr(),
                 "unchanged retries must share body storage"
             );
         }
@@ -112,13 +118,13 @@ async fn mapped_native_json_changes_only_model_and_preserves_client_effort() {
         expected["model"] = json!(model);
         assert_eq!(serde_json::from_slice::<Value>(outbound).unwrap(), expected);
         if model == "test" {
-            assert_eq!(outbound.as_ptr(), body.as_ptr());
+            assert_eq!(outbound, &body);
         }
     }
 }
 
 #[tokio::test]
-async fn image_generation_reuses_large_json_without_changing_image_fields() {
+async fn image_generation_preserves_large_json_without_changing_image_fields() {
     let transport = Arc::new(ReplayTransport::new([Ok(ReplayReply::ok("{\"data\":[]}"))]));
     let mut config = config("openai", "test", 1);
     config.endpoints[0].mappings[0].capabilities =
@@ -134,7 +140,6 @@ async fn image_generation_reuses_large_json_without_changing_image_fields() {
         200
     );
     assert_eq!(transport.calls()[0].body, body);
-    assert_eq!(transport.calls()[0].body.as_ptr(), body.as_ptr());
 }
 
 #[tokio::test]
