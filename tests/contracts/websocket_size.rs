@@ -85,12 +85,16 @@ async fn security_limit_case(
     tokio::time::timeout(Duration::from_secs(120), async {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
+        let (echo_received, wait_for_echo) = tokio::sync::oneshot::channel();
         let upstream = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let mut socket = tokio_tungstenite::accept_async_with_config(stream, Some(unlimited())).await.unwrap();
             let exact = socket.next().await.unwrap().unwrap();
             assert!(matches!(&exact, Message::Binary(bytes) if bytes.len() == limit));
             socket.send(exact).await.unwrap();
+            // A forced capacity close can discard a queued echo. Start the
+            // oversized send only after the exact-limit round trip completes.
+            wait_for_echo.await.unwrap();
             if from_upstream { send_oversized(&mut socket, fragmented, limit, true).await; }
             let close = socket.next().await.unwrap().unwrap();
             assert!(matches!(close, Message::Close(Some(frame)) if u16::from(frame.code) == 1009));
@@ -104,7 +108,8 @@ async fn security_limit_case(
         request.headers_mut().insert("authorization", "Bearer size-test-token".parse().unwrap());
         let (mut socket, _) = tokio_tungstenite::connect_async_with_config(request, Some(unlimited()), false).await.unwrap();
         socket.send(Message::Binary(vec![b'x'; limit].into())).await.unwrap();
-        assert!(matches!(socket.next().await.unwrap().unwrap(), Message::Binary(bytes) if bytes.len() == limit));
+        assert!(matches!(socket.next().await.unwrap().unwrap(), Message::Binary(bytes) if bytes.len() == limit), "exact-limit echo: resolve_ip={resolve_ip}, from_upstream={from_upstream}, fragmented={fragmented}");
+        echo_received.send(()).unwrap();
         if !from_upstream { send_oversized(&mut socket, fragmented, limit, false).await; }
         let close = socket.next().await.unwrap().unwrap();
         assert!(matches!(close, Message::Close(Some(frame)) if u16::from(frame.code) == 1009));
