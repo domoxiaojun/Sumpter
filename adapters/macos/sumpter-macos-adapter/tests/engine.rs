@@ -38,9 +38,6 @@ mod pi;
 #[path = "../../../../tests/contracts/tool_bridge.rs"]
 mod tool_bridge;
 
-#[path = "../../../../tests/contracts/tool_bridge.rs"]
-mod tool_bridge;
-
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
