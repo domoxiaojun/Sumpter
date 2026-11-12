@@ -33,6 +33,7 @@ public enum RuntimeFailureKind: String, Codable, Sendable {
     case upstreamHTTPStatus = "upstream_http_status"
     case streamIdleTimeout = "stream_idle_timeout"
     case streamInterrupted = "stream_interrupted"
+    case responseObservationFailed = "response_observation_failed"
     case upstreamResponseIncomplete = "upstream_response_incomplete"
     case upstreamResponseFailed = "upstream_response_failed"
     case endpointsExhausted = "endpoints_exhausted"

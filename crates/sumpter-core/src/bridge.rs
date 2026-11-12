@@ -1971,9 +1971,88 @@ struct ResponsesToolCallState {
     call_id: String,
     name: String,
     arguments: String,
+    /// 允许发出的稳定前缀；闭合 JSON 的整个分片留给结束快照确认。
+    ready_len: usize,
+    progress: ToolJsonProgress,
     emitted: usize,
     block_index: Option<usize>,
     finalized: bool,
+}
+
+/// 只识别对象的词法闭合位置，逐字节扫描一次；JSON 合法性仍由 serde 校验。
+#[derive(Default)]
+struct ToolJsonProgress {
+    depth: usize,
+    started: bool,
+    in_string: bool,
+    escaped: bool,
+    invalid: bool,
+}
+
+impl ToolJsonProgress {
+    fn complete(&self) -> bool {
+        self.started && self.depth == 0 && !self.in_string && !self.invalid
+    }
+
+    fn feed(&mut self, fragment: &str) {
+        for byte in fragment.bytes() {
+            if self.in_string {
+                if self.escaped {
+                    self.escaped = false;
+                } else if byte == b'\\' {
+                    self.escaped = true;
+                } else if byte == b'"' {
+                    self.in_string = false;
+                }
+                continue;
+            }
+            match byte {
+                b'"' => {
+                    self.invalid |= self.depth == 0;
+                    self.in_string = true;
+                }
+                b'{' | b'[' => {
+                    if self.depth == 0 {
+                        self.invalid |= self.started || byte != b'{';
+                        self.started = true;
+                    }
+                    self.depth += 1;
+                }
+                b'}' | b']' => {
+                    if self.depth == 0 {
+                        self.invalid = true;
+                    } else {
+                        self.depth -= 1;
+                    }
+                }
+                b' ' | b'\t' | b'\n' | b'\r' => {}
+                _ => self.invalid |= self.depth == 0,
+            }
+        }
+    }
+}
+
+impl ResponsesToolCallState {
+    fn append_arguments(&mut self, fragment: &str) -> Result<(), &'static str> {
+        let was_complete = self.progress.complete();
+        if was_complete
+            && !fragment
+                .bytes()
+                .all(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))
+        {
+            return Err("Responses tool argument delta follows a complete JSON object");
+        }
+        self.arguments.push_str(fragment);
+        self.progress.feed(fragment);
+        if self.progress.complete() {
+            if !was_complete {
+                crate::bridge_tools::parse_arguments(&self.arguments)?;
+            }
+        } else {
+            self.ready_len = self.arguments.len();
+        }
+        Ok(())
+    }
 }
 
 /// 事件识别以 data JSON 里的 `type` 字段为准(比依赖 `event:` 行更稳)。
@@ -2200,7 +2279,7 @@ impl ResponsesStreamBridge {
                     .get("arguments")
                     .and_then(Value::as_str)
                     .ok_or("final Responses tool arguments must be a string")?;
-                self.reconcile_function_arguments(slot, arguments, events)?;
+                self.reconcile_function_arguments(slot, arguments, true, events)?;
             }
             return Ok(());
         }
@@ -2223,17 +2302,20 @@ impl ResponsesStreamBridge {
         self.close_text_block(events);
         let index = self.next_block_index;
         self.next_block_index += 1;
-        self.tool_calls.push(ResponsesToolCallState {
+        let mut state = ResponsesToolCallState {
             item_id,
             output_index,
             call_id: call_id.clone(),
             name: name.clone(),
-            // done 事件已带完整参数;added 通常是空串,靠后续 delta 补。
-            arguments: arguments.to_string(),
-            emitted: 0,
             block_index: Some(index),
             finalized,
-        });
+            ..Default::default()
+        };
+        state.append_arguments(arguments)?;
+        if finalized {
+            state.ready_len = state.arguments.len();
+        }
+        self.tool_calls.push(state);
         if self.stream {
             events.push(SseEvent {
                 event: "content_block_start".into(),
@@ -2306,30 +2388,41 @@ impl ResponsesStreamBridge {
         if self.tool_calls[slot].finalized {
             return Err("Responses tool arguments changed after completion");
         }
-        self.tool_calls[slot].arguments.push_str(fragment);
+        self.tool_calls[slot].append_arguments(fragment)?;
         self.flush_tool_arguments(slot, events);
         Ok(())
     }
 
-    /// 完整结束快照只补发尚未发出的后缀；不得重复拼接，也不得覆盖已发送的参数。
+    /// 快照可替换未发出的闭合尾部，但不能修改稳定前缀或已有对象字段。
     fn reconcile_function_arguments(
         &mut self,
         slot: usize,
         arguments: &str,
+        commit: bool,
         events: &mut Vec<SseEvent>,
     ) -> Result<(), &'static str> {
         let complete = crate::bridge_tools::parse_arguments(arguments)?;
         let state = &mut self.tool_calls[slot];
-        if arguments.starts_with(state.arguments.as_str()) {
-            state.arguments = arguments.to_string();
-        } else if crate::bridge_tools::parse_arguments(&state.arguments)
-            .ok()
-            .as_ref()
-            != Some(&complete)
+        let previous = crate::bridge_tools::parse_arguments(&state.arguments).ok();
+        if previous.as_ref() == Some(&complete) {
+            // 仅空白或键顺序不同，保留原序列化，避免改变已发送的前缀。
+        } else if arguments.starts_with(&state.arguments[..state.ready_len])
+            && previous.as_ref().is_none_or(|value| {
+                value.as_object().is_some_and(|object| {
+                    object
+                        .iter()
+                        .all(|(key, value)| complete.get(key) == Some(value))
+                })
+            })
         {
+            state.arguments = arguments.to_string();
+        } else {
             return Err("final Responses tool arguments conflict with emitted deltas");
         }
         state.finalized = true;
+        if commit {
+            state.ready_len = state.arguments.len();
+        }
         self.flush_tool_arguments(slot, events);
         Ok(())
     }
@@ -2343,11 +2436,11 @@ impl ResponsesStreamBridge {
             return;
         };
         let state = &mut self.tool_calls[slot];
-        if state.emitted >= state.arguments.len() {
+        if state.emitted >= state.ready_len {
             return;
         }
-        let pending = state.arguments[state.emitted..].to_string();
-        state.emitted = state.arguments.len();
+        let pending = state.arguments[state.emitted..state.ready_len].to_string();
+        state.emitted = state.ready_len;
         events.push(input_json_delta_event(&pending, index));
     }
 
@@ -2517,7 +2610,7 @@ impl ResponsesStreamBridge {
                         .get("arguments")
                         .and_then(Value::as_str)
                         .ok_or("final Responses tool arguments must be a string")?;
-                    self.reconcile_function_arguments(slot, arguments, &mut events)
+                    self.reconcile_function_arguments(slot, arguments, false, &mut events)
                 });
                 if let Err(detail) = result {
                     events.extend(self.fail(detail));
@@ -2586,6 +2679,11 @@ impl ResponsesStreamBridge {
                         events.extend(self.fail(detail));
                         return events;
                     }
+                }
+                for slot in 0..self.tool_calls.len() {
+                    self.tool_calls[slot].ready_len = self.tool_calls[slot].arguments.len();
+                    self.tool_calls[slot].finalized = true;
+                    self.flush_tool_arguments(slot, &mut events);
                 }
                 if let Some(model) = response
                     .and_then(|r| r.get("model"))
@@ -3477,15 +3575,18 @@ mod tests {
         );
         let shape: Vec<(String, Value)> = done
             .iter()
+            .filter(|(event, _)| {
+                matches!(event.as_str(), "content_block_start" | "content_block_stop")
+            })
             .map(|(event, data)| (event.clone(), data["index"].clone()))
             .collect();
         // 先关工具块,再补发新文本块。
         assert_eq!(shape[0], ("content_block_stop".into(), json!(1)));
         assert_eq!(shape[1], ("content_block_start".into(), json!(2)));
-        assert_eq!(done[1].1["delta"], Value::Null);
+        assert_eq!(done[0].1["delta"]["partial_json"], "{}");
         let delta = done
             .iter()
-            .find(|(event, _)| event == "content_block_delta")
+            .find(|(_, data)| data["delta"]["type"] == "text_delta")
             .expect("补发的文本增量");
         assert_eq!(delta.1["index"], json!(2));
         assert_eq!(delta.1["delta"]["text"], "再写");
@@ -3518,16 +3619,15 @@ mod tests {
         let args = chunk(
             r#"{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{\"path\":\"a\"}"}"#,
         );
-        assert_eq!(args[0].1["delta"]["type"], "input_json_delta");
-        assert_eq!(args[0].1["delta"]["partial_json"], "{\"path\":\"a\"}");
+        assert!(args.is_empty(), "闭合分片须等待结束快照");
 
-        // done 重复带同一个 item_id:不能再开一个块。
-        assert!(
-            chunk(
-                r#"{"type":"response.output_item.done","item":{"type":"function_call","id":"fc_1","call_id":"call_x","name":"Read","arguments":"{\"path\":\"a\"}"}}"#
-            )
-            .is_empty()
+        // done 只补发参数，不再开一个工具块。
+        let item_done = chunk(
+            r#"{"type":"response.output_item.done","item":{"type":"function_call","id":"fc_1","call_id":"call_x","name":"Read","arguments":"{\"path\":\"a\"}"}}"#,
         );
+        assert_eq!(item_done.len(), 1);
+        assert_eq!(item_done[0].1["delta"]["type"], "input_json_delta");
+        assert_eq!(item_done[0].1["delta"]["partial_json"], "{\"path\":\"a\"}");
 
         let done = chunk(
             r#"{"type":"response.completed","response":{"status":"completed","usage":{"output_tokens":7}}}"#,

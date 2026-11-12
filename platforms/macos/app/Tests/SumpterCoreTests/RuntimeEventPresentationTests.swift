@@ -3,6 +3,14 @@ import XCTest
 
 /// 覆盖运行事件展示逻辑:断开判定、消息友好化、池/状态/耗时文案。
 final class RuntimeEventPresentationTests: XCTestCase {
+    func testCompressedResponseObservationFailureIsDistinctFromTransportInterruption() throws {
+        let kind = try JSONDecoder().decode(RuntimeFailureKind.self, from: Data("\"response_observation_failed\"".utf8))
+        XCTAssertEqual(kind, .responseObservationFailed)
+        XCTAssertEqual(RuntimeEventPresentation.failureKindDisplay(kind), "无法确认响应完成")
+        let message = RuntimeEventPresentation.friendlyMessage(kind: "client", statusCode: 200, failover: false, message: nil, outcome: .failed, failureKind: kind)
+        XCTAssertTrue(message.contains("无法确认响应完成"))
+        XCTAssertFalse(message.contains("流中断"))
+    }
     func testUnusedGuardianConnectionRetainsAbnormalTransportEvidence() {
         let trace = WebSocketTrace(stage: "awaiting_first_message", closedBy: "client", relayError: "client_eof_without_close", transportErrorKind: "eof_without_close", abnormalClose: true, attemptCount: 0)
         let stream = StreamTrace(websocketTrace: trace)

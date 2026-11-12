@@ -10,6 +10,61 @@ fn headers(values: &[(&str, &str)]) -> Vec<(String, String)> {
 }
 
 #[test]
+fn gemini_paths_do_not_claim_an_openai_or_gemini_cli_product() {
+    use sumpter_core::client_attribution::uses_openai_client_fallback;
+    for path in [
+        "/v1beta/models/gemini-test:generateContent",
+        "/v1alpha/models/gemini-test:streamGenerateContent?alt=sse",
+        "/v1/models/gemini-test:countTokens",
+        "/v1beta/interactions",
+        "/upload/v1beta/files",
+        "/v1/messages",
+        "/vendor/opaque",
+    ] {
+        assert!(!uses_openai_client_fallback(path), "{path}");
+        for ua in [
+            None,
+            Some("google-genai-sdk/1.0"),
+            Some("OpenAI/Python 1.0"),
+        ] {
+            let h = ua
+                .map(|ua| headers(&[("user-agent", ua)]))
+                .unwrap_or_default();
+            assert_eq!(
+                observe("POST", path, &h, None).client_kind,
+                ClientKind::Unknown,
+                "{path}/{ua:?}"
+            );
+        }
+        assert_eq!(
+            observe(
+                "POST",
+                path,
+                &headers(&[("user-agent", "GeminiCLI/0.1.0")]),
+                None
+            )
+            .client_kind,
+            ClientKind::GeminiCli
+        );
+    }
+    for path in [
+        "/v1/chat/completions",
+        "/chat/completions",
+        "/v1/responses?x=1",
+        "/responses/compact",
+        "/backend-api/codex/responses",
+        "/v1/models",
+        "/v1/realtime/calls/id",
+    ] {
+        assert!(uses_openai_client_fallback(path), "{path}");
+        assert_eq!(
+            observe("POST", path, &[], None).client_kind,
+            ClientKind::OpenaiCompat
+        );
+    }
+}
+
+#[test]
 fn all_21_clients_have_stable_identity_positive_negative_and_declaration_contracts() {
     let fixture: Value = serde_json::from_str(include_str!(
         "../../../tests/fixtures/client_attribution_v1.json"

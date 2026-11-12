@@ -243,6 +243,13 @@ pub(super) fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> O
         .map(|(_, value)| value.as_str())
 }
 
+pub(super) fn detect_client_kind_for_path(headers: &[(String, String)], path: &str) -> ClientKind {
+    detect_client_kind(
+        headers,
+        sumpter_core::client_attribution::uses_openai_client_fallback(path),
+    )
+}
+
 pub(super) fn detect_client_kind(headers: &[(String, String)], openai_inbound: bool) -> ClientKind {
     if header_value(headers, "x-sumpter-client")
         .is_some_and(|value| value.trim().eq_ignore_ascii_case("pi"))

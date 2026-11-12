@@ -15,48 +15,16 @@ pub(crate) fn reference_text(block: &Value) -> Option<String> {
         .map(|name| format!("Tool reference: {name}"))
 }
 
-/// 只有成功的用户工具结果能加载延迟工具；模型自己的文字或失败调用不授权加载。
-fn loaded_names(request: &RoutingRequest) -> HashSet<&str> {
-    let mut names = HashSet::new();
-    for message in &request.messages {
-        if message.role != "user" {
-            continue;
-        }
-        for result in message.content.as_array().into_iter().flatten() {
-            if result.get("type").and_then(Value::as_str) != Some("tool_result")
-                || result.get("is_error").and_then(Value::as_bool) == Some(true)
-            {
-                continue;
-            }
-            for block in result
-                .get("content")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-            {
-                if block.get("type").and_then(Value::as_str) == Some("tool_reference")
-                    && let Some(name) = block.get("tool_name").and_then(Value::as_str)
-                {
-                    names.insert(name);
-                }
-            }
-        }
-    }
-    names
-}
-
+/// 以本轮工具表为准；历史压缩可能已经移除发现结果，不能据此隐藏当前声明。
+/// DeferredToolPlaceholder 只维持客户端的延迟加载通道，不是可执行工具。
 pub(crate) fn active_tools(request: &RoutingRequest) -> Vec<&Map<String, Value>> {
-    let loaded = loaded_names(request);
     request
         .tools
         .iter()
         .filter(|tool| {
             inspector::is_client_tool_type(tool.get("type").and_then(Value::as_str).unwrap_or(""))
-                && (tool.get("defer_loading").and_then(Value::as_bool) != Some(true)
-                    || tool
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .is_some_and(|name| loaded.contains(name)))
+                && !(tool.get("name").and_then(Value::as_str) == Some("DeferredToolPlaceholder")
+                    && tool.get("defer_loading").and_then(Value::as_bool) == Some(true))
         })
         .collect()
 }

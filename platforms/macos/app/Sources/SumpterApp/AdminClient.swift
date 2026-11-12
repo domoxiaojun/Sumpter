@@ -1646,6 +1646,8 @@ public enum AdminWire {
         public let atMS: Int
         public let bytes: Int
         public let data: String
+        public var dataEncoding: String? = nil
+        public var redacted: Bool? = nil
         public let truncated: Bool
     }
 
@@ -1662,6 +1664,8 @@ public enum AdminWire {
         public let outboundURL: String
         public let outboundHeaders: [DiagnosticHeader]
         public let outboundBody: String
+        public var outboundBodyEncoding: String? = nil
+        public var outboundBodyRedacted: Bool? = nil
         public let outboundBodyBytes: Int
         public let outboundBodyTruncated: Bool
         public let responseStatus: Int?
@@ -1717,6 +1721,8 @@ public enum AdminWire {
         public let path: String
         public let inboundHeaders: [DiagnosticHeader]
         public let inboundBody: String
+        public var inboundBodyEncoding: String? = nil
+        public var inboundBodyRedacted: Bool? = nil
         public let inboundBodyBytes: Int
         public let inboundBodyTruncated: Bool
         public let clientKind: String

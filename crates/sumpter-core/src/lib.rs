@@ -37,3 +37,5 @@ pub use routing::{
 
 pub mod model_groups;
 pub use model_groups::ModelGroupSchedulingStrategy;
+
+pub mod diagnostic_capture;

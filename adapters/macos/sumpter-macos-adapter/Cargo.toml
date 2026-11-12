@@ -20,6 +20,8 @@ async-trait = { workspace = true }
 tokio-util = { workspace = true }
 
 [dev-dependencies]
+base64 = { workspace = true }
+flate2 = "1"
 http = { workspace = true }
 hyper = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }

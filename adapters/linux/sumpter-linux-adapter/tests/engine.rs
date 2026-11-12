@@ -12,6 +12,12 @@ mod conversation;
 #[path = "../../../../tests/contracts/gemini.rs"]
 mod gemini;
 
+#[path = "../../../../tests/contracts/compressed_response.rs"]
+mod compressed_response;
+
+#[path = "../../../../tests/contracts/response_observation_edges.rs"]
+mod response_observation_edges;
+
 #[path = "../../../../tests/contracts/model_scope.rs"]
 mod model_scope;
 
@@ -29,6 +35,8 @@ mod request_policy;
 
 #[path = "../../../../tests/contracts/pi.rs"]
 mod pi;
+#[path = "../../../../tests/contracts/tool_bridge.rs"]
+mod tool_bridge;
 
 #[path = "../../../../tests/contracts/tool_bridge.rs"]
 mod tool_bridge;
@@ -288,7 +296,11 @@ fn set_all_endpoint_protocols(config: &mut AppConfig, protocol: EndpointProtocol
 }
 
 fn engine_with(config: AppConfig, fake: Arc<FakeTransport>) -> Engine {
-    Engine::new(config, None, fake)
+    engine_with_transport(config, fake)
+}
+
+fn engine_with_transport(config: AppConfig, transport: Arc<dyn UpstreamTransport>) -> Engine {
+    Engine::new(config, None, transport)
 }
 
 fn temp_config_dir(tag: &str) -> sumpter_core::config_store::ConfigDir {

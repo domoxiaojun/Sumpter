@@ -990,6 +990,7 @@ export function failureKindLabel(kind) {
     upstream_http_status: '上游返回 HTTP 错误状态',
     stream_idle_timeout: '流式空闲超时 (Stream Idle Timeout)',
     stream_interrupted: '流传输中途断开 (Stream Interrupted)',
+    response_observation_failed: '无法确认响应完成',
     upstream_response_incomplete: '上游响应流未完整结束',
     upstream_response_failed: '上游响应协议失败',
     endpoints_exhausted: '所有可用入口全部耗尽',

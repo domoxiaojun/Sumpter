@@ -53,6 +53,8 @@ pub(super) enum StreamReadError {
     Upstream(TransportError),
     #[error("missing protocol terminal event")]
     MissingTerminal,
+    #[error("response observation failed: {0}")]
+    ObservationFailed(&'static str),
 }
 
 #[derive(Clone)]
@@ -140,6 +142,15 @@ impl FailureInfo {
                 kind: RuntimeFailureKind::StreamInterrupted,
                 phase: RuntimeFailurePhase::ResponseStream,
                 detail: Some(error.to_string()),
+                timeout_ms: None,
+                upstream_status_code: None,
+                upstream_request_id: None,
+                retry_after_seconds: None,
+            },
+            StreamReadError::ObservationFailed(issue) => Self {
+                kind: RuntimeFailureKind::ResponseObservationFailed,
+                phase: RuntimeFailurePhase::ResponseStream,
+                detail: Some((*issue).into()),
                 timeout_ms: None,
                 upstream_status_code: None,
                 upstream_request_id: None,

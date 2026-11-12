@@ -18,11 +18,17 @@ Sumpter 的核心边界是“客户端请求进入一个地址，代理按配置
 
 转换面按「能力检查 + 构造」同源实现。目标协议表达不了的项（服务端工具、provider 文件引用、Responses 没有等价参数的 `stop_sequences` 等）显式拒绝并回报具体字段，不静默降级。Chat/Responses 的 JSON Schema 约束及工具结果中的图片只转换到能保留其语义的目标；Responses 的 `previous_response_id` 等服务端上下文引用不能跨协议还原时拒绝转换，原生请求不受此限制。Gemini SSE 文本按增量拼接，工具调用的流式与非流式结束原因保持一致。
 
-客户端工具的 `defer_loading` 在转换时按发现状态处理：成功的用户工具结果通过 `tool_reference` 引用已声明工具后，该工具才加入目标协议的工具定义，引用正文保留名称与原位置。Chat/Responses 保留显式 `strict`，Anthropic 未设置时输出 `strict:false`，避免 Responses 默认严格化改变可选参数；并发限制映射到 `parallel_tool_calls`。Gemini 无法表达的 `strict:true` 和禁用并发调用明确拒绝；非直接 `allowed_callers` 约束也不跨协议降级。原生 Anthropic 转发保留工具定义和引用块。
+客户端工具以本轮 `tools` 声明为准：即使带有 `defer_loading:true` 且历史发现结果已被压缩，真实工具仍加入目标协议的工具定义；仅剔除带该标记的 `DeferredToolPlaceholder` 占位符。`tool_reference` 保留名称与原位置，未知引用或强制调用未声明工具仍明确拒绝，不从摘要文字推断或重建工具。Chat/Responses 保留显式 `strict`，Anthropic 未设置时输出 `strict:false`，避免 Responses 默认严格化改变可选参数；并发限制映射到 `parallel_tool_calls`。Gemini 无法表达的 `strict:true` 和禁用并发调用明确拒绝；非直接 `allowed_callers` 约束也不跨协议降级。原生 Anthropic 转发保留工具定义和引用块。
 
-Responses 参数按 item ID / output index 关联，接收增量及 `function_call_arguments.done`、`output_item.done`、`response.completed.output` 的完整快照；快照只补齐缺少的后缀，冲突、歧义和畸形 JSON 明确失败。反向桥共用 Anthropic 工具块校验，保留起始 `input` 和无参数调用。各桥接方向在调用完成前验证参数为完整 JSON 对象，失败后不再接受后续成功终态，不把截断参数替换成 `{}`。
+Responses 参数按 item ID / output index 关联，接收增量及 `function_call_arguments.done`、`output_item.done`、`response.completed.output` 的完整快照；稳定前缀实时发送，使 JSON 闭合的分片暂缓至工具项或响应结束；期间快照可将 `{}` 或较短对象补齐为更多字段。已有字段值和稳定前缀不可改写，工具项结束后已提交的参数不可变更；冲突、歧义和畸形 JSON 明确失败。反向桥共用 Anthropic 工具块校验，保留起始 `input` 和无参数调用。各桥接方向在调用完成前验证参数为完整 JSON 对象，失败后不再接受后续成功终态，不把截断参数替换成 `{}`。
 
 HTTP/SSE 按请求及业务终态结算；Realtime/Live WebSocket 保留连接与关闭诊断，握手成功不等于模型生成成功。一个客户端请求可包含多次上游尝试，RuntimeEvent 用同一 request ID 关联它们，界面分别展示客户端最终结果和上游尝试链。
+
+HTTP 响应观察支持 identity、gzip、br、zlib 格式的 deflate 与 zstd，最多四层组合编码按逆序增量解码。原生转发及原始捕获保留线上字节和 Content-Encoding；协议观察及转换读取解码视图。正常读取继续转发压缩尾部，在 EOF 校验后结算，Gemini 终态后的用量帧继续计入。观察块最多 64 KiB，每次响应累计解码观察上限 64 MiB；未知编码、非法压缩、压缩截断或超限以 response_observation_failed 表示“无法确认响应完成”，保留 HTTP 状态和明确原因，不伪装成网络中断或成功。原生响应继续转发，已开始的响应不重放。
+
+客户端在已收到协议终态后关闭响应时，只验证已收到的压缩字节，不后台继续读取上游。已收到完整压缩成员且校验通过时按真实协议终态结算；压缩尾部尚未收到时记录 response_observation_failed / compressed_tail_unverified_after_terminal，保留已观察到的协议终态，不记为中途取消。已知 CRC 错误和真实读取错误仍报失败；没有协议终态的中途关闭仍记 499。所有未取得 HTTP EOF 的这类收尾均保留用量值，但将缓存证据标为不完整并停用 TPS 采样，避免把可能缺少末尾用量的响应当作完整统计。
+
+跨协议转换依赖解码结果。解压失败会立即向客户端返回响应体读取错误，不能以空 JSON 或正常 EOF 掩盖失败；已经发送的 HTTP 状态不改写。压缩源生成的成功结束输出在源校验完成前暂存，最多 64 MiB，校验失败时丢弃，不发送虚假的成功结束帧。正常正文增量继续流式发送；原生透传不采用这项结束输出暂存。
 
 Responses 仅支持 HTTP/SSE；通过鉴权的 WS 升级探测在共享入站层返回 426，不建立上游连接、不计推理事件。两个 adapter 只为 Realtime/Live 路径进行 WS 升级。模型目录始终输出 `prefer_websockets=false`，与上游模板或能力缓存无关；不提供重新开启 Responses WS 的配置开关。
 
@@ -39,6 +45,8 @@ Responses 仅支持 HTTP/SSE；通过鉴权的 WS 升级探测在共享入站层
 `sumpter-runtime` 使用 bundled SQLite、WAL 和有界后台写入。内存快照让请求热路径不等待每次数据库写入；Admin 通过 runtime 层异步查询 API 等待结果，最多 4 个专用查询工作器执行同步 SQLite 操作，不占用代理 Tokio 工作线程；客户端取消会停止查询/导出游标，已接纳的写操作完成提交与内存对账后才释放名额。存储退化和 backpressure 通过 Admin 状态暴露。运行统计、会话删除、清理、重置和重建是不同操作，文档不得混用。
 
 统计只从客户端完成事件的上游 usage 聚合，pending 单独计数；缓存 Token 按协议口径保留原始值。存储计数按事件状态变更维护，并叠加有界待提交增量；保留策略删去的计数不会被旧 Engine 累计快照写回。诊断捕获独立于统计，默认关闭，可能包含未脱敏正文和凭据。SQLite 写入背压是统计降级状态，不会关闭代理数据面；事件以零游标通知客户端重新同步，Admin 仍展示 backpressure 和最后错误。
+
+诊断 Body/Chunk 保留字符串字段，并使用可选的 inboundBodyEncoding、outboundBodyEncoding、dataEncoding 区分 utf8 与 base64；缺省是旧文本格式。二进制、压缩数据及跨块不完整的 UTF-8 使用 Base64 无损保存，容量计入编码后的长度，截断只保存可逆的原始字节前缀。索引不携带正文，详情与大块展示按需读取。原始导出保留编码；脱敏副本移除编码／压缩载荷并增加 redacted 或相应 BodyRedacted 标记，不修改源记录。旧文本捕获已经损失的二进制无法恢复，旧事件不重算；配置和数据库 schema 不变。
 
 分页快照同时使用 `snapshotSeq`、`snapshotChangeSeq` 与 `historyGeneration`。事件入队 `seq` 不变，首次完成水位固定快照的已完成集合；后续补充 metadata 不改变该水位。缺少完成水位的旧 token 明确失效，由客户端重取快照，不静默产生重复行或漏行。数据库以补列和回填方式兼容现有事件，不重建历史。
 

@@ -1,3 +1,4 @@
+import { diagnosticPayloadText, diagnosticChunksText, hasCompressedCapture } from '../utils/diagnosticPayload.js';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAppControls } from '../context/AppContext.jsx';
 import { StatusBadge } from '../components/StatusBadge.jsx';
@@ -37,9 +38,6 @@ function headersText(headers = []) {
   return headers.map(({ name, value }) => `${name}: ${value}`).join('\n');
 }
 
-function chunksText(chunks = []) {
-  return chunks.map((chunk) => `[+${chunk.atMS}ms · ${chunk.bytes} bytes${chunk.truncated ? ' · 已截断' : ''}]\n${chunk.data}`).join('\n\n');
-}
 
 function formatBytes(bytes = 0) {
   const value = Number(bytes) || 0;
@@ -551,9 +549,9 @@ export function DiagnosticsPage() {
                       {(captureDetail.truncated || captureDetail.inboundBodyTruncated) && <StatusBadge text="达到内存上限，后续内容已截断" kind="warning" />}
                       {(captureDetail.failureKind || captureDetail.failureDetail) && <RawBlock title={`错误 · ${captureDetail.failureKind || 'unknown'}`} value={captureDetail.failureDetail} />}
                       <RawBlock title="入站请求 Headers" valueFactory={() => headersText(captureDetail.inboundHeaders)} />
-                      <RawBlock title={`入站原始 Body · ${captureDetail.inboundBodyBytes || 0} bytes`} value={captureDetail.inboundBody} />
-                      {(captureDetail.attempts || []).map((attempt, index) => <details key={attempt.id || index} className="diagnostics-attempt"><summary>上游尝试 #{index + 1} · {attempt.endpointName || attempt.endpointID || '-'} · {attempt.responseStatus ?? attempt.error ?? '等待响应'}</summary><div className="diagnostics-attempt-stack"><RawBlock title={`${attempt.outboundMethod || '请求'} ${attempt.outboundURL || ''} Headers`} valueFactory={() => headersText(attempt.outboundHeaders)} /><RawBlock title={`出站原始 Body · ${attempt.outboundBodyBytes || 0} bytes`} value={attempt.outboundBody} /><RawBlock title={`上游响应 Headers · HTTP ${attempt.responseStatus ?? '-'}`} valueFactory={() => headersText(attempt.responseHeaders)} />{attempt.error && <RawBlock title="尝试错误" value={attempt.error} />}<RawBlock title={`原始上游 Chunks · ${(attempt.upstreamChunks || []).length} 个`} valueFactory={() => chunksText(attempt.upstreamChunks)} /></div></details>)}
-                      <RawBlock title={`桥接后客户端 Chunks · ${(captureDetail.clientChunks || []).length} 个`} valueFactory={() => chunksText(captureDetail.clientChunks)} />
+                      <RawBlock title={`入站原始 Body · ${captureDetail.inboundBodyBytes || 0} bytes`} valueFactory={() => diagnosticPayloadText(captureDetail.inboundBody, captureDetail.inboundBodyEncoding, captureDetail.inboundBodyRedacted)} />
+                      {(captureDetail.attempts || []).map((attempt, index) => <details key={attempt.id || index} className="diagnostics-attempt"><summary>上游尝试 #{index + 1} · {attempt.endpointName || attempt.endpointID || '-'} · {attempt.responseStatus ?? attempt.error ?? '等待响应'}</summary><div className="diagnostics-attempt-stack"><RawBlock title={`${attempt.outboundMethod || '请求'} ${attempt.outboundURL || ''} Headers`} valueFactory={() => headersText(attempt.outboundHeaders)} /><RawBlock title={`出站原始 Body · ${attempt.outboundBodyBytes || 0} bytes`} valueFactory={() => diagnosticPayloadText(attempt.outboundBody, attempt.outboundBodyEncoding, attempt.outboundBodyRedacted)} /><RawBlock title={`上游响应 Headers · HTTP ${attempt.responseStatus ?? '-'}`} valueFactory={() => headersText(attempt.responseHeaders)} />{attempt.error && <RawBlock title="尝试错误" value={attempt.error} />}<RawBlock title={`原始上游 Chunks · ${(attempt.upstreamChunks || []).length} 个`} valueFactory={() => diagnosticChunksText(attempt.upstreamChunks, hasCompressedCapture(attempt.responseHeaders))} /></div></details>)}
+                      <RawBlock title={`桥接后客户端 Chunks · ${(captureDetail.clientChunks || []).length} 个`} valueFactory={() => diagnosticChunksText(captureDetail.clientChunks, captureDetail.routeMode !== 'translated' && (captureDetail.attempts || []).some((attempt) => hasCompressedCapture(attempt.responseHeaders)))} />
                       <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.78rem' }}>
                         完整源 JSON 不在详情页自动编码；复制和导出默认保留源数据。需要生成脱敏副本时，请在上方导出向导主动选择“脱敏副本”；服务端会逐条流式生成并支持大文件背压。
                       </p>

@@ -14,6 +14,33 @@ use super::context::current_request_context;
 use super::payload::metadata_json_body_hint;
 use crate::request_build::{self, PassthroughKind};
 
+/// Header-only rejections still know the protocol of recognized request paths.
+/// Opaque paths have no proven dialect and must not be labeled OpenAI.
+pub(super) fn source_format_for_inbound_path(path: &str) -> Option<ProviderProtocol> {
+    let path = path_without_query(path);
+    if is_gemini_generate_path(path) || is_gemini_resource_path(path) {
+        Some(ProviderProtocol::Gemini)
+    } else if ["/v1/messages", "/messages"]
+        .iter()
+        .any(|prefix| is_path_or_child(path, prefix))
+    {
+        Some(ProviderProtocol::Anthropic)
+    } else if [
+        "/v1/responses",
+        "/responses",
+        "/backend-api/codex/responses",
+    ]
+    .iter()
+    .any(|prefix| is_path_or_child(path, prefix))
+    {
+        Some(ProviderProtocol::OpenAIResponses)
+    } else if sumpter_core::client_attribution::uses_openai_client_fallback(path) {
+        Some(ProviderProtocol::OpenAI)
+    } else {
+        None
+    }
+}
+
 /// Legacy internal callers can request a native protocol. Raw data-plane
 /// requests do not use this filter and are always relayed to the selected
 /// Provider, regardless of its protocol label.
