@@ -4,6 +4,8 @@
 
 客户端连接 Sumpter 时，`x-goog-api-key` 或 `Authorization: Bearer` 填的是 Sumpter 入站 Token。Sumpter 剥离它，再注入所选入口的 Google 凭据。入站不接受 query 中的 `key`，避免把入站凭据放入 URL；官方文档中的 query key 示例接入本代理时应改为请求头。
 
+兼容网关的模型名可以包含供应商前缀，例如 `google-vertex-al-ultra/gemini-4-argon`。客户端路径必须保留 `/models/`：`/v1beta/models/google-vertex-al-ultra/gemini-4-argon:streamGenerateContent?alt=sse`。入站模型名中的斜杠也可编码为 `%2F`；映射的上游模型填写未编码的完整名称，或使用 `models/<完整名称>`。代理保留前缀，只按映射改写模型，不把它当成 Vertex AI 的 project/location 路径。每个路径段只允许字母、数字、`-`、`_`、`.`，拒绝空段、单独的 `.`、包含 `..` 的段及 URL 控制字符；去掉可选 `models/` 后最长 256 字节。此规则是网关兼容扩展，上游是否提供该模型仍由入口决定。
+
 ## 原生能力范围
 
 原生请求在 Gemini 入口间使用原始协议。字段是否被上游模型接受，由 Google 的模型能力、API 版本和账户权限决定。跨协议转换只支持现有桥能准确表达的字段，不能把本表理解为所有字段都能转换到 Anthropic / OpenAI。
@@ -11,7 +13,7 @@
 | 能力 | Sumpter 的处理 |
 | --- | --- |
 | 模型发现 | `GET /v1beta/models?pageSize=1000`，读取全部 `nextPageToken` 分页；内部目录将 `models/<id>` 规范化为 `<id>`；不把发现的模型自动加入授权模型组 |
-| 模型列表和详情原生调用 | `/v1beta/models` 与 `/v1beta/models/<id>` 原生响应；使用下述项目资源入口选择规则 |
+| 客户端模型列表和详情 | `/v1beta/models` 与 `/v1alpha/models` 默认返回已配置的文本模型目录，详情路径支持完整带前缀 ID；使用 Gemini 的 `models` / `name` 字段，不需要唯一固定 Gemini 入口。带 `x-sumpter-endpoint-id` 时改为读取指定 Gemini 入口的原生目录，遵循下述资源规则 |
 | 文本与多模态生成 | `generateContent` 保留原生正文与响应，包括图片、音频、视频、PDF、`inlineData`、`fileData`、生成模态与模型专用选项 |
 | 流式生成 | `streamGenerateContent?alt=sse` 保留 SSE；省略 `alt=sse` 时保留 Google 默认 JSON 数组响应，仅使用 Gemini 原生入口，不做数组流的跨协议转换 |
 | 思考和工具 | 原生保留 `thinkingConfig`、`thoughtSignature`、函数调用 ID / 参数 / 结果、并行工具调用、多模态工具结果以及 Google Search / URL Context / Code Execution 等原生工具字段 |
@@ -25,6 +27,8 @@
 | 用量与终止 | 观察原生 prompt、工具输入、候选输出、思考与缓存命中；思考计入输出总量并单列，缓存属于输入子集；保留 finishReason、拦截和错误，不把 HTTP 200 自动当成完整回答 |
 
 模型目录获取有总超时、总响应大小、模型数量和分页次数上限。后续页失败、重复页 Token 或超限会使本次刷新失败，不把部分目录当成完整目录。
+
+客户端默认目录一次返回全部匹配的本地条目，不提供上游分页 Token；只声明会话生成方法，不推断原生嵌入、批处理或模型版本信息。需要上游完整元数据和分页时，显式指定固定 Gemini 入口。管理界面的“获取模型”仍直接读取上游目录；获取目录不会自动授权其中的模型。
 
 `/v1alpha` 和 `/v1beta` 原生资源路径独立于现有 OpenAI 接口。`/v1/models` 和 `/v1/files` 继续使用既有 OpenAI 路由语义。要使用 Google 的 stable v1 资源接口，可以将 Gemini 入口 API 地址设为 `https://generativelanguage.googleapis.com/v1`，客户端仍走 `/v1beta/...`，Sumpter 将使用入口指定的版本。`/v1/interactions` 等没有 OpenAI 冲突的 Google 资源也可直接调用。
 

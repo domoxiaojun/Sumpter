@@ -3,6 +3,7 @@
 //! protocol-specific normalization preserves the existing transport contract.
 
 use super::Engine;
+use super::catalog::is_gemini_models_tree;
 use super::catalog::is_local_models_path;
 use super::catalog::local_models_response;
 use super::context::ClientOut;
@@ -424,9 +425,18 @@ impl Engine {
         // Claim the complete models route tree here. Otherwise POST
         // `/v1/models` and malformed nested paths fall through to the generic
         // resource/raw dispatcher and can leak a request to a Provider.
-        if is_openai_resource_tree(path, "models")
+        // Gemini discovery uses the same configured directory by default.
+        // An explicit endpoint selector retains the native project catalog.
+        let local_gemini_catalog = is_gemini_models_tree(path)
+            && header_value(&headers, "x-sumpter-endpoint-id").is_none();
+        if (is_openai_resource_tree(path, "models") || local_gemini_catalog)
             && !super::protocol::is_gemini_generate_path(path)
         {
+            let catalog_protocol = if local_gemini_catalog {
+                ProviderProtocol::Gemini
+            } else {
+                ProviderProtocol::OpenAI
+            };
             if config.listener.has_inbound_auth() && !inbound_auth_ok(&headers, &config.listener) {
                 let client_kind = detect_client_kind(&headers, path_and_query);
                 self.record_rejected_client_with_metadata(
@@ -437,11 +447,25 @@ impl Engine {
                     client_kind,
                     CodexMetadata::from_request(&headers, None),
                     ClientDeclaredMetadata::from_headers(&headers),
-                    source_format,
+                    Some(catalog_protocol),
                 );
                 return error_response(
                     StatusCode::UNAUTHORIZED,
                     &[("error", "inbound_auth_required")],
+                );
+            }
+            if local_gemini_catalog
+                && query.is_some_and(|query| decoded_query_value(query, "key").is_some())
+            {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    &[
+                        ("error", "invalid_gemini_request"),
+                        (
+                            "message",
+                            "use x-goog-api-key or Bearer for inbound authentication, not a query key",
+                        ),
+                    ],
                 );
             }
             if !is_local_models_path(path) {
@@ -453,7 +477,7 @@ impl Engine {
                     detect_client_kind(&headers, path_and_query),
                     CodexMetadata::from_request(&headers, None),
                     ClientDeclaredMetadata::from_headers(&headers),
-                    source_format,
+                    Some(catalog_protocol),
                 );
                 return error_response(
                     StatusCode::NOT_FOUND,
@@ -469,7 +493,7 @@ impl Engine {
                     detect_client_kind(&headers, path_and_query),
                     CodexMetadata::from_request(&headers, None),
                     ClientDeclaredMetadata::from_headers(&headers),
-                    source_format,
+                    Some(catalog_protocol),
                 );
                 return method_not_allowed_response("GET");
             }

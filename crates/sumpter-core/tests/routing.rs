@@ -848,6 +848,43 @@ fn grok_websearch_requires_responses_without_fixed_protocol_upgrade() {
 }
 
 #[test]
+fn namespaced_grok_retrieval_routes_keep_responses_requirement() {
+    for (rule_id, request) in [
+        ("websearch", websearch_request()),
+        ("webfetch", webfetch_request()),
+    ] {
+        let mut config = base_config();
+        let endpoint = endpoint_mut(&mut config, "qwen");
+        endpoint.protocol = EndpointProtocolMode::Auto;
+        endpoint
+            .mappings
+            .push(mapping("gateway/xai/grok-4.7", "opaque-upstream"));
+        let mut rule = builtin_rules::canonical()
+            .into_iter()
+            .find(|rule| rule.id == rule_id)
+            .unwrap();
+        rule.enabled = true;
+        rule.target = FeatureRuleTarget {
+            endpoint_id: Some("qwen".into()),
+            effort: None,
+            model: "gateway/xai/grok-4.7".into(),
+            protocol_override: None,
+        };
+        config.feature_rules = vec![rule.clone()];
+        let plan = RoutePlanner::plan(&request, &config.clone().normalized()).unwrap();
+        assert_eq!(
+            plan.endpoints[0].protocol,
+            ProviderProtocol::OpenAIResponses
+        );
+        assert_eq!(plan.endpoints[0].routed_model, "gateway/xai/grok-4.7");
+        assert_eq!(plan.endpoints[0].upstream_model, "opaque-upstream");
+        rule.target.protocol_override = Some(ProviderProtocol::Anthropic);
+        config.feature_rules = vec![rule];
+        assert!(RoutePlanner::plan(&request, &config.normalized()).is_err());
+    }
+}
+
+#[test]
 fn contaminated_main_conversation_stays_on_primary() {
     // 主对话夹带 webfetch 风格文案:多条消息/带工具 → 指纹不命中,留在主池。
     let request = request_from(json!({

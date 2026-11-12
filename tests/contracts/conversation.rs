@@ -228,6 +228,85 @@ async fn run_direction(client: Wire, upstream: Wire) {
 
 const WIRES: [Wire; 4] = [Wire::Anthropic, Wire::Chat, Wire::Responses, Wire::Gemini];
 
+/// 带供应商前缀的入站名、映射名以及 base URL 前缀覆盖所有原生/转换方向。
+#[tokio::test]
+async fn gateway_model_names_survive_native_and_translated_directions() {
+    let client_model = "gateway/models/client-model";
+    for client in WIRES {
+        for upstream in WIRES {
+            let upstream_model = match upstream {
+                Wire::Anthropic => "anthropic/claude-opus-5",
+                Wire::Chat | Wire::Responses => "xai/grok-4.7",
+                Wire::Gemini => "google-vertex-al-ultra/gemini-4-argon",
+            };
+            let mut config = single_wire_config(upstream);
+            let ep = &mut config.endpoints[0];
+            ep.mappings[0].client_pattern = client_model.into();
+            ep.mappings[0].upstream_model = upstream_model.into();
+            ep.base_url = if upstream == Wire::Gemini {
+                "https://a.example.com/gateway/models/route/v1beta/".into()
+            } else {
+                "https://a.example.com/gateway/v1/".into()
+            };
+            let fake = FakeTransport::new();
+            let stream = upstream.upstream_stream();
+            fake.push("a.example.com", sse_ok(&[&stream]));
+            let engine = engine_with(config, fake.clone());
+            let mut input = client.body();
+            if client != Wire::Gemini {
+                input["model"] = json!(client_model);
+            }
+            let raw = serde_json::to_vec(&input).unwrap();
+            let (status, response) = call(
+                &engine,
+                loopback(),
+                &client.inbound_path(client_model),
+                vec![("content-type".into(), "application/json".into())],
+                Bytes::from(raw.clone()),
+            )
+            .await;
+            assert_eq!(
+                status,
+                200,
+                "{client:?} -> {upstream:?}: {}",
+                String::from_utf8_lossy(&response)
+            );
+            assert!(String::from_utf8_lossy(&response).contains(client.client_marker()));
+            let sent = fake.requests();
+            assert_eq!(sent.len(), 1);
+            let body: Value = serde_json::from_slice(&sent[0].body).unwrap();
+            let expected_path = match upstream {
+                Wire::Anthropic => "/gateway/v1/messages".into(),
+                Wire::Chat => "/gateway/v1/chat/completions".into(),
+                Wire::Responses => "/gateway/v1/responses".into(),
+                Wire::Gemini => format!(
+                    "/gateway/models/route/v1beta/models/{upstream_model}:streamGenerateContent?alt=sse"
+                ),
+            };
+            assert_eq!(sent[0].path, expected_path, "{client:?} -> {upstream:?}");
+            if upstream == Wire::Gemini {
+                assert!(body.get("model").is_none());
+                if client == Wire::Gemini {
+                    assert_eq!(sent[0].body, raw);
+                    assert_eq!(response, stream.as_bytes());
+                }
+            } else {
+                assert_eq!(body["model"], upstream_model);
+            }
+            let runtime = engine.runtime_snapshot();
+            let event = runtime
+                .recent_events
+                .iter()
+                .find(|event| event.kind == "client")
+                .unwrap();
+            assert!(
+                event.is_succeeded(),
+                "{client:?} -> {upstream:?}: {event:?}"
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn responses_native_only_controls_are_preserved_or_rejected_before_dispatch() {
     let fields = [

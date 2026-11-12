@@ -1411,11 +1411,10 @@ impl RoutePlanner {
     ) -> Option<Result<RoutePlan, RoutePlanError>> {
         let target = &rule.target;
         let effective_model = model_name::clean(&target.model);
-        let grok_requires_responses =
-            matches!(
-                rule.match_.request_kind,
-                Some(RequestKind::WebSearch | RequestKind::WebFetch)
-            ) && effective_model.to_ascii_lowercase().starts_with("grok-");
+        let grok_requires_responses = matches!(
+            rule.match_.request_kind,
+            Some(RequestKind::WebSearch | RequestKind::WebFetch)
+        ) && model_name::is_grok(&effective_model);
         if !passthrough
             && grok_requires_responses
             && target

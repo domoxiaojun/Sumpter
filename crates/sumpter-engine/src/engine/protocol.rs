@@ -400,8 +400,9 @@ pub(super) fn gemini_model_from_path(path: &str) -> Option<String> {
     ) {
         return None;
     }
-    (!model.contains('/') && crate::request_build::valid_gemini_model(model))
-        .then(|| model.to_string())
+    let model = strict_percent_decode(model, false)?;
+    (!model.starts_with("models/") && crate::request_build::valid_gemini_model(&model))
+        .then_some(model)
 }
 
 /// Project resources have no conversational model. Keep Google versioned
@@ -431,7 +432,10 @@ pub(super) fn is_gemini_resource_path(path: &str) -> bool {
     if root == "models" {
         return rest == "models"
             || rest.strip_prefix("models/").is_some_and(|model| {
-                !model.contains('/') && crate::request_build::valid_gemini_model(model)
+                strict_percent_decode(model, false).is_some_and(|model| {
+                    !model.starts_with("models/")
+                        && crate::request_build::valid_gemini_model(&model)
+                })
             });
     }
     matches!(

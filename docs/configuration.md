@@ -70,7 +70,7 @@ Linux Admin 是独立监听，默认 `127.0.0.1:57879`，由 CLI 参数或环境
 | 字段 | 说明 |
 | --- | --- |
 | `id` | 唯一 ID，也是统计聚合键；修改会切断历史入口统计 |
-| `baseURL` | Provider API 根地址；不要填控制台网页地址 |
+| `baseURL` | Provider API 根地址；Anthropic、Chat Completions、Responses 兼容根地址和末尾带 `/v1` 的地址，不会重复拼接版本段；不要填控制台网页地址 |
 | `apiKey` | 发往该 Provider 的凭据，绝不与配置示例一起提交 |
 | `protocol` | `auto`、`anthropic`、`openai`、`openai-responses` 或 `gemini`；只描述入口能力 |
 | `enabled` | false 时不参与路由 |
@@ -85,6 +85,8 @@ Linux Admin 是独立监听，默认 `127.0.0.1:57879`，由 CLI 参数或环境
 
 
 「获取模型」按明确的目录协议身份探测，在总期限和数量上限内合并去重；OpenAI/Responses 默认不附带 Anthropic 目录头。Anthropic 入口另尝试通用目录，避免 CPA 的 Claude 专用别名遮住 Gemini 原始 ID。显式 UA 设置仍被保留。刷新目录不会修改 mapping 或模型组，旧目录缓存需重新获取。
+
+模型匹配和转发保留供应商前缀，例如 `anthropic/claude-opus-5`、`xai/grok-4.7`。`grok-*` 不会自动匹配 `xai/grok-*`，映射应填写完整模式。WebSearch / WebFetch 分流按模型名最后一段识别 Grok 家族，带前缀时仍要求 Responses 目标协议；普通聊天不会因此自动联网。客户端模型详情支持完整路径或将模型名里的 `/` 编码为 `%2F`，并按 Anthropic / Grok / OpenAI 客户端身份返回对应格式。
 
 Auto/OpenAI/Responses 入口在目录成功后，还会以相同身份和凭据尝试 `client_version=cpa` 能力目录。此可选请求最多 3 秒，并受剩余目录探测时间约束；失败不丢弃已取得的模型 ID，也不从扩展结果新增模型。明确的不支持不能被另一份目录的支持声明覆盖。
 

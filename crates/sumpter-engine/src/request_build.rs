@@ -12,7 +12,7 @@ use sumpter_core::config::{
 use sumpter_core::model_name::{self, ReasoningEffort};
 use sumpter_core::routing::{PlannedEndpoint, RequestPurpose, RoutingRequest};
 
-use crate::outbound::{OutboundRequest, join_paths};
+use crate::outbound::OutboundRequest;
 
 /// Claude Code 指纹 UA:入站 UA 透传优先,仅在客户端未带 UA 时作回落
 /// (无 UA 探针打 DashScope 会 405,回落保住指纹放行面)。
@@ -344,8 +344,7 @@ pub fn server_retrieval_enabled(
     request: &RoutingRequest,
     purpose: RequestPurpose,
 ) -> bool {
-    let routed_model = model_name::clean(&endpoint.routed_model).to_ascii_lowercase();
-    let is_grok = routed_model.starts_with("grok-");
+    let is_grok = model_name::is_grok(&endpoint.routed_model);
     match purpose {
         RequestPurpose::WebSearch => true,
         RequestPurpose::WebFetch => is_grok && request_contains_url(request),
@@ -566,10 +565,13 @@ pub(crate) fn build_outbound_with_json(
             passthrough.kind,
             PassthroughKind::GeminiGenerate | PassthroughKind::GeminiSession
         ) {
-            rewrite_gemini_model_path(
-                &gemini_resource_path(&base_path, inbound_path_and_query),
-                &request.model,
-                &endpoint.upstream_model,
+            gemini_resource_path(
+                &base_path,
+                &rewrite_gemini_model_path(
+                    inbound_path_and_query,
+                    &request.model,
+                    &endpoint.upstream_model,
+                ),
             )
         } else if let Some(suffix) = passthrough.kind.canonical_suffix() {
             // 会话/资源别名（`/backend-api/codex/...`、无 `/v1` 前缀）规范化到
@@ -652,7 +654,10 @@ pub(crate) fn build_outbound_with_json(
                     server_retrieval,
                 },
             );
-            (join_paths(&base_path, &messages_path), Bytes::from(body))
+            (
+                openai_resource_path(&base_path, &messages_path),
+                Bytes::from(body),
+            )
         }
         ProviderProtocol::OpenAI => {
             set_header(&mut headers, "accept", "text/event-stream");
@@ -1055,16 +1060,21 @@ pub(crate) fn gemini_upload_handoff_url(
     Some(format!("{origin}{path}{query}"))
 }
 
-/// Gemini Developer API model path segments are intentionally narrower than a
-/// general URL path. This prevents mappings from escaping the `models/` tree.
+/// Accept gateway namespaces without letting any segment escape `models/`.
+/// A leading `models/` is the optional Google resource prefix, not a namespace.
 pub fn valid_gemini_model(model: &str) -> bool {
     let model = model.strip_prefix("models/").unwrap_or(model);
     !model.is_empty()
         && model.len() <= 256
-        && model
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-        && !model.contains("..")
+        && !model.starts_with("models/")
+        && model.split('/').all(|segment| {
+            !segment.is_empty()
+                && segment != "."
+                && !segment.contains("..")
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        })
 }
 
 /// Only model fields defined by the native auxiliary/resource schemas may
@@ -1122,7 +1132,7 @@ fn rewrite_gemini_model_path(
     let (path, query) = path_and_query
         .split_once('?')
         .map_or((path_and_query, None), |(path, query)| (path, Some(query)));
-    let Some((prefix, rest)) = path.rsplit_once("/models/") else {
+    let Some((prefix, rest)) = path.split_once("/models/") else {
         return path_and_query.into();
     };
     let Some((_, operation)) = rest.split_once(':') else {
@@ -1325,10 +1335,7 @@ fn rewrite_anthropic_body(
                 }]),
             );
         }
-        if model_name::clean(options.routed_model)
-            .to_ascii_lowercase()
-            .starts_with("grok-")
-        {
+        if model_name::is_grok(options.routed_model) {
             body.insert("tool_choice".into(), json!({"type": "any"}));
         }
     }
@@ -2548,6 +2555,91 @@ mod tests {
         let body: Value = serde_json::from_slice(&build.request.body).unwrap();
         assert!(body.get("input").is_some());
         assert!(body.get("messages").is_none());
+    }
+
+    #[test]
+    fn gateway_models_accept_safe_segments_and_reject_path_injection() {
+        for model in [
+            "gemini-4-argon",
+            "google-vertex-al-ultra/gemini-4-argon",
+            "models/gateway/models/gemini-4-argon",
+        ] {
+            assert!(valid_gemini_model(model), "{model}");
+        }
+        for model in [
+            "",
+            ".",
+            "..",
+            "/gemini",
+            "provider/",
+            "provider//gemini",
+            "provider/./gemini",
+            "provider/../gemini",
+            "provider/%2e%2e/gemini",
+            "provider/gemini?key=x",
+            "provider/gemini#fragment",
+            "provider\\gemini",
+            "https://host/model",
+            "models/models/gemini",
+        ] {
+            assert!(!valid_gemini_model(model), "{model}");
+        }
+        assert!(!valid_gemini_model(&"g".repeat(257)));
+        assert_eq!(
+            rewrite_gemini_model_path(
+                "/v1beta/models/gateway/models/alias:countTokens?trace=a%2Fb",
+                "gateway/models/alias",
+                "models/provider/gemini-4-argon"
+            ),
+            "/v1beta/models/provider/gemini-4-argon:countTokens?trace=a%2Fb"
+        );
+    }
+
+    #[test]
+    fn namespaced_grok_retrieval_preserves_upstream_alias_and_tool_choice() {
+        for protocol in [
+            ProviderProtocol::Anthropic,
+            ProviderProtocol::OpenAI,
+            ProviderProtocol::OpenAIResponses,
+        ] {
+            let mut ep = endpoint(protocol, ContextMode::Standard, ThinkingMode::Passthrough);
+            ep.routed_model = "gateway/xai/GROK-4.7[1m]".into();
+            ep.upstream_model = "provider/opaque-model".into();
+            for (req, purpose) in [
+                (websearch_request(), RequestPurpose::WebSearch),
+                (webfetch_request(), RequestPurpose::WebFetch),
+            ] {
+                assert!(server_retrieval_enabled(&ep, &req, purpose));
+                let built = build_outbound(
+                    &ep,
+                    &req,
+                    &[],
+                    "POST",
+                    "/v1/messages",
+                    "k",
+                    purpose,
+                    None,
+                    None,
+                );
+                let body: Value = serde_json::from_slice(&built.request.body).unwrap();
+                assert_eq!(body["model"], "provider/opaque-model");
+                match protocol {
+                    ProviderProtocol::Anthropic => {
+                        assert_eq!(body["tool_choice"], json!({"type":"any"}))
+                    }
+                    ProviderProtocol::OpenAI => assert_eq!(body["web_search_options"], json!({})),
+                    ProviderProtocol::OpenAIResponses => {
+                        assert_eq!(body["tools"], json!([{"type":"web_search"}]))
+                    }
+                    ProviderProtocol::Gemini => unreachable!(),
+                }
+            }
+            assert!(!server_retrieval_enabled(
+                &ep,
+                &webfetch_request(),
+                RequestPurpose::Standard
+            ));
+        }
     }
 
     #[test]

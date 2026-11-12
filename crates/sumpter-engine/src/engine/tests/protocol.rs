@@ -30,6 +30,50 @@ fn gemini_native_paths_extract_model_and_stream_shape() {
 }
 use crate::request_build;
 
+#[test]
+fn gemini_gateway_paths_keep_namespaces_and_validate_decoded_segments() {
+    for version in ["v1", "v1alpha", "v1beta"] {
+        for model in [
+            "google-vertex-al-ultra/gemini-4-argon",
+            "google-vertex-al-ultra%2Fgemini-4-argon",
+            "gateway/models/gemini-4-argon",
+        ] {
+            let path = format!("/{version}/models/{model}:streamGenerateContent");
+            assert_eq!(
+                gemini_model_from_path(&path),
+                Some(model.replace("%2F", "/"))
+            );
+            assert!(gemini_stream_path(&path));
+        }
+    }
+    for model in [
+        "provider//gemini",
+        "provider/./gemini",
+        "provider/../gemini",
+        "provider/%2e%2e/gemini",
+        "provider/%252e%252e/gemini",
+        "provider%3Fkey=x/gemini",
+        "provider%5cgemini",
+        "provider%2",
+        "models/gemini",
+    ] {
+        assert!(
+            gemini_model_from_path(&format!("/v1beta/models/{model}:generateContent")).is_none(),
+            "{model}"
+        );
+    }
+    assert!(
+        gemini_model_from_path("/v1beta/google-vertex-al-ultra/gemini-4-argon:generateContent")
+            .is_none()
+    );
+    assert!(
+        gemini_model_from_path(
+            "/v1/projects/p/locations/l/publishers/google/models/gemini:generateContent"
+        )
+        .is_none()
+    );
+}
+
 #[tokio::test]
 async fn realtime_root_live_bootstrap_is_the_only_root_that_registers_a_call() {
     INBOUND_REQUEST_CONTEXT

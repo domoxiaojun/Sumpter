@@ -1070,7 +1070,7 @@ impl Engine {
             endpoint.protocol == ProviderProtocol::Gemini
                 && !request_build::valid_gemini_model(&endpoint.upstream_model)
         }) {
-            let message = "Gemini upstream model must be a model ID or models/<ID>";
+            let message = "Gemini upstream model must be a safe model ID or namespace/model ID, optionally prefixed with models/";
             self.record_rejected_client_with_metadata(
                 400,
                 message,
