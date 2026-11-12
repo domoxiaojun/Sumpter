@@ -1986,32 +1986,59 @@ mod compression_tests {
     }
 
     #[tokio::test]
-    async fn request_size_compressed_body_above_limit_is_rejected() {
+    async fn request_size_compressed_body_respects_configured_decoded_limit() {
         use crate::replay::{ReplayReply, ReplayTransport};
         use std::io::Write;
         use std::sync::Arc;
-        let content_len = 128 * 1024 * 1024 + 1;
+        let decoded_limit_mib = 1;
+        let decoded_limit = decoded_limit_mib as usize * crate::ingress::MIB;
         let mut raw = br#"{"model":"size-model","input":""#.to_vec();
-        raw.resize(raw.len() + content_len, b'x');
-        raw.extend_from_slice(br#""}"#);
+        let suffix = br#""}"#;
+        raw.resize(decoded_limit - suffix.len(), b'x');
+        raw.extend_from_slice(suffix);
         for encoding in ["zstd", "gzip"] {
-            let encoded = if encoding == "zstd" {
-                zstd::stream::encode_all(&raw[..], 1).unwrap()
-            } else {
-                let mut gzip =
-                    flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
-                gzip.write_all(&raw).unwrap();
-                gzip.finish().unwrap()
+            let policy = sumpter_core::request_policy::RequestPolicy {
+                ingress: sumpter_core::request_policy::IngressPolicy {
+                    max_decoded_body_mib: decoded_limit_mib,
+                    ..Default::default()
+                },
+                ..Default::default()
             };
+            let resources = crate::ingress::Resources::new(&policy);
+            let request = crate::ingress::RequestResources::new(policy.ingress, &resources);
+            let encode = |raw: &[u8]| {
+                if encoding == "zstd" {
+                    zstd::stream::encode_all(raw, 1).unwrap()
+                } else {
+                    let mut gzip =
+                        flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+                    gzip.write_all(raw).unwrap();
+                    gzip.finish().unwrap()
+                }
+            };
+            let encoded = encode(&raw);
+            let decoded = decode_inference_body_limited(&encoded, encoding, &request).unwrap();
+            assert!(
+                decoded.as_ref() == raw.as_slice(),
+                "{encoding}: exact limit"
+            );
+            drop(decoded);
+
+            // The configured limit covers the entire JSON body, not only input.
+            let mut oversized = raw.clone();
+            oversized.insert(oversized.len() - suffix.len(), b'x');
+            let encoded = encode(&oversized);
             assert_eq!(
-                decode_inference_body(&encoded, encoding),
-                Err("request_body_too_large")
+                decode_inference_body_limited(&encoded, encoding, &request),
+                Err("request_body_too_large"),
+                "{encoding}: one byte above limit"
             );
             let transport = Arc::new(ReplayTransport::new([Ok(ReplayReply::ok("{}"))]));
             let config = AppConfig::from_json(
                 &serde_json::json!({
                     "schemaVersion":6,
                     "listener":{"host":"127.0.0.1","port":0,"authToken":"size-test-token"},
+                    "requestPolicy":{"ingress":{"maxDecodedBodyMib":decoded_limit_mib}},
                     "retry":{"maxDeferredRounds":0,"sessionStickyRetries":0},
                     "endpoints":[{"id":"size","name":"size","baseURL":"https://size.invalid",
                         "apiKey":"synthetic-token","protocol":"openai-responses","enabled":true,
