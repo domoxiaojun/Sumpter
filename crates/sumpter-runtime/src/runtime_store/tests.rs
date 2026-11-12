@@ -3167,7 +3167,8 @@ fn codex_roles_refresh_current_storage_without_deleting_history_or_double_counti
     assert_eq!(analytics["codexRequests"]["counts"]["prewarm"], 1);
     assert_eq!(analytics["codexRequests"]["counts"]["turn"], 2);
     assert_eq!(analytics["codexRequests"]["counts"]["compaction"], 1);
-    assert_eq!(analytics["codexRequests"]["counts"]["unknown"], 1);
+    assert_eq!(analytics["codexRequests"]["counts"]["memory"], 1);
+    assert_eq!(analytics["codexRequests"]["counts"]["unknown"], 0);
     assert_eq!(
         analytics["codexRequests"]["unobservedWebsocketConnections"],
         1
