@@ -1439,7 +1439,7 @@ fn reporting_aliases_are_reversible_across_queries_and_exports_without_rewriting
     let raw: String = connection
         .query_row(
             "SELECT client_attribution_json FROM runtime_events WHERE seq=1",
-            [],
+            crate::database::params![],
             |r| r.get(0),
         )
         .unwrap();

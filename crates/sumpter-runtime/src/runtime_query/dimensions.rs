@@ -486,7 +486,7 @@ pub fn dimension_page_on(
 fn dimension_costs(
     transaction: &Transaction<'_>,
     base: &SqlFilter,
-    key_expression: &'static str,
+    key_expression: &str,
     prices: &PriceCatalog,
     keys: &[&str],
 ) -> QueryResult<HashMap<String, CostCoverage>> {
