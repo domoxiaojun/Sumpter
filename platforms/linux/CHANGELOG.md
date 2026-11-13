@@ -6,6 +6,19 @@
 
 ## [Unreleased]
 
+## [0.4.82] - 2026-11-13
+
+### 优化与修复
+
+- 重构 Linux WebUI 暗色与亮色双主题令牌、字体排版、图表读数、登录页主题切换以及诊断、分流策略、帮助与关于页信息层级，并同步生成 `platforms/linux/web/` 静态资源。
+- 修复诊断页 `ClientConnectionDiagnostics` 缺少 `Icon` 导入导致的 `#diagnostics` 运行时异常。
+- 修复 Chromium 下启用 `appearance: base-select` 后 `<select>` 出现双箭头与文本顶对齐偏移的问题，并将触控放大样式收窄至 `(hover: none) and (pointer: coarse)` 以恢复桌面端紧凑控件尺寸。
+- 修复移动端小屏抽屉与顶栏按钮重叠、页头对齐、禁用态按钮对比度及实时事件行时间戳换行问题，收敛入口库、分流规则与运行表格列宽以减少桌面宽屏横向溢出。
+
+### 验证与边界
+
+- 共享 Rust 核心、macOS App、配置与数据库 schema 不变；完整 Rust、Swift、WebUI、容器与发布打包产物由 GitHub Actions 验证和生成，发布不代表本机或生产实例已经升级。
+
 ## [0.4.81] - 2026-11-13
 
 ### 清理与维护
