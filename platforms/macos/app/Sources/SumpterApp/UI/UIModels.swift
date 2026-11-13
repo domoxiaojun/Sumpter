@@ -489,36 +489,6 @@ struct RuntimeDiagnosticSummary: Equatable {
     }
 }
 
-/// 最近事件窗口的主运行指标；只以一条 client 事件代表一次端到端请求。
-struct RuntimeOperationalSummary: Equatable {
-    let requests: Int
-    let successes: Int
-    let failures: Int
-    let cancellations: Int
-    let failovers: Int
-    let averageTTFBMS: Int?
-    let averageDurationMS: Int?
-
-    init(events: [RuntimeEvent]) {
-        let clientEvents = events.filter { $0.kind == "client" && !$0.isInFlight }
-        requests = clientEvents.count
-        successes = clientEvents.filter(\.isSucceeded).count
-        failures = clientEvents.filter(\.isFailed).count
-        cancellations = clientEvents.filter(\.isCancelled).count
-        failovers = clientEvents.filter(\.failover).count
-        let ttfbValues = clientEvents.compactMap(\.ttfbMS)
-        averageTTFBMS = ttfbValues.isEmpty ? nil : ttfbValues.reduce(0, +) / ttfbValues.count
-        averageDurationMS = clientEvents.isEmpty
-            ? nil
-            : clientEvents.reduce(0) { $0 + $1.durationMS } / clientEvents.count
-    }
-
-    var successRateText: String {
-        guard requests > 0 else { return "-" }
-        return "\(Int((Double(successes) / Double(requests) * 100).rounded()))%"
-    }
-}
-
 extension AppConfig {
     var endpointRows: [EndpointDisplayRow] {
         endpoints.map { EndpointDisplayRow(endpoint: $0) }

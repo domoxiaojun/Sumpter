@@ -219,27 +219,6 @@ extension AppModel {
         }
     }
 
-    /// 事件即时并入本地快照(与引擎同口径:同 id 原地更新、按类各留 200 条),
-    /// 计数则防抖合并拉取——一次长流会推很多 delta 事件,不该每条都打一次 admin。
-    func applyRuntimeEvent(_ event: RuntimeEvent) {
-        var events = runtime.recentEvents
-        if let index = events.firstIndex(where: { $0.id == event.id }) {
-            events[index] = event
-        } else {
-            events.insert(event, at: 0)
-            events = RuntimeEvent.trimmed(events, perKindLimit: 200)
-        }
-        runtime.recentEvents = events
-        let evaluatedHealth = ProxyHealthEvaluator.evaluate(
-            events: events,
-            isRunning: sidecarState == .running
-        )
-        if evaluatedHealth != health {
-            health = evaluatedHealth
-        }
-        scheduleCountersRefresh()
-    }
-
     func applyRuntimeListItem(_ item: AdminWire.RuntimeEventListItem, resetGeneration: Int? = nil) {
         applyRuntimeListItems([item], resetGeneration: resetGeneration)
     }
@@ -464,7 +443,6 @@ extension AppModel {
             runtimeFacetsRequestGeneration &+= 1
             runtimeHistoryLoading = false
             runtimeErrorPageLoading = false
-            runtimeDimensionPageLoading = false
             runtimeDimensionsLoading = false
             runtimeRequestChainLoading = false
             // 让离开页面后返回的旧响应失效，但不清空已显示快照，回到页面

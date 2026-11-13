@@ -11,7 +11,6 @@ import argparse
 import json
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE = ROOT / "docs" / "templates" / "usage-onboarding.md"
 MATRIX = ROOT / "docs" / "templates" / "usage-path-matrix.json"

@@ -334,17 +334,7 @@ final class AppModel: ObservableObject {
         didSet { UserDefaults.standard.set(runtimeErrorPageSize, forKey: runtimeErrorPageSizeDefaultsKey) }
     }
     @Published var runtimeErrorPageLoading = false
-    /// 旧的单维度页状态保留给兼容视图；当前概览和成本看板使用三张
-    /// 独立分页表，同时保留各自搜索、排序和页大小。
-    @Published var runtimeDimensionPage: AdminWire.RuntimeDimensionPage?
-    @Published var runtimeDimensionPageLoading = false
-    @Published var runtimeDimensionKind = "project"
-    @Published var runtimeDimensionSearch = ""
-    @Published var runtimeDimensionSort = "last_seen"
-    @Published var runtimeDimensionOrder = "desc"
-    @Published var runtimeDimensionPageSize: Int = storedRuntimePageSize(forKey: runtimeDimensionPageSizeDefaultsKey) {
-        didSet { UserDefaults.standard.set(runtimeDimensionPageSize, forKey: runtimeDimensionPageSizeDefaultsKey) }
-    }
+    // 概览和成本看板的四张表分别保留分页、搜索与排序状态。
     @Published var runtimeProjectsPage: AdminWire.RuntimeDimensionPage?
     @Published var runtimeSessionsPage: AdminWire.RuntimeDimensionPage?
     @Published var runtimeEndpointsPage: AdminWire.RuntimeDimensionPage?

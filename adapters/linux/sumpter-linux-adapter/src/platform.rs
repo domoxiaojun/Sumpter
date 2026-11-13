@@ -5,7 +5,6 @@ use std::os::unix::fs::MetadataExt;
 use async_trait::async_trait;
 use axum::http::StatusCode;
 use axum::response::Response;
-use serde_json::json;
 use sumpter_core::access;
 
 use sumpter_engine::boundary::{
@@ -61,9 +60,4 @@ impl PlatformBoundary for Platform {
     ) -> Response {
         sumpter_engine::engine::error_response(StatusCode::NOT_FOUND, &[("error", "not_found")])
     }
-}
-
-#[allow(dead_code)]
-fn _contract_shape() -> serde_json::Value {
-    json!({"platform": "linux", "control": false})
 }

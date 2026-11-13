@@ -156,8 +156,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     /// while staying compact on first launch.
     nonisolated static let preferredContentSize = NSSize(width: 1_310, height: 960)
     private static let preferredMinimumContentSize = NSSize(width: 760, height: 560)
-    private static let screenInset = CGSize(width: 32, height: 48)
-
     private let model: AppModel
     private let windowVisibility = SumpterWindowVisibility()
     private var window: NSWindow?

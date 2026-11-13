@@ -7,10 +7,6 @@ import SumpterCore
 
 @MainActor
 extension AppModel {
-    func refreshNow() async {
-        await refreshStatus(loadLatestEvents: true)
-    }
-
     /// 退出前先停 sidecar(其 SIGTERM 路径会把统计落盘),避免防抖窗口内的最近事件丢失。
     func shutdownAndQuit() {
         Task {
@@ -92,33 +88,6 @@ extension AppModel {
         // reload 回执仍完整解码以兼容 daemon wire，但不再在 App 内展示
         // 配置风险监测；这里只反馈 reload 本身。
         flash("配置已生效")
-    }
-
-    func resetRuntimeStats() {
-        Task {
-            guard let admin else { return }
-            do {
-                try await admin.resetRuntime()
-                runtimeChangeSeq = 0
-                runtimeEventDetails.removeAll()
-                runtimeEventDetail = nil
-                runtimePage = nil
-                runHistoryRequestGeneration &+= 1
-                runHistoryPage = nil
-                runHistoryError = nil
-                runtime = RuntimeSnapshot()
-                clearRuntimeV2Snapshot()
-                runtimeV2RequestGeneration &+= 1
-                runtimeErrorPageRequestGeneration &+= 1
-                runtimeDimensionRequestGeneration &+= 1
-                resetRuntimeLocalDrillDownState()
-                flash("SQLite 新统计已清空")
-            } catch {
-                lastError = "\(error)"
-                flash("重置统计失败")
-            }
-            await refreshStatus(loadLatestEvents: true)
-        }
     }
 
     func recreateRuntimeStats() {

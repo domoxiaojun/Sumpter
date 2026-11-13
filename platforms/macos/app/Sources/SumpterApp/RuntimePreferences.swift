@@ -8,7 +8,6 @@ let statisticsAutoRefreshIntervalDefaultsKey = "statisticsAutoRefreshIntervalSec
 let runHistoryPageSizeDefaultsKey = "runtimeRunHistoryPageSize"
 let runtimeHistoryPageSizeDefaultsKey = "runtimeStatisticsHistoryPageSize"
 let runtimeErrorPageSizeDefaultsKey = "runtimeStatisticsErrorPageSize"
-let runtimeDimensionPageSizeDefaultsKey = "runtimeStatisticsDimensionPageSize"
 let runtimeEndpointPageSizeDefaultsKey = "runtimeStatisticsEndpointPageSize"
 let runtimeProjectPageSizeDefaultsKey = "runtimeStatisticsProjectPageSize"
 let runtimeSessionPageSizeDefaultsKey = "runtimeStatisticsSessionPageSize"

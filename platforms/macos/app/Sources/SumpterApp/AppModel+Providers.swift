@@ -163,18 +163,6 @@ extension AppModel {
         }
     }
 
-    func moveProviderAccount(id: String, direction: Int) async throws {
-        try await mutateConfig { config in
-            let location = try Self.locate(endpointID: id, in: config)
-            let target = location.endpoint + direction
-            guard config.endpoints.indices.contains(target) else {
-                return
-            }
-            let endpoint = config.endpoints.remove(at: location.endpoint)
-            config.endpoints.insert(endpoint, at: target)
-        }
-    }
-
     /// 多选整块移动(一次落盘;顺序语义 = TableSelection.moved,抵边行原地不动)。
     func moveProviderAccounts(ids: Set<String>, direction: Int) async throws {
         guard !ids.isEmpty else { return }
@@ -315,10 +303,6 @@ extension AppModel {
         }
     }
 
-    func deleteProviderMapping(endpointID: String, mappingID: String) async throws {
-        try await deleteProviderMappings(endpointID: endpointID, mappingIDs: [mappingID])
-    }
-
     func deleteProviderMappings(endpointID: String, mappingIDs: Set<String>) async throws {
         guard !mappingIDs.isEmpty else { return }
         try await mutateConfig { config in
@@ -422,39 +406,6 @@ extension AppModel {
         }
     }
 
-    func updateFeatureRule(
-        id: String,
-        enabled: Bool,
-        model: String,
-        effortOverride: ReasoningEffort? = nil,
-        protocolOverride: ProviderProtocol? = nil,
-        endpointID: String? = nil,
-        toolTypePrefix: String,
-        systemContains: String,
-        messagesContain: String,
-        modelEquals: String
-    ) {
-        Task {
-            do {
-                try await updateFeatureRuleAndSave(
-                    id: id,
-                    enabled: enabled,
-                    model: model,
-                    effortOverride: effortOverride,
-                    protocolOverride: protocolOverride,
-                    endpointID: endpointID,
-                    toolTypePrefix: toolTypePrefix,
-                    systemContains: systemContains,
-                    messagesContain: messagesContain,
-                    modelEquals: modelEquals
-                )
-            } catch {
-                lastError = "\(error)"
-                flash("更新分流规则失败")
-            }
-        }
-    }
-
     // MARK: - 转发与重试参数(全局)
 
     func updateRetryPolicyAndSave(
@@ -537,23 +488,6 @@ extension AppModel {
     }
 
     // MARK: - 入站认证
-
-    func setInboundAuthToken(_ token: String) {
-        Task {
-            do {
-                try await mutateConfig { config in
-                    config.listener.authToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
-                }
-            } catch {
-                lastError = "\(error)"
-                flash("更新入站认证失败")
-            }
-        }
-    }
-
-    func clearInboundAuthToken() {
-        setInboundAuthToken("")
-    }
 
     /// 提交监听配置(安全页草稿的唯一落地入口)。
     /// 走 mutateConfig 统一管线:归一化 → 落盘 → 推给引擎(必要时重启进程)。

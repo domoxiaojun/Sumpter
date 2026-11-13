@@ -22,16 +22,6 @@ extension AppModel {
         }
     }
 
-    /// 统计页的显式刷新入口。只刷新轻量状态与当前 v3 稳定快照；旧完整
-    /// analytics 不再进入首屏或自动刷新 critical path。
-    func refreshStatisticsNow() {
-        guard statisticsPageVisible else { return }
-        invalidateRuntimeFacets()
-        Task { await refreshStatus(loadLatestEvents: true) }
-        reloadRuntimeFacets()
-        refreshRuntimeV2(resetSnapshot: true)
-    }
-
     /// 进入统计页或自动刷新设置变化时调用；短时间内复用刚取得的快照。
     func refreshStatisticsIfNeeded(force: Bool = false) {
         guard statisticsPageVisible else { return }
@@ -170,14 +160,6 @@ extension AppModel {
         resetRuntimeLocalSessionState()
     }
 
-    func reloadRuntimeAnalytics() {
-        // Compatibility callers may still use this method name, but the old
-        // full-table analytics request is intentionally retired from the macOS
-        // UI. Keep the call latest-wins and use the v3 projections instead.
-        reloadRuntimeFacets()
-        refreshRuntimeV2(resetSnapshot: true)
-    }
-
     /// Refresh only the picker dimensions.  This request is deliberately
     /// independent from the compatibility aggregate so a slow high-cardinality
     /// table cannot block selectors or the automatic status loop.
@@ -267,34 +249,6 @@ extension AppModel {
         if needsReload {
             invalidateRuntimeFacets()
             reloadRuntimeFacets()
-        }
-    }
-
-    /// A filter can outlive a session/project after a reset or retention cleanup.
-    /// Clear only values the server can prove are absent; old daemons omitting
-    /// facets remain untouched for compatibility.
-    func clearInvalidAnalyticsFilters(_ analytics: AdminWire.RuntimeAnalytics) {
-        var needsReload = false
-        if !runtimeAnalyticsEndpointID.isEmpty,
-           let endpoints = analytics.facets?.endpoints,
-           !endpoints.contains(where: { $0.value == runtimeAnalyticsEndpointID }) {
-            runtimeAnalyticsEndpointID = ""
-            needsReload = true
-        }
-        if !runtimeAnalyticsProject.isEmpty,
-           let projects = analytics.facets?.projects,
-           !projects.contains(where: { $0.value == runtimeAnalyticsProject }) {
-            runtimeAnalyticsProject = ""
-            needsReload = true
-        }
-        if !runtimeAnalyticsSessionID.isEmpty,
-           let sessions = analytics.sessions,
-           !sessions.contains(where: { $0.name == runtimeAnalyticsSessionID }) {
-            runtimeAnalyticsSessionID = ""
-            needsReload = true
-        }
-        if needsReload {
-            reloadRuntimeAnalytics()
         }
     }
 
@@ -542,7 +496,6 @@ extension AppModel {
         // is deliberately not allowed to mutate state when it returns.
         if runtimeHistoryLoading { runtimeHistoryLoading = false }
         if runtimeErrorPageLoading { runtimeErrorPageLoading = false }
-        if runtimeDimensionPageLoading { runtimeDimensionPageLoading = false }
         if runtimeDimensionsLoading { runtimeDimensionsLoading = false }
         if runtimeRequestChainLoading { runtimeRequestChainLoading = false }
         runtimeRequestChainTask?.cancel()
@@ -577,7 +530,6 @@ extension AppModel {
             // replacement has arrived, so the page never flashes empty.
             if !preserveVisibleContent {
                 runtimeErrorPage = nil
-                runtimeDimensionPage = nil
                 runtimeProjectsPage = nil
                 runtimeSessionsPage = nil
                 runtimeEndpointsPage = nil
@@ -785,59 +737,6 @@ extension AppModel {
         }
     }
 
-    func loadRuntimeHistoryPage(_ page: Int) {
-        guard statisticsPageVisible, page >= 1 else { return }
-        // Paging supersedes an aggregate refresh.  The old refresh task will
-        // observe the generation mismatch and leave all state to this request.
-        runtimeV2Loading = false
-        runtimeErrorPageLoading = false
-        runtimeDimensionPageLoading = false
-        runtimeDimensionsLoading = false
-        runtimeRequestChainTask?.cancel()
-        runtimeRequestChainTask = nil
-        runtimeRequestChainRequestGeneration &+= 1
-        runtimeRequestChainLoading = false
-        runtimeRequestChain = nil
-        runtimeErrorPageRequestGeneration &+= 1
-        runtimeDimensionRequestGeneration &+= 1
-        runtimeHistoryLoading = true
-        runtimeV2RequestGeneration &+= 1
-        let generation = runtimeV2RequestGeneration
-        runtimeSnapshotTask?.cancel()
-        runtimeSnapshotTask = Task { [weak self] in
-            guard let self, let admin = self.admin else {
-                self?.runtimeHistoryLoading = false
-                self?.runtimeV2Loading = false
-                return
-            }
-            defer { if generation == self.runtimeV2RequestGeneration { self.runtimeSnapshotTask = nil } }
-            do {
-                let value = try await self.fetchRuntimeHistoryPage(
-                    using: admin,
-                    page: page,
-                    resetSnapshot: self.runtimeHistoryPage == nil,
-                    retrySnapshot: true,
-                    requestGeneration: generation
-                )
-                guard generation == self.runtimeV2RequestGeneration else { return }
-                self.applyRuntimeHistoryPage(value)
-                self.runtimeHistoryError = nil
-                self.runtimeHistoryLoading = false
-                self.runtimeV2Loading = false
-            } catch {
-                guard !Task.isCancelled else { return }
-                guard generation == self.runtimeV2RequestGeneration else { return }
-                self.runtimeHistoryError = "\(error)"
-                self.runtimeHistoryLoading = false
-                self.runtimeV2Loading = false
-                if self.isRuntimeSnapshotError(error) {
-                    self.clearRuntimeV2Snapshot(expectedGeneration: generation)
-                    self.flash("历史快照已变化，请重新加载")
-                }
-            }
-        }
-    }
-
     func loadRuntimeV2Board(_ board: String, force: Bool) {
         guard statisticsPageVisible, runtimeHistoryPage != nil else { return }
         switch board {
@@ -853,89 +752,9 @@ extension AppModel {
             if force || runtimeEndpointsPage == nil || runtimeProjectsPage == nil || runtimeSessionsPage == nil || runtimeModelsPage == nil {
                 loadRuntimeDimensionsForBoard()
             }
-        case "dimensions":
-            if force || runtimeDimensionPage?.kind != Self.runtimeDimensionWireKind(runtimeDimensionKind) {
-                loadRuntimeDimensionPage(kind: runtimeDimensionKind, page: 1)
-            }
         default:
             break
         }
-    }
-
-    static let runtimeDimensionKinds = [
-        "endpoint", "model", "requestKind", "clientKind", "clientVariant", "agentRole", "agentName", "parentThread", "parentTurn", "rootTurn", "purpose", "failureKind",
-        "failurePhase", "protocol", "streamTerminal", "project", "session",
-    ]
-
-    static func runtimeDimensionWireKind(_ kind: String) -> String {
-        switch kind {
-        case "clientKind": "client_kind"
-        case "requestKind": "request_kind"
-        case "clientVariant": "client_variant"
-        case "agentRole": "agent_role"
-        case "agentName": "agent_name"
-        case "parentThread": "parent_thread_id"
-        case "parentTurn": "parent_turn_id"
-        case "rootTurn": "root_turn_id"
-        case "failureKind": "failure_kind"
-        case "failurePhase": "failure_phase"
-        case "streamTerminal": "stream_terminal"
-        default: kind
-        }
-    }
-
-    func setRuntimeDimensionKind(_ kind: String) {
-        guard Self.runtimeDimensionKinds.contains(kind) else { return }
-        runtimeDimensionKind = kind
-        runtimeDimensionSearch = ""
-        runtimeDimensionSort = "last_seen"
-        runtimeDimensionOrder = "desc"
-        runtimeDimensionPage = nil
-        guard statisticsVisible, statisticsBoard == "dimensions" else { return }
-        loadRuntimeDimensionPage(kind: kind, page: 1)
-    }
-
-    func setRuntimeDimensionSearch(_ search: String) {
-        runtimeDimensionSearch = String(search.prefix(256))
-        guard statisticsVisible, ["overview", "dimensions", "tokens"].contains(statisticsBoard) else { return }
-        let kind = statisticsBoard == "overview"
-            ? "project"
-            : statisticsBoard == "tokens" ? "endpoint" : runtimeDimensionKind
-        loadRuntimeDimensionPage(kind: kind, page: 1)
-    }
-
-    func setRuntimeDimensionSort(_ sort: String, order: String? = nil) {
-        let allowed = [
-            "name", "requests", "success_rate", "failures", "input_tokens",
-            "output_tokens", "cache_read", "cache_write", "tokens",
-            "average_duration", "last_seen",
-        ]
-        guard allowed.contains(sort) else { return }
-        let nextOrder = order.flatMap { ["asc", "desc"].contains($0) ? $0 : nil }
-        let changed = runtimeDimensionSort != sort
-            || (nextOrder != nil && runtimeDimensionOrder != nextOrder)
-        runtimeDimensionSort = sort
-        if let nextOrder { runtimeDimensionOrder = nextOrder }
-        guard changed else { return }
-        guard statisticsVisible, ["overview", "dimensions", "tokens"].contains(statisticsBoard) else { return }
-        let kind = statisticsBoard == "overview"
-            ? "project"
-            : statisticsBoard == "tokens" ? "endpoint" : runtimeDimensionKind
-        loadRuntimeDimensionPage(kind: kind, page: 1)
-    }
-
-    func setRuntimeDimensionPageSize(_ pageSize: Int) {
-        guard AdminWire.RuntimeHistoryPage.allowedPageSizes.contains(pageSize) else { return }
-        runtimeDimensionPageSize = pageSize
-        guard statisticsVisible, ["overview", "dimensions", "tokens"].contains(statisticsBoard) else { return }
-        // The Token board reuses the same dimension table, but it is fixed to
-        // the endpoint dimension.  Keep its per-page selector functional too;
-        // previously the setter silently ignored changes while that board was
-        // visible.
-        let kind = statisticsBoard == "overview"
-            ? "project"
-            : statisticsBoard == "tokens" ? "endpoint" : runtimeDimensionKind
-        loadRuntimeDimensionPage(kind: kind, page: 1)
     }
 
     func setRuntimeErrorPageSize(_ pageSize: Int) {
@@ -948,21 +767,21 @@ extension AppModel {
     func setRuntimeProjectPageSize(_ pageSize: Int) {
         guard AdminWire.RuntimeHistoryPage.allowedPageSizes.contains(pageSize) else { return }
         runtimeProjectPageSize = pageSize
-        guard statisticsVisible, ["overview", "tokens", "dimensions"].contains(statisticsBoard) else { return }
+        guard statisticsVisible, ["overview", "tokens"].contains(statisticsBoard) else { return }
         loadRuntimeProjects(page: 1)
     }
 
     func setRuntimeSessionPageSize(_ pageSize: Int) {
         guard AdminWire.RuntimeHistoryPage.allowedPageSizes.contains(pageSize) else { return }
         runtimeSessionPageSize = pageSize
-        guard statisticsVisible, ["overview", "tokens", "dimensions"].contains(statisticsBoard) else { return }
+        guard statisticsVisible, ["overview", "tokens"].contains(statisticsBoard) else { return }
         loadRuntimeSessions(page: 1)
     }
 
     func setRuntimeModelPageSize(_ pageSize: Int) {
         guard AdminWire.RuntimeHistoryPage.allowedPageSizes.contains(pageSize) else { return }
         runtimeModelPageSize = pageSize
-        guard statisticsVisible, ["overview", "tokens", "dimensions"].contains(statisticsBoard) else { return }
+        guard statisticsVisible, ["overview", "tokens"].contains(statisticsBoard) else { return }
         loadRuntimeModels(page: 1)
     }
 
@@ -990,75 +809,15 @@ extension AppModel {
     func setRuntimeProjectSort(_ sort: String, order: String = "desc") {
         runtimeProjectSort = sort
         runtimeProjectOrder = ["asc", "desc"].contains(order) ? order : "desc"
-        guard statisticsVisible, ["overview", "tokens", "dimensions"].contains(statisticsBoard) else { return }
+        guard statisticsVisible, ["overview", "tokens"].contains(statisticsBoard) else { return }
         loadRuntimeProjects(page: 1)
     }
 
     func setRuntimeSessionSort(_ sort: String, order: String = "desc") {
         runtimeSessionSort = sort
         runtimeSessionOrder = ["asc", "desc"].contains(order) ? order : "desc"
-        guard statisticsVisible, ["overview", "tokens", "dimensions"].contains(statisticsBoard) else { return }
+        guard statisticsVisible, ["overview", "tokens"].contains(statisticsBoard) else { return }
         loadRuntimeSessions(page: 1)
-    }
-
-    func loadRuntimeDimensionPage(kind: String? = nil, page: Int = 1) {
-        let kind = kind ?? runtimeDimensionKind
-        guard Self.runtimeDimensionKinds.contains(kind), page >= 1 else { return }
-        runtimeDimensionKind = kind
-        guard let admin, let anchor = runtimeHistoryPage else {
-            runtimeDimensionPageLoading = false
-            refreshRuntimeV2(resetSnapshot: true)
-            return
-        }
-        runtimeDimensionRequestGeneration &+= 1
-        let generation = runtimeDimensionRequestGeneration
-        let snapshotGeneration = runtimeV2RequestGeneration
-        runtimeDimensionPageLoading = true
-        let search = runtimeDimensionSearch
-        let sort = runtimeDimensionSort
-        let order = runtimeDimensionOrder
-        let pageSize = runtimeDimensionPageSize
-        let filter = runtimeV2Filter(snapshot: anchor.filters)
-        runtimeDimensionTask?.cancel()
-        runtimeDimensionTask = Task { [weak self] in
-            guard let self else { return }
-            defer {
-                if generation == self.runtimeDimensionRequestGeneration,
-                   snapshotGeneration == self.runtimeV2RequestGeneration {
-                    self.runtimeDimensionPageLoading = false
-                }
-            }
-            do {
-                let value = try await admin.runtimeDimensions(
-                    kind: kind,
-                    page: page,
-                    pageSize: pageSize,
-                    search: search.isEmpty ? nil : search,
-                    sort: sort,
-                    order: order,
-                    snapshotSeq: anchor.snapshotSeq,
-                    snapshotChangeSeq: anchor.snapshotChangeSeq,
-                    historyGeneration: anchor.historyGeneration,
-                    filter: filter
-                )
-                guard generation == self.runtimeDimensionRequestGeneration,
-                      snapshotGeneration == self.runtimeV2RequestGeneration else { return }
-                if self.runtimeDimensionPage != value {
-                    self.runtimeDimensionPage = value
-                }
-                self.runtimeV2Error = nil
-            } catch {
-                guard !Task.isCancelled else { return }
-                guard generation == self.runtimeDimensionRequestGeneration,
-                      snapshotGeneration == self.runtimeV2RequestGeneration else { return }
-                if self.isRuntimeSnapshotError(error) {
-                    self.clearRuntimeV2Snapshot(expectedGeneration: snapshotGeneration)
-                    self.refreshRuntimeV2(resetSnapshot: true)
-                } else {
-                    self.runtimeV2Error = "读取\(kind)统计列表失败：\(error)"
-                }
-            }
-        }
     }
 
     /// 入口、项目、会话与模型是同一看板的首屏表，使用同一个 generation
@@ -1216,13 +975,6 @@ extension AppModel {
                 }
             }
         }
-    }
-
-    func setRuntimeHistoryPageSize(_ pageSize: Int) {
-        guard AdminWire.RuntimeHistoryPage.allowedPageSizes.contains(pageSize) else { return }
-        runtimeHistoryPageSize = pageSize
-        clearRuntimeV2Snapshot()
-        refreshRuntimeV2(resetSnapshot: true)
     }
 
     func loadRuntimeRequestChain(for eventID: String?) {
@@ -1418,19 +1170,6 @@ extension AppModel {
         }
     }
 
-    func setRuntimeV2Project(_ projectID: String, projectName: String? = nil) {
-        // Keep the historical method name for older views, but preserve the
-        // current contract: a project row is a local drill-down that filters
-        // only the session list, never the global analytics query.
-        setRuntimeLocalProject(projectID, projectName: projectName)
-    }
-
-    func setRuntimeV2Session(_ sessionID: String) {
-        runtimeV2SessionID = sessionID
-        clearRuntimeV2Snapshot()
-        refreshRuntimeV2(resetSnapshot: true)
-    }
-
     func refreshRuntimeMaintenance() {
         runtimeMaintenanceRequestGeneration &+= 1
         let generation = runtimeMaintenanceRequestGeneration
@@ -1613,7 +1352,6 @@ extension AppModel {
         runtimeRequestChainTask?.cancel()
         runtimeRequestChainTask = nil
         runtimeErrorPageLoading = false
-        runtimeDimensionPageLoading = false
         runtimeDimensionsLoading = false
         runtimeRequestChainLoading = false
         runtimeHistoryPage = nil
@@ -1621,7 +1359,6 @@ extension AppModel {
         runtimeHistoryGeneration = nil
         runtimeTrendSeries = nil
         runtimeErrorPage = nil
-        runtimeDimensionPage = nil
         runtimeProjectsPage = nil
         runtimeSessionsPage = nil
         runtimeEndpointsPage = nil

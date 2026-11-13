@@ -2600,7 +2600,7 @@ struct UsagePane: View {
         if keyPath == \.averageDurationForSorting { return "average_duration" }
         if keyPath == \.outputSpeedForSorting { return "output_tokens_per_second" }
         if keyPath == \.lastSeen { return "last_seen" }
-        return model.runtimeDimensionSort
+        return "last_seen"
     }
 
     private func runtimeDimensionLabel(_ kind: String) -> String {
@@ -2859,7 +2859,7 @@ struct UsagePane: View {
             .foregroundStyle(.secondary)
             .lineLimit(dynamicTypeSize.isAccessibilitySize ? 4 : 2)
             .fixedSize(horizontal: false, vertical: true)
-        if model.runtimeV2Loading || model.runtimeDimensionPageLoading {
+        if model.runtimeV2Loading || model.runtimeDimensionsLoading {
             Text("更新中")
                 .foregroundStyle(.secondary)
         }

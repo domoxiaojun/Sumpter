@@ -13,8 +13,8 @@ adapters/
 apps/                 sumpterd-linux / sumpterd-macos 可执行入口
 platforms/linux/      WebUI 源码、生成静态文件、安装、systemd、Compose
 platforms/macos/      SwiftUI App、DMG、Sparkle、安装资源
-scripts/              检查、同步、归因、构建辅助
- docs/                现行指南和共享模板
+scripts/              检查、同步、客户端网关、构建辅助
+docs/                 现行指南和共享模板
 ```
 
 ## 按需求找代码
@@ -30,7 +30,7 @@ scripts/              检查、同步、归因、构建辅助
 | Linux WebUI | `platforms/linux/webui/src/`；生成文件为 `platforms/linux/web/` |
 | 安装、升级、systemd | `platforms/linux/scripts/`、`platforms/linux/deploy/` |
 | Compose 镜像和模板 | `platforms/linux/compose.yaml`、`Dockerfile*` |
-| 客户端项目归因 | `scripts/clients/`，再同步到平台资源 |
+| 客户端身份与项目归因 | `crates/sumpter-core/src/client_identity.rs`、`client_attribution.rs` |
 
 `tests/contracts/` 通过 `#[path]` 被两个 adapter 测试目标复用，不是独立 Cargo package。`platforms/linux/webui/` 是 WebUI 维护源，`platforms/linux/web/` 是需提交的构建产物；不要手工改生成文件。
 

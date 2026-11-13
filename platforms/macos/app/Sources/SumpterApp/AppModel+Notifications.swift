@@ -101,25 +101,6 @@ extension AppModel {
         }
     }
 
-    func setClaudeNotification(argument: String, enabled: Bool) {
-        do {
-            var arguments = claudeNotificationArguments
-            if enabled {
-                arguments.insert(argument)
-            } else {
-                arguments.remove(argument)
-            }
-            try ClaudeNotificationHooks.setSelectedArguments(arguments, port: config.listener.port)
-            refreshNotificationHookState()
-            if !arguments.isEmpty {
-                requestNotificationAuthorization()
-            }
-        } catch {
-            lastError = "\(error)"
-            flash("通知类型设置失败")
-        }
-    }
-
     func setNotificationCategory(_ category: String, enabled: Bool) {
         switch category {
         case "action_required": actionNotificationsEnabled = enabled

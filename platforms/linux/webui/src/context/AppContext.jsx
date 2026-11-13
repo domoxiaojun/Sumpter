@@ -2,7 +2,7 @@ import { BoundedLRUCache, createPageCacheLifecycle, runtimePageActive } from '..
 import { statisticsDateBounds, statisticsRangeIsLive } from '../utils/statisticsDateRange.js';
 import { createContext, useMemo, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { api, getAuthState, openEventStream, subscribeAuth } from '../services/api.js';
-import { upsertRuntimeEvent, mergeRuntimeEvent } from '../utils/runtimeEvents.js';
+import { mergeRuntimeEvent } from '../utils/runtimeEvents.js';
 import { fetchRuntimeChanges, mergeRuntimeListItems, reconcileRuntimeRefresh, runtimeSummaryRevision, RUNTIME_API_VERSION } from '../utils/runtimeSync.js';
 import { clone } from '../utils/helpers.js';
 import { configDraftWrite, requireDraftGeneration } from '../utils/configDraft.js';
