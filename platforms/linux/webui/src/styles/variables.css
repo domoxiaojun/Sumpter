@@ -82,175 +82,179 @@
   --ease-spring: var(--duration-spring) var(--timing-spring);
 }
 
-/* Dark Theme — Obsidian Precision. 深邃黑曜石底色、顶部微光折射、细腻景深与多维语义强调色。 */
+/* Dark Theme — Obsidian Craft & Warm Copper. 深邃黑曜石中性灰阶、克制发丝线边界与暖铜琥珀主交互色。 */
 html[data-theme="dark"],
 :root:not([data-theme="light"]) {
   /* Surfaces */
-  --bg-page: #080a0f;
-  --bg-page-gradient: radial-gradient(ellipse 90% 45% at 50% -10%, rgba(82, 148, 255, 0.1), transparent 70%), radial-gradient(ellipse 60% 35% at 85% 4%, rgba(129, 140, 248, 0.07), transparent 65%), #080a0f;
-  --bg-surface: #0f131b;
-  --bg-surface-elevated: #161b26;
-  --bg-surface-glass: #0b0e15;
-  --bg-sidebar: #0a0d14;
-  --bg-topbar: rgba(10, 13, 20, 0.78);
-  --bg-card: #111620;
-  --bg-hover: rgba(255, 255, 255, 0.05);
-  --bg-active: rgba(255, 255, 255, 0.085);
+  --bg-page: #0b0d11;
+  --bg-page-gradient: radial-gradient(ellipse 80% 42% at 50% -8%, rgba(240, 124, 41, 0.08), transparent 68%), radial-gradient(ellipse 60% 35% at 88% 8%, rgba(56, 189, 248, 0.035), transparent 65%), #0b0d11;
+  --bg-surface: #12151c;
+  --bg-surface-elevated: #181c26;
+  --bg-surface-glass: #0f1218;
+  --bg-inset: #0e1116;
+  --bg-sidebar: #0d1016;
+  --bg-topbar: rgba(11, 13, 17, 0.84);
+  --bg-card: #131720;
+  --bg-hover: rgba(255, 255, 255, 0.045);
+  --bg-active: rgba(240, 124, 41, 0.11);
 
   /* Inks */
-  --text-primary: #f1f5f9;
-  --text-secondary: #94a3b8;
-  --text-muted: #8492a6;
-  --text-inverse: #080a0f;
+  --text-primary: #eef1f6;
+  --text-secondary: #9ea8b8;
+  --text-muted: #768194;
+  --text-inverse: #0e1014;
 
   /* Borders */
   --border-subtle: rgba(255, 255, 255, 0.075);
-  --border-medium: rgba(255, 255, 255, 0.125);
-  --border-strong: rgba(255, 255, 255, 0.2);
-  --border-glow: rgba(82, 148, 255, 0.45);
+  --border-medium: rgba(255, 255, 255, 0.13);
+  --border-strong: rgba(255, 255, 255, 0.22);
+  --border-glow: rgba(240, 124, 41, 0.42);
 
-  /* Accent */
-  --primary: #5294ff;
-  --primary-hover: #73abff;
-  --primary-action-start: #3b82f6;
-  --primary-action-end: #2563eb;
-  --primary-action-hover: #4f8ff7;
-  --selection-border: rgba(82, 148, 255, 0.48);
-  --primary-glow: rgba(82, 148, 255, 0.24);
-  --accent-cyan: #22d3ee;
-  --accent-indigo: #818cf8;
-  --accent-purple: #c084fc;
+  /* Accent — Sumpter Signal Copper & Mineral Secondaries */
+  --primary: #f08030;
+  --primary-hover: #fb9448;
+  --primary-ink: #fb9a55;
+  --primary-action-start: #f08030;
+  --primary-action-end: #df691a;
+  --primary-action-hover: #fa8f42;
+  --selection-border: rgba(240, 128, 48, 0.44);
+  --primary-glow: rgba(240, 128, 48, 0.18);
+  --accent-cyan: #38bdf8;
+  --accent-indigo: #60a5fa;
+  --accent-purple: #a78bfa;
 
   /* Semantic Status */
-  --status-good: #34d399;
-  --status-good-bg: rgba(52, 211, 153, 0.11);
-  --status-good-border: rgba(52, 211, 153, 0.26);
-  --status-good-glow: rgba(52, 211, 153, 0.2);
+  --status-good: #22c55e;
+  --status-good-bg: rgba(34, 197, 94, 0.1);
+  --status-good-border: rgba(34, 197, 94, 0.24);
+  --status-good-glow: rgba(34, 197, 94, 0.16);
 
-  --status-warning: #fbbf24;
-  --status-warning-bg: rgba(251, 191, 36, 0.11);
-  --status-warning-border: rgba(251, 191, 36, 0.28);
-  --status-warning-glow: rgba(251, 191, 36, 0.2);
+  --status-warning: #eab308;
+  --status-warning-bg: rgba(234, 179, 8, 0.1);
+  --status-warning-border: rgba(234, 179, 8, 0.25);
+  --status-warning-glow: rgba(234, 179, 8, 0.16);
 
   --status-critical: #f87171;
-  --status-critical-bg: rgba(248, 113, 113, 0.11);
-  --status-critical-border: rgba(248, 113, 113, 0.28);
-  --status-critical-glow: rgba(248, 113, 113, 0.2);
+  --status-critical-bg: rgba(248, 113, 113, 0.1);
+  --status-critical-border: rgba(248, 113, 113, 0.26);
+  --status-critical-glow: rgba(248, 113, 113, 0.16);
 
-  --status-live: #5294ff;
-  --status-live-bg: rgba(82, 148, 255, 0.12);
-  --status-live-border: rgba(82, 148, 255, 0.28);
+  --status-live: #f08030;
+  --status-live-bg: rgba(240, 128, 48, 0.11);
+  --status-live-border: rgba(240, 128, 48, 0.28);
 
   --status-muted: #94a3b8;
-  --status-muted-bg: rgba(148, 163, 184, 0.09);
+  --status-muted-bg: rgba(148, 163, 184, 0.08);
   --status-muted-border: rgba(148, 163, 184, 0.18);
 
-  /* Elevation — 细腻顶部高光与深邃景深 */
-  --surface-specular: inset 0 1px 0 rgba(255, 255, 255, 0.07);
-  --surface-specular-strong: inset 0 1px 0 rgba(255, 255, 255, 0.12);
-  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.35);
-  --shadow-md: 0 10px 24px -6px rgba(0, 0, 0, 0.55);
-  --shadow-lg: 0 28px 56px -14px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.07);
-  --panel-shadow: 0 14px 34px -14px rgba(0, 0, 0, 0.56), inset 0 1px 0 rgba(255, 255, 255, 0.065);
-  --card-shadow: 0 8px 22px -10px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.065);
-  --control-shadow: 0 1px 2px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  --input-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.28);
-  --shadow-glow-cyan: 0 0 20px rgba(34, 211, 238, 0.16);
-  --shadow-glow-emerald: 0 0 20px rgba(52, 211, 153, 0.16);
+  /* Elevation — 克制边缘高光与清晰层次 */
+  --surface-specular: inset 0 1px 0 rgba(255, 255, 255, 0.055);
+  --surface-specular-strong: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.34);
+  --shadow-md: 0 10px 24px -6px rgba(0, 0, 0, 0.52);
+  --shadow-lg: 0 24px 52px -12px rgba(0, 0, 0, 0.72), 0 0 0 1px rgba(255, 255, 255, 0.07);
+  --panel-shadow: 0 8px 24px -12px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  --card-shadow: 0 4px 14px -6px rgba(0, 0, 0, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  --control-shadow: 0 1px 2px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  --input-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.24);
+  --shadow-glow-cyan: none;
+  --shadow-glow-emerald: none;
 
   /* Segmented Controls & Tabs */
-  --segmented-track-bg: #0a0d14;
-  --segmented-thumb-bg: #1c2331;
+  --segmented-track-bg: #0c0f15;
+  --segmented-thumb-bg: #1e2430;
   --segmented-thumb-border: rgba(255, 255, 255, 0.11);
-  --segmented-thumb-shadow: 0 2px 6px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  --segmented-thumb-shadow: 0 2px 5px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.06);
 
-  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%239ea8b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
-  --backdrop-blur: blur(16px) saturate(160%);
+  --backdrop-blur: blur(14px) saturate(140%);
 }
 
-/* Light Theme — Warm Porcelain & Quartz. */
+/* Light Theme — Warm Alabaster Paper & Architectural Graphite. */
 html[data-theme="light"] {
   /* Surfaces */
-  --bg-page: #f3f5f9;
-  --bg-page-gradient: radial-gradient(ellipse 90% 45% at 50% -10%, rgba(37, 99, 235, 0.06), transparent 70%), #f3f5f9;
+  --bg-page: #f4f5f7;
+  --bg-page-gradient: radial-gradient(ellipse 80% 42% at 50% -8%, rgba(217, 91, 16, 0.055), transparent 68%), #f4f5f7;
   --bg-surface: #ffffff;
   --bg-surface-elevated: #ffffff;
-  --bg-surface-glass: #f8fafc;
-  --bg-sidebar: #edf0f6;
-  --bg-topbar: rgba(243, 245, 249, 0.84);
+  --bg-surface-glass: #f9fafb;
+  --bg-inset: #eef0f4;
+  --bg-sidebar: #eceef2;
+  --bg-topbar: rgba(244, 245, 247, 0.86);
   --bg-card: #ffffff;
   --bg-hover: rgba(15, 23, 42, 0.04);
-  --bg-active: rgba(15, 23, 42, 0.065);
+  --bg-active: rgba(208, 86, 15, 0.09);
 
   /* Inks */
-  --text-primary: #0f172a;
+  --text-primary: #111827;
   --text-secondary: #475569;
   --text-muted: #64748b;
   --text-inverse: #ffffff;
 
   /* Borders */
-  --border-subtle: #e2e8f0;
-  --border-medium: #cbd5e1;
+  --border-subtle: rgba(15, 23, 42, 0.085);
+  --border-medium: #cbd2df;
   --border-strong: #94a3b8;
-  --border-glow: rgba(37, 99, 235, 0.35);
+  --border-glow: rgba(208, 86, 15, 0.36);
 
-  /* Accent */
-  --primary: #2563eb;
-  --primary-hover: #1d4ed8;
-  --primary-action-start: #2563eb;
-  --primary-action-end: #1d4ed8;
-  --primary-action-hover: #1e40af;
-  --selection-border: rgba(37, 99, 235, 0.4);
-  --primary-glow: rgba(37, 99, 235, 0.16);
-  --accent-cyan: #0891b2;
-  --accent-indigo: #4f46e5;
-  --accent-purple: #7c3aed;
+  /* Accent — High-Contrast Burnt Copper for WCAG AA+ on White */
+  --primary: #c9510c;
+  --primary-hover: #b24407;
+  --primary-ink: #b84809;
+  --primary-action-start: #cf560e;
+  --primary-action-end: #b84708;
+  --primary-action-hover: #a83f06;
+  --selection-border: rgba(201, 81, 12, 0.38);
+  --primary-glow: rgba(201, 81, 12, 0.14);
+  --accent-cyan: #0369a1;
+  --accent-indigo: #3730a3;
+  --accent-purple: #6d28d9;
 
   /* Semantic Status */
-  --status-good: #059669;
-  --status-good-bg: rgba(5, 150, 105, 0.08);
-  --status-good-border: rgba(5, 150, 105, 0.22);
-  --status-good-glow: rgba(5, 150, 105, 0.14);
+  --status-good: #15803d;
+  --status-good-bg: rgba(21, 128, 61, 0.085);
+  --status-good-border: rgba(21, 128, 61, 0.24);
+  --status-good-glow: rgba(21, 128, 61, 0.12);
 
-  --status-warning: #d97706;
-  --status-warning-bg: rgba(217, 119, 6, 0.09);
-  --status-warning-border: rgba(217, 119, 6, 0.25);
-  --status-warning-glow: rgba(217, 119, 6, 0.14);
+  --status-warning: #b45309;
+  --status-warning-bg: rgba(180, 83, 9, 0.09);
+  --status-warning-border: rgba(180, 83, 9, 0.26);
+  --status-warning-glow: rgba(180, 83, 9, 0.12);
 
   --status-critical: #dc2626;
-  --status-critical-bg: rgba(220, 38, 38, 0.07);
-  --status-critical-border: rgba(220, 38, 38, 0.22);
-  --status-critical-glow: rgba(220, 38, 38, 0.14);
+  --status-critical-bg: rgba(220, 38, 38, 0.075);
+  --status-critical-border: rgba(220, 38, 38, 0.24);
+  --status-critical-glow: rgba(220, 38, 38, 0.12);
 
-  --status-live: #2563eb;
-  --status-live-bg: rgba(37, 99, 235, 0.08);
-  --status-live-border: rgba(37, 99, 235, 0.22);
+  --status-live: #c9510c;
+  --status-live-bg: rgba(201, 81, 12, 0.085);
+  --status-live-border: rgba(201, 81, 12, 0.24);
 
   --status-muted: #475569;
-  --status-muted-bg: rgba(71, 85, 105, 0.07);
-  --status-muted-border: rgba(71, 85, 105, 0.18);
+  --status-muted-bg: rgba(71, 85, 105, 0.075);
+  --status-muted-border: rgba(71, 85, 105, 0.19);
 
   /* Elevation */
-  --surface-specular: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --surface-specular: inset 0 1px 0 rgba(255, 255, 255, 0.92);
   --surface-specular-strong: inset 0 1px 0 #ffffff;
-  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
-  --shadow-md: 0 8px 20px -6px rgba(15, 23, 42, 0.09), 0 2px 4px -1px rgba(15, 23, 42, 0.04);
-  --shadow-lg: 0 24px 48px -12px rgba(15, 23, 42, 0.18), 0 0 0 1px rgba(15, 23, 42, 0.06);
-  --panel-shadow: 0 10px 26px -12px rgba(15, 23, 42, 0.07), 0 1px 3px rgba(15, 23, 42, 0.04);
-  --card-shadow: 0 6px 18px -8px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
-  --control-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.045);
+  --shadow-md: 0 8px 20px -6px rgba(15, 23, 42, 0.08), 0 2px 4px -1px rgba(15, 23, 42, 0.035);
+  --shadow-lg: 0 22px 44px -12px rgba(15, 23, 42, 0.14), 0 0 0 1px rgba(15, 23, 42, 0.06);
+  --panel-shadow: 0 1px 3px rgba(15, 23, 42, 0.045), 0 8px 20px -14px rgba(15, 23, 42, 0.07);
+  --card-shadow: 0 1px 2px rgba(15, 23, 42, 0.045), 0 4px 12px -8px rgba(15, 23, 42, 0.06);
+  --control-shadow: 0 1px 2px rgba(15, 23, 42, 0.045);
   --input-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.03);
   --shadow-glow-cyan: none;
   --shadow-glow-emerald: none;
 
   /* Segmented Controls & Tabs */
-  --segmented-track-bg: #e8ecf3;
+  --segmented-track-bg: #e7eaf0;
   --segmented-thumb-bg: #ffffff;
-  --segmented-thumb-border: rgba(15, 23, 42, 0.08);
+  --segmented-thumb-border: rgba(15, 23, 42, 0.09);
   --segmented-thumb-shadow: 0 1px 3px rgba(15, 23, 42, 0.1);
 
   --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23475569' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
-  --backdrop-blur: blur(16px) saturate(160%);
+  --backdrop-blur: blur(14px) saturate(140%);
 }

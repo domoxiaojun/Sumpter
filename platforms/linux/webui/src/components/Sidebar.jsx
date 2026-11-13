@@ -107,9 +107,11 @@ export function Sidebar() {
       <button
         ref={menuButtonRef}
         type="button"
-        className="mobile-menu-toggle"
+        className={`mobile-menu-toggle${open ? ' is-hidden' : ''}`}
         aria-label="打开主导航"
         aria-expanded={open}
+        aria-hidden={open || undefined}
+        tabIndex={open ? -1 : undefined}
         aria-controls="primary-navigation"
         onClick={() => setOpen((value) => !value)}
       >

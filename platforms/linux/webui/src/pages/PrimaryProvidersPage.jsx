@@ -1354,7 +1354,7 @@ export function PrimaryProvidersPage() {
   const endpointColumns = [
     {
       title: '状态',
-      width: '80px',
+      width: '66px',
       render: (row) => (
         <QuickToggle
           checked={row.enabled}
@@ -1366,8 +1366,8 @@ export function PrimaryProvidersPage() {
     },
     {
       title: '入口名称',
-      width: '178px',
-      minWidth: '160px',
+      width: '154px',
+      minWidth: '142px',
       render: (row) => (
         <span className="provider-reorder-cell">
           <span className="provider-reorder-handle" aria-hidden="true"><Icon name="drag" size={15} /></span>
@@ -1381,7 +1381,7 @@ export function PrimaryProvidersPage() {
     },
     {
       title: '优先级',
-      width: '62px',
+      width: '56px',
       render: (row) => (
         <span className="mono-cell" style={{ fontWeight: 700, color: 'var(--primary)' }}>
           {row.priority ?? 0}
@@ -1390,7 +1390,7 @@ export function PrimaryProvidersPage() {
     },
     {
       title: '协议',
-      width: '108px',
+      width: '92px',
       render: (row) => (
         <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
           {endpointProtocolLabel(row.protocol)}
@@ -1399,7 +1399,7 @@ export function PrimaryProvidersPage() {
     },
     {
       title: '固定解析',
-      width: '118px',
+      width: '98px',
       render: (row) => (
         <span className="mono-cell" title={row.resolveIP || '使用系统 DNS'}>
           {row.resolveIP || '系统 DNS'}
@@ -1408,7 +1408,7 @@ export function PrimaryProvidersPage() {
     },
     {
       title: '映射',
-      width: '72px',
+      width: '62px',
       render: (row) => (
         <span style={{ fontSize: '0.82rem', color: 'var(--primary)' }}>
           {endpointMappings(row).length} 条
@@ -1417,7 +1417,7 @@ export function PrimaryProvidersPage() {
     },
     {
       title: '模型目录',
-      width: '126px',
+      width: '112px',
       render: (row) => {
         const models = catalogModels(row);
         const status = row.catalog?.status;
@@ -1435,8 +1435,8 @@ export function PrimaryProvidersPage() {
       title: '操作',
       type: 'action',
       align: 'right',
-      width: '292px',
-      minWidth: '292px',
+      width: '248px',
+      minWidth: '248px',
       render: (row, idx) => (
         <div className="provider-row-actions">
           <button
@@ -1668,7 +1668,7 @@ export function PrimaryProvidersPage() {
               data={endpoints}
               keyField="id"
               getRowProps={providerRowProps}
-              tableMinWidth="1114px"
+              tableMinWidth="880px"
               onRowClick={(row) => selectEndpoint(row.id)}
               activeRowKey={selectedEndpoint?.id}
               emptyText="当前暂无 Provider 入口"

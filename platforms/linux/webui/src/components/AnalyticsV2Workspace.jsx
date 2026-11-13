@@ -463,6 +463,7 @@ function TrendChart({ points, metric = 'clientRequests' }) {
           {activeItem?.point && (
             <span className="runtime-v2-chart-readout" aria-live="polite">
               <small>{formatTimestamp(activeItem.point.bucketStart, { smartDate: true })}</small>
+              <span className="runtime-v2-chart-readout-sep" aria-hidden="true">·</span>
               <strong>{formatTrendValue(activeItem.value ?? activeItem.rawValue, metric)}</strong>
             </span>
           )}

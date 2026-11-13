@@ -959,7 +959,7 @@ export function RunPage() {
                   data={visibleEvents}
                   keyField="id"
                   ariaLabel={eventHistory.mode === 'page' ? 'SQLite 持久事件分页列表' : '最近请求事件列表'}
-                  tableMinWidth="1100px"
+                  tableMinWidth="960px"
                   sortKey="timestamp"
                   sortDirection={eventSort}
                   onSortChange={(_key, direction) => setEventSort(direction)}

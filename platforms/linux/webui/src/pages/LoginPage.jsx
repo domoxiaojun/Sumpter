@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useAppControls } from '../context/AppContext.jsx';
+import { Icon } from '../utils/icons.jsx';
 
 import donkeyHead from '../assets/donkey-logo.png';
 
 export function LoginPage() {
-  const { login } = useAppControls();
+  const { login, theme, toggleTheme } = useAppControls();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -36,6 +37,15 @@ export function LoginPage() {
 
   return (
     <main className="login-shell">
+      <button
+        type="button"
+        className="btn-icon topbar-theme-button login-theme-toggle"
+        onClick={toggleTheme}
+        title={theme === 'dark' ? '切换为亮色主题' : '切换为暗色主题'}
+        aria-label="切换主题"
+      >
+        <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={18} />
+      </button>
       <section className="login-card" aria-labelledby="login-title">
         <div className="login-brand"><span className="brand-mark"><img src={donkeyHead} alt="" /></span><span>Sumpter</span></div>
         <h1 id="login-title">登录管理台</h1>

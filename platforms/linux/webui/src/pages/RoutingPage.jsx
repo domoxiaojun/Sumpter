@@ -69,7 +69,7 @@ export function RoutingPage() {
     },
     {
       title: '规则名称',
-      minWidth: '260px',
+      minWidth: '200px',
       render: (row) => (
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '7px', fontWeight: 600, color: 'var(--text-primary)' }}>
@@ -82,7 +82,7 @@ export function RoutingPage() {
     },
     {
       title: '分流 Provider 与模型',
-      minWidth: '360px',
+      minWidth: '260px',
       render: (row) => (
         <span className="routing-target-summary">
           {formatTargetSummary(row.target)}
@@ -93,7 +93,7 @@ export function RoutingPage() {
       title: '操作',
       type: 'action',
       align: 'right',
-      width: '140px',
+      width: '124px',
       render: (row) => (
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px' }}>
           <button
@@ -142,11 +142,27 @@ export function RoutingPage() {
         </div>
       </div>
 
-      <div className="glass-panel" style={{ padding: '20px' }}>
-        <h2>全客户端请求策略</h2>
-        <p>设置并发、排队、重试预算、Responses 流保护和入口兼容声明。</p>
-        <button className="btn btn-secondary" onClick={() => openModal({ title: '请求策略', maxWidth: '760px', content: <RequestPolicyEditor /> })}>配置请求策略</button>
-      </div>
+      <section className="glass-panel" aria-label="全客户端请求策略">
+        <div className="panel-header routing-policy-header">
+          <div className="panel-title-block">
+            <div className="panel-title">
+              <Icon name="sliders" size={18} style={{ color: 'var(--primary)' }} />
+              <span>全客户端请求策略</span>
+            </div>
+            <p className="panel-description">设置全局并发上限、排队等待、重试预算、Responses 流保护和入口兼容声明。</p>
+          </div>
+          <div className="panel-actions">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => openModal({ title: '请求策略', maxWidth: '760px', content: <RequestPolicyEditor /> })}
+            >
+              <Icon name="sliders" size={15} />
+              <span>配置请求策略</span>
+            </button>
+          </div>
+        </div>
+      </section>
       <div className="glass-panel">
         <div className="panel-header">
           <div className="panel-title-group">
@@ -160,7 +176,7 @@ export function RoutingPage() {
               columns={columns}
               data={rules}
               keyField="id"
-              tableMinWidth="880px"
+              tableMinWidth="720px"
               emptyText="暂无配置分流规则"
               ariaLabel="Claude Code 分流规则"
             />

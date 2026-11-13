@@ -349,7 +349,7 @@ input[type="checkbox"]:not(.switch-input):disabled { opacity: 0.45; cursor: not-
 .table-scrollbar::-webkit-slider-thumb { height: 10px; background: var(--text-secondary); }
 .table-scrollbar::-moz-range-track { height: 10px; }
 .table-scrollbar::-moz-range-thumb { height: 10px; background: var(--text-secondary); }
-@media (max-width: 600px), (pointer: coarse) {
+@media (max-width: 600px), (hover: none) and (pointer: coarse) {
   .table-scroll-controls-top { flex-wrap: wrap; }
   .table-scroll-hint { flex-basis: 100%; padding-top: 6px; }
   .table-scroll-controls .table-scroll-step { flex-basis: 44px; min-height: 44px; }
@@ -445,7 +445,7 @@ input[type="checkbox"]:not(.switch-input):disabled { opacity: 0.45; cursor: not-
   .model-group-binding-toolbar label { flex-basis: 100%; }
   .model-group-binding-toolbar select { width: auto; }
 }
-@media (pointer: coarse), (max-width: 600px) {
+@media (max-width: 600px), (hover: none) and (pointer: coarse) {
   .table-scroll-step { flex-basis: 44px; min-height: 44px; }
   .table-scrollbar { height: 44px; }
   .run-events-panel .pagination-compact .btn,
@@ -455,8 +455,8 @@ input[type="checkbox"]:not(.switch-input):disabled { opacity: 0.45; cursor: not-
   .model-group-tab, .model-family-card, .group-actions-menu > summary { min-height: 44px; }
 }
 
-/* Compact desktop controls retain larger targets on touch devices. */
-@media (pointer: coarse) {
+/* Compact desktop controls retain larger targets on true touch devices. */
+@media (hover: none) and (pointer: coarse) {
   .run-events-panel .btn, .run-events-panel .form-input,
   .run-events-panel .form-select, .run-events-panel .telemetry-filter-button { min-height: 44px; }
 }
