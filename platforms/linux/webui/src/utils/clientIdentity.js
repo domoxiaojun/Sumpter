@@ -1,5 +1,18 @@
 import { CLIENT_CATALOG, CLIENT_VARIANTS } from './clientRegistry.js';
-export const validProduct = value => /^[a-z0-9._-]{1,64}$/.test(value);
+export const validProduct = value => typeof value === 'string' && /^[a-z0-9._-]{1,64}$/.test(value);
+
+export function patchIdentityBinding(bindings, id, field, value) {
+  if (field !== 'client' && !bindings[id]?.client) return bindings;
+  const next = { ...bindings };
+  if (field === 'client' && !value) {
+    delete next[id];
+    return next;
+  }
+  const binding = { ...(next[id] || {}), [field]: value };
+  if (!value) delete binding[field];
+  Object.defineProperty(next, id, { value: binding, enumerable: true, writable: true, configurable: true });
+  return next;
+}
 export function parseIdentityAliases(text) {
   const result = {};
   for (const line of text.split('\n').map(v=>v.trim()).filter(Boolean)) {
@@ -23,7 +36,7 @@ export function validateIdentityBindings(bindings) {
 }
 export function parseRelayEndpoints(text) {
   const entries=text.split('\n').map(v=>v.trim()).filter(Boolean).map(line=>line.split('='));
-  if(entries.length>128 || entries.some(([id,value,...rest])=>rest.length || !id || new TextEncoder().encode(id).length>128 || !validProduct(value))) throw new Error('中继目标每行填写 入口ID=来源标识，最多 128 条');
+  if(entries.length>128 || entries.some(parts=>parts.length!==2 || !parts[0] || new TextEncoder().encode(parts[0]).length>128 || !validProduct(parts[1]))) throw new Error('中继目标每行填写 入口ID=来源标识，最多 128 条');
   if(new Set(entries.map(([id])=>id)).size!==entries.length) throw new Error('中继入口不能重复');
   return Object.fromEntries(entries);
 }

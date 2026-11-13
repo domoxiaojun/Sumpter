@@ -38,8 +38,15 @@ pub fn events_page_on(
     builder.completed_snapshot(&snapshot);
     append_runtime_filter(&mut builder, &filters);
     let where_sql = builder.where_sql();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
+        - 978_307_200.0;
+    let count_table = super::access_path::event_query_table(&filters, false, now);
+    let page_table = super::access_path::event_query_table(&filters, true, now);
     let total_count = transaction.query_row(
-        &format!("SELECT COUNT(*) FROM runtime_events{where_sql}"),
+        &format!("SELECT COUNT(*) FROM {count_table}{where_sql}"),
         params_from_iter(builder.values.iter()),
         |row| row.get::<_, i64>(0),
     )?;
@@ -85,7 +92,7 @@ pub fn events_page_on(
                 CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.streamTrace') END AS stream_trace_json, \
                 CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.failureDetail') END AS failure_detail, \
                 CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.message') END AS message,output_span_ms \
-         FROM runtime_events{where_sql} ORDER BY timestamp DESC, seq DESC LIMIT ? OFFSET ?"
+         FROM {page_table}{where_sql} ORDER BY timestamp DESC, seq DESC LIMIT ? OFFSET ?"
     );
     let events = {
         let mut statement = transaction.prepare(&sql)?;

@@ -1,3 +1,5 @@
+import { rememberResponseCost } from '../utils/runtimeResources.js';
+import { runtimeWireRange } from '../utils/statisticsDateRange.js';
 import { configSaveMessage } from '../utils/configFeedback.js';
 import { normalizeUserAgentSettings } from '../utils/userAgent.js';
 import { pruneGroupReferences } from '../utils/modelGroups.js';
@@ -338,8 +340,9 @@ class ApiService {
       throw error;
     }
 
+    options.signal?.throwIfAborted();
     if (data?.authenticated) setAuthenticated(data);
-    return data;
+    return rememberResponseCost(data, new TextEncoder().encode(text).byteLength);
   }
 
   async handleMock(path, options) {
@@ -391,13 +394,13 @@ class ApiService {
     return this.request(`/runtime/request-chain?${query.toString()}`, options);
   }
   getRuntimeAnalytics(range = '24h', filters = {}, { diagnosticsOnly = false, ...options } = {}) {
-    const query = new URLSearchParams({ range });
+    const query = new URLSearchParams({ range: runtimeWireRange(range) });
     if (diagnosticsOnly) query.set('view', 'diagnostics');
     appendQueryValues(query, runtimeAnalyticsFilters(range, filters));
     return this.request(`/runtime/analytics?${query.toString()}`, options);
   }
   getRuntimeTrends({ range = '24h', granularity = 'auto', snapshotSeq, snapshotChangeSeq, historyGeneration, filters = {} } = {}, options = {}) {
-    const query = new URLSearchParams({ range, granularity });
+    const query = new URLSearchParams({ range: runtimeWireRange(range), granularity });
     appendQueryValues(query, { snapshotSeq, snapshotChangeSeq, historyGeneration, ...runtimeAnalyticsFilters(range, filters) });
     return this.request(`/runtime/trends?${query.toString()}`, options);
   }
@@ -427,7 +430,7 @@ class ApiService {
   // four-request implementation opened four SQLite connections and could
   // race itself during automatic refreshes.
   async getRuntimeFacets(range = '24h', filters = {}, options = {}) {
-    const query = new URLSearchParams({ range: String(range || '24h') });
+    const query = new URLSearchParams({ range: runtimeWireRange(String(range || '24h')) });
     appendQueryValues(query, runtimeAnalyticsFilters(range, filters));
     const value = await this.request(`/runtime/facets?${query.toString()}`, options);
     const facets = value?.facets || {};

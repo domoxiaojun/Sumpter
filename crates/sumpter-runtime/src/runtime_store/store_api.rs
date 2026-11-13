@@ -912,37 +912,51 @@ impl RuntimeStore {
         let after_change_seq = after_change_seq.filter(|value| *value > 0);
         let limit = limit.clamp(1, 200);
         let query_limit = limit + 1;
-        let recent_changes = self
-            .inner
-            .state
-            .lock()
-            .unwrap()
-            .recent_changes
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>();
-
-        if let Some(cursor) = after_change_seq {
-            let mut changes = recent_changes
+        // Select under the lock before cloning large event payloads. Change
+        // order is append order; incremental pages need only limit + 1 items.
+        let matches = |change: &&RuntimeChange| {
+            let event = &change.event;
+            before_seq.is_none_or(|value| change.seq < value)
+                && after_change_seq.is_none_or(|value| change.change_seq > value)
+                && kind.is_none_or(|value| value == event.kind)
+                && request_id.is_none_or(|value| event.request_id.as_deref() == Some(value))
+                && outcome.is_none_or(|value| option_token(event.outcome) == Some(value.into()))
+                && !from.is_some_and(|value| event.timestamp < value)
+                && !to.is_some_and(|value| event.timestamp > value)
+        };
+        let recent_changes = {
+            let state = self.inner.state.lock().unwrap();
+            if after_change_seq.is_some() {
+                state
+                    .recent_changes
+                    .iter()
+                    .filter(matches)
+                    .take(query_limit)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            } else {
+                // Collapse updates of the same event before bounding the live
+                // overlay, so repeated deltas cannot crowd out another row.
+                let mut by_id = HashMap::new();
+                for change in state.recent_changes.iter().filter(matches) {
+                    by_id.insert(&change.event.id, change);
+                }
+                let mut selected = by_id.into_values().collect::<Vec<_>>();
+                selected.sort_by_key(|change| std::cmp::Reverse(change.seq));
+                selected
+                    .into_iter()
+                    .take(query_limit)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            }
+        };
+        if after_change_seq.is_some() {
+            return Ok(recent_changes
                 .into_iter()
-                .filter(|change| change.change_seq > cursor)
-                .filter(|change| {
-                    let event = &change.event;
-                    before_seq.is_none_or(|value| change.seq < value)
-                        && kind.is_none_or(|value| value == event.kind)
-                        && request_id.is_none_or(|value| event.request_id.as_deref() == Some(value))
-                        && outcome
-                            .is_none_or(|value| option_token(event.outcome) == Some(value.into()))
-                        && !from.is_some_and(|value| event.timestamp < value)
-                        && !to.is_some_and(|value| event.timestamp > value)
-                })
                 .map(|change| {
                     RuntimeEventListItem::from_change(change.seq, change.change_seq, change.event)
                 })
-                .collect::<Vec<_>>();
-            changes.sort_by_key(|item| item.change_seq);
-            changes.truncate(query_limit);
-            return Ok(changes);
+                .collect());
         }
 
         let connection = read_connection(&self.inner.path)?;

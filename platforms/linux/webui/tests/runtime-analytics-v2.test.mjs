@@ -318,8 +318,8 @@ test('统计页自动刷新会重新锚定使用明细快照，而不是沿用�
   const refreshBody = workspace.slice(refreshStart, refreshEnd);
   assert.match(refreshBody, /sort: current\.sort, order: current\.order/);
   assert.doesNotMatch(refreshBody, /snapshotSeq/);
-  const signalStart = workspace.indexOf('if (!analyticsRefreshSignal || analyticsRefreshSignal === lastAnalyticsRefreshSignal.current) return;');
-  const signalEnd = workspace.indexOf('[analyticsRefreshSignal]', signalStart);
+  const signalStart = workspace.indexOf('    // AppContext refreshes only the cheap summary/facet layer');
+  const signalEnd = workspace.indexOf('}, [analyticsRefreshSignal', signalStart);
   const signalEffect = workspace.slice(signalStart, signalEnd);
   assert.match(signalEffect, /section === 'overview'\) refreshDimensions\(/);
   assert.match(signalEffect, /section === 'tokens'\) refreshDimensions\(/);

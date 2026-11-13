@@ -1,9 +1,10 @@
+import { localDayString, statisticsDateBounds } from '../utils/statisticsDateRange.js';
 import { inboundTokenOptions } from '../utils/inboundTokens.js';
 import { requestKindLabel, clientVariantLabel, agentRoleLabel } from '../utils/helpers.js';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AnalyticsWorkspace } from '../components/AnalyticsWorkspace.jsx';
 import { EventInspector } from '../components/EventInspector.jsx';
-import { useApp } from '../context/AppContext.jsx';
+import { useApp, useRuntimePagePreference } from '../context/AppContext.jsx';
 import { api } from '../services/api.js';
 import { clientKindLabel, failureKindLabel, failurePhaseLabel, formatNumber, purposeLabel } from '../utils/helpers.js';
 import { Icon } from '../utils/icons.jsx';
@@ -188,11 +189,13 @@ function endpointOptions(runtime, config, analytics, selectedValue) {
 export function StatsPage() {
   const {
     runtime,
+    pageVisible,
     config,
     secretStatus,
     runtimeAnalytics,
     runtimeFacets,
     analyticsRefreshSignal,
+    analyticsQueryRevision,
     runtimeEventDetail,
     analyticsRange,
     analyticsFilters,
@@ -204,6 +207,10 @@ export function StatsPage() {
     refreshCore,
     addToast,
   } = useApp();
+  const [customDateEditor, setCustomDateEditor] = useRuntimePagePreference('stats.customEditor', false);
+  const [customStartDay, setCustomStartDay] = useRuntimePagePreference('stats.customStart', localDayString);
+  const [customEndDay, setCustomEndDay] = useRuntimePagePreference('stats.customEnd', localDayString);
+  const [customDateError, setCustomDateError] = useState('');
   const [selectedEventID, setSelectedEventID] = useState(null);
   const [expandedGroups, setExpandedGroups] = useState({});
   const [eventChain, setEventChain] = useState([]);
@@ -215,7 +222,7 @@ export function StatsPage() {
   const [projectSelectionResetSignal, setProjectSelectionResetSignal] = useState(0);
 
   useEffect(() => {
-    if (!selectedEventID) {
+    if (!selectedEventID || !pageVisible) {
       loadRuntimeEvent(null);
       setEventDetailError('');
       return;
@@ -226,7 +233,7 @@ export function StatsPage() {
       if (active) setEventDetailError(error?.message || '无法读取事件详情');
     });
     return () => { active = false; };
-  }, [loadRuntimeEvent, selectedEventID]);
+  }, [loadRuntimeEvent, selectedEventID, pageVisible]);
 
   const filters = analyticsFilters || { inboundTokenID: '', clientKind: '', requestKind: '', clientVariant: '', agentRole: '', agentName: '', parentThreadID: '', parentTurnID: '', rootTurnID: '', endpointID: '', project: '', projectID: '', sessionID: '', model: '', requestPurpose: '', outcome: '', failureKind: '', failurePhase: '' };
   const advancedFilterLabels = [
@@ -297,13 +304,13 @@ export function StatsPage() {
   const requestID = selectedEvent?.requestID;
   useEffect(() => {
     setEventChain([]);
-    if (!requestID) return undefined;
+    if (!requestID || !pageVisible) return undefined;
     const controller = new AbortController();
     api.getRuntimeRequestChain(requestID, { signal: controller.signal }).then((value) => {
       if (!controller.signal.aborted) setEventChain(value.events || []);
     }).catch(() => {});
     return () => controller.abort();
-  }, [requestID]);
+  }, [requestID, pageVisible]);
   return (
     <div className="analytics-page analytics-v3-page">
       <div className="page-header analytics-v3-page-header">
@@ -315,6 +322,7 @@ export function StatsPage() {
           <p className="page-subtitle">请求统计与运行健康</p>
         </div>
         <div className="page-actions">
+          <button type="button" className="btn btn-secondary" onClick={() => loadRuntimeAnalytics(analyticsRange, filters).catch(error => addToast(error.message, 'error'))}>刷新</button>
           <button type="button" className="btn btn-secondary" onClick={() => setOpenExportSignal((value) => value + 1)}>
             <Icon name="download" size={15} />导出
           </button>
@@ -340,12 +348,29 @@ export function StatsPage() {
                   type="button"
                   aria-pressed={analyticsRange === value}
                   className={`btn btn-sm ${analyticsRange === value ? 'btn-primary' : 'btn-secondary'}`}
-                  onClick={() => loadRuntimeAnalytics(value, filters).catch(() => null)}
+                  onClick={() => { setCustomDateEditor(false); setCustomDateError(''); loadRuntimeAnalytics(value, filters).catch(() => null); }}
                 >
                   {label}
                 </button>
               ))}
+              <button type="button" className={`btn btn-sm ${customDateEditor ? 'btn-primary' : 'btn-secondary'}`}
+                aria-pressed={customDateEditor} onClick={() => setCustomDateEditor(true)}>自定义</button>
             </div>
+            {customDateEditor && <div className="runtime-custom-dates">
+              <label>开始日期<input className="form-input" type="date" max={localDayString()} value={customStartDay}
+                onChange={event => { setCustomStartDay(event.target.value); setCustomDateError(''); }} /></label>
+              <label>结束日期<input className="form-input" type="date" max={localDayString()} value={customEndDay}
+                onChange={event => { setCustomEndDay(event.target.value); setCustomDateError(''); }} /></label>
+              <button type="button" className="btn btn-primary" onClick={() => {
+                try {
+                  statisticsDateBounds(customStartDay, customEndDay);
+                  setCustomDateError('');
+                  loadRuntimeAnalytics('custom', { ...filters, customStartDay, customEndDay }).catch(error => setCustomDateError(error.message));
+                } catch (error) { setCustomDateError(error.message); }
+              }}>应用</button>
+              <small>{analyticsRange === 'custom' ? `已应用 ${filters.customStartDay} 至 ${filters.customEndDay} · ` : '选择日期后点击应用 · '}包含结束当天 · 本地时区 {Intl.DateTimeFormat().resolvedOptions().timeZone}</small>
+              {customDateError && <span role="alert" className="text-danger">{customDateError}</span>}
+            </div>}
           </fieldset>
           <label>
             <span>入口</span>
@@ -456,6 +481,7 @@ export function StatsPage() {
         onRecreateDatabase={recreateDatabase}
         openExportSignal={openExportSignal}
         analyticsFilters={filters}
+        analyticsQueryRevision={analyticsQueryRevision}
         analyticsRange={analyticsRange}
         onAnalyticsRangeChange={(value) => loadRuntimeAnalytics(value, filters).catch(() => null)}
         facets={runtimeFacets?.facets || null}

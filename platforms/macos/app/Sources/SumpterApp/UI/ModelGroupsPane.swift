@@ -143,7 +143,7 @@ private struct ModelGroupSettings: View {
         }
     }
     private var options: some View {
-        HStack(spacing: 12) {
+        SumpterWrappingLayout(horizontalSpacing: 12, verticalSpacing: 8) {
             HStack(spacing: 8) {
                 Text("优先级").foregroundStyle(.secondary).fixedSize()
                 TextField("组优先级", value: $group.priority, format: .number)
@@ -157,7 +157,6 @@ private struct ModelGroupSettings: View {
             .pickerStyle(.menu)
             .help("随机或轮询只分配新会话的同优先级入口，后续请求保持会话粘性")
             Toggle("启用该组", isOn: $group.enabled).toggleStyle(.checkbox).fixedSize()
-            Spacer(minLength: 0)
             Menu("组操作") {
                 Button("前移", systemImage: "arrow.left", action: moveUp).disabled(!canMoveUp)
                 Button("后移", systemImage: "arrow.right", action: moveDown).disabled(!canMoveDown)

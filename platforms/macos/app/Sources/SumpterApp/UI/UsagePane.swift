@@ -608,6 +608,7 @@ struct UsagePane: View {
     }
 
     @ObservedObject var model: AppModel
+    @Environment(\.sumpterWindowVisible) private var windowVisible
     /// Keep the overview KPI groups on one visual baseline.  The value is a
     /// minimum rather than a fixed frame so larger Dynamic Type sizes can
     /// still expand cards without clipping their details.
@@ -715,7 +716,7 @@ struct UsagePane: View {
 
     /// 开关或间隔一变就重启刷新循环。
     private var autoRefreshTaskID: String {
-        "\(model.autoRefreshEnabled)-\(model.statisticsAutoRefreshIntervalSeconds)"
+        "\(windowVisible)-\(model.autoRefreshEnabled)-\(model.statisticsAutoRefreshIntervalSeconds)"
     }
 
     var body: some View {
@@ -730,7 +731,23 @@ struct UsagePane: View {
             analyticsControlsPanel
             selectedBoardContent
         }
+        .onAppear {
+            codexSort = model.runtimeDiagnosticSortPreferences["codexSort"] ?? codexSort
+            streamSort = model.runtimeDiagnosticSortPreferences["streamSort"] ?? streamSort
+            toolSort = model.runtimeDiagnosticSortPreferences["toolSort"] ?? toolSort
+            upstreamStatusSort = model.runtimeDiagnosticSortPreferences["upstreamStatusSort"] ?? upstreamStatusSort
+            featureRuleSort = model.runtimeDiagnosticSortPreferences["featureRuleSort"] ?? featureRuleSort
+            protocolRouteSort = model.runtimeDiagnosticSortPreferences["protocolRouteSort"] ?? protocolRouteSort
+            failureSort = model.runtimeDiagnosticSortPreferences["failureSort"] ?? failureSort
+            runtimeEndpointTableSort = model.runtimeEndpointSortPreference
+            runtimeProjectTableSort = model.runtimeProjectSortPreference
+            runtimeSessionTableSort = model.runtimeSessionSortPreference
+            runtimeModelTableSort = model.runtimeModelSortPreference
+        }
         .task(id: autoRefreshTaskID) {
+            guard windowVisible else { return }
+            model.setRuntimeSection(.statistics)
+            selectedBoard = StatisticsBoard(rawValue: model.statisticsBoard) ?? .overview
             // 同 OverviewPane:数据靠 SSE + 兜底轮询,这里只处理冻结/解冻。
             model.setStatisticsVisible(true)
             model.setStatisticsBoard(selectedBoard.rawValue)
@@ -742,9 +759,22 @@ struct UsagePane: View {
             }
             frozenRuntime = nil
             frozenHealth = nil
-            model.refreshStatisticsIfNeeded(force: true)
+            model.refreshStatisticsIfNeeded()
         }
-        .onDisappear { model.setStatisticsVisible(false) }
+        .onDisappear {
+            model.runtimeDiagnosticSortPreferences["codexSort"] = codexSort
+            model.runtimeDiagnosticSortPreferences["streamSort"] = streamSort
+            model.runtimeDiagnosticSortPreferences["toolSort"] = toolSort
+            model.runtimeDiagnosticSortPreferences["upstreamStatusSort"] = upstreamStatusSort
+            model.runtimeDiagnosticSortPreferences["featureRuleSort"] = featureRuleSort
+            model.runtimeDiagnosticSortPreferences["protocolRouteSort"] = protocolRouteSort
+            model.runtimeDiagnosticSortPreferences["failureSort"] = failureSort
+            model.runtimeEndpointSortPreference = runtimeEndpointTableSort
+            model.runtimeProjectSortPreference = runtimeProjectTableSort
+            model.runtimeSessionSortPreference = runtimeSessionTableSort
+            model.runtimeModelSortPreference = runtimeModelTableSort
+            model.setStatisticsVisible(false)
+        }
         .onChange(of: selectedBoard) { _, board in
             model.setStatisticsBoard(board.rawValue)
         }
@@ -867,6 +897,25 @@ struct UsagePane: View {
             hint: "所有条件均可选；留空时查看全部，选择后下面的指标和列表会一起更新。"
         ) {
             VStack(alignment: .leading, spacing: 12) {
+                if model.runtimeCustomDateEditorVisible {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ViewThatFits(in: .horizontal) {
+                            HStack {
+                                DatePicker("开始日期", selection: $model.runtimeCustomDateStart, in: ...Date(), displayedComponents: .date)
+                                DatePicker("结束日期", selection: $model.runtimeCustomDateEnd, in: ...Date(), displayedComponents: .date)
+                                Button("应用") { model.applyRuntimeCustomDates() }
+                            }
+                            VStack(alignment: .leading) {
+                                DatePicker("开始日期", selection: $model.runtimeCustomDateStart, in: ...Date(), displayedComponents: .date)
+                                DatePicker("结束日期", selection: $model.runtimeCustomDateEnd, in: ...Date(), displayedComponents: .date)
+                                Button("应用") { model.applyRuntimeCustomDates() }
+                            }
+                        }
+                        Text("包含结束当天 · 本地时区 \(TimeZone.autoupdatingCurrent.identifier)")
+                            .font(.caption).foregroundStyle(.secondary)
+                        if let error = model.runtimeCustomDateError { Text(error).font(.caption).foregroundStyle(.red) }
+                    }
+                }
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 12) {
                         rangePicker
@@ -879,10 +928,9 @@ struct UsagePane: View {
                     }
                     VStack(alignment: .leading, spacing: 8) {
                         compactRangePicker
-                        HStack(spacing: 10) {
+                        SumpterWrappingLayout(horizontalSpacing: 10, verticalSpacing: 8) {
                             storageSummary
                             snapshotSummary
-                            Spacer(minLength: 0)
                             statisticsActionButtons
                         }
                     }
@@ -1146,7 +1194,7 @@ struct UsagePane: View {
 
     private var compactRangePicker: some View {
         SumpterWrappingLayout(horizontalSpacing: 8, verticalSpacing: 8) {
-            ForEach(["today", "7d", "30d", "all"], id: \.self) { value in
+            ForEach(["today", "7d", "30d", "all", "custom"], id: \.self) { value in
                 Button {
                     model.setRuntimeAnalyticsRange(value)
                 } label: {
@@ -1168,6 +1216,7 @@ struct UsagePane: View {
         case "today": "今天"
         case "7d": "7 天"
         case "30d": "30 天"
+        case "custom": "自定义"
         default: "全部"
         }
     }
@@ -1749,7 +1798,7 @@ struct UsagePane: View {
                 .font(.subheadline.weight(.semibold))
             let usage = model.runtimeTrendSeries?.totals.tokens
             let cache = model.runtimeTrendSeries?.cacheRead
-            HStack(spacing: 16) {
+            SumpterWrappingLayout(horizontalSpacing: 16, verticalSpacing: 8) {
                 Text("已确认缓存命中率 " + rateText(cache?.confirmedHitRate))
                 Text("结论覆盖率 " + rateText(cache?.confirmationCoverage))
             }.font(.callout)
@@ -1837,7 +1886,7 @@ struct UsagePane: View {
     }
 
     private var storageOverviewAction: some View {
-        HStack(spacing: 8) {
+        SumpterWrappingLayout(horizontalSpacing: 8, verticalSpacing: 8) {
             Button {
                 storageSettingsPresented = true
             } label: {
@@ -2055,13 +2104,14 @@ struct UsagePane: View {
 
     private var rangePicker: some View {
         Picker("范围", selection: Binding(
-            get: { model.runtimeAnalyticsRange },
+            get: { model.runtimeCustomDateEditorVisible ? "custom" : model.runtimeAnalyticsRange },
             set: { model.setRuntimeAnalyticsRange($0) }
         )) {
             Text("今天").tag("today")
             Text("7 天").tag("7d")
             Text("30 天").tag("30d")
             Text("全部").tag("all")
+            Text("自定义").tag("custom")
         }
     }
 
@@ -2069,7 +2119,7 @@ struct UsagePane: View {
     private var storageSummary: some View {
         if let probe = model.runtimeStorageProbe {
             let live = model.runtimeSummary?.storage
-            HStack(spacing: 8) {
+            SumpterWrappingLayout(horizontalSpacing: 8, verticalSpacing: 6) {
                 StatusBadge(
                     text: retentionPolicyLabel(probe.retention),
                     systemImage: retentionPolicyIsAutomatic(probe.retention) ? "arrow.triangle.2.circlepath" : "hand.raised.fill",
@@ -2219,7 +2269,7 @@ struct UsagePane: View {
         }
 
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
+            SumpterWrappingLayout(horizontalSpacing: 10, verticalSpacing: 6) {
                 HStack(spacing: 6) {
                     Circle()
                         .fill(palette.brand)
@@ -2230,7 +2280,6 @@ struct UsagePane: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
-                Spacer()
                 if let idx = activeIdx, points.indices.contains(idx) {
                     let bucket = points[idx]
                     HStack(spacing: 6) {
@@ -2401,9 +2450,8 @@ struct UsagePane: View {
         ) {
             if let page = model.runtimeErrorPage {
                 VStack(alignment: .leading, spacing: 12) {
-                    HStack {
+                    SumpterWrappingLayout(horizontalSpacing: 12, verticalSpacing: 8) {
                         Text("共 \(tokenNumber(page.totalCount)) 组").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                        Spacer()
                         SumpterPaginationControls(
                             page: page.page,
                             totalPages: page.totalPages,
@@ -2449,7 +2497,7 @@ struct UsagePane: View {
                        let selectedEvent = model.runtimeEventDetail?.event ?? v2RequestChainEvents?.first(where: { $0.id == selectedID }) ?? historyEvents.first(where: { $0.id == selectedID }) {
                         let chainEvents = v2RequestChainEvents ?? [selectedEvent]
                         Divider()
-                        HStack(alignment: .top, spacing: 16) {
+                        SumpterAdaptiveColumns(minimumColumnWidth: 360, maximumColumns: 2, spacing: 16) {
                             RuntimeRequestTraceView(
                                 chain: chainEvents,
                                 truncated: model.runtimeRequestChain?.truncated ?? false,
@@ -2462,8 +2510,7 @@ struct UsagePane: View {
                                     }
                                 )
                             )
-                            .frame(width: 310, alignment: .topLeading)
-                            Divider()
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
                             RuntimeEventInspector(
                                 event: selectedEvent,
                                 chain: chainEvents,
@@ -2474,7 +2521,7 @@ struct UsagePane: View {
                                     model.loadRuntimeRequestChain(for: nil)
                                 }
                             )
-                            .frame(minWidth: 360, maxWidth: .infinity, alignment: .topLeading)
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
                         }
                     }
                 }
@@ -2877,7 +2924,7 @@ struct UsagePane: View {
     }
 
     private var healthPanel: some View {
-        HStack(spacing: 12) {
+        SumpterWrappingLayout(horizontalSpacing: 12, verticalSpacing: 8) {
             Text("即时健康")
                 .font(.subheadline.weight(.semibold))
             StatusBadge(
@@ -2890,7 +2937,6 @@ struct UsagePane: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(dynamicTypeSize.isAccessibilitySize ? 4 : 2)
                 .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
         }
     }
 
@@ -2969,20 +3015,25 @@ struct UsagePane: View {
                     Text("WS 在连接结束后汇总；未观测连接 \(requests.unobservedWebsocketConnections) · 未观测帧 \(requests.unobservedFrames)").font(.caption).foregroundStyle(.secondary)
                 }
 
-                HStack(spacing: 12) {
-                    Picker("诊断维度", selection: $diagnosticDimension) {
-                        ForEach(DiagnosticDimension.allCases) { dimension in
-                            Text(dimension.title).tag(dimension)
-                        }
+                VStack(alignment: .leading, spacing: 8) {
+                    ViewThatFits(in: .horizontal) {
+                        diagnosticDimensionPicker.pickerStyle(.segmented).labelsHidden()
+                        diagnosticDimensionPicker.pickerStyle(.menu)
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    Spacer(minLength: 0)
                     Text(clientRecordingSummary)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 diagnosticTable
+            }
+        }
+    }
+
+    private var diagnosticDimensionPicker: some View {
+        Picker("诊断维度", selection: $diagnosticDimension) {
+            ForEach(DiagnosticDimension.allCases) { dimension in
+                Text(dimension.title).tag(dimension)
             }
         }
     }

@@ -1,3 +1,5 @@
+import { statisticsDateBounds } from './statisticsDateRange.js';
+
 export const RUNTIME_DEFAULT_PAGE_SIZE = 10;
 export const RUNTIME_EVENT_PAGE_SIZES = Object.freeze([RUNTIME_DEFAULT_PAGE_SIZE, 25, 50, 100, 200]);
 export const RUNTIME_EVENT_PAGE_SIZE_STORAGE_KEY = 'sumpter-runtime-event-page-size';
@@ -47,7 +49,11 @@ export function runtimeFilterValues(filters = {}) {
 }
 
 export function runtimeAnalyticsFilters(range, filters = {}, now = new Date()) {
-  return { ...runtimeRangeFilter(range, now), ...runtimeFilterValues(filters) };
+  const custom = range === 'custom'
+    ? (filters.from != null && filters.to != null ? { from: filters.from, to: filters.to }
+      : statisticsDateBounds(filters.customStartDay, filters.customEndDay, now))
+    : runtimeRangeFilter(range, now);
+  return { ...custom, ...runtimeFilterValues(filters) };
 }
 
 export function runtimeSnapshotFilters(filters, snapshot) {

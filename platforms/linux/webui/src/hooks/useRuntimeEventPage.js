@@ -25,7 +25,7 @@ function eventMatchesOutcome(event, outcome) {
 
 export function useRuntimeEventPage({
   recentEvents = [], eventKind = '', outcome = '', resetGeneration = 0, onRecovered,
-  autoRefresh = true, refreshInterval = 15,
+  autoRefresh = true, refreshInterval = 15, enabled = true,
   range = 'all',
   scopeKey = '',
 } = {}) {
@@ -61,6 +61,7 @@ export function useRuntimeEventPage({
 
   useEffect(() => {
     const generation = ++requestGenerationRef.current;
+    if (!enabled) { setRefreshing(false); return undefined; }
     const controller = new AbortController();
     const snapshot = runtimeCurrentRangeSnapshot(range, snapshotRef.current);
     const requestedPage = snapshotRef.current && !snapshot ? 1 : Math.max(1, Number(page) || 1);
@@ -125,8 +126,8 @@ export function useRuntimeEventPage({
       }
     })();
 
-    return () => controller.abort();
-  }, [range, scopeKey, eventKind, outcome, onRecovered, page, pageSize, reloadGeneration, resetGeneration]);
+    return () => { ++requestGenerationRef.current; controller.abort(); };
+  }, [enabled, range, scopeKey, eventKind, outcome, onRecovered, page, pageSize, reloadGeneration, resetGeneration]);
 
   const setPage = useCallback((value) => {
     const next = clampRuntimeEventPage(value, result?.totalPages || 1);
@@ -173,7 +174,7 @@ export function useRuntimeEventPage({
   // SSE had already delivered the event. Debounce the reset so a burst of
   // completed events results in one stable-snapshot request.
   useEffect(() => {
-    if (mode !== 'page' || page !== 1 || refreshing || snapshotRef.current == null) return undefined;
+    if (!enabled || !autoRefresh || mode !== 'page' || page !== 1 || refreshing || snapshotRef.current == null) return undefined;
     const changes = completedEventsAfterSnapshot(scopedRecentEvents, snapshotRef.current, eventKind);
     if (!changes.length || autoRefreshTimerRef.current != null) return undefined;
     const newest = Math.max(...changes.map((event) => Number(event.changeSeq || 0)));
@@ -195,10 +196,10 @@ export function useRuntimeEventPage({
         autoRefreshTimerRef.current = null;
       }
     };
-  }, [eventKind, refreshing, mode, page, scopedRecentEvents]);
+  }, [enabled, autoRefresh, eventKind, refreshing, mode, page, scopedRecentEvents]);
 
   useEffect(() => {
-    if (!autoRefresh || page !== 1 || mode !== 'page') return undefined;
+    if (!enabled || !autoRefresh || page !== 1 || mode !== 'page') return undefined;
     const timer = window.setInterval(() => {
       if (document.hidden || refreshing) return;
       backgroundRefreshRef.current = true;
@@ -206,7 +207,7 @@ export function useRuntimeEventPage({
       setReloadGeneration((value) => value + 1);
     }, Math.max(1, Number(refreshInterval) || 15) * 1000);
     return () => window.clearInterval(timer);
-  }, [autoRefresh, page, mode, refreshInterval, refreshing]);
+  }, [enabled, autoRefresh, page, mode, refreshInterval, refreshing]);
 
   return {
     mode,

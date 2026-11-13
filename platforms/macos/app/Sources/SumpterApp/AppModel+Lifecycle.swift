@@ -94,6 +94,7 @@ extension AppModel {
     }
 
     func stopSidecar() async {
+        cancelRuntimePageRequests()
         // 先失效连接和所有 latest-wins 代次，再等待进程退出。MainActor 在 await
         // 期间可重入；如果晚清空 admin，用户此时点击诊断会继续打到旧随机端口。
         adminConnectionGeneration &+= 1
@@ -184,7 +185,7 @@ extension AppModel {
     }
 
     func reconcileRuntimeChanges(using admin: AdminClient) async {
-        guard autoRefreshEnabled else { return }
+        guard autoRefreshEnabled, runPageVisible else { return }
         guard runtimeChangeSeq > 0 else {
             // A zero cursor is explicitly non-authoritative (old daemon,
             // reset, or a page without change metadata). Re-read the latest
@@ -203,9 +204,8 @@ extension AppModel {
                     await refreshStatus(loadLatestEvents: true)
                     return
                 }
-                for item in page.events {
-                    applyRuntimeListItem(item, resetGeneration: page.resetGeneration)
-                }
+                guard !Task.isCancelled, runPageVisible else { return }
+                applyRuntimeListItems(page.events, resetGeneration: page.resetGeneration)
                 let nextCursor = page.events.map(\.changeSeq).max() ?? cursor
                 guard page.hasMore else { return }
                 guard !page.events.isEmpty, nextCursor > cursor else {
@@ -240,71 +240,68 @@ extension AppModel {
         scheduleCountersRefresh()
     }
 
-    func applyRuntimeListItem(
-        _ item: AdminWire.RuntimeEventListItem,
-        resetGeneration: Int? = nil
-    ) {
-        runtimeChangeSeq = max(runtimeChangeSeq, item.changeSeq)
-        if autoRefreshEnabled, let chain = runtimeRequestChain, item.requestID == chain.requestID {
-            runtimeRequestChain = chain.merging(AdminWire.RuntimeRequestChain(apiVersion: chain.apiVersion, requestID: chain.requestID, events: [item], truncated: false))
+    func applyRuntimeListItem(_ item: AdminWire.RuntimeEventListItem, resetGeneration: Int? = nil) {
+        applyRuntimeListItems([item], resetGeneration: resetGeneration)
+    }
+
+    func applyRuntimeListItems(_ incoming: [AdminWire.RuntimeEventListItem], resetGeneration: Int? = nil) {
+        runtimeChangeSeq = max(runtimeChangeSeq, incoming.map(\.changeSeq).max() ?? 0)
+        if incoming.contains(where: { $0.phase != .inFlight }) { runtimeFacetsDirty = true }
+        guard runPageVisible, !incoming.isEmpty else { return }
+        var byID = Dictionary((runtimePage?.events ?? []).map { ($0.id, $0) }, uniquingKeysWith: { a, b in a.changeSeq >= b.changeSeq ? a : b })
+        var events = runtime.recentEvents
+        var changed = false
+        var completed = false
+        for item in incoming {
+            if let current = byID[item.id], current.changeSeq >= item.changeSeq { continue }
+            changed = true
+            completed = completed || item.phase != .inFlight
+            byID[item.id] = item
+            if let index = events.firstIndex(where: { $0.id == item.id }) {
+                events[index] = item.mergedRuntimeEvent(with: events[index])
+            } else {
+                events.insert(item.runtimeEvent, at: 0)
+            }
         }
-        // Statistics are served from a stable SQLite snapshot and do not need
-        // the run page's per-event overlay. Avoid publishing the high-rate
-        // runtime list while this pane is visible; the next page transition
-        // (or window show) performs one authoritative refresh for the run UI.
-        guard !statisticsVisible else { return }
-        var items = runtimePage?.events ?? []
-        if let index = items.firstIndex(where: { $0.id == item.id }) {
-            // SSE reconnects and a paged response can deliver an older change.
-            // Ignore it everywhere, not only in the compact page, otherwise it
-            // could still roll back the full in-memory RuntimeEvent below.
-            guard item.changeSeq >= items[index].changeSeq else { return }
-            items[index] = item
-        } else {
-            items.append(item)
+        guard changed else { return }
+        if autoRefreshEnabled, let chain = runtimeRequestChain {
+            let changes = incoming.filter { $0.requestID == chain.requestID }
+            if !changes.isEmpty {
+                runtimeRequestChain = chain.merging(AdminWire.RuntimeRequestChain(apiVersion: chain.apiVersion, requestID: chain.requestID, events: changes, truncated: false))
+            }
         }
-        // Preserve live requests and newly completed old-seq connections.
-        let live = items.filter { $0.phase == .inFlight }
-        let completed = items.filter { $0.phase != .inFlight }.sorted { $0.changeSeq > $1.changeSeq }
-        items = (live + completed.prefix(200)).sorted { $0.seq > $1.seq }
-        runtimePage = AdminWire.RuntimeEventPage(
-            events: items,
-            hasMore: runtimePage?.hasMore ?? false,
-            resetGeneration: resetGeneration ?? runtimePage?.resetGeneration,
-            cursorValid: true
-        )
-        // The list endpoint intentionally returns a compact projection. Merge it
-        // into the existing full event so an SSE/list refresh cannot erase usage,
-        // tool calls, streamTrace or Codex metadata already loaded for this ID.
-        let existing = runtime.recentEvents.first(where: { $0.id == item.id })
-        applyRuntimeEvent(item.mergedRuntimeEvent(with: existing))
-        // 进行中的 delta 只更新实时 overlay；进入终态后自动重建第一页。
-        // 旧 daemon 若没有 phase 也必须走这条兼容路径。
-        if item.phase != .inFlight {
-            scheduleRunHistoryAutoRefresh()
-        }
+        let live = byID.values.filter { $0.phase == .inFlight }
+        let ended = byID.values.filter { $0.phase != .inFlight }.sorted { $0.changeSeq > $1.changeSeq }
+        let items = (live + ended.prefix(200)).sorted { $0.seq > $1.seq }
+        runtimePage = AdminWire.RuntimeEventPage(events: items, hasMore: runtimePage?.hasMore ?? false,
+            resetGeneration: resetGeneration ?? runtimePage?.resetGeneration, cursorValid: true)
+        runtime.recentEvents = RuntimeEvent.trimmed(events, perKindLimit: 200)
+        let next = ProxyHealthEvaluator.evaluate(events: runtime.recentEvents, isRunning: sidecarState == .running)
+        if health != next { health = next }
+        scheduleCountersRefresh()
+        if completed { scheduleRunHistoryAutoRefresh() }
     }
 
     /// 自动把运行页第一页推进到最新稳定快照。用户正在查看更早页时不
     /// 强行跳页；回到第一页的分页动作会主动建立新快照。
     func scheduleRunHistoryAutoRefresh() {
-        guard autoRefreshEnabled, runHistoryPage?.page == 1,
+        guard runPageVisible, autoRefreshEnabled, runHistoryPage?.page == 1,
               runHistoryAutoRefreshTask == nil else { return }
         runHistoryAutoRefreshTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 220_000_000)
             guard let self else { return }
             self.runHistoryAutoRefreshTask = nil
-            guard !Task.isCancelled, self.autoRefreshEnabled,
+            guard !Task.isCancelled, self.runPageVisible, self.autoRefreshEnabled,
                   self.runHistoryPage?.page == 1 else { return }
-            self.refreshRunHistory(resetSnapshot: true)
+            self.refreshRunHistory(resetSnapshot: true, coalescing: true)
         }
     }
 
     func scheduleCountersRefresh() {
-        guard countersRefreshTask == nil else { return }
+        guard runtimeDataVisible, countersRefreshTask == nil else { return }
         countersRefreshTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
-            guard let self else { return }
+            do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
+            guard let self, !Task.isCancelled, self.runtimeDataVisible else { return }
             self.countersRefreshTask = nil
             await self.refreshStatus()
         }
@@ -410,17 +407,18 @@ extension AppModel {
             runtime.recentEvents = []
             await refreshStatus(loadLatestEvents: true)
         case .runtimeChange(let change):
-            guard autoRefreshEnabled else { return }
+            if !change.event.isInFlight { runtimeFacetsDirty = true }
+            guard autoRefreshEnabled, runtimeDataVisible else { return }
             guard change.seq > 0, change.changeSeq > 0 else {
                 await refreshStatus(loadLatestEvents: true)
                 return
             }
             applyRuntimeListItem(AdminWire.RuntimeEventListItem(change: change))
-            if change.changeSeq >= (runtimeEventDetails[change.event.id]?.changeSeq ?? 0) {
-                runtimeEventDetails[change.event.id] = change
-                if runtimeEventDetails.count > 200, let oldest = runtimeEventDetails.min(by: { $0.value.changeSeq < $1.value.changeSeq })?.key { runtimeEventDetails.removeValue(forKey: oldest) }
-                if runtimeEventDetail?.event.id == change.event.id { runtimeEventDetail = change }
+            if let cached = runtimeEventDetails.peek(change.event.id), change.changeSeq >= cached.changeSeq {
+                let cost = (try? JSONEncoder().encode(change.event).count) ?? runtimeEventDetails.costLimit + 1
+                runtimeEventDetails.insert(change, for: change.event.id, cost: cost)
             }
+            if runtimeEventDetail?.event.id == change.event.id { runtimeEventDetail = change }
         }
     }
 
@@ -445,6 +443,9 @@ extension AppModel {
         runtimeDimensionTask = nil
         runtimeErrorTask?.cancel()
         runtimeErrorTask = nil
+        runtimeExportEstimateTask?.cancel()
+        runtimeExportEstimateTask = nil
+        runtimeExportEstimateRequestGeneration &+= 1
         runtimeRequestChainTask?.cancel()
         runtimeRequestChainTask = nil
     }

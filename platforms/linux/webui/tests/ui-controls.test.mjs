@@ -79,7 +79,7 @@ test('background refresh skips an in-flight sort and resumes with the completed 
   const context = {
     useCallback: callback => callback,
     dimensionRequestRefs: { current: { model: reference } },
-    dimensions: { model: { ...response('cache_read', 'desc'), page: 2 } },
+    dimensions: { model: { ...response('cache_read', 'desc'), page: 1 } },
     dimensionSearch: { model: 'model' }, pageSize: 10,
     loadDimension: (...args) => calls.push(args),
   };
@@ -91,7 +91,7 @@ test('background refresh skips an in-flight sort and resumes with the completed 
   sort.finish();
   await context.refresh(['model']);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0][1], 2);
+  assert.equal(calls[0][1], 1);
   assert.equal(calls[0][4].sort, 'cache_read');
   assert.equal(calls[0][4].order, 'desc');
   assert.equal(calls[0][4].snapshotSeq, undefined);
@@ -104,6 +104,7 @@ test('snapshot recovery preserves selected sort and clears the recovered error',
   let dimensions = { model: response('cache_read', 'desc') };
   let errors = {};
   const context = {
+    document: { hidden: false }, runtimePagePreferences: { current: new Map() },
     useCallback: callback => callback, dimensions, pageSize: 10, dimensionSearch: {},
     selectedProject: null, selectedSession: null, activeFilters: { model: 'chosen' },
     dimensionRequestRefs: { current: { model: { current: {} } } },

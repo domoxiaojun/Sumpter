@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseIdentityAliases, parseRelayEndpoints, identityAliasesText, validateIdentityBindings } from '../src/utils/clientIdentity.js';
+import { parseIdentityAliases, parseRelayEndpoints, identityAliasesText, patchIdentityBinding, validProduct, validateIdentityBindings } from '../src/utils/clientIdentity.js';
 import { CLIENT_CATALOG, CLIENT_VARIANTS } from '../src/utils/clientRegistry.js';
 import { clientAttributionSummary, clientKindLabel } from '../src/utils/helpers.js';
 
@@ -23,7 +23,28 @@ test('token binding validation uses stable IDs and the complete shared variant c
 test('relay configuration retains endpoint IDs without accepting arbitrary source labels', () => {
   const id=`Endpoint-${'a'.repeat(80)}`;
   assert.deepEqual(parseRelayEndpoints(`${id}=home`),{[id]:'home'});
-  for (const value of ['target=bad source','target=home\ntarget=office',`${'x'.repeat(129)}=home`]) assert.throws(()=>parseRelayEndpoints(value));
+  for (const value of ['target', 'target=', '=home', 'target=home=office', 'target=bad source','target=home\ntarget=office',`${'x'.repeat(129)}=home`]) assert.throws(()=>parseRelayEndpoints(value));
+});
+
+test('missing product values never pass validation through string coercion', () => {
+  for (const value of [undefined, null, true, 123, {}, ['codex']]) assert.equal(validProduct(value), false);
+  for (const binding of [{}, { client: null }, { client: 123 }]) assert.throws(() => validateIdentityBindings({ work: binding }));
+  assert.equal(validProduct('undefined'), true, 'an explicitly entered literal is still a valid custom label');
+});
+
+test('binding edits keep optional fields and clearing the product restores automatic detection', () => {
+  const original = { work: { client: 'codex', variant: 'desktop', relaySource: 'office' }, other: { client: 'pi' } };
+  const changed = patchIdentityBinding(original, 'work', 'client', 'my-app');
+  assert.deepEqual(changed.work, { client: 'my-app', variant: 'desktop', relaySource: 'office' });
+  const optional = patchIdentityBinding(changed, 'work', 'variant', '');
+  assert.equal(Object.hasOwn(optional.work, 'variant'), false);
+  const cleared = patchIdentityBinding(optional, 'work', 'client', '');
+  assert.equal(Object.hasOwn(cleared, 'work'), false);
+  assert.deepEqual(cleared.other, original.other);
+  assert.equal(patchIdentityBinding(cleared, 'work', 'variant', 'cli'), cleared);
+  assert.equal(patchIdentityBinding(cleared, 'work', 'relaySource', 'office'), cleared);
+  assert.equal(original.work.client, 'codex');
+  assert.equal(original.work.variant, 'desktop');
 });
 
 test('identity settings survive complete config read-write conversion', async () => {

@@ -18,7 +18,10 @@ use std::{
     marker::PhantomData,
     ops::Deref,
     path::Path,
-    sync::{Arc, OnceLock},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -182,6 +185,7 @@ impl StreamTrait for Session {
 /// the writer never competes with another writer inside an implicit pool.
 pub struct Connection {
     session: Option<Arc<Session>>,
+    progress_enabled: Option<Arc<AtomicBool>>,
 }
 
 #[derive(Clone, Copy)]
@@ -225,8 +229,44 @@ impl Connection {
                 .pragma("cache_size", "-2048")
         });
         let db = run(async move { Database::connect(options).await })?;
+        let progress_enabled = if let Some(cancelled) = read_only
+            .then(crate::query_executor::cancellation)
+            .flatten()
+        {
+            let enabled = Arc::new(AtomicBool::new(true));
+            let callback_enabled = enabled.clone();
+            let pool = db.get_sqlite_connection_pool().clone();
+            run(async move {
+                let mut connection = pool
+                    .acquire()
+                    .await
+                    .map_err(|error| DbErr::Custom(error.to_string()))?;
+                let mut handle = connection
+                    .lock_handle()
+                    .await
+                    .map_err(|error| DbErr::Custom(error.to_string()))?;
+                let mut interrupted = false;
+                handle.set_progress_handler(10_000, move || {
+                    if interrupted
+                        || !callback_enabled.load(Ordering::Relaxed)
+                        || !*cancelled.borrow()
+                    {
+                        return true;
+                    }
+                    // Stop the current statement once; allow the queued
+                    // read-transaction rollback to finish after SQLITE_INTERRUPT.
+                    interrupted = true;
+                    false
+                });
+                Ok(())
+            })?;
+            Some(enabled)
+        } else {
+            None
+        };
         Ok(Self {
             session: Some(Arc::new(Session::Connection(db))),
+            progress_enabled,
         })
     }
 
@@ -287,6 +327,9 @@ impl Connection {
     }
 
     pub fn transaction_with_behavior(&mut self, _: TransactionBehavior) -> Result<Transaction<'_>> {
+        if let Some(enabled) = &self.progress_enabled {
+            enabled.store(true, Ordering::Relaxed);
+        }
         let transaction = self.orm(|db| async move {
             match db.as_ref() {
                 Session::Connection(db) => db.begin().await,
@@ -296,6 +339,7 @@ impl Connection {
         Ok(Transaction {
             connection: Connection {
                 session: Some(Arc::new(Session::Transaction(transaction))),
+                progress_enabled: self.progress_enabled.clone(),
             },
             parent: PhantomData,
         })
@@ -309,12 +353,19 @@ impl Drop for Connection {
             .take()
             .and_then(|session| Arc::try_unwrap(session).ok())
         {
+            let enabled = self.progress_enabled.take();
             let _ = crate::query_executor::without_cancellation(|| {
                 run(async move {
-                    match session {
+                    // Do not disable the handler before the SQLite worker has
+                    // drained the cancelled statement ahead of this cleanup.
+                    let result = match session {
                         Session::Connection(db) => db.close().await,
                         Session::Transaction(db) => db.rollback().await,
+                    };
+                    if let Some(enabled) = enabled {
+                        enabled.store(false, Ordering::Relaxed);
                     }
+                    result
                 })
             });
         }
@@ -337,6 +388,9 @@ impl Deref for Transaction<'_> {
 }
 impl Transaction<'_> {
     pub fn commit(mut self) -> Result<()> {
+        if let Some(enabled) = &self.connection.progress_enabled {
+            enabled.store(false, Ordering::Relaxed);
+        }
         let session = self.connection.session.take().expect("open transaction");
         let session = Arc::try_unwrap(session).map_err(|_| {
             Error::InvalidParameterName("transaction still has an active cursor".into())
@@ -715,6 +769,67 @@ mod tests {
         );
         drop(reader);
         assert_eq!(std::fs::read(&path).unwrap(), before);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelled_count_interrupts_sqlite_before_its_first_row() {
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+        let root = std::env::temp_dir().join(format!(
+            "sumpter-cancel-count-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("test.sqlite3");
+        let writer = Connection::open(&path).unwrap();
+        writer
+            .execute_batch("CREATE TABLE sentinel(value INTEGER); INSERT INTO sentinel VALUES(1);")
+            .unwrap();
+        drop(writer);
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (finished, done) = tokio::sync::oneshot::channel();
+        let query_path = path.clone();
+        let task = tokio::spawn(crate::query_executor::run(move || {
+            let mut reader =
+                Connection::open_with_flags(query_path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+            let transaction = reader.transaction().unwrap();
+            let _ = started.send(());
+            let result = transaction.query_row(
+                "WITH RECURSIVE n(x) AS (SELECT 0 UNION ALL SELECT x+1 FROM n WHERE x<10000)
+                 SELECT COUNT(*) FROM n a,n b,n c",
+                params![],
+                |row| row.get::<_, i64>(0),
+            );
+            drop(transaction);
+            drop(reader);
+            let _ = finished.send(result.is_err());
+        }));
+        ready.await.unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        task.abort();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(3), done)
+                .await
+                .unwrap()
+                .unwrap()
+        );
+        // Cancellation of a read must not poison the next writer or leave a lock.
+        let writer = Connection::open(&path).unwrap();
+        writer
+            .execute("INSERT INTO sentinel VALUES(2)", params![])
+            .unwrap();
+        assert_eq!(
+            writer
+                .query_row("SELECT COUNT(*) FROM sentinel", params![], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        drop(writer);
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -1,3 +1,5 @@
+import { useAppControls, useRuntimePagePreference } from '../context/AppContext.jsx';
+import { statisticsRangeIsLive } from '../utils/statisticsDateRange.js';
 import { useDialogFocus } from '../hooks/useDialogFocus.js';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DataTable } from './DataTable.jsx';
@@ -1696,7 +1698,7 @@ function runtimePriceDateValue(value) {
   return runtimeDateTimeLocal(value, normalizeTimestampMS);
 }
 
-function ExportPanel({ addToast, filters = {}, filterKey }) {
+function ExportPanel({ addToast, filters = {}, filterKey, pageVisible }) {
   const [scope, setScope] = useState('events');
   const [format, setFormat] = useState('jsonl');
   const [privacy, setPrivacy] = useState('stored');
@@ -1705,26 +1707,36 @@ function ExportPanel({ addToast, filters = {}, filterKey }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const estimateGeneration = useRef(0);
+  const estimateAbortRef = useRef(null);
   const queryKey = JSON.stringify({ scope, format, privacy, confirmStored, filterKey });
   useEffect(() => {
     estimateGeneration.current += 1;
+    estimateAbortRef.current?.abort();
+    estimateAbortRef.current = null;
     setEstimate(null);
     setLoading(false);
-    return () => { estimateGeneration.current += 1; };
-  }, [queryKey]);
+    return () => { estimateGeneration.current += 1; estimateAbortRef.current?.abort(); };
+  }, [queryKey, pageVisible]);
   const loadEstimate = async () => {
+    if (!pageVisible) return;
     if (privacy === 'stored' && !confirmStored) {
       setError(new Error('选择 stored 前必须明确确认 SQLite 已存字段范围'));
       return;
     }
     const generation = ++estimateGeneration.current;
+    estimateAbortRef.current?.abort();
+    const controller = new AbortController();
+    estimateAbortRef.current = controller;
     const estimateFilters = runtimeFilterValues(filters);
     setLoading(true); setError(null);
     try {
-      const value = await api.estimateRuntimeExport({ scope, format, privacy, confirmStored, filters: estimateFilters });
+      const value = await api.estimateRuntimeExport({ scope, format, privacy, confirmStored, filters: estimateFilters }, { signal: controller.signal });
       if (generation === estimateGeneration.current) setEstimate({ ...value, filters: estimateFilters });
-    } catch (nextError) { if (generation === estimateGeneration.current) setError(nextError); }
-    finally { if (generation === estimateGeneration.current) setLoading(false); }
+    } catch (nextError) { if (!isAbortError(nextError) && generation === estimateGeneration.current) setError(nextError); }
+    finally {
+      if (estimateAbortRef.current === controller) estimateAbortRef.current = null;
+      if (generation === estimateGeneration.current) setLoading(false);
+    }
   };
   const download = async () => {
     if (!estimate) return loadEstimate();
@@ -1751,10 +1763,11 @@ function ExportPanel({ addToast, filters = {}, filterKey }) {
   );
 }
 
-export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, onRecreateDatabase, openExportSignal = 0, analyticsFilters = {}, analyticsRange = 'today', onAnalyticsRangeChange, facets = null, analyticsRefreshSignal = 0, onProjectSelectionChange, onSessionSelectionChange, projectSelectionResetSignal = 0, legacyAnalytics = null, summaryStorage = null, config = null }) {
-  const [section, setSection] = useState('overview');
+export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, onRecreateDatabase, openExportSignal = 0, analyticsFilters = {}, analyticsRange = 'today', onAnalyticsRangeChange, facets = null, analyticsRefreshSignal = 0, analyticsQueryRevision = 0, onProjectSelectionChange, onSessionSelectionChange, projectSelectionResetSignal = 0, legacyAnalytics = null, summaryStorage = null, config = null }) {
+  const { pageVisible, runtimePagePreferences } = useAppControls();
+  const [section, setSection] = useRuntimePagePreference('stats.board', 'overview');
   const sectionTabRefs = useRef([]);
-  const [range, setRange] = useState(analyticsRange || 'today');
+  const range = analyticsRange || 'today';
   const [trend, setTrend] = useState(null);
   const [trendLoading, setTrendLoading] = useState(false);
   const [trendError, setTrendError] = useState(null);
@@ -1770,7 +1783,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
   const [dimensions, setDimensions] = useState({ endpoint: null, project: null, session: null, model: null });
   const [dimensionLoading, setDimensionLoading] = useState({ endpoint: false, project: false, session: false, model: false });
   const [dimensionError, setDimensionError] = useState({ endpoint: null, project: null, session: null, model: null });
-  const [dimensionSearch, setDimensionSearch] = useState({ endpoint: '', project: '', session: '', model: '' });
+  const [dimensionSearch, setDimensionSearch] = useRuntimePagePreference('stats.dimensionSearch', { endpoint: '', project: '', session: '', model: '' });
   // A project row is a local drill-down, not a replacement for the global
   // project filter. It only narrows the session projection below the tables.
   const [selectedProject, setSelectedProject] = useState(null);
@@ -1804,21 +1817,18 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
   const pageSize = analyticsPageSize;
   const [localDay, setLocalDay] = useState(() => runtimeTodayBounds().from);
   useEffect(() => observeRuntimeDay(setLocalDay), []);
-  const rangeClock = useMemo(() => new Date(), [range, localDay, analyticsRefreshSignal]);
+  const rangeClock = useMemo(() => new Date(), [range, localDay, analyticsRefreshSignal, analyticsQueryRevision, analyticsFilters.customStartDay, analyticsFilters.customEndDay]);
   const activeFilters = useMemo(() => runtimeAnalyticsFilters(range, analyticsFilters, rangeClock), [range, analyticsFilters, rangeClock]);
   // Rolling bounds advance on refresh without resetting the user's drill-down.
   // A new local day is a new "today" query and must discard yesterday's snapshot.
-  const activeQueryKey = useMemo(() => JSON.stringify({ range, filters: runtimeFilterValues(analyticsFilters), localDay: range === 'today' ? localDay : null }), [range, analyticsFilters, localDay]);
+  const activeQueryKey = useMemo(() => JSON.stringify({ range, analyticsQueryRevision, customStartDay: analyticsFilters.customStartDay, customEndDay: analyticsFilters.customEndDay, filters: runtimeFilterValues(analyticsFilters), localDay: range === 'today' ? localDay : null }), [range, analyticsFilters, localDay, analyticsQueryRevision]);
   const lastAnalyticsRefreshSignal = useRef(0);
+  const pendingBoardRefreshRef = useRef(false);
   const previousQueryKeyRef = useRef(activeQueryKey);
 
-  useEffect(() => {
-    const nextRange = String(analyticsRange || 'today');
-    if (nextRange === range) return;
-    setRange(nextRange);
-  }, [analyticsRange]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadTrends = useCallback(async (nextRange = range) => {
+    if (document.hidden) return;
     const request = beginLatestRequest(trendRequestRef);
     setTrendLoading(true); setTrendError(null);
     try {
@@ -1827,11 +1837,13 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     } catch (error) {
       if (!isAbortError(error) && request.isCurrent()) setTrendError(error);
     } finally {
+      request.finish();
       if (request.isCurrent()) setTrendLoading(false);
     }
   }, [activeFilters, range]);
 
   const loadErrors = useCallback(async (page = 1, nextPageSize = errors?.pageSize || pageSize, snapshot = errors) => {
+    if (document.hidden) return;
     const request = beginLatestRequest(errorsRequestRef);
     setErrorsLoading(true); setErrorsError(null);
     try {
@@ -1862,6 +1874,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
   }, [activeFilters, errors, pageSize]);
 
   const loadDiagnostics = useCallback(async () => {
+    if (document.hidden) return;
     const request = beginLatestRequest(diagnosticsRequestRef);
     setDiagnosticsLoading(true); setDiagnosticsError(null);
     try {
@@ -1870,12 +1883,15 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     } catch (error) {
       if (!isAbortError(error) && request.isCurrent()) setDiagnosticsError(error);
     } finally {
+      request.finish();
       if (request.isCurrent()) setDiagnosticsLoading(false);
     }
   }, [activeFilters, range]);
 
-  const loadDimension = useCallback(async (kind, page = 1, nextPageSize = dimensions[kind]?.pageSize || pageSize, search = dimensionSearch[kind] || '', snapshot = dimensions[kind], localSelection = undefined) => {
+  const loadDimension = useCallback(async (kind, page = 1, nextPageSize = dimensions[kind]?.pageSize || pageSize, search = dimensionSearch[kind] || '', snapshot = dimensions[kind] ?? runtimePagePreferences.current.get(`stats.sort.${kind}`), localSelection = undefined) => {
+    if (document.hidden) return;
     if (!['endpoint', 'project', 'session', 'model'].includes(kind)) return;
+    snapshot ??= runtimePagePreferences.current.get(`stats.sort.${kind}`);
     const request = beginLatestRequest(dimensionRequestRefs.current[kind]);
     setDimensionLoading((previous) => ({ ...previous, [kind]: true }));
     setDimensionError((previous) => ({ ...previous, [kind]: null }));
@@ -1928,6 +1944,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
           const normalized = normalizeRuntimePagedResult(value, { page: 1, pageSize: nextPageSize });
           if (!normalized) throw new Error(`${dimensionLabel(kind)}响应不是分页形状`);
           if (request.isCurrent()) {
+            runtimePagePreferences.current.set(`stats.sort.${kind}`, runtimeDimensionSortState(normalized));
             setDimensions((previous) => ({ ...previous, [kind]: normalized }));
             setDimensionError((previous) => ({ ...previous, [kind]: null }));
           }
@@ -1957,12 +1974,14 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
       // replace it with the previous table state.
       if (dimensionRequestRefs.current[kind].current?.pending) return;
       const current = dimensions[kind];
+      if ((current?.page || 1) > 1) return;
       const sortOnly = current ? { sort: current.sort, order: current.order } : null;
       return loadDimension(kind, current?.page || 1, current?.pageSize || pageSize, dimensionSearch[kind] || '', sortOnly);
     }));
   }, [dimensionSearch, dimensions, loadDimension, pageSize]);
 
   const loadStorage = useCallback(async ({ includeStorage = true, includeRetention = false, includePricing = false } = {}) => {
+    if (document.hidden) return;
     const request = beginLatestRequest(storageRequestRef);
     setStorageLoading(true); setStorageError(null);
     try {
@@ -1995,6 +2014,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     } catch (error) {
       if (!isAbortError(error) && request.isCurrent()) setStorageError(error);
     } finally {
+      request.finish();
       if (request.isCurrent()) setStorageLoading(false);
     }
   }, []);
@@ -2086,7 +2106,8 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     // not leave a stale trend/error/dimension table behind the fresh picker
     // counts.  A generation/AbortController in each loader keeps this safe
     // when a filter change and timer tick arrive together.
-    if (!analyticsRefreshSignal || analyticsRefreshSignal === lastAnalyticsRefreshSignal.current) return;
+    if (!pageVisible || !statisticsRangeIsLive(range, analyticsFilters)) { pendingBoardRefreshRef.current = false; return; }
+    if (!analyticsRefreshSignal || (analyticsRefreshSignal === lastAnalyticsRefreshSignal.current && !pendingBoardRefreshRef.current)) return;
     // The section-loading effect below owns the very first board request.
     // AppContext emits its first signal only after the lightweight facets
     // request settles; reloading here would duplicate the in-flight/just
@@ -2096,30 +2117,46 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     const firstSignal = lastAnalyticsRefreshSignal.current === 0;
     lastAnalyticsRefreshSignal.current = analyticsRefreshSignal;
     if (firstSignal) return;
+    const busy = [trendRequestRef, errorsRequestRef, diagnosticsRequestRef, ...Object.values(dimensionRequestRefs.current)]
+      .some(reference => reference.current.pending);
+    if (busy) { pendingBoardRefreshRef.current = true; return; }
+    pendingBoardRefreshRef.current = false;
     if (section === 'overview' || section === 'trends' || section === 'tokens') loadTrends(range);
     if (section === 'overview') refreshDimensions(['endpoint', 'project', 'session', 'model']);
     if (section === 'errors') {
-      if (!errorsRequestRef.current.pending) loadErrors(errors?.page || 1, errors?.pageSize || pageSize, null);
+      if (!errorsRequestRef.current.pending && (errors?.page || 1) === 1) loadErrors(1, errors?.pageSize || pageSize, null);
       loadDiagnostics();
     }
     if (section === 'tokens') refreshDimensions(['endpoint', 'project', 'session', 'model']);
     if (section === 'overview' && showStorageSettings) loadStorage({ includeRetention: true });
-  }, [analyticsRefreshSignal]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [analyticsRefreshSignal, trendLoading, errorsLoading, diagnosticsLoading, dimensionLoading]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (openExportSignal > 0) setShowExport(true);
   }, [openExportSignal]);
   useEffect(() => {
-    if ((section === 'overview' || section === 'trends' || section === 'tokens') && !trend) loadTrends();
-    if (section === 'overview' && !dimensions.endpoint) loadDimensions(['endpoint', 'project', 'session', 'model']);
-    if (section === 'errors' && !errors) loadErrors();
+    if (!pageVisible) return undefined;
+    const live = statisticsRangeIsLive(range, analyticsFilters);
+    if ((section === 'overview' || section === 'trends' || section === 'tokens') && (!trend || live)) loadTrends();
+    if (section === 'overview' && (!dimensions.endpoint || live)) {
+      if (dimensions.endpoint) refreshDimensions(); else loadDimensions();
+    }
+    if (section === 'errors' && (!errors || (live && errors.page === 1))) loadErrors();
     if (section === 'errors' && !diagnostics) loadDiagnostics();
-    if (section === 'tokens' && !dimensions.endpoint) loadDimensions(['endpoint', 'project', 'session', 'model']);
+    if (section === 'tokens' && (!dimensions.endpoint || live)) {
+      if (dimensions.endpoint) refreshDimensions(); else loadDimensions();
+    }
     if (section === 'overview' && !storage) loadStorage();
     if (section === 'tokens' && !pricing) loadStorage({ includeStorage: false, includePricing: true });
     // Load once when entering a section. Individual panels expose Retry, so a
     // failed request must not create an automatic retry loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [section]);
+    return () => {
+      for (const reference of [trendRequestRef, errorsRequestRef, diagnosticsRequestRef, storageRequestRef, ...Object.values(dimensionRequestRefs.current)]) {
+        reference.current.controller?.abort();
+        reference.current = { id: safeNumber(reference.current.id) + 1, controller: null, pending: false };
+      }
+    };
+  }, [section, pageVisible]);
 
   useEffect(() => {
     // Load the independent capacity-reminder setting only when storage
@@ -2403,7 +2440,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
       {section === 'tokens' && <section id="analytics-panel-tokens" role="tabpanel" aria-labelledby="analytics-tab-tokens">
         <CostPanel pricing={pricing} config={config} pricingLoading={storageLoading} pricingError={storageError} onRetryPricing={() => loadStorage({ includeStorage: false, includePricing: true })} onSavePricing={savePricing} trend={trend} legacyAnalytics={legacyAnalytics} costPages={dimensions} costLoading={dimensionLoading} costErrors={dimensionError} costCallbacks={dimensionCallbacks} clientKindFacets={facets?.clientKinds} addToast={addToast} selectedProject={selectedProject} selectedSession={selectedSession} onProjectSelect={selectProject} onSessionSelect={selectSession} onClearProject={clearSelectedProject} onClearSession={clearSelectedSession} />
       </section>}
-      {showExport && <section id="analytics-panel-export" className="runtime-v2-panel" aria-label="运行统计导出"><div className="runtime-v2-panel-header"><div><h2>运行统计导出</h2><p>导出当前筛选下的 SQLite 运行统计字段，不包含诊断正文。</p></div><button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowExport(false)}>关闭</button></div><ExportPanel addToast={addToast} filters={activeFilters} filterKey={activeQueryKey} /></section>}
+      {showExport && <section id="analytics-panel-export" className="runtime-v2-panel" aria-label="运行统计导出"><div className="runtime-v2-panel-header"><div><h2>运行统计导出</h2><p>导出当前筛选下的 SQLite 运行统计字段，不包含诊断正文。</p></div><button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowExport(false)}>关闭</button></div><ExportPanel addToast={addToast} filters={activeFilters} filterKey={activeQueryKey} pageVisible={pageVisible} /></section>}
     </section>
   );
 }

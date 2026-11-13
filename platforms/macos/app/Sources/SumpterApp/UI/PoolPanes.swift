@@ -87,28 +87,9 @@ struct ProvidersPane: View {
             let rows = model.config.endpointRows
             // 顶部摘要区保持双栏：左侧先回答“有哪些入口、当前状态如何”，
             // 右侧集中放转发与重试参数；窗口收窄后再纵向排列。
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .top, spacing: SumpterTheme.Layout.panelSpacing) {
-                    providerOverviewPanel(rows: rows)
-                        .frame(
-                            minWidth: 360,
-                            idealWidth: 420,
-                            maxWidth: 460,
-                            maxHeight: .infinity,
-                            alignment: .topLeading
-                        )
-                    retryPolicyPanel
-                        .frame(
-                            minWidth: 480,
-                            maxWidth: .infinity,
-                            maxHeight: .infinity,
-                            alignment: .topLeading
-                        )
-                }
-                VStack(alignment: .leading, spacing: SumpterTheme.Layout.panelSpacing) {
-                    providerOverviewPanel(rows: rows)
-                    retryPolicyPanel
-                }
+            SumpterAdaptiveColumns(minimumColumnWidth: 420, maximumColumns: 2, spacing: SumpterTheme.Layout.panelSpacing) {
+                providerOverviewPanel(rows: rows)
+                retryPolicyPanel
             }
             modelCatalogSettingsPanel
             // 入口详情平铺在入口列表下方，模型映射再紧随其后，保持一条清晰的
@@ -271,11 +252,6 @@ struct ProvidersPane: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     overviewMetrics(
-                        columns: [
-                            GridItem(.flexible(), spacing: 10),
-                            GridItem(.flexible(), spacing: 10),
-                            GridItem(.flexible(), spacing: 10)
-                        ],
                         rows: rows,
                         enabledCount: enabledCount,
                         mappingCount: mappingCount,
@@ -287,13 +263,12 @@ struct ProvidersPane: View {
     }
 
     private func overviewMetrics(
-        columns: [GridItem],
         rows: [EndpointDisplayRow],
         enabledCount: Int,
         mappingCount: Int,
         catalogModelCount: Int
     ) -> some View {
-        LazyVGrid(columns: columns, spacing: 10) {
+        SumpterAdaptiveColumns(minimumColumnWidth: 130, maximumColumns: 3, spacing: 10) {
             ProviderPolicySummaryItem(title: "入口总数", value: String(rows.count))
             ProviderPolicySummaryItem(title: "已启用", value: String(enabledCount))
             ProviderPolicySummaryItem(title: "未启用", value: String(max(0, rows.count - enabledCount)))
@@ -320,23 +295,15 @@ struct ProvidersPane: View {
             },
             content: {
                 let retry = model.config.retry
-                policyMetrics(
-                    columns: [
-                        GridItem(.flexible(), spacing: 10),
-                        GridItem(.flexible(), spacing: 10),
-                        GridItem(.flexible(), spacing: 10)
-                    ],
-                    retry: retry
-                )
+                policyMetrics(retry: retry)
             }
         )
     }
 
     private func policyMetrics(
-        columns: [GridItem],
         retry: RetryPolicy
     ) -> some View {
-        LazyVGrid(columns: columns, spacing: 10) {
+        SumpterAdaptiveColumns(minimumColumnWidth: 130, maximumColumns: 3, spacing: 10) {
             ProviderPolicySummaryItem(title: "首响应截止", value: timeoutSummary(retry.responseTimeoutSeconds))
             ProviderPolicySummaryItem(title: "流式空闲截止", value: timeoutSummary(retry.streamIdleTimeoutSeconds))
             ProviderPolicySummaryItem(title: "500 失败后切换入口", value: retry.failoverOn500 ? "开启" : "关闭")
@@ -751,17 +718,15 @@ private struct ProviderSummaryPanel<Content: View, Action: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: SumpterTheme.Layout.panelSpacing) {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title)
-                        .font(.headline)
-                    Text(hint)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 8) {
+                SumpterWrappingLayout(horizontalSpacing: 12, verticalSpacing: 8) {
+                    Text(title).font(.headline)
+                    action
                 }
-                Spacer(minLength: 8)
-                action
+                Text(hint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Divider()
             content

@@ -1,3 +1,5 @@
+import { BoundedLRUCache, createPageCacheLifecycle, runtimePageActive } from '../utils/runtimeResources.js';
+import { statisticsDateBounds, statisticsRangeIsLive } from '../utils/statisticsDateRange.js';
 import { createContext, useMemo, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { api, getAuthState, openEventStream, subscribeAuth } from '../services/api.js';
 import { upsertRuntimeEvent, mergeRuntimeEvent } from '../utils/runtimeEvents.js';
@@ -11,6 +13,8 @@ const RuntimeContext = createContext(null);
 
 function normalizeAnalyticsFilters(filters = {}) {
   return {
+    customStartDay: String(filters.customStartDay || ''),
+    customEndDay: String(filters.customEndDay || ''),
     inboundTokenID: String(filters.inboundTokenID || ''),
     clientKind: String(filters.clientKind || ''),
     requestKind: String(filters.requestKind || ''),
@@ -90,10 +94,15 @@ export function AppProvider({ children }) {
   // on the same automatic-refresh cadence without reintroducing a full
   // /runtime/analytics request into the critical path.
   const [analyticsRefreshSignal, setAnalyticsRefreshSignal] = useState(0);
+  const [analyticsQueryRevision, setAnalyticsQueryRevision] = useState(0);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [analyticsError, setAnalyticsError] = useState(null);
   const [analyticsStale, setAnalyticsStale] = useState(false);
   const [runtimeEventDetail, setRuntimeEventDetail] = useState(null);
+  const [pageVisible, setPageVisible] = useState(() => !document.hidden);
+  const [runtimePagesRetained, setRuntimePagesRetained] = useState(true);
+  const runtimePagePreferences = useRef(new Map());
+  const runtimeDataActive = () => runtimePageActive(currentRouteRef.current, !document.hidden);
   const [analyticsRange, setAnalyticsRange] = useState('today');
   const [analyticsFilters, setAnalyticsFilters] = useState({ inboundTokenID: '', clientKind: '', requestKind: '', clientVariant: '', agentRole: '', agentName: '', parentThreadID: '', parentTurnID: '', rootTurnID: '', endpointID: '', project: '', projectID: '', sessionID: '', model: '', requestPurpose: '', outcome: '', failureKind: '', failurePhase: '' });
   const [diagnostics, setDiagnostics] = useState(null);
@@ -112,8 +121,10 @@ export function AppProvider({ children }) {
   const resetGenerationRef = useRef(0);
   const runtimeRefreshTimerRef = useRef(null);
   const coreAbortRef = useRef(null);
+  const statusRequestRef = useRef(null);
   const aggregateAbortRef = useRef(null);
   const analyticsFacetAbortRef = useRef(null);
+  const facetsPendingRef = useRef(false);
   const migrationNoticesRef = useRef(new Set());
   // These refs keep data requests independent from React render identity. In
   // particular, changing analytics filters must not recreate the SSE effect.
@@ -128,7 +139,14 @@ export function AppProvider({ children }) {
   const analyticsSummaryRevisionRef = useRef('');
   const analyticsFacetsRevisionRef = useRef('');
   const eventDetailGenerationRef = useRef(0);
-  const eventDetailCacheRef = useRef(new Map());
+  const eventDetailCacheRef = useRef(new BoundedLRUCache());
+  const eventDetailAbortRef = useRef(null);
+  const reconcileAbortRef = useRef(null);
+  const aggregatePendingRef = useRef(false);
+  const corePendingRef = useRef(false);
+  const autoRefreshRef = useRef(true);
+  const sseBatchRef = useRef(new Map());
+  const sseBatchTimerRef = useRef(null);
 
   configDocRef.current = configDoc;
 
@@ -144,6 +162,12 @@ export function AppProvider({ children }) {
     // controller so cancelling facets never aborts the caller's core
     // status/config request; relay the core controller only when that refresh
     // itself is superseded.
+    if (!runtimeDataActive() || currentRouteRef.current !== 'statistics') return Promise.resolve(null);
+    if (options.coalesce && analyticsFacetAbortRef.current) {
+      facetsPendingRef.current = true;
+      return Promise.resolve(null);
+    }
+    facetsPendingRef.current = false;
     analyticsFacetAbortRef.current?.abort();
     const controller = new AbortController();
     analyticsFacetAbortRef.current = controller;
@@ -177,6 +201,10 @@ export function AppProvider({ children }) {
         parentController?.signal?.removeEventListener('abort', relayAbort);
         if (analyticsFacetAbortRef.current === controller) analyticsFacetAbortRef.current = null;
         if (analyticsGenerationRef.current === generation) setAnalyticsLoading(false);
+        if (facetsPendingRef.current && runtimeDataActive() && currentRouteRef.current === 'statistics') {
+          facetsPendingRef.current = false;
+          void fetchAnalyticsFacets(++analyticsGenerationRef.current);
+        }
       });
   }, []);
 
@@ -195,6 +223,7 @@ export function AppProvider({ children }) {
 
   // Real-time Controls
   const [autoRefresh, setAutoRefresh] = useState(true);
+  autoRefreshRef.current = autoRefresh;
   const [runRefreshInterval, setRunRefreshIntervalState] = useState(() => (
     readRefreshInterval(refreshIntervalStorageKeys.run, 5)
   ));
@@ -323,12 +352,29 @@ export function AppProvider({ children }) {
   useEffect(() => subscribeAuth(setAuth), []);
 
   // Fetch Core Data
+  // Polling and explicit refreshes share the same lightweight status read.
+  const readStatus = useCallback(() => {
+    if (statusRequestRef.current) return statusRequestRef.current.promise;
+    const controller = new AbortController();
+    const request = { controller, promise: null };
+    const timeout = window.setTimeout(() => controller.abort(), 10_000);
+    request.promise = api.getStatus({ signal: controller.signal }).finally(() => {
+      window.clearTimeout(timeout);
+      if (statusRequestRef.current === request) statusRequestRef.current = null;
+    });
+    statusRequestRef.current = request;
+    return request.promise;
+  }, []);
+
   const refreshCore = useCallback(async () => {
     if (!auth.authenticated) return;
+    if (document.hidden && configDocRef.current) return;
+    if (coreAbortRef.current) { corePendingRef.current = true; return; }
     const refreshGeneration = ++coreRefreshGenerationRef.current;
     const eventsCursorAtStart = lastChangeSeqRef.current;
-    const shouldLoadAnalytics = currentRoute === 'statistics';
-    const shouldLoadEvents = currentRoute === 'run';
+    const shouldLoadAnalytics = !document.hidden && currentRouteRef.current === 'statistics';
+    const shouldLoadEvents = !document.hidden && currentRouteRef.current === 'run';
+    const shouldLoadRuntime = shouldLoadAnalytics || shouldLoadEvents;
     let analyticsSnapshotChanged = false;
     coreAbortRef.current?.abort();
     aggregateAbortRef.current?.abort();
@@ -349,21 +395,22 @@ export function AppProvider({ children }) {
       setLastError(null);
       const [confRes, statusRes, summaryRes, eventsRes] = await Promise.all([
         api.getConfig({ signal: controller.signal }),
-        api.getStatus({ signal: controller.signal }),
-        api.getRuntimeSummary({ signal: controller.signal }),
+        readStatus(),
+        shouldLoadRuntime ? api.getRuntimeSummary({ signal: controller.signal }) : Promise.resolve(null),
         shouldLoadEvents
           ? api.getRuntimeEvents({ limit: 10, signal: controller.signal })
           : Promise.resolve({ events: [] }),
       ]);
       if (coreRefreshGenerationRef.current !== refreshGeneration) return;
       requireStatusRuntimeApiV1(statusRes);
+      setConfigDoc((previous) => (sameJSON(previous, confRes) ? previous : confRes));
+      showMigrationNotice(confRes?.migrationNotice);
+      setStatus((previous) => (sameJSON(previous, statusRes) ? previous : statusRes));
+      if (!shouldLoadRuntime) return;
       requireRuntimeApiV1(summaryRes);
       const nextAnalyticsRevision = runtimeSummaryRevision(summaryRes);
       analyticsSnapshotChanged = analyticsSummaryRevisionRef.current !== nextAnalyticsRevision;
       analyticsSummaryRevisionRef.current = nextAnalyticsRevision;
-      setConfigDoc((previous) => (sameJSON(previous, confRes) ? previous : confRes));
-      showMigrationNotice(confRes?.migrationNotice);
-      setStatus((previous) => (sameJSON(previous, statusRes) ? previous : statusRes));
       const nextResetGeneration = Number(summaryRes?.resetGeneration || 0);
       const resetGenerationChanged = nextResetGeneration !== resetGenerationRef.current;
       setRuntime((previous) => {
@@ -420,17 +467,23 @@ export function AppProvider({ children }) {
       window.clearTimeout(timeout);
       if (coreAbortRef.current === controller) coreAbortRef.current = null;
       if (coreRefreshGenerationRef.current === refreshGeneration) setIsLoading(false);
+      if (corePendingRef.current && !document.hidden) {
+        corePendingRef.current = false;
+        queueMicrotask(() => void refreshCore());
+      }
     }
-  }, [addToast, auth.authenticated, currentRoute, fetchAnalyticsFacets, requireRuntimeApiV1, requireStatusRuntimeApiV1, showMigrationNotice]);
+  }, [addToast, auth.authenticated, fetchAnalyticsFacets, readStatus, requireRuntimeApiV1, requireStatusRuntimeApiV1, showMigrationNotice]);
 
   const refreshRuntimeAggregates = useCallback(async () => {
-    if (!auth.authenticated) return false;
+    if (!auth.authenticated || !runtimeDataActive()) return false;
+    if (currentRouteRef.current === 'statistics' && !statisticsRangeIsLive(analyticsRangeRef.current, analyticsFiltersRef.current)) return false;
+    if (aggregateAbortRef.current) { aggregatePendingRef.current = true; return false; }
     const refreshGeneration = ++aggregateRefreshGenerationRef.current;
     aggregateAbortRef.current?.abort();
     const controller = new AbortController();
     aggregateAbortRef.current = controller;
     const timeout = window.setTimeout(() => controller.abort(), 10_000);
-    const shouldLoadAnalytics = currentRoute === 'statistics';
+    const shouldLoadAnalytics = !document.hidden && currentRouteRef.current === 'statistics';
     try {
       const summaryRes = await api.getRuntimeSummary({ signal: controller.signal });
       if (aggregateRefreshGenerationRef.current !== refreshGeneration) return false;
@@ -456,8 +509,8 @@ export function AppProvider({ children }) {
         });
       }
       if (shouldLoadAnalytics && analyticsSnapshotChanged) {
-        const analyticsGeneration = ++analyticsGenerationRef.current;
-        void fetchAnalyticsFacets(analyticsGeneration, controller, { notifyWorkspace: false });
+        const analyticsGeneration = analyticsFacetAbortRef.current ? analyticsGenerationRef.current : ++analyticsGenerationRef.current;
+        void fetchAnalyticsFacets(analyticsGeneration, controller, { notifyWorkspace: false, coalesce: true });
         setAnalyticsRefreshSignal((current) => current + 1);
       }
       return Number(summaryRes?.storage?.pendingEvents || 0) > 0;
@@ -473,11 +526,15 @@ export function AppProvider({ children }) {
     } finally {
       window.clearTimeout(timeout);
       if (aggregateAbortRef.current === controller) aggregateAbortRef.current = null;
+      if (aggregatePendingRef.current && runtimeDataActive()) {
+        aggregatePendingRef.current = false;
+        queueMicrotask(() => void refreshRuntimeAggregates());
+      }
     }
-  }, [auth.authenticated, currentRoute, fetchAnalyticsFacets, refreshCore, requireRuntimeApiV1]);
+  }, [auth.authenticated, fetchAnalyticsFacets, refreshCore, requireRuntimeApiV1]);
 
   const scheduleRuntimeAggregatesRefresh = useCallback((delay = 1200) => {
-    if (runtimeRefreshTimerRef.current != null) return;
+    if (!runtimeDataActive() || !autoRefreshRef.current || runtimeRefreshTimerRef.current != null) return;
     runtimeRefreshTimerRef.current = window.setTimeout(async () => {
       runtimeRefreshTimerRef.current = null;
       try {
@@ -500,10 +557,12 @@ export function AppProvider({ children }) {
   ) => {
     const nextRange = String(range || 'today');
     const nextFilters = normalizeAnalyticsFilters(filters);
+    if (nextRange === 'custom') statisticsDateBounds(nextFilters.customStartDay, nextFilters.customEndDay);
     analyticsRangeRef.current = nextRange;
     analyticsFiltersRef.current = nextFilters;
     setAnalyticsRange(nextRange);
     setAnalyticsFilters(nextFilters);
+    setAnalyticsQueryRevision(value => value + 1);
     const generation = ++analyticsGenerationRef.current;
     setAnalyticsLoading(true);
     setAnalyticsError(null);
@@ -513,7 +572,9 @@ export function AppProvider({ children }) {
 
   const loadRuntimeEvent = useCallback(async (id, expectedChangeSeq = 0) => {
     const generation = ++eventDetailGenerationRef.current;
-    if (!id) {
+    eventDetailAbortRef.current?.abort();
+    eventDetailAbortRef.current = null;
+    if (!id || !runtimeDataActive()) {
       setRuntimeEventDetail(null);
       return null;
     }
@@ -522,18 +583,22 @@ export function AppProvider({ children }) {
       setRuntimeEventDetail(cached);
       return cached;
     }
+    const controller = new AbortController();
+    eventDetailAbortRef.current = controller;
     try {
-      const fetched = await api.getRuntimeEvent(id);
-      if (eventDetailGenerationRef.current !== generation) return null;
+      const fetched = await api.getRuntimeEvent(id, { signal: controller.signal });
+      if (controller.signal.aborted || eventDetailGenerationRef.current !== generation) return null;
       const latest = eventDetailCacheRef.current.get(id);
       const value = latest && Number(latest.changeSeq || 0) > Number(fetched.changeSeq || 0) ? latest : fetched;
       eventDetailCacheRef.current.set(id, value);
-      if (eventDetailCacheRef.current.size > 200) eventDetailCacheRef.current.delete(eventDetailCacheRef.current.keys().next().value);
+
       setRuntimeEventDetail(value);
       return value;
     } catch (error) {
-      if (eventDetailGenerationRef.current !== generation) return null;
+      if (controller.signal.aborted || eventDetailGenerationRef.current !== generation) return null;
       throw error;
+    } finally {
+      if (eventDetailAbortRef.current === controller) eventDetailAbortRef.current = null;
     }
   }, []);
 
@@ -548,6 +613,11 @@ export function AppProvider({ children }) {
   const exportRuntimeSession = useCallback((sessionID) => api.exportRuntimeSession(sessionID), []);
 
   const reconcileRuntimeChanges = useCallback(async () => {
+    if (!runtimeDataActive() || !autoRefreshRef.current || currentRouteRef.current !== 'run') return 'none';
+    if (reconcileAbortRef.current) return 'none';
+    const controller = new AbortController();
+    reconcileAbortRef.current = controller;
+    try {
     // A zero cursor is not proof that there is nothing to reconcile: it can
     // mean a fresh daemon, an old event page, or a reset. Fetch the newest
     // page so the periodic fallback can recover even while SSE is open.
@@ -556,10 +626,11 @@ export function AppProvider({ children }) {
       return 'core';
     }
     const result = await fetchRuntimeChanges({
-      fetchPage: (params) => api.getRuntimeEvents(params),
+      fetchPage: (params) => api.getRuntimeEvents({ ...params, signal: controller.signal }),
       afterChangeSeq: lastChangeSeqRef.current,
       resetGeneration: resetGenerationRef.current,
     });
+    if (controller.signal.aborted || !runtimeDataActive()) return 'none';
     if (!result.valid) {
       await refreshCore();
       return 'core';
@@ -585,6 +656,9 @@ export function AppProvider({ children }) {
     if (result.resetGeneration != null) resetGenerationRef.current = Number(result.resetGeneration);
     lastChangeSeqRef.current = Math.max(lastChangeSeqRef.current, Number(result.lastChangeSeq || 0));
     return 'changes';
+    } finally {
+      if (reconcileAbortRef.current === controller) reconcileAbortRef.current = null;
+    }
   }, [refreshCore]);
 
   const loadMoreRuntimeEvents = useCallback(async ({ pages = 5 } = {}) => {
@@ -635,6 +709,59 @@ export function AppProvider({ children }) {
     return lastPage || { events: [], hasMore: false };
   }, [refreshCore, runtime?.eventPage?.events, runtime?.resetGeneration]);
 
+  const cancelRuntimeDataRequests = useCallback(() => {
+    statusRequestRef.current?.controller.abort();
+    statusRequestRef.current = null;
+    ++coreRefreshGenerationRef.current;
+    ++aggregateRefreshGenerationRef.current;
+    ++analyticsGenerationRef.current;
+    ++eventDetailGenerationRef.current;
+    for (const reference of [coreAbortRef, aggregateAbortRef, analyticsFacetAbortRef, eventDetailAbortRef, reconcileAbortRef]) {
+      reference.current?.abort(); reference.current = null;
+    }
+    for (const reference of [runtimeRefreshTimerRef, sseBatchTimerRef]) {
+      if (reference.current != null) window.clearTimeout(reference.current);
+      reference.current = null;
+    }
+    corePendingRef.current = false;
+    aggregatePendingRef.current = false;
+    facetsPendingRef.current = false;
+    sseBatchRef.current.clear();
+    setAnalyticsLoading(false);
+  }, []);
+
+  useEffect(() => {
+    const lifecycle = createPageCacheLifecycle({
+      onVisibility: setPageVisible,
+      onRetain: () => setRuntimePagesRetained(true),
+      cancelRequests: cancelRuntimeDataRequests,
+      release: () => {
+        eventDetailCacheRef.current.clear();
+        setRuntimeEventDetail(null);
+        setRuntime(null);
+        setRuntimeFacets(null);
+        setRuntimeAnalytics(null);
+        analyticsFacetsRevisionRef.current = '';
+        analyticsSummaryRevisionRef.current = '';
+        lastChangeSeqRef.current = 0;
+        setRuntimePagesRetained(false);
+      },
+    });
+    const update = () => lifecycle.update(!document.hidden);
+    update();
+    document.addEventListener('visibilitychange', update);
+    return () => { lifecycle.dispose(); document.removeEventListener('visibilitychange', update); };
+  }, [cancelRuntimeDataRequests]);
+
+  const previousRuntimePage = useRef(`${currentRoute}:${pageVisible}`);
+  useEffect(() => {
+    const key = `${currentRoute}:${pageVisible}`;
+    if (previousRuntimePage.current === key) return;
+    previousRuntimePage.current = key;
+    cancelRuntimeDataRequests();
+    if (pageVisible && auth.authenticated && !authLoading) void refreshCore();
+  }, [currentRoute, pageVisible, auth.authenticated, authLoading, refreshCore, cancelRuntimeDataRequests]);
+
   // Initial session check. Protected APIs must never be called before this resolves.
   useEffect(() => {
     let cancelled = false;
@@ -648,6 +775,8 @@ export function AppProvider({ children }) {
     if (authLoading || !auth.authenticated) {
       streamRef.current?.close();
       streamRef.current = null;
+      statusRequestRef.current?.controller.abort();
+      statusRequestRef.current = null;
       setStreamConnected(false);
       setIsLoading(false);
       return undefined;
@@ -656,29 +785,31 @@ export function AppProvider({ children }) {
     streamRef.current?.close();
     streamRef.current = openEventStream({
       onRuntimeChange: (change) => {
-        if (!change?.seq || !change?.changeSeq) {
-          refreshCore();
-          return;
-        }
-        lastChangeSeqRef.current = Math.max(lastChangeSeqRef.current, Number(change?.changeSeq || 0));
-        setRuntime((previous) => ({
-          ...(previous || {}),
-          lastChangeSeq: change?.changeSeq,
-          recentEvents: upsertRuntimeEvent(previous?.recentEvents, {
-            ...(change?.event || change),
-            seq: change?.seq,
-            changeSeq: change?.changeSeq,
-          }),
-        }));
-        const priorDetail = eventDetailCacheRef.current.get(change.event.id);
-        const incoming = { ...change.event, seq: change.seq, changeSeq: change.changeSeq };
-        if (!priorDetail || Number(priorDetail.changeSeq || 0) <= Number(change.changeSeq)) {
-          const updated = { ...change, event: mergeRuntimeEvent(priorDetail?.event, incoming) };
-          if (incoming.detailsOmitted !== true || priorDetail) eventDetailCacheRef.current.set(change.event.id, updated);
-          if (eventDetailCacheRef.current.size > 200) eventDetailCacheRef.current.delete(eventDetailCacheRef.current.keys().next().value);
-          setRuntimeEventDetail((previous) => previous?.event?.id === change.event.id ? updated : previous);
-        }
-        scheduleRuntimeAggregatesRefresh();
+        if (!autoRefreshRef.current || !runtimeDataActive()) return;
+        if (!change?.seq || !change?.changeSeq) { refreshCore(); return; }
+        if (currentRouteRef.current !== 'run') { scheduleRuntimeAggregatesRefresh(); return; }
+        lastChangeSeqRef.current = Math.max(lastChangeSeqRef.current, Number(change.changeSeq));
+        const previous = sseBatchRef.current.get(change.event.id);
+        if (!previous || previous.changeSeq < change.changeSeq) sseBatchRef.current.set(change.event.id, change);
+        if (sseBatchTimerRef.current != null) return;
+        sseBatchTimerRef.current = window.setTimeout(() => {
+          sseBatchTimerRef.current = null;
+          const batch = [...sseBatchRef.current.values()];
+          sseBatchRef.current.clear();
+          if (!runtimeDataActive() || !autoRefreshRef.current || currentRouteRef.current !== 'run') return;
+          const changes = batch.map(change => ({ ...change.event, seq: change.seq, changeSeq: change.changeSeq }));
+          setRuntime(previous => ({ ...(previous || {}), recentEvents: mergeRuntimeListItems(previous?.recentEvents || [], changes),
+            lastChangeSeq: Math.max(...changes.map(change => change.changeSeq)) }));
+          for (const change of batch) {
+            const prior = eventDetailCacheRef.current.peek(change.event.id);
+            const incoming = { ...change.event, seq: change.seq, changeSeq: change.changeSeq };
+            if (prior && Number(prior.changeSeq || 0) > Number(change.changeSeq)) continue;
+            const updated = { ...change, event: mergeRuntimeEvent(prior?.event, incoming) };
+            if (prior) eventDetailCacheRef.current.set(change.event.id, updated);
+            setRuntimeEventDetail(previous => previous?.event?.id === change.event.id ? updated : previous);
+          }
+          scheduleRuntimeAggregatesRefresh();
+        }, 50);
       },
       onConfigReloaded: () => refreshCore(),
       onModelCatalogUpdated: () => refreshCore(),
@@ -704,6 +835,8 @@ export function AppProvider({ children }) {
     return () => {
       streamRef.current?.close();
       streamRef.current = null;
+      statusRequestRef.current?.controller.abort();
+      statusRequestRef.current = null;
       coreAbortRef.current?.abort();
       coreAbortRef.current = null;
       aggregateAbortRef.current?.abort();
@@ -716,13 +849,14 @@ export function AppProvider({ children }) {
   useEffect(() => {
     if (!autoRefresh || !auth.authenticated || authLoading) return;
     const statisticsPage = currentRoute === 'statistics';
-    const interval = statisticsPage ? statisticsRefreshInterval : runRefreshInterval;
+    const interval = !pageVisible ? 15 : statisticsPage ? statisticsRefreshInterval : runRefreshInterval;
     const timer = setInterval(() => {
-      if (document.hidden) return; // Background throttle
-      api.getStatus().then((nextStatus) => {
+      readStatus().then((nextStatus) => {
         requireStatusRuntimeApiV1(nextStatus);
         setStatus((previous) => (sameJSON(previous, nextStatus) ? previous : nextStatus));
       }).catch(() => {});
+      if (document.hidden || !runtimeDataActive()) return;
+      if (statisticsPage && !statisticsRangeIsLive(analyticsRangeRef.current, analyticsFiltersRef.current)) return;
       if (statisticsPage && streamConnected) {
         reconcileRuntimeChanges()
           // reconcileRuntimeChanges may already have performed a full core
@@ -740,6 +874,8 @@ export function AppProvider({ children }) {
     }, interval * 1000);
     return () => clearInterval(timer);
   }, [
+    pageVisible,
+    readStatus,
     autoRefresh,
     auth.authenticated,
     authLoading,
@@ -823,6 +959,9 @@ export function AppProvider({ children }) {
 
   const value = useMemo(() => ({
     currentRoute,
+    pageVisible,
+    runtimePagesRetained,
+    runtimePagePreferences,
     navigate,
     registerNavigationGuard,
     canLeavePage,
@@ -859,13 +998,14 @@ export function AppProvider({ children }) {
     refreshCore,
     toggleProxy,
     saveConfig,
-  }), [currentRoute, navigate, theme, configDoc, status, diagnostics, autostart, isLoading, lastError, auth, authLoading, login, logout, autoRefresh, setAutoRefresh, refreshIntervalOptions, runRefreshInterval, setRunRefreshInterval, statisticsRefreshInterval, setStatisticsRefreshInterval, streamConnected, toasts, addToast, removeToast, isCommandOpen, setIsCommandOpen, activeModal, refreshCore, toggleProxy, saveConfig]);
+  }), [currentRoute, pageVisible, runtimePagesRetained, navigate, theme, configDoc, status, diagnostics, autostart, isLoading, lastError, auth, authLoading, login, logout, autoRefresh, setAutoRefresh, refreshIntervalOptions, runRefreshInterval, setRunRefreshInterval, statisticsRefreshInterval, setStatisticsRefreshInterval, streamConnected, toasts, addToast, removeToast, isCommandOpen, setIsCommandOpen, activeModal, refreshCore, toggleProxy, saveConfig]);
 
   const runtimeValue = useMemo(() => ({
     runtime,
     runtimeAnalytics,
     runtimeFacets,
     analyticsRefreshSignal,
+    analyticsQueryRevision,
     analyticsLoading,
     analyticsError,
     analyticsStale,
@@ -877,7 +1017,7 @@ export function AppProvider({ children }) {
     deleteRuntimeSession,
     exportRuntimeSession,
     loadMoreRuntimeEvents,
-  }), [runtime, runtimeAnalytics, runtimeFacets, analyticsRefreshSignal, analyticsLoading, analyticsError, analyticsStale, runtimeEventDetail, analyticsRange, analyticsFilters, loadRuntimeAnalytics, loadRuntimeEvent, deleteRuntimeSession, exportRuntimeSession, loadMoreRuntimeEvents]);
+  }), [runtime, runtimeAnalytics, runtimeFacets, analyticsRefreshSignal, analyticsQueryRevision, analyticsLoading, analyticsError, analyticsStale, runtimeEventDetail, analyticsRange, analyticsFilters, loadRuntimeAnalytics, loadRuntimeEvent, deleteRuntimeSession, exportRuntimeSession, loadMoreRuntimeEvents]);
 
   return <AppContext.Provider value={value}><RuntimeContext.Provider value={runtimeValue}>{children}</RuntimeContext.Provider></AppContext.Provider>;
 }
@@ -892,4 +1032,13 @@ export function useApp() {
   const controls = useAppControls();
   const runtime = useContext(RuntimeContext);
   return { ...controls, ...runtime };
+}
+
+// Session-only UI preferences survive the release of bulky page results.
+export function useRuntimePagePreference(key, initialValue) {
+  const { runtimePagePreferences } = useAppControls();
+  const [value, setValue] = useState(() => runtimePagePreferences.current.has(key)
+    ? runtimePagePreferences.current.get(key) : (typeof initialValue === 'function' ? initialValue() : initialValue));
+  useEffect(() => { runtimePagePreferences.current.set(key, value); }, [key, value, runtimePagePreferences]);
+  return [value, setValue];
 }

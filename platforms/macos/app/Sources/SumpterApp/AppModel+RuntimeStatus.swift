@@ -182,8 +182,45 @@ extension AppModel {
         loadLatestEvents: Bool = false,
         reconcileEvents: Bool = false
     ) async {
+        guard !Task.isCancelled else { return }
+        if statusRefreshTask != nil {
+            statusRefreshPending = true
+            statusRefreshWantsLatest = statusRefreshWantsLatest || loadLatestEvents
+            statusRefreshWantsReconcile = statusRefreshWantsReconcile || reconcileEvents
+            return
+        }
         refreshRequestGeneration &+= 1
         let generation = refreshRequestGeneration
+        let task = Task<Void, Never> { [weak self] in
+            guard let self else { return }
+            await self.performStatusRefresh(loadLatestEvents: loadLatestEvents,
+                                           reconcileEvents: reconcileEvents,
+                                           generation: generation)
+        }
+        statusRefreshTask = task
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    private func performStatusRefresh(loadLatestEvents: Bool, reconcileEvents: Bool, generation: Int) async {
+        defer {
+            if generation == refreshRequestGeneration {
+                statusRefreshTask = nil
+                let latest = statusRefreshWantsLatest
+                let reconcile = statusRefreshWantsReconcile
+                let pending = statusRefreshPending
+                statusRefreshPending = false
+                statusRefreshWantsLatest = false
+                statusRefreshWantsReconcile = false
+                if pending && !Task.isCancelled {
+                    Task { [weak self] in await self?.refreshStatus(loadLatestEvents: latest, reconcileEvents: reconcile) }
+                }
+            }
+        }
+        guard !Task.isCancelled, generation == refreshRequestGeneration else { return }
         let eventsCursorAtStart = runtimeChangeSeq
         advanceRunOverviewDay()
         guard sidecar.isRunning, let admin else {
@@ -205,7 +242,7 @@ extension AppModel {
         do {
             status = try await admin.status()
         } catch {
-            guard generation == refreshRequestGeneration else { return }
+            guard !Task.isCancelled, generation == refreshRequestGeneration else { return }
             // Only the liveness request controls the unreachable state.
             if sidecarState != .unreachable { sidecarState = .unreachable }
             if statusText != "引擎无响应" { statusText = "引擎无响应" }
@@ -213,12 +250,15 @@ extension AppModel {
             if evaluated != health { health = evaluated }
             return
         }
-        guard generation == refreshRequestGeneration else { return }
+        guard !Task.isCancelled, generation == refreshRequestGeneration else { return }
         guard status.runtimeApiVersion == nil || status.runtimeApiVersion == Self.runtimeAPIVersion else {
             lastError = "daemon 运行统计 API 版本为 v\(status.runtimeApiVersion ?? -1)，App 需要 v\(Self.runtimeAPIVersion)。请同步升级。"
             return
         }
 
+        guard !Task.isCancelled else { return }
+        applyDaemonStatus(status)
+        guard runtimeDataVisible else { return }
         var summary: AdminWire.RuntimeSummary?
         do {
             let value = try await admin.runtimeSummary()
@@ -228,32 +268,32 @@ extension AppModel {
                 )
             }
             summary = value
-            guard generation == refreshRequestGeneration else { return }
+            guard !Task.isCancelled, generation == refreshRequestGeneration else { return }
             runtimeSummaryError = nil
         } catch {
-            guard generation == refreshRequestGeneration else { return }
+            guard !Task.isCancelled, generation == refreshRequestGeneration else { return }
             runtimeSummaryError = "\(error)"
         }
 
         var page: AdminWire.RuntimeEventPage?
-        if loadLatestEvents || runtimePage == nil {
+        if runPageVisible && (loadLatestEvents || runtimePage == nil) {
             do {
                 page = try await admin.runtimeEvents(limit: 10)
                 runtimeEventsError = nil
             } catch {
-                guard generation == refreshRequestGeneration else { return }
+                guard !Task.isCancelled, generation == refreshRequestGeneration else { return }
                 runtimeEventsError = "\(error)"
             }
         }
-        guard generation == refreshRequestGeneration else { return }
+        guard !Task.isCancelled, generation == refreshRequestGeneration else { return }
 
         if let summary {
             let resetGenerationChanged = runtimeSummary.map {
                 $0.resetGeneration != summary.resetGeneration
             } ?? false
-            if resetGenerationChanged, page == nil {
+            if resetGenerationChanged, page == nil, runPageVisible {
                 page = try? await admin.runtimeEvents(limit: 10)
-                guard generation == refreshRequestGeneration else { return }
+                guard !Task.isCancelled, generation == refreshRequestGeneration else { return }
             }
             if resetGenerationChanged {
                 resetRunOverview()
@@ -266,6 +306,7 @@ extension AppModel {
                 runHistoryError = nil
             }
             let counters = summary.counters
+            if runtimeSummary?.counters != counters || resetGenerationChanged { runtimeFacetsDirty = true }
             let existing = RuntimeEvent.indexedByID(runtime.recentEvents)
             let mergedEvents = page?.events.map { $0.mergedRuntimeEvent(with: existing[$0.id]) } ?? runtime.recentEvents
             let snapshot = RuntimeSnapshot(
@@ -302,28 +343,20 @@ extension AppModel {
                 runtimeChangeSeq = resetGenerationChanged ? pageCursor : max(runtimeChangeSeq, pageCursor)
             }
         }
-        if !isProxyRunning { isProxyRunning = true }
-        if sidecarState != .running { sidecarState = .running }
-        if endpointCount != status.endpoints { endpointCount = status.endpoints }
-        if engineGeneration != status.generation { engineGeneration = status.generation }
-        // status.lastError is the daemon's own operational error only.
-        if lastError != status.lastError { lastError = status.lastError }
-        if statusText != "运行中" { statusText = "运行中" }
-        let evaluatedHealth = ProxyHealthEvaluator.evaluate(events: runtime.recentEvents, isRunning: true)
-        if evaluatedHealth != health { health = evaluatedHealth }
-
-        if reconcileEvents && autoRefreshEnabled && !loadLatestEvents {
+        if runPageVisible && reconcileEvents && autoRefreshEnabled && !loadLatestEvents {
             await reconcileRuntimeChanges(using: admin)
         }
         // SSE announces before SQLite commits. A quiet connection may have no
         // later notice, so the normal polling cycle must advance page 1 too.
-        if autoRefreshEnabled, !statisticsVisible, runHistoryPage?.page == 1, !runHistoryLoading {
-            refreshRunHistory(resetSnapshot: true)
+        if runPageVisible, runHistoryPage == nil || (autoRefreshEnabled && runHistoryPage?.page == 1) {
+            refreshRunHistory(resetSnapshot: true, coalescing: true)
         }
         refreshRunOverviewIfDue(force: loadLatestEvents)
     }
 
     func resetRunOverview() {
+        runOverviewTask?.cancel()
+        runOverviewTask = nil
         runOverviewRequestGeneration &+= 1
         runOverviewTotals = nil
         runOverviewFailed = false
@@ -348,8 +381,9 @@ extension AppModel {
     /// Trends aggregate the local calendar day, independently of pagination
     /// and of the statistics page's selected range and filters.
     func refreshRunOverviewIfDue(force: Bool = false) {
-        guard sidecar.isRunning, admin != nil, !statisticsVisible,
+        guard runPageVisible, sidecar.isRunning, admin != nil,
               autoRefreshEnabled || force else { return }
+        if runOverviewTask != nil { runOverviewRefreshPending = runOverviewRefreshPending || force; return }
         let due = lastRunOverviewRefreshAt.map { Date().timeIntervalSince($0) >= 15 } ?? true
         guard force || due else { return }
         runOverviewRequestGeneration &+= 1
@@ -358,8 +392,17 @@ extension AppModel {
         let resetGeneration = runtimeSummary?.resetGeneration
         let filter = RunOverviewScope.filter()
         lastRunOverviewRefreshAt = Date()
-        Task { [weak self] in
+        runOverviewTask = Task { [weak self] in
             guard let self, let admin = self.admin else { return }
+            defer {
+                if generation == self.runOverviewRequestGeneration {
+                    self.runOverviewTask = nil
+                    if self.runOverviewRefreshPending {
+                        self.runOverviewRefreshPending = false
+                        self.refreshRunOverviewIfDue(force: true)
+                    }
+                }
+            }
             do {
                 let series = try await admin.runtimeTrends(
                     range: RunOverviewScope.range,

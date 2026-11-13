@@ -15,6 +15,7 @@ final class StatusItemController: NSObject {
     private let settingsWindow: SettingsWindowController
     private let updater: AppUpdateController
     private var indicatorObserver: AnyCancellable?
+    private var lastIndicatorKey: String?
 
     init(model: AppModel, updater: AppUpdateController = .shared) {
         self.model = model
@@ -34,7 +35,7 @@ final class StatusItemController: NSObject {
         // `AppModel.indicator` 是 computed,没有自己的 publisher;订阅 objectWillChange
         // 后经主队列延一拍再读,否则读到的还是变更前的值。
         indicatorObserver = model.objectWillChange
-            .receive(on: DispatchQueue.main)
+            .debounce(for: .milliseconds(50), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in self?.refreshIcon() }
     }
 
@@ -43,6 +44,9 @@ final class StatusItemController: NSObject {
     private func refreshIcon() {
         guard let button = statusItem.button else { return }
         let indicator = model.indicator
+        let key = "\(indicator.label)|\(indicator.dotStyle)|\(button.effectiveAppearance.name.rawValue)"
+        guard key != lastIndicatorKey else { return }
+        lastIndicatorKey = key
         button.image = MenuBarIconImage.image(dotColor: Self.dotColor(for: indicator))
         button.toolTip = "Sumpter · \(indicator.label)"
         button.setAccessibilityLabel("Sumpter · \(indicator.label)")
@@ -168,9 +172,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let window = window ?? makeWindow()
         self.window = window
         windowVisibility.isVisible = true
-        if model.statisticsVisible {
-            model.refreshStatisticsIfNeeded(force: true)
-        }
+        model.setRuntimeWindowVisible(true)
         // LSUIElement apps normally use the accessory policy and therefore do
         // not participate in Cmd+Tab.  A user-visible settings window is a
         // regular app window; switching to another app must leave this policy
@@ -183,12 +185,14 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     func hide() {
         windowVisibility.isVisible = false
+        model.setRuntimeWindowVisible(false)
         window?.orderOut(nil)
         restoreAccessoryPolicy()
     }
 
     func windowWillClose(_ notification: Notification) {
         windowVisibility.isVisible = false
+        model.setRuntimeWindowVisible(false)
         restoreAccessoryPolicy()
     }
 

@@ -282,11 +282,17 @@ final class AppModel: ObservableObject {
     }() {
         didSet { UserDefaults.standard.set(runHistoryPageSize, forKey: runHistoryPageSizeDefaultsKey) }
     }
+    @Published var runEventSortAscending = false
     @Published var runHistoryKindFilter = "client"
     @Published var runHistoryOutcomeFilter = ""
     @Published var runHistoryLoading = false
     @Published var runHistoryError: String?
     @Published var runtimeAnalyticsRange = "today"
+    @Published var runtimeCustomDateEditorVisible = false
+    @Published var runtimeCustomDateStart = Date()
+    @Published var runtimeCustomDateEnd = Date()
+    @Published var runtimeCustomDateRange: StatisticsDateRange?
+    @Published var runtimeCustomDateError: String?
     @Published var runtimeAnalyticsClientKind = ""
     @Published var runtimeAnalyticsRequestKind = ""
     @Published var runtimeAnalyticsInboundTokenID = ""
@@ -520,17 +526,35 @@ final class AppModel: ObservableObject {
     var runtimeExportRequestGeneration = 0
     var runtimeExportEstimateRequestGeneration = 0
     var statisticsBoard = "overview"
+    var runtimeDiagnosticSortPreferences: [String: [KeyPathComparator<UsageAggregateRow>]] = [:]
+    var runtimeEndpointSortPreference = [KeyPathComparator<AdminWire.RuntimeDimensionRow>(\.lastSeen, order: .reverse)]
+    var runtimeProjectSortPreference = [KeyPathComparator<AdminWire.RuntimeDimensionRow>(\.lastSeen, order: .reverse)]
+    var runtimeSessionSortPreference = [KeyPathComparator<AdminWire.RuntimeDimensionRow>(\.lastSeen, order: .reverse)]
+    var runtimeModelSortPreference = [KeyPathComparator<AdminWire.RuntimeDimensionRow>(\.lastSeen, order: .reverse)]
     var runtimeRequestChainTask: Task<Void, Never>?
     var runtimeSnapshotTask: Task<Void, Never>?
     var runtimeFacetsTask: Task<Void, Never>?
     var runtimeDimensionTask: Task<Void, Never>?
     var runtimeErrorTask: Task<Void, Never>?
+    var runtimeExportEstimateTask: Task<Void, Never>?
     var runHistoryTask: Task<Void, Never>?
     var lastRuntimeAnalyticsRefreshAt: Date?
     var lastRuntimeV2RefreshAt: Date?
     var lastRuntimeFacetsRefreshAt: Date?
     var detailRequestGeneration = 0
-    var runtimeEventDetails: [String: AdminWire.RuntimeEventDetail] = [:]
+    var runtimeEventDetails = BoundedLRUCache<String, AdminWire.RuntimeEventDetail>()
+    let runtimeViewState = RuntimeViewState()
+    var runtimeCacheReleaseTask: Task<Void, Never>?
+    var runtimeMemoryPressureSource: DispatchSourceMemoryPressure?
+    var runtimeEventDetailTask: Task<Void, Never>?
+    var runOverviewTask: Task<Void, Never>?
+    var runOverviewRefreshPending = false
+    var statusRefreshTask: Task<Void, Never>?
+    var statusRefreshPending = false
+    var statusRefreshWantsLatest = false
+    var statusRefreshWantsReconcile = false
+    var runHistoryRefreshPending = false
+    var runtimeFacetsDirty = true
     var diagnosticCaptureRequestGeneration = 0
     var diagnosticCaptureDetailRequestGeneration = 0
     var diagnosticCaptureExportRequestGeneration = 0
@@ -558,6 +582,7 @@ final class AppModel: ObservableObject {
 
     init(startServices: Bool = true) {
         guard startServices else { return }
+        observeRuntimeMemoryPressure()
         Task { await bootstrap() }
         startStatusPolling()
     }
@@ -570,22 +595,22 @@ final class AppModel: ObservableObject {
             while !Task.isCancelled {
                 guard let self else { return }
                 let enabled = self.autoRefreshEnabled
-                let interval = max(1, self.runtimeAutoRefreshIntervalSeconds)
+                let interval = self.runtimeViewState.windowVisible ? max(1, self.runtimeAutoRefreshIntervalSeconds) : 15
                 do {
                     try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
                 } catch {
                     return
                 }
-                guard !Task.isCancelled, enabled else { continue }
+                guard !Task.isCancelled, enabled, self.autoRefreshEnabled else { continue }
                 // 事件/summary 走当前间隔；完整 legacy analytics 不再进入
                 // 常规轮询。统计页的 facets 与 v3 快照按较慢的统计间隔
                 // 刷新，避免每 1~2 秒重算整张 SQLite 看板。
-                if self.statisticsVisible {
+                if self.statisticsPageVisible && self.statisticsRangeIsLive {
                     let statisticsInterval = max(1, self.statisticsAutoRefreshIntervalSeconds)
                     let facetsDue = self.lastRuntimeFacetsRefreshAt.map {
                         Date().timeIntervalSince($0) >= statisticsInterval
                     } ?? true
-                    if facetsDue { self.reloadRuntimeFacets() }
+                    if facetsDue && self.runtimeFacetsDirty { self.reloadRuntimeFacets() }
                     let snapshotDue = self.lastRuntimeV2RefreshAt.map {
                         Date().timeIntervalSince($0) >= statisticsInterval
                     } ?? true

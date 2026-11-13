@@ -4,6 +4,7 @@ import SwiftUI
 
 struct OverviewPane: View {
     @ObservedObject var model: AppModel
+    @Environment(\.sumpterWindowVisible) private var windowVisible
     @Environment(\.sumpterPalette) private var palette
     // 关闭自动刷新时冻结的画面快照;nil 表示跟随实时数据。
     // AppModel 的后台轮询(菜单栏健康点)仍在更新模型,不冻结的话表格会自己跳动,开关就形同虚设。
@@ -57,7 +58,8 @@ struct OverviewPane: View {
                 onSelectEvent: { eventID in
                     model.loadRuntimeEvent(id: eventID)
                     model.loadRuntimeRequestChain(for: eventID)
-                }
+                },
+                sortAscendingPreference: $model.runEventSortAscending
             )
             .id(model.runOverviewDayStart)
             if let lastError = model.lastError, !lastError.isEmpty {
@@ -70,6 +72,8 @@ struct OverviewPane: View {
             }
         }
         .task(id: autoRefreshTaskID) {
+            guard windowVisible else { return }
+            model.setRuntimeSection(.run)
             model.advanceRunOverviewDay()
             // 数据由 SSE 增量推送 + AppModel 兜底轮询驱动;此处只管「冻结/解冻」快照。
             // (旧版在这里另跑一个 1-30 秒轮询循环,与 AppModel 的循环叠加成重复请求。)
@@ -87,7 +91,6 @@ struct OverviewPane: View {
             frozenHealth = nil
             frozenOverview = nil
             model.refresh()
-            model.refreshRunHistory(resetSnapshot: model.runHistoryPage == nil)
         }
         .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in model.advanceRunOverviewDay() }
         .onReceive(NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange)) { _ in model.advanceRunOverviewDay() }
@@ -104,7 +107,7 @@ struct OverviewPane: View {
 
     /// 开关或间隔一变就重启刷新循环。
     private var autoRefreshTaskID: String {
-        "\(model.autoRefreshEnabled)-\(model.runtimeAutoRefreshIntervalSeconds)"
+        "\(windowVisible)-\(model.autoRefreshEnabled)-\(model.runtimeAutoRefreshIntervalSeconds)"
     }
 
     private var displayRuntime: RuntimeSnapshot { frozenRuntime ?? model.runtime }
@@ -245,7 +248,7 @@ struct OverviewPane: View {
     }
 
     private var statusActions: some View {
-        HStack(spacing: 10) {
+        SumpterWrappingLayout(horizontalSpacing: 10, verticalSpacing: 8) {
             AutoRefreshControl(
                 enabled: $model.autoRefreshEnabled,
                 intervalSeconds: $model.runtimeAutoRefreshIntervalSeconds
@@ -283,15 +286,8 @@ struct OverviewPane: View {
     }
 
     private var metrics: some View {
-        ViewThatFits(in: .horizontal) {
-            // Five metrics should share the full row. An adaptive grid can
-            // reserve a sixth, empty slot when the window becomes wider.
-            HStack(alignment: .top, spacing: 12) {
-                metricTiles
-            }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 12)], spacing: 12) {
-                metricTiles
-            }
+        SumpterAdaptiveColumns(minimumColumnWidth: 190, maximumColumns: 5) {
+            metricTiles
         }
     }
 

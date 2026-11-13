@@ -140,7 +140,13 @@ public struct AdminClient: Sendable {
     }
 
     public func runtimeEvent(id: String) async throws -> AdminWire.RuntimeEventDetail {
-        try await send(request("/admin/runtime/events/\(id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id)"), as: AdminWire.RuntimeEventDetail.self)
+        try await runtimeEventWithCost(id: id).0
+    }
+
+    func runtimeEventWithCost(id: String) async throws -> (AdminWire.RuntimeEventDetail, Int) {
+        let data = try await sendData(request("/admin/runtime/events/\(id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id)"))
+        try Task.checkCancellation()
+        return (try JSONDecoder().decode(AdminWire.RuntimeEventDetail.self, from: data), data.count)
     }
 
     public func runtimeAnalytics(
@@ -152,7 +158,7 @@ public struct AdminClient: Sendable {
         from: Double? = nil,
         to: Double? = nil
     ) async throws -> AdminWire.RuntimeAnalytics {
-        var query = ["range": range]
+        var query = ["range": range == "custom" ? "all" : range]
         if !clientKind.isEmpty { query["clientKind"] = clientKind }
         if !endpointID.isEmpty { query["endpointID"] = endpointID }
         if !project.isEmpty { query["project"] = project }
@@ -163,7 +169,7 @@ public struct AdminClient: Sendable {
     }
 
     public func runtimeAnalytics(range: String = "today", filter: AdminWire.RuntimeFilter, diagnosticsOnly: Bool = false) async throws -> AdminWire.RuntimeAnalytics {
-        var query: [String: String] = ["range": range]
+        var query: [String: String] = ["range": range == "custom" ? "all" : range]
         if diagnosticsOnly { query["view"] = "diagnostics" }
         filter.add(to: &query)
         return try await send(request("/admin/runtime/analytics", query: query), as: AdminWire.RuntimeAnalytics.self)
@@ -321,7 +327,7 @@ public struct AdminClient: Sendable {
         historyGeneration: Int? = nil,
         filter: AdminWire.RuntimeFilter = .init()
     ) async throws -> AdminWire.RuntimeTrendSeries {
-        var query = ["range": range, "granularity": granularity]
+        var query = ["range": range == "custom" ? "all" : range, "granularity": granularity]
         if let snapshotSeq { query["snapshotSeq"] = String(snapshotSeq) }
         if let snapshotChangeSeq { query["snapshotChangeSeq"] = String(snapshotChangeSeq) }
         if let historyGeneration { query["historyGeneration"] = String(historyGeneration) }
@@ -336,7 +342,7 @@ public struct AdminClient: Sendable {
         range: String = "24h",
         filter: AdminWire.RuntimeFilter = .init()
     ) async throws -> AdminWire.RuntimeFacetSnapshot {
-        var query = ["range": range]
+        var query = ["range": range == "custom" ? "all" : range]
         filter.add(to: &query)
         return try await send(request("/admin/runtime/facets", query: query), as: AdminWire.RuntimeFacetSnapshot.self)
     }

@@ -4,13 +4,17 @@ struct SettingsRootView: View {
     // 详情页各自观察 AppModel。根导航不订阅全量运行状态，避免每次
     // SSE/轮询更新都重新计算左侧 List 和 NavigationSplitView。
     let model: AppModel
+    @ObservedObject private var runtimeViewState: RuntimeViewState
     @ObservedObject private var windowVisibility: SumpterWindowVisibility
     @State private var selection: SettingsSection? = .run
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var wideColumnVisibility: NavigationSplitViewVisibility = .all
     @Environment(\.colorScheme) private var systemColorScheme
     @AppStorage("sumpterAppearanceMode") private var appearanceModeRaw = SumpterAppearanceMode.system.rawValue
 
     init(model: AppModel, windowVisibility: SumpterWindowVisibility = SumpterWindowVisibility()) {
         self.model = model
+        self._runtimeViewState = ObservedObject(wrappedValue: model.runtimeViewState)
         self._windowVisibility = ObservedObject(wrappedValue: windowVisibility)
     }
 
@@ -34,31 +38,48 @@ struct SettingsRootView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
-            List(SettingsSection.allCases, selection: $selection) { section in
-                NavigationLink(value: section) {
-                    Label(section.title, systemImage: section.systemImage)
-                        .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+        GeometryReader { proxy in
+            NavigationSplitView(columnVisibility: $columnVisibility) {
+                List(SettingsSection.allCases, selection: $selection) { section in
+                    NavigationLink(value: section) {
+                        Label(section.title, systemImage: section.systemImage)
+                            .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+                    }
+                    .accessibilityLabel(section.title)
                 }
-                .accessibilityLabel(section.title)
-            }
-            .listStyle(.sidebar)
-            .scrollContentBackground(.hidden)
-            .background(palette.sidebar)
-            .navigationTitle("Sumpter")
-            // Keep enough room for labels at the normal size, while allowing
-            // the window controller's compact breakpoint to collapse the
-            // detail content on smaller laptop displays.
-            .frame(minWidth: 200)
-        } detail: {
-            detailView(for: selection ?? .run)
+                .listStyle(.sidebar)
+                .scrollContentBackground(.hidden)
+                .background(palette.sidebar)
+                .navigationTitle("Sumpter")
+                .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
+            } detail: {
+                Group {
+                    if runtimeViewState.retainsPageContent || ![SettingsSection.run, .statistics].contains(selection ?? .run) {
+                        detailView(for: selection ?? .run)
+                    } else {
+                        Color.clear
+                    }
+                }
                 .navigationTitle((selection ?? .run).title)
+            }
+            .navigationSplitViewStyle(.balanced)
+            // Collapse only when crossing the breakpoint. The native sidebar
+            // button remains available, and resizing never recreates the detail.
+            .onChange(of: proxy.size.width < 980, initial: true) { _, compact in
+                if compact {
+                    wideColumnVisibility = columnVisibility
+                    columnVisibility = .detailOnly
+                } else {
+                    columnVisibility = wideColumnVisibility
+                }
+            }
         }
         .onAppear {
             if selection == nil {
                 selection = .run
             }
         }
+        .onChange(of: selection) { _, value in model.setRuntimeSection(value ?? .run) }
         .tint(palette.brand)
         .background(palette.canvas)
         .environment(\.sumpterPalette, palette)

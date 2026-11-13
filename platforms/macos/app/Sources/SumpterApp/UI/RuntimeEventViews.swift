@@ -535,6 +535,7 @@ struct RecentEventsPanel: View {
     var requestChainEvents: [RuntimeEvent]?
     var requestChainLoading = false
     var onSelectEvent: ((String?) -> Void)?
+    var sortAscendingPreference: Binding<Bool>?
     @State private var selectedEventID: String?
     @State private var expandedEventGroups: Set<String> = []
     @Environment(\.sumpterPalette) private var palette
@@ -611,11 +612,13 @@ struct RecentEventsPanel: View {
             }
         }
         .onAppear {
+            if let sortAscendingPreference { sortAscending = sortAscendingPreference.wrappedValue }
             if let initialKindFilter { eventKindFilter = initialKindFilter }
             if let initialOutcomeFilter { eventOutcomeFilter = initialOutcomeFilter }
             ensureSelection()
         }
         .onChange(of: visibleEventIDs) { _, _ in ensureSelection() }
+        .onChange(of: sortAscending) { _, value in sortAscendingPreference?.wrappedValue = value }
         .onChange(of: selectedEventID) { _, eventID in onSelectEvent?(eventID) }
         .onChange(of: eventKindFilter) { _, filter in
             onKindFilterChange?(filter)

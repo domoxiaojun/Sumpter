@@ -11,15 +11,22 @@ extension AppModel {
     func setStatisticsBoard(_ board: String) {
         let allowed = ["overview", "trends", "tokens", "errors"]
         guard allowed.contains(board) else { return }
+        let changed = statisticsBoard != board
         statisticsBoard = board
-        guard statisticsVisible else { return }
-        loadRuntimeV2Board(board, force: false)
+        guard statisticsPageVisible else { return }
+        if changed {
+            cancelStatisticsRequests()
+            refreshRuntimeV2(resetSnapshot: false, preserveVisibleContent: true)
+        } else {
+            loadRuntimeV2Board(board, force: false)
+        }
     }
 
     /// 统计页的显式刷新入口。只刷新轻量状态与当前 v3 稳定快照；旧完整
     /// analytics 不再进入首屏或自动刷新 critical path。
     func refreshStatisticsNow() {
-        guard statisticsVisible else { return }
+        guard statisticsPageVisible else { return }
+        invalidateRuntimeFacets()
         Task { await refreshStatus(loadLatestEvents: true) }
         reloadRuntimeFacets()
         refreshRuntimeV2(resetSnapshot: true)
@@ -27,7 +34,8 @@ extension AppModel {
 
     /// 进入统计页或自动刷新设置变化时调用；短时间内复用刚取得的快照。
     func refreshStatisticsIfNeeded(force: Bool = false) {
-        guard statisticsVisible else { return }
+        guard statisticsPageVisible else { return }
+        if force { invalidateRuntimeFacets() }
         reloadRuntimeFacets()
         if force || runtimeHistoryPage == nil {
             Task { await refreshStatus(loadLatestEvents: true) }
@@ -37,11 +45,51 @@ extension AppModel {
         }
     }
 
+    var statisticsRangeIsLive: Bool {
+        runtimeAnalyticsRange != "custom" || runtimeCustomDateRange?.includesToday() == true
+    }
+
+    var statisticsHasHistoricalPage: Bool {
+        if (runtimeHistoryPage?.page ?? 1) > 1 { return true }
+        if statisticsBoard == "errors" { return (runtimeErrorPage?.page ?? 1) > 1 }
+        if statisticsBoard == "overview" || statisticsBoard == "tokens" {
+            return [runtimeEndpointsPage, runtimeProjectsPage, runtimeSessionsPage, runtimeModelsPage]
+                .contains { ($0?.page ?? 1) > 1 }
+        }
+        return false
+    }
+
+    func invalidateRuntimeFacets() {
+        runtimeFacetsTask?.cancel()
+        runtimeFacetsTask = nil
+        runtimeFacetsRequestGeneration &+= 1
+        runtimeFacetsDirty = true
+    }
+
     func setRuntimeAnalyticsRange(_ range: String) {
-        guard ["today", "7d", "30d", "all"].contains(range) else { return }
+        guard ["today", "7d", "30d", "all", "custom"].contains(range) else { return }
+        runtimeCustomDateEditorVisible = range == "custom"
+        runtimeCustomDateError = nil
+        guard range != "custom" else { return }
         runtimeAnalyticsRange = range
-        clearRuntimeLocalProject()
-        clearRuntimeLocalSession()
+        resetRuntimeLocalDrillDownState()
+        invalidateRuntimeFacets()
+        reloadRuntimeFacets()
+        refreshRuntimeV2(resetSnapshot: true)
+    }
+
+    func applyRuntimeCustomDates(now: Date = Date(), calendar: Calendar = .autoupdatingCurrent) {
+        let range = StatisticsDateRange(startDay: StatisticsDateRange.dayString(runtimeCustomDateStart, calendar: calendar),
+                                        endDay: StatisticsDateRange.dayString(runtimeCustomDateEnd, calendar: calendar))
+        guard range.bounds(now: now, calendar: calendar) != nil else {
+            runtimeCustomDateError = "开始日期不能晚于结束日期，结束日期不能晚于今天。"
+            return
+        }
+        runtimeCustomDateError = nil
+        runtimeCustomDateRange = range
+        runtimeAnalyticsRange = "custom"
+        resetRuntimeLocalDrillDownState()
+        invalidateRuntimeFacets()
         reloadRuntimeFacets()
         refreshRuntimeV2(resetSnapshot: true)
     }
@@ -70,8 +118,8 @@ extension AppModel {
         if let outcome { runtimeAnalyticsOutcome = outcome }
         if let failureKind { runtimeAnalyticsFailureKind = failureKind }
         if let failurePhase { runtimeAnalyticsFailurePhase = failurePhase }
-        clearRuntimeLocalProject()
-        clearRuntimeLocalSession()
+        resetRuntimeLocalDrillDownState()
+        invalidateRuntimeFacets()
         reloadRuntimeFacets()
         refreshRuntimeV2(resetSnapshot: true)
     }
@@ -134,14 +182,18 @@ extension AppModel {
     /// independent from the compatibility aggregate so a slow high-cardinality
     /// table cannot block selectors or the automatic status loop.
     func reloadRuntimeFacets() {
-        guard statisticsVisible else { return }
+        guard statisticsPageVisible, runtimeFacetsTask == nil,
+              runtimeFacetsDirty || runtimeFacets == nil else { return }
         runtimeFacetsRequestGeneration &+= 1
         let generation = runtimeFacetsRequestGeneration
         let range = runtimeAnalyticsRange
         let filter = runtimeV2Filter()
         runtimeFacetsTask?.cancel()
+        runtimeFacetsDirty = false
         runtimeFacetsTask = Task { [weak self] in
-            guard let self, let admin = self.admin else { return }
+            guard let self else { return }
+            defer { if generation == self.runtimeFacetsRequestGeneration { self.runtimeFacetsTask = nil } }
+            guard let admin = self.admin else { self.runtimeFacetsDirty = true; return }
             do {
                 let value = try await admin.runtimeFacets(range: range, filter: filter)
                 guard generation == self.runtimeFacetsRequestGeneration else { return }
@@ -152,6 +204,7 @@ extension AppModel {
                 self.clearInvalidAnalyticsFacetFilters(value)
             } catch {
                 guard !Task.isCancelled else { return }
+                self.runtimeFacetsDirty = true
                 // Facets are an enhancement; preserve the last good selectors
                 // and let the v3 board report its own query error.
             }
@@ -211,7 +264,10 @@ extension AppModel {
             runtimeAnalyticsFailurePhase = ""
             needsReload = true
         }
-        if needsReload { reloadRuntimeFacets() }
+        if needsReload {
+            invalidateRuntimeFacets()
+            reloadRuntimeFacets()
+        }
     }
 
     /// A filter can outlive a session/project after a reset or retention cleanup.
@@ -257,7 +313,9 @@ extension AppModel {
     /// 运行页只读取自己的稳定历史快照。统计页的筛选、页码和 loading
     /// 状态不会被这个请求改写；实时 SSE 事件由 OverviewPane 作为独立
     /// overlay 展示，不占持久历史页的名额。
-    func refreshRunHistory(resetSnapshot: Bool = false) {
+    func refreshRunHistory(resetSnapshot: Bool = false, coalescing: Bool = false) {
+        guard runPageVisible else { return }
+        if coalescing && runHistoryLoading { runHistoryRefreshPending = true; return }
         advanceRunOverviewDay()
         runHistoryRequestGeneration &+= 1
         let generation = runHistoryRequestGeneration
@@ -270,6 +328,15 @@ extension AppModel {
         runHistoryTask?.cancel()
         runHistoryTask = Task { [weak self] in
             guard let self else { return }
+            defer {
+                if generation == self.runHistoryRequestGeneration {
+                    self.runHistoryTask = nil
+                    if self.runHistoryRefreshPending && self.runHistoryPage?.page == 1 {
+                        self.runHistoryRefreshPending = false
+                        self.refreshRunHistory(resetSnapshot: true, coalescing: true)
+                    }
+                }
+            }
             guard let admin = self.admin else {
                 guard generation == self.runHistoryRequestGeneration else { return }
                 self.runHistoryLoading = false
@@ -309,6 +376,8 @@ extension AppModel {
     }
 
     func loadRunHistoryPage(_ page: Int) {
+        guard runPageVisible else { return }
+        runHistoryRefreshPending = false
         guard page >= 1, runHistoryPage != nil else { return }
         guard RunOverviewScope.isCurrent(runHistoryPage?.filters) else {
             return refreshRunHistory(resetSnapshot: true)
@@ -328,6 +397,15 @@ extension AppModel {
         runHistoryTask?.cancel()
         runHistoryTask = Task { [weak self] in
             guard let self else { return }
+            defer {
+                if generation == self.runHistoryRequestGeneration {
+                    self.runHistoryTask = nil
+                    if self.runHistoryRefreshPending && self.runHistoryPage?.page == 1 {
+                        self.runHistoryRefreshPending = false
+                        self.refreshRunHistory(resetSnapshot: true, coalescing: true)
+                    }
+                }
+            }
             guard let admin = self.admin else {
                 guard generation == self.runHistoryRequestGeneration else { return }
                 self.runHistoryLoading = false
@@ -421,6 +499,10 @@ extension AppModel {
             failurePhase: runtimeAnalyticsFailurePhase.isEmpty ? nil : runtimeAnalyticsFailurePhase,
             from: AdminWire.RuntimeFilter.rangeStart(runtimeAnalyticsRange, now: now, calendar: calendar)
         )
+        if runtimeAnalyticsRange == "custom", let bounds = runtimeCustomDateRange?.bounds(now: now, calendar: calendar) {
+            base.from = bounds.from
+            base.to = bounds.to
+        }
         if let snapshot {
             base.from = snapshot.from
             base.to = snapshot.to
@@ -450,6 +532,9 @@ extension AppModel {
         resetSnapshot: Bool = false,
         preserveVisibleContent: Bool = false
     ) {
+        guard statisticsPageVisible else { return }
+        if resetSnapshot && preserveVisibleContent && statisticsHasHistoricalPage { return }
+        if preserveVisibleContent && runtimeSnapshotTask != nil { return }
         runtimeDimensionTask?.cancel()
         runtimeErrorTask?.cancel()
         // A new snapshot refresh supersedes any in-flight page/aggregate/child
@@ -468,6 +553,8 @@ extension AppModel {
         runtimeV2RequestGeneration &+= 1
         let generation = runtimeV2RequestGeneration
         if resetSnapshot {
+            runtimeExportEstimateTask?.cancel()
+            runtimeExportEstimateTask = nil
             runtimeExportEstimateRequestGeneration &+= 1
             if runtimeExportEstimate != nil { runtimeExportEstimate = nil }
             if runtimeExportEstimateError != nil { runtimeExportEstimateError = nil }
@@ -500,6 +587,7 @@ extension AppModel {
         runtimeSnapshotTask?.cancel()
         runtimeSnapshotTask = Task { [weak self] in
             guard let self else { return }
+            defer { if generation == self.runtimeV2RequestGeneration { self.runtimeSnapshotTask = nil } }
             await self.refreshRuntimeV2Async(
                 resetSnapshot: resetSnapshot,
                 preserveVisibleContent: preserveVisibleContent,
@@ -698,7 +786,7 @@ extension AppModel {
     }
 
     func loadRuntimeHistoryPage(_ page: Int) {
-        guard page >= 1 else { return }
+        guard statisticsPageVisible, page >= 1 else { return }
         // Paging supersedes an aggregate refresh.  The old refresh task will
         // observe the generation mismatch and leave all state to this request.
         runtimeV2Loading = false
@@ -722,6 +810,7 @@ extension AppModel {
                 self?.runtimeV2Loading = false
                 return
             }
+            defer { if generation == self.runtimeV2RequestGeneration { self.runtimeSnapshotTask = nil } }
             do {
                 let value = try await self.fetchRuntimeHistoryPage(
                     using: admin,
@@ -750,7 +839,7 @@ extension AppModel {
     }
 
     func loadRuntimeV2Board(_ board: String, force: Bool) {
-        guard statisticsVisible, runtimeHistoryPage != nil else { return }
+        guard statisticsPageVisible, runtimeHistoryPage != nil else { return }
         switch board {
         case "overview":
             if force || runtimeEndpointsPage == nil || runtimeProjectsPage == nil || runtimeSessionsPage == nil || runtimeModelsPage == nil {
@@ -1213,7 +1302,7 @@ extension AppModel {
     }
 
     func resumeRuntimeRequestChainRefresh() {
-        guard autoRefreshEnabled, runtimeRequestChainTask == nil,
+        guard runtimeDataVisible, autoRefreshEnabled, runtimeRequestChainTask == nil,
               let chain = runtimeRequestChain, chain.isInFlight,
               let id = chain.events.first(where: { $0.kind == "client" })?.id else { return }
         loadRuntimeRequestChain(for: id)
@@ -1416,6 +1505,9 @@ extension AppModel {
         privacy: String = "stored",
         confirmStored: Bool = false
     ) {
+        guard statisticsPageVisible else { return }
+        runtimeExportEstimateTask?.cancel()
+        runtimeExportEstimateTask = nil
         runtimeExportEstimateRequestGeneration &+= 1
         let generation = runtimeExportEstimateRequestGeneration
         guard let admin else {
@@ -1427,8 +1519,12 @@ extension AppModel {
         let snapshotGeneration = runtimeV2RequestGeneration
         let connectionGeneration = adminConnectionGeneration
         runtimeExportEstimateError = nil
-        Task { [weak self] in
+        let filter = runtimeV2Filter(snapshot: anchor?.filters)
+        runtimeExportEstimateTask = Task { [weak self] in
             guard let self else { return }
+            defer {
+                if generation == self.runtimeExportEstimateRequestGeneration { self.runtimeExportEstimateTask = nil }
+            }
             do {
                 let estimate = try await admin.runtimeExportEstimate(
                     scope: scope, format: format, privacy: privacy,
@@ -1436,7 +1532,7 @@ extension AppModel {
                     snapshotSeq: anchor?.snapshotSeq,
                         snapshotChangeSeq: anchor?.snapshotChangeSeq,
                     historyGeneration: anchor?.historyGeneration,
-                    filter: self.runtimeV2Filter(snapshot: anchor?.filters)
+                    filter: filter
                 )
                 guard !Task.isCancelled,
                       generation == self.runtimeExportEstimateRequestGeneration,
@@ -1445,7 +1541,7 @@ extension AppModel {
                 self.runtimeExportEstimate = estimate
                 self.runtimeExportEstimateError = nil
             } catch {
-                guard generation == self.runtimeExportEstimateRequestGeneration,
+                guard !Task.isCancelled, generation == self.runtimeExportEstimateRequestGeneration,
                       snapshotGeneration == self.runtimeV2RequestGeneration,
                       connectionGeneration == self.adminConnectionGeneration else { return }
                 self.runtimeExportEstimateError = "\(error)"
@@ -1511,6 +1607,8 @@ extension AppModel {
         runtimeErrorPageRequestGeneration &+= 1
         runtimeDimensionRequestGeneration &+= 1
         runtimeRequestChainRequestGeneration &+= 1
+        runtimeExportEstimateTask?.cancel()
+        runtimeExportEstimateTask = nil
         runtimeExportEstimateRequestGeneration &+= 1
         runtimeRequestChainTask?.cancel()
         runtimeRequestChainTask = nil
@@ -1535,16 +1633,18 @@ extension AppModel {
     }
 
     func loadRuntimeEvent(id: String?) {
+        runtimeEventDetailTask?.cancel()
+        runtimeEventDetailTask = nil
         detailRequestGeneration &+= 1
         let generation = detailRequestGeneration
-        guard let id, !id.isEmpty else {
+        guard runtimeDataVisible, let id, !id.isEmpty else {
             runtimeEventDetail = nil
             return
         }
         let expected = max(runtimePage?.events.first(where: { $0.id == id })?.changeSeq ?? 0,
                            runHistoryPage?.events.first(where: { $0.id == id })?.changeSeq ?? 0,
                            runtimeRequestChain?.events.first(where: { $0.id == id })?.changeSeq ?? 0)
-        if let cached = runtimeEventDetails[id], cached.changeSeq >= expected {
+        if let cached = runtimeEventDetails.value(for: id), cached.changeSeq >= expected {
             runtimeEventDetail = cached
             return
         }
@@ -1553,26 +1653,23 @@ extension AppModel {
         if runtimeEventDetail?.event.id != id {
             runtimeEventDetail = nil
         }
-        Task {
-            guard let admin else { return }
+        runtimeEventDetailTask = Task { [weak self] in
+            guard let self, let admin = self.admin else { return }
+            defer { if generation == detailRequestGeneration { runtimeEventDetailTask = nil } }
             do {
-                let fetchedDetail = try await admin.runtimeEvent(id: id)
-                guard generation == detailRequestGeneration else { return }
-                let current = runtimeEventDetails[id]
+                let (fetchedDetail, responseBytes) = try await admin.runtimeEventWithCost(id: id)
+                guard !Task.isCancelled, generation == detailRequestGeneration else { return }
+                let current = runtimeEventDetails.peek(id)
                 let detail = current.map { $0.changeSeq > fetchedDetail.changeSeq ? $0 : fetchedDetail } ?? fetchedDetail
-                runtimeEventDetails[id] = detail
-                if runtimeEventDetails.count > 200, let oldest = runtimeEventDetails.min(by: { $0.value.changeSeq < $1.value.changeSeq })?.key { runtimeEventDetails.removeValue(forKey: oldest) }
-                runtimeEventDetail = detail
-                var events = runtime.recentEvents
-                if let index = events.firstIndex(where: { $0.id == id }) {
-                    events[index] = detail.event
-                } else {
-                    events.insert(detail.event, at: 0)
+                if (current?.changeSeq ?? -1) <= fetchedDetail.changeSeq {
+                    runtimeEventDetails.insert(detail, for: id, cost: responseBytes)
                 }
-                runtime.recentEvents = RuntimeEvent.trimmed(events, perKindLimit: 200)
+                runtimeEventDetail = detail
+                // The list keeps its lightweight row. Copying full details
+                // into it would bypass the LRU budget after selection changes.
             }
             catch {
-                guard generation == detailRequestGeneration else { return }
+                guard !Task.isCancelled, generation == detailRequestGeneration else { return }
                 flash("读取事件详情失败")
             }
         }

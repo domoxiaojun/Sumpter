@@ -18,7 +18,7 @@ const AboutPage = lazy(() => import('./pages/AboutPage.jsx').then((module) => ({
 import { LoginPage } from './pages/LoginPage.jsx';
 
 export function AppContent() {
-  const { currentRoute, isLoading, auth, authLoading } = useAppControls();
+  const { currentRoute, runtimePagesRetained, isLoading, auth, authLoading } = useAppControls();
 
   useEffect(() => {
     if (!auth.authenticated) return undefined;
@@ -39,6 +39,7 @@ export function AppContent() {
       );
     }
 
+    if (!runtimePagesRetained && ['run', 'statistics'].includes(currentRoute)) return null;
     switch (currentRoute) {
       case 'run':
         return <RunPage />;

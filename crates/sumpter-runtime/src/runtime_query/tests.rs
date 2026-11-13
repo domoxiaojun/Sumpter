@@ -1455,3 +1455,44 @@ fn reporting_aliases_are_reversible_across_queries_and_exports_without_rewriting
         0
     );
 }
+
+#[test]
+fn time_index_pages_preserve_counts_order_and_inclusive_date_bounds() {
+    let mut connection = test_connection();
+    insert_100k(&connection);
+    for (from, to) in [(5_998_000.0, 6_000_000.0), (60.0, 6_000_000.0)] {
+        let filter = RuntimeFilter {
+            from: Some(from),
+            to: Some(to),
+            ..Default::default()
+        };
+        let actual = events_page_on(
+            &mut connection,
+            &EventPageRequest {
+                filter,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let expected_count = connection.query_row(
+            "SELECT COUNT(*) FROM runtime_events WHERE is_in_flight=0 AND timestamp>=?1 AND timestamp<=?2",
+            params![from, to], |row| row.get::<_, i64>(0)).unwrap();
+        assert_eq!(actual.total_count, expected_count);
+        let mut statement = connection.prepare(
+            "SELECT seq FROM runtime_events WHERE is_in_flight=0 AND timestamp>=?1 AND timestamp<=?2 ORDER BY timestamp DESC,seq DESC LIMIT 10"
+        ).unwrap();
+        let expected = statement
+            .query_map(params![from, to], |row| row.get::<_, i64>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            actual
+                .events
+                .iter()
+                .map(|event| event.seq)
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+}

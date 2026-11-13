@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRequestChainLoader, mergeRequestChain } from '../utils/requestChain.js';
-import { useApp } from '../context/AppContext.jsx';
+import { useApp, useRuntimePagePreference } from '../context/AppContext.jsx';
 import { MetricCard } from '../components/MetricCard.jsx';
 import { LiveSurfaceLight } from '../components/LiveSurfaceLight.jsx';
 import { StatusBadge } from '../components/StatusBadge.jsx';
@@ -453,12 +453,12 @@ function MobileEventList({ events, selectedEventID, onSelect, loading, live = fa
 export function RunPage() {
   const {
     status, runtime, runtimeEventDetail, config, secretStatus, toggleProxy,
-    autoRefresh, runRefreshInterval,
+    autoRefresh, runRefreshInterval, pageVisible,
     loadRuntimeEvent, addToast,
   } = useApp();
-  const [eventFilter, setEventFilter] = useState('client'); // 'client' | 'upstream' | 'all'
-  const [eventOutcomeFilter, setEventOutcomeFilter] = useState(''); // '' | 'succeeded' | 'failed' | 'cancelled'
-  const [eventSort, setEventSort] = useState('desc'); // 'desc' = 最新优先, 'asc' = 最早优先
+  const [eventFilter, setEventFilter] = useRuntimePagePreference('run.kind', 'client'); // 'client' | 'upstream' | 'all'
+  const [eventOutcomeFilter, setEventOutcomeFilter] = useRuntimePagePreference('run.outcome', ''); // '' | 'succeeded' | 'failed' | 'cancelled'
+  const [eventSort, setEventSort] = useRuntimePagePreference('run.sort', 'desc'); // 'desc' = 最新优先, 'asc' = 最早优先
   const [selectedEventID, setSelectedEventID] = useState(null);
   const toggleSelectEvent = useCallback((id) => {
     setSelectedEventID((previous) => (previous === id ? null : id));
@@ -482,6 +482,7 @@ export function RunPage() {
   const notifySnapshotRecovered = useCallback((message) => addToast(message, 'info'), [addToast]);
   const eventHistory = useRuntimeEventPage({
     range: RUN_OVERVIEW_RANGE,
+    enabled: pageVisible,
     scopeKey: localDay,
     recentEvents,
     autoRefresh,
@@ -501,34 +502,38 @@ export function RunPage() {
   }, [eventHistory.loading, eventPageDirection]);
 
   useEffect(() => {
+    if (!pageVisible) return undefined;
     let cancelled = false;
-    setOverview(null);
+    let pending = false;
+    const controller = new AbortController();
     const load = () => {
-      if (document.hidden) return;
-      api.getRuntimeTrends(runOverviewQuery()).then((series) => {
+      if (document.hidden || pending) return;
+      pending = true;
+      api.getRuntimeTrends(runOverviewQuery(), { signal: controller.signal }).then((series) => {
         if (cancelled) return;
         const totals = runOverviewTotals(series);
         setOverview(totals ? { status: 'ready', ...totals } : { status: 'error' });
       }).catch(() => {
-        if (!cancelled) {
+        if (!cancelled && !controller.signal.aborted) {
           setOverview((current) => current?.status === 'ready' ? current : { status: 'error' });
         }
-      });
+      }).finally(() => { pending = false; });
     };
     load();
-    if (!autoRefresh) return () => { cancelled = true; };
+    if (!autoRefresh) return () => { cancelled = true; controller.abort(); };
     const timer = window.setInterval(load, Math.max(15, Number(runRefreshInterval) || 15) * 1000);
     return () => {
       cancelled = true;
+      controller.abort();
       window.clearInterval(timer);
     };
-  }, [autoRefresh, runRefreshInterval, runtime?.resetGeneration, localDay]);
+  }, [pageVisible, autoRefresh, runRefreshInterval, runtime?.resetGeneration, localDay]);
 
   useEffect(() => {
-    if (!recentEvents.some((event) => eventIsInFlight(event))) return undefined;
+    if (!pageVisible || !recentEvents.some((event) => eventIsInFlight(event))) return undefined;
     const timer = window.setInterval(() => setDurationTick((value) => value + 1), 1000);
     return () => window.clearInterval(timer);
-  }, [recentEvents]);
+  }, [recentEvents, pageVisible]);
 
   const liveEvents = useMemo(() => (
     orderRuntimeEvents(eventHistory.liveEvents || [], eventSort)
@@ -574,7 +579,7 @@ export function RunPage() {
   );
   useEffect(() => {
     setRequestChainSnapshot(null);
-    if (!selectedRequestID || selectedRequestID === '-') return undefined;
+    if (!pageVisible || !selectedRequestID || selectedRequestID === '-') return undefined;
     const loader = createRequestChainLoader({
       read: signal => api.getRuntimeRequestChain(selectedRequestID, { signal }),
       onValue: value => setRequestChainSnapshot(previous => mergeRequestChain(value, previous?.requestID === selectedRequestID ? previous.events : [])),
@@ -600,14 +605,14 @@ export function RunPage() {
   }, [autoRefresh, baseEventContext, selectedRequestID]);
 
   useEffect(() => {
-    if (!currentSelectedID) {
+    if (!currentSelectedID || !pageVisible) {
       loadRuntimeEvent(null);
       return;
     }
     loadRuntimeEvent(currentSelectedID, selectedChangeSeq).catch((error) => {
       addToast(`加载事件详情失败: ${error.message}`, 'error');
     });
-  }, [addToast, currentSelectedID, selectedChangeSeq, loadRuntimeEvent]);
+  }, [addToast, currentSelectedID, selectedChangeSeq, loadRuntimeEvent, pageVisible]);
 
   const copyText = (text, label = '内容') => copyWithToast(text, label, addToast);
   const changeEventPage = (nextPage) => {

@@ -7994,9 +7994,44 @@ button.responsive-data-card {
 .security-admin-panel > summary::before { content: '▸'; }
 .security-admin-panel[open] > summary::before { content: '▾'; }
 .security-admin-panel > .glass-panel { border: 0; background: transparent; box-shadow: none; }
+
+/* Client identity uses the same compact token cards as the credential editor. */
+.client-identity-panel, .client-identity-token-list { min-width: 0; }
+.client-identity-panel .form-hint { margin: 0; line-height: 1.6; overflow-wrap: anywhere; }
+.client-identity-token-list { display: grid; gap: var(--space-4); }
+.client-identity-token { min-width: 0; margin: 0; padding: var(--space-3) var(--space-4) var(--space-4); border: 1px solid var(--border-medium); border-radius: var(--radius-md); }
+.client-identity-token > legend { max-width: 100%; padding: 0 var(--space-2); font-size: 0.9rem; font-weight: 600; overflow-wrap: anywhere; }
+.client-identity-token-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-3); }
+.client-identity-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-4); }
+.client-identity-panel .form-group { min-width: 0; margin-bottom: 0; }
+.client-identity-panel .form-input, .client-identity-panel .form-select { min-height: 44px; }
+.client-identity-panel .form-input:disabled { opacity: 0.62; cursor: not-allowed; }
+.client-identity-panel .form-textarea { resize: vertical; font-family: var(--font-mono); }
+.client-identity-relay { margin-top: var(--space-3); border-top: 1px solid var(--border-subtle); }
+.client-identity-relay > summary, .client-identity-advanced > summary { min-height: 44px; padding: var(--space-3) 0; cursor: pointer; font-size: 0.85rem; color: var(--text-secondary); }
+.client-identity-advanced { min-width: 0; border-top: 1px solid var(--border-subtle); }
+.client-identity-advanced-body { display: grid; gap: var(--space-4); padding-bottom: var(--space-3); }
+.client-identity-panel summary:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: var(--radius-sm); }
+.client-identity-catalog { max-width: 100%; }
+.client-identity-catalog .data-table { min-width: 540px; }
+.client-identity-error { margin: 0; color: var(--status-critical); }
 @media (max-width: 640px) {
   .inbound-token-fields { grid-template-columns: minmax(0, 1fr); }
   .inbound-token-actions { width: 100%; }
   .inbound-token-actions .btn { flex: 1 1 auto; }
   .inbound-token-row { padding: var(--space-3); }
+  .client-identity-fields { grid-template-columns: minmax(0, 1fr); }
+  .client-identity-token { padding: var(--space-3); }
+  .client-identity-panel .btn { min-height: 44px; }
 }
+
+.runtime-custom-dates {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+.runtime-custom-dates label { display: grid; gap: 0.35rem; min-width: 0; }
+.runtime-custom-dates input { max-width: 100%; }
+.runtime-custom-dates small, .runtime-custom-dates [role="alert"] { flex-basis: 100%; }

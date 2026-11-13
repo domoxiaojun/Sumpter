@@ -2180,6 +2180,8 @@ pub(crate) use output_speed::{
     output_tokens_per_second, output_tokens_per_second_for_event,
 };
 
+#[path = "runtime_query/access_path.rs"]
+mod access_path;
 #[path = "runtime_query/analytics.rs"]
 mod analytics_queries;
 #[path = "runtime_query/dimensions.rs"]

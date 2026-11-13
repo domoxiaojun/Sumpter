@@ -142,24 +142,26 @@ struct SettingsPage<Content: View>: View {
 
     var body: some View {
         GeometryReader { proxy in
+            let horizontalPadding: CGFloat = proxy.size.width < 760 ? 16 : 24
+            let contentWidth = min(maxWidth, max(0, proxy.size.width - horizontalPadding * 2))
             ScrollView {
-                HStack(alignment: .top, spacing: 0) {
-                    LazyVStack(alignment: .leading, spacing: dynamicTypeSize.isAccessibilitySize ? 18 : SumpterTheme.Layout.panelSpacing) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(title)
-                                .font(.title2.weight(.semibold))
-                                .textSelection(.enabled)
-                            Text(subtitle)
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        content
+                LazyVStack(alignment: .leading, spacing: dynamicTypeSize.isAccessibilitySize ? 18 : SumpterTheme.Layout.panelSpacing) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(title)
+                            .font(.title2.weight(.semibold))
+                            .textSelection(.enabled)
+                        Text(subtitle)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    .frame(maxWidth: maxWidth, alignment: .topLeading)
-                    Spacer(minLength: 0)
+                    content
                 }
-                .padding(.horizontal, proxy.size.width < 760 ? 16 : 24)
+                // The viewport owns the width. A table or long identifier must
+                // not enlarge the page and hide its trailing controls.
+                .frame(width: contentWidth, alignment: .topLeading)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(.horizontal, horizontalPadding)
                 .padding(.vertical, proxy.size.height < 640 ? 16 : 24)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -210,47 +212,104 @@ struct SectionPanel<Content: View>: View {
     }
 }
 
+/// A small equal-width grid driven by the width actually offered by its
+/// parent. Wide windows never create more columns than there are children.
+/// Layout keeps the same child views (and editor state) when columns change.
+struct SumpterAdaptiveColumns: Layout {
+    var minimumColumnWidth: CGFloat = 190
+    var maximumColumns: Int = 5
+    var spacing: CGFloat = 12
+
+    private func arrangement(width: CGFloat?, subviews: Subviews) -> (size: CGSize, frames: [CGRect]) {
+        guard !subviews.isEmpty else { return (.zero, []) }
+        let count = min(max(1, maximumColumns), subviews.count)
+        let idealWidth = minimumColumnWidth * CGFloat(count) + spacing * CGFloat(count - 1)
+        let availableWidth = max(0, width.flatMap { $0.isFinite ? $0 : nil } ?? idealWidth)
+        let columns = max(1, min(count, Int((availableWidth + spacing) / (minimumColumnWidth + spacing))))
+        let columnWidth = max(0, (availableWidth - spacing * CGFloat(columns - 1)) / CGFloat(columns))
+        var frames: [CGRect] = []
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        for (index, subview) in subviews.enumerated() {
+            let column = index % columns
+            if column == 0, index > 0 {
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            let size = subview.sizeThatFits(ProposedViewSize(width: columnWidth, height: nil))
+            frames.append(CGRect(x: CGFloat(column) * (columnWidth + spacing), y: y, width: columnWidth, height: size.height))
+            rowHeight = max(rowHeight, size.height)
+        }
+        // Stretch peers to the tallest item in their row; wrapped titles
+        // should not leave adjacent panel borders at different heights.
+        for start in stride(from: 0, to: frames.count, by: columns) {
+            let end = min(start + columns, frames.count)
+            let height = frames[start..<end].map(\.height).max() ?? 0
+            for index in start..<end { frames[index].size.height = height }
+        }
+        return (CGSize(width: availableWidth, height: y + rowHeight), frames)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrangement(width: proposal.width, subviews: subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for (subview, frame) in zip(subviews, arrangement(width: bounds.width, subviews: subviews).frames) {
+            subview.place(
+                at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: frame.width, height: frame.height)
+            )
+        }
+    }
+}
+
 /// A small, deterministic wrapping layout for metadata badges and compact
 /// control groups.  Unlike a fixed `HStack`, it keeps each child at its
-/// intrinsic width and starts a new line when the available detail width is
-/// too small.  This is intentionally a layout-only change: no child is
+/// intrinsic width (bounded by the viewport) and starts a new line when the
+/// available detail width is too small. This is a layout-only change: no child is
 /// scaled, so Dynamic Type and keyboard focus retain their native metrics.
 struct SumpterWrappingLayout: Layout {
     var horizontalSpacing: CGFloat = 8
     var verticalSpacing: CGFloat = 8
 
-    func sizeThatFits(
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout ()
-    ) -> CGSize {
-        let maxWidth = proposal.width ?? .infinity
+    private func arrangement(width: CGFloat?, subviews: Subviews) -> (size: CGSize, frames: [CGRect]) {
+        let maxWidth = max(0, width.flatMap { $0.isFinite ? $0 : nil } ?? .infinity)
         var lineWidth: CGFloat = 0
         var lineHeight: CGFloat = 0
         var totalWidth: CGFloat = 0
-        var totalHeight: CGFloat = 0
+        var y: CGFloat = 0
         var hasLine = false
+        var frames: [CGRect] = []
 
         for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            let proposedLineWidth = hasLine ? lineWidth + horizontalSpacing + size.width : size.width
+            let idealSize = subview.sizeThatFits(.unspecified)
+            let itemWidth = min(maxWidth, max(0, idealSize.width))
+            // A single badge/path can exceed the viewport. Remeasure its
+            // height after offering a bounded width, in both layout passes.
+            let size = subview.sizeThatFits(ProposedViewSize(width: itemWidth, height: nil))
+            let fittedWidth = min(itemWidth, max(0, size.width))
+            let proposedLineWidth = hasLine ? lineWidth + horizontalSpacing + fittedWidth : fittedWidth
             if hasLine, proposedLineWidth > maxWidth {
                 totalWidth = max(totalWidth, lineWidth)
-                totalHeight += lineHeight + verticalSpacing
-                lineWidth = size.width
-                lineHeight = size.height
-            } else {
-                lineWidth = proposedLineWidth
-                lineHeight = max(lineHeight, size.height)
+                y += lineHeight + verticalSpacing
+                lineWidth = 0
+                lineHeight = 0
+                hasLine = false
             }
+            let x = hasLine ? lineWidth + horizontalSpacing : 0
+            frames.append(CGRect(x: x, y: y, width: fittedWidth, height: size.height))
+            lineWidth = x + fittedWidth
+            lineHeight = max(lineHeight, size.height)
             hasLine = true
         }
+        totalWidth = max(totalWidth, lineWidth)
+        return (CGSize(width: totalWidth, height: hasLine ? y + lineHeight : 0), frames)
+    }
 
-        if hasLine {
-            totalWidth = max(totalWidth, lineWidth)
-            totalHeight += lineHeight
-        }
-        return CGSize(width: totalWidth.isFinite ? totalWidth : 0, height: totalHeight)
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrangement(width: proposal.width, subviews: subviews).size
     }
 
     func placeSubviews(
@@ -259,31 +318,12 @@ struct SumpterWrappingLayout: Layout {
         subviews: Subviews,
         cache: inout ()
     ) {
-        let maxWidth = bounds.width
-        var x = bounds.minX
-        var y = bounds.minY
-        var lineHeight: CGFloat = 0
-        var hasLine = false
-
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            let proposedLineWidth = hasLine ? x - bounds.minX + horizontalSpacing + size.width : size.width
-            if hasLine, proposedLineWidth > maxWidth {
-                x = bounds.minX
-                y += lineHeight + verticalSpacing
-                lineHeight = 0
-            }
-            if x > bounds.minX {
-                x += horizontalSpacing
-            }
+        for (subview, frame) in zip(subviews, arrangement(width: bounds.width, subviews: subviews).frames) {
             subview.place(
-                at: CGPoint(x: x, y: y),
+                at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
                 anchor: .topLeading,
-                proposal: ProposedViewSize(width: size.width, height: size.height)
+                proposal: ProposedViewSize(width: frame.width, height: frame.height)
             )
-            x += size.width
-            lineHeight = max(lineHeight, size.height)
-            hasLine = true
         }
     }
 }
@@ -480,6 +520,7 @@ struct StatusBadge: View {
     var body: some View {
         Label(text, systemImage: systemImage)
             .font(.caption.weight(.semibold))
+            .fixedSize(horizontal: false, vertical: true)
             .foregroundStyle(color)
             .padding(.horizontal, 9)
             .padding(.vertical, 5)
@@ -981,8 +1022,7 @@ struct MetricTile: View {
                 Text(title)
                     .font(compact ? .caption2 : .caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 4)
             }
             Text(value)
@@ -1201,12 +1241,45 @@ struct FormLine<Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
+        SumpterFormLineLayout {
             Text(title)
                 .foregroundStyle(.secondary)
-                .frame(width: 112, alignment: .trailing)
-            content
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .firstTextBaseline, spacing: 10) { content }
                 .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// Keep editor identity and focus when a label moves above its field.
+private struct SumpterFormLineLayout: Layout {
+    private func arrangement(width: CGFloat?, subviews: Subviews) -> (size: CGSize, frames: [CGRect]) {
+        guard subviews.count == 2 else { return (.zero, []) }
+        let width = max(0, width.flatMap { $0.isFinite ? $0 : nil } ?? 520)
+        let stacked = width < 520
+        let labelWidth: CGFloat = stacked ? width : 112
+        let editorWidth = stacked ? width : max(0, width - labelWidth - 10)
+        let label = subviews[0].dimensions(in: ProposedViewSize(width: labelWidth, height: nil))
+        let editor = subviews[1].dimensions(in: ProposedViewSize(width: editorWidth, height: nil))
+        let baseline = max(label[VerticalAlignment.firstTextBaseline], editor[VerticalAlignment.firstTextBaseline])
+        let labelY = stacked ? 0 : baseline - label[VerticalAlignment.firstTextBaseline]
+        let editorY = stacked ? label.height + 6 : baseline - editor[VerticalAlignment.firstTextBaseline]
+        let height = max(labelY + label.height, editorY + editor.height)
+        let frames = [
+            CGRect(x: stacked ? 0 : max(0, labelWidth - label.width), y: labelY, width: min(label.width, labelWidth), height: label.height),
+            CGRect(x: stacked ? 0 : labelWidth + 10, y: editorY, width: editorWidth, height: editor.height)
+        ]
+        return (CGSize(width: width, height: height), frames)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrangement(width: proposal.width, subviews: subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for (subview, frame) in zip(subviews, arrangement(width: bounds.width, subviews: subviews).frames) {
+            subview.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY), anchor: .topLeading,
+                          proposal: ProposedViewSize(width: frame.width, height: frame.height))
         }
     }
 }
