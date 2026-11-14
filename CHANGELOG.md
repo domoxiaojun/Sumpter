@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+## [0.4.83] - 2026-11-14
+
+### 变更与重构
+
+- 将 Linux WebUI 全面迁移至 Tailwind CSS v4、shadcn/ui 与 Recharts v3 组件体系，引入标准交互原语（`platforms/linux/webui/src/components/ui/`）、`lucide-react` 图标与统一 `@theme` 设计令牌（`src/styles/shadcn.css`），移除旧版手写 CSS 样式层并重建同步 `platforms/linux/web/` 静态产物。
+- 保持既有导航栏结构、首页运行看板、近期事件/请求流、深/浅双主题与全部控制面板页面核心交互语义一致，更新对应 WebUI 源码契约测试，并修复中宽视口顶栏状态徽章与搜索按钮重叠及 `CardHeader` `flex` 对齐问题。
+
+### 验证与边界
+
+- 共享 Rust 核心、macOS App、配置与数据库 schema 不变；完整 Rust、Swift、WebUI、容器镜像与发布打包产物由 GitHub Actions 验证和生成，发布不代表本机或生产实例已经升级。
+
 ## [0.4.82] - 2026-11-13
 
 ### 优化与修复
