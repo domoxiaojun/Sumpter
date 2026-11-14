@@ -1,15 +1,29 @@
-import { localDayString, statisticsDateBounds } from '../utils/statisticsDateRange.js';
-import { inboundTokenOptions } from '../utils/inboundTokens.js';
-import { requestKindLabel, clientVariantLabel, agentRoleLabel } from '../utils/helpers.js';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { BarChart3, ChevronRight, Download, Filter, RefreshCw, Trash2, X } from 'lucide-react';
 import { AnalyticsWorkspace } from '../components/AnalyticsWorkspace.jsx';
 import { EventInspector } from '../components/EventInspector.jsx';
+import { Badge } from '../components/ui/badge.jsx';
+import { Button } from '../components/ui/button.jsx';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card.jsx';
+import { Input } from '../components/ui/input.jsx';
+import { Label } from '../components/ui/label.jsx';
 import { useApp, useRuntimePagePreference } from '../context/AppContext.jsx';
-import { api } from '../services/api.js';
-import { clientKindLabel, failureKindLabel, failurePhaseLabel, formatNumber, purposeLabel } from '../utils/helpers.js';
-import { Icon } from '../utils/icons.jsx';
-import { copyWithToast } from '../utils/clipboard.js';
 import { useDialogFocus } from '../hooks/useDialogFocus.js';
+import { cn } from '../lib/utils.js';
+import { api } from '../services/api.js';
+import { copyWithToast } from '../utils/clipboard.js';
+import {
+  agentRoleLabel,
+  clientKindLabel,
+  clientVariantLabel,
+  failureKindLabel,
+  failurePhaseLabel,
+  formatNumber,
+  purposeLabel,
+  requestKindLabel,
+} from '../utils/helpers.js';
+import { inboundTokenOptions } from '../utils/inboundTokens.js';
+import { localDayString, statisticsDateBounds } from '../utils/statisticsDateRange.js';
 
 const RANGE_OPTIONS = [
   ['today', '今天'],
@@ -17,6 +31,8 @@ const RANGE_OPTIONS = [
   ['30d', '30 天'],
   ['all', '全部'],
 ];
+
+const SELECT_CLS = 'flex h-9 w-full rounded-md border border-input bg-background/60 px-2.5 text-xs text-foreground shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50';
 
 function projectLabel(value) {
   if (value === 'unidentified_project') return '未识别项目';
@@ -68,16 +84,21 @@ function RuntimeCleanupDialog({ open, onClose, onCompleted, addToast }) {
   const canPreview = olderThan != null && !loading;
   const runPreview = async () => {
     if (olderThan == null) return;
-    setLoading(true); setError(''); setPreview(null);
+    setLoading(true);
+    setError('');
+    setPreview(null);
     try {
       setPreview(await api.previewRuntimeCleanup({ olderThan }));
     } catch (nextError) {
       setError(nextError?.message || '无法预览清理范围');
-    } finally { setLoading(false); }
+    } finally {
+      setLoading(false);
+    }
   };
   const runCleanup = async () => {
     if (!preview || olderThan == null || loading) return;
-    setLoading(true); setError('');
+    setLoading(true);
+    setError('');
     try {
       const result = await api.cleanupRuntime({ olderThan });
       addToast(`已按时间清理 ${formatNumber(result.deletedEvents || 0)} 条统计事件`, 'success');
@@ -85,30 +106,132 @@ function RuntimeCleanupDialog({ open, onClose, onCompleted, addToast }) {
       await onCompleted?.();
     } catch (nextError) {
       setError(nextError?.message || '清理失败');
-    } finally { setLoading(false); }
+    } finally {
+      setLoading(false);
+    }
   };
   const nowDate = new Date();
-  const today = [nowDate.getFullYear(), String(nowDate.getMonth() + 1).padStart(2, '0'), String(nowDate.getDate()).padStart(2, '0')].join('-');
+  const today = [
+    nowDate.getFullYear(),
+    String(nowDate.getMonth() + 1).padStart(2, '0'),
+    String(nowDate.getDate()).padStart(2, '0'),
+  ].join('-');
+
   return (
-    <div className="modal-overlay runtime-v2-storage-modal" onClick={(event) => { if (event.target === event.currentTarget && !loading) onClose?.(); }}>
-      <section ref={dialogRef} tabIndex={-1} className="modal-dialog runtime-v2-storage-dialog runtime-cleanup-dialog" role="dialog" aria-modal="true" aria-labelledby="runtime-cleanup-heading" aria-busy={loading || undefined}>
-        <header className="modal-header runtime-v2-storage-dialog-header">
-          <div><h2 id="runtime-cleanup-heading">按时间清理运行统计</h2><p>只删除已完成且整组早于截止时间的请求；进行中的请求组会完整保留。</p></div>
-          <button type="button" className="btn-icon" onClick={onClose} disabled={loading} aria-label="关闭清理窗口"><Icon name="close" size={16} /></button>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
+      onClick={(event) => {
+        if (event.target === event.currentTarget && !loading) onClose?.();
+      }}
+    >
+      <section
+        ref={dialogRef}
+        tabIndex={-1}
+        className="w-full max-w-lg rounded-xl border border-border bg-card text-card-foreground shadow-2xl outline-none"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="runtime-cleanup-heading"
+        aria-busy={loading || undefined}
+      >
+        <header className="flex items-start justify-between gap-4 border-b border-border/60 px-5 py-4">
+          <div className="space-y-1">
+            <h2 id="runtime-cleanup-heading" className="text-base font-semibold text-foreground">
+              按时间清理运行统计
+            </h2>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              只删除已完成且整组早于截止时间的请求；进行中的请求组会完整保留。
+            </p>
+          </div>
+          <Button type="button" variant="ghost" size="icon-sm" onClick={onClose} disabled={loading} aria-label="关闭清理窗口">
+            <X className="size-4" />
+          </Button>
         </header>
-        <div className="modal-body runtime-v2-storage-dialog-body runtime-cleanup-body">
-          <label><span>清理范围</span><select className="form-select" value={selection} onChange={(event) => { setSelection(event.target.value); setPreview(null); setError(''); }} disabled={loading}>
-            <option value="7">早于 7 天</option><option value="30">早于 30 天</option><option value="90">早于 90 天</option><option value="custom">自定义日期</option><option value="all">全部已完成记录</option>
-          </select></label>
-          {selection === 'custom' && <label><span>清理早于此日期的记录</span><input className="form-input" type="date" value={customDate} max={today} onChange={(event) => { setCustomDate(event.target.value); setPreview(null); setError(''); }} disabled={loading} /></label>}
-          <p className="runtime-cleanup-help">将删除截止时间之前的统计事件。诊断捕获、自动保留策略和数据库结构不会受影响。</p>
-          {selection === 'all' && <div className="runtime-v2-storage-limit-error" role="note">“全部”也不会删除进行中的请求；如需移除旧版字段或回收数据库文件，请单独使用“重置并新建数据库”。</div>}
-          {preview && <div className="runtime-cleanup-preview" role="status"><strong>预计删除 {formatNumber(preview.deletableEvents)} 条事件</strong><span>涉及约 {formatNumber(preview.deletableRequests)} 个请求 · 清理后保留 {formatNumber(preview.remainingEvents)} 条事件</span></div>}
-          {error && <div className="runtime-v2-storage-limit-error" role="alert">{error}</div>}
+
+        <div className="space-y-4 px-5 py-4 text-xs">
+          <label className="block space-y-1.5">
+            <span className="font-medium text-foreground">清理范围</span>
+            <select
+              className={SELECT_CLS}
+              value={selection}
+              onChange={(event) => {
+                setSelection(event.target.value);
+                setPreview(null);
+                setError('');
+              }}
+              disabled={loading}
+            >
+              <option value="7">早于 7 天</option>
+              <option value="30">早于 30 天</option>
+              <option value="90">早于 90 天</option>
+              <option value="custom">自定义日期</option>
+              <option value="all">全部已完成记录</option>
+            </select>
+          </label>
+
+          {selection === 'custom' && (
+            <label className="block space-y-1.5">
+              <span className="font-medium text-foreground">清理早于此日期的记录</span>
+              <Input
+                type="date"
+                value={customDate}
+                max={today}
+                onChange={(event) => {
+                  setCustomDate(event.target.value);
+                  setPreview(null);
+                  setError('');
+                }}
+                disabled={loading}
+              />
+            </label>
+          )}
+
+          <p className="leading-relaxed text-muted-foreground">
+            将删除截止时间之前的统计事件。诊断捕获、自动保留策略和数据库结构不会受影响。
+          </p>
+
+          {selection === 'all' && (
+            <div className="rounded-lg border border-status-warning/35 bg-status-warning/10 p-3 text-status-warning" role="note">
+              “全部”也不会删除进行中的请求；如需移除旧版字段或回收数据库文件，请单独使用“重置并新建数据库”。
+            </div>
+          )}
+
+          {preview && (
+            <div className="rounded-lg border border-primary/30 bg-primary/10 p-3" role="status">
+              <strong className="block font-semibold text-foreground">
+                预计删除 {formatNumber(preview.deletableEvents)} 条事件
+              </strong>
+              <span className="mt-0.5 block text-muted-foreground">
+                涉及约 {formatNumber(preview.deletableRequests)} 个请求 · 清理后保留 {formatNumber(preview.remainingEvents)} 条事件
+              </span>
+            </div>
+          )}
+
+          {error && (
+            <div className="rounded-lg border border-status-critical/35 bg-status-critical/10 p-3 text-status-critical" role="alert">
+              {error}
+            </div>
+          )}
         </div>
-        <footer className="modal-footer runtime-v2-storage-dialog-footer">
-          <button type="button" className="btn btn-secondary" onClick={onClose} disabled={loading}>取消</button>
-          {!preview ? <button type="button" className="btn btn-primary" onClick={runPreview} disabled={!canPreview}>{loading ? '计算中…' : '预览清理范围'}</button> : <button type="button" className="btn btn-danger" onClick={runCleanup} disabled={loading || preview.deletableEvents <= 0}>{loading ? '清理中…' : `确认清理 ${formatNumber(preview.deletableEvents)} 条`}</button>}
+
+        <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-border/60 px-5 py-3.5">
+          <Button type="button" variant="secondary" size="sm" onClick={onClose} disabled={loading}>
+            取消
+          </Button>
+          {!preview ? (
+            <Button type="button" size="sm" onClick={runPreview} disabled={!canPreview}>
+              {loading ? '计算中…' : '预览清理范围'}
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              onClick={runCleanup}
+              disabled={loading || preview.deletableEvents <= 0}
+            >
+              {loading ? '清理中…' : `确认清理 ${formatNumber(preview.deletableEvents)} 条`}
+            </Button>
+          )}
         </footer>
       </section>
     </div>
@@ -207,6 +330,7 @@ export function StatsPage() {
     refreshCore,
     addToast,
   } = useApp();
+
   const [customDateEditor, setCustomDateEditor] = useRuntimePagePreference('stats.customEditor', false);
   const [customStartDay, setCustomStartDay] = useRuntimePagePreference('stats.customStart', localDayString);
   const [customEndDay, setCustomEndDay] = useRuntimePagePreference('stats.customEnd', localDayString);
@@ -235,14 +359,63 @@ export function StatsPage() {
     return () => { active = false; };
   }, [loadRuntimeEvent, selectedEventID, pageVisible]);
 
-  const filters = analyticsFilters || { inboundTokenID: '', clientKind: '', requestKind: '', clientVariant: '', agentRole: '', agentName: '', parentThreadID: '', parentTurnID: '', rootTurnID: '', endpointID: '', project: '', projectID: '', sessionID: '', model: '', requestPurpose: '', outcome: '', failureKind: '', failurePhase: '' };
+  const filters = analyticsFilters || {
+    inboundTokenID: '',
+    clientKind: '',
+    requestKind: '',
+    clientVariant: '',
+    agentRole: '',
+    agentName: '',
+    parentThreadID: '',
+    parentTurnID: '',
+    rootTurnID: '',
+    endpointID: '',
+    project: '',
+    projectID: '',
+    sessionID: '',
+    model: '',
+    requestPurpose: '',
+    outcome: '',
+    failureKind: '',
+    failurePhase: '',
+  };
+
   const advancedFilterLabels = [
-    ['requestKind', '请求类型'], ['clientVariant', '客户端形态'], ['agentRole', '代理角色'], ['agentName', '代理名称'],
-    ['parentThreadID', '父线程'], ['parentTurnID', '父回合'], ['rootTurnID', '根回合'],
-    ['requestPurpose', '用途'], ['failureKind', '失败类型'], ['failurePhase', '失败阶段'],
+    ['requestKind', '请求类型'],
+    ['clientVariant', '客户端形态'],
+    ['agentRole', '代理角色'],
+    ['agentName', '代理名称'],
+    ['parentThreadID', '父线程'],
+    ['parentTurnID', '父回合'],
+    ['rootTurnID', '根回合'],
+    ['requestPurpose', '用途'],
+    ['failureKind', '失败类型'],
+    ['failurePhase', '失败阶段'],
   ].filter(([key]) => filters[key]).map(([key, label]) => `${label}=${filters[key]}`);
-  const activeFilterCount = [filters.inboundTokenID, filters.clientKind, filters.requestKind, filters.clientVariant, filters.agentRole, filters.agentName, filters.parentThreadID, filters.parentTurnID, filters.rootTurnID, filters.endpointID, filters.projectID, filters.project, filters.sessionID, filters.model, filters.requestPurpose, filters.outcome, filters.failureKind, filters.failurePhase, selectedProject?.key, selectedSession?.key]
-    .filter((value) => String(value || '').trim()).length;
+
+  const activeFilterCount = [
+    filters.inboundTokenID,
+    filters.clientKind,
+    filters.requestKind,
+    filters.clientVariant,
+    filters.agentRole,
+    filters.agentName,
+    filters.parentThreadID,
+    filters.parentTurnID,
+    filters.rootTurnID,
+    filters.endpointID,
+    filters.projectID,
+    filters.project,
+    filters.sessionID,
+    filters.model,
+    filters.requestPurpose,
+    filters.outcome,
+    filters.failureKind,
+    filters.failurePhase,
+    selectedProject?.key,
+    selectedSession?.key,
+  ].filter((value) => String(value || '').trim()).length;
+
   const facets = useMemo(() => ({
     inboundTokens: inboundTokenOptions(config, runtimeFacets?.facets, filters.inboundTokenID, secretStatus?.inboundAuthToken?.configured),
     clientKinds: facetOptions(runtimeFacets, 'clientKinds', filters.clientKind),
@@ -260,7 +433,28 @@ export function StatsPage() {
     requestPurposes: facetOptions(runtimeFacets, 'requestPurposes', filters.requestPurpose),
     failureKinds: facetOptions(runtimeFacets, 'failureKinds', filters.failureKind),
     failurePhases: facetOptions(runtimeFacets, 'failurePhases', filters.failurePhase),
-  }), [config, secretStatus, runtime, runtimeFacets, filters.inboundTokenID, filters.clientKind, filters.requestKind, filters.clientVariant, filters.agentRole, filters.agentName, filters.parentThreadID, filters.parentTurnID, filters.rootTurnID, filters.endpointID, filters.project, filters.sessionID, filters.model, filters.requestPurpose, filters.failureKind, filters.failurePhase]);
+  }), [
+    config,
+    secretStatus,
+    runtime,
+    runtimeFacets,
+    filters.inboundTokenID,
+    filters.clientKind,
+    filters.requestKind,
+    filters.clientVariant,
+    filters.agentRole,
+    filters.agentName,
+    filters.parentThreadID,
+    filters.parentTurnID,
+    filters.rootTurnID,
+    filters.endpointID,
+    filters.project,
+    filters.sessionID,
+    filters.model,
+    filters.requestPurpose,
+    filters.failureKind,
+    filters.failurePhase,
+  ]);
 
   const updateFilter = (key, value) => {
     const next = {
@@ -274,9 +468,11 @@ export function StatsPage() {
   const handleProjectSelectionChange = useCallback((project) => {
     setSelectedProject(project || null);
   }, []);
+
   const handleSessionSelectionChange = useCallback((session) => {
     setSelectedSession(session || null);
   }, []);
+
   const clearLocalDrilldowns = useCallback(() => {
     setProjectSelectionResetSignal((value) => value + 1);
     setSelectedProject(null);
@@ -285,7 +481,26 @@ export function StatsPage() {
 
   const clearAllFilters = () => {
     clearLocalDrilldowns();
-    loadRuntimeAnalytics(analyticsRange, { inboundTokenID: '', clientKind: '', requestKind: '', clientVariant: '', agentRole: '', agentName: '', parentThreadID: '', parentTurnID: '', rootTurnID: '', endpointID: '', project: '', projectID: '', sessionID: '', model: '', requestPurpose: '', outcome: '', failureKind: '', failurePhase: '' }).catch(() => null);
+    loadRuntimeAnalytics(analyticsRange, {
+      inboundTokenID: '',
+      clientKind: '',
+      requestKind: '',
+      clientVariant: '',
+      agentRole: '',
+      agentName: '',
+      parentThreadID: '',
+      parentTurnID: '',
+      rootTurnID: '',
+      endpointID: '',
+      project: '',
+      projectID: '',
+      sessionID: '',
+      model: '',
+      requestPurpose: '',
+      outcome: '',
+      failureKind: '',
+      failurePhase: '',
+    }).catch(() => null);
   };
 
   const recreateDatabase = async () => {
@@ -302,6 +517,7 @@ export function StatsPage() {
 
   const selectedEvent = runtimeEventDetail?.event?.id === selectedEventID ? runtimeEventDetail.event : null;
   const requestID = selectedEvent?.requestID;
+
   useEffect(() => {
     setEventChain([]);
     if (!requestID || !pageVisible) return undefined;
@@ -311,168 +527,321 @@ export function StatsPage() {
     }).catch(() => {});
     return () => controller.abort();
   }, [requestID, pageVisible]);
+
   return (
-    <div className="analytics-page analytics-v3-page">
-      <div className="page-header analytics-v3-page-header">
-        <div className="page-title-group">
-          <h1 className="page-title">
-            <Icon name="chart" size={24} style={{ color: 'var(--primary)' }} />
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="space-y-1">
+          <h1 className="flex items-center gap-2.5 text-xl font-semibold tracking-tight text-foreground">
+            <BarChart3 className="size-5 text-primary" />
             <span>统计</span>
           </h1>
-          <p className="page-subtitle">请求统计与运行健康</p>
+          <p className="text-xs text-muted-foreground">请求统计与运行健康</p>
         </div>
-        <div className="page-actions">
-          <button type="button" className="btn btn-secondary" onClick={() => loadRuntimeAnalytics(analyticsRange, filters).catch(error => addToast(error.message, 'error'))}>刷新</button>
-          <button type="button" className="btn btn-secondary" onClick={() => setOpenExportSignal((value) => value + 1)}>
-            <Icon name="download" size={15} />导出
-          </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => loadRuntimeAnalytics(analyticsRange, filters).catch((error) => addToast(error.message, 'error'))}
+          >
+            <RefreshCw className={cn('size-3.5', analyticsLoading && 'animate-spin')} />
+            <span>刷新</span>
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => setOpenExportSignal((value) => value + 1)}
+          >
+            <Download className="size-3.5" />
+            <span>导出</span>
+          </Button>
         </div>
       </div>
 
-      {runtime?.startupIssue && <div className="glass-panel runtime-startup-issue" role="alert"><strong>运行统计数据库需要重建</strong><p>{runtime.startupIssue.message || '检测到旧版 runtime 数据库，代理暂未启动。'}</p><button type="button" className="btn btn-danger" onClick={recreateDatabase}>清空并重建数据库</button></div>}
-      <section className="glass-panel analytics-v3-filter-panel" aria-labelledby="analytics-v3-filter-heading">
-        <div className="analytics-v3-filter-status">
-          <div>
-            <h2 id="analytics-v3-filter-heading">范围与筛选</h2>
-            <p>按所选时间范围展示数据；常用条件直接选择，其他条件在高级筛选中展开。</p>
+      {runtime?.startupIssue && (
+        <div
+          className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-status-critical/40 bg-status-critical/10 p-4 text-xs text-status-critical"
+          role="alert"
+        >
+          <div className="space-y-0.5">
+            <strong className="block text-sm font-semibold">运行统计数据库需要重建</strong>
+            <p>{runtime.startupIssue.message || '检测到旧版 runtime 数据库，代理暂未启动。'}</p>
           </div>
+          <Button type="button" variant="destructive" size="sm" onClick={recreateDatabase}>
+            <Trash2 className="size-3.5" />
+            <span>清空并重建数据库</span>
+          </Button>
         </div>
+      )}
 
-        <div id="analytics-v3-filter-grid" className="analytics-v3-filter-grid">
-          <fieldset className="analytics-v3-range" aria-label="统计时间范围">
-            <legend>时间</legend>
-            <div className="analytics-v3-segmented">
-              {RANGE_OPTIONS.map(([value, label]) => (
-                <button
-                  key={value}
-                  type="button"
-                  aria-pressed={analyticsRange === value}
-                  className={`btn btn-sm ${analyticsRange === value ? 'btn-primary' : 'btn-secondary'}`}
-                  onClick={() => { setCustomDateEditor(false); setCustomDateError(''); loadRuntimeAnalytics(value, filters).catch(() => null); }}
-                >
-                  {label}
-                </button>
-              ))}
-              <button type="button" className={`btn btn-sm ${customDateEditor ? 'btn-primary' : 'btn-secondary'}`}
-                aria-pressed={customDateEditor} onClick={() => setCustomDateEditor(true)}>自定义</button>
-            </div>
-            {customDateEditor && <div className="runtime-custom-dates">
-              <label>开始日期<input className="form-input" type="date" max={localDayString()} value={customStartDay}
-                onChange={event => { setCustomStartDay(event.target.value); setCustomDateError(''); }} /></label>
-              <label>结束日期<input className="form-input" type="date" max={localDayString()} value={customEndDay}
-                onChange={event => { setCustomEndDay(event.target.value); setCustomDateError(''); }} /></label>
-              <button type="button" className="btn btn-primary" onClick={() => {
-                try {
-                  statisticsDateBounds(customStartDay, customEndDay);
-                  setCustomDateError('');
-                  loadRuntimeAnalytics('custom', { ...filters, customStartDay, customEndDay }).catch(error => setCustomDateError(error.message));
-                } catch (error) { setCustomDateError(error.message); }
-              }}>应用</button>
-              <small>{analyticsRange === 'custom' ? `已应用 ${filters.customStartDay} 至 ${filters.customEndDay} · ` : '选择日期后点击应用 · '}包含结束当天 · 本地时区 {Intl.DateTimeFormat().resolvedOptions().timeZone}</small>
-              {customDateError && <span role="alert" className="text-danger">{customDateError}</span>}
-            </div>}
-          </fieldset>
-          <label>
-            <span>入口</span>
-            <select className="form-select" value={filters.endpointID || ''} onChange={(event) => updateFilter('endpointID', event.target.value)}>
-              <option value="">全部</option>
-              {facets.endpoints.map((item) => <option key={item.value} value={item.value}>{item.label} · {formatNumber(item.count)}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>项目</span>
-            <select className="form-select" value={filters.project || ''} onChange={(event) => updateFilter('project', event.target.value)}>
-              <option value="">全部</option>
-              {facets.projects.map((item) => <option key={item.value} value={item.value}>{projectLabel(item.value)} · {formatNumber(item.count)}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>会话</span>
-            <select className="form-select" value={filters.sessionID || ''} onChange={(event) => updateFilter('sessionID', event.target.value)}>
-              <option value="">全部</option>
-              {facets.sessions.map((item) => <option key={item.value} value={item.value}>{sessionLabel(item.value)} · {formatNumber(item.count)}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>入站 Token</span>
-            <select className="form-select" aria-label="入站 Token" value={filters.inboundTokenID || ''} onChange={e => updateFilter('inboundTokenID', e.target.value)}>
-              <option value="">全部 Token</option>
-              {facets.inboundTokens.map(item => <option key={item.value} value={item.value}>{item.label} · {formatNumber(item.count)}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>客户端</span>
-            <select className="form-select" value={filters.clientKind || ''} onChange={(event) => updateFilter('clientKind', event.target.value)}>
-              <option value="">全部</option>
-              {facets.clientKinds.map((item) => <option key={item.value} value={item.value}>{clientKindLabel(item.value)} · {formatNumber(item.count)}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>模型</span>
-            <select className="form-select" value={filters.model || ''} onChange={(event) => updateFilter('model', event.target.value)}>
-              <option value="">全部</option>
-              {facets.models.map((item) => <option key={item.value} value={item.value}>{facetOptionLabel(item, 'model')}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>最终结果</span>
-            <select className="form-select" value={filters.outcome || ''} onChange={(event) => updateFilter('outcome', event.target.value)}>
-              <option value="">全部</option>
-              <option value="succeeded">成功</option>
-              <option value="failed">失败</option>
-              <option value="cancelled">已取消</option>
-            </select>
-          </label>
-          <button
-            type="button"
-            className="btn btn-secondary analytics-v3-clear-filter"
-            disabled={!activeFilterCount}
-            onClick={clearAllFilters}
-          >
-            清除筛选
-          </button>
-        </div>
-        <details className="analytics-v3-advanced-filters">
-          <summary>高级筛选{advancedFilterLabels.length > 0 ? ` · 已选 ${advancedFilterLabels.length} 项` : ' · 代理、用途与失败诊断'}</summary>
-          <div className="analytics-v3-filter-grid">
-          {[
-            ['requestKind', '请求类型', 'requestKinds'], ['clientVariant', '客户端形态', 'clientVariants'], ['agentRole', '代理角色', 'agentRoles'], ['agentName', '代理名称', 'agentNames'],
-            ['parentThreadID', '父线程', 'parentThreads'], ['parentTurnID', '父回合', 'parentTurns'], ['rootTurnID', '根回合', 'rootTurns'],
-          ].map(([key, label, facetKey]) => (
-            <label key={key}><span>{label}</span><select className="form-select" value={filters[key] || ''} onChange={(event) => updateFilter(key, event.target.value)}>
-              <option value="">全部</option>{(facets[facetKey] || []).map((item) => <option key={item.value} value={item.value}>{key === 'requestKind' ? requestKindLabel(item.value) : key === 'clientVariant' ? clientVariantLabel(item.value) : key === 'agentRole' ? agentRoleLabel(item.value) : item.value} · {formatNumber(item.count)}</option>)}
-            </select></label>
-          ))}
-          <label>
-            <span>用途</span>
-            <select className="form-select" value={filters.requestPurpose || ''} onChange={(event) => updateFilter('requestPurpose', event.target.value)}>
-              <option value="">全部</option>
-              {facets.requestPurposes.map((item) => <option key={item.value} value={item.value}>{facetOptionLabel(item, 'purpose')}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>失败类型</span>
-            <select className="form-select" value={filters.failureKind || ''} onChange={(event) => updateFilter('failureKind', event.target.value)}>
-              <option value="">全部</option>
-              {facets.failureKinds.map((item) => <option key={item.value} value={item.value}>{facetOptionLabel(item, 'failureKind')}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>失败阶段</span>
-            <select className="form-select" value={filters.failurePhase || ''} onChange={(event) => updateFilter('failurePhase', event.target.value)}>
-              <option value="">全部</option>
-              {facets.failurePhases.map((item) => <option key={item.value} value={item.value}>{facetOptionLabel(item, 'failurePhase')}</option>)}
-            </select>
-          </label>
+      <Card aria-labelledby="analytics-v3-filter-heading">
+        <CardHeader className="border-b border-border/60 pb-4">
+          <div className="flex items-center gap-2">
+            <Filter className="size-4 text-primary" />
+            <CardTitle id="analytics-v3-filter-heading">范围与筛选</CardTitle>
+            {activeFilterCount > 0 && <Badge variant="default">{activeFilterCount} 项筛选</Badge>}
           </div>
-        </details>
-        {advancedFilterLabels.length > 0 && <p className="analytics-v3-active-filters">{advancedFilterLabels.join(' · ')}</p>}
-        <div className="analytics-v3-filter-feedback" role={analyticsError ? 'alert' : 'status'} aria-live="polite">
-          {analyticsError
-            ? `统计刷新失败：${analyticsError}${analyticsStale ? '；当前保留上一份结果。' : ''}`
-            : analyticsLoading ? '正在更新统计…' : activeFilterCount ? `已应用 ${activeFilterCount} 项筛选` : '显示全部项目'}
-        </div>
-      </section>
+          <CardDescription>按所选时间范围展示数据；常用条件直接选择，其他条件在高级筛选中展开。</CardDescription>
+        </CardHeader>
+
+        <CardContent className="space-y-4">
+          <div
+            id="analytics-v3-filter-grid"
+            className="analytics-v3-filter-grid grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5"
+          >
+            <fieldset className="space-y-1.5 sm:col-span-2 lg:col-span-4 xl:col-span-5" aria-label="统计时间范围">
+              <legend className="text-xs font-medium text-foreground/90">时间</legend>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {RANGE_OPTIONS.map(([value, label]) => (
+                  <Button
+                    key={value}
+                    type="button"
+                    size="xs"
+                    variant={analyticsRange === value && !customDateEditor ? 'default' : 'secondary'}
+                    aria-pressed={analyticsRange === value}
+                    onClick={() => {
+                      setCustomDateEditor(false);
+                      setCustomDateError('');
+                      loadRuntimeAnalytics(value, filters).catch(() => null);
+                    }}
+                  >
+                    {label}
+                  </Button>
+                ))}
+                <Button
+                  type="button"
+                  size="xs"
+                  variant={customDateEditor ? 'default' : 'secondary'}
+                  aria-pressed={customDateEditor}
+                  onClick={() => setCustomDateEditor(true)}
+                >
+                  自定义
+                </Button>
+              </div>
+              {customDateEditor && (
+                <div className="mt-2 flex flex-wrap items-end gap-2.5 rounded-lg border border-border/75 bg-muted/20 p-3">
+                  <Label className="space-y-1">
+                    <span className="block">开始日期</span>
+                    <Input
+                      type="date"
+                      className="h-8 w-auto text-xs"
+                      max={localDayString()}
+                      value={customStartDay}
+                      onChange={(event) => {
+                        setCustomStartDay(event.target.value);
+                        setCustomDateError('');
+                      }}
+                    />
+                  </Label>
+                  <Label className="space-y-1">
+                    <span className="block">结束日期</span>
+                    <Input
+                      type="date"
+                      className="h-8 w-auto text-xs"
+                      max={localDayString()}
+                      value={customEndDay}
+                      onChange={(event) => {
+                        setCustomEndDay(event.target.value);
+                        setCustomDateError('');
+                      }}
+                    />
+                  </Label>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => {
+                      try {
+                        statisticsDateBounds(customStartDay, customEndDay);
+                        setCustomDateError('');
+                        loadRuntimeAnalytics('custom', { ...filters, customStartDay, customEndDay }).catch((error) => setCustomDateError(error.message));
+                      } catch (error) {
+                        setCustomDateError(error.message);
+                      }
+                    }}
+                  >
+                    应用
+                  </Button>
+                  <small className="text-[11px] text-muted-foreground">
+                    {analyticsRange === 'custom' ? `已应用 ${filters.customStartDay} 至 ${filters.customEndDay} · ` : '选择日期后点击应用 · '}
+                    包含结束当天 · 本地时区 {Intl.DateTimeFormat().resolvedOptions().timeZone}
+                  </small>
+                  {customDateError && <span role="alert" className="text-xs font-medium text-status-critical">{customDateError}</span>}
+                </div>
+              )}
+            </fieldset>
+
+            <label className="space-y-1">
+              <span className="block text-xs font-medium text-foreground/90">入口</span>
+              <select className={SELECT_CLS} value={filters.endpointID || ''} onChange={(event) => updateFilter('endpointID', event.target.value)}>
+                <option value="">全部</option>
+                {facets.endpoints.map((item) => (
+                  <option key={item.value} value={item.value}>{item.label} · {formatNumber(item.count)}</option>
+                ))}
+              </select>
+            </label>
+
+            <label className="space-y-1">
+              <span className="block text-xs font-medium text-foreground/90">项目</span>
+              <select className={SELECT_CLS} value={filters.project || ''} onChange={(event) => updateFilter('project', event.target.value)}>
+                <option value="">全部</option>
+                {facets.projects.map((item) => (
+                  <option key={item.value} value={item.value}>{projectLabel(item.value)} · {formatNumber(item.count)}</option>
+                ))}
+              </select>
+            </label>
+
+            <label className="space-y-1">
+              <span className="block text-xs font-medium text-foreground/90">会话</span>
+              <select className={SELECT_CLS} value={filters.sessionID || ''} onChange={(event) => updateFilter('sessionID', event.target.value)}>
+                <option value="">全部</option>
+                {facets.sessions.map((item) => (
+                  <option key={item.value} value={item.value}>{sessionLabel(item.value)} · {formatNumber(item.count)}</option>
+                ))}
+              </select>
+            </label>
+
+            <label className="space-y-1">
+              <span className="block text-xs font-medium text-foreground/90">入站 Token</span>
+              <select
+                className={SELECT_CLS}
+                aria-label="入站 Token"
+                value={filters.inboundTokenID || ''}
+                onChange={(e) => updateFilter('inboundTokenID', e.target.value)}
+              >
+                <option value="">全部 Token</option>
+                {facets.inboundTokens.map((item) => (
+                  <option key={item.value} value={item.value}>{item.label} · {formatNumber(item.count)}</option>
+                ))}
+              </select>
+            </label>
+
+            <label className="space-y-1">
+              <span className="block text-xs font-medium text-foreground/90">客户端</span>
+              <select className={SELECT_CLS} value={filters.clientKind || ''} onChange={(event) => updateFilter('clientKind', event.target.value)}>
+                <option value="">全部</option>
+                {facets.clientKinds.map((item) => (
+                  <option key={item.value} value={item.value}>{clientKindLabel(item.value)} · {formatNumber(item.count)}</option>
+                ))}
+              </select>
+            </label>
+
+            <label className="space-y-1">
+              <span className="block text-xs font-medium text-foreground/90">模型</span>
+              <select className={SELECT_CLS} value={filters.model || ''} onChange={(event) => updateFilter('model', event.target.value)}>
+                <option value="">全部</option>
+                {facets.models.map((item) => (
+                  <option key={item.value} value={item.value}>{facetOptionLabel(item, 'model')}</option>
+                ))}
+              </select>
+            </label>
+
+            <label className="space-y-1">
+              <span className="block text-xs font-medium text-foreground/90">最终结果</span>
+              <select className={SELECT_CLS} value={filters.outcome || ''} onChange={(event) => updateFilter('outcome', event.target.value)}>
+                <option value="">全部</option>
+                <option value="succeeded">成功</option>
+                <option value="failed">失败</option>
+                <option value="cancelled">已取消</option>
+              </select>
+            </label>
+
+            <div className="flex items-end">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                className="w-full sm:w-auto"
+                disabled={!activeFilterCount}
+                onClick={clearAllFilters}
+              >
+                清除筛选
+              </Button>
+            </div>
+          </div>
+
+          <details className="analytics-v3-advanced-filters group rounded-lg border border-border/80 bg-muted/15">
+            <summary className="flex cursor-pointer list-none items-center gap-2 px-3.5 py-2.5 text-xs font-medium text-foreground select-none hover:bg-muted/35">
+              <ChevronRight className="size-3.5 text-muted-foreground transition-transform group-open:rotate-90" />
+              <span>高级筛选{advancedFilterLabels.length > 0 ? ` · 已选 ${advancedFilterLabels.length} 项` : ' · 代理、用途与失败诊断'}</span>
+            </summary>
+            <div className="grid gap-3 border-t border-border/60 p-3.5 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
+              {[
+                ['requestKind', '请求类型', 'requestKinds'],
+                ['clientVariant', '客户端形态', 'clientVariants'],
+                ['agentRole', '代理角色', 'agentRoles'],
+                ['agentName', '代理名称', 'agentNames'],
+                ['parentThreadID', '父线程', 'parentThreads'],
+                ['parentTurnID', '父回合', 'parentTurns'],
+                ['rootTurnID', '根回合', 'rootTurns'],
+              ].map(([key, label, facetKey]) => (
+                <label key={key} className="space-y-1">
+                  <span className="block text-xs font-medium text-foreground/90">{label}</span>
+                  <select className={SELECT_CLS} value={filters[key] || ''} onChange={(event) => updateFilter(key, event.target.value)}>
+                    <option value="">全部</option>
+                    {(facets[facetKey] || []).map((item) => (
+                      <option key={item.value} value={item.value}>
+                        {key === 'requestKind'
+                          ? requestKindLabel(item.value)
+                          : key === 'clientVariant'
+                            ? clientVariantLabel(item.value)
+                            : key === 'agentRole'
+                              ? agentRoleLabel(item.value)
+                              : item.value} · {formatNumber(item.count)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ))}
+
+              <label className="space-y-1">
+                <span className="block text-xs font-medium text-foreground/90">用途</span>
+                <select className={SELECT_CLS} value={filters.requestPurpose || ''} onChange={(event) => updateFilter('requestPurpose', event.target.value)}>
+                  <option value="">全部</option>
+                  {facets.requestPurposes.map((item) => (
+                    <option key={item.value} value={item.value}>{facetOptionLabel(item, 'purpose')}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="space-y-1">
+                <span className="block text-xs font-medium text-foreground/90">失败类型</span>
+                <select className={SELECT_CLS} value={filters.failureKind || ''} onChange={(event) => updateFilter('failureKind', event.target.value)}>
+                  <option value="">全部</option>
+                  {facets.failureKinds.map((item) => (
+                    <option key={item.value} value={item.value}>{facetOptionLabel(item, 'failureKind')}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="space-y-1">
+                <span className="block text-xs font-medium text-foreground/90">失败阶段</span>
+                <select className={SELECT_CLS} value={filters.failurePhase || ''} onChange={(event) => updateFilter('failurePhase', event.target.value)}>
+                  <option value="">全部</option>
+                  {facets.failurePhases.map((item) => (
+                    <option key={item.value} value={item.value}>{facetOptionLabel(item, 'failurePhase')}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </details>
+
+          {advancedFilterLabels.length > 0 && (
+            <p className="font-mono text-xs text-primary">{advancedFilterLabels.join(' · ')}</p>
+          )}
+
+          <div
+            className={cn('text-xs', analyticsError ? 'text-status-warning font-medium' : 'text-muted-foreground')}
+            role={analyticsError ? 'alert' : 'status'}
+            aria-live="polite"
+          >
+            {analyticsError
+              ? `统计刷新失败：${analyticsError}${analyticsStale ? '；当前保留上一份结果。' : ''}`
+              : analyticsLoading ? '正在更新统计…' : activeFilterCount ? `已应用 ${activeFilterCount} 项筛选` : '显示全部项目'}
+          </div>
+        </CardContent>
+      </Card>
 
       <AnalyticsWorkspace
         onSelectEvent={setSelectedEventID}
@@ -497,21 +866,40 @@ export function StatsPage() {
       <RuntimeCleanupDialog
         open={cleanupOpen}
         onClose={() => setCleanupOpen(false)}
-        onCompleted={async () => { clearLocalDrilldowns(); await refreshCore(); }}
+        onCompleted={async () => {
+          clearLocalDrilldowns();
+          await refreshCore();
+        }}
         addToast={addToast}
       />
 
       {selectedEventID && (
-        <section id="analytics-request-drilldown" className="glass-panel analytics-v3-event-detail" aria-labelledby="analytics-v3-event-heading">
-          <div className="panel-header"><h2 id="analytics-v3-event-heading">请求详情</h2>
-            <button type="button" className="btn btn-ghost" onClick={() => setSelectedEventID(null)}>关闭</button>
-          </div>
-          {eventDetailError ? <div className="runtime-v2-message" role="alert">{eventDetailError}</div> : selectedEvent ? (
-            <EventInspector event={selectedEvent} chain={eventChain} onSelect={setSelectedEventID}
-              expanded={expandedGroups} onToggle={(key, open) => setExpandedGroups((previous) => previous[key] === open ? previous : { ...previous, [key]: open })}
-              onCopy={(text, label) => copyWithToast(text, label, addToast)} />
-          ) : <div className="runtime-v2-loading" role="status">正在按需读取单条详情…</div>}
-        </section>
+        <Card id="analytics-request-drilldown" aria-labelledby="analytics-v3-event-heading">
+          <CardHeader className="flex flex-row items-center justify-between border-b border-border/60 pb-3">
+            <CardTitle id="analytics-v3-event-heading">请求详情</CardTitle>
+            <Button type="button" variant="ghost" size="sm" onClick={() => setSelectedEventID(null)}>
+              关闭
+            </Button>
+          </CardHeader>
+          <CardContent className="pt-4">
+            {eventDetailError ? (
+              <div className="rounded-lg border border-status-critical/35 bg-status-critical/10 p-3 text-xs text-status-critical" role="alert">
+                {eventDetailError}
+              </div>
+            ) : selectedEvent ? (
+              <EventInspector
+                event={selectedEvent}
+                chain={eventChain}
+                onSelect={setSelectedEventID}
+                expanded={expandedGroups}
+                onToggle={(key, open) => setExpandedGroups((previous) => (previous[key] === open ? previous : { ...previous, [key]: open }))}
+                onCopy={(text, label) => copyWithToast(text, label, addToast)}
+              />
+            ) : (
+              <div className="text-xs text-muted-foreground" role="status">正在按需读取单条详情…</div>
+            )}
+          </CardContent>
+        </Card>
       )}
     </div>
   );

@@ -15,8 +15,7 @@ test('recent event request cell renders tool calls from the list projection', as
   const omitted = runtimeEvents.match(/const omittedDetailFields = \[([^\]]*)\]/)[1];
   assert.doesNotMatch(omitted, /toolCalls/, '分页列表现在自带 toolCalls,不应再被视为省略字段');
 
-  const css = await readFile(new URL('../src/styles/components.css', import.meta.url), 'utf8');
-  assert.match(css, /\.telemetry-event-tools \{[^}]*white-space: nowrap/);
+  assert.match(cell, /className="[^"]*telemetry-event-tools[^"]*whitespace-nowrap/, '工具行应保持单行不换行');
 });
 
 test('recent event result cell exposes the recorded transport', async () => {

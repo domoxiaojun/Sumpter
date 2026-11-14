@@ -38,7 +38,7 @@ test('RunPage uses the shared inspector with independent collapsed groups', () =
   const inspector = readFileSync(new URL('../src/components/EventInspector.jsx', import.meta.url), 'utf8');
   assert.match(source, /<EventInspector/);
   assert.match(inspector, /data-event-detail-tier="primary"/);
-  assert.match(inspector, /<details[\s\S]*?<summary>/);
+  assert.match(inspector, /<details[\s\S]*?<summary\b[^>]*>/);
   assert.match(inspector, /open=\{open\}/);
   assert.match(inspector, /eventHttpTone\(event\)/);
   assert.match(inspector, /eventCacheLabel\(event\)/);

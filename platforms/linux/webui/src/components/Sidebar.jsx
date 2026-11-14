@@ -1,14 +1,45 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  Activity,
+  BarChart3,
+  CircleHelp,
+  GitBranch,
+  Info,
+  Layers,
+  Server,
+  ShieldCheck,
+  Wrench,
+} from 'lucide-react';
 import { useAppControls } from '../context/AppContext.jsx';
-import { Icon } from '../utils/icons.jsx';
 import donkeyHead from '../assets/donkey-logo.png';
+import { cn } from '../lib/utils.js';
+import {
+  Sidebar as ShadcnSidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  useSidebar,
+} from './ui/sidebar.jsx';
+
+const ROUTE_ICONS = {
+  run: Activity,
+  providers: Server,
+  'model-groups': Layers,
+  routing: GitBranch,
+  security: ShieldCheck,
+  statistics: BarChart3,
+  diagnostics: Wrench,
+  help: CircleHelp,
+  about: Info,
+};
 
 export function Sidebar() {
   const { currentRoute, navigate, status } = useAppControls();
-  const [open, setOpen] = useState(false);
-  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 900px)').matches);
-  const menuButtonRef = useRef(null);
-  const asideRef = useRef(null);
+  const { isMobile, setOpenMobile } = useSidebar();
 
   const navGroups = [
     {
@@ -35,168 +66,111 @@ export function Sidebar() {
     { id: 'about', title: '关于', icon: 'info' },
   ];
 
-  const isRunning = status?.running;
+  const isRunning = Boolean(status?.running);
+  const listenerText = status?.listener
+    ? `${status.listener.host}:${status.listener.port}`
+    : '127.0.0.1:57878';
 
-  useEffect(() => {
-    setOpen(false);
-  }, [currentRoute]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return undefined;
-    const media = window.matchMedia('(max-width: 900px)');
-    const onChange = (event) => {
-      setIsMobile(event.matches);
-      if (!event.matches) setOpen(false);
-    };
-    setIsMobile(media.matches);
-    if (media.addEventListener) media.addEventListener('change', onChange);
-    else media.addListener?.(onChange);
-    return () => {
-      if (media.removeEventListener) media.removeEventListener('change', onChange);
-      else media.removeListener?.(onChange);
-    };
-  }, []);
-
-  const closeMenu = useCallback(() => {
-    setOpen(false);
-    if (isMobile) requestAnimationFrame(() => menuButtonRef.current?.focus());
-  }, [isMobile]);
-
-  useEffect(() => {
-    if (!isMobile || !open) return undefined;
-    const aside = asideRef.current;
-    const mainWrapper = document.querySelector('.main-wrapper');
-    const previousInert = mainWrapper?.inert ?? false;
-    const previousOverflow = document.body.style.overflow;
-    if (mainWrapper) mainWrapper.inert = true;
-    document.body.style.overflow = 'hidden';
-
-    const focusableSelector = 'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-    const focusables = () => Array.from(aside?.querySelectorAll(focusableSelector) || []).filter((element) => element.getClientRects().length > 0);
-    const frame = requestAnimationFrame(() => focusables()[0]?.focus());
-    const onKeyDown = (event) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        closeMenu();
-        return;
-      }
-      if (event.key !== 'Tab') return;
-      const items = focusables();
-      if (!items.length) return;
-      const first = items[0];
-      const last = items[items.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      cancelAnimationFrame(frame);
-      document.removeEventListener('keydown', onKeyDown);
-      if (mainWrapper) mainWrapper.inert = previousInert;
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [closeMenu, isMobile, open]);
+  const handleSelect = (id) => {
+    if (navigate(id) && isMobile) {
+      setOpenMobile(false);
+    }
+  };
 
   return (
-    <>
-      <button
-        ref={menuButtonRef}
-        type="button"
-        className={`mobile-menu-toggle${open ? ' is-hidden' : ''}`}
-        aria-label="打开主导航"
-        aria-expanded={open}
-        aria-hidden={open || undefined}
-        tabIndex={open ? -1 : undefined}
-        aria-controls="primary-navigation"
-        onClick={() => setOpen((value) => !value)}
-      >
-        <Icon name="menu" size={20} />
-      </button>
-      {open && <button type="button" className="mobile-nav-backdrop" aria-label="关闭主导航" aria-hidden="true" tabIndex="-1" onClick={closeMenu} />}
-      <aside
-        ref={asideRef}
-        id="primary-navigation"
-        className={`glass-sidebar ${open ? 'mobile-open' : ''}`}
-        aria-label="应用主导航"
-        role={isMobile ? 'dialog' : undefined}
-        aria-modal={isMobile && open ? 'true' : undefined}
-        aria-hidden={isMobile && !open ? 'true' : undefined}
-        inert={isMobile && !open ? true : undefined}
-      >
-      <div className="brand-section">
-        <div className="brand-icon-wrap" aria-hidden="true">
-          <img src={donkeyHead} alt="" />
-        </div>
-        <div className="brand-text-wrap">
-          <span className="brand-title">Sumpter</span>
-          <span className="brand-badge">DONKEY TECH</span>
-        </div>
-        <button type="button" className="mobile-nav-close" aria-label="关闭主导航" onClick={closeMenu}>
-          <Icon name="close" size={18} />
-        </button>
-      </div>
+    <ShadcnSidebar id="primary-navigation" variant="inset" collapsible="icon" aria-label="应用主导航">
+      <SidebarHeader className="pb-2">
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <button
+              type="button"
+              onClick={() => handleSelect('run')}
+              className="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+            >
+              <div className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-sidebar-border bg-background/80 p-1">
+                <img src={donkeyHead} alt="" className="size-full object-contain" />
+              </div>
+              <div className="flex min-w-0 flex-col group-data-[collapsible=icon]:hidden">
+                <span className="truncate text-sm font-semibold tracking-tight text-sidebar-foreground">
+                  Sumpter
+                </span>
+                <span className="truncate font-mono text-[10px] tracking-wider text-muted-foreground">
+                  DONKEY TECH
+                </span>
+              </div>
+            </button>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarHeader>
 
-      <nav className="sidebar-nav" aria-label="主路由">
+      <SidebarContent>
         {navGroups.map((group) => (
-          <div key={group.title} className="nav-group">
-            <div className="nav-group-title">{group.title}</div>
-            {group.items.map((item) => {
-              const active = currentRoute === item.id;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={`nav-link-btn ${active ? 'active' : ''}`}
-                  onClick={() => { if (navigate(item.id)) setOpen(false); }}
-                  aria-current={active ? 'page' : undefined}
-                >
-                  <span className="nav-icon">
-                    <Icon name={item.icon} size={18} />
-                  </span>
-                  <span>{item.title}</span>
-                </button>
-              );
-            })}
-          </div>
+          <SidebarGroup key={group.title}>
+            <SidebarGroupLabel>{group.title}</SidebarGroupLabel>
+            <SidebarMenu>
+              {group.items.map((item) => {
+                const NavIcon = ROUTE_ICONS[item.id] || Activity;
+                const active = currentRoute === item.id;
+                return (
+                  <SidebarMenuItem key={item.id}>
+                    <SidebarMenuButton
+                      isActive={active}
+                      aria-current={active ? 'page' : undefined}
+                      onClick={() => handleSelect(item.id)}
+                      tooltip={item.title}
+                    >
+                      <NavIcon />
+                      <span className="truncate group-data-[collapsible=icon]:hidden">{item.title}</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                );
+              })}
+            </SidebarMenu>
+          </SidebarGroup>
         ))}
-      </nav>
+      </SidebarContent>
 
-      <div className="sidebar-footer">
-        <nav className="sidebar-resource-links" aria-label="帮助与关于">
+      <SidebarFooter className="pt-2">
+        <SidebarMenu aria-label="帮助与关于">
           {resourceItems.map((item) => {
+            const NavIcon = ROUTE_ICONS[item.id] || CircleHelp;
             const active = currentRoute === item.id;
             return (
-              <button
-                key={item.id}
-                type="button"
-                className={`nav-link-btn ${active ? 'active' : ''}`}
-                onClick={() => { if (navigate(item.id)) setOpen(false); }}
-                aria-current={active ? 'page' : undefined}
-              >
-                <span className="nav-icon"><Icon name={item.icon} size={18} /></span>
-                <span>{item.title}</span>
-              </button>
+              <SidebarMenuItem key={item.id}>
+                <SidebarMenuButton
+                  isActive={active}
+                  aria-current={active ? 'page' : undefined}
+                  onClick={() => handleSelect(item.id)}
+                  tooltip={item.title}
+                >
+                  <NavIcon />
+                  <span className="truncate group-data-[collapsible=icon]:hidden">{item.title}</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
             );
           })}
-        </nav>
-        <div className="system-status-indicator">
-          <span className={`pulse-dot ${isRunning ? 'status-good' : 'status-muted'}`} style={{ color: isRunning ? 'var(--status-good)' : 'var(--status-muted)' }} />
-          <div className="system-status-text">
-            <strong>
-              {isRunning ? '代理运行中' : '代理已就绪'}
-            </strong>
-            <span>
-              {status?.listener ? `${status.listener.host}:${status.listener.port}` : '127.0.0.1:57878'}
-            </span>
+        </SidebarMenu>
+
+        <div className="mt-1 rounded-xl border border-sidebar-border bg-background/60 p-2.5 group-data-[collapsible=icon]:hidden">
+          <div className="flex items-center gap-2">
+            <span
+              className={cn(
+                'size-2 shrink-0 rounded-full',
+                isRunning ? 'bg-status-good animate-pulse' : 'bg-muted-foreground',
+              )}
+              aria-hidden="true"
+            />
+            <div className="min-w-0">
+              <div className="truncate text-xs font-semibold text-sidebar-foreground">
+                {isRunning ? '代理运行中' : '代理已就绪'}
+              </div>
+              <div className="truncate font-mono text-[11px] text-muted-foreground tabular-nums">
+                {listenerText}
+              </div>
+            </div>
           </div>
         </div>
-      </div>
-      </aside>
-    </>
+      </SidebarFooter>
+    </ShadcnSidebar>
   );
 }

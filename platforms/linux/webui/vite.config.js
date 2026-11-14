@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 import { fileURLToPath } from 'node:url';
 import net from 'node:net';
 
@@ -42,7 +43,7 @@ function autoMockWhenBackendOffline() {
 
 export default defineConfig({
   base: './',
-  plugins: [react(), autoMockWhenBackendOffline()],
+  plugins: [react(), tailwindcss(), autoMockWhenBackendOffline()],
   server: {
     port: 57890,
     host: '127.0.0.1',

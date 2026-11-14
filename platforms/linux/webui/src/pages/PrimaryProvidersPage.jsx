@@ -1,22 +1,42 @@
 import { useEffect, useRef, useState } from 'react';
+import {
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  Coins,
+  GripVertical,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Server,
+  Trash2,
+  Wrench,
+} from 'lucide-react';
+import { cn } from '../lib/utils.js';
 import { useAppControls } from '../context/AppContext.jsx';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges.js';
 import { DataTable } from '../components/DataTable.jsx';
 import { PricingPanel } from '../components/AnalyticsV2Workspace.jsx';
 import { QuickToggle } from '../components/QuickToggle.jsx';
 import { StatusBadge } from '../components/StatusBadge.jsx';
-import { Icon } from '../utils/icons.jsx';
 import { api, isValidResolveIP, normalizeResolveIP } from '../services/api.js';
 import { UserAgentEditor } from '../components/UserAgentEditor.jsx';
 import { normalizeUserAgentSettings, userAgentSummary } from '../utils/userAgent.js';
 import { addEndpointModelsToGroups, addEndpointToLibrary } from '../utils/modelGroups.js';
 import { clone, formatTimestamp } from '../utils/helpers.js';
 import { ENDPOINT_PROTOCOL_MODES, endpointProtocolLabel, normalizeEndpointProtocol } from '../utils/protocols.js';
+import { Badge } from '../components/ui/badge.jsx';
+import { Button } from '../components/ui/button.jsx';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card.jsx';
+import { Input } from '../components/ui/input.jsx';
+import { Label } from '../components/ui/label.jsx';
+
+const SELECT_CLS = 'h-9 w-full rounded-md border border-input bg-background px-2.5 text-xs text-foreground shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50';
+const COMPACT_SELECT_CLS = 'h-7 rounded-md border border-input bg-background px-2 text-xs text-foreground shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50';
 
 function endpointMappings(endpoint) {
   return endpoint?.modelMappings || endpoint?.mappings || [];
 }
-
 
 // Keep catalog IDs aligned with the Rust model-name parser before matching or
 // persisting a mapping. Catalogs may expose reasoning/context suffixes; those
@@ -103,13 +123,16 @@ function RetryDelayControls({ initialSeconds, initialEnabled, onChange }) {
 
   return (
     <>
-      <div className="form-group">
-        <label className="form-label" htmlFor="provider-retry-delay">retry_delay 秒数</label>
-        <input id="provider-retry-delay"
-           type="number"
+      <div className="space-y-1.5">
+        <Label htmlFor="provider-retry-delay" className="text-xs font-medium text-muted-foreground">
+          retry_delay 秒数
+        </Label>
+        <Input
+          id="provider-retry-delay"
+          type="number"
           min="0.1"
           step="0.1"
-          className="form-input"
+          className="h-9 font-mono text-xs tabular-nums"
           value={seconds}
           placeholder="例如 2.5"
           disabled={!enabled}
@@ -119,14 +142,16 @@ function RetryDelayControls({ initialSeconds, initialEnabled, onChange }) {
             update(nextSeconds, enabled);
           }}
         />
-        <span className="form-hint">填写秒数后，最终失败响应可返回 retry_delay 数字字段。</span>
+        <span className="block text-[11px] text-muted-foreground">
+          填写秒数后，最终失败响应可返回 retry_delay 数字字段。
+        </span>
       </div>
 
-      <div className="form-group">
-        <label className="form-label">透传 retry_delay</label>
+      <div className="space-y-1.5">
+        <span className="block text-xs font-medium text-muted-foreground">透传 retry_delay</span>
         <LocalToggle
           initial={enabled}
-          label={(checked) => checked ? '已开启' : '已关闭'}
+          label={(checked) => (checked ? '已开启' : '已关闭')}
           title="控制最终失败响应是否带回 retry_delay 与 Retry-After"
           ariaLabel="透传 retry_delay 与 Retry-After"
           onChange={(nextEnabled) => {
@@ -134,7 +159,9 @@ function RetryDelayControls({ initialSeconds, initialEnabled, onChange }) {
             update(seconds, nextEnabled);
           }}
         />
-        <span className="form-hint">关闭后即使填写秒数，也不会把 retry_delay 或 Retry-After 返回给客户端。</span>
+        <span className="block text-[11px] text-muted-foreground">
+          关闭后即使填写秒数，也不会把 retry_delay 或 Retry-After 返回给客户端。
+        </span>
       </div>
     </>
   );
@@ -155,19 +182,19 @@ function providerDropPosition(event) {
 function createProviderDragImage(sourceRow) {
   if (!sourceRow || typeof document === 'undefined') return null;
   const bounds = sourceRow.getBoundingClientRect();
-  const clone = sourceRow.cloneNode(true);
-  clone.removeAttribute('aria-selected');
-  clone.classList.add('provider-drag-preview-row');
+  const cloneNode = sourceRow.cloneNode(true);
+  cloneNode.removeAttribute('aria-selected');
+  cloneNode.classList.add('provider-drag-preview-row');
   const preview = sourceRow.tagName === 'TR' ? document.createElement('table') : document.createElement('div');
   preview.className = `provider-drag-preview${sourceRow.tagName === 'TR' ? ' data-table' : ''}`;
   preview.style.width = `${Math.max(280, Math.round(bounds.width))}px`;
   preview.style.maxWidth = `${Math.max(280, Math.round(bounds.width))}px`;
   if (sourceRow.tagName === 'TR') {
     const body = document.createElement('tbody');
-    body.appendChild(clone);
+    body.appendChild(cloneNode);
     preview.appendChild(body);
   } else {
-    preview.appendChild(clone);
+    preview.appendChild(cloneNode);
   }
   preview.style.position = 'fixed';
   preview.style.left = '-10000px';
@@ -186,7 +213,8 @@ function CatalogModelPicker({ models, onChange }) {
 
   const toggle = (model) => {
     const next = new Set(selected);
-    if (next.has(model)) next.delete(model); else next.add(model);
+    if (next.has(model)) next.delete(model);
+    else next.add(model);
     update(next);
   };
 
@@ -195,25 +223,34 @@ function CatalogModelPicker({ models, onChange }) {
   };
 
   return (
-    <div className="catalog-picker">
-      <div className="catalog-picker-header">
-        <span className="form-hint">选择目录中尚未映射的模型；默认全选。共 {models.length} 个。</span>
-        <button type="button" className="btn btn-secondary btn-compact" onClick={toggleAll}>
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs text-muted-foreground">
+          选择目录中尚未映射的模型；默认全选。共 {models.length} 个。
+        </span>
+        <Button type="button" variant="outline" size="sm" className="h-7 px-2.5 text-xs" onClick={toggleAll}>
           {selected.size === models.length ? '取消全选' : '全选'}
-        </button>
+        </Button>
       </div>
-      <div className="catalog-picker-grid">
+      <div className="grid max-h-72 gap-2 overflow-y-auto rounded-xl border bg-muted/15 p-3 sm:grid-cols-2">
         {models.map((model) => (
           <label
             key={model}
-            className="catalog-picker-option"
+            className="flex cursor-pointer items-center gap-2 rounded-lg border bg-background px-2.5 py-2 text-xs hover:bg-muted/40"
           >
-            <input type="checkbox" checked={selected.has(model)} onChange={() => toggle(model)} />
-            <span className="mono-cell" style={{ overflowWrap: 'anywhere', fontSize: '0.8rem' }}>{model}</span>
+            <input
+              type="checkbox"
+              className="size-3.5 shrink-0 accent-primary"
+              checked={selected.has(model)}
+              onChange={() => toggle(model)}
+            />
+            <span className="break-all font-mono text-xs text-foreground">{model}</span>
           </label>
         ))}
       </div>
-      <span className="form-hint">将按入口协议和模型映射生成客户端模型名与上游模型名。</span>
+      <span className="block text-[11px] text-muted-foreground">
+        将按入口协议和模型映射生成客户端模型名与上游模型名。
+      </span>
     </div>
   );
 }
@@ -294,7 +331,12 @@ function EndpointMappingTable({ endpoint, configDoc, saveConfig, addToast }) {
   for (const row of draft) {
     const key = modelKey(row.from);
     if (!key) continue;
-    if (seen.has(key)) { duplicateKeys.add(row._key); duplicateKeys.add(seen.get(key)); } else seen.set(key, row._key);
+    if (seen.has(key)) {
+      duplicateKeys.add(row._key);
+      duplicateKeys.add(seen.get(key));
+    } else {
+      seen.set(key, row._key);
+    }
   }
   const rowError = (row) => {
     if (!row.from.trim()) return '客户端模型不能为空';
@@ -307,18 +349,30 @@ function EndpointMappingTable({ endpoint, configDoc, saveConfig, addToast }) {
   const update = (key, patch) => setDraft((rows) => rows.map((row) => (row._key === key ? { ...row, ...patch } : row)));
   const remove = (keys) => {
     setDraft((rows) => rows.filter((row) => !keys.has(row._key)));
-    setSelected((prev) => { const next = new Set(prev); for (const key of keys) next.delete(key); return next; });
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const key of keys) next.delete(key);
+      return next;
+    });
   };
   const addRow = () => {
     const key = nextKey();
     focusKeyRef.current = key;
     setDraft((rows) => [...rows, mappingDraftRow({ thinking: 'passThrough', context: 'passThrough' }, key)]);
   };
-  const toggle = (key, checked) => setSelected((prev) => { const next = new Set(prev); if (checked) next.add(key); else next.delete(key); return next; });
+  const toggle = (key, checked) => setSelected((prev) => {
+    const next = new Set(prev);
+    if (checked) next.add(key);
+    else next.delete(key);
+    return next;
+  });
   const allVisibleSelected = visible.length > 0 && visible.every((row) => selected.has(row._key));
   const toggleAll = (checked) => setSelected((prev) => {
     const next = new Set(prev);
-    for (const row of visible) { if (checked) next.add(row._key); else next.delete(row._key); }
+    for (const row of visible) {
+      if (checked) next.add(row._key);
+      else next.delete(row._key);
+    }
     return next;
   });
   const applyBulk = (patch) => {
@@ -333,7 +387,10 @@ function EndpointMappingTable({ endpoint, configDoc, saveConfig, addToast }) {
     setSelected(new Set());
   };
   const save = async () => {
-    if (invalidCount) { addToast(`还有 ${invalidCount} 行映射不完整，请先修正`, 'warning'); return; }
+    if (invalidCount) {
+      addToast(`还有 ${invalidCount} 行映射不完整，请先修正`, 'warning');
+      return;
+    }
     setSaving(true);
     try {
       const mappings = draft.map(mappingFromDraftRow);
@@ -343,8 +400,11 @@ function EndpointMappingTable({ endpoint, configDoc, saveConfig, addToast }) {
         const existingKeys = new Set(endpointMappings(target).map((mapping) => modelKey(mappingClient(mapping))));
         target.modelMappings = mappings;
         delete target.mappings;
-        addEndpointModelsToGroups(latestConfig, endpoint.id,
-          mappings.filter((mapping) => !existingKeys.has(modelKey(mappingClient(mapping)))).map(mappingClient));
+        addEndpointModelsToGroups(
+          latestConfig,
+          endpoint.id,
+          mappings.filter((mapping) => !existingKeys.has(modelKey(mappingClient(mapping)))).map(mappingClient),
+        );
         return latestConfig;
       }, {}, draftSource.current);
       draftSource.current = saved;
@@ -358,61 +418,256 @@ function EndpointMappingTable({ endpoint, configDoc, saveConfig, addToast }) {
   };
 
   return (
-    <section className="mapping-table" aria-label={`模型映射 · ${endpoint.name}`}>
-      <div className="mapping-table-toolbar">
-        <div className="mapping-table-title">
-          <strong>模型映射 · {draft.length}</strong>
-          {dirty && <span className="mapping-dirty-badge" role="status">未保存</span>}
-          {invalidCount > 0 && <span className="mapping-invalid-badge" role="status">{invalidCount} 行待修正</span>}
+    <section className="space-y-3 border-t pt-4" aria-label={`模型映射 · ${endpoint.name}`}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <strong className="text-sm font-semibold text-foreground">模型映射 · {draft.length}</strong>
+          {dirty && (
+            <Badge variant="outline" className="border-status-warning/40 bg-status-warning/10 text-[11px] text-status-warning" role="status">
+              未保存
+            </Badge>
+          )}
+          {invalidCount > 0 && (
+            <Badge variant="outline" className="border-status-critical/40 bg-status-critical/10 text-[11px] text-status-critical" role="status">
+              {invalidCount} 行待修正
+            </Badge>
+          )}
         </div>
-        <div className="mapping-table-actions">
-          {(draft.length > 6 || query) && <input className="form-input mapping-search" placeholder="筛选模型" aria-label="筛选模型映射" value={query} onChange={(e) => setQuery(e.target.value)} />}
-          <button type="button" className="btn btn-secondary btn-compact" onClick={addRow}><Icon name="plus" size={13} /><span>添加一行</span></button>
-          {dirty && <button type="button" className="btn btn-ghost btn-compact" disabled={saving} onClick={discard}>放弃改动</button>}
-          <button type="button" className="btn btn-primary btn-compact" disabled={!dirty || saving || invalidCount > 0} onClick={save}>{saving ? '保存中…' : '保存映射'}</button>
+        <div className="flex flex-wrap items-center gap-2">
+          {(draft.length > 6 || query) && (
+            <Input
+              className="h-8 w-44 text-xs"
+              placeholder="筛选模型"
+              aria-label="筛选模型映射"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          )}
+          <Button type="button" variant="outline" size="sm" className="h-8 gap-1 px-2.5 text-xs" onClick={addRow}>
+            <Plus className="size-3.5" />
+            <span>添加一行</span>
+          </Button>
+          {dirty && (
+            <Button type="button" variant="ghost" size="sm" className="h-8 px-2.5 text-xs" disabled={saving} onClick={discard}>
+              放弃改动
+            </Button>
+          )}
+          <Button type="button" size="sm" className="h-8 px-3 text-xs" disabled={!dirty || saving || invalidCount > 0} onClick={save}>
+            {saving ? '保存中…' : '保存映射'}
+          </Button>
         </div>
       </div>
 
       {selected.size > 0 && (
-        <div className="mapping-bulk-bar" role="toolbar" aria-label="批量操作">
-          <span>已选 {selected.size} 行</span>
-          <label>Thinking<select className="form-select" value="" aria-label="批量设置 Thinking" onChange={(e) => { if (e.target.value) applyBulk({ thinking: e.target.value }); }}><option value="">批量设置…</option>{MAPPING_THINKING_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-          <label>上下文<select className="form-select" value="" aria-label="批量设置上下文" onChange={(e) => { if (e.target.value) applyBulk({ context: e.target.value }); }}><option value="">批量设置…</option>{MAPPING_CONTEXT_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-          <button type="button" className="btn btn-ghost btn-compact" onClick={() => applyBulk({ to: '' })} title="上游模型名留空即与客户端同名">上游同名</button>
-          <button type="button" className="btn btn-ghost btn-compact mapping-bulk-delete" onClick={() => remove(new Set(selected))}><Icon name="trash" size={13} /><span>删除选中</span></button>
-          <button type="button" className="btn btn-ghost btn-compact" onClick={() => setSelected(new Set())}>取消选择</button>
+        <div
+          className="mapping-bulk-bar flex flex-wrap items-center gap-2.5 rounded-xl border border-primary/35 bg-primary/10 px-3 py-2 text-xs"
+          role="toolbar"
+          aria-label="批量操作"
+        >
+          <span className="font-semibold text-foreground tabular-nums">已选 {selected.size} 行</span>
+          <label className="flex items-center gap-1.5 text-muted-foreground">
+            <span>Thinking</span>
+            <select
+              className={COMPACT_SELECT_CLS}
+              value=""
+              aria-label="批量设置 Thinking"
+              onChange={(e) => { if (e.target.value) applyBulk({ thinking: e.target.value }); }}
+            >
+              <option value="">批量设置…</option>
+              {MAPPING_THINKING_OPTIONS.map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-1.5 text-muted-foreground">
+            <span>上下文</span>
+            <select
+              className={COMPACT_SELECT_CLS}
+              value=""
+              aria-label="批量设置上下文"
+              onChange={(e) => { if (e.target.value) applyBulk({ context: e.target.value }); }}
+            >
+              <option value="">批量设置…</option>
+              {MAPPING_CONTEXT_OPTIONS.map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
+          </label>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-xs"
+            onClick={() => applyBulk({ to: '' })}
+            title="上游模型名留空即与客户端同名"
+          >
+            上游同名
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1 px-2 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+            onClick={() => remove(new Set(selected))}
+          >
+            <Trash2 className="size-3" />
+            <span>删除选中</span>
+          </Button>
+          <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setSelected(new Set())}>
+            取消选择
+          </Button>
         </div>
       )}
 
       {draft.length === 0 ? (
-        <div className="mapping-empty">当前入口未配置任何模型映射；所有请求原样使用客户端模型名转发。点击「添加一行」或「从已知模型添加」开始。</div>
+        <div className="rounded-xl border border-dashed px-4 py-8 text-center text-xs text-muted-foreground">
+          当前入口未配置任何模型映射；所有请求原样使用客户端模型名转发。点击「添加一行」或「从已知模型添加」开始。
+        </div>
       ) : (
-        <div className="mapping-grid" role="table" aria-label="模型映射列表">
-          <div className="mapping-grid-head" role="row">
-            <span><input type="checkbox" aria-label="全选当前可见映射" checked={allVisibleSelected} onChange={(e) => toggleAll(e.target.checked)} /></span>
-            <span>客户端模型</span><span>上游模型</span><span>Thinking</span><span>上下文</span><span>首响超时(s)</span><span />
+        <div className="overflow-x-auto rounded-xl border" role="table" aria-label="模型映射列表">
+          <div className="min-w-[820px]">
+            <div
+              className="mapping-grid-head grid grid-cols-[36px_minmax(180px,1.2fr)_minmax(180px,1.2fr)_165px_125px_100px_40px] items-center gap-2 border-b bg-muted/50 px-3 py-2 text-[11px] font-medium text-muted-foreground"
+              role="row"
+            >
+              <span>
+                <input
+                  type="checkbox"
+                  className="size-3.5 accent-primary"
+                  aria-label="全选当前可见映射"
+                  checked={allVisibleSelected}
+                  onChange={(e) => toggleAll(e.target.checked)}
+                />
+              </span>
+              <span>客户端模型</span>
+              <span>上游模型</span>
+              <span>Thinking</span>
+              <span>上下文</span>
+              <span>首响超时(s)</span>
+              <span />
+            </div>
+
+            <div className="divide-y">
+              {visible.map((row) => {
+                const error = rowError(row);
+                return (
+                  <div
+                    key={row._key}
+                    data-mapping-key={row._key}
+                    role="row"
+                    className={cn(
+                      'mapping-grid-row grid grid-cols-[36px_minmax(180px,1.2fr)_minmax(180px,1.2fr)_165px_125px_100px_40px] items-center gap-2 px-3 py-2 transition-colors hover:bg-muted/25',
+                      selected.has(row._key) && 'is-selected bg-primary/5',
+                      error && 'is-invalid border-l-2 border-l-status-critical bg-status-critical/5',
+                    )}
+                    title={error || undefined}
+                  >
+                    <span>
+                      <input
+                        type="checkbox"
+                        className="size-3.5 accent-primary"
+                        aria-label={`选择映射 ${row.from || '(空)'}`}
+                        checked={selected.has(row._key)}
+                        onChange={(e) => toggle(row._key, e.target.checked)}
+                      />
+                    </span>
+                    <span>
+                      <Input
+                        type="text"
+                        className="h-8 font-mono text-xs"
+                        aria-label="客户端模型"
+                        placeholder="claude-opus-5 或 gpt-*"
+                        value={row.from}
+                        onChange={(e) => update(row._key, { from: e.target.value })}
+                      />
+                    </span>
+                    <span>
+                      <Input
+                        type="text"
+                        className="h-8 font-mono text-xs"
+                        aria-label="上游模型"
+                        placeholder="留空同名"
+                        value={row.to}
+                        onChange={(e) => update(row._key, { to: e.target.value })}
+                      />
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <select
+                        className={cn(COMPACT_SELECT_CLS, 'h-8 flex-1')}
+                        aria-label="Thinking"
+                        value={row.thinking}
+                        onChange={(e) => update(row._key, { thinking: e.target.value })}
+                      >
+                        {MAPPING_THINKING_OPTIONS.map(([value, label]) => (
+                          <option key={value} value={value}>{label}</option>
+                        ))}
+                      </select>
+                      {row.thinking === 'adaptive' && (
+                        <select
+                          className={cn(COMPACT_SELECT_CLS, 'h-8 w-[68px]')}
+                          aria-label="思考级别"
+                          value={row.effort}
+                          onChange={(e) => update(row._key, { effort: e.target.value })}
+                        >
+                          {MAPPING_EFFORT_OPTIONS.map((value) => (
+                            <option key={value} value={value}>{value === 'auto' ? '自动' : value}</option>
+                          ))}
+                        </select>
+                      )}
+                    </span>
+                    <span>
+                      <select
+                        className={cn(COMPACT_SELECT_CLS, 'h-8 w-full')}
+                        aria-label="上下文"
+                        value={row.context}
+                        onChange={(e) => update(row._key, { context: e.target.value })}
+                      >
+                        {MAPPING_CONTEXT_OPTIONS.map(([value, label]) => (
+                          <option key={value} value={value}>{label}</option>
+                        ))}
+                      </select>
+                    </span>
+                    <span>
+                      <Input
+                        className="h-8 font-mono text-xs tabular-nums"
+                        type="number"
+                        min="0.1"
+                        step="0.1"
+                        aria-label="映射级首响应超时(秒)"
+                        placeholder="全局"
+                        value={row.failoverTimeoutSeconds}
+                        onChange={(e) => update(row._key, { failoverTimeoutSeconds: e.target.value })}
+                      />
+                    </span>
+                    <span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        className="size-7 text-muted-foreground hover:text-destructive"
+                        title="删除此行"
+                        aria-label={`删除映射 ${row.from || '(空)'}`}
+                        onClick={() => remove(new Set([row._key]))}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    </span>
+                  </div>
+                );
+              })}
+              {visible.length === 0 && (
+                <div className="px-4 py-6 text-center text-xs text-muted-foreground">
+                  没有匹配「{query}」的映射。
+                </div>
+              )}
+            </div>
           </div>
-          {visible.map((row) => {
-            const error = rowError(row);
-            return (
-              <div key={row._key} data-mapping-key={row._key} role="row" className={`mapping-grid-row${selected.has(row._key) ? ' is-selected' : ''}${error ? ' is-invalid' : ''}`} title={error || undefined}>
-                <span><input type="checkbox" aria-label={`选择映射 ${row.from || '(空)'}`} checked={selected.has(row._key)} onChange={(e) => toggle(row._key, e.target.checked)} /></span>
-                <span><input type="text" className="form-input mono-cell" aria-label="客户端模型" placeholder="claude-opus-5 或 gpt-*" value={row.from} onChange={(e) => update(row._key, { from: e.target.value })} /></span>
-                <span><input type="text" className="form-input mono-cell" aria-label="上游模型" placeholder="留空同名" value={row.to} onChange={(e) => update(row._key, { to: e.target.value })} /></span>
-                <span className="mapping-thinking-cell">
-                  <select className="form-select" aria-label="Thinking" value={row.thinking} onChange={(e) => update(row._key, { thinking: e.target.value })}>{MAPPING_THINKING_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
-                  {row.thinking === 'adaptive' && <select className="form-select" aria-label="思考级别" value={row.effort} onChange={(e) => update(row._key, { effort: e.target.value })}>{MAPPING_EFFORT_OPTIONS.map((value) => <option key={value} value={value}>{value === 'auto' ? '自动' : value}</option>)}</select>}
-                </span>
-                <span><select className="form-select" aria-label="上下文" value={row.context} onChange={(e) => update(row._key, { context: e.target.value })}>{MAPPING_CONTEXT_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></span>
-                <span><input className="form-input mono-cell" type="number" min="0.1" step="0.1" aria-label="映射级首响应超时(秒)" placeholder="全局" value={row.failoverTimeoutSeconds} onChange={(e) => update(row._key, { failoverTimeoutSeconds: e.target.value })} /></span>
-                <span><button type="button" className="btn-icon btn-compact-icon mapping-row-delete" title="删除此行" aria-label={`删除映射 ${row.from || '(空)'}`} onClick={() => remove(new Set([row._key]))}><Icon name="trash" size={13} /></button></span>
-              </div>
-            );
-          })}
-          {visible.length === 0 && <div className="mapping-empty">没有匹配「{query}」的映射。</div>}
         </div>
       )}
-      <p className="form-hint">改动只在点击「保存映射」后写入配置；精确模型名优先于 <code>prefix-*</code> 通配。首响超时留空时使用全局单次响应超时。</p>
+
+      <p className="text-[11px] text-muted-foreground">
+        改动只在点击「保存映射」后写入配置；精确模型名优先于 <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">prefix-*</code> 通配。首响超时留空时使用全局单次响应超时。
+      </p>
     </section>
   );
 }
@@ -479,9 +734,11 @@ export function PrimaryProvidersPage() {
   const modelCatalog = config?.modelCatalog || {};
   const [catalogRefreshing, setCatalogRefreshing] = useState(false);
   const [catalogIntervalDraft, setCatalogIntervalDraft] = useState(String(modelCatalog.refreshIntervalMinutes ?? 180));
+
   useEffect(() => {
     setCatalogIntervalDraft(String(modelCatalog.refreshIntervalMinutes ?? 180));
   }, [modelCatalog.refreshIntervalMinutes]);
+
   const updateModelCatalog = async (patch) => {
     try {
       await saveConfig((latestConfig) => ({
@@ -500,6 +757,7 @@ export function PrimaryProvidersPage() {
       addToast(`保存模型目录设置失败：${error.message}`, 'error');
     }
   };
+
   const refreshModelCatalog = async () => {
     setCatalogRefreshing(true);
     try {
@@ -511,6 +769,7 @@ export function PrimaryProvidersPage() {
       setCatalogRefreshing(false);
     }
   };
+
   const stickyTTLEffective = Number.isFinite(Number(config?.sessionStickyTtlHours))
     ? Number(config.sessionStickyTtlHours)
     : 72;
@@ -547,6 +806,7 @@ export function PrimaryProvidersPage() {
       setSavingStickyTTL(false);
     }
   };
+
   const [providerDragState, setProviderDragState] = useState({
     sourceID: null,
     targetID: null,
@@ -576,7 +836,7 @@ export function PrimaryProvidersPage() {
   const endpoints = config?.endpoints || [];
   const retry = config?.retry || {};
   const selectedEndpoint = endpoints.find((e) => e.id === selectedEndpointID) || endpoints[0];
-  const selectEndpoint = id => {
+  const selectEndpoint = (id) => {
     if (id === selectedEndpoint?.id || canLeavePage()) setSelectedEndpointID(id);
   };
   const enabledEndpointCount = endpoints.filter((endpoint) => endpoint.enabled !== false).length;
@@ -588,7 +848,8 @@ export function PrimaryProvidersPage() {
   const setModelFetchState = (endpointID, fetching) => {
     setFetchingModelEndpointIDs((previous) => {
       const next = new Set(previous);
-      if (fetching) next.add(endpointID); else next.delete(endpointID);
+      if (fetching) next.add(endpointID);
+      else next.delete(endpointID);
       return next;
     });
   };
@@ -695,8 +956,11 @@ export function PrimaryProvidersPage() {
               });
               existing.add(key);
             }
-            addEndpointModelsToGroups(nextConfig, endpoint.id,
-              target.modelMappings.slice(existingMappings.length).map(mappingClient));
+            addEndpointModelsToGroups(
+              nextConfig,
+              endpoint.id,
+              target.modelMappings.slice(existingMappings.length).map(mappingClient),
+            );
             await saveConfig(nextConfig, {}, configDoc);
             addToast(`已添加 ${target.modelMappings.length - existingMappings.length} 条模型映射`, 'success');
             return false;
@@ -875,68 +1139,84 @@ export function PrimaryProvidersPage() {
 
     openModal({
       title: '编辑全局转发与重试策略',
+      maxWidth: '680px',
       content: (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
-          <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+        <div className="space-y-4">
+          <p className="text-xs leading-relaxed text-muted-foreground">
             这些参数作用于所有 Provider 入口；可分别控制超时、HTTP 500 和流内错误处理、错误重试轮数，以及是否向客户端透传 retry_delay。
-          </div>
+          </p>
 
-          <div className="grid-2col">
-            <div className="form-group">
-              <label className="form-label" htmlFor="provider-response-timeout">单次上游首响应截止（秒）</label>
-              <input id="provider-response-timeout"
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="provider-response-timeout" className="text-xs font-medium text-muted-foreground">
+                单次上游首响应截止（秒）
+              </Label>
+              <Input
+                id="provider-response-timeout"
                 type="number"
                 min="0.1"
                 step="0.1"
-                className="form-input"
+                className="h-9 font-mono text-xs tabular-nums"
                 defaultValue={responseTimeout}
                 placeholder="留空由客户端决定"
                 onChange={(e) => { responseTimeout = e.target.value ? Number(e.target.value) : null; }}
               />
-              <span className="form-hint">每次上游尝试从连接、TLS 握手到响应头的等待上限；超时后按重试策略继续，不是客户端请求总时限。</span>
+              <span className="block text-[11px] text-muted-foreground">
+                每次上游尝试从连接、TLS 握手到响应头的等待上限；超时后按重试策略继续，不是客户端请求总时限。
+              </span>
             </div>
 
-            <div className="form-group">
-              <label className="form-label" htmlFor="provider-stream-timeout">流式空闲截止（秒）</label>
-              <input id="provider-stream-timeout"
+            <div className="space-y-1.5">
+              <Label htmlFor="provider-stream-timeout" className="text-xs font-medium text-muted-foreground">
+                流式空闲截止（秒）
+              </Label>
+              <Input
+                id="provider-stream-timeout"
                 type="number"
                 min="0.1"
                 step="0.1"
-                className="form-input"
+                className="h-9 font-mono text-xs tabular-nums"
                 defaultValue={streamIdleTimeout}
                 placeholder="留空允许无限空闲"
                 onChange={(e) => { streamIdleTimeout = e.target.value ? Number(e.target.value) : null; }}
               />
-              <span className="form-hint">首响应后两次流式 chunk 间的最长间隔。</span>
+              <span className="block text-[11px] text-muted-foreground">首响应后两次流式 chunk 间的最长间隔。</span>
             </div>
           </div>
 
-          <div className="retry-policy-section-title">HTTP 500 处理</div>
+          <div className="border-t pt-3 text-xs font-semibold text-foreground">HTTP 500 处理</div>
 
-          <div className="grid-2col">
-            <div className="form-group">
-              <label className="form-label">500 失败后切换入口</label>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <span className="block text-xs font-medium text-muted-foreground">500 失败后切换入口</span>
               <LocalToggle
                 initial={failoverOn500}
-                label={(checked) => checked ? '已开启' : '已关闭'}
+                label={(checked) => (checked ? '已开启' : '已关闭')}
                 title="控制 HTTP 500 重试耗尽后是否切换到下一个入口"
                 ariaLabel="HTTP 500 失败后切换入口"
                 onChange={(value) => { failoverOn500 = value; }}
               />
-              <span className="form-hint">开启：重试耗尽后继续下一个入口；关闭：在当前入口直接返回 500。</span>
+              <span className="block text-[11px] text-muted-foreground">
+                开启：重试耗尽后继续下一个入口；关闭：在当前入口直接返回 500。
+              </span>
             </div>
 
-            <div className="form-group">
-              <label className="form-label" htmlFor="provider-500-retries">入口内 500 重试</label>
-              <input id="provider-500-retries"
-                 type="number"
+            <div className="space-y-1.5">
+              <Label htmlFor="provider-500-retries" className="text-xs font-medium text-muted-foreground">
+                入口内 500 重试
+              </Label>
+              <Input
+                id="provider-500-retries"
+                type="number"
                 min="0"
                 step="1"
-                className="form-input"
+                className="h-9 font-mono text-xs tabular-nums"
                 defaultValue={max500Retries}
                 onChange={(e) => { max500Retries = Number(e.target.value); }}
               />
-              <span className="form-hint">仅针对同一入口连续收到的 HTTP 500；0 表示不额外重试。</span>
+              <span className="block text-[11px] text-muted-foreground">
+                仅针对同一入口连续收到的 HTTP 500；0 表示不额外重试。
+              </span>
             </div>
 
             <RetryDelayControls
@@ -949,75 +1229,90 @@ export function PrimaryProvidersPage() {
             />
           </div>
 
-          <div className="retry-policy-section-title">HTTP 200 流内错误处理</div>
-          <div className="grid-2col">
-            <div className="form-group">
-              <label className="form-label" htmlFor="stream-error-retries">入口内流错误重试</label>
-              <input
+          <div className="border-t pt-3 text-xs font-semibold text-foreground">HTTP 200 流内错误处理</div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="stream-error-retries" className="text-xs font-medium text-muted-foreground">
+                入口内流错误重试
+              </Label>
+              <Input
                 id="stream-error-retries"
                 type="number"
                 min="0"
                 step="1"
-                className="form-input"
+                className="h-9 font-mono text-xs tabular-nums"
                 defaultValue={maxStreamErrorRetries}
                 onChange={(e) => { maxStreamErrorRetries = Number(e.target.value); }}
               />
-              <span className="form-hint">Responses 流会先在代理内缓存到终态；遇到上游断流、限流或服务器错误时，客户端不会先收到半截流，代理按此次数重跑。已输出到终态或超过 16 MiB 缓存上限后不重放；0 表示关闭。</span>
+              <span className="block text-[11px] text-muted-foreground">
+                Responses 流会先在代理内缓存到终态；遇到上游断流、限流或服务器错误时，客户端不会先收到半截流，代理按此次数重跑。已输出到终态或超过 16 MiB 缓存上限后不重放；0 表示关闭。
+              </span>
             </div>
-            <div className="form-group">
-              <label className="form-label">流错误后切换入口</label>
+            <div className="space-y-1.5">
+              <span className="block text-xs font-medium text-muted-foreground">流错误后切换入口</span>
               <LocalToggle
                 initial={failoverOnStreamError}
-                label={(checked) => checked ? '已开启' : '已关闭'}
+                label={(checked) => (checked ? '已开启' : '已关闭')}
                 title="控制流内暂时性错误重试耗尽后是否切换到下一个入口"
                 ariaLabel="流内暂时性错误重试耗尽后切换入口"
                 onChange={(value) => { failoverOnStreamError = value; }}
               />
-              <span className="form-hint">开启：重试耗尽后尝试下一个入口。已输出正文、推理或工具调用时不重试或切换。</span>
+              <span className="block text-[11px] text-muted-foreground">
+                开启：重试耗尽后尝试下一个入口。已输出正文、推理或工具调用时不重试或切换。
+              </span>
             </div>
           </div>
 
-          <div className="grid-2col">
-            <div className="form-group">
-              <label className="form-label" htmlFor="provider-sticky-retries">粘性入口额外重试</label>
-              <input id="provider-sticky-retries"
-                 type="number"
+          <div className="grid gap-3 border-t pt-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="provider-sticky-retries" className="text-xs font-medium text-muted-foreground">
+                粘性入口额外重试
+              </Label>
+              <Input
+                id="provider-sticky-retries"
+                type="number"
                 min="0"
                 step="1"
-                className="form-input"
+                className="h-9 font-mono text-xs tabular-nums"
                 defaultValue={stickyRetries}
                 onChange={(e) => { stickyRetries = Number(e.target.value); }}
               />
-              <span className="form-hint">设置 2 = 非 500 可重试故障后额外重试 2 次；全部遇到可重试故障才切换其它组，成功后立即改绑。</span>
+              <span className="block text-[11px] text-muted-foreground">
+                设置 2 = 非 500 可重试故障后额外重试 2 次；全部遇到可重试故障才切换其它组，成功后立即改绑。
+              </span>
             </div>
 
-            <div className="form-group">
-              <label className="form-label" htmlFor="provider-retry-rounds">故障重试最大轮数</label>
-              <input id="provider-retry-rounds"
-                 type="number"
+            <div className="space-y-1.5">
+              <Label htmlFor="provider-retry-rounds" className="text-xs font-medium text-muted-foreground">
+                故障重试最大轮数
+              </Label>
+              <Input
+                id="provider-retry-rounds"
+                type="number"
                 min="0"
                 step="1"
-                className="form-input"
+                className="h-9 font-mono text-xs tabular-nums"
                 defaultValue={maxRounds}
                 onChange={(e) => { maxRounds = Number(e.target.value); }}
               />
-              <span className="form-hint">0 表示不限制轮数。</span>
+              <span className="block text-[11px] text-muted-foreground">0 表示不限制轮数。</span>
             </div>
-          </div>
 
-          <div className="grid-2col">
-            <div className="form-group">
-              <label className="form-label" htmlFor="provider-retry-time">跨轮最长时长（秒）</label>
-              <input id="provider-retry-time"
-                 type="number"
+            <div className="space-y-1.5">
+              <Label htmlFor="provider-retry-time" className="text-xs font-medium text-muted-foreground">
+                跨轮最长时长（秒）
+              </Label>
+              <Input
+                id="provider-retry-time"
+                type="number"
                 min="0"
                 step="0.1"
-                className="form-input"
+                className="h-9 font-mono text-xs tabular-nums"
                 defaultValue={maxDuration}
                 placeholder="0 表示不限总时长"
                 onChange={(e) => { maxDuration = Number(e.target.value); }}
               />
-              <span className="form-hint">超时后停止重试并返回最后错误。</span>
+              <span className="block text-[11px] text-muted-foreground">超时后停止重试并返回最后错误。</span>
             </div>
           </div>
         </div>
@@ -1036,17 +1331,21 @@ export function PrimaryProvidersPage() {
             const maxStreamErrorRetriesNumber = Number(maxStreamErrorRetries);
             const max500RetriesNumber = Number(max500Retries);
             const retryDelaySecondsNumber = retryDelaySeconds == null || retryDelaySeconds === '' ? null : Number(retryDelaySeconds);
-            if ((responseTimeoutNumber != null && (!Number.isFinite(responseTimeoutNumber) || responseTimeoutNumber <= 0))
-              || (streamIdleTimeoutNumber != null && (!Number.isFinite(streamIdleTimeoutNumber) || streamIdleTimeoutNumber <= 0))) {
+            if (
+              (responseTimeoutNumber != null && (!Number.isFinite(responseTimeoutNumber) || responseTimeoutNumber <= 0))
+              || (streamIdleTimeoutNumber != null && (!Number.isFinite(streamIdleTimeoutNumber) || streamIdleTimeoutNumber <= 0))
+            ) {
               addToast('首响应截止和流式空闲截止必须留空或填写大于 0 的数字', 'warning');
               return true;
             }
-            if (!Number.isSafeInteger(maxStreamErrorRetriesNumber) || maxStreamErrorRetriesNumber < 0
+            if (
+              !Number.isSafeInteger(maxStreamErrorRetriesNumber) || maxStreamErrorRetriesNumber < 0
               || !Number.isInteger(max500RetriesNumber) || max500RetriesNumber < 0
               || (retryDelaySecondsNumber != null && (!Number.isFinite(retryDelaySecondsNumber) || retryDelaySecondsNumber <= 0))
               || !Number.isInteger(stickyRetriesNumber) || stickyRetriesNumber < 0
               || !Number.isInteger(maxRoundsNumber) || maxRoundsNumber < 0
-              || !Number.isFinite(maxDurationNumber) || maxDurationNumber < 0) {
+              || !Number.isFinite(maxDurationNumber) || maxDurationNumber < 0
+            ) {
               addToast('入口内 500／流错误重试、故障轮数和粘性重试必须是非负整数；retry_delay 秒数和超时必须大于 0', 'warning');
               return true;
             }
@@ -1108,11 +1407,10 @@ export function PrimaryProvidersPage() {
     let keepAlive = isNew ? true : endpoint?.keepAlive === true;
     let livePassthrough = Array.isArray(endpoint?.capabilities) && endpoint.capabilities.includes('live');
     let stickyGroup = endpoint?.stickyGroup || '';
-    let modelMappings = clone(endpointMappings(endpoint));
+    const modelMappings = clone(endpointMappings(endpoint));
     let apiKeyTouched = false;
 
-    // Try fetching existing secret if editing
-    let existingSecretStatus = secretStatus?.endpoints?.[endpoint?.id];
+    const existingSecretStatus = secretStatus?.endpoints?.[endpoint?.id];
     let fetchedKey = '';
     if (!isNew && endpoint?.id) {
       try {
@@ -1127,81 +1425,120 @@ export function PrimaryProvidersPage() {
       title: isNew ? '添加 Provider 入口' : `编辑入口 · ${endpoint.name}`,
       maxWidth: '680px',
       content: (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          {isNew && <p className="form-hint">新入口仅加入入口库；请到模型组手动添加入口并选择承接范围。</p>}
-          <div className="grid-2col">
-            <div className="form-group">
-              <label className="form-label" htmlFor="provider-id">入口 ID {isNew ? '' : '(只读)'}</label>
+        <div className="space-y-4">
+          {isNew && (
+            <p className="rounded-lg border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+              新入口仅加入入口库；请到模型组手动添加入口并选择承接范围。
+            </p>
+          )}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="provider-id" className="text-xs font-medium text-muted-foreground">
+                入口 ID {isNew ? '' : '(只读)'}
+              </Label>
               {isNew ? (
-                <input id="provider-id"
+                <Input
+                  id="provider-id"
                   type="text"
-                  className="form-input"
+                  className="h-9 font-mono text-xs"
                   defaultValue=""
                   placeholder="留空则自动生成"
                   onChange={(e) => { endpointID = e.target.value; }}
                 />
               ) : (
-                <input id="provider-id" type="text" className="form-input" value={endpointID} readOnly aria-readonly="true" />
+                <Input
+                  id="provider-id"
+                  type="text"
+                  className="h-9 bg-muted/40 font-mono text-xs"
+                  value={endpointID}
+                  readOnly
+                  aria-readonly="true"
+                />
               )}
-              <span className="form-hint">只允许字母、数字、点、下划线和连字符；保存后不可修改。</span>
+              <span className="block text-[11px] text-muted-foreground">
+                只允许字母、数字、点、下划线和连字符；保存后不可修改。
+              </span>
             </div>
 
-            <div className="form-group">
-              <label className="form-label">入口状态</label>
-              <LocalToggle initial={enabled} onChange={(value) => { enabled = value; }} label={(value) => (value ? '已启用' : '已停用')} title="切换入口是否参与调度" ariaLabel="切换入口是否参与调度" />
+            <div className="space-y-1.5">
+              <span className="block text-xs font-medium text-muted-foreground">入口状态</span>
+              <LocalToggle
+                initial={enabled}
+                onChange={(value) => { enabled = value; }}
+                label={(value) => (value ? '已启用' : '已停用')}
+                title="切换入口是否参与调度"
+                ariaLabel="切换入口是否参与调度"
+              />
             </div>
           </div>
 
-          <div className="form-group">
-            <label className="form-label" htmlFor="provider-name">入口名称 *</label>
-            <input id="provider-name"
-               type="text"
-              className="form-input"
+          <div className="space-y-1.5">
+            <Label htmlFor="provider-name" className="text-xs font-medium text-muted-foreground">
+              入口名称 *
+            </Label>
+            <Input
+              id="provider-name"
+              type="text"
+              className="h-9 text-xs"
               defaultValue={name}
               placeholder="如：Anthropic 官方直连"
               onChange={(e) => { name = e.target.value; }}
             />
           </div>
 
-          <div className="form-group">
-            <label className="form-label" htmlFor="provider-api-url">API 地址 *</label>
-            <input id="provider-api-url"
-               type="text"
-              className="form-input"
+          <div className="space-y-1.5">
+            <Label htmlFor="provider-api-url" className="text-xs font-medium text-muted-foreground">
+              API 地址 *
+            </Label>
+            <Input
+              id="provider-api-url"
+              type="text"
+              className="h-9 font-mono text-xs"
               defaultValue={baseURL}
               placeholder="https://api.anthropic.com"
               onChange={(e) => { baseURL = e.target.value; }}
             />
           </div>
 
-          <div className="form-group">
-            <label className="form-label" htmlFor="provider-resolve-ip">指定解析 IP</label>
-            <input id="provider-resolve-ip"
-               type="text"
-              className="form-input"
+          <div className="space-y-1.5">
+            <Label htmlFor="provider-resolve-ip" className="text-xs font-medium text-muted-foreground">
+              指定解析 IP
+            </Label>
+            <Input
+              id="provider-resolve-ip"
+              type="text"
+              className="h-9 font-mono text-xs"
               defaultValue={resolveIP}
               placeholder="留空使用系统 DNS，如 203.0.113.10 或 2001:db8::10"
               onChange={(e) => { resolveIP = e.target.value; }}
             />
-            <span className="form-hint">连接固定地址，Host、HTTPS SNI、证书校验和 WebSocket 握手仍使用 API 地址中的域名。</span>
+            <span className="block text-[11px] text-muted-foreground">
+              连接固定地址，Host、HTTPS SNI、证书校验和 WebSocket 握手仍使用 API 地址中的域名。
+            </span>
           </div>
 
-          <div className="form-group">
-            <label className="form-label" htmlFor="provider-api-key">API Key 密钥</label>
-            <input id="provider-api-key"
-               type="password"
-              className="form-input"
+          <div className="space-y-1.5">
+            <Label htmlFor="provider-api-key" className="text-xs font-medium text-muted-foreground">
+              API Key 密钥
+            </Label>
+            <Input
+              id="provider-api-key"
+              type="password"
+              className="h-9 font-mono text-xs"
               defaultValue={fetchedKey}
               placeholder={existingSecretStatus?.configured ? `已保存 (尾号 ${existingSecretStatus.last4}) · 输入以替换` : '输入上游 API Key'}
               onChange={(e) => { apiKey = e.target.value; apiKeyTouched = true; }}
             />
-            <span className="form-hint">编辑时清空再保存，会移除该入口已保存的 Key。</span>
+            <span className="block text-[11px] text-muted-foreground">编辑时清空再保存，会移除该入口已保存的 Key。</span>
           </div>
 
-          <div className="form-group">
-            <label className="form-label" htmlFor="provider-protocol">入口协议</label>
-            <select id="provider-protocol"
-               className="form-select"
+          <div className="space-y-1.5">
+            <Label htmlFor="provider-protocol" className="text-xs font-medium text-muted-foreground">
+              入口协议
+            </Label>
+            <select
+              id="provider-protocol"
+              className={SELECT_CLS}
               defaultValue={protocol}
               onChange={(e) => { protocol = normalizeEndpointProtocol(e.target.value, 'auto'); }}
             >
@@ -1209,50 +1546,93 @@ export function PrimaryProvidersPage() {
                 <option key={option.value} value={option.value}>{option.label}</option>
               ))}
             </select>
-            <span className="form-hint">自动（四协议）会按入站路径选择对应的原生协议；固定协议用于强制指定上游格式。</span>
+            <span className="block text-[11px] text-muted-foreground">
+              自动（四协议）会按入站路径选择对应的原生协议；固定协议用于强制指定上游格式。
+            </span>
           </div>
 
           <UserAgentEditor initialValue={userAgent} onChange={(value) => { userAgent = value; }} />
 
-          <div className="form-group">
-            <label className="form-label" htmlFor="provider-priority">调度优先级 (Priority)</label>
-            <input id="provider-priority" type="number" className="form-input" defaultValue={priority} onChange={(e) => { priority = Number(e.target.value); }} />
-            <span className="form-hint">数值越小越优先调度。</span>
-          </div>
-
-          <div className="form-group">
-            <label className="form-label" htmlFor="provider-sticky-group">粘性分组</label>
-            <input id="provider-sticky-group" type="text" className="form-input" defaultValue={stickyGroup} placeholder="留空 = 入口独立分组" onChange={(e) => { stickyGroup = e.target.value; }} />
-            <span className="form-hint">同一分组共享会话粘性；当前分组故障后再故障转移到其他分组。</span>
-          </div>
-
-          <div className="grid-2col">
-            <div className="form-group">
-              <label className="form-label">连接复用</label>
-              <LocalToggle initial={keepAlive} onChange={(value) => { keepAlive = value; }} label={(value) => (value ? '启用连接复用' : '每请求新建连接')} ariaLabel="切换连接复用（Keep-Alive）" />
-              <span className="form-hint">新入口默认启用；可按入口关闭。启用后复用出站连接，可减少 TCP/TLS 握手开销。</span>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="provider-priority" className="text-xs font-medium text-muted-foreground">
+                调度优先级 (Priority)
+              </Label>
+              <Input
+                id="provider-priority"
+                type="number"
+                className="h-9 font-mono text-xs tabular-nums"
+                defaultValue={priority}
+                onChange={(e) => { priority = Number(e.target.value); }}
+              />
+              <span className="block text-[11px] text-muted-foreground">数值越小越优先调度。</span>
             </div>
-            <div className="form-group">
-              <label className="form-label">原生能力</label>
-              <LocalToggle initial={livePassthrough} onChange={(value) => { livePassthrough = value; }} label={(value) => (value ? 'Live / Realtime 透传' : '未声明 Live')} ariaLabel="切换 Live / Realtime 原样透传" />
-              <span className="form-hint">只声明入口路由能力，不把上游未公开的语音模型加入模型列表。</span>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="provider-sticky-group" className="text-xs font-medium text-muted-foreground">
+                粘性分组
+              </Label>
+              <Input
+                id="provider-sticky-group"
+                type="text"
+                className="h-9 font-mono text-xs"
+                defaultValue={stickyGroup}
+                placeholder="留空 = 入口独立分组"
+                onChange={(e) => { stickyGroup = e.target.value; }}
+              />
+              <span className="block text-[11px] text-muted-foreground">
+                同一分组共享会话粘性；当前分组故障后再故障转移到其他分组。
+              </span>
             </div>
           </div>
 
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <span className="block text-xs font-medium text-muted-foreground">连接复用</span>
+              <LocalToggle
+                initial={keepAlive}
+                onChange={(value) => { keepAlive = value; }}
+                label={(value) => (value ? '启用连接复用' : '每请求新建连接')}
+                ariaLabel="切换连接复用（Keep-Alive）"
+              />
+              <span className="block text-[11px] text-muted-foreground">
+                新入口默认启用；可按入口关闭。启用后复用出站连接，可减少 TCP/TLS 握手开销。
+              </span>
+            </div>
+            <div className="space-y-1.5">
+              <span className="block text-xs font-medium text-muted-foreground">原生能力</span>
+              <LocalToggle
+                initial={livePassthrough}
+                onChange={(value) => { livePassthrough = value; }}
+                label={(value) => (value ? 'Live / Realtime 透传' : '未声明 Live')}
+                ariaLabel="切换 Live / Realtime 原样透传"
+              />
+              <span className="block text-[11px] text-muted-foreground">
+                只声明入口路由能力，不把上游未公开的语音模型加入模型列表。
+              </span>
+            </div>
+          </div>
 
           {!isNew && endpoint && (
-            <div className="form-group endpoint-pricing-entry">
-              <label className="form-label">成本价格</label>
-              <div className="endpoint-pricing-entry-actions">
-                <button type="button" className="btn btn-secondary btn-compact" onClick={() => openPricingEditor(endpoint)}>
-                  <Icon name="currency" size={13} />
+            <div className="space-y-1.5 rounded-xl border bg-muted/20 p-3">
+              <span className="block text-xs font-medium text-foreground">成本价格</span>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 gap-1.5 px-2.5 text-xs"
+                  onClick={() => openPricingEditor(endpoint)}
+                >
+                  <Coins className="size-3.5" />
                   <span>编辑此入口价格</span>
-                </button>
-                <span className="form-hint">按入口维护输入、输出和缓存价格；未设置专属价格时回退到全局价格。</span>
+                </Button>
+                <span className="text-[11px] text-muted-foreground">
+                  按入口维护输入、输出和缓存价格；未设置专属价格时回退到全局价格。
+                </span>
               </div>
             </div>
           )}
-
         </div>
       ),
       actions: [
@@ -1366,67 +1746,75 @@ export function PrimaryProvidersPage() {
     },
     {
       title: '入口名称',
-      width: '154px',
-      minWidth: '142px',
+      width: '180px',
+      minWidth: '154px',
       render: (row) => (
-        <span className="provider-reorder-cell">
-          <span className="provider-reorder-handle" aria-hidden="true"><Icon name="drag" size={15} /></span>
-          <span className="provider-reorder-copy">
-            <strong>{row.name}</strong>
-            <small className="mono-cell">{row.id}</small>
-            <small className="ua-summary" title={userAgentSummary(row.userAgent)}>UA：{userAgentSummary(row.userAgent)}</small>
+        <span className="provider-reorder-cell flex items-start gap-2">
+          <span className="mt-0.5 text-muted-foreground/70" aria-hidden="true">
+            <GripVertical className="size-4" />
+          </span>
+          <span className="flex min-w-0 flex-col gap-0.5">
+            <strong className="truncate text-xs font-semibold text-foreground">{row.name}</strong>
+            <small className="truncate font-mono text-[11px] text-muted-foreground">{row.id}</small>
+            <small className="truncate text-[10px] text-muted-foreground" title={userAgentSummary(row.userAgent)}>
+              UA：{userAgentSummary(row.userAgent)}
+            </small>
           </span>
         </span>
       ),
     },
     {
       title: '优先级',
-      width: '56px',
+      width: '64px',
       render: (row) => (
-        <span className="mono-cell" style={{ fontWeight: 700, color: 'var(--primary)' }}>
+        <span className="font-mono text-xs font-bold text-primary tabular-nums">
           {row.priority ?? 0}
         </span>
       ),
     },
     {
       title: '协议',
-      width: '92px',
+      width: '96px',
       render: (row) => (
-        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+        <span className="text-xs text-muted-foreground">
           {endpointProtocolLabel(row.protocol)}
         </span>
       ),
     },
     {
       title: '固定解析',
-      width: '98px',
+      width: '104px',
       render: (row) => (
-        <span className="mono-cell" title={row.resolveIP || '使用系统 DNS'}>
+        <span className="font-mono text-xs text-muted-foreground" title={row.resolveIP || '使用系统 DNS'}>
           {row.resolveIP || '系统 DNS'}
         </span>
       ),
     },
     {
       title: '映射',
-      width: '62px',
+      width: '64px',
       render: (row) => (
-        <span style={{ fontSize: '0.82rem', color: 'var(--primary)' }}>
+        <span className="font-mono text-xs font-medium text-primary tabular-nums">
           {endpointMappings(row).length} 条
         </span>
       ),
     },
     {
       title: '模型目录',
-      width: '112px',
+      width: '118px',
       render: (row) => {
         const models = catalogModels(row);
-        const status = row.catalog?.status;
+        const catStatus = row.catalog?.status;
         return (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-            <span style={{ fontSize: '0.8rem', color: status === '获取失败' ? 'var(--status-critical)' : 'var(--text-secondary)' }}>
-              {status || '未获取'}{models.length ? ` · ${models.length} 个` : ''}
+          <div className="flex flex-col gap-0.5">
+            <span className={cn('text-xs', catStatus === '获取失败' ? 'text-status-critical' : 'text-muted-foreground')}>
+              {catStatus || '未获取'}{models.length ? ` · ${models.length} 个` : ''}
             </span>
-            {row.catalog?.updatedAt && <span className="form-hint" style={{ fontSize: '0.68rem' }}>{catalogTimestamp(row.catalog.updatedAt)}</span>}
+            {row.catalog?.updatedAt && (
+              <span className="text-[10px] text-muted-foreground tabular-nums">
+                {catalogTimestamp(row.catalog.updatedAt)}
+              </span>
+            )}
           </div>
         );
       },
@@ -1438,40 +1826,48 @@ export function PrimaryProvidersPage() {
       width: '248px',
       minWidth: '248px',
       render: (row, idx) => (
-        <div className="provider-row-actions">
-          <button
+        <div className="provider-row-actions flex flex-nowrap items-center justify-end gap-1 whitespace-nowrap">
+          <Button
             type="button"
-            className="btn-icon btn-compact-icon"
+            variant="ghost"
+            size="icon-sm"
+            className="size-7"
             disabled={idx === 0}
             onClick={(e) => { e.stopPropagation(); handleMoveEndpoint(idx, -1); }}
             title="上移同优先级入口顺序"
             aria-label={`上移入口「${row.name || row.id}」`}
           >
-            <Icon name="chevron" size={14} style={{ transform: 'rotate(-90deg)' }} />
-          </button>
-          <button
+            <ChevronUp className="size-3.5" />
+          </Button>
+          <Button
             type="button"
-            className="btn-icon btn-compact-icon"
+            variant="ghost"
+            size="icon-sm"
+            className="size-7"
             disabled={idx === endpoints.length - 1}
             onClick={(e) => { e.stopPropagation(); handleMoveEndpoint(idx, 1); }}
             title="下移同优先级入口顺序"
             aria-label={`下移入口「${row.name || row.id}」`}
           >
-            <Icon name="chevron" size={14} style={{ transform: 'rotate(90deg)' }} />
-          </button>
-          <button
+            <ChevronDown className="size-3.5" />
+          </Button>
+          <Button
             type="button"
-            className="btn btn-secondary btn-compact"
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1 px-2 text-xs"
             onClick={(e) => { e.stopPropagation(); openEndpointEditor(row); }}
             aria-label={`编辑入口「${row.name || row.id}」`}
             title={`编辑入口「${row.name || row.id}」`}
           >
-            <Icon name="edit" size={13} />
+            <Pencil className="size-3" />
             <span>编辑</span>
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="btn btn-secondary btn-compact"
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1 px-2 text-xs"
             onClick={(e) => {
               e.stopPropagation();
               if (fetchingModelEndpointIDs.has(row.id)) cancelModelFetch(row.id);
@@ -1480,173 +1876,206 @@ export function PrimaryProvidersPage() {
             aria-label={`${fetchingModelEndpointIDs.has(row.id) ? '取消获取' : '获取'}入口「${row.name || row.id}」的模型`}
             title={`${fetchingModelEndpointIDs.has(row.id) ? '取消获取' : '获取'}入口「${row.name || row.id}」的模型`}
           >
-            <Icon name="refresh" size={13} />
+            <RefreshCw className={cn('size-3', fetchingModelEndpointIDs.has(row.id) && 'animate-spin')} />
             <span>{fetchingModelEndpointIDs.has(row.id) ? '取消获取（读取中…）' : '获取模型'}</span>
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="btn btn-danger btn-compact"
+            variant="destructive"
+            size="icon-sm"
+            className="size-7"
             onClick={(e) => { e.stopPropagation(); handleDeleteEndpoint(row); }}
             aria-label={`删除入口「${row.name || row.id}」`}
             title={`删除入口「${row.name || row.id}」`}
           >
-            <Icon name="trash" size={13} />
-          </button>
+            <Trash2 className="size-3.5" />
+          </Button>
         </div>
       ),
     },
   ];
 
   return (
-    <div className="page-stack">
+    <div className="space-y-6">
       {/* Header */}
-      <div className="page-header">
-        <div className="page-title-group">
-          <h1 className="page-title">
-            <Icon name="server" size={24} style={{ color: 'var(--primary)' }} />
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="space-y-1">
+          <h1 className="flex items-center gap-2.5 text-2xl font-semibold tracking-tight text-foreground">
+            <Server className="size-5 text-primary" aria-hidden="true" />
             <span>入口库</span>
           </h1>
-          <p className="page-subtitle">统一维护上游地址、密钥和原始映射，供多个模型组复用。</p>
+          <p className="text-xs text-muted-foreground">统一维护上游地址、密钥和原始映射，供多个模型组复用。</p>
         </div>
-        <div className="page-actions">
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={openRetryEditor}
-          >
-            <Icon name="wrench" size={15} />
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={openRetryEditor} className="gap-1.5">
+            <Wrench className="size-3.5" />
             <span>编辑重试策略</span>
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => openEndpointEditor(null)}
-          >
-            <Icon name="plus" size={16} />
+          </Button>
+          <Button type="button" size="sm" onClick={() => openEndpointEditor(null)} className="gap-1.5">
+            <Plus className="size-3.5" />
             <span>添加入口通道</span>
-          </button>
+          </Button>
         </div>
       </div>
 
       {/* Top Overview Cards */}
-      <div className="grid-2col provider-overview-grid">
+      <div className="grid gap-4 lg:grid-cols-3">
         {/* Explicit Mapping Card */}
-        <div className="glass-panel panel-padded-stack provider-overview-card">
-          <div className="panel-toolbar">
-            <span className="panel-title">
-              入口模型映射与入口概览
-            </span>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
+            <CardTitle className="text-sm font-semibold">入口模型映射与入口概览</CardTitle>
             <StatusBadge text="按入口生效" kind="good" />
-          </div>
-          <p className="panel-description">
-            每个入口都必须在“模型映射”中声明客户端模型、上游模型、Thinking 和上下文策略。
-            精确模型名优先于 <code>prefix-*</code> 通配映射；点击入口后即可编辑。
-          </p>
-          <span className="form-hint">模型组决定承接范围与组内入口优先级；这里的优先级用于旧配置和新增默认组。原始映射的模型参数继续继承。</span>
-          <div className="grid-3col provider-overview-metrics" aria-label="Provider 入口概览">
-            <div><span>入口总数</span><strong className="mono-cell">{endpoints.length}</strong></div>
-            <div><span>已启用</span><strong className="mono-cell">{enabledEndpointCount}</strong></div>
-            <div><span>未启用</span><strong className="mono-cell">{Math.max(0, endpoints.length - enabledEndpointCount)}</strong></div>
-            <div><span>模型映射</span><strong className="mono-cell">{mappedModelCount} 条</strong></div>
-            <div><span>目录模型（去重）</span><strong className="mono-cell">{catalogModelCount ? `${catalogModelCount} 个` : '尚未获取'}</strong></div>
-          </div>
-        </div>
+          </CardHeader>
+          <CardContent className="space-y-3 text-xs">
+            <p className="leading-relaxed text-muted-foreground">
+              每个入口都必须在“模型映射”中声明客户端模型、上游模型、Thinking 和上下文策略。
+              精确模型名优先于 <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">prefix-*</code> 通配映射；点击入口后即可编辑。
+            </p>
+            <span className="block text-[11px] text-muted-foreground">
+              模型组决定承接范围与组内入口优先级；这里的优先级用于旧配置和新增默认组。原始映射的模型参数继续继承。
+            </span>
+            <div className="grid grid-cols-3 gap-2 border-t pt-3" aria-label="Provider 入口概览">
+              <div className="space-y-0.5">
+                <span className="block text-[11px] text-muted-foreground">入口总数</span>
+                <strong className="font-mono text-sm font-semibold text-foreground tabular-nums">{endpoints.length}</strong>
+              </div>
+              <div className="space-y-0.5">
+                <span className="block text-[11px] text-muted-foreground">已启用</span>
+                <strong className="font-mono text-sm font-semibold text-status-good tabular-nums">{enabledEndpointCount}</strong>
+              </div>
+              <div className="space-y-0.5">
+                <span className="block text-[11px] text-muted-foreground">未启用</span>
+                <strong className="font-mono text-sm font-semibold text-foreground tabular-nums">
+                  {Math.max(0, endpoints.length - enabledEndpointCount)}
+                </strong>
+              </div>
+              <div className="space-y-0.5">
+                <span className="block text-[11px] text-muted-foreground">模型映射</span>
+                <strong className="font-mono text-sm font-semibold text-primary tabular-nums">{mappedModelCount} 条</strong>
+              </div>
+              <div className="col-span-2 space-y-0.5">
+                <span className="block text-[11px] text-muted-foreground">目录模型（去重）</span>
+                <strong className="font-mono text-sm font-semibold text-foreground tabular-nums">
+                  {catalogModelCount ? `${catalogModelCount} 个` : '尚未获取'}
+                </strong>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
         {/* Global Retry Policy Card */}
-        <div className="glass-panel panel-padded-stack provider-overview-card">
-          <div className="panel-toolbar">
-            <span className="panel-title">
-              全局超时与重试参数摘要
-            </span>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
+            <CardTitle className="text-sm font-semibold">全局超时与重试参数摘要</CardTitle>
             <StatusBadge text="生效中" kind="good" />
-          </div>
-          <div className="grid-2col summary-grid provider-retry-grid">
-            <div><span>首响应截止</span><strong className="mono-cell">{retry.responseTimeoutSeconds ? `${retry.responseTimeoutSeconds}s` : '由客户端决定'}</strong></div>
-            <div><span>流式空闲截止</span><strong className="mono-cell">{retry.streamIdleTimeoutSeconds ? `${retry.streamIdleTimeoutSeconds}s` : '无限空闲'}</strong></div>
-            <div><span>500 失败后切换入口</span><strong className="mono-cell">{(retry.failoverOn500 ?? true) ? '开启' : '关闭'}</strong></div>
-            <div><span>入口内流错误重试</span><strong className="mono-cell">{retry.maxStreamErrorRetries ?? 0} 次</strong></div>
-            <div><span>流错误后切换入口</span><strong className="mono-cell">{(retry.failoverOnStreamError ?? false) ? '开启' : '关闭'}</strong></div>
-            <div><span>入口内 500 重试</span><strong className="mono-cell">{retry.max500Retries ?? 0} 次</strong></div>
-            <div><span>retry_delay 透传</span><strong className="mono-cell">{(retry.passThroughRetryDelay ?? true) ? (retry.retryDelaySeconds ? `${retry.retryDelaySeconds}s` : '未配置') : '关闭'}</strong></div>
-            <div><span>粘性入口重试</span><strong className="mono-cell">{retry.sessionStickyRetries ?? 2} 次</strong></div>
-            <div><span>会话粘性时长</span><strong className="mono-cell">{stickyTTLEffective > 0 ? `${stickyTTLEffective}h` : '永不过期'}</strong></div>
-            <div><span>故障重试最大轮数</span><strong className="mono-cell">{retry.maxDeferredRounds ?? retry.crossRoundRetries ?? 3} 轮</strong></div>
-            <div><span>跨轮最长时长</span><strong className="mono-cell">{retry.maxRetryDurationSeconds ? `${retry.maxRetryDurationSeconds}s` : '不限时长'}</strong></div>
-          </div>
-        </div>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
+              <div><span className="block text-[11px] text-muted-foreground">首响应截止</span><strong className="font-mono text-foreground tabular-nums">{retry.responseTimeoutSeconds ? `${retry.responseTimeoutSeconds}s` : '由客户端决定'}</strong></div>
+              <div><span className="block text-[11px] text-muted-foreground">流式空闲截止</span><strong className="font-mono text-foreground tabular-nums">{retry.streamIdleTimeoutSeconds ? `${retry.streamIdleTimeoutSeconds}s` : '无限空闲'}</strong></div>
+              <div><span className="block text-[11px] text-muted-foreground">500 失败后切换入口</span><strong className="text-foreground">{(retry.failoverOn500 ?? true) ? '开启' : '关闭'}</strong></div>
+              <div><span className="block text-[11px] text-muted-foreground">入口内流错误重试</span><strong className="font-mono text-foreground tabular-nums">{retry.maxStreamErrorRetries ?? 0} 次</strong></div>
+              <div><span className="block text-[11px] text-muted-foreground">流错误后切换入口</span><strong className="text-foreground">{(retry.failoverOnStreamError ?? false) ? '开启' : '关闭'}</strong></div>
+              <div><span className="block text-[11px] text-muted-foreground">入口内 500 重试</span><strong className="font-mono text-foreground tabular-nums">{retry.max500Retries ?? 0} 次</strong></div>
+              <div><span className="block text-[11px] text-muted-foreground">retry_delay 透传</span><strong className="font-mono text-foreground">{(retry.passThroughRetryDelay ?? true) ? (retry.retryDelaySeconds ? `${retry.retryDelaySeconds}s` : '未配置') : '关闭'}</strong></div>
+              <div><span className="block text-[11px] text-muted-foreground">粘性入口重试</span><strong className="font-mono text-foreground tabular-nums">{retry.sessionStickyRetries ?? 2} 次</strong></div>
+              <div><span className="block text-[11px] text-muted-foreground">会话粘性时长</span><strong className="font-mono text-foreground tabular-nums">{stickyTTLEffective > 0 ? `${stickyTTLEffective}h` : '永不过期'}</strong></div>
+              <div><span className="block text-[11px] text-muted-foreground">故障重试最大轮数</span><strong className="font-mono text-foreground tabular-nums">{retry.maxDeferredRounds ?? retry.crossRoundRetries ?? 3} 轮</strong></div>
+              <div className="col-span-2"><span className="block text-[11px] text-muted-foreground">跨轮最长时长</span><strong className="font-mono text-foreground tabular-nums">{retry.maxRetryDurationSeconds ? `${retry.maxRetryDurationSeconds}s` : '不限时长'}</strong></div>
+            </div>
+          </CardContent>
+        </Card>
 
-        <div className="glass-panel panel-padded-stack provider-overview-card provider-catalog-card">
-          <div className="panel-toolbar">
-            <span className="panel-title">
-              自动模型目录
-            </span>
-            <StatusBadge text={modelCatalog.autoRefresh === false ? '已停用' : '已启用'} kind={modelCatalog.autoRefresh === false ? 'muted' : 'good'} />
-          </div>
-          <div className="summary-grid provider-catalog-controls">
-            <label className="provider-catalog-row">
-              <span>Provider 自动刷新</span>
-              <QuickToggle
-                checked={modelCatalog.autoRefresh !== false}
-                onChange={(checked) => void updateModelCatalog({ autoRefresh: checked })}
-                label={modelCatalog.autoRefresh === false ? '关闭' : '开启'}
-                ariaLabel="切换 Provider 模型目录自动刷新"
-              />
-            </label>
-            <label className="provider-catalog-row">
-              <span>启动时刷新</span>
-              <QuickToggle
-                checked={modelCatalog.refreshOnStartup !== false}
-                onChange={(checked) => void updateModelCatalog({ refreshOnStartup: checked })}
-                label={modelCatalog.refreshOnStartup === false ? '关闭' : '开启'}
-                ariaLabel="切换启动时刷新模型目录"
-              />
-            </label>
-            <label className="provider-catalog-row">
-              <span>公共元数据</span>
-              <QuickToggle
-                checked={modelCatalog.remoteMetadataEnabled !== false}
-                onChange={(checked) => void updateModelCatalog({ remoteMetadataEnabled: checked })}
-                label={modelCatalog.remoteMetadataEnabled === false ? '关闭' : '开启'}
-                ariaLabel="切换公共模型元数据刷新"
-              />
-            </label>
-            <label className="provider-catalog-row">
-              <span>刷新周期（分钟）</span>
-              <input
-                className="form-input provider-catalog-interval"
-                type="number"
-                min="15"
-                max="1440"
-                step="15"
-                value={catalogIntervalDraft}
-                onChange={(event) => setCatalogIntervalDraft(event.target.value)}
-                onBlur={() => {
-                  const value = Math.min(1440, Math.max(15, Number(catalogIntervalDraft) || 180));
-                  setCatalogIntervalDraft(String(value));
-                  void updateModelCatalog({ refreshIntervalMinutes: value });
-                }}
-              />
-            </label>
-          </div>
-          <button type="button" className="btn btn-secondary provider-catalog-refresh-btn" disabled={catalogRefreshing} onClick={() => void refreshModelCatalog()}>
-            <Icon name="refresh" size={14} />
-            <span>{catalogRefreshing ? '刷新中…' : '立即刷新目录'}</span>
-          </button>
-        </div>
+        {/* Auto Catalog Card */}
+        <Card className="flex flex-col justify-between">
+          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
+            <CardTitle className="text-sm font-semibold">自动模型目录</CardTitle>
+            <StatusBadge
+              text={modelCatalog.autoRefresh === false ? '已停用' : '已启用'}
+              kind={modelCatalog.autoRefresh === false ? 'muted' : 'good'}
+            />
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="space-y-2.5 text-xs">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-muted-foreground">Provider 自动刷新</span>
+                <QuickToggle
+                  checked={modelCatalog.autoRefresh !== false}
+                  onChange={(checked) => void updateModelCatalog({ autoRefresh: checked })}
+                  label={modelCatalog.autoRefresh === false ? '关闭' : '开启'}
+                  ariaLabel="切换 Provider 模型目录自动刷新"
+                />
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-muted-foreground">启动时刷新</span>
+                <QuickToggle
+                  checked={modelCatalog.refreshOnStartup !== false}
+                  onChange={(checked) => void updateModelCatalog({ refreshOnStartup: checked })}
+                  label={modelCatalog.refreshOnStartup === false ? '关闭' : '开启'}
+                  ariaLabel="切换启动时刷新模型目录"
+                />
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-muted-foreground">公共元数据</span>
+                <QuickToggle
+                  checked={modelCatalog.remoteMetadataEnabled !== false}
+                  onChange={(checked) => void updateModelCatalog({ remoteMetadataEnabled: checked })}
+                  label={modelCatalog.remoteMetadataEnabled === false ? '关闭' : '开启'}
+                  ariaLabel="切换公共模型元数据刷新"
+                />
+              </div>
+              <label className="flex items-center justify-between gap-2">
+                <span className="text-muted-foreground">刷新周期（分钟）</span>
+                <Input
+                  className="h-7 w-24 text-right font-mono text-xs tabular-nums"
+                  type="number"
+                  min="15"
+                  max="1440"
+                  step="15"
+                  value={catalogIntervalDraft}
+                  onChange={(event) => setCatalogIntervalDraft(event.target.value)}
+                  onBlur={() => {
+                    const value = Math.min(1440, Math.max(15, Number(catalogIntervalDraft) || 180));
+                    setCatalogIntervalDraft(String(value));
+                    void updateModelCatalog({ refreshIntervalMinutes: value });
+                  }}
+                />
+              </label>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-full gap-1.5"
+              disabled={catalogRefreshing}
+              onClick={() => void refreshModelCatalog()}
+            >
+              <RefreshCw className={cn('size-3.5', catalogRefreshing && 'animate-spin')} />
+              <span>{catalogRefreshing ? '刷新中…' : '立即刷新目录'}</span>
+            </Button>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Endpoints Table */}
-      <div className="glass-panel">
-        <div className="panel-header">
-          <div className="panel-title-group">
-            <div className="panel-title">上游通道入口列表 ({endpoints.length})</div>
-            <span className="panel-hint">调度优先按 Priority 数值（小者优先），同级按列表顺序。点击行查看详细映射；拖动整行可调整入口顺序，目标行上/下半区会显示插入位置。</span>
+      <Card className="overflow-hidden py-0">
+        <CardHeader className="flex flex-col gap-3 border-b py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-1">
+            <CardTitle className="text-base font-semibold">上游通道入口列表 ({endpoints.length})</CardTitle>
+            <CardDescription className="text-xs">
+              调度优先按 Priority 数值（小者优先），同级按列表顺序。点击行查看详细映射；拖动整行可调整入口顺序，目标行上/下半区会显示插入位置。
+            </CardDescription>
           </div>
-          <div className="panel-header-actions provider-sticky-toolbar">
-            <label htmlFor="provider-sticky-ttl" title="同一会话粘在同一入口组的时长；超时后新请求按入口库顺序重新选择。0 表示永不过期。">会话粘性时长</label>
-            <input
+          <div className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+            <label
+              htmlFor="provider-sticky-ttl"
+              title="同一会话粘在同一入口组的时长；超时后新请求按入口库顺序重新选择。0 表示永不过期。"
+            >
+              会话粘性时长
+            </label>
+            <Input
               id="provider-sticky-ttl"
-              className="form-input provider-sticky-input"
+              className="h-8 w-20 text-right font-mono text-xs tabular-nums"
               type="number"
               min="0"
               step="1"
@@ -1654,16 +2083,21 @@ export function PrimaryProvidersPage() {
               disabled={savingStickyTTL}
               onChange={(event) => setStickyTTLDraft(event.target.value)}
               onBlur={commitStickyTTL}
-              onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  event.currentTarget.blur();
+                }
+              }}
               aria-label="会话粘性时长（小时）"
             />
             <span>h</span>
           </div>
-        </div>
-        <div className="panel-body panel-body-flush">
-          <div className="provider-desktop-table">
+        </CardHeader>
+
+        <div>
+          <div className="provider-desktop-table hidden md:block">
             <DataTable
-              className="provider-table"
               columns={endpointColumns}
               data={endpoints}
               keyField="id"
@@ -1676,9 +2110,9 @@ export function PrimaryProvidersPage() {
             />
           </div>
 
-          <div className="provider-mobile-list" role="list" aria-label="上游 Provider 入口">
+          <div className="provider-mobile-list space-y-3 p-3 md:hidden" role="list" aria-label="上游 Provider 入口">
             {endpoints.length === 0 ? (
-              <div className="responsive-card-empty">当前暂无 Provider 入口</div>
+              <div className="py-8 text-center text-xs text-muted-foreground">当前暂无 Provider 入口</div>
             ) : endpoints.map((endpoint, idx) => {
               const models = catalogModels(endpoint);
               const selected = selectedEndpoint?.id === endpoint.id;
@@ -1687,16 +2121,24 @@ export function PrimaryProvidersPage() {
                 <article
                   {...dragProps}
                   key={endpoint.id}
-                  className={`${dragProps.className} responsive-data-card provider-mobile-card${selected ? ' is-selected' : ''}`}
+                  className={cn(
+                    dragProps.className,
+                    'space-y-3 rounded-xl border bg-card p-3.5 transition-colors',
+                    selected && 'border-primary bg-primary/5',
+                  )}
                   role="listitem"
                 >
-                  <div className="responsive-data-card-heading">
-                    <span className="provider-mobile-drag-handle" aria-hidden="true">
-                      <Icon name="drag" size={15} />
-                    </span>
-                    <div className="responsive-data-card-title">
-                      <strong>{endpoint.name || endpoint.id}</strong>
-                      <small className="mono-cell">{endpoint.id}</small>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex min-w-0 items-start gap-2">
+                      <span className="mt-0.5 text-muted-foreground" aria-hidden="true">
+                        <GripVertical className="size-4" />
+                      </span>
+                      <div className="min-w-0">
+                        <strong className="block truncate text-xs font-semibold text-foreground">
+                          {endpoint.name || endpoint.id}
+                        </strong>
+                        <small className="block truncate font-mono text-[11px] text-muted-foreground">{endpoint.id}</small>
+                      </div>
                     </div>
                     <QuickToggle
                       checked={endpoint.enabled}
@@ -1706,92 +2148,113 @@ export function PrimaryProvidersPage() {
                     />
                   </div>
 
-                  <dl className="responsive-data-card-fields provider-mobile-summary">
+                  <dl className="grid grid-cols-2 gap-2 text-xs">
                     <div>
-                      <dt>优先级</dt>
-                      <dd className="mono-cell responsive-data-card-primary-value">{endpoint.priority ?? 0}</dd>
+                      <dt className="text-[11px] text-muted-foreground">优先级</dt>
+                      <dd className="font-mono font-semibold text-primary tabular-nums">{endpoint.priority ?? 0}</dd>
                     </div>
                     <div>
-                      <dt>协议</dt>
+                      <dt className="text-[11px] text-muted-foreground">协议</dt>
                       <dd>{endpointProtocolLabel(endpoint.protocol)}</dd>
                     </div>
                     <div>
-                      <dt>模型映射</dt>
-                      <dd>{endpointMappings(endpoint).length} 条</dd>
+                      <dt className="text-[11px] text-muted-foreground">模型映射</dt>
+                      <dd className="font-mono tabular-nums">{endpointMappings(endpoint).length} 条</dd>
                     </div>
-                    <div><dt>UA</dt><dd>{userAgentSummary(endpoint.userAgent)}</dd></div>
-                    <div><dt>解析 IP</dt><dd className="mono-cell">{endpoint.resolveIP || '系统 DNS'}</dd></div>
                     <div>
-                      <dt>模型目录</dt>
-                      <dd className={endpoint.catalog?.status === '获取失败' ? 'provider-secret-missing' : undefined}>
+                      <dt className="text-[11px] text-muted-foreground">UA</dt>
+                      <dd className="truncate">{userAgentSummary(endpoint.userAgent)}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-[11px] text-muted-foreground">解析 IP</dt>
+                      <dd className="font-mono">{endpoint.resolveIP || '系统 DNS'}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-[11px] text-muted-foreground">模型目录</dt>
+                      <dd className={endpoint.catalog?.status === '获取失败' ? 'text-status-critical' : undefined}>
                         {endpoint.catalog?.status || '未获取'}{models.length ? ` · ${models.length} 个` : ''}
                       </dd>
                     </div>
                   </dl>
 
-                  <div className="responsive-data-card-actions provider-mobile-primary-actions">
-                    <button
+                  <div className="provider-mobile-primary-actions flex flex-wrap gap-2">
+                    <Button
                       type="button"
-                      className={`btn ${selected ? 'btn-primary' : 'btn-secondary'}`}
+                      variant={selected ? 'default' : 'outline'}
+                      size="sm"
+                      className="h-8 gap-1.5 text-xs"
                       onClick={() => {
                         selectEndpoint(endpoint.id);
                         window.requestAnimationFrame(() => document.getElementById('provider-endpoint-inspector')?.scrollIntoView({ block: 'start' }));
                       }}
                     >
-                      <Icon name="server" size={14} />
+                      <Server className="size-3.5" />
                       <span>{selected ? '正在查看' : '查看详情'}</span>
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
-                      className="btn btn-secondary"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-1.5 text-xs"
                       onClick={() => openEndpointEditor(endpoint)}
                     >
-                      <Icon name="edit" size={14} />
+                      <Pencil className="size-3.5" />
                       <span>编辑</span>
-                    </button>
+                    </Button>
                   </div>
 
-                  <details className="responsive-data-card-more provider-mobile-more">
-                    <summary>排序、模型与删除</summary>
-                    <div className="responsive-data-card-actions">
-                      <button
+                  <details className="group rounded-lg border bg-muted/20 p-2">
+                    <summary className="flex cursor-pointer list-none items-center justify-between text-xs font-medium text-muted-foreground select-none">
+                      <span>排序、模型与删除</span>
+                      <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
+                    </summary>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      <Button
                         type="button"
-                        className="btn btn-secondary"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 gap-1 px-2 text-xs"
                         disabled={idx === 0}
                         onClick={() => handleMoveEndpoint(idx, -1)}
                       >
-                        <Icon name="chevron" size={14} style={{ transform: 'rotate(-90deg)' }} />
+                        <ChevronUp className="size-3.5" />
                         <span>上移</span>
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
-                        className="btn btn-secondary"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 gap-1 px-2 text-xs"
                         disabled={idx === endpoints.length - 1}
                         onClick={() => handleMoveEndpoint(idx, 1)}
                       >
-                        <Icon name="chevron" size={14} style={{ transform: 'rotate(90deg)' }} />
+                        <ChevronDown className="size-3.5" />
                         <span>下移</span>
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
-                        className="btn btn-secondary"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 gap-1 px-2 text-xs"
                         onClick={() => {
                           if (fetchingModelEndpointIDs.has(endpoint.id)) cancelModelFetch(endpoint.id);
                           else void handleFetchModels(endpoint);
                         }}
                       >
-                        <Icon name="refresh" size={14} />
+                        <RefreshCw className="size-3.5" />
                         <span>{fetchingModelEndpointIDs.has(endpoint.id) ? '取消获取（读取中…）' : '获取模型'}</span>
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
-                        className="btn btn-danger"
+                        variant="destructive"
+                        size="sm"
+                        className="h-7 gap-1 px-2 text-xs"
                         onClick={() => handleDeleteEndpoint(endpoint)}
                         aria-label={`删除入口「${endpoint.name || endpoint.id}」`}
                       >
-                        <Icon name="trash" size={14} />
+                        <Trash2 className="size-3.5" />
                         <span>删除</span>
-                      </button>
+                      </Button>
                     </div>
                   </details>
                 </article>
@@ -1799,84 +2262,118 @@ export function PrimaryProvidersPage() {
             })}
           </div>
         </div>
-      </div>
+      </Card>
 
       {/* Selected Endpoint Inspector & Full Model Mappings */}
       {selectedEndpoint && (
-        <div id="provider-endpoint-inspector" className="glass-panel panel-padded-stack provider-endpoint-inspector">
-          <div className="panel-toolbar">
-            <div className="panel-actions">
-              <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
-                入口详情 · {selectedEndpoint.name}
-              </h3>
+        <Card id="provider-endpoint-inspector">
+          <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0 pb-3">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <CardTitle className="text-base font-semibold">入口详情 · {selectedEndpoint.name}</CardTitle>
               <StatusBadge text={selectedEndpoint.enabled ? '已就绪' : '已停用'} kind={selectedEndpoint.enabled ? 'good' : 'muted'} />
             </div>
 
-            <div className="panel-actions">
-              <button
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
                 type="button"
-                className="btn btn-secondary btn-compact"
+                variant="outline"
+                size="sm"
+                className="h-8 gap-1.5 text-xs"
                 onClick={() => {
                   if (fetchingModelEndpointIDs.has(selectedEndpoint.id)) cancelModelFetch(selectedEndpoint.id);
                   else void handleFetchModels(selectedEndpoint);
                 }}
               >
-                <Icon name="refresh" size={13} />
+                <RefreshCw className={cn('size-3.5', fetchingModelEndpointIDs.has(selectedEndpoint.id) && 'animate-spin')} />
                 <span>{fetchingModelEndpointIDs.has(selectedEndpoint.id) ? '取消获取（读取中…）' : '获取模型'}</span>
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
-                className="btn btn-secondary btn-compact"
+                variant="outline"
+                size="sm"
+                className="h-8 gap-1.5 text-xs"
                 onClick={() => openEndpointEditor(selectedEndpoint)}
               >
-                <Icon name="edit" size={13} />
+                <Pencil className="size-3.5" />
                 <span>编辑通道设置</span>
-              </button>
+              </Button>
             </div>
-          </div>
+          </CardHeader>
 
-          <div className="grid-4col endpoint-detail-grid">
-            <div><span>入口 ID</span><span className="mono-cell">{selectedEndpoint.id}</span></div>
-            <div><span>API 地址</span><span className="mono-cell">{selectedEndpoint.baseURL}</span></div>
-            <div><span>指定解析 IP</span><span className="mono-cell">{selectedEndpoint.resolveIP || '系统 DNS'}</span></div>
-            <div><span>API Key</span><span className={secretStatus?.endpoints?.[selectedEndpoint.id]?.configured ? 'provider-secret-configured' : 'provider-secret-missing'}>{secretStatus?.endpoints?.[selectedEndpoint.id]?.configured ? `已配置 · 尾号 ${secretStatus.endpoints[selectedEndpoint.id].last4 || '****'}` : '未配置'}</span></div>
-            <div><span>入口协议</span><span className="mono-cell">{endpointProtocolLabel(selectedEndpoint.protocol)}</span></div>
-            <div><span>粘性分组</span><span className="mono-cell">{selectedEndpoint.stickyGroup || '独立分组'}</span></div>
-            <div><span>连接复用</span><span className="mono-cell">{selectedEndpoint.keepAlive ? '开启' : '关闭'}</span></div>
-            <div><span>UA</span><span>{userAgentSummary(selectedEndpoint.userAgent)}</span></div>
-          </div>
+          <CardContent className="space-y-5">
+            <div className="grid gap-3 rounded-xl border bg-muted/15 p-3.5 text-xs sm:grid-cols-2 lg:grid-cols-4">
+              <div><span className="block text-[11px] text-muted-foreground">入口 ID</span><span className="break-all font-mono font-medium text-foreground">{selectedEndpoint.id}</span></div>
+              <div><span className="block text-[11px] text-muted-foreground">API 地址</span><span className="break-all font-mono font-medium text-foreground">{selectedEndpoint.baseURL}</span></div>
+              <div><span className="block text-[11px] text-muted-foreground">指定解析 IP</span><span className="font-mono font-medium text-foreground">{selectedEndpoint.resolveIP || '系统 DNS'}</span></div>
+              <div>
+                <span className="block text-[11px] text-muted-foreground">API Key</span>
+                <span className={cn('font-mono font-medium', secretStatus?.endpoints?.[selectedEndpoint.id]?.configured ? 'text-status-good' : 'text-status-warning')}>
+                  {secretStatus?.endpoints?.[selectedEndpoint.id]?.configured
+                    ? `已配置 · 尾号 ${secretStatus.endpoints[selectedEndpoint.id].last4 || '****'}`
+                    : '未配置'}
+                </span>
+              </div>
+              <div><span className="block text-[11px] text-muted-foreground">入口协议</span><span className="font-mono font-medium text-foreground">{endpointProtocolLabel(selectedEndpoint.protocol)}</span></div>
+              <div><span className="block text-[11px] text-muted-foreground">粘性分组</span><span className="font-mono font-medium text-foreground">{selectedEndpoint.stickyGroup || '独立分组'}</span></div>
+              <div><span className="block text-[11px] text-muted-foreground">连接复用</span><span className="font-mono font-medium text-foreground">{selectedEndpoint.keepAlive ? '开启' : '关闭'}</span></div>
+              <div><span className="block text-[11px] text-muted-foreground">UA</span><span className="text-foreground">{userAgentSummary(selectedEndpoint.userAgent)}</span></div>
+            </div>
 
-          <div className="endpoint-catalog-card">
-            <div className="endpoint-catalog-info">
-              <div className="endpoint-catalog-heading">
-                模型目录 · {catalogModels(selectedEndpoint).length} 个
-                {selectedEndpoint.catalog?.status ? <span style={{ marginLeft: '8px', color: selectedEndpoint.catalog.status === '获取失败' ? 'var(--status-critical)' : 'var(--status-good)' }}>{selectedEndpoint.catalog.status}</span> : null}
-              </div>
-              <div className="form-hint" style={{ marginTop: '4px' }}>
-                {selectedEndpoint.catalog?.updatedAt ? `更新于 ${catalogTimestamp(selectedEndpoint.catalog.updatedAt)}` : '尚未获取该入口的模型目录'}
-                {selectedEndpoint.catalog?.source ? <span> · 来源 <span className="mono-cell" style={{ overflowWrap: 'anywhere' }}>{selectedEndpoint.catalog.source}</span></span> : null}
-              </div>
-              {selectedEndpoint.catalog?.error && <div role="alert" style={{ marginTop: '6px', color: 'var(--status-critical)', fontSize: '0.78rem', overflowWrap: 'anywhere' }}>{selectedEndpoint.catalog.error}</div>}
-              {catalogModels(selectedEndpoint).length > 0 && (
-                <div className="endpoint-catalog-tags">
-                  {catalogModels(selectedEndpoint).map((model) => (
-                    <span key={model} className="mono-cell endpoint-catalog-tag">
-                      {readableCatalogModel(model)}
-                    </span>
-                  ))}
+            <div className="flex flex-col gap-3 rounded-xl border bg-muted/15 p-3.5 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0 flex-1 space-y-1.5">
+                <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-foreground">
+                  <span>模型目录 · {catalogModels(selectedEndpoint).length} 个</span>
+                  {selectedEndpoint.catalog?.status && (
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        'text-[10px]',
+                        selectedEndpoint.catalog.status === '获取失败'
+                          ? 'border-status-critical/40 bg-status-critical/10 text-status-critical'
+                          : 'border-status-good/40 bg-status-good/10 text-status-good',
+                      )}
+                    >
+                      {selectedEndpoint.catalog.status}
+                    </Badge>
+                  )}
                 </div>
-              )}
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', flexShrink: 0 }}>
-              <button type="button" className="btn btn-secondary btn-compact" disabled={!catalogModels(selectedEndpoint).length} onClick={() => openCatalogMappingEditor(selectedEndpoint)}>
-                <Icon name="plus" size={13} />
+                <div className="text-[11px] text-muted-foreground">
+                  {selectedEndpoint.catalog?.updatedAt ? `更新于 ${catalogTimestamp(selectedEndpoint.catalog.updatedAt)}` : '尚未获取该入口的模型目录'}
+                  {selectedEndpoint.catalog?.source ? (
+                    <span> · 来源 <span className="break-all font-mono">{selectedEndpoint.catalog.source}</span></span>
+                  ) : null}
+                </div>
+                {selectedEndpoint.catalog?.error && (
+                  <div role="alert" className="break-all text-xs text-status-critical">
+                    {selectedEndpoint.catalog.error}
+                  </div>
+                )}
+                {catalogModels(selectedEndpoint).length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {catalogModels(selectedEndpoint).map((model) => (
+                      <Badge key={model} variant="outline" className="bg-background font-mono text-[11px] font-normal">
+                        {readableCatalogModel(model)}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 shrink-0 gap-1.5 text-xs"
+                disabled={!catalogModels(selectedEndpoint).length}
+                onClick={() => openCatalogMappingEditor(selectedEndpoint)}
+              >
+                <Plus className="size-3.5" />
                 <span>从已知模型添加</span>
-              </button>
+              </Button>
             </div>
-          </div>
 
-          <EndpointMappingTable endpoint={selectedEndpoint} configDoc={configDoc} saveConfig={saveConfig} addToast={addToast} />
-        </div>
+            <EndpointMappingTable endpoint={selectedEndpoint} configDoc={configDoc} saveConfig={saveConfig} addToast={addToast} />
+          </CardContent>
+        </Card>
       )}
     </div>
   );

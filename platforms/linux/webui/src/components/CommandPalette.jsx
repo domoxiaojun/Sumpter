@@ -1,32 +1,51 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Activity,
+  BarChart3,
+  ChevronRight,
+  CircleHelp,
+  GitBranch,
+  Info,
+  Layers,
+  Moon,
+  Play,
+  RefreshCw,
+  Search,
+  Server,
+  ShieldCheck,
+  Square,
+  Sun,
+  Wrench,
+} from 'lucide-react';
 import { useAppControls } from '../context/AppContext.jsx';
-import { Icon } from '../utils/icons.jsx';
-import { useDialogFocus } from '../hooks/useDialogFocus.js';
+import { cn } from '../lib/utils.js';
+import { Badge } from './ui/badge.jsx';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog.jsx';
+import { InputGroup, InputGroupAddon, InputGroupInput } from './ui/input-group.jsx';
 
 export function CommandPalette() {
   const {
-    isCommandOpen, setIsCommandOpen, navigate, toggleTheme,
+    isCommandOpen, setIsCommandOpen, navigate, theme, toggleTheme,
     toggleProxy, refreshCore, status,
   } = useAppControls();
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef(null);
-  const dialogRef = useDialogFocus(isCommandOpen, { onClose: () => setIsCommandOpen(false), initialFocusRef: inputRef });
 
   const commands = useMemo(() => [
-    { id: 'nav-run', title: '转到：运行监控', category: '页面跳转', icon: 'play', action: () => navigate('run') },
-    { id: 'nav-model-groups', title: '转到：模型组', category: '页面跳转', icon: 'route', action: () => navigate('model-groups') },
-    { id: 'nav-providers', title: '转到：入口库', category: '页面跳转', icon: 'server', action: () => navigate('providers') },
-    { id: 'nav-routing', title: '转到：Claude Code 路由', category: '页面跳转', icon: 'route', action: () => navigate('routing') },
-    { id: 'nav-security', title: '转到：安全与监听配置', category: '页面跳转', icon: 'shield', action: () => navigate('security') },
-    { id: 'nav-stats', title: '转到：使用统计与分析', category: '页面跳转', icon: 'chart', action: () => navigate('statistics') },
-    { id: 'nav-diag', title: '转到：系统诊断', category: '页面跳转', icon: 'wrench', action: () => navigate('diagnostics') },
-    { id: 'nav-help', title: '转到：帮助', category: '页面跳转', icon: 'help', action: () => navigate('help') },
-    { id: 'nav-about', title: '转到：关于', category: '页面跳转', icon: 'info', action: () => navigate('about') },
-    { id: 'act-toggle-proxy', title: status?.running ? '停止代理服务' : '启动代理服务', category: '控制操作', icon: status?.running ? 'stop' : 'play', action: toggleProxy },
-    { id: 'act-refresh', title: '刷新系统与配置数据', category: '控制操作', icon: 'refresh', action: refreshCore },
-    { id: 'act-theme', title: '切换深色/浅色主题', category: '外观设置', icon: 'moon', action: toggleTheme },
-  ], [navigate, toggleProxy, refreshCore, toggleTheme, status]);
+    { id: 'nav-run', title: '转到：运行监控', category: '页面跳转', IconComp: Activity, action: () => navigate('run') },
+    { id: 'nav-model-groups', title: '转到：模型组', category: '页面跳转', IconComp: Layers, action: () => navigate('model-groups') },
+    { id: 'nav-providers', title: '转到：入口库', category: '页面跳转', IconComp: Server, action: () => navigate('providers') },
+    { id: 'nav-routing', title: '转到：Claude Code 路由', category: '页面跳转', IconComp: GitBranch, action: () => navigate('routing') },
+    { id: 'nav-security', title: '转到：安全与监听配置', category: '页面跳转', IconComp: ShieldCheck, action: () => navigate('security') },
+    { id: 'nav-stats', title: '转到：使用统计与分析', category: '页面跳转', IconComp: BarChart3, action: () => navigate('statistics') },
+    { id: 'nav-diag', title: '转到：系统诊断', category: '页面跳转', IconComp: Wrench, action: () => navigate('diagnostics') },
+    { id: 'nav-help', title: '转到：帮助', category: '页面跳转', IconComp: CircleHelp, action: () => navigate('help') },
+    { id: 'nav-about', title: '转到：关于', category: '页面跳转', IconComp: Info, action: () => navigate('about') },
+    { id: 'act-toggle-proxy', title: status?.running ? '停止代理服务' : '启动代理服务', category: '控制操作', IconComp: status?.running ? Square : Play, action: toggleProxy },
+    { id: 'act-refresh', title: '刷新系统与配置数据', category: '控制操作', IconComp: RefreshCw, action: refreshCore },
+    { id: 'act-theme', title: '切换深色/浅色主题', category: '外观设置', IconComp: theme === 'dark' ? Sun : Moon, action: toggleTheme },
+  ], [navigate, toggleProxy, refreshCore, toggleTheme, status, theme]);
 
   const filtered = useMemo(() => {
     if (!query.trim()) return commands;
@@ -38,12 +57,16 @@ export function CommandPalette() {
     if (!isCommandOpen) return undefined;
     setQuery('');
     setSelectedIndex(0);
+    const timer = requestAnimationFrame(() => inputRef.current?.focus());
+    return () => cancelAnimationFrame(timer);
   }, [isCommandOpen]);
 
   const executeItem = (item) => {
     setIsCommandOpen(false);
     item.action();
   };
+
+  const safeIndex = filtered.length ? Math.min(selectedIndex, filtered.length - 1) : 0;
 
   const handleKeyDown = (e) => {
     if (e.key === 'ArrowDown') {
@@ -54,78 +77,89 @@ export function CommandPalette() {
       if (filtered.length) setSelectedIndex((prev) => (prev - 1 + filtered.length) % filtered.length);
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      if (filtered[selectedIndex]) executeItem(filtered[selectedIndex]);
+      if (filtered[safeIndex]) executeItem(filtered[safeIndex]);
     }
   };
 
-  if (!isCommandOpen) return null;
-
   return (
-    <div className="modal-overlay" onClick={() => setIsCommandOpen(false)}>
-      <div
-        className="modal-dialog command-palette-dialog"
-        ref={dialogRef}
-        tabIndex={-1}
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-label="命令面板"
-      >
-        <div className="command-palette-header">
-          <Icon name="search" size={18} className="text-muted" />
-          <input
-            ref={inputRef}
-            type="text"
-            className="form-input command-palette-input"
-            aria-label="搜索指令和页面"
-            role="combobox"
-            aria-expanded="true"
-            aria-autocomplete="list"
-            aria-controls="command-palette-results"
-            aria-activedescendant={filtered[selectedIndex] ? `command-${filtered[selectedIndex].id}` : undefined}
-            placeholder="输入指令或搜索页面 (如: 运行、Provider、启动代理)..."
-            value={query}
-            onChange={(e) => {
-              setQuery(e.target.value);
-              setSelectedIndex(0);
-            }}
-            onKeyDown={handleKeyDown}
-          />
-          <button type="button" className="btn-icon" aria-label="关闭命令面板" onClick={() => setIsCommandOpen(false)}><Icon name="close" size={16} /></button>
+    <Dialog open={isCommandOpen} onOpenChange={setIsCommandOpen}>
+      <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-lg" aria-label="命令面板">
+        <DialogHeader className="sr-only">
+          <DialogTitle>命令面板</DialogTitle>
+        </DialogHeader>
+        <div className="border-b px-3 py-2.5 pr-10">
+          <InputGroup className="border-0 shadow-none focus-within:ring-0">
+            <InputGroupAddon>
+              <Search className="size-4 text-muted-foreground" />
+            </InputGroupAddon>
+            <InputGroupInput
+              ref={inputRef}
+              type="text"
+              aria-label="搜索指令和页面"
+              role="combobox"
+              aria-expanded="true"
+              aria-autocomplete="list"
+              aria-controls="command-palette-results"
+              aria-activedescendant={filtered[safeIndex] ? `command-${filtered[safeIndex].id}` : undefined}
+              placeholder="输入指令或搜索页面 (如: 运行、Provider、启动代理)..."
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setSelectedIndex(0);
+              }}
+              onKeyDown={handleKeyDown}
+            />
+          </InputGroup>
         </div>
 
-        <div className="command-palette-list" id="command-palette-results" role="listbox" aria-label="可用指令">
+        <div
+          id="command-palette-results"
+          role="listbox"
+          aria-label="可用指令"
+          className="max-h-80 overflow-y-auto p-1.5"
+        >
           {filtered.length === 0 ? (
-            <div className="command-palette-empty">
+            <div className="px-3 py-8 text-center text-xs text-muted-foreground">
               未找到匹配的指令或页面
             </div>
           ) : (
             filtered.map((item, idx) => {
-              const isSelected = idx === selectedIndex;
+              const isSelected = idx === safeIndex;
+              const ItemIcon = item.IconComp;
               return (
-                <div
+                <button
                   key={item.id}
                   id={`command-${item.id}`}
+                  type="button"
                   role="option"
                   aria-selected={isSelected}
-                  className={`command-palette-item${isSelected ? ' is-selected' : ''}`}
+                  className={cn(
+                    'flex w-full cursor-pointer items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-xs transition-colors',
+                    isSelected
+                      ? 'bg-accent text-accent-foreground'
+                      : 'text-foreground hover:bg-accent/60',
+                  )}
                   onClick={() => executeItem(item)}
                   onMouseEnter={() => setSelectedIndex(idx)}
                 >
-                  <div className="command-palette-icon">
-                    <Icon name={item.icon} size={15} />
-                  </div>
-                  <div className="command-palette-copy">
-                    <span className="command-palette-title">{item.title}</span>
-                    <span className="command-palette-category">{item.category}</span>
-                  </div>
-                  {isSelected && <Icon name="chevron" size={15} />}
-                </div>
+                  <span className="flex min-w-0 items-center gap-2.5">
+                    <span className="flex size-6 shrink-0 items-center justify-center rounded-md border bg-background/80 text-muted-foreground">
+                      <ItemIcon className="size-3.5" />
+                    </span>
+                    <span className="truncate font-medium">{item.title}</span>
+                  </span>
+                  <span className="flex shrink-0 items-center gap-1.5">
+                    <Badge variant="outline" className="text-[10px] font-normal">
+                      {item.category}
+                    </Badge>
+                    {isSelected && <ChevronRight className="size-3.5 text-muted-foreground" />}
+                  </span>
+                </button>
               );
             })
           )}
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

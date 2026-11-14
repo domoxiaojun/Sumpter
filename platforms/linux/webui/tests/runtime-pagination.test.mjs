@@ -138,7 +138,7 @@ test('event table keeps pagination outside horizontal scrolling and exposes sort
   assert.match(tableSource, /getRowProps/);
   assert.match(tableSource, /beforeTable = null/);
   assert.match(tableSource, /\{beforeTable\}/);
-  assert.match(runPageSource, /className="telemetry-live-mobile"/);
+  assert.match(runPageSource, /className="[^"]*telemetry-live-mobile/);
   assert.doesNotMatch(runPageSource, /beforeTable=/, 'live events must not share the history scrolling container');
   const liveSection = runPageSource.indexOf('className="telemetry-live-section"');
   const historySection = runPageSource.indexOf('className="telemetry-history-group"');
@@ -148,15 +148,15 @@ test('event table keeps pagination outside horizontal scrolling and exposes sort
 });
 
 test('analytics facet tabs stay inside the board on phone widths', async () => {
-  const componentStyles = await readFile(
-    new URL('../src/styles/components.css', import.meta.url),
+  const analyticsSource = await readFile(
+    new URL('../src/components/AnalyticsV2Workspace.jsx', import.meta.url),
     'utf8',
   );
-  assert.match(componentStyles, /@media \(max-width: 600px\)[\s\S]*?\.runtime-v2-section-tabs\s*\{[\s\S]*?display: grid;/);
-  assert.match(componentStyles, /\.runtime-v2-section-tabs\s*\{[\s\S]*?grid-template-columns: repeat\(6, minmax\(0, 1fr\)\);[\s\S]*?overflow: visible;/);
-  assert.match(componentStyles, /\.runtime-v2-section-tabs button:nth-child\(-n \+ 3\)\s*\{\s*grid-column: span 2;/);
-  assert.match(componentStyles, /\.runtime-v2-section-tabs button:nth-child\(n \+ 4\)\s*\{\s*grid-column: span 3;/);
-  assert.match(componentStyles, /\.runtime-v2-section-tabs button\s*\{[\s\S]*?min-width: 0;[\s\S]*?white-space: normal;/);
+  const navStart = analyticsSource.indexOf('<nav aria-label="统计看板">');
+  const nav = analyticsSource.slice(navStart, analyticsSource.indexOf('</nav>', navStart));
+  assert.match(nav, /runtime-v2-section-tabs grid w-full grid-cols-4[\s\S]*?sm:inline-flex/);
+  assert.match(nav, /role="tablist"/);
+  assert.match(nav, /min-w-0/);
 });
 
 test('Run page keeps Provider inventory on its dedicated page', async () => {
@@ -173,7 +173,7 @@ test('Run page places input/output Token cards before the routing counters', asy
   const output = runPageSource.indexOf('label="输出 Token"');
   const provider = runPageSource.indexOf('label="可调度入口"');
   assert.ok(input >= 0 && output > input && provider > output);
-  const metrics = runPageSource.slice(runPageSource.indexOf('className="run-metric-grid"'), runPageSource.indexOf('{/* Real-time'));
+  const metrics = runPageSource.slice(runPageSource.indexOf('className="run-metric-grid'), runPageSource.indexOf('{/* Real-time'));
   assert.equal((metrics.match(/<MetricCard/g) || []).length, 5, 'match the five native overview metrics');
   assert.doesNotMatch(metrics, /Endpoints 上游入口|label="Provider 候选"/);
   assert.doesNotMatch(runPageSource, /grid-4col run-metric-grid/, 'avoid the generic mobile single-column override');
@@ -189,28 +189,26 @@ test('Run page places input/output Token cards before the routing counters', asy
 
 test('Run page recent-event mobile route uses the same primary endpoint name as desktop', async () => {
   const runPageSource = await readFile(new URL('../src/pages/RunPage.jsx', import.meta.url), 'utf8');
-  assert.match(runPageSource, /<small>\{eventEndpointName\(event\)\}<\/small>/);
-  assert.doesNotMatch(runPageSource, /<small>Provider · \{eventEndpointName\(event\)\}<\/small>/);
+  assert.match(runPageSource, /<small[^>]*>\{eventEndpointName\(event\)\}<\/small>/);
+  assert.doesNotMatch(runPageSource, /<small[^>]*>Provider · \{eventEndpointName\(event\)\}<\/small>/);
 });
 
 test('runtime page motion is directional, compositor-friendly, and reduced-motion safe', async () => {
-  const [componentStyles, animationStyles] = await Promise.all([
-    readFile(new URL('../src/styles/components.css', import.meta.url), 'utf8'),
-    readFile(new URL('../src/styles/animations.css', import.meta.url), 'utf8'),
-  ]);
-  assert.match(componentStyles, /\.event-page-content[\s\S]*?will-change: opacity, transform/);
-  assert.match(componentStyles, /data-page-direction='forward'[\s\S]*?translate3d\(-12px/);
-  assert.match(componentStyles, /data-page-direction='backward'[\s\S]*?translate3d\(12px/);
-  assert.match(animationStyles, /@keyframes runtime-page-enter-forward/);
-  assert.match(animationStyles, /@keyframes runtime-page-enter-backward/);
-  assert.match(animationStyles, /prefers-reduced-motion[\s\S]*?event-page-stage-loading\[data-page-direction\]/);
+  const styles = await readFile(new URL('../src/styles/shadcn.css', import.meta.url), 'utf8');
+  assert.match(styles, /\.event-page-content[\s\S]*?will-change: opacity, transform/);
+  assert.match(styles, /data-page-direction='forward'[\s\S]*?translate3d\(-12px/);
+  assert.match(styles, /data-page-direction='backward'[\s\S]*?translate3d\(12px/);
+  assert.match(styles, /@keyframes runtime-page-enter-forward/);
+  assert.match(styles, /@keyframes runtime-page-enter-backward/);
+  assert.match(styles, /prefers-reduced-motion[\s\S]*?event-page-stage-loading\[data-page-direction\]/);
 });
 
 test('live surface uses the official Paper Mesh Gradient in both layouts', async () => {
-  const [source, lightSource, packageJson] = await Promise.all([
+  const [source, lightSource, packageJson, styles] = await Promise.all([
     readFile(new URL('../src/pages/RunPage.jsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/components/LiveSurfaceLight.jsx', import.meta.url), 'utf8'),
     readFile(new URL('../package.json', import.meta.url), 'utf8'),
+    readFile(new URL('../src/styles/shadcn.css', import.meta.url), 'utf8'),
   ]);
   const desktop = source.slice(source.indexOf('function LiveEventList('), source.indexOf('function MobileEventList('));
   const compact = source.slice(source.indexOf('function MobileEventList('), source.indexOf('export function RunPage'));
@@ -227,5 +225,5 @@ test('live surface uses the official Paper Mesh Gradient in both layouts', async
   assert.match(lightSource, /prefers-reduced-motion/);
   assert.match(packageJson, /"@paper-design\/shaders-react"/);
   assert.match(lightSource, /className="telemetry-live-light"/);
-  assert.match(await readFile(new URL('../src/styles/components.css', import.meta.url), 'utf8'), /pointer-events: none/);
+  assert.match(styles, /\.telemetry-live-light[\s\S]*?pointer-events: none/);
 });

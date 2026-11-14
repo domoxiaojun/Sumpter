@@ -1,16 +1,69 @@
-import { useAppControls, useRuntimePagePreference } from '../context/AppContext.jsx';
-import { statisticsRangeIsLive } from '../utils/statisticsDateRange.js';
-import { useDialogFocus } from '../hooks/useDialogFocus.js';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ChevronRight,
+  Database,
+  Download,
+  Edit3,
+  Layers,
+  RefreshCw,
+  Search,
+  TrendingUp,
+  X,
+} from 'lucide-react';
+import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from 'recharts';
+import { useAppControls, useRuntimePagePreference } from '../context/AppContext.jsx';
+import { useDialogFocus } from '../hooks/useDialogFocus.js';
+import { cn } from '../lib/utils.js';
+import { api } from '../services/api.js';
+import {
+  agentRoleLabel,
+  clientKindLabel,
+  clientVariantLabel,
+  failureKindLabel,
+  failurePhaseLabel,
+  formatDuration,
+  formatTimestamp,
+  formatTokenCount,
+  normalizeTimestampMS,
+  projectClientKindsLabel,
+  projectLabelText,
+  projectSourceLabel,
+  purposeLabel,
+  requestKindLabel,
+} from '../utils/helpers.js';
+import { formatOutputTokensPerSecond, outputSpeedDetail } from '../utils/outputSpeed.js';
+import {
+  isRuntimeSnapshotError,
+  normalizeRuntimePagedResult,
+  observeRuntimeDay,
+  persistRuntimeAnalyticsPageSize,
+  readRuntimeAnalyticsPageSize,
+  runtimeAnalyticsFilters,
+  runtimeAppleTimestamp,
+  runtimeCacheRate,
+  runtimeCostAmount,
+  runtimeDateTimeLocal,
+  runtimeDimensionSortState,
+  runtimeFilterValues,
+  runtimePriceInput,
+  runtimePriceMicros,
+  runtimeSnapshotFilters,
+  runtimeTodayBounds,
+  runtimeV2ErrorMessage,
+} from '../utils/runtimeAnalyticsV2.js';
+import { statisticsRangeIsLive } from '../utils/statisticsDateRange.js';
 import { DataTable } from './DataTable.jsx';
 import { HorizontalScroll } from './HorizontalScroll.jsx';
 import { PaginationBar } from './PaginationBar.jsx';
 import { StatusBadge } from './StatusBadge.jsx';
-import { Icon } from '../utils/icons.jsx';
-import { api } from '../services/api.js';
-import { requestKindLabel, clientVariantLabel, agentRoleLabel, formatDuration, formatTimestamp, formatTokenCount, normalizeTimestampMS, clientKindLabel, failureKindLabel, failurePhaseLabel, projectLabelText, projectClientKindsLabel, projectSourceLabel, purposeLabel } from '../utils/helpers.js';
-import { isRuntimeSnapshotError, normalizeRuntimePagedResult, observeRuntimeDay, persistRuntimeAnalyticsPageSize, readRuntimeAnalyticsPageSize, runtimeDimensionSortState, runtimeAnalyticsFilters, runtimeAppleTimestamp, runtimeCacheRate, runtimeCostAmount, runtimeDateTimeLocal, runtimeFilterValues, runtimeSnapshotFilters, runtimeTodayBounds, runtimePriceInput, runtimePriceMicros, runtimeV2ErrorMessage } from '../utils/runtimeAnalyticsV2.js';
-import { formatOutputTokensPerSecond, outputSpeedDetail } from '../utils/outputSpeed.js';
+import { Badge } from './ui/badge.jsx';
+import { Button } from './ui/button.jsx';
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card.jsx';
+import { ChartContainer, ChartTooltip, ChartTooltipContent } from './ui/chart.jsx';
+import { Input } from './ui/input.jsx';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table.jsx';
+
+const SELECT_CLS = 'flex h-9 w-full rounded-md border border-input bg-background/60 px-2.5 text-xs text-foreground shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50';
 
 const SECTIONS = [
   { id: 'overview', label: '概览' },
@@ -106,8 +159,6 @@ function dimensionValueLabel(value, kind) {
   }
 }
 
-
-
 function safeNumber(value, fallback = 0) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
@@ -181,43 +232,66 @@ function TokenCoreGrid({ tokens, compact = false, cache = null }) {
   const cacheReadRate = runtimeCacheRate(tokens, 'token');
   const cards = [
     {
-      id: 'input', label: '输入 Token', value: tokenValue(tokens, 'inputTokens'),
+      id: 'input',
+      label: '输入 Token',
+      value: tokenValue(tokens, 'inputTokens'),
       detail: '输入用量',
       accent: 'var(--primary)',
     },
     {
-      id: 'output', label: '输出 Token', value: tokenValue(tokens, 'outputTokens'),
+      id: 'output',
+      label: '输出 Token',
+      value: tokenValue(tokens, 'outputTokens'),
       detail: '输出用量',
       accent: 'var(--accent-indigo)',
     },
     {
-      id: 'cache-read', label: '缓存读取', value: cacheRead,
-      detail: '缓存读取用量', tone: 'runtime-v2-token-card-cache',
+      id: 'cache-read',
+      label: '缓存读取',
+      value: cacheRead,
+      detail: '缓存读取用量',
       accent: 'var(--accent-cyan)',
     },
     {
-      id: 'cache-write', label: '缓存写入', value: cacheWrite,
-      detail: '缓存写入 Token', tone: 'runtime-v2-token-card-cache',
+      id: 'cache-write',
+      label: '缓存写入',
+      value: cacheWrite,
+      detail: '缓存写入 Token',
       accent: 'var(--accent-purple)',
     },
   ];
+
   return (
-    <div className={`runtime-v2-token-core-grid${compact ? ' compact' : ''}`}>
-      <div className="runtime-v2-cache-confirmation" style={{ gridColumn: '1 / -1' }}>
-        <strong>已确认缓存命中率 {percent(cache?.confirmedHitRate)}</strong>
-        <span> · 结论覆盖率 {percent(cache?.confirmationCoverage)}</span>
-        {cache && <small style={{ display: 'block' }}>未知 {cache.unknownRequests} · 适用性不明 {cache.applicabilityUnknownRequests} · 不适用 {cache.notApplicableRequests}；命中率只统计已确认命中/未命中的已结束请求。</small>}
+    <div className={cn('grid gap-3', compact ? 'sm:grid-cols-2 lg:grid-cols-4' : 'sm:grid-cols-2 lg:grid-cols-4')}>
+      <div className="col-span-full rounded-lg border border-border/75 bg-muted/20 px-3.5 py-2.5 text-xs">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <strong className="font-semibold text-foreground">已确认缓存命中率 {percent(cache?.confirmedHitRate)}</strong>
+          <span className="text-muted-foreground">· 结论覆盖率 {percent(cache?.confirmationCoverage)}</span>
+        </div>
+        {cache && (
+          <small className="mt-1 block text-[11px] text-muted-foreground">
+            未知 {cache.unknownRequests} · 适用性不明 {cache.applicabilityUnknownRequests} · 不适用 {cache.notApplicableRequests}；命中率只统计已确认命中/未命中的已结束请求。
+          </small>
+        )}
       </div>
+
       {cards.map((card) => (
-        <div key={card.id} className={`runtime-v2-token-card ${card.tone || ''}`} data-token-role={card.id} style={{ '--card-accent': card.accent || 'var(--primary)' }}>
-          <div className="runtime-v2-token-card-heading">
-            <span>{card.label}</span>
-          </div>
-          <strong className="mono-cell">{optionalNumberWithComma(card.value)}</strong>
-          <div className="runtime-v2-token-card-footer">
+        <div
+          key={card.id}
+          data-token-role={card.id}
+          className="rounded-xl border border-border/80 border-t-2 bg-card/85 p-3.5 shadow-xs transition-colors hover:border-border sumpter-specular"
+          style={{ borderTopColor: card.accent || 'var(--primary)' }}
+        >
+          <div className="text-xs font-medium text-muted-foreground">{card.label}</div>
+          <strong className="mt-1.5 block font-mono text-lg font-semibold tracking-tight text-foreground tabular-nums">
+            {optionalNumberWithComma(card.value)}
+          </strong>
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-1 text-[11px] text-muted-foreground">
             <small>{card.detail}</small>
             {card.id === 'cache-read' && (
-              <span className="runtime-v2-token-card-hit-rate">Token 读占比 {percent(cacheReadRate)}</span>
+              <span className="rounded bg-accent-cyan/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-accent-cyan">
+                Token 读占比 {percent(cacheReadRate)}
+              </span>
             )}
           </div>
         </div>
@@ -225,8 +299,6 @@ function TokenCoreGrid({ tokens, compact = false, cache = null }) {
     </div>
   );
 }
-
-
 
 function analyticsTokenUsage(analytics) {
   if (!analytics || typeof analytics !== 'object') return {};
@@ -318,31 +390,54 @@ function dimensionTokenValue(row, field) {
 function PanelMessage({ error, onRetry, unsupported = false }) {
   if (!error) return null;
   return (
-    <div className="runtime-v2-message" role="alert">
+    <div
+      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-status-critical/35 bg-status-critical/10 px-3.5 py-2.5 text-xs text-status-critical"
+      role="alert"
+    >
       <span>{unsupported ? runtimeV2ErrorMessage(error) : runtimeV2ErrorMessage(error)}</span>
-      {onRetry && <button type="button" className="btn btn-secondary btn-sm" onClick={onRetry}>重试</button>}
+      {onRetry && (
+        <Button type="button" variant="secondary" size="xs" onClick={onRetry}>
+          重试
+        </Button>
+      )}
     </div>
   );
 }
 
 function LoadingLine({ text = '读取中…' }) {
-  return <div className="runtime-v2-loading" role="status" aria-live="polite"><span className="loading-dot" />{text}</div>;
+  return (
+    <div className="flex items-center gap-2 py-3 text-xs text-muted-foreground" role="status" aria-live="polite">
+      <span className="size-2 animate-pulse rounded-full bg-primary" />
+      <span>{text}</span>
+    </div>
+  );
 }
 
 function Metric({ label, value, detail, tone = '', accent = 'var(--primary)', progress = null }) {
   const clamped = progress == null || !Number.isFinite(Number(progress))
     ? null
     : Math.max(0, Math.min(100, Number(progress)));
+  const isWarningTone = tone.includes('warning');
   return (
-    <div className="runtime-v2-metric" style={{ '--card-accent': accent }}>
-      <span>{label}</span>
-      <strong className={`mono-cell ${tone}`}>{value}</strong>
+    <div
+      className="rounded-xl border border-border/80 border-t-2 bg-card/85 p-3.5 shadow-xs transition-colors hover:border-border sumpter-specular"
+      style={{ borderTopColor: accent }}
+    >
+      <span className="block text-xs font-medium text-muted-foreground">{label}</span>
+      <strong
+        className={cn(
+          'mt-1.5 block font-mono text-lg font-semibold tracking-tight tabular-nums',
+          isWarningTone ? 'text-status-warning' : 'text-foreground',
+        )}
+      >
+        {value}
+      </strong>
       {clamped != null && (
-        <span className="runtime-v2-metric-bar" aria-hidden="true">
-          <i style={{ width: `${clamped.toFixed(1)}%` }} />
+        <span className="mt-2 block h-1.5 w-full overflow-hidden rounded-full bg-muted" aria-hidden="true">
+          <i className="block h-full rounded-full transition-all" style={{ width: `${clamped.toFixed(1)}%`, backgroundColor: accent }} />
         </span>
       )}
-      {detail && <small>{detail}</small>}
+      {detail && <small className="mt-1.5 block text-[11px] leading-relaxed text-muted-foreground">{detail}</small>}
     </div>
   );
 }
@@ -410,137 +505,152 @@ function formatTrendValue(value, metric) {
 }
 
 function TrendChart({ points, metric = 'clientRequests' }) {
-  const [hoveredIndex, setHoveredIndex] = useState(null);
-  const width = 760;
-  const height = 228;
-  const padLeft = 56;
-  const padRight = 22;
-  const padTop = 20;
-  const padBottom = 30;
-  const innerWidth = width - padLeft - padRight;
-  const innerHeight = height - padTop - padBottom;
-  const baselineY = padTop + innerHeight;
   const keepNullForEmptyBucket = NON_ZERO_EMPTY_METRICS.has(metric);
-
   const rawList = points || [];
-  const series = rawList.map((point, index) => {
-    const rawValue = trendMetricValue(point, metric);
-    const hasValue = rawValue != null && Number.isFinite(Number(rawValue));
-    const value = hasValue ? Math.max(0, Number(rawValue)) : (keepNullForEmptyBucket ? null : 0);
-    return { point, index, rawValue, hasValue, value };
-  });
 
-  const validValues = series.filter((item) => item.value != null).map((item) => item.value);
+  const chartData = useMemo(() => (
+    rawList.map((point, index) => {
+      const rawValue = trendMetricValue(point, metric);
+      const hasValue = rawValue != null && Number.isFinite(Number(rawValue));
+      const value = hasValue ? Math.max(0, Number(rawValue)) : (keepNullForEmptyBucket ? null : 0);
+      const terminal = safeNumber(point?.clientSuccesses) + safeNumber(point?.clientFailures) + safeNumber(point?.clientCancelled);
+      return {
+        idx: index,
+        bucketStart: point.bucketStart,
+        label: formatTimestamp(point.bucketStart, { smartDate: true }),
+        fullTime: dateLabel(point.bucketStart),
+        value,
+        terminal,
+      };
+    })
+  ), [rawList, metric, keepNullForEmptyBucket]);
+
+  const validValues = chartData.filter((item) => item.value != null).map((item) => item.value);
   const maxValue = Math.max(1, ...validValues);
-
-  const plotted = series.map((item, index) => {
-    const x = padLeft + (rawList.length <= 1 ? innerWidth / 2 : (index / (rawList.length - 1)) * innerWidth);
-    const y = item.value == null ? null : baselineY - (item.value / maxValue) * innerHeight;
-    return { ...item, x, y };
-  });
-
-  const validPlotted = plotted.filter((item) => item.y != null);
-  const line = validPlotted.map((item) => `${item.x.toFixed(1)},${item.y.toFixed(1)}`).join(' ');
-  const areaPath = validPlotted.length >= 2
-    ? `M ${validPlotted[0].x.toFixed(1)} ${baselineY.toFixed(1)} `
-      + validPlotted.map((item) => `L ${item.x.toFixed(1)} ${item.y.toFixed(1)}`).join(' ')
-      + ` L ${validPlotted[validPlotted.length - 1].x.toFixed(1)} ${baselineY.toFixed(1)} Z`
-    : '';
-
   const latest = rawList.at(-1);
-  const activeItem = (hoveredIndex != null && plotted[hoveredIndex])
-    ? plotted[hoveredIndex]
-    : (validPlotted.at(-1) || plotted.at(-1) || null);
-  const firstPoint = plotted[0]?.point;
-  const midPoint = plotted[Math.floor(plotted.length / 2)]?.point;
-  const lastPoint = plotted.at(-1)?.point;
+  const latestValid = [...chartData].reverse().find((item) => item.value != null) || chartData.at(-1) || null;
+  const label = trendMetricLabel(metric);
+
+  const chartConfig = useMemo(() => ({
+    value: {
+      label,
+      color: 'var(--chart-1)',
+    },
+  }), [label]);
 
   return (
-    <div className="runtime-v2-chart-wrap">
-      <div className="runtime-v2-chart-legend" aria-label="趋势图图例">
-        <span><i className="runtime-v2-legend-line runtime-v2-legend-request" />{trendMetricLabel(metric)}</span>
-        <div className="runtime-v2-chart-legend-right">
-          {activeItem?.point && (
-            <span className="runtime-v2-chart-readout" aria-live="polite">
-              <small>{formatTimestamp(activeItem.point.bucketStart, { smartDate: true })}</small>
-              <span className="runtime-v2-chart-readout-sep" aria-hidden="true">·</span>
-              <strong>{formatTrendValue(activeItem.value ?? activeItem.rawValue, metric)}</strong>
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs" aria-label="趋势图图例">
+        <span className="inline-flex items-center gap-2 font-medium text-foreground">
+          <i className="inline-block h-0.5 w-3.5 rounded-full bg-primary" aria-hidden="true" />
+          <span>{label}</span>
+        </span>
+        <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-muted-foreground">
+          {latestValid && (
+            <span className="rounded-md border border-border/70 bg-muted/35 px-2 py-0.5 text-foreground" aria-live="polite">
+              <small className="text-muted-foreground">{latestValid.label}</small>
+              <span className="mx-1.5 text-border" aria-hidden="true">·</span>
+              <strong>{formatTrendValue(latestValid.value, metric)}</strong>
             </span>
           )}
-          <span className="runtime-v2-chart-scale">峰值 {formatTrendValue(maxValue, metric)} / 桶</span>
+          <span>峰值 {formatTrendValue(maxValue, metric)} / 桶</span>
         </div>
       </div>
-      <svg
-        className="runtime-v2-chart"
-        viewBox={`0 0 ${width} ${height}`}
-        role="img"
-        aria-label={`趋势图：${trendMetricLabel(metric)}，共 ${numberWithComma(points?.length || 0)} 个时间桶，最近桶 ${formatTrendValue(trendMetricValue(latest, metric), metric)}`}
-        onMouseLeave={() => setHoveredIndex(null)}
-      >
-        <defs>
-          <linearGradient id="runtime-v2-trend-area-gradient" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="var(--primary)" stopOpacity="0.26" />
-            <stop offset="100%" stopColor="var(--primary)" stopOpacity="0.01" />
-          </linearGradient>
-        </defs>
-        {[0, 0.5, 1].map((ratio) => {
-          const y = baselineY - ratio * innerHeight;
-          const labelValue = maxValue * ratio;
-          return (
-            <g key={ratio}>
-              <line x1={padLeft} x2={width - padRight} y1={y} y2={y} className="runtime-v2-chart-grid" />
-              <text x={padLeft - 8} y={y + 4} textAnchor="end" className="runtime-v2-chart-axis-text">
-                {formatTrendValue(labelValue, metric)}
-              </text>
-            </g>
-          );
-        })}
-        {areaPath && <path d={areaPath} className="runtime-v2-chart-area" fill="url(#runtime-v2-trend-area-gradient)" />}
-        {line && <polyline points={line} className="runtime-v2-chart-request" />}
-        {validPlotted.map((item) => (
-          <circle
-            key={`${item.point.bucketStart}-${item.index}`}
-            cx={item.x}
-            cy={item.y}
-            r={hoveredIndex === item.index ? 4.8 : 3}
-            className={`runtime-v2-chart-point${hoveredIndex === item.index ? ' is-active' : ''}`}
-            onMouseEnter={() => setHoveredIndex(item.index)}
-          >
-            <title>{`${dateLabel(item.point.bucketStart)} · ${formatTrendValue(item.value ?? item.rawValue, metric)}`}</title>
-          </circle>
-        ))}
-        {firstPoint && (
-          <text x={padLeft} y={height - 8} textAnchor="start" className="runtime-v2-chart-axis-text">
-            {formatTimestamp(firstPoint.bucketStart, { smartDate: true })}
-          </text>
-        )}
-        {midPoint && plotted.length > 2 && (
-          <text x={padLeft + innerWidth / 2} y={height - 8} textAnchor="middle" className="runtime-v2-chart-axis-text">
-            {formatTimestamp(midPoint.bucketStart, { smartDate: true })}
-          </text>
-        )}
-        {lastPoint && plotted.length > 1 && (
-          <text x={width - padRight} y={height - 8} textAnchor="end" className="runtime-v2-chart-axis-text">
-            {formatTimestamp(lastPoint.bucketStart, { smartDate: true })}
-          </text>
-        )}
-      </svg>
-      <details className="runtime-v2-chart-table">
-        <summary>显示趋势数据表（键盘和读屏备用）</summary>
-        <HorizontalScroll dragToScroll controlsAtTop className="table-container" ariaLabel="趋势数据表">
-          <table className="data-table" aria-label={`${trendMetricLabel(metric)}趋势数据表`}>
-            <thead><tr><th>时间</th><th className="data-table-column-number">{trendMetricLabel(metric)}</th><th className="data-table-column-number">终态请求</th></tr></thead>
-            <tbody>
-              {(points || []).map((point) => (
-                <tr key={`${point.bucketStart}-${point.bucketEnd}`}>
-                  <td className="mono-cell">{dateLabel(point.bucketStart)}</td>
-                  <td className="data-table-cell-number mono-cell">{formatTrendValue(trendMetricValue(point, metric), metric)}</td>
-                  <td className="data-table-cell-number mono-cell">{numberWithComma(safeNumber(point.clientSuccesses) + safeNumber(point.clientFailures) + safeNumber(point.clientCancelled))}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </HorizontalScroll>
+
+      {chartData.length > 0 ? (
+        <div
+          role="img"
+          aria-label={`趋势图：${label}，共 ${numberWithComma(points?.length || 0)} 个时间桶，最近桶 ${formatTrendValue(trendMetricValue(latest, metric), metric)}`}
+        >
+          <ChartContainer config={chartConfig} className="aspect-auto h-[230px] w-full">
+            <AreaChart data={chartData} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}>
+              <defs>
+                <linearGradient id={`fill-${metric}`} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="var(--color-value)" stopOpacity={0.34} />
+                  <stop offset="95%" stopColor="var(--color-value)" stopOpacity={0.02} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid vertical={false} strokeDasharray="3 3" />
+              <XAxis
+                dataKey="label"
+                tickLine={false}
+                axisLine={false}
+                tickMargin={8}
+                minTickGap={28}
+              />
+              <YAxis
+                tickLine={false}
+                axisLine={false}
+                width={54}
+                tickFormatter={(val) => formatTrendValue(val, metric)}
+              />
+              <ChartTooltip
+                cursor={false}
+                content={(
+                  <ChartTooltipContent
+                    indicator="dot"
+                    labelFormatter={(_, payload) => payload?.[0]?.payload?.fullTime || ''}
+                    formatter={(val) => (
+                      <div className="flex w-full items-center justify-between gap-4">
+                        <span className="text-muted-foreground">{label}</span>
+                        <span className="font-mono font-semibold text-foreground tabular-nums">
+                          {formatTrendValue(val, metric)}
+                        </span>
+                      </div>
+                    )}
+                  />
+                )}
+              />
+              <Area
+                dataKey="value"
+                type="monotone"
+                fill={`url(#fill-${metric})`}
+                stroke="var(--color-value)"
+                strokeWidth={2}
+                connectNulls={false}
+                dot={{ r: 2.5, fill: 'var(--color-value)', strokeWidth: 0 }}
+                activeDot={{ r: 4.5, fill: 'var(--color-value)', strokeWidth: 2, stroke: 'var(--background)' }}
+              />
+            </AreaChart>
+          </ChartContainer>
+        </div>
+      ) : (
+        <div className="flex h-40 items-center justify-center rounded-lg border border-dashed border-border/80 bg-muted/15 text-xs text-muted-foreground">
+          当前时间范围暂无时间桶数据
+        </div>
+      )}
+
+      <details className="group rounded-lg border border-border/75 bg-muted/15">
+        <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs font-medium text-muted-foreground select-none hover:bg-muted/35 hover:text-foreground">
+          <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
+          <span>显示趋势数据表（键盘和读屏备用）</span>
+        </summary>
+        <div className="border-t border-border/60">
+          <HorizontalScroll dragToScroll controlsAtTop ariaLabel="趋势数据表">
+            <Table aria-label={`${label}趋势数据表`}>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>时间</TableHead>
+                  <TableHead className="text-right">{label}</TableHead>
+                  <TableHead className="text-right">终态请求</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(points || []).map((point) => (
+                  <TableRow key={`${point.bucketStart}-${point.bucketEnd}`}>
+                    <TableCell className="font-mono text-xs">{dateLabel(point.bucketStart)}</TableCell>
+                    <TableCell className="text-right font-mono text-xs tabular-nums">
+                      {formatTrendValue(trendMetricValue(point, metric), metric)}
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-xs tabular-nums">
+                      {numberWithComma(safeNumber(point.clientSuccesses) + safeNumber(point.clientFailures) + safeNumber(point.clientCancelled))}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </HorizontalScroll>
+        </div>
       </details>
     </div>
   );
@@ -553,22 +663,80 @@ function ErrorTable({ page, loading, onPageChange, onPageSizeChange, onSelectEve
     __key: [row.failureKind, row.failurePhase, row.endpointID, row.model, row.upstreamStatusCode, index].join('|'),
   }));
   return (
-    <>
+    <div className="space-y-3">
       <DataTable
-        className="runtime-v2-table"
         ariaLabel="错误聚合"
         adaptive
         data={groups}
         keyField="__key"
         emptyText="当前范围没有结构化错误"
         columns={[
-          { title: '错误类型', type: 'text', minWidth: '190px', render: (row) => <div className="runtime-v2-cell-stack"><strong title={`${row.failureKind || '未分类'} / ${row.failurePhase || '未记录'}`}>{row.failureKind || '未分类'}</strong><small>{row.failurePhase || '阶段未记录'}</small></div> },
-          { title: '入口 / 模型', type: 'text', minWidth: '220px', render: (row) => <div className="runtime-v2-cell-stack"><span title={row.endpointName || row.endpointID || ''}>{row.endpointName || row.endpointID || '—'}</span><small className="mono-cell" title={row.model || ''}>{row.model || '模型未记录'}</small></div> },
-          { title: '状态', type: 'number', width: '90px', render: (row) => row.upstreamStatusCode == null ? '—' : <span className="mono-cell">{row.upstreamStatusCode}</span> },
-          { title: '次数', type: 'number', width: '92px', render: (row) => <strong className="mono-cell">{numberWithComma(row.occurrences)}</strong> },
-          { title: '影响请求', type: 'number', width: '110px', render: (row) => <span className="mono-cell">{numberWithComma(row.affectedRequests)}</span> },
-          { title: '最近活动', type: 'time', width: '190px', render: (row) => <span className="mono-cell">{dateLabel(row.lastSeen)}</span> },
-          { title: '样本', type: 'action', width: '110px', render: (row) => <div className="runtime-v2-sample-actions">{(row.sampleEventIDs || []).slice(0, 2).map((id) => <button key={id} type="button" className="btn btn-ghost btn-sm" title={id} onClick={() => onSelectEvent?.(id)}>查看</button>)}</div> },
+          {
+            title: '错误类型',
+            type: 'text',
+            minWidth: '190px',
+            render: (row) => (
+              <div className="flex flex-col gap-0.5">
+                <strong className="text-xs font-semibold text-foreground" title={`${row.failureKind || '未分类'} / ${row.failurePhase || '未记录'}`}>
+                  {row.failureKind || '未分类'}
+                </strong>
+                <small className="text-[11px] text-muted-foreground">{row.failurePhase || '阶段未记录'}</small>
+              </div>
+            ),
+          },
+          {
+            title: '入口 / 模型',
+            type: 'text',
+            minWidth: '220px',
+            render: (row) => (
+              <div className="flex flex-col gap-0.5">
+                <span className="text-xs text-foreground" title={row.endpointName || row.endpointID || ''}>
+                  {row.endpointName || row.endpointID || '—'}
+                </span>
+                <small className="font-mono text-[11px] text-muted-foreground" title={row.model || ''}>
+                  {row.model || '模型未记录'}
+                </small>
+              </div>
+            ),
+          },
+          {
+            title: '状态',
+            type: 'number',
+            width: '90px',
+            render: (row) => (row.upstreamStatusCode == null ? '—' : <span className="font-mono text-xs">{row.upstreamStatusCode}</span>),
+          },
+          {
+            title: '次数',
+            type: 'number',
+            width: '92px',
+            render: (row) => <strong className="font-mono text-xs font-semibold">{numberWithComma(row.occurrences)}</strong>,
+          },
+          {
+            title: '影响请求',
+            type: 'number',
+            width: '110px',
+            render: (row) => <span className="font-mono text-xs">{numberWithComma(row.affectedRequests)}</span>,
+          },
+          {
+            title: '最近活动',
+            type: 'time',
+            width: '190px',
+            render: (row) => <span className="font-mono text-xs">{dateLabel(row.lastSeen)}</span>,
+          },
+          {
+            title: '样本',
+            type: 'action',
+            width: '110px',
+            render: (row) => (
+              <div className="flex items-center gap-1">
+                {(row.sampleEventIDs || []).slice(0, 2).map((id) => (
+                  <Button key={id} type="button" variant="ghost" size="xs" title={id} onClick={() => onSelectEvent?.(id)}>
+                    查看
+                  </Button>
+                ))}
+              </div>
+            ),
+          },
         ]}
       />
       <PaginationBar
@@ -584,7 +752,7 @@ function ErrorTable({ page, loading, onPageChange, onPageSizeChange, onSelectEve
         onPageSizeChange={onPageSizeChange}
         ariaLabel="错误分组分页"
       />
-    </>
+    </div>
   );
 }
 
@@ -604,47 +772,121 @@ function AdvancedDiagnosticsPanel({ analytics, loading, error, onRetry }) {
     ['streamTerminals', '流终止'],
     ['internalFeatures', '后台功能线程'],
   ];
+
+  const resolveKind = (key) => (
+    key === 'requestKinds' ? 'requestKind'
+      : key === 'requestPurposes' ? 'purpose'
+        : key === 'failureKinds' ? 'failureKind'
+          : key === 'failurePhases' ? 'failurePhase'
+            : key === 'streamTerminals' ? 'streamTerminal'
+              : key === 'protocolRoutes' ? 'protocol'
+                : key === 'internalFeatures' ? 'internalFeature' : ''
+  );
+
   return (
-    <section className="runtime-v2-advanced-diagnostics" aria-labelledby="runtime-v2-advanced-diagnostics-heading">
-      <div className="runtime-v2-overview-block-heading">
-        <div><h3 id="runtime-v2-advanced-diagnostics-heading">结构化诊断摘要</h3><span>来自已保存事件的模型、用途、协议、失败和流终止事实</span></div>
-        {onRetry && <button type="button" className="btn btn-ghost btn-sm" onClick={onRetry} disabled={loading}>刷新诊断</button>}
+    <section className="space-y-4 rounded-xl border border-border/80 bg-muted/15 p-4" aria-labelledby="runtime-v2-advanced-diagnostics-heading">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 id="runtime-v2-advanced-diagnostics-heading" className="text-sm font-semibold text-foreground">
+            结构化诊断摘要
+          </h3>
+          <span className="text-xs text-muted-foreground">来自已保存事件的模型、用途、协议、失败和流终止事实</span>
+        </div>
+        {onRetry && (
+          <Button type="button" variant="ghost" size="sm" onClick={onRetry} disabled={loading}>
+            <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
+            <span>刷新诊断</span>
+          </Button>
+        )}
       </div>
+
       {error && <PanelMessage error={error} onRetry={onRetry} />}
-      {loading && !analytics ? <LoadingLine text="正在读取结构化诊断…" /> : analytics ? (
+
+      {loading && !analytics ? (
+        <LoadingLine text="正在读取结构化诊断…" />
+      ) : analytics ? (
         <>
-          {analytics.codexRequests && <div className="runtime-v2-diagnostic-summary">
-            <strong>Codex 逻辑请求（独立于连接计数）</strong>
-            <span>{Object.entries(analytics.codexRequests.counts).map(([kind, count]) => `${({prewarm:'连接预热',turn:'正式回合',compaction:'上下文压缩',memory:'记忆提取',unknown:'用途未确定'})[kind] || kind} ${count}`).join(' · ')}</span>
-            <small>WS 在连接结束后汇总；未观测连接 {analytics.codexRequests.unobservedWebsocketConnections} · 未观测帧 {analytics.codexRequests.unobservedFrames}</small>
-          </div>}
-          <div className="runtime-v2-diagnostic-summary-grid">
+          {analytics.codexRequests && (
+            <div className="space-y-1 rounded-lg border border-border/75 bg-card/75 p-3 text-xs">
+              <strong className="block font-semibold text-foreground">Codex 逻辑请求（独立于连接计数）</strong>
+              <span className="block font-mono text-foreground">
+                {Object.entries(analytics.codexRequests.counts).map(([kind, count]) => (
+                  `${({ prewarm: '连接预热', turn: '正式回合', compaction: '上下文压缩', memory: '记忆提取', unknown: '用途未确定' })[kind] || kind} ${count}`
+                )).join(' · ')}
+              </span>
+              <small className="block text-[11px] text-muted-foreground">
+                WS 在连接结束后汇总；未观测连接 {analytics.codexRequests.unobservedWebsocketConnections} · 未观测帧 {analytics.codexRequests.unobservedFrames}
+              </small>
+            </div>
+          )}
+
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {dimensions.map(([key, label]) => {
               const rows = diagnosticRows(analytics, key);
               const total = rows.reduce((sum, row) => sum + safeNumber(row.attempts ?? row.count), 0);
-              const preview = rows.slice(0, 2).map((row) => `${dimensionValueLabel(row.name || row.value, key === 'requestKinds' ? 'requestKind' : key === 'requestPurposes' ? 'purpose' : key === 'failureKinds' ? 'failureKind' : key === 'failurePhases' ? 'failurePhase' : key === 'streamTerminals' ? 'streamTerminal' : key === 'protocolRoutes' ? 'protocol' : key === 'internalFeatures' ? 'internalFeature' : '')} ${numberWithComma(row.attempts ?? row.count)}`).join(' · ');
-              return <div className="runtime-v2-diagnostic-summary" key={key}><strong>{label}</strong><b className="mono-cell">{numberWithComma(total)}</b><small title={preview}>{preview || '暂无记录'}</small></div>;
+              const preview = rows.slice(0, 2).map((row) => (
+                `${dimensionValueLabel(row.name || row.value, resolveKind(key))} ${numberWithComma(row.attempts ?? row.count)}`
+              )).join(' · ');
+              return (
+                <div className="space-y-1 rounded-lg border border-border/75 bg-card/75 p-3" key={key}>
+                  <strong className="block text-xs font-medium text-muted-foreground">{label}</strong>
+                  <b className="block font-mono text-base font-semibold text-foreground">{numberWithComma(total)}</b>
+                  <small className="block truncate text-[11px] text-muted-foreground" title={preview}>
+                    {preview || '暂无记录'}
+                  </small>
+                </div>
+              );
             })}
-            <div className="runtime-v2-diagnostic-summary"><strong>工具调用</strong><b className="mono-cell">{numberWithComma(diagnosticRows(analytics, 'toolCalls').reduce((sum, row) => sum + safeNumber(row.count), 0))}</b><small>按工具名称汇总</small></div>
-            <div className="runtime-v2-diagnostic-summary"><strong>Codex 元数据</strong><b className="mono-cell">{numberWithComma(analytics.codexMetadataPresent)}</b><small>已记录的客户端事件</small></div>
-            <div className="runtime-v2-diagnostic-summary"><strong>后台功能请求</strong><b className="mono-cell">{numberWithComma(analytics.internalFeatureRequests)}</b><small>不计入普通项目维度</small></div>
+            <div className="space-y-1 rounded-lg border border-border/75 bg-card/75 p-3">
+              <strong className="block text-xs font-medium text-muted-foreground">工具调用</strong>
+              <b className="block font-mono text-base font-semibold text-foreground">
+                {numberWithComma(diagnosticRows(analytics, 'toolCalls').reduce((sum, row) => sum + safeNumber(row.count), 0))}
+              </b>
+              <small className="block text-[11px] text-muted-foreground">按工具名称汇总</small>
+            </div>
+            <div className="space-y-1 rounded-lg border border-border/75 bg-card/75 p-3">
+              <strong className="block text-xs font-medium text-muted-foreground">Codex 元数据</strong>
+              <b className="block font-mono text-base font-semibold text-foreground">{numberWithComma(analytics.codexMetadataPresent)}</b>
+              <small className="block text-[11px] text-muted-foreground">已记录的客户端事件</small>
+            </div>
+            <div className="space-y-1 rounded-lg border border-border/75 bg-card/75 p-3">
+              <strong className="block text-xs font-medium text-muted-foreground">后台功能请求</strong>
+              <b className="block font-mono text-base font-semibold text-foreground">{numberWithComma(analytics.internalFeatureRequests)}</b>
+              <small className="block text-[11px] text-muted-foreground">不计入普通项目维度</small>
+            </div>
           </div>
-          <details className="runtime-v2-diagnostic-details">
-            <summary>查看完整结构化分组</summary>
-            <div className="runtime-v2-diagnostic-detail-grid">
+
+          <details className="group rounded-lg border border-border/75 bg-card/60">
+            <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs font-medium text-foreground select-none hover:bg-muted/35">
+              <ChevronRight className="size-3.5 text-muted-foreground transition-transform group-open:rotate-90" />
+              <span>查看完整结构化分组</span>
+            </summary>
+            <div className="grid gap-3 border-t border-border/60 p-3.5 sm:grid-cols-2 lg:grid-cols-4">
               {dimensions.map(([key, label]) => {
                 const rows = diagnosticRows(analytics, key);
-                return <div key={key}><strong>{label}</strong><ul>{rows.slice(0, 8).map((row) => <li key={`${key}-${row.name || row.value}`}><span>{dimensionValueLabel(row.name || row.value, key === 'requestKinds' ? 'requestKind' : key === 'requestPurposes' ? 'purpose' : key === 'failureKinds' ? 'failureKind' : key === 'failurePhases' ? 'failurePhase' : key === 'streamTerminals' ? 'streamTerminal' : key === 'protocolRoutes' ? 'protocol' : key === 'internalFeatures' ? 'internalFeature' : '')}</span><b className="mono-cell">{numberWithComma(row.attempts ?? row.count)}</b></li>)}</ul></div>;
+                return (
+                  <div key={key} className="space-y-1.5 rounded-md border border-border/60 bg-background/40 p-2.5 text-xs">
+                    <strong className="block font-semibold text-foreground">{label}</strong>
+                    <ul className="space-y-1">
+                      {rows.slice(0, 8).map((row) => (
+                        <li key={`${key}-${row.name || row.value}`} className="flex items-center justify-between gap-2 text-[11px]">
+                          <span className="truncate text-muted-foreground">{dimensionValueLabel(row.name || row.value, resolveKind(key))}</span>
+                          <b className="font-mono text-foreground">{numberWithComma(row.attempts ?? row.count)}</b>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
               })}
             </div>
           </details>
         </>
-      ) : <div className="runtime-v2-empty">暂无结构化诊断数据</div>}
+      ) : (
+        <div className="py-4 text-center text-xs text-muted-foreground">暂无结构化诊断数据</div>
+      )}
     </section>
   );
 }
-
-
 
 function dimensionSuccessRate(row) {
   const completed = safeNumber(row?.successes) + safeNumber(row?.failures) + safeNumber(row?.cancelled);
@@ -662,33 +904,57 @@ function unavailableCostRequests(cost) {
   return safeNumber(cost?.unpricedRequests) + safeNumber(cost?.unknownAccountingRequests);
 }
 
-
-
-function DimensionTable({ page, loading, onPageChange, onPageSizeChange, onSearchSubmit, onSortChange, kind, clientKindFacets, addToast, onSessionExport, onSessionDelete, sessionActionID, onProjectStickyClear, onSessionStickyClear, stickyActionKey, mode = 'usage', activeRowKey, onRowClick }) {
+function DimensionTable({
+  page,
+  loading,
+  onPageChange,
+  onPageSizeChange,
+  onSearchSubmit,
+  onSortChange,
+  kind,
+  clientKindFacets,
+  addToast,
+  onSessionExport,
+  onSessionDelete,
+  sessionActionID,
+  onProjectStickyClear,
+  onSessionStickyClear,
+  stickyActionKey,
+  mode = 'usage',
+  activeRowKey,
+  onRowClick,
+}) {
   const [searchDraft, setSearchDraft] = useState(page?.search || '');
   useEffect(() => setSearchDraft(page?.search || ''), [page?.search, kind]);
   if (!page) return null;
   const rows = page.rows || [];
+
   const identityColumn = {
     title: dimensionLabel(kind), key: 'name', type: 'text', minWidth: '180px', sortable: true,
-    render: (row) => <div className="runtime-v2-cell-stack"><strong className="runtime-v2-ellipsis" title={row.name}>{dimensionValueLabel(row.name, kind)}</strong><small>{kind === 'project' ? projectClientKindsLabel(row.clientKinds) : (kind === 'session' ? projectSourceLabel(row.source) : dimensionLabel(kind))}</small></div>,
+    render: (row) => (
+      <div className="flex flex-col gap-0.5">
+        <strong className="max-w-[240px] truncate text-xs font-semibold text-foreground" title={row.name}>
+          {dimensionValueLabel(row.name, kind)}
+        </strong>
+        <small className="text-[11px] text-muted-foreground">
+          {kind === 'project' ? projectClientKindsLabel(row.clientKinds) : (kind === 'session' ? projectSourceLabel(row.source) : dimensionLabel(kind))}
+        </small>
+      </div>
+    ),
   };
   const usageColumns = [
     identityColumn,
-    { title: '请求', key: 'requests', type: 'number', width: '118px', sortable: true, render: (row) => <span className="mono-cell">{numberWithComma(row.requests)}</span> },
-    { title: '成功率', key: 'success_rate', type: 'number', width: '110px', sortable: true, render: (row) => <span className="mono-cell">{dimensionSuccessRate(row)}</span> },
-    { title: '失败', key: 'failures', type: 'number', width: '100px', sortable: true, render: (row) => <span className="mono-cell">{numberWithComma(row.failures)}</span> },
-    {
-      title: '输入 Token', key: 'input_tokens', type: 'number', width: '140px', sortable: true,
-      render: (row) => <span className="mono-cell">{dimensionTokenValue(row, 'inputTokens')}</span>,
-    },
-    { title: '输出 Token', key: 'output_tokens', type: 'number', width: '132px', sortable: true, render: (row) => <span className="mono-cell">{dimensionTokenValue(row, 'outputTokens')}</span> },
-    { title: '输出速度', key: 'output_tokens_per_second', type: 'number', width: '132px', sortable: true, render: (row) => <span className="mono-cell">{formatOutputTokensPerSecond(row.outputTokensPerSecond)}</span> },
-    { title: '缓存读取', key: 'cache_read', type: 'number', width: '150px', sortable: true, render: (row) => <div className="runtime-v2-usage-cell"><span className="mono-cell">{dimensionTokenValue(row, 'cacheReadInputTokens')}</span><small>Token 读占比 {percent(runtimeCacheRate(row, 'token'))}</small></div> },
-    { title: '缓存写入', key: 'cache_write', type: 'number', width: '132px', sortable: true, render: (row) => <span className="mono-cell">{dimensionTokenValue(row, 'cacheCreationInputTokens')}</span> },
-    { title: '平均耗时', key: 'average_duration', type: 'time', width: '128px', sortable: true, render: (row) => <span className="mono-cell">{formatDuration(row.averageDurationMS)}</span> },
-    { title: '最近活动', key: 'last_seen', type: 'time', width: '190px', sortable: true, render: (row) => <span className="mono-cell">{dateLabel(row.lastSeen)}</span> },
-    { title: '关联', type: 'action', width: '100px', render: (row) => <span className="runtime-v2-muted-action" title={`${numberWithComma(row.relatedCount)} 个关联维度`}>{numberWithComma(row.relatedCount)}</span> },
+    { title: '请求', key: 'requests', type: 'number', width: '118px', sortable: true, render: (row) => <span className="font-mono text-xs">{numberWithComma(row.requests)}</span> },
+    { title: '成功率', key: 'success_rate', type: 'number', width: '110px', sortable: true, render: (row) => <span className="font-mono text-xs">{dimensionSuccessRate(row)}</span> },
+    { title: '失败', key: 'failures', type: 'number', width: '100px', sortable: true, render: (row) => <span className="font-mono text-xs">{numberWithComma(row.failures)}</span> },
+    { title: '输入 Token', key: 'input_tokens', type: 'number', width: '140px', sortable: true, render: (row) => <span className="font-mono text-xs">{dimensionTokenValue(row, 'inputTokens')}</span> },
+    { title: '输出 Token', key: 'output_tokens', type: 'number', width: '132px', sortable: true, render: (row) => <span className="font-mono text-xs">{dimensionTokenValue(row, 'outputTokens')}</span> },
+    { title: '输出速度', key: 'output_tokens_per_second', type: 'number', width: '132px', sortable: true, render: (row) => <span className="font-mono text-xs">{formatOutputTokensPerSecond(row.outputTokensPerSecond)}</span> },
+    { title: '缓存读取', key: 'cache_read', type: 'number', width: '150px', sortable: true, render: (row) => <div className="flex flex-col gap-0.5"><span className="font-mono text-xs">{dimensionTokenValue(row, 'cacheReadInputTokens')}</span><small className="text-[11px] text-muted-foreground">Token 读占比 {percent(runtimeCacheRate(row, 'token'))}</small></div> },
+    { title: '缓存写入', key: 'cache_write', type: 'number', width: '132px', sortable: true, render: (row) => <span className="font-mono text-xs">{dimensionTokenValue(row, 'cacheCreationInputTokens')}</span> },
+    { title: '平均耗时', key: 'average_duration', type: 'time', width: '128px', sortable: true, render: (row) => <span className="font-mono text-xs">{formatDuration(row.averageDurationMS)}</span> },
+    { title: '最近活动', key: 'last_seen', type: 'time', width: '190px', sortable: true, render: (row) => <span className="font-mono text-xs">{dateLabel(row.lastSeen)}</span> },
+    { title: '关联', type: 'action', width: '100px', render: (row) => <span className="font-mono text-xs text-muted-foreground" title={`${numberWithComma(row.relatedCount)} 个关联维度`}>{numberWithComma(row.relatedCount)}</span> },
   ];
   const costColumns = [
     identityColumn,
@@ -697,12 +963,20 @@ function DimensionTable({ page, loading, onPageChange, onPageSizeChange, onSearc
       // page is built. The server does not expose a cost ORDER BY key, so do
       // not advertise a client-only sort that would make pagination wrong.
       title: '估算成本', type: 'number', width: '150px',
-      render: (row) => <div className="runtime-v2-usage-cell"><strong className="mono-cell">{dimensionCostValue(row)}</strong><small>{safeNumber(row?.cost?.pricedRequests) > 0 ? `已计价 ${numberWithComma(row.cost.pricedRequests)} 个请求` : '暂无可计价请求'}</small></div>,
+      render: (row) => (
+        <div className="flex flex-col gap-0.5">
+          <strong className="font-mono text-xs font-semibold text-foreground">{dimensionCostValue(row)}</strong>
+          <small className="text-[11px] text-muted-foreground">
+            {safeNumber(row?.cost?.pricedRequests) > 0 ? `已计价 ${numberWithComma(row.cost.pricedRequests)} 个请求` : '暂无可计价请求'}
+          </small>
+        </div>
+      ),
     },
-    { title: '请求', key: 'requests', type: 'number', width: '118px', sortable: true, render: (row) => <span className="mono-cell">{numberWithComma(row.requests)}</span> },
-    { title: '暂无法计价', type: 'number', width: '132px', render: (row) => <span className="mono-cell">{numberWithComma(unavailableCostRequests(row.cost))}</span> },
-    { title: '最近活动', key: 'last_seen', type: 'time', width: '180px', sortable: true, render: (row) => <span className="mono-cell">{dateLabel(row.lastSeen)}</span> },
+    { title: '请求', key: 'requests', type: 'number', width: '118px', sortable: true, render: (row) => <span className="font-mono text-xs">{numberWithComma(row.requests)}</span> },
+    { title: '暂无法计价', type: 'number', width: '132px', render: (row) => <span className="font-mono text-xs">{numberWithComma(unavailableCostRequests(row.cost))}</span> },
+    { title: '最近活动', key: 'last_seen', type: 'time', width: '180px', sortable: true, render: (row) => <span className="font-mono text-xs">{dateLabel(row.lastSeen)}</span> },
   ];
+
   const columns = mode === 'cost' ? costColumns : usageColumns;
   if (mode === 'usage' && kind === 'project' && onProjectStickyClear) {
     columns.push({
@@ -711,19 +985,28 @@ function DimensionTable({ page, loading, onPageChange, onPageSizeChange, onSearc
       width: '130px',
       render: (row) => {
         const busy = stickyActionKey === `project:${row.key}`;
-        return <div className="runtime-v2-sample-actions">
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            disabled={Boolean(stickyActionKey)}
-            onClick={(event) => { event.stopPropagation(); onProjectStickyClear(row); }}
-            aria-label={`清除项目 ${row.name} 的粘性归属`}
-            title="清除后新请求按当前路由规则重新选择入口"
-          >{busy ? '清除中…' : '清除粘性'}</button>
-        </div>;
+        return (
+          <div className="flex items-center gap-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              disabled={Boolean(stickyActionKey)}
+              onClick={(event) => {
+                event.stopPropagation();
+                onProjectStickyClear(row);
+              }}
+              aria-label={`清除项目 ${row.name} 的粘性归属`}
+              title="清除后新请求按当前路由规则重新选择入口"
+            >
+              {busy ? '清除中…' : '清除粘性'}
+            </Button>
+          </div>
+        );
       },
     });
   }
+
   if (mode === 'usage' && kind === 'session' && (onSessionExport || onSessionDelete || onSessionStickyClear)) {
     columns.push({
       title: '操作',
@@ -732,25 +1015,85 @@ function DimensionTable({ page, loading, onPageChange, onPageSizeChange, onSearc
       render: (row) => {
         const stickyBusy = stickyActionKey === `session:${row.key}`;
         const busy = sessionActionID === row.name || stickyBusy;
-        return <div className="runtime-v2-sample-actions">
-          {onSessionStickyClear && <button type="button" className="btn btn-ghost btn-sm" disabled={busy || Boolean(stickyActionKey) || row.key === 'unidentified_session'} onClick={(event) => { event.stopPropagation(); onSessionStickyClear(row); }} aria-label={`清除会话 ${row.name} 的粘性归属`} title={row.key === 'unidentified_session' ? '未识别会话包含多个对话，不能单独清除' : '只解除此对话的入口绑定，保留统计与事件'}>{stickyBusy ? '清除中…' : '清除粘性'}</button>}
-          <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={(event) => { event.stopPropagation(); onSessionExport?.(row.name); }} aria-label={`导出会话 ${row.name}`}>导出</button>
-          <button type="button" className="btn btn-danger btn-sm" disabled={busy} onClick={(event) => { event.stopPropagation(); onSessionDelete?.(row.name); }} aria-label={`删除会话 ${row.name}`}>{busy ? '处理中…' : '删除'}</button>
-        </div>;
+        return (
+          <div className="flex flex-wrap items-center gap-1">
+            {onSessionStickyClear && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                disabled={busy || Boolean(stickyActionKey) || row.key === 'unidentified_session'}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onSessionStickyClear(row);
+                }}
+                aria-label={`清除会话 ${row.name} 的粘性归属`}
+                title={row.key === 'unidentified_session' ? '未识别会话包含多个对话，不能单独清除' : '只解除此对话的入口绑定，保留统计与事件'}
+              >
+                {stickyBusy ? '清除中…' : '清除粘性'}
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              disabled={busy}
+              onClick={(event) => {
+                event.stopPropagation();
+                onSessionExport?.(row.name);
+              }}
+              aria-label={`导出会话 ${row.name}`}
+            >
+              导出
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              size="xs"
+              disabled={busy}
+              onClick={(event) => {
+                event.stopPropagation();
+                onSessionDelete?.(row.name);
+              }}
+              aria-label={`删除会话 ${row.name}`}
+            >
+              {busy ? '处理中…' : '删除'}
+            </Button>
+          </div>
+        );
       },
     });
   }
+
   return (
-    <>
-      <form className="runtime-v2-search-label" onSubmit={(event) => { event.preventDefault(); if (!loading) onSearchSubmit(searchDraft.trim()); }}>
-        <label htmlFor={`runtime-v2-${kind}-search`}>搜索{dimensionLabel(kind)}</label>
-        <div className="runtime-v2-search-controls">
-          <input id={`runtime-v2-${kind}-search`} className="form-input" type="search" value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} placeholder="输入名称后按回车" />
-          <button type="submit" className="btn btn-secondary" disabled={loading}>搜索</button>
+    <div className="space-y-3">
+      <form
+        className="flex flex-wrap items-center gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!loading) onSearchSubmit(searchDraft.trim());
+        }}
+      >
+        <label htmlFor={`runtime-v2-${kind}-search`} className="text-xs font-medium text-muted-foreground">
+          搜索{dimensionLabel(kind)}
+        </label>
+        <div className="flex flex-1 flex-wrap items-center gap-2 sm:max-w-xs">
+          <Input
+            id={`runtime-v2-${kind}-search`}
+            type="search"
+            className="h-8 flex-1 text-xs"
+            value={searchDraft}
+            onChange={(event) => setSearchDraft(event.target.value)}
+            placeholder="输入名称后按回车"
+          />
+          <Button type="submit" variant="secondary" size="xs" disabled={loading}>
+            <Search className="size-3" />
+            <span>搜索</span>
+          </Button>
         </div>
       </form>
+
       <DataTable
-        className={`runtime-v2-table runtime-v2-${mode}-table`}
         ariaLabel={`${dimensionLabel(kind)}${mode === 'cost' ? '成本' : '使用情况'}`}
         adaptive
         data={rows}
@@ -764,6 +1107,7 @@ function DimensionTable({ page, loading, onPageChange, onPageSizeChange, onSearc
         onSortChange={onSortChange}
         columns={columns}
       />
+
       <PaginationBar
         itemNoun={`个${dimensionLabel(kind)}`}
         emptySummary={`当前搜索没有${dimensionLabel(kind)}`}
@@ -777,7 +1121,7 @@ function DimensionTable({ page, loading, onPageChange, onPageSizeChange, onSearc
         onPageSizeChange={onPageSizeChange}
         ariaLabel={`${dimensionLabel(kind)}${mode === 'cost' ? '成本' : '使用'}分页`}
       />
-    </>
+    </div>
   );
 }
 
@@ -821,20 +1165,36 @@ function DimensionBlock({
       ? `${title} · 会话：${selectedSessionLabel}`
       : kind === 'model' && selectedProjectLabel
         ? `${title} · 项目：${selectedProjectLabel}`
-    : title;
+        : title;
+
   return (
-    <section className={`runtime-v2-dimension-block runtime-v2-dimension-block-${mode}`} aria-labelledby={`runtime-v2-${mode}-${kind}-heading`}>
-      <div className="runtime-v2-overview-block-heading">
-        <h3 id={`runtime-v2-${mode}-${kind}-heading`}>{displayTitle}</h3>
-        <span className="runtime-v2-dimension-heading-meta">
-          {page ? `共 ${numberWithComma(page.totalCount)} 个${dimensionLabel(kind)}` : '读取中…'}
-          {kind === 'session' && selectedProjectLabel && <button type="button" className="btn btn-ghost btn-sm" onClick={onClearProject}>清除项目选择</button>}
-          {kind === 'model' && selectedSessionLabel && <button type="button" className="btn btn-ghost btn-sm" onClick={onClearSession}>清除会话选择</button>}
-          {kind === 'model' && !selectedSessionLabel && selectedProjectLabel && <button type="button" className="btn btn-ghost btn-sm" onClick={onClearProject}>清除项目选择</button>}
+    <section
+      className="space-y-3 rounded-xl border border-border/80 bg-card/60 p-4"
+      aria-labelledby={`runtime-v2-${mode}-${kind}-heading`}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 id={`runtime-v2-${mode}-${kind}-heading`} className="text-sm font-semibold text-foreground">
+          {displayTitle}
+        </h3>
+        <span className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <span>{page ? `共 ${numberWithComma(page.totalCount)} 个${dimensionLabel(kind)}` : '读取中…'}</span>
+          {kind === 'session' && selectedProjectLabel && (
+            <Button type="button" variant="ghost" size="xs" onClick={onClearProject}>清除项目选择</Button>
+          )}
+          {kind === 'model' && selectedSessionLabel && (
+            <Button type="button" variant="ghost" size="xs" onClick={onClearSession}>清除会话选择</Button>
+          )}
+          {kind === 'model' && !selectedSessionLabel && selectedProjectLabel && (
+            <Button type="button" variant="ghost" size="xs" onClick={onClearProject}>清除项目选择</Button>
+          )}
         </span>
       </div>
+
       <PanelMessage error={error} onRetry={onRetry} />
-      {loading && !page ? <LoadingLine text={`正在读取${displayTitle}…`} /> : page ? (
+
+      {loading && !page ? (
+        <LoadingLine text={`正在读取${displayTitle}…`} />
+      ) : page ? (
         <DimensionTable
           page={page}
           loading={loading}
@@ -855,7 +1215,9 @@ function DimensionBlock({
           onSearchSubmit={onSearchSubmit}
           onSortChange={onSortChange}
         />
-      ) : <div className="runtime-v2-empty">当前范围没有{dimensionLabel(kind)}数据</div>}
+      ) : (
+        <div className="py-4 text-center text-xs text-muted-foreground">当前范围没有{dimensionLabel(kind)}数据</div>
+      )}
     </section>
   );
 }
@@ -891,25 +1253,29 @@ function StorageTechnicalDetails({ storage }) {
   const effectiveBytes = storage.liveBytes ?? databaseBytes;
   const walBytes = storage.walBytes;
   const missingIndexes = Array.isArray(storage.missingIndexes) ? storage.missingIndexes : null;
-  const count = (value) => value == null ? '—' : numberWithComma(value);
+  const count = (value) => (value == null ? '—' : numberWithComma(value));
   const hourlyRollup = storage.hourlyRollupComplete == null
     ? '—'
     : storage.hourlyRollupComplete === false
       ? `待处理 ${count(storage.hourlyRollupDirtyBuckets)} 个桶`
       : storage.hourlyRollupMaxSeq == null ? '已完成' : `完成至 #${count(storage.hourlyRollupMaxSeq)}`;
+
   return (
-    <details className="runtime-v2-storage-technical-details">
-      <summary>
-        <span>技术详情</span>
-        <span className="runtime-v2-storage-technical-summary-meta">版本、文件与聚合状态</span>
+    <details className="runtime-v2-storage-technical-details group mt-3 rounded-lg border border-border/75 bg-background/40">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-xs font-medium text-foreground select-none hover:bg-muted/35">
+        <span className="flex items-center gap-1.5">
+          <ChevronRight className="size-3.5 text-muted-foreground transition-transform group-open:rotate-90" />
+          <span>技术详情</span>
+        </span>
+        <span className="text-[11px] text-muted-foreground">版本、文件与聚合状态</span>
       </summary>
-      <dl className="runtime-v2-storage-technical-grid">
-        <div><dt>Schema / 投影</dt><dd>v{storage.schemaVersion ?? '—'} / v{storage.projectionVersion ?? '—'}</dd></div>
-        <div><dt>数据库文件 / 有效占用</dt><dd>{databaseBytes == null ? '—' : formatBytes(databaseBytes)} / {effectiveBytes == null ? '—' : formatBytes(effectiveBytes)}</dd></div>
-        <div><dt>WAL / 空闲页</dt><dd>{walBytes == null ? '—' : formatBytes(walBytes)} / {storage.freelistBytes == null ? '—' : formatBytes(storage.freelistBytes)}</dd></div>
-        <div><dt>用户删除</dt><dd>{count(storage.userDeletedEvents)} 条事件 / {count(storage.userDeletedRequests)} 个请求</dd></div>
-        <div><dt>小时聚合</dt><dd>{hourlyRollup}</dd></div>
-        <div><dt>缺失索引</dt><dd>{missingIndexes == null ? '—' : missingIndexes.length ? missingIndexes.join(', ') : '无'}</dd></div>
+      <dl className="grid gap-2.5 border-t border-border/60 p-3 text-xs sm:grid-cols-2 lg:grid-cols-3">
+        <div><dt className="text-[11px] text-muted-foreground">Schema / 投影</dt><dd className="font-mono font-medium">v{storage.schemaVersion ?? '—'} / v{storage.projectionVersion ?? '—'}</dd></div>
+        <div><dt className="text-[11px] text-muted-foreground">数据库文件 / 有效占用</dt><dd className="font-mono font-medium">{databaseBytes == null ? '—' : formatBytes(databaseBytes)} / {effectiveBytes == null ? '—' : formatBytes(effectiveBytes)}</dd></div>
+        <div><dt className="text-[11px] text-muted-foreground">WAL / 空闲页</dt><dd className="font-mono font-medium">{walBytes == null ? '—' : formatBytes(walBytes)} / {storage.freelistBytes == null ? '—' : formatBytes(storage.freelistBytes)}</dd></div>
+        <div><dt className="text-[11px] text-muted-foreground">用户删除</dt><dd className="font-mono font-medium">{count(storage.userDeletedEvents)} 条事件 / {count(storage.userDeletedRequests)} 个请求</dd></div>
+        <div><dt className="text-[11px] text-muted-foreground">小时聚合</dt><dd className="font-mono font-medium">{hourlyRollup}</dd></div>
+        <div><dt className="text-[11px] text-muted-foreground">缺失索引</dt><dd className="font-mono font-medium">{missingIndexes == null ? '—' : missingIndexes.length ? missingIndexes.join(', ') : '无'}</dd></div>
       </dl>
     </details>
   );
@@ -946,41 +1312,88 @@ function StorageManagementCard({ storage, retention, loading, error, onOpen, onR
     : capacityExceeded || ageExceeded
       ? { label: '需要关注', kind: 'warning', detail: capacityExceeded && ageExceeded ? '已达到时间和容量条件，旧数据会自动轮换' : capacityExceeded ? '已达到存储上限，旧数据会自动轮换' : '已达到保存时长，旧数据会自动轮换' }
       : storageStatePresentation(storage);
+
   return (
-    <section className="runtime-v2-storage-management" aria-labelledby="runtime-v2-storage-management-heading" data-storage-management>
-      <div className="runtime-v2-storage-management-icon" aria-hidden="true"><Icon name="database" size={22} /></div>
-      <div className="runtime-v2-storage-management-copy">
-        <div className="runtime-v2-storage-management-title">
-          <h3 id="runtime-v2-storage-management-heading">运行统计存储</h3>
-          <StatusBadge text={presentation.label} kind={presentation.kind} />
-        </div>
-        <p>{presentation.detail} · 查看当前占用与事件保留情况；需要调整保留策略或执行清理时打开存储设置。</p>
-        {storage?.legacyRetentionDetected && (
-          <div className="runtime-v2-retention-warning" role="alert">
-            检测到旧版本的自动清理设置。它们已不再生效，也不会自动迁移；手动清理只删除事件，需使用“重置并新建数据库”移除旧字段。
+    <section
+      className="rounded-xl border border-border/80 bg-muted/20 p-4"
+      aria-labelledby="runtime-v2-storage-management-heading"
+      data-storage-management
+    >
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="flex items-start gap-3">
+          <div
+            className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-border/80 bg-background/60 text-primary"
+            aria-hidden="true"
+          >
+            <Database className="size-5" />
           </div>
-        )}
-        <div className="runtime-v2-storage-management-metrics" aria-label="数据存储摘要">
-          <span className={capacityExceeded ? 'is-warning' : ''}><strong>{effectiveBytes == null ? '—' : formatBytes(effectiveBytes)}</strong><small>有效占用</small></span>
-          <span><strong>{retainedEvents == null ? '—' : numberWithComma(retainedEvents)}</strong><small>保留事件</small></span>
-          <span><strong>{retentionLabel}</strong><small>{retentionDetail} · 在设置中调整</small></span>
-          {hasPending && <span className="is-warning"><strong>{pending == null ? '—' : numberWithComma(pending)}</strong><small>待写入{pendingBytes == null ? '' : ` · ${formatBytes(pendingBytes)}`}</small></span>}
+          <div className="min-w-0 flex-1 space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 id="runtime-v2-storage-management-heading" className="text-sm font-semibold text-foreground">
+                运行统计存储
+              </h3>
+              <StatusBadge text={presentation.label} kind={presentation.kind} />
+            </div>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              {presentation.detail} · 查看当前占用与事件保留情况；需要调整保留策略或执行清理时打开存储设置。
+            </p>
+            {storage?.legacyRetentionDetected && (
+              <div className="rounded-lg border border-status-warning/35 bg-status-warning/10 p-2.5 text-xs text-status-warning" role="alert">
+                检测到旧版本的自动清理设置。它们已不再生效，也不会自动迁移；手动清理只删除事件，需使用“重置并新建数据库”移除旧字段。
+              </div>
+            )}
+
+            <div className="flex flex-wrap gap-3 pt-1" aria-label="数据存储摘要">
+              <span
+                className={cn(
+                  'rounded-lg border px-3 py-1.5',
+                  capacityExceeded ? 'border-status-warning/40 bg-status-warning/10 text-status-warning' : 'border-border/75 bg-card/70',
+                )}
+              >
+                <strong className="block font-mono text-sm font-semibold">{effectiveBytes == null ? '—' : formatBytes(effectiveBytes)}</strong>
+                <small>有效占用</small>
+              </span>
+              <span className="rounded-lg border border-border/75 bg-card/70 px-3 py-1.5">
+                <strong className="block font-mono text-sm font-semibold">{retainedEvents == null ? '—' : numberWithComma(retainedEvents)}</strong>
+                <small>保留事件</small>
+              </span>
+              <span className="rounded-lg border border-border/75 bg-card/70 px-3 py-1.5">
+                <strong className="block text-sm font-semibold">{retentionLabel}</strong>
+                <small className="text-[11px] text-muted-foreground">{retentionDetail} · 在设置中调整</small>
+              </span>
+              {hasPending && (
+                <span className="rounded-lg border border-status-warning/40 bg-status-warning/10 px-3 py-1.5 text-status-warning">
+                  <strong className="block font-mono text-sm font-semibold">{pending == null ? '—' : numberWithComma(pending)}</strong>
+                  <small className="text-[11px]">待写入{pendingBytes == null ? '' : ` · ${formatBytes(pendingBytes)}`}</small>
+                </span>
+              )}
+            </div>
+
+            <StorageTechnicalDetails storage={storage} />
+          </div>
         </div>
-        <StorageTechnicalDetails storage={storage} />
+
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          {!storage && loading && (
+            <span className="text-xs text-muted-foreground" role="status">读取中…</span>
+          )}
+          {onRetry && (
+            <Button type="button" variant="ghost" size="sm" onClick={onRetry} disabled={loading}>
+              {loading ? '读取中…' : '刷新'}
+            </Button>
+          )}
+          <Button type="button" size="sm" onClick={onOpen}>
+            <Edit3 className="size-3.5" />
+            <span>存储设置…</span>
+          </Button>
+        </div>
       </div>
-      <div className="runtime-v2-storage-management-actions">
-        {!storage && loading && <span className="runtime-v2-storage-management-loading" role="status">读取中…</span>}
-        {onRetry && <button type="button" className="btn btn-ghost btn-sm" onClick={onRetry} disabled={loading}>{loading ? '读取中…' : '刷新'}</button>}
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={onOpen}
-        >
-          <Icon name="edit" size={15} />
-          存储设置…
-        </button>
-      </div>
-      {error && <div className="runtime-v2-storage-management-error" role="alert">{runtimeV2ErrorMessage(error)}</div>}
+
+      {error && (
+        <div className="mt-3 rounded-lg border border-status-critical/35 bg-status-critical/10 px-3 py-2 text-xs text-status-critical" role="alert">
+          {runtimeV2ErrorMessage(error)}
+        </div>
+      )}
     </section>
   );
 }
@@ -1000,32 +1413,64 @@ function TrendPanel({ trend, legacyAnalytics, loading, error, onRetry }) {
   const failoverDetail = totals && totals.failoverRecoveredRequests != null
     ? `恢复 ${numberWithComma(totals.failoverRecoveredRequests)} · 最终失败 ${numberWithComma(totals.failoverTerminalRequests)}`
     : '发生入口切换的请求';
+
   return (
-    <section className="runtime-v2-panel" aria-labelledby="runtime-v2-trends-heading">
-      <div className="runtime-v2-panel-header">
-        <div><h2 id="runtime-v2-trends-heading">趋势</h2><p>使用上方范围筛选查看请求、响应速度、Token、缓存、故障转移与成本。</p></div>
-      </div>
-      <PanelMessage error={error} onRetry={onRetry} />
-      {loading && !totals ? <LoadingLine text="正在读取趋势快照…" /> : totals ? (
-        <>
-          <div className="runtime-v2-metrics-grid">
-            <Metric label="客户端请求" value={numberWithComma(totals.clientRequests)} detail={`完成 ${numberWithComma(completed)} · 成功率 ${percentFromCount(totals.clientSuccesses, completed)}`} accent="var(--primary)" />
-            <Metric label="平均完成耗时" value={formatDuration(latencyAverage(duration))} detail="请求完成平均耗时" accent="var(--accent-indigo)" />
-            <Metric label="平均首字节" value={formatDuration(latencyAverage(ttfb))} detail="首次响应平均耗时" accent="var(--accent-cyan)" />
-            <Metric label="输出速度" value={formatOutputTokensPerSecond(totals.outputTokensPerSecond)} detail={outputSpeedDetail(totals.outputSpeedRequests)} accent="var(--accent-indigo)" />
-            <Metric label="故障转移" value={numberWithComma(totals.failovers)} detail={failoverDetail} tone="runtime-v2-warning" accent="var(--status-warning)" />
-            <Metric label="上游尝试" value={numberWithComma(totals.upstreamAttempts)} detail={`成功 ${numberWithComma(totals.upstreamSuccesses)} · 失败 ${numberWithComma(totals.upstreamFailures)}`} accent="var(--accent-indigo)" />
-            <Metric label="慢请求" value={optionalNumberWithComma(thresholdExceeded(duration, thresholds.durationMS?.[0]))} detail={thresholds.durationMS?.[0] ? `完成耗时 > ${formatDuration(thresholds.durationMS[0])}` : '未提供阈值'} accent="var(--status-warning)" />
-            <Metric label="严重慢请求" value={optionalNumberWithComma(thresholdExceeded(duration, thresholds.durationMS?.[1]))} detail={thresholds.durationMS?.[1] ? `完成耗时 > ${formatDuration(thresholds.durationMS[1])}` : '未提供阈值'} tone="runtime-v2-warning" accent="var(--status-danger)" />
-            <Metric label="输入 Token" value={optionalNumberWithComma(tokenValue(tokens, 'inputTokens'))} detail="输入用量" accent="var(--primary)" />
-            <Metric label="缓存读取" value={optionalNumberWithComma(tokenValue(tokens, 'cacheReadInputTokens'))} detail={`Token 读占比 ${percent(runtimeCacheRate(tokens, 'token'))}`} accent="var(--accent-cyan)" />
-            <Metric label="估算成本" value={formatMoney(cost.estimatedCostMicros, cost.currency || 'USD')} detail="按已配置价格估算" accent="var(--status-good)" />
-          </div>
-          {trend && <label className="runtime-v2-trend-metric"><span>展示指标</span><select className="form-select" value={metric} onChange={(event) => setMetric(event.target.value)}>{TREND_METRICS.map(([value, label, unit]) => <option key={value} value={value}>{label}{unit === 'percent' ? '（比例）' : ''}</option>)}</select></label>}
-          {trend ? <TrendChart points={trend.points || []} metric={metric} /> : <div className="runtime-v2-empty">当前 daemon 未提供 v3 时间桶，以上为兼容统计摘要；升级后可查看趋势。</div>}
-        </>
-      ) : <div className="runtime-v2-empty">暂无趋势数据</div>}
-    </section>
+    <Card aria-labelledby="runtime-v2-trends-heading">
+      <CardHeader className="border-b border-border/60 pb-4">
+        <div className="flex items-center gap-2">
+          <TrendingUp className="size-4 text-primary" />
+          <CardTitle id="runtime-v2-trends-heading">趋势</CardTitle>
+        </div>
+        <CardDescription>使用上方范围筛选查看请求、响应速度、Token、缓存、故障转移与成本。</CardDescription>
+      </CardHeader>
+
+      <CardContent className="space-y-5">
+        <PanelMessage error={error} onRetry={onRetry} />
+
+        {loading && !totals ? (
+          <LoadingLine text="正在读取趋势快照…" />
+        ) : totals ? (
+          <>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              <Metric label="客户端请求" value={numberWithComma(totals.clientRequests)} detail={`完成 ${numberWithComma(completed)} · 成功率 ${percentFromCount(totals.clientSuccesses, completed)}`} accent="var(--primary)" />
+              <Metric label="平均完成耗时" value={formatDuration(latencyAverage(duration))} detail="请求完成平均耗时" accent="var(--accent-indigo)" />
+              <Metric label="平均首字节" value={formatDuration(latencyAverage(ttfb))} detail="首次响应平均耗时" accent="var(--accent-cyan)" />
+              <Metric label="输出速度" value={formatOutputTokensPerSecond(totals.outputTokensPerSecond)} detail={outputSpeedDetail(totals.outputSpeedRequests)} accent="var(--accent-indigo)" />
+              <Metric label="故障转移" value={numberWithComma(totals.failovers)} detail={failoverDetail} tone="runtime-v2-warning" accent="var(--status-warning)" />
+              <Metric label="上游尝试" value={numberWithComma(totals.upstreamAttempts)} detail={`成功 ${numberWithComma(totals.upstreamSuccesses)} · 失败 ${numberWithComma(totals.upstreamFailures)}`} accent="var(--accent-indigo)" />
+              <Metric label="慢请求" value={optionalNumberWithComma(thresholdExceeded(duration, thresholds.durationMS?.[0]))} detail={thresholds.durationMS?.[0] ? `完成耗时 > ${formatDuration(thresholds.durationMS[0])}` : '未提供阈值'} accent="var(--status-warning)" />
+              <Metric label="严重慢请求" value={optionalNumberWithComma(thresholdExceeded(duration, thresholds.durationMS?.[1]))} detail={thresholds.durationMS?.[1] ? `完成耗时 > ${formatDuration(thresholds.durationMS[1])}` : '未提供阈值'} tone="runtime-v2-warning" accent="var(--status-critical)" />
+              <Metric label="输入 Token" value={optionalNumberWithComma(tokenValue(tokens, 'inputTokens'))} detail="输入用量" accent="var(--primary)" />
+              <Metric label="缓存读取" value={optionalNumberWithComma(tokenValue(tokens, 'cacheReadInputTokens'))} detail={`Token 读占比 ${percent(runtimeCacheRate(tokens, 'token'))}`} accent="var(--accent-cyan)" />
+              <Metric label="估算成本" value={formatMoney(cost.estimatedCostMicros, cost.currency || 'USD')} detail="按已配置价格估算" accent="var(--status-good)" />
+            </div>
+
+            {trend && (
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="inline-flex items-center gap-2 text-xs font-medium text-foreground">
+                  <span>展示指标</span>
+                  <select className={cn(SELECT_CLS, 'w-auto min-w-[180px]')} value={metric} onChange={(event) => setMetric(event.target.value)}>
+                    {TREND_METRICS.map(([value, label, unit]) => (
+                      <option key={value} value={value}>{label}{unit === 'percent' ? '（比例）' : ''}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            )}
+
+            {trend ? (
+              <TrendChart points={trend.points || []} metric={metric} />
+            ) : (
+              <div className="rounded-lg border border-dashed border-border/80 bg-muted/15 p-4 text-center text-xs text-muted-foreground">
+                当前 daemon 未提供 v3 时间桶，以上为兼容统计摘要；升级后可查看趋势。
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="py-6 text-center text-xs text-muted-foreground">暂无趋势数据</div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -1037,36 +1482,59 @@ const MemoizedTrendPanel = React.memo(TrendPanel);
 function DrilldownContextBar({ selectedProject, selectedSession, onClearProject, onClearSession }) {
   if (!selectedProject && !selectedSession) return null;
   return (
-    <div className="runtime-v2-drilldown-bar" role="status" aria-label="下钻筛选路径">
-      <div className="runtime-v2-drilldown-crumbs">
-        <span className="runtime-v2-drilldown-root">全部维度</span>
+    <div
+      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/30 bg-primary/10 px-3.5 py-2 text-xs"
+      role="status"
+      aria-label="下钻筛选路径"
+    >
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="font-medium text-muted-foreground">全部维度</span>
         {selectedProject && (
           <>
-            <span className="runtime-v2-drilldown-sep" aria-hidden="true">/</span>
-            <span className="runtime-v2-drilldown-pill">
-              <small>项目</small>
+            <span className="text-muted-foreground" aria-hidden="true">/</span>
+            <Badge variant="default" className="gap-1.5 pr-1">
+              <small className="opacity-80">项目</small>
               <strong>{selectedProject.name}</strong>
-              <button type="button" className="runtime-v2-drilldown-clear" onClick={onClearProject} aria-label="清除项目下钻">×</button>
-            </span>
+              <button
+                type="button"
+                className="ml-0.5 rounded px-1 hover:bg-primary/20"
+                onClick={onClearProject}
+                aria-label="清除项目下钻"
+              >
+                ×
+              </button>
+            </Badge>
           </>
         )}
         {selectedSession && (
           <>
-            <span className="runtime-v2-drilldown-sep" aria-hidden="true">/</span>
-            <span className="runtime-v2-drilldown-pill is-session">
-              <small>会话</small>
+            <span className="text-muted-foreground" aria-hidden="true">/</span>
+            <Badge variant="info" className="gap-1.5 pr-1">
+              <small className="opacity-80">会话</small>
               <strong>{selectedSession.name}</strong>
-              <button type="button" className="runtime-v2-drilldown-clear" onClick={onClearSession} aria-label="清除会话下钻">×</button>
-            </span>
+              <button
+                type="button"
+                className="ml-0.5 rounded px-1 hover:bg-accent-cyan/20"
+                onClick={onClearSession}
+                aria-label="清除会话下钻"
+              >
+                ×
+              </button>
+            </Badge>
           </>
         )}
       </div>
-      <div className="runtime-v2-drilldown-actions">
+
+      <div className="flex items-center gap-1.5">
         {selectedSession && (
-          <button type="button" className="btn btn-ghost btn-sm" onClick={onClearSession}>返回全部会话</button>
+          <Button type="button" variant="ghost" size="xs" onClick={onClearSession}>
+            返回全部会话
+          </Button>
         )}
         {selectedProject && (
-          <button type="button" className="btn btn-ghost btn-sm" onClick={onClearProject}>重置下钻</button>
+          <Button type="button" variant="ghost" size="xs" onClick={onClearProject}>
+            重置下钻
+          </Button>
         )}
       </div>
     </div>
@@ -1133,155 +1601,179 @@ function OverviewPanel({
   const ttfb = totals?.ttfbMS || {};
   const tokens = mergeDefined(analyticsTokenUsage(legacyAnalytics), totals?.tokens);
   const visibleDimensions = USAGE_DIMENSION_META.filter(([kind]) => dimensionFocus === 'all' || dimensionFocus === kind);
+
   return (
-    <section className="runtime-v2-panel runtime-v2-overview-panel" aria-labelledby="runtime-v3-overview-heading">
-      <div className="runtime-v2-panel-header">
-        <div>
-          <h2 id="runtime-v3-overview-heading">使用概览</h2>
-          <p>当前范围的入口、项目、会话与模型用量集中展示；点击项目或会话行，可查看对应模型明细。</p>
+    <Card aria-labelledby="runtime-v3-overview-heading">
+      <CardHeader className="border-b border-border/60 pb-4">
+        <div className="flex items-center gap-2">
+          <Layers className="size-4 text-primary" />
+          <CardTitle id="runtime-v3-overview-heading">使用概览</CardTitle>
         </div>
-        <span className="runtime-v2-panel-kicker">入口 · 项目 · 会话</span>
-      </div>
-      <PanelMessage error={error} onRetry={onRetry} />
-      {loading && !totals && <LoadingLine text="正在读取概览快照…" />}
-      {totals && (
-        <>
-          <div className="runtime-v2-overview-block runtime-v2-overview-request-block">
-            <div className="runtime-v2-overview-block-heading">
-              <h3>核心指标</h3>
-              <span>当前范围</span>
-            </div>
-            <div className="runtime-v2-overview-health-grid">
-              <Metric label="请求" value={numberWithComma(totals.clientRequests)} detail={`已完成 ${numberWithComma(completed)} · 待定 ${numberWithComma(totals.clientUnknownResults)}`} accent="var(--primary)" />
-              <Metric label="成功率" value={percentFromCount(totals.clientSuccesses, completed)} detail={`成功 ${numberWithComma(totals.clientSuccesses)} · 失败 ${numberWithComma(totals.clientFailures)} · 取消 ${numberWithComma(totals.clientCancelled)}`} accent="var(--status-good)" progress={successRatePct} />
-              <Metric label="平均首字节" value={formatDuration(latencyAverage(ttfb))} detail="首次响应平均耗时" accent="var(--accent-cyan)" />
-              <Metric label="平均完成耗时" value={formatDuration(latencyAverage(duration))} detail="请求完成平均耗时" accent="var(--accent-indigo)" />
-              <Metric label="输出速度" value={formatOutputTokensPerSecond(totals.outputTokensPerSecond)} detail={outputSpeedDetail(totals.outputSpeedRequests)} accent="var(--accent-indigo)" />
-              <Metric label="故障转移" value={optionalNumberWithComma(failoverRequests)} detail="发生入口切换的请求" tone="runtime-v2-warning" accent="var(--status-warning)" />
-            </div>
-          </div>
-          {trend?.points?.length > 0 && (
-            <div className="runtime-v2-overview-trend-card">
-              <div className="runtime-v2-overview-trend-header">
-                <div className="runtime-v2-overview-trend-title">
-                  <h3>趋势脉搏快览</h3>
-                  <span>按时间桶实时追踪请求规模、延迟、速率与成本走向</span>
-                </div>
-                <div className="runtime-v2-metric-pills" role="group" aria-label="概览趋势指标切换">
-                  {OVERVIEW_TREND_PILLS.map(([key, label]) => (
-                    <button
-                      key={key}
-                      type="button"
-                      className={`runtime-v2-metric-pill${overviewMetric === key ? ' is-active' : ''}`}
-                      aria-pressed={overviewMetric === key}
-                      onClick={() => setOverviewMetric(key)}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
+        <CardDescription>
+          当前范围的入口、项目、会话与模型用量集中展示；点击项目或会话行，可查看对应模型明细。
+        </CardDescription>
+        <CardAction>
+          <Badge variant="outline">入口 · 项目 · 会话</Badge>
+        </CardAction>
+      </CardHeader>
+
+      <CardContent className="space-y-6">
+        <PanelMessage error={error} onRetry={onRetry} />
+        {loading && !totals && <LoadingLine text="正在读取概览快照…" />}
+
+        {totals && (
+          <>
+            <div className="space-y-3">
+              <div className="flex items-baseline justify-between gap-2">
+                <h3 className="text-sm font-semibold text-foreground">核心指标</h3>
+                <span className="text-xs text-muted-foreground">当前范围</span>
               </div>
-              <TrendChart points={trend.points} metric={overviewMetric} />
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+                <Metric label="请求" value={numberWithComma(totals.clientRequests)} detail={`已完成 ${numberWithComma(completed)} · 待定 ${numberWithComma(totals.clientUnknownResults)}`} accent="var(--primary)" />
+                <Metric label="成功率" value={percentFromCount(totals.clientSuccesses, completed)} detail={`成功 ${numberWithComma(totals.clientSuccesses)} · 失败 ${numberWithComma(totals.clientFailures)} · 取消 ${numberWithComma(totals.clientCancelled)}`} accent="var(--status-good)" progress={successRatePct} />
+                <Metric label="平均首字节" value={formatDuration(latencyAverage(ttfb))} detail="首次响应平均耗时" accent="var(--accent-cyan)" />
+                <Metric label="平均完成耗时" value={formatDuration(latencyAverage(duration))} detail="请求完成平均耗时" accent="var(--accent-indigo)" />
+                <Metric label="输出速度" value={formatOutputTokensPerSecond(totals.outputTokensPerSecond)} detail={outputSpeedDetail(totals.outputSpeedRequests)} accent="var(--accent-indigo)" />
+                <Metric label="故障转移" value={optionalNumberWithComma(failoverRequests)} detail="发生入口切换的请求" tone="runtime-v2-warning" accent="var(--status-warning)" />
+              </div>
             </div>
-          )}
-          <div className="runtime-v2-overview-block runtime-v2-overview-token-section">
-            <div className="runtime-v2-overview-block-heading">
-              <h3>Token 与缓存</h3>
-              <span>缓存读取下方显示缓存读取命中率</span>
+
+            {trend?.points?.length > 0 && (
+              <div className="space-y-3 rounded-xl border border-border/80 bg-muted/15 p-4">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                  <div>
+                    <h3 className="text-sm font-semibold text-foreground">趋势脉搏快览</h3>
+                    <span className="text-xs text-muted-foreground">按时间桶实时追踪请求规模、延迟、速率与成本走向</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1" role="group" aria-label="概览趋势指标切换">
+                    {OVERVIEW_TREND_PILLS.map(([key, label]) => (
+                      <Button
+                        key={key}
+                        type="button"
+                        size="xs"
+                        variant={overviewMetric === key ? 'default' : 'secondary'}
+                        aria-pressed={overviewMetric === key}
+                        onClick={() => setOverviewMetric(key)}
+                      >
+                        {label}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+                <TrendChart points={trend.points} metric={overviewMetric} />
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h3 className="text-sm font-semibold text-foreground">Token 与缓存</h3>
+                <span className="text-xs text-muted-foreground">缓存读取下方显示缓存读取命中率</span>
+              </div>
+              <TokenCoreGrid tokens={tokens} compact cache={trend?.cacheRead} />
             </div>
-            <TokenCoreGrid tokens={tokens} compact cache={trend?.cacheRead} />
-          </div>
-        </>
-      )}
-      {!totals && !loading && <div className="runtime-v2-empty">暂无概览数据</div>}
-      <StorageManagementCard
-        storage={effectiveStorage}
-        retention={storageRetention}
-        loading={storageLoading}
-        error={storageError}
-        onOpen={onOpenStorage}
-        onRetry={onRetryStorage}
-      />
-      {storageSettingsOpen && <StorageSettingsDialog
-        storage={effectiveStorage}
-        retention={storageRetention}
-        loading={storageLoading}
-        error={storageError}
-        onClose={onCloseStorage}
-        onRetry={onRetryStorage}
-        onUpdateRetention={onUpdateRetention}
-        onManualCleanup={onManualCleanup}
-        onRecreateDatabase={onRecreateDatabase}
-      />}
-      <div className="runtime-v2-overview-block runtime-v2-overview-usage-block">
-        <div className="runtime-v2-overview-usage-toolbar">
-          <div className="runtime-v2-overview-block-heading">
-            <h3>使用明细</h3>
-            <span>项目 / 会话行可钻取模型用量</span>
-          </div>
-          <div className="runtime-v2-dimension-focus-bar" role="group" aria-label="维度视图聚焦">
-            {[
-              ['all', '全部维度'],
-              ['endpoint', '入口'],
-              ['project', '项目'],
-              ['session', '会话'],
-              ['model', '模型'],
-            ].map(([id, label]) => {
-              const totalCount = id === 'all' ? null : usagePages?.[id]?.totalCount;
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  className={`runtime-v2-dimension-focus-btn${dimensionFocus === id ? ' is-active' : ''}`}
-                  aria-pressed={dimensionFocus === id}
-                  onClick={() => setDimensionFocus(id)}
-                >
-                  <span>{label}</span>
-                  {totalCount != null && <small className="mono-cell">{numberWithComma(totalCount)}</small>}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-        <DrilldownContextBar
-          selectedProject={selectedProject}
-          selectedSession={selectedSession}
-          onClearProject={onClearProject}
-          onClearSession={onClearSession}
+          </>
+        )}
+
+        {!totals && !loading && (
+          <div className="py-6 text-center text-xs text-muted-foreground">暂无概览数据</div>
+        )}
+
+        <StorageManagementCard
+          storage={effectiveStorage}
+          retention={storageRetention}
+          loading={storageLoading}
+          error={storageError}
+          onOpen={onOpenStorage}
+          onRetry={onRetryStorage}
         />
-        <div className="runtime-v2-dimension-stack">
-          {visibleDimensions.map(([kind, title]) => (
-            <DimensionBlock
-              key={kind}
-              kind={kind}
-              title={title}
-              page={usagePages?.[kind]}
-              loading={usageLoading?.[kind]}
-              error={usageErrors?.[kind]}
-              onRetry={() => usageCallbacks?.retry?.(kind)}
-              onPageChange={(page) => usageCallbacks?.page?.(kind, page)}
-              onPageSizeChange={(size) => usageCallbacks?.pageSize?.(kind, size)}
-              onSearchSubmit={(value) => usageCallbacks?.search?.(kind, value)}
-              onSortChange={(key, order) => usageCallbacks?.sort?.(kind, key, order)}
-              clientKindFacets={clientKindFacets}
-              addToast={addToast}
-              onSessionExport={onSessionExport}
-              onSessionDelete={onSessionDelete}
-              sessionActionID={sessionActionID}
-              onProjectStickyClear={onProjectStickyClear}
-              onSessionStickyClear={onSessionStickyClear}
-              stickyActionKey={stickyActionKey}
-              activeRowKey={kind === 'project' ? selectedProject?.key : kind === 'session' ? selectedSession?.key : undefined}
-              onRowClick={kind === 'project' ? onProjectSelect : kind === 'session' ? onSessionSelect : undefined}
-              selectedProjectLabel={(kind === 'session' || kind === 'model') && !selectedSession ? selectedProject?.name : undefined}
-              selectedSessionLabel={kind === 'model' ? selectedSession?.name : undefined}
-              onClearProject={kind === 'session' || (kind === 'model' && !selectedSession) ? onClearProject : undefined}
-              onClearSession={kind === 'model' && selectedSession ? onClearSession : undefined}
-            />
-          ))}
+
+        {storageSettingsOpen && (
+          <StorageSettingsDialog
+            storage={effectiveStorage}
+            retention={storageRetention}
+            loading={storageLoading}
+            error={storageError}
+            onClose={onCloseStorage}
+            onRetry={onRetryStorage}
+            onUpdateRetention={onUpdateRetention}
+            onManualCleanup={onManualCleanup}
+            onRecreateDatabase={onRecreateDatabase}
+          />
+        )}
+
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-foreground">使用明细</h3>
+              <span className="text-xs text-muted-foreground">项目 / 会话行可钻取模型用量</span>
+            </div>
+            <div className="flex flex-wrap gap-1" role="group" aria-label="维度视图聚焦">
+              {[
+                ['all', '全部维度'],
+                ['endpoint', '入口'],
+                ['project', '项目'],
+                ['session', '会话'],
+                ['model', '模型'],
+              ].map(([id, label]) => {
+                const totalCount = id === 'all' ? null : usagePages?.[id]?.totalCount;
+                return (
+                  <Button
+                    key={id}
+                    type="button"
+                    size="xs"
+                    variant={dimensionFocus === id ? 'default' : 'secondary'}
+                    aria-pressed={dimensionFocus === id}
+                    onClick={() => setDimensionFocus(id)}
+                  >
+                    <span>{label}</span>
+                    {totalCount != null && <small className="font-mono opacity-80">{numberWithComma(totalCount)}</small>}
+                  </Button>
+                );
+              })}
+            </div>
+          </div>
+
+          <DrilldownContextBar
+            selectedProject={selectedProject}
+            selectedSession={selectedSession}
+            onClearProject={onClearProject}
+            onClearSession={onClearSession}
+          />
+
+          <div className="space-y-4">
+            {visibleDimensions.map(([kind, title]) => (
+              <DimensionBlock
+                key={kind}
+                kind={kind}
+                title={title}
+                page={usagePages?.[kind]}
+                loading={usageLoading?.[kind]}
+                error={usageErrors?.[kind]}
+                onRetry={() => usageCallbacks?.retry?.(kind)}
+                onPageChange={(page) => usageCallbacks?.page?.(kind, page)}
+                onPageSizeChange={(size) => usageCallbacks?.pageSize?.(kind, size)}
+                onSearchSubmit={(value) => usageCallbacks?.search?.(kind, value)}
+                onSortChange={(key, order) => usageCallbacks?.sort?.(kind, key, order)}
+                clientKindFacets={clientKindFacets}
+                addToast={addToast}
+                onSessionExport={onSessionExport}
+                onSessionDelete={onSessionDelete}
+                sessionActionID={sessionActionID}
+                onProjectStickyClear={onProjectStickyClear}
+                onSessionStickyClear={onSessionStickyClear}
+                stickyActionKey={stickyActionKey}
+                activeRowKey={kind === 'project' ? selectedProject?.key : kind === 'session' ? selectedSession?.key : undefined}
+                onRowClick={kind === 'project' ? onProjectSelect : kind === 'session' ? onSessionSelect : undefined}
+                selectedProjectLabel={(kind === 'session' || kind === 'model') && !selectedSession ? selectedProject?.name : undefined}
+                selectedSessionLabel={kind === 'model' ? selectedSession?.name : undefined}
+                onClearProject={kind === 'session' || (kind === 'model' && !selectedSession) ? onClearProject : undefined}
+                onClearSession={kind === 'model' && selectedSession ? onClearSession : undefined}
+              />
+            ))}
+          </div>
         </div>
-      </div>
-    </section>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -1290,28 +1782,35 @@ function StorageSettingsDialog({ storage, retention, loading, error, onClose, on
 
   return (
     <div
-      className="modal-overlay runtime-v2-storage-modal"
-      onClick={(event) => { if (event.target === event.currentTarget) onClose?.(); }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose?.();
+      }}
     >
       <section
         ref={dialogRef}
         tabIndex={-1}
-        className="modal-dialog runtime-v2-storage-dialog"
+        className="flex max-h-[88dvh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-2xl outline-none"
         role="dialog"
         aria-modal="true"
         aria-labelledby="runtime-v2-storage-dialog-heading"
         aria-describedby="runtime-v2-storage-dialog-description"
       >
-        <header className="modal-header runtime-v2-storage-dialog-header">
-          <div>
-            <h2 id="runtime-v2-storage-dialog-heading">运行统计存储设置</h2>
-            <p id="runtime-v2-storage-dialog-description">调整存储上限，或执行需要明确确认的统计维护操作。</p>
+        <header className="flex items-start justify-between gap-4 border-b border-border/60 px-5 py-4">
+          <div className="space-y-1">
+            <h2 id="runtime-v2-storage-dialog-heading" className="text-base font-semibold text-foreground">
+              运行统计存储设置
+            </h2>
+            <p id="runtime-v2-storage-dialog-description" className="text-xs text-muted-foreground">
+              调整存储上限，或执行需要明确确认的统计维护操作。
+            </p>
           </div>
-          <button type="button" className="btn-icon" onClick={onClose} aria-label="关闭存储设置">
-            <Icon name="close" size={16} />
-          </button>
+          <Button type="button" variant="ghost" size="icon-sm" onClick={onClose} aria-label="关闭存储设置">
+            <X className="size-4" />
+          </Button>
         </header>
-        <div className="modal-body runtime-v2-storage-dialog-body">
+
+        <div className="overflow-y-auto px-5 py-4">
           <StoragePanel
             storage={storage}
             retention={retention}
@@ -1323,8 +1822,11 @@ function StorageSettingsDialog({ storage, retention, loading, error, onClose, on
             onRecreateDatabase={onRecreateDatabase}
           />
         </div>
-        <footer className="modal-footer runtime-v2-storage-dialog-footer">
-          <button type="button" className="btn btn-secondary" onClick={onClose}>完成</button>
+
+        <footer className="flex justify-end border-t border-border/60 px-5 py-3">
+          <Button type="button" variant="secondary" size="sm" onClick={onClose}>
+            完成
+          </Button>
         </footer>
       </section>
     </div>
@@ -1341,14 +1843,12 @@ function StoragePanel({ storage, retention, loading, error, onRetry, onUpdateRet
   const retainedEvents = storage?.retainedEvents ?? storage?.eventCount;
   const pendingEvents = storage?.pendingEvents == null ? null : safeNumber(storage.pendingEvents);
   const pendingBytes = storage?.pendingBytes == null ? null : safeNumber(storage.pendingBytes);
-  const usedPercent = storageLimitBytes != null && effectiveBytes != null
-    ? Math.min(100, Math.round((Number(effectiveBytes) / Math.max(1, Number(storageLimitBytes))) * 100))
-    : null;
   const [storageLimitMB, setStorageLimitMB] = useState('');
   const [maxAgeDaysInput, setMaxAgeDaysInput] = useState('');
   const [retentionDirty, setRetentionDirty] = useState(false);
   const [savingRetention, setSavingRetention] = useState(false);
   const [retentionError, setRetentionError] = useState('');
+
   useEffect(() => {
     if (!retentionDirty) {
       const bytes = activeRetention?.storageLimitBytes;
@@ -1356,6 +1856,7 @@ function StoragePanel({ storage, retention, loading, error, onRetry, onUpdateRet
       setMaxAgeDaysInput(maxAgeDays == null ? '' : String(Math.max(1, Number(maxAgeDays))));
     }
   }, [activeRetention?.storageLimitBytes, maxAgeDays, retentionDirty]);
+
   const persistRetention = async (nextMaxAgeDays, nextStorageLimitBytes) => {
     if (!activeRetention || !onUpdateRetention) return;
     setRetentionError('');
@@ -1373,6 +1874,7 @@ function StoragePanel({ storage, retention, loading, error, onRetry, onUpdateRet
       setSavingRetention(false);
     }
   };
+
   const saveRetention = async (event) => {
     event?.preventDefault();
     if (!activeRetention || !onUpdateRetention) return;
@@ -1390,61 +1892,136 @@ function StoragePanel({ storage, retention, loading, error, onRetry, onUpdateRet
     }
     await persistRetention(nextMaxAgeDays, megabytes == null ? null : megabytes * 1048576);
   };
+
   const disableStorageLimit = () => {
     setStorageLimitMB('');
     setRetentionDirty(false);
     persistRetention(maxAgeDays == null ? null : Number(maxAgeDays), null);
   };
+
   const disableMaxAge = () => {
     setMaxAgeDaysInput('');
     setRetentionDirty(false);
     persistRetention(null, storageLimitBytes == null ? null : Number(storageLimitBytes));
   };
+
   return (
-    <div className="runtime-v2-storage-panel-content">
-      <p className="runtime-v2-storage-dialog-copy">系统按滚动 24 小时的保存天数和 SQLite 有效占用上限自动轮换；任一条件先达到就触发。按请求组删除，进行中的请求组会完整保留。留空可分别关闭对应条件；轮换不会立即缩小数据库文件。</p>
+    <div className="space-y-4 text-xs">
+      <p className="leading-relaxed text-muted-foreground">
+        系统按滚动 24 小时的保存天数和 SQLite 有效占用上限自动轮换；任一条件先达到就触发。按请求组删除，进行中的请求组会完整保留。留空可分别关闭对应条件；轮换不会立即缩小数据库文件。
+      </p>
       <PanelMessage error={error} onRetry={onRetry} />
-      {loading && !storage ? <LoadingLine text="正在读取存储状态…" /> : storage ? (
+
+      {loading && !storage ? (
+        <LoadingLine text="正在读取存储状态…" />
+      ) : storage ? (
         <>
-          <div className="runtime-v2-storage-limit-editor">
-            <div className="runtime-v2-storage-limit-heading">
-              <strong>自动保留策略</strong>
-              <span>{maxAgeDays == null && storageLimitBytes == null ? '仅手动清理' : `${maxAgeDays == null ? '' : `最长 ${maxAgeDays} 天`}${maxAgeDays != null && storageLimitBytes != null ? ' · ' : ''}${storageLimitBytes == null ? '' : `容量 ${formatBytes(storageLimitBytes)}`}`}</span>
+          <div className="space-y-3 rounded-lg border border-border/80 bg-muted/20 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <strong className="font-semibold text-foreground">自动保留策略</strong>
+              <span className="font-mono text-[11px] text-muted-foreground">
+                {maxAgeDays == null && storageLimitBytes == null
+                  ? '仅手动清理'
+                  : `${maxAgeDays == null ? '' : `最长 ${maxAgeDays} 天`}${maxAgeDays != null && storageLimitBytes != null ? ' · ' : ''}${storageLimitBytes == null ? '' : `容量 ${formatBytes(storageLimitBytes)}`}`}
+              </span>
             </div>
-            <form className="runtime-v2-storage-limit-controls" onSubmit={saveRetention}>
-              <label htmlFor="runtime-v2-storage-max-age-days">最大保存天数</label>
-              <input id="runtime-v2-storage-max-age-days" className="form-input" inputMode="numeric" pattern="[0-9]*" value={maxAgeDaysInput} onChange={(event) => { setMaxAgeDaysInput(event.target.value.replace(/[^0-9]/g, '')); setRetentionDirty(true); }} placeholder="例如 30" />
-              <span aria-hidden="true">天</span>
+
+            <form className="flex flex-wrap items-center gap-2" onSubmit={saveRetention}>
+              <label htmlFor="runtime-v2-storage-max-age-days" className="font-medium text-foreground">最大保存天数</label>
+              <Input
+                id="runtime-v2-storage-max-age-days"
+                className="h-8 w-24 font-mono text-xs"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={maxAgeDaysInput}
+                onChange={(event) => {
+                  setMaxAgeDaysInput(event.target.value.replace(/[^0-9]/g, ''));
+                  setRetentionDirty(true);
+                }}
+                placeholder="例如 30"
+              />
+              <span aria-hidden="true" className="text-muted-foreground">天</span>
+
               <label htmlFor="runtime-v2-storage-limit-mb">容量上限</label>
-              <input id="runtime-v2-storage-limit-mb" className="form-input" inputMode="numeric" pattern="[0-9]*" value={storageLimitMB} onChange={(event) => { setStorageLimitMB(event.target.value.replace(/[^0-9]/g, '')); setRetentionDirty(true); }} placeholder="例如 1024" />
-              <span aria-hidden="true">MB</span>
-              <button type="submit" className="btn btn-secondary" disabled={savingRetention || !activeRetention}>{savingRetention ? '保存中…' : '保存保留策略'}</button>
-              <button type="button" className="btn btn-ghost" onClick={disableMaxAge} disabled={savingRetention || activeRetention?.maxAgeDays == null}>关闭时间上限</button>
-              <button type="button" className="btn btn-ghost" onClick={disableStorageLimit} disabled={savingRetention || activeRetention?.storageLimitBytes == null}>关闭容量上限</button>
+              <Input
+                id="runtime-v2-storage-limit-mb"
+                className="h-8 w-24 font-mono text-xs"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={storageLimitMB}
+                onChange={(event) => {
+                  setStorageLimitMB(event.target.value.replace(/[^0-9]/g, ''));
+                  setRetentionDirty(true);
+                }}
+                placeholder="例如 1024"
+              />
+              <span aria-hidden="true" className="text-muted-foreground">MB</span>
+
+              <Button type="submit" variant="secondary" size="xs" disabled={savingRetention || !activeRetention}>
+                {savingRetention ? '保存中…' : '保存保留策略'}
+              </Button>
+              <Button type="button" variant="ghost" size="xs" onClick={disableMaxAge} disabled={savingRetention || activeRetention?.maxAgeDays == null}>
+                关闭时间上限
+              </Button>
+              <Button type="button" variant="ghost" size="xs" onClick={disableStorageLimit} disabled={savingRetention || activeRetention?.storageLimitBytes == null}>
+                关闭容量上限
+              </Button>
             </form>
-            {retentionError && <div className="runtime-v2-storage-limit-error" role="alert">{retentionError}</div>}
-          </div>
-          <div className="runtime-v2-storage-dialog-context" aria-label="当前存储上下文">
-            <span>保留事件 <strong>{retainedEvents == null ? '—' : numberWithComma(retainedEvents)}</strong></span>
-            {pendingEvents != null && pendingEvents > 0 && <span className="is-warning">待写入 <strong>{numberWithComma(pendingEvents)}{pendingBytes == null ? '' : ` · ${formatBytes(pendingBytes)}`}</strong></span>}
-          </div>
-          <div className="runtime-v2-storage-grid">
-            <div className="runtime-v2-subpanel runtime-v2-manual-cleanup-panel">
-              <div className="runtime-v2-subpanel-heading"><strong>清理方式</strong><StatusBadge text={maxAgeDays == null && storageLimitBytes == null ? '仅手动清理' : '自动轮换'} kind="good" /></div>
-              <p className="runtime-v2-storage-action-copy">{maxAgeDays == null && storageLimitBytes == null ? '未设置自动条件，记录会持续保留，直到你主动清理统计。' : `按${maxAgeDays == null ? '' : `时间（${maxAgeDays} 天）`}${maxAgeDays != null && storageLimitBytes != null ? '或' : ''}${storageLimitBytes == null ? '' : '容量'}自动轮换最旧的已完成请求；进行中的请求组会继续保留。`}</p>
-              <div className="runtime-v2-form-actions">
-                <span>按时间清理已完成统计，进行中的请求组会保留；诊断捕获不受影响。</span>
-                <button type="button" className="btn btn-danger" onClick={onManualCleanup}>按时间清理统计</button>
+
+            {retentionError && (
+              <div className="rounded-lg border border-status-critical/35 bg-status-critical/10 px-3 py-2 text-status-critical" role="alert">
+                {retentionError}
               </div>
-              <div className="runtime-v2-form-actions runtime-v2-recreate-database-actions">
-                <span>旧版自动清理字段不会通过手动清理移除；需要彻底切换到当前数据库结构时使用此操作。</span>
-                <button type="button" className="btn btn-danger" onClick={onRecreateDatabase}>重置并新建数据库</button>
+            )}
+          </div>
+
+          <div
+            className="runtime-v2-storage-dialog-context flex flex-wrap items-center gap-4 rounded-lg border border-border/75 bg-muted/15 px-3.5 py-2.5"
+            aria-label="当前存储上下文"
+          >
+            <span>保留事件 <strong className="font-mono">{retainedEvents == null ? '—' : numberWithComma(retainedEvents)}</strong></span>
+            {pendingEvents != null && pendingEvents > 0 && (
+              <span className="text-status-warning">
+                待写入 <strong className="font-mono">{numberWithComma(pendingEvents)}{pendingBytes == null ? '' : ` · ${formatBytes(pendingBytes)}`}</strong>
+              </span>
+            )}
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="space-y-3 rounded-lg border border-border/80 bg-muted/15 p-3.5">
+              <div className="flex items-center justify-between gap-2">
+                <strong className="font-semibold text-foreground">清理方式</strong>
+                <StatusBadge text={maxAgeDays == null && storageLimitBytes == null ? '仅手动清理' : '自动轮换'} kind="good" />
+              </div>
+              <p className="leading-relaxed text-muted-foreground">
+                {maxAgeDays == null && storageLimitBytes == null
+                  ? '未设置自动条件，记录会持续保留，直到你主动清理统计。'
+                  : `按${maxAgeDays == null ? '' : `时间（${maxAgeDays} 天）`}${maxAgeDays != null && storageLimitBytes != null ? '或' : ''}${storageLimitBytes == null ? '' : '容量'}自动轮换最旧的已完成请求；进行中的请求组会继续保留。`}
+              </p>
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-2.5">
+                <span className="text-[11px] text-muted-foreground">按时间清理已完成统计，进行中的请求组会保留；诊断捕获不受影响。</span>
+                <Button type="button" variant="destructive" size="xs" onClick={onManualCleanup}>
+                  按时间清理统计
+                </Button>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-2.5">
+                <span className="text-[11px] text-muted-foreground">旧版自动清理字段不会通过手动清理移除；需要彻底切换到当前数据库结构时使用此操作。</span>
+                <Button type="button" variant="destructive" size="xs" onClick={onRecreateDatabase}>
+                  重置并新建数据库
+                </Button>
               </div>
             </div>
-            <div className="runtime-v2-subpanel runtime-v2-storage-note"><strong>数据说明</strong><p>运行记录会保留源事件和会话归属；自动轮换按请求组删除，任何含进行中事件的请求组都会跳过，避免请求链残缺。</p><p>完整诊断捕获独立保存，源请求正文、Headers 和流式 Chunk 不会重复计入统计。</p></div>
+
+            <div className="space-y-2 rounded-lg border border-border/80 bg-muted/15 p-3.5 text-muted-foreground">
+              <strong className="block font-semibold text-foreground">数据说明</strong>
+              <p className="leading-relaxed">运行记录会保留源事件和会话归属；自动轮换按请求组删除，任何含进行中事件的请求组都会跳过，避免请求链残缺。</p>
+              <p className="leading-relaxed">完整诊断捕获独立保存，源请求正文、Headers 和流式 Chunk 不会重复计入统计。</p>
+            </div>
           </div>
         </>
-      ) : <div className="runtime-v2-empty">暂无存储状态</div>}
+      ) : (
+        <div className="py-4 text-center text-muted-foreground">暂无存储状态</div>
+      )}
     </div>
   );
 }
@@ -1468,7 +2045,7 @@ function configuredEndpointModels(config) {
     });
     models.forEach((modelKey) => rows.push({ endpointID, endpointName: endpoint.name || endpointID, modelKey }));
   });
-  return rows.sort((left, right) => (left.endpointName + '/' + left.modelKey).localeCompare(right.endpointName + '/' + right.modelKey, 'zh-CN'));
+  return rows.sort((left, right) => (`${left.endpointName}/${left.modelKey}`).localeCompare(`${right.endpointName}/${right.modelKey}`, 'zh-CN'));
 }
 
 export function PricingPanel({ pricing, config, endpointID = '', loading, error, onRetry, onSave }) {
@@ -1483,6 +2060,7 @@ export function PricingPanel({ pricing, config, endpointID = '', loading, error,
   const endpointName = endpointID
     ? ((config?.endpoints || []).find((endpoint) => endpoint.id === endpointID)?.name || endpointID)
     : '';
+
   useEffect(() => {
     if (!pricing) return;
     setCurrency(pricing.currency || 'USD');
@@ -1498,18 +2076,31 @@ export function PricingPanel({ pricing, config, endpointID = '', loading, error,
       cacheCreation: runtimePriceInput(price.cacheCreationPerMillionMicros),
     })));
   }, [pricing]);
+
   const update = (index, key, value) => {
     setValidationError(null);
-    setPrices((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, [key]: value } : row));
+    setPrices((current) => current.map((row, rowIndex) => (rowIndex === index ? { ...row, [key]: value } : row)));
   };
+
   const add = () => {
     setValidationError(null);
-    setPrices((current) => [...current, { id: 'new-' + Date.now(), endpointID: endpointID || '', modelKey: '', effectiveFrom: '', effectiveTo: '', input: '', output: '', cacheRead: '', cacheCreation: '' }]);
+    setPrices((current) => [...current, {
+      id: `new-${Date.now()}`,
+      endpointID: endpointID || '',
+      modelKey: '',
+      effectiveFrom: '',
+      effectiveTo: '',
+      input: '',
+      output: '',
+      cacheRead: '',
+      cacheCreation: '',
+    }]);
   };
+
   const addConfiguredModel = (model) => {
     setValidationError(null);
     setPrices((current) => [...current, {
-      id: 'new-' + Date.now() + '-' + model.endpointID + '-' + model.modelKey,
+      id: `new-${Date.now()}-${model.endpointID}-${model.modelKey}`,
       endpointID: model.endpointID,
       modelKey: model.modelKey,
       effectiveFrom: new Date().toISOString().slice(0, 16),
@@ -1520,10 +2111,12 @@ export function PricingPanel({ pricing, config, endpointID = '', loading, error,
       cacheCreation: '',
     }]);
   };
+
   const remove = (index) => {
     setValidationError(null);
     setPrices((current) => current.filter((_, rowIndex) => rowIndex !== index));
   };
+
   const submit = () => {
     if (!pricing) return;
     const nextCurrency = currency.trim().toUpperCase();
@@ -1565,55 +2158,183 @@ export function PricingPanel({ pricing, config, endpointID = '', loading, error,
     setValidationError(null);
     onSave({ expectedRevision: pricing.revision, currency: nextCurrency, prices: payload });
   };
+
   return (
-    <div className="runtime-v2-subpanel runtime-v2-pricing-panel">
-      <div className="runtime-v2-subpanel-heading"><div><strong>{endpointID ? `入口模型价格 · ${endpointName}` : '入口模型价格'}</strong><small>{endpointID ? '当前入口优先使用专属价格；没有专属价格时回退到全局价格。' : '优先按“入口 + 生效模型”匹配；没有入口专属价格时回退到全局模型价格。'}</small></div></div>
+    <div className="space-y-4 rounded-xl border border-border/80 bg-muted/20 p-4">
+      <div className="space-y-0.5">
+        <strong className="block text-sm font-semibold text-foreground">
+          {endpointID ? `入口模型价格 · ${endpointName}` : '入口模型价格'}
+        </strong>
+        <small className="block text-xs text-muted-foreground">
+          {endpointID ? '当前入口优先使用专属价格；没有专属价格时回退到全局价格。' : '优先按“入口 + 生效模型”匹配；没有入口专属价格时回退到全局模型价格。'}
+        </small>
+      </div>
+
       <PanelMessage error={validationError} />
       <PanelMessage error={error} onRetry={onRetry} />
-      {loading && !pricing ? <LoadingLine text="正在读取价格表…" /> : pricing ? (
+
+      {loading && !pricing ? (
+        <LoadingLine text="正在读取价格表…" />
+      ) : pricing ? (
         <>
-          <label className="runtime-v2-currency-field"><span>货币</span><input className="form-input" value={currency} maxLength={3} onChange={(event) => setCurrency(event.target.value)} /></label>
-          {configuredModels.length > 0 && <div className="runtime-v2-pricing-catalog" aria-label="已配置入口模型"><div><strong>当前配置中的模型</strong><span>点击模型生成入口专属价格行</span></div><div className="runtime-v2-pricing-catalog-list">{configuredModels.map((model) => {
-            const exists = prices.some((row) => row.endpointID === model.endpointID && row.modelKey === model.modelKey);
-            return <button key={model.endpointID + '/' + model.modelKey} type="button" className="runtime-v2-pricing-model-chip" disabled={exists} onClick={() => addConfiguredModel(model)}><span>{model.endpointName}</span><strong>{model.modelKey}</strong><em>{exists ? '已添加' : '添加价格'}</em></button>;
-          })}</div></div>}
-          <HorizontalScroll dragToScroll controlsAtTop className="table-container runtime-v2-pricing-table-wrap" ariaLabel="模型价格表"><table className="data-table runtime-v2-pricing-table"><thead><tr><th>入口</th><th>模型键</th><th>生效起点</th><th>生效终点</th><th>输入 / 1M</th><th>输出 / 1M</th><th>缓存读 / 1M</th><th>缓存写 / 1M</th><th>操作</th></tr></thead><tbody>{visiblePrices.map(({ row, index }) => <tr key={row.id || `price-${index}`}>
-            <td>{endpointID && row.endpointID === endpointID ? <span className="runtime-v2-pricing-endpoint-label" title={endpointName}>{endpointName}</span> : <select className="form-select" value={row.endpointID || ''} onChange={(event) => update(index, 'endpointID', event.target.value)} aria-label={`第 ${index + 1} 行入口`}><option value="">全局回退</option>{(config?.endpoints || []).map((endpoint) => <option key={endpoint.id} value={endpoint.id}>{endpoint.name || endpoint.id}</option>)}</select>}</td>
-            <td><input className="form-input" list="runtime-pricing-models" value={row.modelKey} onChange={(event) => update(index, 'modelKey', event.target.value)} placeholder="exact-model" /></td>
-            <td><input className="form-input" type="datetime-local" value={row.effectiveFrom} onChange={(event) => update(index, 'effectiveFrom', event.target.value)} /></td>
-            <td><input className="form-input" type="datetime-local" value={row.effectiveTo} onChange={(event) => update(index, 'effectiveTo', event.target.value)} /></td>
-            <td><input className="form-input" inputMode="decimal" value={row.input} onChange={(event) => update(index, 'input', event.target.value)} placeholder="USD" required aria-label={`第 ${index + 1} 行输入价格`} /></td>
-            <td><input className="form-input" inputMode="decimal" value={row.output} onChange={(event) => update(index, 'output', event.target.value)} placeholder="USD" required aria-label={`第 ${index + 1} 行输出价格`} /></td>
-            <td><input className="form-input" inputMode="decimal" value={row.cacheRead} onChange={(event) => update(index, 'cacheRead', event.target.value)} placeholder="可空" /></td>
-            <td><input className="form-input" inputMode="decimal" value={row.cacheCreation} onChange={(event) => update(index, 'cacheCreation', event.target.value)} placeholder="可空" /></td>
-            <td><button type="button" className="btn btn-danger btn-sm" onClick={() => remove(index)}>移除</button></td>
-          </tr>)}</tbody></table></HorizontalScroll>
-          <datalist id="runtime-pricing-models">{[...new Set(configuredModels.map((model) => model.modelKey))].map((modelKey) => <option key={modelKey} value={modelKey} />)}</datalist>
-          <div className="runtime-v2-form-actions"><span>金额按每百万 Token 填写。</span><div className="page-actions"><button type="button" className="btn btn-secondary" onClick={add}>添加价格</button><button type="button" className="btn btn-primary" onClick={submit}>替换价格表</button></div></div>
+          <label className="inline-flex items-center gap-2 text-xs font-medium text-foreground">
+            <span>货币</span>
+            <Input className="h-8 w-20 font-mono text-xs uppercase" value={currency} maxLength={3} onChange={(event) => setCurrency(event.target.value)} />
+          </label>
+
+          {configuredModels.length > 0 && (
+            <div className="space-y-2 rounded-lg border border-border/75 bg-card/70 p-3" aria-label="已配置入口模型">
+              <div className="flex flex-wrap items-baseline justify-between gap-2 text-xs">
+                <strong className="font-semibold text-foreground">当前配置中的模型</strong>
+                <span className="text-muted-foreground">点击模型生成入口专属价格行</span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {configuredModels.map((model) => {
+                  const exists = prices.some((row) => row.endpointID === model.endpointID && row.modelKey === model.modelKey);
+                  return (
+                    <button
+                      key={`${model.endpointID}/${model.modelKey}`}
+                      type="button"
+                      disabled={exists}
+                      onClick={() => addConfiguredModel(model)}
+                      className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-border/80 bg-background/60 px-2.5 py-1 text-[11px] transition-colors hover:border-primary/50 hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <span className="text-muted-foreground">{model.endpointName}</span>
+                      <strong className="font-mono font-semibold text-foreground">{model.modelKey}</strong>
+                      <em className="not-italic text-primary">{exists ? '已添加' : '添加价格'}</em>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <HorizontalScroll dragToScroll controlsAtTop ariaLabel="模型价格表">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>入口</TableHead>
+                  <TableHead>模型键</TableHead>
+                  <TableHead>生效起点</TableHead>
+                  <TableHead>生效终点</TableHead>
+                  <TableHead>输入 / 1M</TableHead>
+                  <TableHead>输出 / 1M</TableHead>
+                  <TableHead>缓存读 / 1M</TableHead>
+                  <TableHead>缓存写 / 1M</TableHead>
+                  <TableHead>操作</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {visiblePrices.map(({ row, index }) => (
+                  <TableRow key={row.id || `price-${index}`}>
+                    <TableCell className="min-w-[130px]">
+                      {endpointID && row.endpointID === endpointID ? (
+                        <span className="text-xs font-medium" title={endpointName}>{endpointName}</span>
+                      ) : (
+                        <select
+                          className={cn(SELECT_CLS, 'h-8')}
+                          value={row.endpointID || ''}
+                          onChange={(event) => update(index, 'endpointID', event.target.value)}
+                          aria-label={`第 ${index + 1} 行入口`}
+                        >
+                          <option value="">全局回退</option>
+                          {(config?.endpoints || []).map((endpoint) => (
+                            <option key={endpoint.id} value={endpoint.id}>{endpoint.name || endpoint.id}</option>
+                          ))}
+                        </select>
+                      )}
+                    </TableCell>
+                    <TableCell className="min-w-[140px]">
+                      <Input className="h-8 font-mono text-xs" list="runtime-pricing-models" value={row.modelKey} onChange={(event) => update(index, 'modelKey', event.target.value)} placeholder="exact-model" />
+                    </TableCell>
+                    <TableCell className="min-w-[165px]">
+                      <Input className="h-8 font-mono text-xs" type="datetime-local" value={row.effectiveFrom} onChange={(event) => update(index, 'effectiveFrom', event.target.value)} />
+                    </TableCell>
+                    <TableCell className="min-w-[165px]">
+                      <Input className="h-8 font-mono text-xs" type="datetime-local" value={row.effectiveTo} onChange={(event) => update(index, 'effectiveTo', event.target.value)} />
+                    </TableCell>
+                    <TableCell className="min-w-[96px]">
+                      <Input className="h-8 font-mono text-xs" inputMode="decimal" value={row.input} onChange={(event) => update(index, 'input', event.target.value)} placeholder="USD" required aria-label={`第 ${index + 1} 行输入价格`} />
+                    </TableCell>
+                    <TableCell className="min-w-[96px]">
+                      <Input className="h-8 font-mono text-xs" inputMode="decimal" value={row.output} onChange={(event) => update(index, 'output', event.target.value)} placeholder="USD" required aria-label={`第 ${index + 1} 行输出价格`} />
+                    </TableCell>
+                    <TableCell className="min-w-[96px]">
+                      <Input className="h-8 font-mono text-xs" inputMode="decimal" value={row.cacheRead} onChange={(event) => update(index, 'cacheRead', event.target.value)} placeholder="可空" />
+                    </TableCell>
+                    <TableCell className="min-w-[96px]">
+                      <Input className="h-8 font-mono text-xs" inputMode="decimal" value={row.cacheCreation} onChange={(event) => update(index, 'cacheCreation', event.target.value)} placeholder="可空" />
+                    </TableCell>
+                    <TableCell>
+                      <Button type="button" variant="destructive" size="xs" onClick={() => remove(index)}>移除</Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </HorizontalScroll>
+
+          <datalist id="runtime-pricing-models">
+            {[...new Set(configuredModels.map((model) => model.modelKey))].map((modelKey) => (
+              <option key={modelKey} value={modelKey} />
+            ))}
+          </datalist>
+
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+            <span className="text-xs text-muted-foreground">金额按每百万 Token 填写。</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button type="button" variant="secondary" size="sm" onClick={add}>添加价格</Button>
+              <Button type="button" size="sm" onClick={submit}>替换价格表</Button>
+            </div>
+          </div>
         </>
-      ) : <div className="runtime-v2-empty">暂无价格表</div>}
+      ) : (
+        <div className="py-4 text-center text-xs text-muted-foreground">暂无价格表</div>
+      )}
     </div>
   );
 }
 
-
-
-function CostPanel({ pricing, config, pricingLoading, pricingError, onRetryPricing, onSavePricing, trend, legacyAnalytics, costPages, costLoading, costErrors, costCallbacks, clientKindFacets, addToast, selectedProject, selectedSession, onProjectSelect, onSessionSelect, onClearProject, onClearSession }) {
+function CostPanel({
+  pricing,
+  config,
+  pricingLoading,
+  pricingError,
+  onRetryPricing,
+  onSavePricing,
+  trend,
+  legacyAnalytics,
+  costPages,
+  costLoading,
+  costErrors,
+  costCallbacks,
+  clientKindFacets,
+  addToast,
+  selectedProject,
+  selectedSession,
+  onProjectSelect,
+  onSessionSelect,
+  onClearProject,
+  onClearSession,
+}) {
   const [showPricing, setShowPricing] = useState(false);
   const [dimensionFocus, setDimensionFocus] = useState('all');
   const totals = trend?.totals || legacyTrendTotals(legacyAnalytics);
   const cost = totals?.cost || {};
   const unpricedTotal = safeNumber(cost?.unpricedRequests) + safeNumber(cost?.unknownAccountingRequests);
   const visibleDimensions = USAGE_DIMENSION_META.filter(([kind]) => dimensionFocus === 'all' || dimensionFocus === kind);
+
   return (
-    <section className="runtime-v2-panel runtime-v2-cost-section" aria-labelledby="runtime-v3-cost-heading">
-      <div className="runtime-v2-panel-header">
+    <Card aria-labelledby="runtime-v3-cost-heading">
+      <CardHeader className="flex flex-col gap-3 border-b border-border/60 pb-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <h2 id="runtime-v3-cost-heading">成本</h2>
-          <p>按入口、项目、会话和模型查看估算成本。点击项目或会话行，可继续查看对应模型成本。</p>
+          <CardTitle id="runtime-v3-cost-heading">成本</CardTitle>
+          <CardDescription>
+            按入口、项目、会话和模型查看估算成本。点击项目或会话行，可继续查看对应模型成本。
+          </CardDescription>
         </div>
-        <div className="page-actions">
-          <div className="runtime-v2-dimension-focus-bar" role="group" aria-label="成本维度视图聚焦">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap gap-1" role="group" aria-label="成本维度视图聚焦">
             {[
               ['all', '全部维度'],
               ['endpoint', '入口'],
@@ -1621,76 +2342,84 @@ function CostPanel({ pricing, config, pricingLoading, pricingError, onRetryPrici
               ['session', '会话'],
               ['model', '模型'],
             ].map(([id, label]) => (
-              <button
+              <Button
                 key={id}
                 type="button"
-                className={`runtime-v2-dimension-focus-btn${dimensionFocus === id ? ' is-active' : ''}`}
+                size="xs"
+                variant={dimensionFocus === id ? 'default' : 'secondary'}
                 aria-pressed={dimensionFocus === id}
                 onClick={() => setDimensionFocus(id)}
               >
                 <span>{label}</span>
-              </button>
+              </Button>
             ))}
           </div>
-          <button
+          <Button
             type="button"
-            className={`btn ${showPricing ? 'btn-secondary' : 'btn-primary'} btn-sm`}
+            variant={showPricing ? 'secondary' : 'default'}
+            size="xs"
             onClick={() => setShowPricing((current) => !current)}
             aria-expanded={showPricing}
           >
-            <Icon name="edit" size={14} />
-            {showPricing ? '收起价格表' : '配置模型价格…'}
-          </button>
+            <Edit3 className="size-3" />
+            <span>{showPricing ? '收起价格表' : '配置模型价格…'}</span>
+          </Button>
         </div>
-      </div>
-      <div className="runtime-v2-metrics-grid runtime-v2-cost-summary">
-        <Metric label="估算成本" value={safeNumber(cost?.pricedRequests) > 0 ? formatMoney(cost.estimatedCostMicros, cost.currency || pricing?.currency || 'USD') : '—'} detail={safeNumber(cost?.pricedRequests) > 0 ? `基于 ${numberWithComma(cost.pricedRequests)} 个已计价请求` : '暂无可计价请求'} accent="var(--status-good)" />
-        <Metric label="请求" value={optionalNumberWithComma(totals?.clientRequests)} detail="当前筛选范围" accent="var(--primary)" />
-        <Metric label="暂无法计价" value={optionalNumberWithComma(unpricedTotal)} detail={unpricedTotal > 0 ? '缺少价格或完整用量 · 可在右上角补充模型单价' : '所有已完成请求均已匹配单价'} accent="var(--status-warning)" />
-      </div>
-      {showPricing && (
-        <PricingPanel
-          pricing={pricing}
-          config={config}
-          loading={pricingLoading}
-          error={pricingError}
-          onRetry={onRetryPricing}
-          onSave={onSavePricing}
-        />
-      )}
-      <DrilldownContextBar
-        selectedProject={selectedProject}
-        selectedSession={selectedSession}
-        onClearProject={onClearProject}
-        onClearSession={onClearSession}
-      />
-      <div className="runtime-v2-cost-dimension-stack">
-        {visibleDimensions.map(([kind, title]) => (
-          <DimensionBlock
-            key={kind}
-            kind={kind}
-            title={title.replace('使用情况', '成本')}
-            page={costPages?.[kind]}
-            loading={costLoading?.[kind]}
-            error={costErrors?.[kind]}
-            onRetry={() => costCallbacks?.retry?.(kind)}
-            onPageChange={(page) => costCallbacks?.page?.(kind, page)}
-            onPageSizeChange={(size) => costCallbacks?.pageSize?.(kind, size)}
-            onSearchSubmit={(value) => costCallbacks?.search?.(kind, value)}
-            onSortChange={(key, order) => costCallbacks?.sort?.(kind, key, order)}
-            clientKindFacets={clientKindFacets}
-            addToast={addToast}
-            mode="cost"
-            activeRowKey={kind === 'project' ? selectedProject?.key : kind === 'session' ? selectedSession?.key : undefined}
-            onRowClick={kind === 'project' ? onProjectSelect : kind === 'session' ? onSessionSelect : undefined}
-            selectedProjectLabel={(kind === 'session' || kind === 'model') && !selectedSession ? selectedProject?.name : undefined}
-            selectedSessionLabel={kind === 'model' ? selectedSession?.name : undefined}
-            onClearProject={kind === 'session' || (kind === 'model' && !selectedSession) ? onClearProject : undefined}
-            onClearSession={kind === 'model' && selectedSession ? onClearSession : undefined}
+      </CardHeader>
+
+      <CardContent className="space-y-5">
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Metric label="估算成本" value={safeNumber(cost?.pricedRequests) > 0 ? formatMoney(cost.estimatedCostMicros, cost.currency || pricing?.currency || 'USD') : '—'} detail={safeNumber(cost?.pricedRequests) > 0 ? `基于 ${numberWithComma(cost.pricedRequests)} 个已计价请求` : '暂无可计价请求'} accent="var(--status-good)" />
+          <Metric label="请求" value={optionalNumberWithComma(totals?.clientRequests)} detail="当前筛选范围" accent="var(--primary)" />
+          <Metric label="暂无法计价" value={optionalNumberWithComma(unpricedTotal)} detail={unpricedTotal > 0 ? '缺少价格或完整用量 · 可在右上角补充模型单价' : '所有已完成请求均已匹配单价'} accent="var(--status-warning)" />
+        </div>
+
+        {showPricing && (
+          <PricingPanel
+            pricing={pricing}
+            config={config}
+            loading={pricingLoading}
+            error={pricingError}
+            onRetry={onRetryPricing}
+            onSave={onSavePricing}
           />
-        ))}
-      </div>
-    </section>
+        )}
+
+        <DrilldownContextBar
+          selectedProject={selectedProject}
+          selectedSession={selectedSession}
+          onClearProject={onClearProject}
+          onClearSession={onClearSession}
+        />
+
+        <div className="space-y-4">
+          {visibleDimensions.map(([kind, title]) => (
+            <DimensionBlock
+              key={kind}
+              kind={kind}
+              title={title.replace('使用情况', '成本')}
+              page={costPages?.[kind]}
+              loading={costLoading?.[kind]}
+              error={costErrors?.[kind]}
+              onRetry={() => costCallbacks?.retry?.(kind)}
+              onPageChange={(page) => costCallbacks?.page?.(kind, page)}
+              onPageSizeChange={(size) => costCallbacks?.pageSize?.(kind, size)}
+              onSearchSubmit={(value) => costCallbacks?.search?.(kind, value)}
+              onSortChange={(key, order) => costCallbacks?.sort?.(kind, key, order)}
+              clientKindFacets={clientKindFacets}
+              addToast={addToast}
+              mode="cost"
+              activeRowKey={kind === 'project' ? selectedProject?.key : kind === 'session' ? selectedSession?.key : undefined}
+              onRowClick={kind === 'project' ? onProjectSelect : kind === 'session' ? onSessionSelect : undefined}
+              selectedProjectLabel={(kind === 'session' || kind === 'model') && !selectedSession ? selectedProject?.name : undefined}
+              selectedSessionLabel={kind === 'model' ? selectedSession?.name : undefined}
+              onClearProject={kind === 'session' || (kind === 'model' && !selectedSession) ? onClearProject : undefined}
+              onClearSession={kind === 'model' && selectedSession ? onClearSession : undefined}
+            />
+          ))}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -1750,21 +2479,82 @@ function ExportPanel({ addToast, filters = {}, filterKey, pageVisible }) {
     finally { setLoading(false); }
   };
   return (
-    <div className="runtime-v2-export-content">
+    <div className="space-y-3 text-xs">
       <PanelMessage error={error} onRetry={loadEstimate} />
-      <div className="runtime-v2-export-form">
-        <label><span>范围</span><select className="form-select" value={scope} onChange={(event) => { setScope(event.target.value); setEstimate(null); }}><option value="events">事件</option><option value="projects">项目</option><option value="sessions">会话</option></select></label>
-        <label><span>格式</span><select className="form-select" value={format} onChange={(event) => { setFormat(event.target.value); setEstimate(null); }}><option value="jsonl">JSONL（逐行）</option><option value="csv">CSV</option></select></label>
-        <label><span>数据范围</span><select className="form-select" value={privacy} onChange={(event) => { setPrivacy(event.target.value); setConfirmStored(false); setEstimate(null); }}><option value="stored">源数据（SQLite 已存字段，默认）</option><option value="redacted">脱敏副本</option></select></label>
-        <div className="runtime-v2-export-actions"><button type="button" className="btn btn-secondary" onClick={loadEstimate} disabled={loading}>{loading ? '估算中…' : '估算导出'}</button><button type="button" className="btn btn-primary" onClick={download} disabled={loading || !estimate}>{loading ? '处理中…' : '开始下载'}</button></div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:items-end">
+        <label className="space-y-1">
+          <span className="block font-medium text-foreground">范围</span>
+          <select className={SELECT_CLS} value={scope} onChange={(event) => { setScope(event.target.value); setEstimate(null); }}>
+            <option value="events">事件</option>
+            <option value="projects">项目</option>
+            <option value="sessions">会话</option>
+          </select>
+        </label>
+        <label className="space-y-1">
+          <span className="block font-medium text-foreground">格式</span>
+          <select className={SELECT_CLS} value={format} onChange={(event) => { setFormat(event.target.value); setEstimate(null); }}>
+            <option value="jsonl">JSONL（逐行）</option>
+            <option value="csv">CSV</option>
+          </select>
+        </label>
+        <label className="space-y-1">
+          <span className="block font-medium text-foreground">数据范围</span>
+          <select className={SELECT_CLS} value={privacy} onChange={(event) => { setPrivacy(event.target.value); setConfirmStored(false); setEstimate(null); }}>
+            <option value="stored">源数据（SQLite 已存字段，默认）</option>
+            <option value="redacted">脱敏副本</option>
+          </select>
+        </label>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" variant="secondary" size="sm" onClick={loadEstimate} disabled={loading}>
+            {loading ? '估算中…' : '估算导出'}
+          </Button>
+          <Button type="button" size="sm" onClick={download} disabled={loading || !estimate}>
+            <Download className="size-3.5" />
+            <span>{loading ? '处理中…' : '开始下载'}</span>
+          </Button>
+        </div>
       </div>
-      {privacy === 'stored' && <label className="runtime-v2-confirm-row"><input type="checkbox" checked={confirmStored} onChange={(event) => { setConfirmStored(event.target.checked); setEstimate(null); }} /> <span>我确认源数据导出包含 SQLite 已保存的会话/归属字段；诊断捕获正文、Headers、Cookie、Authorization 和 API Key 仍只在诊断捕获导出中提供。</span></label>}
-      {estimate && <div className="runtime-v2-export-estimate" role="status"><strong>{numberWithComma(estimate.rowCount)} 行 · 约 {formatBytes(estimate.estimatedBytes)}</strong></div>}
+
+      {privacy === 'stored' && (
+        <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-status-warning/30 bg-status-warning/10 p-2.5 text-status-warning">
+          <input
+            type="checkbox"
+            className="mt-0.5 size-4 shrink-0 accent-primary"
+            checked={confirmStored}
+            onChange={(event) => { setConfirmStored(event.target.checked); setEstimate(null); }}
+          />
+          <span>我确认源数据导出包含 SQLite 已保存的会话/归属字段；诊断捕获正文、Headers、Cookie、Authorization 和 API Key 仍只在诊断捕获导出中提供。</span>
+        </label>
+      )}
+
+      {estimate && (
+        <div className="rounded-lg border border-border/75 bg-muted/20 px-3 py-2 font-mono text-foreground" role="status">
+          <strong>{numberWithComma(estimate.rowCount)} 行 · 约 {formatBytes(estimate.estimatedBytes)}</strong>
+        </div>
+      )}
     </div>
   );
 }
 
-export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, onRecreateDatabase, openExportSignal = 0, analyticsFilters = {}, analyticsRange = 'today', onAnalyticsRangeChange, facets = null, analyticsRefreshSignal = 0, analyticsQueryRevision = 0, onProjectSelectionChange, onSessionSelectionChange, projectSelectionResetSignal = 0, legacyAnalytics = null, summaryStorage = null, config = null }) {
+export function AnalyticsWorkspace({
+  onSelectEvent,
+  addToast,
+  onManualCleanup,
+  onRecreateDatabase,
+  openExportSignal = 0,
+  analyticsFilters = {},
+  analyticsRange = 'today',
+  onAnalyticsRangeChange,
+  facets = null,
+  analyticsRefreshSignal = 0,
+  analyticsQueryRevision = 0,
+  onProjectSelectionChange,
+  onSessionSelectionChange,
+  projectSelectionResetSignal = 0,
+  legacyAnalytics = null,
+  summaryStorage = null,
+  config = null,
+}) {
   const { pageVisible, runtimePagePreferences } = useAppControls();
   const [section, setSection] = useRuntimePagePreference('stats.board', 'overview');
   const sectionTabRefs = useRef([]);
@@ -1826,7 +2616,6 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
   const lastAnalyticsRefreshSignal = useRef(0);
   const pendingBoardRefreshRef = useRef(false);
   const previousQueryKeyRef = useRef(activeQueryKey);
-
 
   const loadTrends = useCallback(async (nextRange = range) => {
     if (document.hidden) return;
@@ -1965,7 +2754,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
 
   // Automatic refresh must re-anchor every usage table on a fresh SQLite
   // snapshot. `loadDimension` defaults to the previously loaded page's
-  // snapshotSeq/historyGeneration so paging and sorting stay consistent, but
+  // snapshotSeq/historyGeneration so paging/sorting stay consistent, but
   // reusing that anchor on a timer tick pins the tables to the first snapshot
   // forever while the un-anchored trend totals keep moving. Keep the visible
   // page, page size, search and sort; drop only the snapshot anchor.
@@ -2119,7 +2908,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     lastAnalyticsRefreshSignal.current = analyticsRefreshSignal;
     if (firstSignal) return;
     const busy = [trendRequestRef, errorsRequestRef, diagnosticsRequestRef, ...Object.values(dimensionRequestRefs.current)]
-      .some(reference => reference.current.pending);
+      .some((reference) => reference.current.pending);
     if (busy) { pendingBoardRefreshRef.current = true; return; }
     pendingBoardRefreshRef.current = false;
     if (section === 'overview' || section === 'trends' || section === 'tokens') loadTrends(range);
@@ -2131,9 +2920,11 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     if (section === 'tokens') refreshDimensions(['endpoint', 'project', 'session', 'model']);
     if (section === 'overview' && showStorageSettings) loadStorage({ includeRetention: true });
   }, [analyticsRefreshSignal, trendLoading, errorsLoading, diagnosticsLoading, dimensionLoading]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (openExportSignal > 0) setShowExport(true);
   }, [openExportSignal]);
+
   useEffect(() => {
     if (!pageVisible) return undefined;
     const live = statisticsRangeIsLive(range, analyticsFilters);
@@ -2195,6 +2986,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     setSection(next);
     window.requestAnimationFrame(() => sectionTabRefs.current[nextIndex]?.focus());
   };
+
   const updateStorageRetention = async (payload) => {
     setStorageError(null);
     try {
@@ -2219,6 +3011,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
       throw error;
     }
   };
+
   const savePricing = async (payload) => {
     setStorageError(null);
     try {
@@ -2234,6 +3027,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
       addToast?.(`价格表更新失败：${error.message}`, 'error');
     }
   };
+
   const exportSession = async (sessionID) => {
     const value = String(sessionID || '').trim();
     if (!value) return;
@@ -2354,6 +3148,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     setSelectedProject(next);
     onProjectSelectionChange?.(next);
   }, [onProjectSelectionChange, onSessionSelectionChange]);
+
   const selectSession = useCallback((row) => {
     const key = String(row?.key || row?.name || '').trim();
     if (!key) return;
@@ -2361,6 +3156,7 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     setSelectedSession(next);
     onSessionSelectionChange?.(next);
   }, [onSessionSelectionChange]);
+
   const clearSelectedProject = useCallback(() => {
     skipNextClearedProjectReloadRef.current = false;
     setSelectedSession(null);
@@ -2368,80 +3164,164 @@ export function AnalyticsWorkspace({ onSelectEvent, addToast, onManualCleanup, o
     setSelectedProject(null);
     onProjectSelectionChange?.(null);
   }, [onProjectSelectionChange, onSessionSelectionChange]);
+
   const clearSelectedSession = useCallback(() => {
     setSelectedSession(null);
     onSessionSelectionChange?.(null);
   }, [onSessionSelectionChange]);
 
   return (
-    <section className="runtime-v2-workspace" aria-label="统计详情">
-      <nav className="runtime-v2-board-picker" aria-label="统计看板">
-        <HorizontalScroll className="runtime-v2-section-tabs" role="tablist" ariaLabel="数据库分析分面">
-          {SECTIONS.map((item, index) => <button
-            key={item.id}
-            ref={(node) => { sectionTabRefs.current[index] = node; }}
-            id={`analytics-tab-${item.id}`}
-            type="button"
-            role="tab"
-            aria-selected={section === item.id}
-            aria-controls={`analytics-panel-${item.id}`}
-            tabIndex={section === item.id ? 0 : -1}
-            className={section === item.id ? 'active' : ''}
-            onClick={() => setSection(item.id)}
-            onKeyDown={(event) => {
-              if (event.key === 'ArrowRight' || event.key === 'ArrowDown') { event.preventDefault(); moveSection(item.id, 1); }
-              if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') { event.preventDefault(); moveSection(item.id, -1); }
-              if (event.key === 'Home') { event.preventDefault(); moveSection(item.id, 'home'); }
-              if (event.key === 'End') { event.preventDefault(); moveSection(item.id, 'end'); }
-            }}
-          >{item.label}</button>)}
-        </HorizontalScroll>
+    <section className="space-y-4" aria-label="统计详情">
+      <nav aria-label="统计看板">
+        <div
+          className="runtime-v2-section-tabs grid w-full grid-cols-4 rounded-xl border border-border/80 bg-muted/45 p-1 sm:inline-flex sm:w-auto"
+          role="tablist"
+          aria-label="数据库分析分面"
+        >
+          {SECTIONS.map((item, index) => (
+            <button
+              key={item.id}
+              ref={(node) => { sectionTabRefs.current[index] = node; }}
+              id={`analytics-tab-${item.id}`}
+              type="button"
+              role="tab"
+              aria-selected={section === item.id}
+              aria-controls={`analytics-panel-${item.id}`}
+              tabIndex={section === item.id ? 0 : -1}
+              className={cn(
+                'min-w-0 cursor-pointer rounded-lg px-2 py-1.5 text-center text-xs font-medium whitespace-nowrap transition-all sm:flex-initial sm:px-4',
+                section === item.id
+                  ? 'bg-background text-foreground shadow-xs font-semibold'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+              onClick={() => setSection(item.id)}
+              onKeyDown={(event) => {
+                if (event.key === 'ArrowRight' || event.key === 'ArrowDown') { event.preventDefault(); moveSection(item.id, 1); }
+                if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') { event.preventDefault(); moveSection(item.id, -1); }
+                if (event.key === 'Home') { event.preventDefault(); moveSection(item.id, 'home'); }
+                if (event.key === 'End') { event.preventDefault(); moveSection(item.id, 'end'); }
+              }}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
       </nav>
-      {section === 'overview' && <section id="analytics-panel-overview" className="runtime-v2-tab-panel" role="tabpanel" aria-labelledby="analytics-tab-overview">
-        <OverviewPanel
-          trend={trend}
-          legacyAnalytics={legacyAnalytics}
-          loading={trendLoading}
-          error={trendError}
-          storage={storage}
-          summaryStorage={summaryStorage}
-          storageRetention={retention}
-          storageLoading={storageLoading}
-          storageError={storageError}
-          storageSettingsOpen={showStorageSettings}
-          onRetry={() => loadTrends(range)}
-          onOpenStorage={() => setShowStorageSettings(true)}
-          onCloseStorage={closeStorageSettings}
-          onRetryStorage={() => loadStorage({ includeRetention: showStorageSettings })}
-          onUpdateRetention={updateStorageRetention}
-          onManualCleanup={onManualCleanup}
-          onRecreateDatabase={onRecreateDatabase}
-          usagePages={dimensions}
-          usageLoading={dimensionLoading}
-          usageErrors={dimensionError}
-          usageCallbacks={dimensionCallbacks}
-          clientKindFacets={facets?.clientKinds}
-          addToast={addToast}
-          onSessionExport={exportSession}
-          onSessionDelete={deleteSession}
-          onProjectStickyClear={clearProjectSticky}
-          onSessionStickyClear={clearSessionSticky}
-          stickyActionKey={stickyActionKey}
-          sessionActionID={sessionActionID}
-          selectedProject={selectedProject}
-          selectedSession={selectedSession}
-          onProjectSelect={selectProject}
-          onSessionSelect={selectSession}
-          onClearProject={clearSelectedProject}
-          onClearSession={clearSelectedSession}
-        />
-      </section>}
-      {section === 'trends' && <section id="analytics-panel-trends" className="runtime-v2-tab-panel" role="tabpanel" aria-labelledby="analytics-tab-trends"><MemoizedTrendPanel trend={trend} legacyAnalytics={legacyAnalytics} loading={trendLoading} error={trendError} onRetry={retryTrends} /></section>}
-      {section === 'errors' && <section id="analytics-panel-errors" role="tabpanel" aria-labelledby="analytics-tab-errors" className="runtime-v2-panel"><div className="runtime-v2-panel-header"><div><h2>错误与结构化诊断</h2><p>先看错误分组与样本，再按需展开模型、用途、协议、失败和流终止分组。</p></div></div><PanelMessage error={errorsError} onRetry={() => loadErrors(1)} /><div className="runtime-v2-table-status">{errorsLoading && <LoadingLine text="正在读取错误分组…" />}</div>{errors && <ErrorTable page={errors} loading={errorsLoading} onPageChange={(page) => loadErrors(page)} onPageSizeChange={(size) => changePageSize('errors', size)} onSelectEvent={onSelectEvent} />}<AdvancedDiagnosticsPanel analytics={diagnostics} loading={diagnosticsLoading} error={diagnosticsError} onRetry={loadDiagnostics} /></section>}
-      {section === 'tokens' && <section id="analytics-panel-tokens" role="tabpanel" aria-labelledby="analytics-tab-tokens">
-        <CostPanel pricing={pricing} config={config} pricingLoading={storageLoading} pricingError={storageError} onRetryPricing={() => loadStorage({ includeStorage: false, includePricing: true })} onSavePricing={savePricing} trend={trend} legacyAnalytics={legacyAnalytics} costPages={dimensions} costLoading={dimensionLoading} costErrors={dimensionError} costCallbacks={dimensionCallbacks} clientKindFacets={facets?.clientKinds} addToast={addToast} selectedProject={selectedProject} selectedSession={selectedSession} onProjectSelect={selectProject} onSessionSelect={selectSession} onClearProject={clearSelectedProject} onClearSession={clearSelectedSession} />
-      </section>}
-      {showExport && <section id="analytics-panel-export" className="runtime-v2-panel" aria-label="运行统计导出"><div className="runtime-v2-panel-header"><div><h2>运行统计导出</h2><p>导出当前筛选下的 SQLite 运行统计字段，不包含诊断正文。</p></div><button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowExport(false)}>关闭</button></div><ExportPanel addToast={addToast} filters={activeFilters} filterKey={activeQueryKey} pageVisible={pageVisible} /></section>}
+
+      {section === 'overview' && (
+        <section id="analytics-panel-overview" role="tabpanel" aria-labelledby="analytics-tab-overview">
+          <OverviewPanel
+            trend={trend}
+            legacyAnalytics={legacyAnalytics}
+            loading={trendLoading}
+            error={trendError}
+            storage={storage}
+            summaryStorage={summaryStorage}
+            storageRetention={retention}
+            storageLoading={storageLoading}
+            storageError={storageError}
+            storageSettingsOpen={showStorageSettings}
+            onRetry={() => loadTrends(range)}
+            onOpenStorage={() => setShowStorageSettings(true)}
+            onCloseStorage={closeStorageSettings}
+            onRetryStorage={() => loadStorage({ includeRetention: showStorageSettings })}
+            onUpdateRetention={updateStorageRetention}
+            onManualCleanup={onManualCleanup}
+            onRecreateDatabase={onRecreateDatabase}
+            usagePages={dimensions}
+            usageLoading={dimensionLoading}
+            usageErrors={dimensionError}
+            usageCallbacks={dimensionCallbacks}
+            clientKindFacets={facets?.clientKinds}
+            addToast={addToast}
+            onSessionExport={exportSession}
+            onSessionDelete={deleteSession}
+            onProjectStickyClear={clearProjectSticky}
+            onSessionStickyClear={clearSessionSticky}
+            stickyActionKey={stickyActionKey}
+            sessionActionID={sessionActionID}
+            selectedProject={selectedProject}
+            selectedSession={selectedSession}
+            onProjectSelect={selectProject}
+            onSessionSelect={selectSession}
+            onClearProject={clearSelectedProject}
+            onClearSession={clearSelectedSession}
+          />
+        </section>
+      )}
+
+      {section === 'trends' && (
+        <section id="analytics-panel-trends" role="tabpanel" aria-labelledby="analytics-tab-trends">
+          <MemoizedTrendPanel trend={trend} legacyAnalytics={legacyAnalytics} loading={trendLoading} error={trendError} onRetry={retryTrends} />
+        </section>
+      )}
+
+      {section === 'errors' && (
+        <Card id="analytics-panel-errors" role="tabpanel" aria-labelledby="analytics-tab-errors">
+          <CardHeader className="border-b border-border/60 pb-4">
+            <CardTitle>错误与结构化诊断</CardTitle>
+            <CardDescription>先看错误分组与样本，再按需展开模型、用途、协议、失败和流终止分组。</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <PanelMessage error={errorsError} onRetry={() => loadErrors(1)} />
+            {errorsLoading && <LoadingLine text="正在读取错误分组…" />}
+            {errors && (
+              <ErrorTable
+                page={errors}
+                loading={errorsLoading}
+                onPageChange={(page) => loadErrors(page)}
+                onPageSizeChange={(size) => changePageSize('errors', size)}
+                onSelectEvent={onSelectEvent}
+              />
+            )}
+            <AdvancedDiagnosticsPanel analytics={diagnostics} loading={diagnosticsLoading} error={diagnosticsError} onRetry={loadDiagnostics} />
+          </CardContent>
+        </Card>
+      )}
+
+      {section === 'tokens' && (
+        <section id="analytics-panel-tokens" role="tabpanel" aria-labelledby="analytics-tab-tokens">
+          <CostPanel
+            pricing={pricing}
+            config={config}
+            pricingLoading={storageLoading}
+            pricingError={storageError}
+            onRetryPricing={() => loadStorage({ includeStorage: false, includePricing: true })}
+            onSavePricing={savePricing}
+            trend={trend}
+            legacyAnalytics={legacyAnalytics}
+            costPages={dimensions}
+            costLoading={dimensionLoading}
+            costErrors={dimensionError}
+            costCallbacks={dimensionCallbacks}
+            clientKindFacets={facets?.clientKinds}
+            addToast={addToast}
+            selectedProject={selectedProject}
+            selectedSession={selectedSession}
+            onProjectSelect={selectProject}
+            onSessionSelect={selectSession}
+            onClearProject={clearSelectedProject}
+            onClearSession={clearSelectedSession}
+          />
+        </section>
+      )}
+
+      {showExport && (
+        <Card id="analytics-panel-export" aria-label="运行统计导出">
+          <CardHeader className="flex flex-row items-start justify-between gap-4 border-b border-border/60 pb-3">
+            <div className="space-y-0.5">
+              <CardTitle>运行统计导出</CardTitle>
+              <CardDescription>导出当前筛选下的 SQLite 运行统计字段，不包含诊断正文。</CardDescription>
+            </div>
+            <Button type="button" variant="ghost" size="xs" onClick={() => setShowExport(false)}>
+              关闭
+            </Button>
+          </CardHeader>
+          <CardContent>
+            <ExportPanel addToast={addToast} filters={activeFilters} filterKey={activeQueryKey} pageVisible={pageVisible} />
+          </CardContent>
+        </Card>
+      )}
     </section>
   );
 }

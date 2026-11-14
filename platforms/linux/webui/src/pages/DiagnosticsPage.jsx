@@ -1,12 +1,26 @@
-import { diagnosticPayloadText, diagnosticChunksText, hasCompressedCapture } from '../utils/diagnosticPayload.js';
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { useAppControls } from '../context/AppContext.jsx';
-import { StatusBadge } from '../components/StatusBadge.jsx';
-import { Icon } from '../utils/icons.jsx';
-import { copyWithToast } from '../utils/clipboard.js';
-import { api } from '../services/api.js';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Activity, AlertTriangle, CheckCircle2, ChevronRight, Copy, Download, Search, Wrench } from 'lucide-react';
 import { ClientConnectionDiagnostics } from '../components/ClientConnectionDiagnostics.jsx';
-import { formatDuration, formatTimestamp, formatNumber, clientDeclaredProject, projectSourceLabel, formatWebSocketTrace } from '../utils/helpers.js';
+import { StatusBadge } from '../components/StatusBadge.jsx';
+import { Button } from '../components/ui/button.jsx';
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card.jsx';
+import { Input } from '../components/ui/input.jsx';
+import { Label } from '../components/ui/label.jsx';
+import { useAppControls } from '../context/AppContext.jsx';
+import { cn } from '../lib/utils.js';
+import { api } from '../services/api.js';
+import { copyWithToast } from '../utils/clipboard.js';
+import { diagnosticChunksText, diagnosticPayloadText, hasCompressedCapture } from '../utils/diagnosticPayload.js';
+import {
+  clientDeclaredProject,
+  formatDuration,
+  formatNumber,
+  formatTimestamp,
+  formatWebSocketTrace,
+  projectSourceLabel,
+} from '../utils/helpers.js';
+
+const SELECT_CLS = 'flex h-9 w-full rounded-md border border-input bg-background/60 px-2.5 text-xs text-foreground shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50';
 
 // 原始 Body/Chunks 可能接近整个捕获容量。详情页首屏不应该为每个折叠块
 // 都创建一份字符串或 DOM；只有用户明确展开某一块时才计算和挂载内容。
@@ -31,13 +45,24 @@ function RawBlock({ title, value, valueFactory }) {
     }
   };
 
-  return <details className="diagnostics-raw-block" onToggle={loadValue}><summary>{title}</summary>{renderedValue !== null && <pre className="mono-cell diagnostics-code">{renderedValue}</pre>}</details>;
+  return (
+    <details className="group rounded-lg border border-border/80 bg-muted/20" onToggle={loadValue}>
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs font-medium text-foreground select-none hover:bg-muted/40">
+        <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-90" />
+        <span className="truncate font-mono">{title}</span>
+      </summary>
+      {renderedValue !== null && (
+        <pre className="max-h-96 overflow-auto border-t border-border/60 bg-background/60 p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all text-foreground">
+          {renderedValue}
+        </pre>
+      )}
+    </details>
+  );
 }
 
 function headersText(headers = []) {
   return headers.map(({ name, value }) => `${name}: ${value}`).join('\n');
 }
-
 
 function formatBytes(bytes = 0) {
   const value = Number(bytes) || 0;
@@ -235,7 +260,7 @@ export function DiagnosticsPage() {
         index.records.some((record) => record.requestID === current) ? current : ''
       ));
     } catch (error) {
-      if (captureIndexGenerationRef.current !== generation || error?.name === 'AbortError' && controller.signal.aborted) return;
+      if (captureIndexGenerationRef.current !== generation || (error?.name === 'AbortError' && controller.signal.aborted)) return;
       setCaptureError(errorMessage(error, '诊断捕获索引自动刷新失败'));
     } finally {
       window.clearTimeout(timeout);
@@ -458,217 +483,462 @@ export function DiagnosticsPage() {
   const captureProject = clientDeclaredProject(captureDetail);
 
   return (
-    <div className="page-stack diagnostics-page">
-      <div className="page-header">
-        <div className="page-title-group">
-          <h1 className="page-title">
-            <Icon name="wrench" size={24} style={{ color: 'var(--primary)' }} />
-            <span>诊断</span>
-          </h1>
-          <p className="page-subtitle">配置路径、最近请求和诊断捕获。</p>
-        </div>
+    <div className="space-y-6">
+      <div className="flex flex-col gap-1">
+        <h1 className="flex items-center gap-2.5 text-xl font-semibold tracking-tight text-foreground">
+          <Wrench className="size-5 text-primary" />
+          <span>诊断</span>
+        </h1>
+        <p className="text-xs text-muted-foreground">配置路径、最近请求和诊断捕获。</p>
       </div>
 
       <ClientConnectionDiagnostics />
-      <div className="glass-panel panel-padded-stack diagnostics-capture-panel">
-        <div className="panel-toolbar diagnostics-capture-header">
-          <div className="diagnostics-capture-copy">
-            <div className="panel-title"><Icon name="activity" size={18} style={{ color: 'var(--primary)' }} /><span>完整诊断捕获</span></div>
-            <p className="panel-description diagnostics-capture-description">
+
+      <Card>
+        <CardHeader className="flex flex-col gap-3 border-b border-border/60 pb-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <Activity className="size-4 text-primary" />
+              <CardTitle>完整诊断捕获</CardTitle>
+            </div>
+            <CardDescription className="max-w-3xl">
               手动开始后保留实际收到的入站/出站 Headers、Body、上游响应和客户端输出。原始捕获文件不会被改写；页面默认按需读取源数据索引和单条正文，脱敏只作为主动导出选项。
-            </p>
+            </CardDescription>
           </div>
-          <div className="panel-actions diagnostics-capture-actions">
+          <div className="flex flex-wrap items-center gap-2">
             {captureLoading ? <StatusBadge text="读取索引中" kind="muted" /> : capture ? (
               <>
                 <StatusBadge text={captureStatus[0]} kind={captureStatus[1]} />
-                <label htmlFor="diagnostic-capacity-mb" className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', margin: 0 }}>
+                <label htmlFor="diagnostic-capacity-mb" className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
                   <span>容量</span>
-                  <input id="diagnostic-capacity-mb" type="number" min="1" step="1" inputMode="numeric" className="form-input" style={{ width: '112px' }} value={captureCapacityMB} disabled={captureBusy || capture.enabled} onChange={(event) => { capacityDirtyRef.current = true; setCaptureCapacityMB(event.target.value); }} aria-invalid={!capacityValid} />
+                  <Input
+                    id="diagnostic-capacity-mb"
+                    type="number"
+                    min="1"
+                    step="1"
+                    inputMode="numeric"
+                    className="h-8 w-24 font-mono text-xs"
+                    value={captureCapacityMB}
+                    disabled={captureBusy || capture.enabled}
+                    onChange={(event) => {
+                      capacityDirtyRef.current = true;
+                      setCaptureCapacityMB(event.target.value);
+                    }}
+                    aria-invalid={!capacityValid}
+                  />
                   <span>MB</span>
                 </label>
-                {capture.enabled
-                  ? <button type="button" className="btn btn-secondary" disabled={captureBusy} onClick={() => updateCapture(false)}>停止捕获</button>
-                  : <button type="button" className="btn btn-primary" disabled={captureBusy || !capacityValid} onClick={() => updateCapture(true)}>开始捕获</button>}
-                <button type="button" className="btn btn-secondary" disabled={captureBusy || !capture.records.length} onClick={clearCapture}>清空</button>
+                {capture.enabled ? (
+                  <Button type="button" variant="secondary" size="sm" disabled={captureBusy} onClick={() => updateCapture(false)}>
+                    停止捕获
+                  </Button>
+                ) : (
+                  <Button type="button" size="sm" disabled={captureBusy || !capacityValid} onClick={() => updateCapture(true)}>
+                    开始捕获
+                  </Button>
+                )}
+                <Button type="button" variant="secondary" size="sm" disabled={captureBusy || !capture.records.length} onClick={clearCapture}>
+                  清空
+                </Button>
               </>
             ) : <StatusBadge text="不可用" kind="warning" />}
           </div>
-        </div>
-        {captureError && !capture ? (
-          <div role="alert" className="diagnostics-alert">
-            <Icon name="warning" size={18} />
-            <div className="diagnostics-alert-copy"><strong>完整诊断捕获暂不可用</strong><div>{captureError}</div></div>
-            <button type="button" className="btn btn-secondary" disabled={loading} onClick={fetchDiag}>重试加载</button>
-          </div>
-        ) : capture ? (
-          <>
-            {captureError && <div role="alert" className="diagnostics-inline-warning"><Icon name="warning" size={15} /><span>{captureError}；保留上一次索引，页面会自动重试。</span></div>}
-            <div className="diagnostics-capture-metrics">
-              <div className="diagnostics-progress-meta">
-                <span>{formatBytes(capture.capturedBytes)} / {formatBytes(capture.maxBytes)} · 显示最近 {capture.records.length} / 共 {capture.recordCount} 条索引{capture.indexTruncated ? '（仅显示最近 200 条）' : ''}</span><span>{capturePercent.toFixed(1)}%</span>
+        </CardHeader>
+
+        <CardContent className="space-y-4">
+          {captureError && !capture ? (
+            <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-status-warning/35 bg-status-warning/10 p-3.5 text-xs text-status-warning">
+              <div className="flex items-start gap-2.5">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                <div>
+                  <strong className="block font-semibold">完整诊断捕获暂不可用</strong>
+                  <div>{captureError}</div>
+                </div>
               </div>
-              <div role="progressbar" aria-label="诊断捕获容量" aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(capturePercent)} className="runtime-progress-track"><div className="runtime-progress-value" style={{ '--progress-scale': Math.max(0, Math.min(1, capturePercent / 100)), '--progress-color': capture.limitReached ? 'var(--status-warning)' : 'var(--primary)' }} /></div>
-              {!capacityValid && <span style={{ color: 'var(--status-warning)', fontSize: '0.8rem' }}>容量必须是大于 0 的整数 MB。</span>}
-              {capture.limitReached && <span style={{ color: 'var(--status-warning)', fontSize: '0.8rem' }}>已达到容量上限并自动停止；已捕获内容仍然保留。</span>}
+              <Button type="button" variant="secondary" size="sm" disabled={loading} onClick={fetchDiag}>
+                重试加载
+              </Button>
             </div>
-            <div className="diagnostics-capture-content">
+          ) : capture ? (
+            <>
+              {captureError && (
+                <div role="alert" className="flex items-center gap-2 rounded-lg border border-status-warning/35 bg-status-warning/10 px-3 py-2 text-xs text-status-warning">
+                  <AlertTriangle className="size-4 shrink-0" />
+                  <span>{captureError}；保留上一次索引，页面会自动重试。</span>
+                </div>
+              )}
+
+              <div className="space-y-2 rounded-lg border border-border/75 bg-muted/20 p-3.5">
+                <div className="flex flex-wrap items-center justify-between gap-2 font-mono text-xs text-muted-foreground">
+                  <span>
+                    {formatBytes(capture.capturedBytes)} / {formatBytes(capture.maxBytes)} · 显示最近 {capture.records.length} / 共 {capture.recordCount} 条索引
+                    {capture.indexTruncated ? '（仅显示最近 200 条）' : ''}
+                  </span>
+                  <span className="font-semibold text-foreground">{capturePercent.toFixed(1)}%</span>
+                </div>
+                <div
+                  role="progressbar"
+                  aria-label="诊断捕获容量"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  aria-valuenow={Math.round(capturePercent)}
+                  className="h-2 w-full overflow-hidden rounded-full bg-muted"
+                >
+                  <div
+                    className={cn(
+                      'h-full rounded-full transition-all duration-300',
+                      capture.limitReached ? 'bg-status-warning' : 'bg-primary',
+                    )}
+                    style={{ width: `${Math.max(0, Math.min(100, capturePercent))}%` }}
+                  />
+                </div>
+                {!capacityValid && (
+                  <p className="text-xs text-status-warning">容量必须是大于 0 的整数 MB。</p>
+                )}
+                {capture.limitReached && (
+                  <p className="text-xs text-status-warning">已达到容量上限并自动停止；已捕获内容仍然保留。</p>
+                )}
+              </div>
+
               {capture.records.length ? (
-                <>
-                  <div className="diagnostics-capture-selector-row">
-                    <select className="form-select diagnostics-capture-select" value={selectedCaptureIndex?.requestID || ''} onChange={(event) => setSelectedCaptureID(event.target.value)} aria-label="选择诊断捕获请求">
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      className={cn(SELECT_CLS, 'min-w-[260px] flex-1 font-mono')}
+                      value={selectedCaptureIndex?.requestID || ''}
+                      onChange={(event) => setSelectedCaptureID(event.target.value)}
+                      aria-label="选择诊断捕获请求"
+                    >
                       <option value="">选择请求以查看索引摘要…</option>
-                      {capture.records.map((record) => <option key={record.requestID} value={record.requestID}>{formatTimestamp(record.timestamp, { date: true })} · {record.clientModel || '未知模型'} · {record.statusCode ?? '进行中'} · {record.requestID}</option>)}
+                      {capture.records.map((record) => (
+                        <option key={record.requestID} value={record.requestID}>
+                          {formatTimestamp(record.timestamp, { date: true })} · {record.clientModel || '未知模型'} · {record.statusCode ?? '进行中'} · {record.requestID}
+                        </option>
+                      ))}
                     </select>
-                    <span className="diagnostics-helper">单条导出仅针对当前选中；索引每 5 秒自动刷新，切换记录不会读取大正文，完整 Headers、Body 与 Chunk 需显式加载</span>
-                    <button type="button" className="btn btn-secondary" disabled={!captureDetailMatchesSelection} onClick={copyCapture} title="复制当前选中的源诊断 JSON">复制源数据 JSON</button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      disabled={!captureDetailMatchesSelection}
+                      onClick={copyCapture}
+                      title="复制当前选中的源诊断 JSON"
+                    >
+                      <Copy className="size-3.5" />
+                      <span>复制源数据 JSON</span>
+                    </Button>
                   </div>
-                  <div className="diagnostics-export-wizard" aria-label="诊断导出向导">
-                    <div className="diagnostics-export-heading"><strong>导出向导</strong><span>下载全部捕获快照也必须经过范围、格式和隐私确认；估算 {formatNumber(capture.recordCount)} 条 · 约 {formatBytes(capture.capturedBytes || 0)}</span></div>
-                    <div className="diagnostics-export-fields">
-                      <label><span>范围</span><select className="form-select" value={captureExportScope} onChange={(event) => setCaptureExportScope(event.target.value)}><option value="selected">当前选中请求</option><option value="all">全部捕获（服务端流式）</option></select></label>
-                      <label><span>格式</span><select className="form-select" value={captureExportFormat} onChange={(event) => setCaptureExportFormat(event.target.value)}><option value="jsonl">JSONL（逐条）</option><option value="json">JSON</option></select></label>
-                      <label><span>数据</span><select className="form-select" value={captureExportPrivacy} onChange={(event) => { setCaptureExportPrivacy(event.target.value); setCaptureExportConfirmRaw(false); }}><option value="raw">源数据（默认）</option><option value="redacted">脱敏副本</option></select></label>
-                      {captureExportPrivacy === 'redacted' && <label><span>JSON / 单个 SSE 事件解析上限（MiB）</span><input className="form-input" type="number" min="1" max="256" step="1" value={maxParseMib} onChange={event => setMaxParseMib(event.target.value === '' ? '' : Number(event.target.value))} /></label>}
-                      <button type="button" className="btn btn-primary diagnostics-export-button" disabled={captureExportBusy || (captureExportScope !== 'all' && !selectedCaptureID)} onClick={startCaptureExport}>{captureExportBusy ? '准备导出…' : '开始流式导出'}</button>
+                  <p className="text-[11px] text-muted-foreground">
+                    单条导出仅针对当前选中；索引每 5 秒自动刷新，切换记录不会读取大正文，完整 Headers、Body 与 Chunk 需显式加载
+                  </p>
+
+                  <div className="space-y-3 rounded-lg border border-border/80 bg-muted/15 p-4" aria-label="诊断导出向导">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <strong className="font-semibold text-foreground">导出向导</strong>
+                      <span className="font-mono text-[11px] text-muted-foreground">
+                        下载全部捕获快照也必须经过范围、格式和隐私确认；估算 {formatNumber(capture.recordCount)} 条 · 约 {formatBytes(capture.capturedBytes || 0)}
+                      </span>
                     </div>
-                    {captureExportPrivacy === 'redacted' && <p className="diagnostics-helper">JSON 默认 64 MiB，可调至 256 MiB；SSE 逐事件处理，累计流大小不受此值限制。原始 Chunk 仅保留元数据，可解析正文放在 redactedResponseBody / redactedClientBody；失败或截断时省略并说明原因。规则脱敏不能识别所有自然语言机密，分享前仍需检查。</p>}
-                    {captureExportPrivacy === 'raw' && <label className="diagnostics-raw-confirm"><input type="checkbox" checked={captureExportConfirmRaw} onChange={(event) => setCaptureExportConfirmRaw(event.target.checked)} /> <span>我确认导出可能包含鉴权头、Cookie、URL 密钥、请求体和响应正文，并承担泄露风险。</span></label>}
-                  </div>
-                  {captureDetailLoading ? <p style={{ color: 'var(--text-secondary)' }}>正在读取选中请求详情…</p> : captureDetailError ? <div role="alert" className="diagnostics-index-preview"><span style={{ color: 'var(--status-warning)' }}>{captureDetailError}</span><button type="button" className="btn btn-secondary" onClick={loadCaptureDetail}>重试读取</button></div> : captureDetailMatchesSelection ? (
-                    <div className="diagnostics-detail-stack">
-                      <div className="grid-3col diagnostics-detail-grid">
-                        <div>请求：<strong>{captureDetail.method} {captureDetail.path}</strong></div>
-                        <div>模型：<strong>{captureDetail.clientModel || '-'} → {captureDetail.effectiveModel || '-'}</strong></div>
-                        <div>结果：<strong>{captureDetail.statusCode ?? '进行中'} / {captureDetail.outcome || '-'}</strong></div>
-                        <div>用途：<strong>{captureDetail.requestPurpose || '-'}</strong></div>
-                        <div>耗时：<strong>{captureDetail.completedAtMS == null ? '进行中' : `${captureDetail.completedAtMS} ms`}</strong></div>
-                        {captureDetail.websocketTrace && <div>{formatWebSocketTrace(captureDetail.websocketTrace)}</div>}
-                        <div>项目：<strong>{captureProject ? `${captureProject.label} · ${projectSourceLabel('client_declared')}` : '未声明（Codex 工作区见入站 Body 的 client_metadata）'}</strong></div>
+
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5 lg:items-end">
+                      <label className="space-y-1.5">
+                        <span className="block text-xs font-medium text-foreground">范围</span>
+                        <select className={SELECT_CLS} value={captureExportScope} onChange={(event) => setCaptureExportScope(event.target.value)}>
+                          <option value="selected">当前选中请求</option>
+                          <option value="all">全部捕获（服务端流式）</option>
+                        </select>
+                      </label>
+
+                      <label className="space-y-1.5">
+                        <span className="block text-xs font-medium text-foreground">格式</span>
+                        <select className={SELECT_CLS} value={captureExportFormat} onChange={(event) => setCaptureExportFormat(event.target.value)}>
+                          <option value="jsonl">JSONL（逐条）</option>
+                          <option value="json">JSON</option>
+                        </select>
+                      </label>
+
+                      <label className="space-y-1.5">
+                        <span className="block text-xs font-medium text-foreground">数据</span>
+                        <select
+                          className={SELECT_CLS}
+                          value={captureExportPrivacy}
+                          onChange={(event) => {
+                            setCaptureExportPrivacy(event.target.value);
+                            setCaptureExportConfirmRaw(false);
+                          }}
+                        >
+                          <option value="raw">源数据（默认）</option>
+                          <option value="redacted">脱敏副本</option>
+                        </select>
+                      </label>
+
+                      {captureExportPrivacy === 'redacted' && (
+                        <label className="space-y-1.5">
+                          <span className="block text-xs font-medium text-foreground">解析上限（MiB）</span>
+                          <Input
+                            type="number"
+                            min="1"
+                            max="256"
+                            step="1"
+                            className="h-9 font-mono text-xs"
+                            value={maxParseMib}
+                            onChange={(event) => setMaxParseMib(event.target.value === '' ? '' : Number(event.target.value))}
+                          />
+                        </label>
+                      )}
+
+                      <div className={cn(captureExportPrivacy !== 'redacted' && 'lg:col-start-5')}>
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="w-full"
+                          disabled={captureExportBusy || (captureExportScope !== 'all' && !selectedCaptureID)}
+                          onClick={startCaptureExport}
+                        >
+                          <Download className="size-3.5" />
+                          <span>{captureExportBusy ? '准备导出…' : '开始流式导出'}</span>
+                        </Button>
                       </div>
-                      {(captureDetail.truncated || captureDetail.inboundBodyTruncated) && <StatusBadge text="达到内存上限，后续内容已截断" kind="warning" />}
-                      {(captureDetail.failureKind || captureDetail.failureDetail) && <RawBlock title={`错误 · ${captureDetail.failureKind || 'unknown'}`} value={captureDetail.failureDetail} />}
+                    </div>
+
+                    {captureExportPrivacy === 'redacted' && (
+                      <p className="text-[11px] leading-relaxed text-muted-foreground">
+                        JSON 默认 64 MiB，可调至 256 MiB；SSE 逐事件处理，累计流大小不受此值限制。原始 Chunk 仅保留元数据，可解析正文放在 redactedResponseBody / redactedClientBody；失败或截断时省略并说明原因。规则脱敏不能识别所有自然语言机密，分享前仍需检查。
+                      </p>
+                    )}
+
+                    {captureExportPrivacy === 'raw' && (
+                      <label className="flex cursor-pointer items-start gap-2 rounded-md border border-status-warning/30 bg-status-warning/10 p-2.5 text-xs text-status-warning">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5 size-4 shrink-0 accent-primary"
+                          checked={captureExportConfirmRaw}
+                          onChange={(event) => setCaptureExportConfirmRaw(event.target.checked)}
+                        />
+                        <span>我确认导出可能包含鉴权头、Cookie、URL 密钥、请求体和响应正文，并承担泄露风险。</span>
+                      </label>
+                    )}
+                  </div>
+
+                  {captureDetailLoading ? (
+                    <p className="text-xs text-muted-foreground">正在读取选中请求详情…</p>
+                  ) : captureDetailError ? (
+                    <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-status-warning/35 bg-status-warning/10 p-3 text-xs text-status-warning">
+                      <span>{captureDetailError}</span>
+                      <Button type="button" variant="secondary" size="xs" onClick={loadCaptureDetail}>
+                        重试读取
+                      </Button>
+                    </div>
+                  ) : captureDetailMatchesSelection ? (
+                    <div className="space-y-3">
+                      <div className="grid gap-2.5 rounded-lg border border-border/75 bg-muted/20 p-3.5 text-xs sm:grid-cols-2 lg:grid-cols-3">
+                        <div><span className="text-muted-foreground">请求：</span><strong className="font-mono">{captureDetail.method} {captureDetail.path}</strong></div>
+                        <div><span className="text-muted-foreground">模型：</span><strong className="font-mono">{captureDetail.clientModel || '-'} → {captureDetail.effectiveModel || '-'}</strong></div>
+                        <div><span className="text-muted-foreground">结果：</span><strong className="font-mono">{captureDetail.statusCode ?? '进行中'} / {captureDetail.outcome || '-'}</strong></div>
+                        <div><span className="text-muted-foreground">用途：</span><strong>{captureDetail.requestPurpose || '-'}</strong></div>
+                        <div><span className="text-muted-foreground">耗时：</span><strong className="font-mono">{captureDetail.completedAtMS == null ? '进行中' : `${captureDetail.completedAtMS} ms`}</strong></div>
+                        {captureDetail.websocketTrace && <div className="font-mono">{formatWebSocketTrace(captureDetail.websocketTrace)}</div>}
+                        <div className="sm:col-span-2 lg:col-span-3">
+                          <span className="text-muted-foreground">项目：</span>
+                          <strong>{captureProject ? `${captureProject.label} · ${projectSourceLabel('client_declared')}` : '未声明（Codex 工作区见入站 Body 的 client_metadata）'}</strong>
+                        </div>
+                      </div>
+
+                      {(captureDetail.truncated || captureDetail.inboundBodyTruncated) && (
+                        <StatusBadge text="达到内存上限，后续内容已截断" kind="warning" />
+                      )}
+                      {(captureDetail.failureKind || captureDetail.failureDetail) && (
+                        <RawBlock title={`错误 · ${captureDetail.failureKind || 'unknown'}`} value={captureDetail.failureDetail} />
+                      )}
                       <RawBlock title="入站请求 Headers" valueFactory={() => headersText(captureDetail.inboundHeaders)} />
-                      <RawBlock title={`入站原始 Body · ${captureDetail.inboundBodyBytes || 0} bytes`} valueFactory={() => diagnosticPayloadText(captureDetail.inboundBody, captureDetail.inboundBodyEncoding, captureDetail.inboundBodyRedacted)} />
-                      {(captureDetail.attempts || []).map((attempt, index) => <details key={attempt.id || index} className="diagnostics-attempt"><summary>上游尝试 #{index + 1} · {attempt.endpointName || attempt.endpointID || '-'} · {attempt.responseStatus ?? attempt.error ?? '等待响应'}</summary><div className="diagnostics-attempt-stack"><RawBlock title={`${attempt.outboundMethod || '请求'} ${attempt.outboundURL || ''} Headers`} valueFactory={() => headersText(attempt.outboundHeaders)} /><RawBlock title={`出站原始 Body · ${attempt.outboundBodyBytes || 0} bytes`} valueFactory={() => diagnosticPayloadText(attempt.outboundBody, attempt.outboundBodyEncoding, attempt.outboundBodyRedacted)} /><RawBlock title={`上游响应 Headers · HTTP ${attempt.responseStatus ?? '-'}`} valueFactory={() => headersText(attempt.responseHeaders)} />{attempt.error && <RawBlock title="尝试错误" value={attempt.error} />}<RawBlock title={`原始上游 Chunks · ${(attempt.upstreamChunks || []).length} 个`} valueFactory={() => diagnosticChunksText(attempt.upstreamChunks, hasCompressedCapture(attempt.responseHeaders))} /></div></details>)}
-                      <RawBlock title={`桥接后客户端 Chunks · ${(captureDetail.clientChunks || []).length} 个`} valueFactory={() => diagnosticChunksText(captureDetail.clientChunks, captureDetail.routeMode !== 'translated' && (captureDetail.attempts || []).some((attempt) => hasCompressedCapture(attempt.responseHeaders)))} />
-                      <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+                      <RawBlock
+                        title={`入站原始 Body · ${captureDetail.inboundBodyBytes || 0} bytes`}
+                        valueFactory={() => diagnosticPayloadText(captureDetail.inboundBody, captureDetail.inboundBodyEncoding, captureDetail.inboundBodyRedacted)}
+                      />
+
+                      {(captureDetail.attempts || []).map((attempt, index) => (
+                        <details key={attempt.id || index} className="group rounded-lg border border-border/80 bg-muted/15">
+                          <summary className="flex cursor-pointer list-none items-center gap-2 px-3.5 py-2.5 text-xs font-semibold text-foreground select-none hover:bg-muted/35">
+                            <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-90" />
+                            <span className="font-mono">
+                              上游尝试 #{index + 1} · {attempt.endpointName || attempt.endpointID || '-'} · {attempt.responseStatus ?? attempt.error ?? '等待响应'}
+                            </span>
+                          </summary>
+                          <div className="space-y-2 border-t border-border/60 p-3">
+                            <RawBlock title={`${attempt.outboundMethod || '请求'} ${attempt.outboundURL || ''} Headers`} valueFactory={() => headersText(attempt.outboundHeaders)} />
+                            <RawBlock
+                              title={`出站原始 Body · ${attempt.outboundBodyBytes || 0} bytes`}
+                              valueFactory={() => diagnosticPayloadText(attempt.outboundBody, attempt.outboundBodyEncoding, attempt.outboundBodyRedacted)}
+                            />
+                            <RawBlock title={`上游响应 Headers · HTTP ${attempt.responseStatus ?? '-'}`} valueFactory={() => headersText(attempt.responseHeaders)} />
+                            {attempt.error && <RawBlock title="尝试错误" value={attempt.error} />}
+                            <RawBlock
+                              title={`原始上游 Chunks · ${(attempt.upstreamChunks || []).length} 个`}
+                              valueFactory={() => diagnosticChunksText(attempt.upstreamChunks, hasCompressedCapture(attempt.responseHeaders))}
+                            />
+                          </div>
+                        </details>
+                      ))}
+
+                      <RawBlock
+                        title={`桥接后客户端 Chunks · ${(captureDetail.clientChunks || []).length} 个`}
+                        valueFactory={() => diagnosticChunksText(
+                          captureDetail.clientChunks,
+                          captureDetail.routeMode !== 'translated'
+                            && (captureDetail.attempts || []).some((attempt) => hasCompressedCapture(attempt.responseHeaders)),
+                        )}
+                      />
+
+                      <p className="text-[11px] leading-relaxed text-muted-foreground">
                         完整源 JSON 不在详情页自动编码；复制和导出默认保留源数据。需要生成脱敏副本时，请在上方导出向导主动选择“脱敏副本”；服务端会逐条流式生成并支持大文件背压。
                       </p>
                     </div>
                   ) : selectedCaptureIndex ? (
-                    <div className="diagnostics-index-preview">
-                      <div><strong>{selectedCaptureIndex.method || '请求'} {selectedCaptureIndex.path || ''}</strong><span className="mono-cell">{selectedCaptureIndex.requestID}</span></div>
-                      <p>{selectedCaptureIndex.clientModel || '未知模型'} · {selectedCaptureIndex.statusCode ?? '进行中'} · {selectedCaptureIndex.attemptCount ?? 0} 次上游尝试 · {selectedCaptureIndex.clientChunkCount ?? 0} 个客户端 Chunk</p>
-                      <p>正文、Headers 与流式 Chunk 尚未读取；这样选择和自动刷新索引不会卡住页面。</p>
-                      <button type="button" className="btn btn-primary" onClick={loadCaptureDetail}><Icon name="search" size={14} />读取完整正文与流诊断</button>
+                    <div className="space-y-2.5 rounded-lg border border-border/80 bg-muted/20 p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <strong className="font-mono text-foreground">{selectedCaptureIndex.method || '请求'} {selectedCaptureIndex.path || ''}</strong>
+                        <span className="font-mono text-muted-foreground">{selectedCaptureIndex.requestID}</span>
+                      </div>
+                      <p className="text-xs text-foreground">
+                        {selectedCaptureIndex.clientModel || '未知模型'} · {selectedCaptureIndex.statusCode ?? '进行中'} · {selectedCaptureIndex.attemptCount ?? 0} 次上游尝试 · {selectedCaptureIndex.clientChunkCount ?? 0} 个客户端 Chunk
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        正文、Headers 与流式 Chunk 尚未读取；这样选择和自动刷新索引不会卡住页面。
+                      </p>
+                      <Button type="button" size="sm" onClick={loadCaptureDetail}>
+                        <Search className="size-3.5" />
+                        <span>读取完整正文与流诊断</span>
+                      </Button>
                     </div>
-                  ) : <p style={{ color: 'var(--text-secondary)' }}>选择一条请求查看索引摘要；需要时再读取完整源数据。</p>}
-                </>
-              ) : <p style={{ color: 'var(--text-muted)', margin: 0 }}>{capture.enabled ? '正在等待下一次代理请求…' : '开启捕获后，新请求会显示在这里。'}</p>}
-            </div>
-          </>
-        ) : <p style={{ marginTop: '16px', color: 'var(--text-muted)' }}>正在读取诊断捕获索引…</p>}
-      </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">选择一条请求查看索引摘要；需要时再读取完整源数据。</p>
+                  )}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  {capture.enabled ? '正在等待下一次代理请求…' : '开启捕获后，新请求会显示在这里。'}
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="text-xs text-muted-foreground">正在读取诊断捕获索引…</p>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Diagnostics Grid */}
-      <div className="glass-panel panel-padded-stack diagnostics-matrix-panel">
-        <div className="panel-title">
-          <span>运行环境状态矩阵</span>
-        </div>
-
-        {diagnosticsError && (
-          <div role="alert" className="diagnostics-alert">
-            <Icon name="warning" size={18} />
-            <div className="diagnostics-alert-copy">
-              <strong>环境诊断暂不可用</strong>
-              <div>{diagnosticsError}</div>
+      <Card>
+        <CardHeader className="border-b border-border/60 pb-4">
+          <CardTitle>运行环境状态矩阵</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {diagnosticsError && (
+            <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-status-warning/35 bg-status-warning/10 p-3.5 text-xs text-status-warning">
+              <div className="flex items-start gap-2.5">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                <div>
+                  <strong className="block font-semibold">环境诊断暂不可用</strong>
+                  <div>{diagnosticsError}</div>
+                </div>
+              </div>
+              <Button type="button" variant="secondary" size="sm" disabled={loading} onClick={fetchDiag}>
+                重试
+              </Button>
             </div>
-            <button type="button" className="btn btn-secondary" disabled={loading} onClick={fetchDiag}>重试</button>
-          </div>
-        )}
+          )}
 
-        <div className="grid-3col diagnostics-matrix-grid">
-          <div>
-            <span>Daemon 版本</span>
-            <strong className="mono-cell">{diag?.version || '0.2.0'}</strong>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="rounded-lg border border-border/75 bg-muted/20 p-3">
+              <span className="block text-[11px] text-muted-foreground">Daemon 版本</span>
+              <strong className="mt-1 block font-mono text-sm font-semibold text-foreground">{diag?.version || '0.2.0'}</strong>
+            </div>
+            <div className="rounded-lg border border-border/75 bg-muted/20 p-3">
+              <span className="block text-[11px] text-muted-foreground">配置代数 (Generation)</span>
+              <strong className="mt-1 block font-mono text-sm font-semibold text-foreground">{diag?.generation || '-'}</strong>
+            </div>
+            <div className="rounded-lg border border-border/75 bg-muted/20 p-3">
+              <span className="block text-[11px] text-muted-foreground">运行时长</span>
+              <strong className="mt-1 block font-mono text-sm font-semibold text-foreground">{diag?.uptimeSeconds ? formatDuration(diag.uptimeSeconds * 1000) : '-'}</strong>
+            </div>
+            <div className="rounded-lg border border-border/75 bg-muted/20 p-3">
+              <span className="block text-[11px] text-muted-foreground">Admin 管理监听</span>
+              <strong className="mt-1 block font-mono text-sm font-semibold text-foreground">{formatListenerAddress(diag?.adminListener, '127.0.0.1:57879')}</strong>
+            </div>
+            <div className="rounded-lg border border-border/75 bg-muted/20 p-3">
+              <span className="block text-[11px] text-muted-foreground">代理转发监听</span>
+              <strong className="mt-1 block font-mono text-sm font-semibold text-foreground">{formatListenerAddress(diag?.proxyListener, '127.0.0.1:57878')}</strong>
+            </div>
+            <div className="rounded-lg border border-border/75 bg-muted/20 p-3">
+              <span className="block text-[11px] text-muted-foreground">统计文件可写性</span>
+              <div className="mt-1">
+                <StatusBadge text={diag?.statsWritable ? '可正常写入' : '不可写'} kind={diag?.statsWritable ? 'good' : 'critical'} />
+              </div>
+            </div>
           </div>
-          <div>
-            <span>配置代数 (Generation)</span>
-            <strong className="mono-cell">{diag?.generation || '-'}</strong>
-          </div>
-          <div>
-            <span>运行时长</span>
-            <strong className="mono-cell">{diag?.uptimeSeconds ? formatDuration(diag.uptimeSeconds * 1000) : '-'}</strong>
-          </div>
-          <div>
-            <span>Admin 管理监听</span>
-            <strong className="mono-cell">{formatListenerAddress(diag?.adminListener, '127.0.0.1:57879')}</strong>
-          </div>
-          <div>
-            <span>代理转发监听</span>
-            <strong className="mono-cell">{formatListenerAddress(diag?.proxyListener, '127.0.0.1:57878')}</strong>
-          </div>
-          <div>
-            <span>统计文件可写性</span>
-            <StatusBadge text={diag?.statsWritable ? '可正常写入' : '不可写'} kind={diag?.statsWritable ? 'good' : 'critical'} />
-          </div>
-        </div>
 
-        <div className="diagnostics-paths">
-          <div><span>配置文件路径</span><code className="mono-cell">{diag?.configPath || '~/.config/sumpter/config.json'}</code></div>
-          <div><span>WebUI 静态根目录</span><code className="mono-cell">{diag?.webRoot || '~/.local/share/sumpter/web'}</code></div>
-        </div>
-      </div>
+          <div className="grid gap-2.5 sm:grid-cols-2">
+            <div className="rounded-lg border border-border/75 bg-muted/20 p-3 text-xs">
+              <span className="block text-[11px] text-muted-foreground">配置文件路径</span>
+              <code className="mt-1 block font-mono break-all text-foreground">{diag?.configPath || '~/.config/sumpter/config.json'}</code>
+            </div>
+            <div className="rounded-lg border border-border/75 bg-muted/20 p-3 text-xs">
+              <span className="block text-[11px] text-muted-foreground">WebUI 静态根目录</span>
+              <code className="mt-1 block font-mono break-all text-foreground">{diag?.webRoot || '~/.local/share/sumpter/web'}</code>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Warnings & Risks Panel */}
-      <div className="glass-panel panel-padded-stack diagnostics-warnings-panel">
-        <div className="panel-title">
-          <span>系统健康与配置风险检查</span>
-        </div>
-        {diag?.warnings?.length > 0 ? (
-          <div className="diagnostics-warning-list">
-            {diag.warnings.map((w, idx) => (
-              <div
-                key={idx}
-                className="diagnostics-warning-item"
-              >
-                <Icon name="warning" size={16} />
-                <span>{typeof w === 'string' ? w : w.message}</span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="diagnostics-ok-state">
-            <Icon name="check" size={18} />
-            <span>服务端自检未发现任何配置风险或异常警告。</span>
-          </div>
-        )}
-      </div>
+      <Card>
+        <CardHeader className="border-b border-border/60 pb-4">
+          <CardTitle>系统健康与配置风险检查</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {diag?.warnings?.length > 0 ? (
+            <div className="space-y-2">
+              {diag.warnings.map((w, idx) => (
+                <div
+                  key={idx}
+                  className="flex items-start gap-2.5 rounded-lg border border-status-warning/35 bg-status-warning/10 p-3 text-xs text-status-warning"
+                >
+                  <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                  <span>{typeof w === 'string' ? w : w.message}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 rounded-lg border border-status-good/30 bg-status-good/10 p-3 text-xs text-status-good">
+              <CheckCircle2 className="size-4 shrink-0" />
+              <span>服务端自检未发现任何配置风险或异常警告。</span>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* systemd Journal Guide */}
-      <div className="glass-panel panel-padded-stack diagnostics-journal-panel">
-        <div className="panel-toolbar">
-          <div className="panel-title">
-            <Icon name="activity" size={18} style={{ color: 'var(--primary)' }} />
-            <span>systemd 守护进程服务日志</span>
+      <Card>
+        <CardHeader className="border-b border-border/60 pb-4">
+          <div className="flex items-center gap-2">
+            <Activity className="size-4 text-primary" />
+            <CardTitle>systemd 守护进程服务日志</CardTitle>
           </div>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={() => copyCommand(journalCmd)}
-          >
-            <Icon name="copy" size={14} />
-            <span>复制命令</span>
-          </button>
-        </div>
-        <p className="panel-description">
-          如需深入排查系统级启动崩溃或网络连接异常，可在 Linux 终端中运行以下只读命令查看实时日志：
-        </p>
-        <pre className="mono-cell diagnostics-journal-command">
-          {journalCmd}
-        </pre>
-      </div>
+          <CardDescription>
+            如需深入排查系统级启动崩溃或网络连接异常，可在 Linux 终端中运行以下只读命令查看实时日志：
+          </CardDescription>
+          <CardAction>
+            <Button type="button" variant="secondary" size="sm" onClick={() => copyCommand(journalCmd)}>
+              <Copy className="size-3.5" />
+              <span>复制命令</span>
+            </Button>
+          </CardAction>
+        </CardHeader>
+        <CardContent>
+          <pre className="overflow-x-auto rounded-lg border border-border/75 bg-muted/30 px-3.5 py-2.5 font-mono text-xs text-foreground">
+            {journalCmd}
+          </pre>
+        </CardContent>
+      </Card>
     </div>
   );
 }

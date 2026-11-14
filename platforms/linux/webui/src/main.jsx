@@ -8,12 +8,7 @@ import { AppContent } from './App.jsx';
 import '@fontsource-variable/inter/index.css';
 import '@fontsource-variable/noto-sans-sc/index.css';
 import '@fontsource-variable/jetbrains-mono/index.css';
-import './styles/variables.css';
-import './styles/base.css';
-import './styles/components.css';
-import './styles/workspace.css';
-import './styles/animations.css';
-import './styles/system.css';
+import './styles/shadcn.css';
 
 const container = document.getElementById('root');
 const root = createRoot(container);

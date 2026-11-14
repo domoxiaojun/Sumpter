@@ -10,7 +10,7 @@ test('endpoint mapping table edits rows inline with bulk selection and a single 
 
   const table = page.slice(page.indexOf('function EndpointMappingTable('), page.indexOf('function EndpointPricingEditor('));
   assert.match(table, /aria-label="全选当前可见映射"/);
-  assert.match(table, /className="mapping-bulk-bar"/);
+  assert.match(table, /className="[^"]*mapping-bulk-bar/);
   assert.match(table, /删除选中/);
   assert.match(table, /aria-label="批量设置 Thinking"/);
   assert.match(table, /disabled=\{!dirty \|\| saving \|\| invalidCount > 0\}/, '只有有改动且无错误时才能保存');
@@ -25,7 +25,7 @@ test('endpoint mapping table edits rows inline with bulk selection and a single 
 test('mapping table keeps future mapping fields through the draft roundtrip', async () => {
   const page = await readFile(new URL('../src/pages/PrimaryProvidersPage.jsx', import.meta.url), 'utf8');
   assert.match(page, /MAPPING_EDITABLE_FIELDS = \['from', 'to', 'clientPattern', 'upstreamModel', 'thinking', 'effort', 'context', 'failoverTimeoutSeconds'\]/);
-  const css = await readFile(new URL('../src/styles/components.css', import.meta.url), 'utf8');
-  assert.match(css, /\.mapping-grid-row\.is-invalid/);
-  assert.match(css, /@media \(max-width: 900px\) \{[\s\S]*\.mapping-grid-head \{ display: none; \}/);
+  const table = page.slice(page.indexOf('function EndpointMappingTable('), page.indexOf('function EndpointPricingEditor('));
+  assert.match(table, /mapping-grid-row[\s\S]*?is-invalid border-l-2 border-l-status-critical/);
+  assert.match(table, /overflow-x-auto[\s\S]*?min-w-\[820px\][\s\S]*?mapping-grid-head/);
 });

@@ -1,0 +1,431 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:where([data-theme="dark"], .dark, .dark *));
+
+/* 最新 shadcn/ui v4 oklch 语义色板：极纯净中性石板灰 + 克制 Sumpter 烧铜强调色 */
+:root,
+html[data-theme="light"] {
+  color-scheme: light;
+  --font-cjk: 'Noto Sans SC Variable', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --radius: 0.65rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.577 0.175 42);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.967 0.002 264);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.967 0.002 264);
+  --muted-foreground: oklch(0.52 0.012 264);
+  --accent: oklch(0.967 0.004 264);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.985 0 0);
+  --border: oklch(0.915 0.004 264);
+  --input: oklch(0.915 0.004 264);
+  --ring: oklch(0.577 0.175 42);
+
+  --chart-1: oklch(0.646 0.195 41.1);
+  --chart-2: oklch(0.6 0.118 184.7);
+  --chart-3: oklch(0.398 0.07 227.4);
+  --chart-4: oklch(0.75 0.15 70);
+  --chart-5: oklch(0.55 0.18 255);
+
+  --sidebar: oklch(0.975 0.002 264);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.577 0.175 42);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.935 0.004 264);
+  --sidebar-accent-foreground: oklch(0.145 0 0);
+  --sidebar-border: oklch(0.905 0.004 264);
+  --sidebar-ring: oklch(0.577 0.175 42);
+
+  --status-good: oklch(0.56 0.17 149);
+  --status-warning: oklch(0.66 0.16 70);
+  --status-critical: oklch(0.58 0.22 27);
+  --status-live: oklch(0.577 0.175 42);
+  --status-muted: oklch(0.52 0.012 264);
+  --text-primary: var(--foreground);
+  --text-secondary: var(--muted-foreground);
+  --text-muted: var(--muted-foreground);
+  --accent-cyan: oklch(0.56 0.14 230);
+  --accent-indigo: oklch(0.54 0.16 270);
+  --border-subtle: oklch(0.915 0.004 264);
+  --border-medium: oklch(0.85 0.008 264);
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --background: oklch(0.145 0.003 264);
+  --foreground: oklch(0.98 0.002 264);
+  --card: oklch(0.18 0.004 264);
+  --card-foreground: oklch(0.98 0.002 264);
+  --popover: oklch(0.19 0.004 264);
+  --popover-foreground: oklch(0.98 0.002 264);
+  --primary: oklch(0.705 0.185 45);
+  --primary-foreground: oklch(0.14 0.004 264);
+  --secondary: oklch(0.24 0.005 264);
+  --secondary-foreground: oklch(0.96 0.002 264);
+  --muted: oklch(0.23 0.005 264);
+  --muted-foreground: oklch(0.68 0.01 264);
+  --accent: oklch(0.25 0.006 264);
+  --accent-foreground: oklch(0.98 0.002 264);
+  --destructive: oklch(0.67 0.19 25);
+  --destructive-foreground: oklch(0.14 0 0);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 14%);
+  --ring: oklch(0.705 0.185 45);
+
+  --chart-1: oklch(0.72 0.18 45);
+  --chart-2: oklch(0.7 0.14 185);
+  --chart-3: oklch(0.72 0.15 245);
+  --chart-4: oklch(0.78 0.15 80);
+  --chart-5: oklch(0.66 0.2 300);
+
+  --sidebar: oklch(0.118 0.003 264);
+  --sidebar-foreground: oklch(0.96 0.002 264);
+  --sidebar-primary: oklch(0.705 0.185 45);
+  --sidebar-primary-foreground: oklch(0.14 0 0);
+  --sidebar-accent: oklch(0.21 0.005 264);
+  --sidebar-accent-foreground: oklch(0.98 0.002 264);
+  --sidebar-border: oklch(1 0 0 / 9%);
+  --sidebar-ring: oklch(0.705 0.185 45);
+
+  --status-good: oklch(0.72 0.17 150);
+  --status-warning: oklch(0.78 0.16 80);
+  --status-critical: oklch(0.7 0.19 24);
+  --status-live: oklch(0.705 0.185 45);
+  --status-muted: oklch(0.68 0.01 264);
+  --text-primary: var(--foreground);
+  --text-secondary: var(--muted-foreground);
+  --text-muted: var(--muted-foreground);
+  --accent-cyan: oklch(0.74 0.13 220);
+  --accent-indigo: oklch(0.68 0.15 270);
+  --border-subtle: oklch(1 0 0 / 10%);
+  --border-medium: oklch(1 0 0 / 16%);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --color-status-good: var(--status-good);
+  --color-status-warning: var(--status-warning);
+  --color-status-critical: var(--status-critical);
+  --color-status-live: var(--status-live);
+  --color-accent-cyan: var(--accent-cyan);
+  --color-accent-indigo: var(--accent-indigo);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, var(--font-cjk);
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace, var(--font-cjk);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground antialiased selection:bg-primary/20 selection:text-foreground;
+    font-family: var(--font-sans);
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11', 'ss03';
+  }
+  code, pre, kbd, samp, .font-mono {
+    font-family: var(--font-mono);
+  }
+}
+
+/* 动效与遥测光晕层：全部保持 compositor 友好的 transform / opacity */
+@keyframes runtime-row-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes runtime-stream-pulse {
+  0%, 100% {
+    opacity: 0.58;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes telemetry-live-edge-breathe {
+  0%, 100% {
+    opacity: 0.22;
+  }
+  50% {
+    opacity: 0.44;
+  }
+}
+
+@keyframes telemetry-live-status-pulse {
+  0%, 100% {
+    opacity: 0.48;
+    transform: scale(0.84);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+}
+
+.runtime-row-enter {
+  animation: runtime-row-enter 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes runtime-page-enter-forward {
+  from {
+    opacity: 0;
+    transform: translate3d(12px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes runtime-page-enter-backward {
+  from {
+    opacity: 0;
+    transform: translate3d(-12px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+.event-page-stage {
+  position: relative;
+}
+
+.event-page-content {
+  will-change: opacity, transform;
+}
+
+.event-page-stage-loading[data-page-direction='forward'] .event-page-content {
+  opacity: 0.72;
+  transform: translate3d(-12px, 0, 0);
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+
+.event-page-stage-loading[data-page-direction='backward'] .event-page-content {
+  opacity: 0.72;
+  transform: translate3d(12px, 0, 0);
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+
+.event-page-stage-ready[data-page-direction='forward'] .event-page-content {
+  animation: runtime-page-enter-forward 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.event-page-stage-ready[data-page-direction='backward'] .event-page-content {
+  animation: runtime-page-enter-backward 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.runtime-stream-indicator {
+  display: inline-flex;
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 9999px;
+  background: currentColor;
+  animation: runtime-stream-pulse 1.4s ease-in-out infinite;
+}
+
+/* Paper MeshGradient：仅作用于进行中请求组的边缘光晕，不遮挡表格正文 */
+.telemetry-live-light {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  border-radius: inherit;
+  opacity: 0.26;
+  animation: telemetry-live-edge-breathe 10s ease-in-out infinite;
+  mask-image: linear-gradient(
+    to bottom,
+    #000 0,
+    rgb(0 0 0 / 0.35) 4px,
+    transparent 14px,
+    transparent calc(100% - 14px),
+    rgb(0 0 0 / 0.35) calc(100% - 4px),
+    #000 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    #000 0,
+    rgb(0 0 0 / 0.35) 4px,
+    transparent 14px,
+    transparent calc(100% - 14px),
+    rgb(0 0 0 / 0.35) calc(100% - 4px),
+    #000 100%
+  );
+}
+
+.telemetry-live-light > div,
+.telemetry-live-mesh,
+.telemetry-live-mesh canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.telemetry-live-pill-dot,
+.telemetry-live-heading i,
+.telemetry-live-heading-cell i,
+.telemetry-live-status-dot {
+  animation: telemetry-live-status-pulse 3.4s ease-in-out infinite;
+}
+
+/* 通用水平滚动器原生 range 轨道 */
+.table-scrollbar {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--muted);
+  outline: none;
+  cursor: pointer;
+}
+
+.table-scrollbar::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 36px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--muted-foreground);
+  opacity: 0.55;
+  transition: opacity 150ms ease;
+}
+
+.table-scrollbar:hover::-webkit-slider-thumb {
+  opacity: 0.9;
+}
+
+.table-scrollbar::-moz-range-thumb {
+  width: 36px;
+  height: 6px;
+  border: 0;
+  border-radius: 9999px;
+  background: var(--muted-foreground);
+  opacity: 0.55;
+}
+
+/* 键盘跳转无障碍链接 */
+.skip-link {
+  position: fixed;
+  top: -120px;
+  left: 16px;
+  z-index: 100;
+  padding: 8px 14px;
+  border-radius: var(--radius);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: 0.875rem;
+  font-weight: 600;
+  transition: top 120ms ease;
+}
+
+.skip-link:focus {
+  top: 12px;
+}
+
+/* 入口表格原生拖拽顺序指示器 */
+.provider-draggable-row {
+  cursor: grab;
+}
+
+.provider-row-dragging {
+  opacity: 0.45;
+}
+
+.provider-drop-before > td,
+.provider-drop-before {
+  box-shadow: inset 0 2px 0 0 var(--primary);
+}
+
+.provider-drop-after > td,
+.provider-drop-after {
+  box-shadow: inset 0 -2px 0 0 var(--primary);
+}
+
+.provider-drag-preview {
+  border-radius: var(--radius);
+  border: 1px solid var(--primary);
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.28);
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .telemetry-live-light,
+  .telemetry-live-group,
+  .telemetry-live-mobile,
+  .telemetry-live-status-dot,
+  .telemetry-live-pill-dot,
+  .telemetry-live-heading i,
+  .telemetry-live-heading-cell i,
+  .runtime-row-enter,
+  .runtime-stream-indicator,
+  .event-page-content,
+  .event-page-stage-loading[data-page-direction] .event-page-content,
+  .event-page-stage-ready[data-page-direction] .event-page-content {
+    animation: none !important;
+    transition: none !important;
+    transform: none !important;
+  }
+}

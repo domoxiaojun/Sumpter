@@ -1,14 +1,17 @@
 import { useRef } from 'react';
+import { GitBranch, Pencil, Plus, SlidersHorizontal, Trash2 } from 'lucide-react';
 import { useAppControls } from '../context/AppContext.jsx';
 import { DataTable } from '../components/DataTable.jsx';
 import { QuickToggle } from '../components/QuickToggle.jsx';
-import { Icon } from '../utils/icons.jsx';
 import { clone } from '../utils/helpers.js';
 import { sourceFormatLabel } from '../utils/protocols.js';
 import { FeatureRuleEditor } from '../components/FeatureRuleEditor.jsx';
 import { createRouteCatalogLoader, isBuiltinRule } from '../utils/featureRoutes.js';
 import { api } from '../services/api.js';
 import { RequestPolicyEditor } from '../components/RequestPolicyEditor.jsx';
+import { Badge } from '../components/ui/badge.jsx';
+import { Button } from '../components/ui/button.jsx';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card.jsx';
 
 const catalogLoaderFactory = (fetchModels) => createRouteCatalogLoader(fetchModels);
 
@@ -16,26 +19,47 @@ export function RoutingPage() {
   const { config, configDoc, saveConfig, openModal, addToast } = useAppControls();
   const rules = config?.featureRules || [];
   const catalogLoaderRef = useRef(null);
-  if (!catalogLoaderRef.current) catalogLoaderRef.current = catalogLoaderFactory((endpointID, options) => api.fetchProviderModels(endpointID, options));
+  if (!catalogLoaderRef.current) {
+    catalogLoaderRef.current = catalogLoaderFactory((endpointID, options) => api.fetchProviderModels(endpointID, options));
+  }
   const catalogLoader = catalogLoaderRef.current;
 
   const handleToggleRule = async (ruleId, enabled) => {
     try {
       const nextConfig = clone(config);
       const targetRule = nextConfig.featureRules.find((r) => r.id === ruleId);
-      if (targetRule) { targetRule.enabled = enabled; await saveConfig(nextConfig, {}, configDoc); addToast(`规则「${targetRule.name || targetRule.id}」已${enabled ? '启用' : '停用'}`, 'success'); }
-    } catch (err) { addToast(`操作失败: ${err.message}`, 'error'); }
+      if (targetRule) {
+        targetRule.enabled = enabled;
+        await saveConfig(nextConfig, {}, configDoc);
+        addToast(`规则「${targetRule.name || targetRule.id}」已${enabled ? '启用' : '停用'}`, 'success');
+      }
+    } catch (err) {
+      addToast(`操作失败: ${err.message}`, 'error');
+    }
   };
 
   const handleDeleteRule = async (rule) => {
-    if (isBuiltinRule(rule)) { addToast('内建分流规则只能调整启停和目标，不能删除', 'warning'); return; }
+    if (isBuiltinRule(rule)) {
+      addToast('内建分流规则只能调整启停和目标，不能删除', 'warning');
+      return;
+    }
     if (!confirm(`确定删除分流规则「${rule.name || rule.id}」吗？`)) return;
-    try { const nextConfig = clone(config); nextConfig.featureRules = nextConfig.featureRules.filter((r) => r.id !== rule.id); await saveConfig(nextConfig, {}, configDoc); addToast('分流规则已删除', 'success'); }
-    catch (err) { addToast(`删除失败: ${err.message}`, 'error'); }
+    try {
+      const nextConfig = clone(config);
+      nextConfig.featureRules = nextConfig.featureRules.filter((r) => r.id !== rule.id);
+      await saveConfig(nextConfig, {}, configDoc);
+      addToast('分流规则已删除', 'success');
+    } catch (err) {
+      addToast(`删除失败: ${err.message}`, 'error');
+    }
   };
 
   const openRuleEditor = (rule = null) => {
-    openModal({ title: rule ? `编辑分流规则 · ${rule.name || rule.id}` : '新建智能分流规则', maxWidth: '680px', content: <FeatureRuleEditor rule={rule} catalogLoader={catalogLoader} /> });
+    openModal({
+      title: rule ? `编辑分流规则 · ${rule.name || rule.id}` : '新建智能分流规则',
+      maxWidth: '680px',
+      content: <FeatureRuleEditor rule={rule} catalogLoader={catalogLoader} />,
+    });
   };
 
   const formatMatchSummary = (match = {}) => {
@@ -71,12 +95,16 @@ export function RoutingPage() {
       title: '规则名称',
       minWidth: '200px',
       render: (row) => (
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '7px', fontWeight: 600, color: 'var(--text-primary)' }}>
+        <div className="space-y-0.5">
+          <div className="flex flex-wrap items-center gap-1.5 text-xs font-semibold text-foreground">
             <span>{row.name || row.id}</span>
-            {isBuiltinRule(row) && <span className="route-builtin-badge">内建</span>}
+            {isBuiltinRule(row) && (
+              <Badge variant="outline" className="border-primary/40 bg-primary/10 px-1.5 py-0 text-[10px] text-primary">
+                内建
+              </Badge>
+            )}
           </div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{formatMatchSummary(row.match)}</div>
+          <div className="text-[11px] text-muted-foreground">{formatMatchSummary(row.match)}</div>
         </div>
       ),
     },
@@ -84,7 +112,7 @@ export function RoutingPage() {
       title: '分流 Provider 与模型',
       minWidth: '260px',
       render: (row) => (
-        <span className="routing-target-summary">
+        <span className="font-mono text-xs text-foreground/90">
           {formatTargetSummary(row.target)}
         </span>
       ),
@@ -95,25 +123,29 @@ export function RoutingPage() {
       align: 'right',
       width: '124px',
       render: (row) => (
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px' }}>
-          <button
+        <div className="flex justify-end gap-1.5">
+          <Button
             type="button"
-            className="btn btn-secondary btn-compact"
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1 px-2 text-xs"
             onClick={() => openRuleEditor(row)}
           >
-            <Icon name="edit" size={13} />
+            <Pencil className="size-3" />
             <span>{isBuiltinRule(row) ? '编辑目标' : '编辑'}</span>
-          </button>
+          </Button>
           {!isBuiltinRule(row) && (
-            <button
+            <Button
               type="button"
-              className="btn btn-danger btn-compact"
+              variant="destructive"
+              size="icon-sm"
+              className="size-7"
               onClick={() => handleDeleteRule(row)}
               aria-label={`删除分流规则「${row.name || row.id}」`}
               title={`删除分流规则「${row.name || row.id}」`}
             >
-              <Icon name="trash" size={13} />
-            </button>
+              <Trash2 className="size-3.5" />
+            </Button>
           )}
         </div>
       ),
@@ -121,57 +153,56 @@ export function RoutingPage() {
   ];
 
   return (
-    <div className="page-stack">
-      <div className="page-header">
-        <div className="page-title-group">
-          <h1 className="page-title">
-            <Icon name="route" size={24} style={{ color: 'var(--primary)' }} />
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="space-y-1">
+          <h1 className="flex items-center gap-2.5 text-2xl font-semibold tracking-tight text-foreground">
+            <GitBranch className="size-5 text-primary" aria-hidden="true" />
             <span>Claude Code 路由</span>
           </h1>
-          <p className="page-subtitle">Claude Code 内部子请求分流与 effort 覆盖。</p>
+          <p className="text-xs text-muted-foreground">Claude Code 内部子请求分流与 effort 覆盖。</p>
         </div>
-        <div className="page-actions">
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => openRuleEditor(null)}
-          >
-            <Icon name="plus" size={16} />
-            <span>添加分流规则</span>
-          </button>
-        </div>
+        <Button type="button" size="sm" onClick={() => openRuleEditor(null)} className="gap-1.5">
+          <Plus className="size-3.5" />
+          <span>添加分流规则</span>
+        </Button>
       </div>
 
-      <section className="glass-panel" aria-label="全客户端请求策略">
-        <div className="panel-header routing-policy-header">
-          <div className="panel-title-block">
-            <div className="panel-title">
-              <Icon name="sliders" size={18} style={{ color: 'var(--primary)' }} />
+      <Card aria-label="全客户端请求策略">
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0">
+          <div className="space-y-1">
+            <CardTitle className="flex items-center gap-2 text-base font-semibold">
+              <SlidersHorizontal className="size-4 text-primary" aria-hidden="true" />
               <span>全客户端请求策略</span>
-            </div>
-            <p className="panel-description">设置全局并发上限、排队等待、重试预算、Responses 流保护和入口兼容声明。</p>
+            </CardTitle>
+            <CardDescription className="text-xs">
+              设置全局并发上限、排队等待、重试预算、Responses 流保护和入口兼容声明。
+            </CardDescription>
           </div>
-          <div className="panel-actions">
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => openModal({ title: '请求策略', maxWidth: '760px', content: <RequestPolicyEditor /> })}
-            >
-              <Icon name="sliders" size={15} />
-              <span>配置请求策略</span>
-            </button>
-          </div>
-        </div>
-      </section>
-      <div className="glass-panel">
-        <div className="panel-header">
-          <div className="panel-title-group">
-            <div className="panel-title">Claude Code 分流规则 ({rules.length})</div>
-            <span className="panel-hint">命中特征条件的请求会自动绕过主对话模型并路由至指定的目标通道。</span>
-          </div>
-        </div>
-        <div className="panel-body panel-body-flush">
-          <div className="routing-desktop-table">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            onClick={() => openModal({ title: '请求策略', maxWidth: '760px', content: <RequestPolicyEditor /> })}
+          >
+            <SlidersHorizontal className="size-3.5" />
+            <span>配置请求策略</span>
+          </Button>
+        </CardHeader>
+      </Card>
+
+      <Card className="overflow-hidden py-0">
+        <CardHeader className="border-b py-4">
+          <CardTitle className="text-base font-semibold">
+            Claude Code 分流规则 ({rules.length})
+          </CardTitle>
+          <CardDescription className="text-xs">
+            命中特征条件的请求会自动绕过主对话模型并路由至指定的目标通道。
+          </CardDescription>
+        </CardHeader>
+        <div>
+          <div className="routing-desktop-table hidden md:block">
             <DataTable
               columns={columns}
               data={rules}
@@ -182,16 +213,22 @@ export function RoutingPage() {
             />
           </div>
 
-          <div className="routing-mobile-list" role="list" aria-label="Claude Code 分流规则">
+          <div className="routing-mobile-list space-y-2.5 p-3 md:hidden" role="list" aria-label="Claude Code 分流规则">
             {rules.length === 0 ? (
-              <div className="responsive-card-empty">暂无配置分流规则</div>
+              <div className="py-8 text-center text-xs text-muted-foreground">暂无配置分流规则</div>
             ) : rules.map((rule) => (
-              <article key={rule.id} className="responsive-data-card routing-mobile-card" role="listitem">
-                <div className="responsive-data-card-heading">
-                  <div className="responsive-data-card-title">
-                    <strong>{rule.name || rule.id}</strong>
-                    {isBuiltinRule(rule) && <span className="route-builtin-badge">内建</span>}
-                    <small className="mono-cell">{rule.id}</small>
+              <article key={rule.id} className="space-y-3 rounded-xl border bg-card p-3.5" role="listitem">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <strong className="text-xs font-semibold text-foreground">{rule.name || rule.id}</strong>
+                      {isBuiltinRule(rule) && (
+                        <Badge variant="outline" className="border-primary/40 bg-primary/10 px-1.5 py-0 text-[10px] text-primary">
+                          内建
+                        </Badge>
+                      )}
+                    </div>
+                    <small className="font-mono text-[11px] text-muted-foreground">{rule.id}</small>
                   </div>
                   <QuickToggle
                     checked={rule.enabled}
@@ -201,44 +238,48 @@ export function RoutingPage() {
                   />
                 </div>
 
-                <dl className="responsive-data-card-fields">
+                <dl className="grid gap-2 text-xs">
                   <div>
-                    <dt>匹配条件</dt>
-                    <dd>{formatMatchSummary(rule.match)}</dd>
+                    <dt className="text-[11px] text-muted-foreground">匹配条件</dt>
+                    <dd className="text-foreground">{formatMatchSummary(rule.match)}</dd>
                   </div>
                   <div>
-                    <dt>目标 Provider 与模型</dt>
-                    <dd className="mono-cell responsive-data-card-primary-value">{formatTargetSummary(rule.target)}</dd>
+                    <dt className="text-[11px] text-muted-foreground">目标 Provider 与模型</dt>
+                    <dd className="font-mono text-xs text-foreground">{formatTargetSummary(rule.target)}</dd>
                   </div>
                 </dl>
 
-                <div className="responsive-data-card-actions">
-                  <button
+                <div className="flex flex-wrap gap-2">
+                  <Button
                     type="button"
-                    className="btn btn-secondary"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 gap-1 px-2.5 text-xs"
                     onClick={() => openRuleEditor(rule)}
                   >
-                    <Icon name="edit" size={14} />
+                    <Pencil className="size-3" />
                     <span>{isBuiltinRule(rule) ? '编辑目标' : '编辑规则'}</span>
-                  </button>
+                  </Button>
                   {!isBuiltinRule(rule) && (
-                    <button
+                    <Button
                       type="button"
-                      className="btn btn-danger"
+                      variant="destructive"
+                      size="sm"
+                      className="h-7 gap-1 px-2.5 text-xs"
                       onClick={() => handleDeleteRule(rule)}
                       aria-label={`删除分流规则「${rule.name || rule.id}」`}
                       title={`删除分流规则「${rule.name || rule.id}」`}
                     >
-                      <Icon name="trash" size={14} />
+                      <Trash2 className="size-3" />
                       <span>删除</span>
-                    </button>
+                    </Button>
                   )}
                 </div>
               </article>
             ))}
           </div>
         </div>
-      </div>
+      </Card>
     </div>
   );
 }

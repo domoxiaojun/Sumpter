@@ -1,3 +1,4 @@
+import { cn } from '../lib/utils.js';
 import { HorizontalScroll } from './HorizontalScroll.jsx';
 
 const COLUMN_TYPE_DEFAULTS = Object.freeze({
@@ -53,7 +54,7 @@ export function DataTable({
   const hasData = Boolean(data && data.length > 0);
 
   const emptyState = (
-    <div className="data-table-empty">
+    <div className="flex min-h-28 items-center justify-center px-4 py-8 text-center text-xs text-muted-foreground">
       {emptyText}
     </div>
   );
@@ -66,9 +67,9 @@ export function DataTable({
     <HorizontalScroll
       dragToScroll={adaptive}
       controlsAtTop={adaptive}
-      shellClassName="data-table-shell"
+      shellClassName="w-full"
       containerRef={containerRef}
-      className={`table-container ${scrollHeight ? 'table-container-scroll' : ''} ${className}`}
+      className={cn('w-full', scrollHeight && 'overflow-y-auto', className)}
       style={{ ...(containerStyle || {}), ...(scrollHeight ? { maxHeight: scrollHeight, overflowY: 'auto' } : {}) }}
       onScroll={onContainerScroll}
       tabIndex={0}
@@ -78,7 +79,10 @@ export function DataTable({
       {beforeTable}
       {hasData ? (
         <table
-          className={`data-table${adaptive ? ' data-table-adaptive' : ''}`}
+          className={cn(
+            'w-full caption-bottom border-collapse text-sm',
+            adaptive && 'table-auto',
+          )}
           aria-label={ariaLabel}
           aria-busy={loading || undefined}
           style={{ minWidth: tableMinWidth || (adaptive ? '100%' : tableMinimumWidth(columns)) }}
@@ -97,7 +101,7 @@ export function DataTable({
               );
             })}
           </colgroup>
-          <thead>
+          <thead className="sticky top-0 z-10 border-b bg-muted/75 backdrop-blur-sm">
             <tr>
               {columns.map((col, idx) => {
                 const presentation = columnPresentation(col, adaptive);
@@ -109,7 +113,10 @@ export function DataTable({
                 return (
                   <th
                     key={col.key || idx}
-                    className={col.type ? `data-table-column-${col.type}` : undefined}
+                    className={cn(
+                      'h-10 px-3.5 align-middle text-[11px] font-medium tracking-wider text-muted-foreground whitespace-nowrap',
+                      col.type ? `data-table-column-${col.type}` : '',
+                    )}
                     aria-sort={ariaSort}
                     style={{
                       textAlign: presentation.align,
@@ -120,7 +127,11 @@ export function DataTable({
                     {sortable ? (
                       <button
                         type="button"
-                        className="data-table-sort-button"
+                        className={cn(
+                          'data-table-sort-button inline-flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 text-[11px] font-medium transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50',
+                          presentation.align === 'right' && 'ml-auto flex-row-reverse',
+                          activeSort && 'text-foreground font-semibold',
+                        )}
                         disabled={loading}
                         aria-label={`${col.title}，点击按${activeSort && sortDirection === 'asc' ? '降序' : '升序'}排列`}
                         onClick={() => onSortChange(
@@ -129,7 +140,7 @@ export function DataTable({
                         )}
                       >
                         <span>{col.title}</span>
-                        <span aria-hidden="true" className="data-table-sort-indicator">
+                        <span aria-hidden="true" className="text-[10px] opacity-75">
                           {activeSort ? (sortDirection === 'desc' ? '↓' : '↑') : '↕'}
                         </span>
                       </button>
@@ -139,7 +150,7 @@ export function DataTable({
               })}
             </tr>
           </thead>
-          <tbody>
+          <tbody className="divide-y divide-border/70">
             {data.map((row, rowIdx) => {
               const key = row[keyField] || rowIdx;
               const isActive = activeRowKey && key === activeRowKey;
@@ -149,7 +160,11 @@ export function DataTable({
                 <tr
                   key={key}
                   {...rowInteractionProps}
-                  className={[isActive ? 'active-row' : '', customRowClassName || ''].filter(Boolean).join(' ')}
+                  className={cn(
+                    'transition-colors hover:bg-muted/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                    isActive && 'bg-primary/10 hover:bg-primary/15',
+                    customRowClassName,
+                  )}
                   onClick={onRowClick ? () => onRowClick(row) : undefined}
                   onKeyDown={onRowClick ? (event) => {
                     // Interactive controls inside an actionable row own their
@@ -172,7 +187,11 @@ export function DataTable({
                       <td
                         key={col.key || colIdx}
                         data-label={col.title || col.key || undefined}
-                        className={col.type ? `data-table-cell-${col.type}` : undefined}
+                        className={cn(
+                          'px-3.5 py-2.5 align-middle text-xs',
+                          presentation.align === 'right' && 'text-right font-mono tabular-nums',
+                          col.type ? `data-table-cell-${col.type}` : '',
+                        )}
                         style={{
                           textAlign: presentation.align,
                           minWidth: presentation.minWidth || undefined,

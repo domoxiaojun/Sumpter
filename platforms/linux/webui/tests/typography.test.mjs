@@ -16,14 +16,14 @@ test('webui self-hosts Inter, Noto Sans SC and JetBrains Mono variable fonts', a
 });
 
 test('font stacks lead with the bundled variable families and end with a CJK fallback', async () => {
-  const variables = await readFile(new URL('../src/styles/variables.css', import.meta.url), 'utf8');
+  const variables = await readFile(new URL('../src/styles/shadcn.css', import.meta.url), 'utf8');
   assert.match(variables, /--font-sans: 'Inter Variable',[^;]*var\(--font-cjk\);/);
   assert.match(variables, /--font-mono: 'JetBrains Mono Variable',[^;]*var\(--font-cjk\);/);
   assert.match(variables, /--font-cjk: 'Noto Sans SC Variable',[^;]*sans-serif;/);
 });
 
 test('no stylesheet references a font family that is not bundled or a system fallback', async () => {
-  const files = ['base.css', 'components.css', 'workspace.css', 'animations.css', 'system.css'];
+  const files = ['shadcn.css'];
   for (const file of files) {
     const css = await readFile(new URL(`../src/styles/${file}`, import.meta.url), 'utf8');
     assert.doesNotMatch(css, /Plus Jakarta Sans|'Inter'|"Inter"|'JetBrains Mono'(?! Variable)/, `${file} 引用了未打包的字体`);

@@ -1,4 +1,5 @@
 import React, { useEffect, useId, useState } from 'react';
+import { cn } from '../lib/utils.js';
 import { formatNumber } from '../utils/helpers.js';
 import {
   RUNTIME_EVENT_PAGE_SIZES,
@@ -6,6 +7,9 @@ import {
   runtimeEventPageRange,
   runtimeEventPageWindow,
 } from '../utils/runtimeAnalyticsV2.js';
+import { Button } from './ui/button.jsx';
+import { Input } from './ui/input.jsx';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select.jsx';
 
 export function PaginationBar({
   page = 1,
@@ -64,48 +68,87 @@ export function PaginationBar({
 
   return (
     <nav
-      className={`pagination-bar${compact ? ' pagination-compact' : ''}${loading ? ' is-loading' : ''}`}
+      className={cn(
+        'flex flex-wrap items-center justify-between gap-3 border-b bg-muted/20 px-4 py-2.5 text-xs',
+        compact && 'px-3 py-2',
+        loading && 'opacity-80',
+      )}
       aria-label={ariaLabel}
       aria-busy={loading}
       data-page={currentPage}
       data-loading={loading ? 'true' : 'false'}
     >
-      <div className="pagination-summary" aria-live="polite">
-        <strong>{formatNumber(normalizedTotalCount)} {itemNoun}</strong>
-        <span>
+      <div className="flex flex-wrap items-center gap-2 text-muted-foreground" aria-live="polite">
+        <strong className="font-semibold text-foreground tabular-nums">
+          {formatNumber(normalizedTotalCount)} {itemNoun}
+        </strong>
+        <span className="tabular-nums">
           {normalizedTotalCount
             ? `第 ${formatNumber(range.from)}–${formatNumber(range.to)} 条${compact ? '' : ` · 第 ${formatNumber(currentPage)} / ${formatNumber(normalizedTotalPages)} 页`}`
-            : (emptySummary || `当前筛选没有记录`)}
+            : (emptySummary || '当前筛选没有记录')}
         </span>
-        {liveItemCount > 0 && <span className="pagination-live-count">另有 {formatNumber(liveItemCount)} {liveItemNoun}</span>}
-        {loading && <span className="pagination-loading">正在读取第 {formatNumber(currentPage)} 页…</span>}
+        {liveItemCount > 0 && (
+          <span className="inline-flex items-center rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary tabular-nums">
+            另有 {formatNumber(liveItemCount)} {liveItemNoun}
+          </span>
+        )}
+        {loading && (
+          <span className="text-[11px] text-primary tabular-nums">
+            正在读取第 {formatNumber(currentPage)} 页…
+          </span>
+        )}
       </div>
 
-      <div className="pagination-controls">
-        <label className="pagination-page-size">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-1.5 text-muted-foreground">
           <span>每页</span>
           {onPageSizeChange ? (
-            <select
-              className="form-select"
-              value={normalizedPageSize}
+            <Select
+              value={String(normalizedPageSize)}
+              onValueChange={(value) => onPageSizeChange(Number(value))}
               disabled={loading}
-              onChange={(event) => onPageSizeChange(Number(event.target.value))}
-              aria-label="每页显示数量"
             >
-              {RUNTIME_EVENT_PAGE_SIZES.map((value) => (
-                <option key={value} value={value}>{value} 条</option>
-              ))}
-            </select>
-          ) : <span className="pagination-page-size-value">{normalizedPageSize} 条</span>}
-        </label>
+              <SelectTrigger
+                size="sm"
+                className="h-7 w-[74px] bg-background px-2 text-xs tabular-nums"
+                aria-label="每页显示数量"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {RUNTIME_EVENT_PAGE_SIZES.map((value) => (
+                  <SelectItem key={value} value={String(value)}>
+                    {value} 条
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : (
+            <span className="font-mono text-xs text-foreground tabular-nums">{normalizedPageSize} 条</span>
+          )}
+        </div>
 
-        <form className="pagination-page-jump" onSubmit={submitPage}>
-          {compact && <button type="button" className="btn btn-secondary" aria-label="上一页"
-            disabled={!canNavigate || currentPage <= 1} onClick={() => onPageChange?.(currentPage - 1)}><span className="pagination-direction-arrow" aria-hidden="true">‹</span><span className="pagination-direction-label">上一页</span></button>}
-          <label htmlFor={pageInputID}>{compact ? '第' : '跳转到'}</label>
-          <input
+        <form className="pagination-page-jump flex items-center gap-1.5" onSubmit={submitPage}>
+          {compact && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1 px-2 text-xs"
+              aria-label="上一页"
+              disabled={!canNavigate || currentPage <= 1}
+              onClick={() => onPageChange?.(currentPage - 1)}
+            >
+              <span aria-hidden="true">‹</span>
+              <span>上一页</span>
+            </Button>
+          )}
+          <label htmlFor={pageInputID} className="text-muted-foreground">
+            {compact ? '第' : '跳转到'}
+          </label>
+          <Input
             id={pageInputID}
-            className="form-input pagination-page-input"
+            className="h-7 w-14 px-2 text-center font-mono text-xs tabular-nums"
             type="number"
             inputMode="numeric"
             min="1"
@@ -115,66 +158,103 @@ export function PaginationBar({
             disabled={!canNavigate}
             aria-label={`跳转到页码，共 ${pageCount} 页`}
           />
-          <span aria-hidden="true">/ {formatNumber(pageCount)}</span>
-          <button type="submit" className="btn btn-secondary pagination-jump-button" disabled={!canNavigate}>跳转</button>
-          {compact && <button type="button" className="btn btn-secondary" aria-label="下一页"
-            disabled={!canNavigate || currentPage >= normalizedTotalPages}
-            onClick={() => onPageChange?.(currentPage + 1)}><span className="pagination-direction-label">下一页</span><span className="pagination-direction-arrow" aria-hidden="true">›</span></button>}
+          <span className="font-mono text-muted-foreground tabular-nums" aria-hidden="true">
+            / {formatNumber(pageCount)}
+          </span>
+          <Button
+            type="submit"
+            variant="outline"
+            size="sm"
+            className="h-7 px-2.5 text-xs"
+            disabled={!canNavigate}
+          >
+            跳转
+          </Button>
+          {compact && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1 px-2 text-xs"
+              aria-label="下一页"
+              disabled={!canNavigate || currentPage >= normalizedTotalPages}
+              onClick={() => onPageChange?.(currentPage + 1)}
+            >
+              <span>下一页</span>
+              <span aria-hidden="true">›</span>
+            </Button>
+          )}
         </form>
 
-        {!compact && <div className="pagination-pages" role="group" aria-label="选择页码">
-          <button
-            type="button"
-            className="btn btn-secondary pagination-edge"
-            onClick={() => onPageChange?.(1)}
-            disabled={!canNavigate || currentPage <= 1}
-            aria-label="第一页"
-          >
-            首页
-          </button>
-          <button
-            type="button"
-            className="btn btn-secondary pagination-edge"
-            onClick={() => onPageChange?.(currentPage - 1)}
-            disabled={!canNavigate || currentPage <= 1}
-            aria-label="上一页"
-          >
-            上一页
-          </button>
-          {pages.map((value, index) => (
-            <React.Fragment key={value}>
-              {index > 0 && value - pages[index - 1] > 1 && <span className="pagination-ellipsis" aria-hidden="true">…</span>}
-              <button
-                type="button"
-                className={`btn ${value === currentPage ? 'btn-primary' : 'btn-secondary'} pagination-number`}
-                onClick={() => onPageChange?.(value)}
-                disabled={!canNavigate || value === currentPage}
-                aria-label={`第 ${value} 页`}
-                aria-current={value === currentPage ? 'page' : undefined}
-              >
-                {value}
-              </button>
-            </React.Fragment>
-          ))}
-          <button
-            type="button"
-            className="btn btn-secondary pagination-edge"
-            onClick={() => onPageChange?.(currentPage + 1)}
-            disabled={!canNavigate || currentPage >= normalizedTotalPages}
-            aria-label="下一页"
-          >
-            下一页
-          </button>
-          <button
-            type="button"
-            className="btn btn-secondary pagination-edge"
-            onClick={() => onPageChange?.(normalizedTotalPages)}
-            disabled={!canNavigate || currentPage >= normalizedTotalPages}
-            aria-label="最后一页"
-          >
-            末页
-          </button>
-        </div>}
+        {!compact && (
+          <div className="flex flex-wrap items-center gap-1" role="group" aria-label="选择页码">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={() => onPageChange?.(1)}
+              disabled={!canNavigate || currentPage <= 1}
+              aria-label="第一页"
+            >
+              首页
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={() => onPageChange?.(currentPage - 1)}
+              disabled={!canNavigate || currentPage <= 1}
+              aria-label="上一页"
+            >
+              上一页
+            </Button>
+            {pages.map((value, index) => (
+              <React.Fragment key={value}>
+                {index > 0 && value - pages[index - 1] > 1 && (
+                  <span className="px-1 text-muted-foreground" aria-hidden="true">
+                    …
+                  </span>
+                )}
+                <Button
+                  type="button"
+                  variant={value === currentPage ? 'default' : 'outline'}
+                  size="sm"
+                  className="h-7 min-w-7 px-2 font-mono text-xs tabular-nums"
+                  onClick={() => onPageChange?.(value)}
+                  disabled={!canNavigate || value === currentPage}
+                  aria-label={`第 ${value} 页`}
+                  aria-current={value === currentPage ? 'page' : undefined}
+                >
+                  {value}
+                </Button>
+              </React.Fragment>
+            ))}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={() => onPageChange?.(currentPage + 1)}
+              disabled={!canNavigate || currentPage >= normalizedTotalPages}
+              aria-label="下一页"
+            >
+              下一页
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={() => onPageChange?.(normalizedTotalPages)}
+              disabled={!canNavigate || currentPage >= normalizedTotalPages}
+              aria-label="最后一页"
+            >
+              末页
+            </Button>
+          </div>
+        )}
       </div>
     </nav>
   );

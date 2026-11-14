@@ -73,10 +73,10 @@ const apiServiceSource = await readFile(
   new URL('../src/services/api.js', import.meta.url),
   'utf8',
 );
-const componentStyles = await readFile(
-  new URL('../src/styles/components.css', import.meta.url),
-  'utf8',
-);
+const [componentStyles, dataTableSource] = await Promise.all([
+  readFile(new URL('../src/styles/shadcn.css', import.meta.url), 'utf8'),
+  readFile(new URL('../src/components/DataTable.jsx', import.meta.url), 'utf8'),
+]);
 const appContextSource = await readFile(
   new URL('../src/context/AppContext.jsx', import.meta.url),
   'utf8',
@@ -168,8 +168,7 @@ test('Linux Provider 入口拖拽覆盖整行且不劫持原生控件', () => {
   assert.match(providerEditorSource, /createProviderDragImage/);
   assert.match(providerEditorSource, /拖动整行可调整入口顺序/);
   assert.match(providerEditorSource, /编辑此入口价格/);
-  assert.match(providerEditorSource, /className="provider-reorder-cell"/);
-  assert.match(componentStyles, /\.provider-reorder-cell\s*\{[\s\S]*?display:\s*flex;[\s\S]*?align-items:\s*center;/);
+  assert.match(providerEditorSource, /className="provider-reorder-cell flex items-start gap-2"/);
 });
 
 test('Provider 每行在编辑后提供入口级获取模型动作', () => {
@@ -193,8 +192,8 @@ test('DataTable 不用通用 display 覆盖渲染器布局，Provider 操作栏�
     /\.data-table td:not\([^\n]+\) > \*\s*\{[\s\S]*?-webkit-box/,
     '表格不能把所有直接子元素强制改成 -webkit-box',
   );
-  assert.match(componentStyles, /:where\(\.data-table td > \*\)\s*\{/);
-  assert.match(componentStyles, /\.provider-row-actions\s*\{[\s\S]*?flex-wrap: nowrap;[\s\S]*?max-width: none;/);
+  assert.doesNotMatch(dataTableSource, /-webkit-box/, 'DataTable 不能用 -webkit-box 裁切自定义单元格');
+  assert.match(providerEditorSource, /provider-row-actions flex flex-nowrap items-center justify-end gap-1 whitespace-nowrap/);
 });
 
 test('Grok Build client kind uses its product label', () => {

@@ -1,8 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppControls } from '../context/AppContext.jsx';
-import { Icon } from '../utils/icons.jsx';
-import { useDialogFocus } from '../hooks/useDialogFocus.js';
 import { ModalBusyContext } from '../context/ModalContext.js';
+import { Button } from './ui/button.jsx';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog.jsx';
+
+const ACTION_VARIANT = {
+  primary: 'default',
+  secondary: 'outline',
+  danger: 'destructive',
+  destructive: 'destructive',
+  ghost: 'ghost',
+};
 
 export function Modal() {
   const { activeModal, closeModal } = useAppControls();
@@ -11,56 +19,71 @@ export function Modal() {
   const busyRef = useRef(false);
   const [contentBusy, setContentBusy] = useState(false);
   const contentBusyRef = useRef(false);
-  const updateContentBusy = useCallback(value => {
+  const updateContentBusy = useCallback((value) => {
     contentBusyRef.current = value;
     setContentBusy(value);
   }, []);
-  const dismiss = () => { if (!busyRef.current && !contentBusyRef.current) closeModal(); };
+  const dismiss = () => {
+    if (!busyRef.current && !contentBusyRef.current) closeModal();
+  };
   const activeRef = useRef(activeModal);
   activeRef.current = activeModal;
-  const dialogRef = useDialogFocus(Boolean(activeModal), { onClose: dismiss });
+
   useEffect(() => {
     busyRef.current = false;
     updateContentBusy(false);
     setBusy(false);
     setError('');
-  }, [activeModal]);
+  }, [activeModal, updateContentBusy]);
 
-  if (!activeModal) return null;
-
-  const { title, content, actions = [], maxWidth = '580px' } = activeModal;
+  const { title, content, actions = [], maxWidth = '580px' } = activeModal || {};
+  const isBusy = busy || contentBusy;
 
   return (
-    <div className="modal-overlay" onClick={dismiss}>
-      <div
-        className="modal-dialog"
-        ref={dialogRef}
-        tabIndex={-1}
-        aria-busy={busy || contentBusy || undefined}
-        style={{ maxWidth }}
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
+    <Dialog
+      open={Boolean(activeModal)}
+      onOpenChange={(open) => {
+        if (!open) dismiss();
+      }}
+    >
+      <DialogContent
+        showCloseButton={!isBusy}
+        aria-busy={isBusy || undefined}
         aria-labelledby="modal-title"
+        style={{ maxWidth }}
+        className="w-[calc(100%-2rem)] max-h-[88dvh] overflow-y-auto"
+        onEscapeKeyDown={(event) => {
+          if (busyRef.current || contentBusyRef.current) event.preventDefault();
+        }}
+        onInteractOutside={(event) => {
+          if (busyRef.current || contentBusyRef.current) event.preventDefault();
+        }}
       >
-        <div className="modal-header">
-          <h3 id="modal-title" style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
-            {title}
-          </h3>
-          <button type="button" className="btn-icon" onClick={dismiss} disabled={busy || contentBusy} aria-label="关闭弹窗">
-            <Icon name="close" size={16} />
-          </button>
+        <DialogHeader>
+          <DialogTitle id="modal-title">{title}</DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-3 text-sm">
+          <ModalBusyContext.Provider value={updateContentBusy}>
+            {content}
+          </ModalBusyContext.Provider>
+          {error && (
+            <p
+              role="alert"
+              className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+            >
+              {error}
+            </p>
+          )}
         </div>
 
-        <div className="modal-body"><ModalBusyContext.Provider value={updateContentBusy}>{content}</ModalBusyContext.Provider>{error && <p role="alert" className="form-hint">{error}</p>}</div>
-
         {actions && actions.length > 0 && (
-          <div className="modal-footer">
+          <DialogFooter className="pt-2">
             {actions.map((act, idx) => (
-              <button
+              <Button
                 key={idx}
                 type="button"
-                className={`btn btn-${act.kind || 'secondary'}`}
+                variant={ACTION_VARIANT[act.kind] || 'outline'}
                 onClick={async () => {
                   if (busyRef.current || contentBusyRef.current) return;
                   busyRef.current = true;
@@ -78,14 +101,14 @@ export function Modal() {
                     }
                   }
                 }}
-                disabled={act.disabled || busy || contentBusy}
+                disabled={act.disabled || isBusy}
               >
                 {act.label}
-              </button>
+              </Button>
             ))}
-          </div>
+          </DialogFooter>
         )}
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
