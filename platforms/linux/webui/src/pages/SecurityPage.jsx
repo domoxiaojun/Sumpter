@@ -203,7 +203,7 @@ export function SecurityPage() {
       <InboundTokensPanel />
       <ClientIdentityPanel />
 
-      <details className="group rounded-xl border border-border bg-card text-card-foreground shadow-sm sumpter-specular">
+      <details className="group rounded-xl border border-border bg-card text-card-foreground shadow-sm">
         <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-5 py-4 text-sm font-semibold text-foreground select-none hover:bg-muted/25">
           <span className="flex items-center gap-2">
             <ChevronRight className="size-4 text-muted-foreground transition-transform group-open:rotate-90" />

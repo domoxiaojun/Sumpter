@@ -17,7 +17,7 @@ export function DropdownMenuContent({ className, sideOffset = 6, align = 'end', 
         sideOffset={sideOffset}
         align={align}
         className={cn(
-          'z-50 min-w-[10rem] overflow-hidden rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-xl sumpter-specular',
+          'z-50 min-w-[10rem] overflow-hidden rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-xl',
           'data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-95 duration-150',
           className,
         )}

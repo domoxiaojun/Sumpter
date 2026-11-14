@@ -176,6 +176,30 @@ html[data-theme="dark"] {
   }
 }
 
+/* Radix 的弹窗、抽屉、菜单和选择器共用 data-scroll-locked 计数。
+   react-remove-scroll 注入的 <style> 被 Admin CSP 拦截，因此滚动锁必须有静态规则。
+   根元素保留滚动条槽位；开发模式也取消库的 margin 补偿，避免重复留白。 */
+html {
+  scrollbar-gutter: stable;
+}
+
+html body[data-scroll-locked] {
+  overflow: hidden !important;
+  overscroll-behavior: contain;
+  margin-right: 0 !important;
+  --removed-body-scroll-bar-size: 0px;
+}
+
+/* SelectViewport 的内联滚动条样式同样需要静态版本。 */
+[data-radix-select-viewport] {
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+[data-radix-select-viewport]::-webkit-scrollbar {
+  display: none;
+}
+
 /* 动效与遥测光晕层：全部保持 compositor 友好的 transform / opacity */
 @keyframes runtime-row-enter {
   from {
@@ -320,6 +344,20 @@ html[data-theme="dark"] {
   display: block;
   width: 100%;
   height: 100%;
+}
+
+/* Paper Shaders 运行时注入的默认 <style> 会被 Admin CSP（style-src 'self'）拦截，这里提供等价规则。 */
+.telemetry-live-mesh {
+  position: relative;
+  isolation: isolate;
+}
+
+.telemetry-live-mesh canvas {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  contain: strict;
+  border-radius: inherit;
 }
 
 .telemetry-live-pill-dot,

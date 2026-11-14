@@ -1,8 +1,8 @@
 import { createContext, useContext, useId, useMemo } from 'react';
 import * as RechartsPrimitive from 'recharts';
 import { cn } from '../../lib/utils.js';
+import { chartColorVariables } from '../../utils/chartColors.js';
 
-const THEMES = { light: '', dark: '.dark' };
 const ChartContext = createContext(null);
 
 function useChart() {
@@ -33,34 +33,7 @@ function getPayloadConfigFromPayload(config, payload, key) {
   return configLabelKey in config ? config[configLabelKey] : config[key];
 }
 
-function ChartStyle({ id, config }) {
-  const colorConfig = Object.entries(config).filter(([, item]) => item.theme || item.color);
-  if (!colorConfig.length) return null;
-
-  return (
-    <style
-      dangerouslySetInnerHTML={{
-        __html: Object.entries(THEMES)
-          .map(
-            ([theme, prefix]) => `
-${prefix} [data-chart=${id}] {
-${colorConfig
-  .map(([key, itemConfig]) => {
-    const color = itemConfig.theme?.[theme] || itemConfig.color;
-    return color ? `  --color-${key}: ${color};` : null;
-  })
-  .filter(Boolean)
-  .join('\n')}
-}
-`,
-          )
-          .join('\n'),
-      }}
-    />
-  );
-}
-
-export function ChartContainer({ id, className, children, config, ...props }) {
+export function ChartContainer({ id, className, children, config, style, ...props }) {
   const uniqueId = useId();
   const chartId = `chart-${id || uniqueId.replace(/:/g, '')}`;
 
@@ -73,9 +46,9 @@ export function ChartContainer({ id, className, children, config, ...props }) {
           "[&_.recharts-cartesian-axis-tick_text]:fill-muted-foreground [&_.recharts-cartesian-grid_line[stroke='#ccc']]:stroke-border/50 [&_.recharts-curve.recharts-tooltip-cursor]:stroke-border [&_.recharts-dot[stroke='#fff']]:stroke-transparent [&_.recharts-layer]:outline-hidden [&_.recharts-rectangle.recharts-tooltip-cursor]:fill-muted/40 [&_.recharts-reference-line_[stroke='#ccc']]:stroke-border [&_.recharts-surface]:outline-hidden flex aspect-video justify-center text-xs",
           className,
         )}
+        style={{ ...chartColorVariables(config), ...style }}
         {...props}
       >
-        <ChartStyle id={chartId} config={config} />
         <RechartsPrimitive.ResponsiveContainer>
           {children}
         </RechartsPrimitive.ResponsiveContainer>

@@ -1,0 +1,1 @@
+import{ak as o,r as a}from"./index-j2odksR9.js";function n(e,s=!1){const{registerNavigationGuard:t}=o(),r=a.useRef({dirty:e,saving:s});r.current={dirty:e,saving:s},a.useLayoutEffect(()=>t(()=>r.current),[t])}export{n as u};

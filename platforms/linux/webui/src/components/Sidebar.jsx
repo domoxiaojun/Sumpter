@@ -85,6 +85,8 @@ export function Sidebar() {
             <button
               type="button"
               onClick={() => handleSelect('run')}
+              aria-label="Sumpter · 运行"
+              title="回到运行页"
               className="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
             >
               <div className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-sidebar-border bg-background/80 p-1">

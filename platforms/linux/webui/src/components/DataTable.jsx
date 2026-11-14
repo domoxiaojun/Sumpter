@@ -128,7 +128,7 @@ export function DataTable({
                       <button
                         type="button"
                         className={cn(
-                          'data-table-sort-button inline-flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 text-[11px] font-medium transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50',
+                          'data-table-sort-button inline-flex min-h-6 cursor-pointer items-center gap-1 rounded px-1 py-0.5 text-[11px] font-medium transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50',
                           presentation.align === 'right' && 'ml-auto flex-row-reverse',
                           activeSort && 'text-foreground font-semibold',
                         )}

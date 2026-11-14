@@ -2,6 +2,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { AppProvider } from './context/AppContext.jsx';
 import { AppContent } from './App.jsx';
+import { ErrorBoundary } from './components/ErrorBoundary.jsx';
 
 // 自托管字体(SIL OFL):Inter 负责拉丁/数字,Noto Sans SC 负责中文,JetBrains Mono 负责等宽。
 // 三者都按 unicode-range 分片,浏览器只拉取页面实际用到的片段。
@@ -15,8 +16,10 @@ const root = createRoot(container);
 
 root.render(
   <React.StrictMode>
-    <AppProvider>
-      <AppContent />
-    </AppProvider>
+    <ErrorBoundary scope="app">
+      <AppProvider>
+        <AppContent />
+      </AppProvider>
+    </ErrorBoundary>
   </React.StrictMode>
 );

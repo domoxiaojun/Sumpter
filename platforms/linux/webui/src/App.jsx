@@ -5,6 +5,7 @@ import { Topbar } from './components/Topbar.jsx';
 import { CommandPalette } from './components/CommandPalette.jsx';
 import { Modal } from './components/Modal.jsx';
 import { ToastContainer } from './components/Toast.jsx';
+import { ErrorBoundary } from './components/ErrorBoundary.jsx';
 import { SidebarInset, SidebarProvider } from './components/ui/sidebar.jsx';
 import { TooltipProvider } from './components/ui/tooltip.jsx';
 import { LoginPage } from './pages/LoginPage.jsx';
@@ -95,16 +96,18 @@ export function AppContent() {
             tabIndex="-1"
           >
             <div className="mx-auto w-full max-w-[1440px]">
-              <Suspense
-                fallback={
-                  <div className="flex min-h-[40vh] items-center justify-center gap-2.5 text-sm text-muted-foreground">
-                    <span className="size-2 rounded-full bg-primary animate-pulse" aria-hidden="true" />
-                    <span>正在加载页面…</span>
-                  </div>
-                }
-              >
-                {renderPage()}
-              </Suspense>
+              <ErrorBoundary resetKey={currentRoute}>
+                <Suspense
+                  fallback={
+                    <div className="flex min-h-[40vh] items-center justify-center gap-2.5 text-sm text-muted-foreground">
+                      <span className="size-2 rounded-full bg-primary animate-pulse" aria-hidden="true" />
+                      <span>正在加载页面…</span>
+                    </div>
+                  }
+                >
+                  {renderPage()}
+                </Suspense>
+              </ErrorBoundary>
             </div>
           </main>
         </SidebarInset>

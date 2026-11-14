@@ -279,7 +279,7 @@ function TokenCoreGrid({ tokens, compact = false, cache = null }) {
         <div
           key={card.id}
           data-token-role={card.id}
-          className="rounded-xl border border-border/80 border-t-2 bg-card/85 p-3.5 shadow-xs transition-colors hover:border-border sumpter-specular"
+          className="rounded-xl border border-border/80 border-t-2 bg-card/85 p-3.5 shadow-xs transition-colors hover:border-border"
           style={{ borderTopColor: card.accent || 'var(--primary)' }}
         >
           <div className="text-xs font-medium text-muted-foreground">{card.label}</div>
@@ -420,7 +420,7 @@ function Metric({ label, value, detail, tone = '', accent = 'var(--primary)', pr
   const isWarningTone = tone.includes('warning');
   return (
     <div
-      className="rounded-xl border border-border/80 border-t-2 bg-card/85 p-3.5 shadow-xs transition-colors hover:border-border sumpter-specular"
+      className="rounded-xl border border-border/80 border-t-2 bg-card/85 p-3.5 shadow-xs transition-colors hover:border-border"
       style={{ borderTopColor: accent }}
     >
       <span className="block text-xs font-medium text-muted-foreground">{label}</span>

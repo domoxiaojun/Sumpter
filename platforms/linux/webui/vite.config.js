@@ -41,8 +41,12 @@ function autoMockWhenBackendOffline() {
   };
 }
 
-export default defineConfig({
+// ?mock=1 演示数据只在开发服务或显式 VITE_SUMPTER_MOCK=1 的构建中可用；提交的 web/ 产物不包含它。
+export default defineConfig(({ command }) => ({
   base: './',
+  define: {
+    __SUMPTER_MOCK_ALLOWED__: JSON.stringify(command === 'serve' || process.env.VITE_SUMPTER_MOCK === '1'),
+  },
   plugins: [react(), tailwindcss(), autoMockWhenBackendOffline()],
   server: {
     port: 57890,
@@ -58,6 +62,8 @@ export default defineConfig({
     outDir: fileURLToPath(new URL('../web', import.meta.url)),
     emptyOutDir: true,
     target: 'es2022',
+    // Admin CSP 没有放行 data:（default-src 'self'），小于 4 KB 的字体分片若被内联会被浏览器拦截。
+    assetsInlineLimit: 0,
     sourcemap: false,
   },
-});
+}));

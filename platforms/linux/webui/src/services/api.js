@@ -12,7 +12,11 @@ import {
 } from '../utils/protocols.js';
 import { RUNTIME_DEFAULT_PAGE_SIZE, runtimeAnalyticsFilters, runtimeFilterValues } from '../utils/runtimeAnalyticsV2.js';
 
-const isMock = new URLSearchParams(window.location.search).get('mock') === '1';
+// 演示数据只用于本地界面验收：Vite 生产构建默认关闭，避免已部署的控制台被 ?mock=1 换成虚构状态。
+// 浏览器冒烟测试用 VITE_SUMPTER_MOCK=1 构建；Node 单元测试不经过 Vite，常量未定义时保持可用。
+// __SUMPTER_MOCK_ALLOWED__ 由 vite.config.js 在构建期替换为字面量，关闭时演示数据分包会被整体剔除。
+const mockAllowed = typeof __SUMPTER_MOCK_ALLOWED__ === 'undefined' ? true : __SUMPTER_MOCK_ALLOWED__;
+const isMock = mockAllowed && new URLSearchParams(window.location.search).get('mock') === '1';
 
 export function normalizeResolveIP(value) {
   return String(value ?? '').trim();
@@ -346,8 +350,10 @@ class ApiService {
   }
 
   async handleMock(path, options) {
-    this.mockApiPromise ||= import('./mockApi.js').then(({ createMockApi }) =>
-      createMockApi({ fromWireConfig, normalizeCatalog }));
+    // 条件写在 import() 上，打包器才能在 mock 关闭的构建里丢弃整个演示数据分包。
+    this.mockApiPromise ||= mockAllowed
+      ? import('./mockApi.js').then(({ createMockApi }) => createMockApi({ fromWireConfig, normalizeCatalog }))
+      : Promise.reject(new Error('此构建不包含演示数据'));
     return (await this.mockApiPromise).handleMock(path, options);
   }
 

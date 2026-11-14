@@ -3,6 +3,7 @@ import { PanelLeft } from 'lucide-react';
 import { cn } from '../../lib/utils.js';
 import { Button } from './button.jsx';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from './sheet.jsx';
+import { Tooltip, TooltipContent, TooltipTrigger } from './tooltip.jsx';
 
 const SidebarContext = createContext(null);
 
@@ -190,12 +191,14 @@ export function SidebarMenuItem({ className, ...props }) {
   return <li data-slot="sidebar-menu-item" className={cn('relative', className)} {...props} />;
 }
 
-export function SidebarMenuButton({ isActive = false, className, children, ...props }) {
-  return (
+export function SidebarMenuButton({ isActive = false, tooltip, className, children, ...props }) {
+  const { state, isMobile } = useSidebar();
+  const button = (
     <button
       type="button"
       data-slot="sidebar-menu-button"
       data-active={isActive}
+      aria-label={tooltip || undefined}
       className={cn(
         'flex w-full items-center gap-2.5 overflow-hidden rounded-lg px-2.5 py-2 text-left text-[13px] font-medium transition-colors outline-none cursor-pointer',
         'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring',
@@ -207,5 +210,13 @@ export function SidebarMenuButton({ isActive = false, className, children, ...pr
     >
       {children}
     </button>
+  );
+
+  if (!tooltip || state !== 'collapsed' || isMobile) return button;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{button}</TooltipTrigger>
+      <TooltipContent side="right" align="center">{tooltip}</TooltipContent>
+    </Tooltip>
   );
 }

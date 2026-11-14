@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   BarChart3,
@@ -31,6 +31,8 @@ export function CommandPalette() {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef(null);
+  const listRef = useRef(null);
+  const selectedRef = useRef(null);
 
   const commands = useMemo(() => [
     { id: 'nav-run', title: '转到：运行监控', category: '页面跳转', IconComp: Activity, action: () => navigate('run') },
@@ -67,14 +69,26 @@ export function CommandPalette() {
   };
 
   const safeIndex = filtered.length ? Math.min(selectedIndex, filtered.length - 1) : 0;
+  const selectedID = filtered[safeIndex]?.id;
+
+  useLayoutEffect(() => {
+    if (!isCommandOpen || !listRef.current || !selectedRef.current) return;
+    // 只滚动指令列表，避免 scrollIntoView 同时挪动弹窗或背景页面。
+    const list = listRef.current;
+    const viewport = list.getBoundingClientRect();
+    const option = selectedRef.current.getBoundingClientRect();
+    if (option.top < viewport.top) list.scrollTop += option.top - viewport.top;
+    else if (option.bottom > viewport.bottom) list.scrollTop += option.bottom - viewport.bottom;
+  }, [isCommandOpen, selectedID, query]);
 
   const handleKeyDown = (e) => {
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      if (filtered.length) setSelectedIndex((prev) => (prev + 1) % filtered.length);
+      if (filtered.length) setSelectedIndex((safeIndex + 1) % filtered.length);
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      if (filtered.length) setSelectedIndex((prev) => (prev - 1 + filtered.length) % filtered.length);
+      if (filtered.length) setSelectedIndex((safeIndex - 1 + filtered.length) % filtered.length);
     } else if (e.key === 'Enter') {
       e.preventDefault();
       if (filtered[safeIndex]) executeItem(filtered[safeIndex]);
@@ -83,11 +97,11 @@ export function CommandPalette() {
 
   return (
     <Dialog open={isCommandOpen} onOpenChange={setIsCommandOpen}>
-      <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-lg" aria-label="命令面板">
+      <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-lg" aria-label="命令面板">
         <DialogHeader className="sr-only">
           <DialogTitle>命令面板</DialogTitle>
         </DialogHeader>
-        <div className="border-b px-3 py-2.5 pr-10">
+        <div className="shrink-0 border-b px-3 py-2.5 pr-10">
           <InputGroup className="border-0 shadow-none focus-within:ring-0">
             <InputGroupAddon>
               <Search className="size-4 text-muted-foreground" />
@@ -113,10 +127,11 @@ export function CommandPalette() {
         </div>
 
         <div
+          ref={listRef}
           id="command-palette-results"
           role="listbox"
           aria-label="可用指令"
-          className="max-h-80 overflow-y-auto p-1.5"
+          className="min-h-0 max-h-80 overflow-y-auto p-1.5"
         >
           {filtered.length === 0 ? (
             <div className="px-3 py-8 text-center text-xs text-muted-foreground">
@@ -130,7 +145,9 @@ export function CommandPalette() {
                 <button
                   key={item.id}
                   id={`command-${item.id}`}
+                  ref={isSelected ? selectedRef : null}
                   type="button"
+                  tabIndex={-1}
                   role="option"
                   aria-selected={isSelected}
                   className={cn(
@@ -140,7 +157,9 @@ export function CommandPalette() {
                       : 'text-foreground hover:bg-accent/60',
                   )}
                   onClick={() => executeItem(item)}
-                  onMouseEnter={() => setSelectedIndex(idx)}
+                  onPointerMove={(event) => {
+                    if (event.pointerType === 'mouse') setSelectedIndex(idx);
+                  }}
                 >
                   <span className="flex min-w-0 items-center gap-2.5">
                     <span className="flex size-6 shrink-0 items-center justify-center rounded-md border bg-background/80 text-muted-foreground">
