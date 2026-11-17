@@ -4,6 +4,24 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本。
 
+## [0.4.85] - 2026-11-18
+
+### 变更与重构
+
+- 全面重构 Linux WebUI 为柔和现代设计语言：建立亮/暗三阶 `oklch` 分层语义色板、漫反射卡片阴影、主画布环境极光柔晕，以及页面入场、卡片交错、折叠面板展开与声呐状态环等轻量纯 CSS 微交互动效（支持 `prefers-reduced-motion` 且兼容严格 Admin CSP）。
+- 新增标准化复用组件 `PageHeader`、`NativeSelect`、`Checkbox` 与 `Textarea`，清理各页面散落的手写表单控件类与原生裸控件，并升级顶栏、侧栏、弹层、按钮、标签页与表格原语的视觉层级与质感。
+- 对齐全局主视口、顶栏、卡片头、筛选条、分页条与表格首列的 `20px` 水平基准线，移除嵌套硬框与生硬顶边色条；为登录页补充受 WebGL2 与减弱动态效果保护的 `MeshGradient` 环境光效。
+- 同步对齐 macOS SwiftUI `SumpterTheme` 浅/深色语义调色板及表格圆角表面，并重建同步 `platforms/linux/web/` 静态产物。
+
+### 修复
+
+- 补齐 `DropdownMenuTrigger` 对读屏器虚拟光标及无指针合成 `.click()` 激活的支持，保证键盘与辅助技术下的稳定交互。
+- 修复 `CommandPalette` 在弹窗入场缩放动画期间方向键滚动换算偏差，防止选项底部微裁切。
+
+### 验证与边界
+
+- 共享 Rust 核心、配置与数据库 schema 不变；本机通过文档契约、Rust workspace、macOS App、243 项 WebUI 单元/契约测试及真实 Chrome Admin CSP 冒烟回归。跨平台发行包与多架构容器镜像由 GitHub Actions `Release` 工作流构建与发布，发布不代表本机或生产实例已经升级。
+
 ## [0.4.84] - 2026-11-14
 
 ### 修复
