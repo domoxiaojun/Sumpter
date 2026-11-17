@@ -26,6 +26,7 @@ export function PaginationBar({
   emptySummary,
   liveItemNoun = '条进行中',
   compact = false,
+  className = '',
 }) {
   const pageInputID = `pagination-page-${useId().replace(/:/g, '')}`;
   const normalizedPageSize = normalizeRuntimeEventPageSize(pageSize);
@@ -69,9 +70,10 @@ export function PaginationBar({
   return (
     <nav
       className={cn(
-        'flex flex-wrap items-center justify-between gap-3 border-b bg-muted/20 px-4 py-2.5 text-xs',
-        compact && 'px-3 py-2',
+        'flex flex-wrap items-center justify-between gap-3 border-b border-border/70 bg-muted/25 px-5 py-2.5 text-xs transition-opacity',
+        compact && 'py-2',
         loading && 'opacity-80',
+        className,
       )}
       aria-label={ariaLabel}
       aria-busy={loading}
@@ -88,12 +90,13 @@ export function PaginationBar({
             : (emptySummary || '当前筛选没有记录')}
         </span>
         {liveItemCount > 0 && (
-          <span className="inline-flex items-center rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary tabular-nums">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-primary/25 bg-primary/10 px-2.5 py-0.5 text-[11px] font-medium text-primary tabular-nums">
+            <i className="size-1.5 rounded-full bg-primary animate-pulse" aria-hidden="true" />
             另有 {formatNumber(liveItemCount)} {liveItemNoun}
           </span>
         )}
         {loading && (
-          <span className="text-[11px] text-primary tabular-nums">
+          <span className="text-[11px] font-medium text-primary tabular-nums">
             正在读取第 {formatNumber(currentPage)} 页…
           </span>
         )}
@@ -110,7 +113,7 @@ export function PaginationBar({
             >
               <SelectTrigger
                 size="sm"
-                className="h-7 w-[74px] bg-background px-2 text-xs tabular-nums"
+                className="h-7 w-[74px] rounded-lg bg-card/90 px-2 text-xs font-mono tabular-nums"
                 aria-label="每页显示数量"
               >
                 <SelectValue />
@@ -133,8 +136,7 @@ export function PaginationBar({
             <Button
               type="button"
               variant="outline"
-              size="sm"
-              className="h-7 gap-1 px-2 text-xs"
+              size="xs"
               aria-label="上一页"
               disabled={!canNavigate || currentPage <= 1}
               onClick={() => onPageChange?.(currentPage - 1)}
@@ -148,7 +150,7 @@ export function PaginationBar({
           </label>
           <Input
             id={pageInputID}
-            className="h-7 w-14 px-2 text-center font-mono text-xs tabular-nums"
+            className="h-7 w-14 rounded-lg bg-card/90 px-2 text-center font-mono text-xs tabular-nums"
             type="number"
             inputMode="numeric"
             min="1"
@@ -164,8 +166,7 @@ export function PaginationBar({
           <Button
             type="submit"
             variant="outline"
-            size="sm"
-            className="h-7 px-2.5 text-xs"
+            size="xs"
             disabled={!canNavigate}
           >
             跳转
@@ -174,8 +175,7 @@ export function PaginationBar({
             <Button
               type="button"
               variant="outline"
-              size="sm"
-              className="h-7 gap-1 px-2 text-xs"
+              size="xs"
               aria-label="下一页"
               disabled={!canNavigate || currentPage >= normalizedTotalPages}
               onClick={() => onPageChange?.(currentPage + 1)}
@@ -191,8 +191,7 @@ export function PaginationBar({
             <Button
               type="button"
               variant="outline"
-              size="sm"
-              className="h-7 px-2 text-xs"
+              size="xs"
               onClick={() => onPageChange?.(1)}
               disabled={!canNavigate || currentPage <= 1}
               aria-label="第一页"
@@ -202,8 +201,7 @@ export function PaginationBar({
             <Button
               type="button"
               variant="outline"
-              size="sm"
-              className="h-7 px-2 text-xs"
+              size="xs"
               onClick={() => onPageChange?.(currentPage - 1)}
               disabled={!canNavigate || currentPage <= 1}
               aria-label="上一页"
@@ -220,8 +218,8 @@ export function PaginationBar({
                 <Button
                   type="button"
                   variant={value === currentPage ? 'default' : 'outline'}
-                  size="sm"
-                  className="h-7 min-w-7 px-2 font-mono text-xs tabular-nums"
+                  size="xs"
+                  className="min-w-7 px-2 font-mono tabular-nums"
                   onClick={() => onPageChange?.(value)}
                   disabled={!canNavigate || value === currentPage}
                   aria-label={`第 ${value} 页`}
@@ -234,8 +232,7 @@ export function PaginationBar({
             <Button
               type="button"
               variant="outline"
-              size="sm"
-              className="h-7 px-2 text-xs"
+              size="xs"
               onClick={() => onPageChange?.(currentPage + 1)}
               disabled={!canNavigate || currentPage >= normalizedTotalPages}
               aria-label="下一页"
@@ -245,8 +242,7 @@ export function PaginationBar({
             <Button
               type="button"
               variant="outline"
-              size="sm"
-              className="h-7 px-2 text-xs"
+              size="xs"
               onClick={() => onPageChange?.(normalizedTotalPages)}
               disabled={!canNavigate || currentPage >= normalizedTotalPages}
               aria-label="最后一页"

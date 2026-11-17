@@ -2,8 +2,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   BarChart3,
-  ChevronRight,
   CircleHelp,
+  CornerDownLeft,
   GitBranch,
   Info,
   Layers,
@@ -22,6 +22,7 @@ import { cn } from '../lib/utils.js';
 import { Badge } from './ui/badge.jsx';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog.jsx';
 import { InputGroup, InputGroupAddon, InputGroupInput } from './ui/input-group.jsx';
+import { Kbd } from './ui/kbd.jsx';
 
 export function CommandPalette() {
   const {
@@ -74,11 +75,16 @@ export function CommandPalette() {
   useLayoutEffect(() => {
     if (!isCommandOpen || !listRef.current || !selectedRef.current) return;
     // 只滚动指令列表，避免 scrollIntoView 同时挪动弹窗或背景页面。
+    // 弹窗入场缩放动画期间按 offsetHeight 换算未缩放布局坐标，防止缩放结束后底部被裁切。
     const list = listRef.current;
     const viewport = list.getBoundingClientRect();
     const option = selectedRef.current.getBoundingClientRect();
-    if (option.top < viewport.top) list.scrollTop += option.top - viewport.top;
-    else if (option.bottom > viewport.bottom) list.scrollTop += option.bottom - viewport.bottom;
+    const scaleY = list.offsetHeight > 0 ? viewport.height / list.offsetHeight : 1;
+    if (option.top < viewport.top) {
+      list.scrollTop -= Math.ceil((viewport.top - option.top) / scaleY);
+    } else if (option.bottom > viewport.bottom) {
+      list.scrollTop += Math.ceil((option.bottom - viewport.bottom) / scaleY);
+    }
   }, [isCommandOpen, selectedID, query]);
 
   const handleKeyDown = (e) => {
@@ -97,14 +103,17 @@ export function CommandPalette() {
 
   return (
     <Dialog open={isCommandOpen} onOpenChange={setIsCommandOpen}>
-      <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-lg" aria-label="命令面板">
+      <DialogContent
+        className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden border-border/85 bg-popover/96 p-0 backdrop-blur-xl sm:max-w-lg"
+        aria-label="命令面板"
+      >
         <DialogHeader className="sr-only">
           <DialogTitle>命令面板</DialogTitle>
         </DialogHeader>
-        <div className="shrink-0 border-b px-3 py-2.5 pr-10">
-          <InputGroup className="border-0 shadow-none focus-within:ring-0">
-            <InputGroupAddon>
-              <Search className="size-4 text-muted-foreground" />
+        <div className="shrink-0 border-b border-border/75 px-3.5 py-3 pr-11">
+          <InputGroup className="h-9 border-0 bg-transparent shadow-none hover:border-0 has-[[data-slot=input-group-input]:focus-visible]:ring-0">
+            <InputGroupAddon className="pl-1.5">
+              <Search className="size-4 text-primary" />
             </InputGroupAddon>
             <InputGroupInput
               ref={inputRef}
@@ -115,7 +124,7 @@ export function CommandPalette() {
               aria-autocomplete="list"
               aria-controls="command-palette-results"
               aria-activedescendant={filtered[safeIndex] ? `command-${filtered[safeIndex].id}` : undefined}
-              placeholder="输入指令或搜索页面 (如: 运行、Provider、启动代理)..."
+              placeholder="输入指令或搜索页面（如：运行、入口库、启动代理）…"
               value={query}
               onChange={(e) => {
                 setQuery(e.target.value);
@@ -131,10 +140,10 @@ export function CommandPalette() {
           id="command-palette-results"
           role="listbox"
           aria-label="可用指令"
-          className="min-h-0 max-h-80 overflow-y-auto p-1.5"
+          className="min-h-0 max-h-80 overflow-y-auto p-2"
         >
           {filtered.length === 0 ? (
-            <div className="px-3 py-8 text-center text-xs text-muted-foreground">
+            <div className="px-3 py-10 text-center text-xs text-muted-foreground">
               未找到匹配的指令或页面
             </div>
           ) : (
@@ -151,32 +160,54 @@ export function CommandPalette() {
                   role="option"
                   aria-selected={isSelected}
                   className={cn(
-                    'flex w-full cursor-pointer items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-xs transition-colors',
+                    'flex w-full cursor-pointer items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left text-xs transition-colors',
                     isSelected
                       ? 'bg-accent text-accent-foreground'
-                      : 'text-foreground hover:bg-accent/60',
+                      : 'text-foreground/90 hover:bg-accent/55',
                   )}
                   onClick={() => executeItem(item)}
                   onPointerMove={(event) => {
                     if (event.pointerType === 'mouse') setSelectedIndex(idx);
                   }}
                 >
-                  <span className="flex min-w-0 items-center gap-2.5">
-                    <span className="flex size-6 shrink-0 items-center justify-center rounded-md border bg-background/80 text-muted-foreground">
+                  <span className="flex min-w-0 items-center gap-3">
+                    <span
+                      className={cn(
+                        'flex size-7 shrink-0 items-center justify-center rounded-lg border transition-colors',
+                        isSelected
+                          ? 'border-primary/25 bg-primary/12 text-primary'
+                          : 'border-border/80 bg-card/80 text-muted-foreground',
+                      )}
+                    >
                       <ItemIcon className="size-3.5" />
                     </span>
                     <span className="truncate font-medium">{item.title}</span>
                   </span>
-                  <span className="flex shrink-0 items-center gap-1.5">
+                  <span className="flex shrink-0 items-center gap-2">
                     <Badge variant="outline" className="text-[10px] font-normal">
                       {item.category}
                     </Badge>
-                    {isSelected && <ChevronRight className="size-3.5 text-muted-foreground" />}
+                    {isSelected && <CornerDownLeft className="size-3.5 text-primary" aria-hidden="true" />}
                   </span>
                 </button>
               );
             })
           )}
+        </div>
+
+        <div className="flex items-center justify-between border-t border-border/70 bg-muted/35 px-4 py-2 text-[11px] text-muted-foreground">
+          <span className="inline-flex items-center gap-1.5">
+            <Kbd>↑</Kbd>
+            <Kbd>↓</Kbd>
+            <span>选择</span>
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <Kbd>↵</Kbd>
+            <span>执行</span>
+            <span className="mx-1 text-border">·</span>
+            <Kbd>Esc</Kbd>
+            <span>关闭</span>
+          </span>
         </div>
       </DialogContent>
     </Dialog>

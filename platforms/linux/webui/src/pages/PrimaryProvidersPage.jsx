@@ -28,11 +28,11 @@ import { ENDPOINT_PROTOCOL_MODES, endpointProtocolLabel, normalizeEndpointProtoc
 import { Badge } from '../components/ui/badge.jsx';
 import { Button } from '../components/ui/button.jsx';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card.jsx';
+import { Checkbox } from '../components/ui/checkbox.jsx';
 import { Input } from '../components/ui/input.jsx';
 import { Label } from '../components/ui/label.jsx';
-
-const SELECT_CLS = 'h-9 w-full rounded-md border border-input bg-background px-2.5 text-xs text-foreground shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50';
-const COMPACT_SELECT_CLS = 'h-7 rounded-md border border-input bg-background px-2 text-xs text-foreground shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50';
+import { NativeSelect } from '../components/ui/native-select.jsx';
+import { PageHeader } from '../components/ui/page-header.jsx';
 
 function endpointMappings(endpoint) {
   return endpoint?.modelMappings || endpoint?.mappings || [];
@@ -223,24 +223,22 @@ function CatalogModelPicker({ models, onChange }) {
   };
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3.5">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-xs text-muted-foreground">
           选择目录中尚未映射的模型；默认全选。共 {models.length} 个。
         </span>
-        <Button type="button" variant="outline" size="sm" className="h-7 px-2.5 text-xs" onClick={toggleAll}>
+        <Button type="button" variant="outline" size="xs" onClick={toggleAll}>
           {selected.size === models.length ? '取消全选' : '全选'}
         </Button>
       </div>
-      <div className="grid max-h-72 gap-2 overflow-y-auto rounded-xl border bg-muted/15 p-3 sm:grid-cols-2">
+      <div className="grid max-h-72 gap-2 overflow-y-auto rounded-2xl border border-border/80 bg-muted/20 p-3.5 sm:grid-cols-2">
         {models.map((model) => (
           <label
             key={model}
-            className="flex cursor-pointer items-center gap-2 rounded-lg border bg-background px-2.5 py-2 text-xs hover:bg-muted/40"
+            className="flex cursor-pointer items-center gap-2.5 rounded-xl border border-border/75 bg-card px-3 py-2 text-xs transition-colors hover:border-border hover:bg-accent/45"
           >
-            <input
-              type="checkbox"
-              className="size-3.5 shrink-0 accent-primary"
+            <Checkbox
               checked={selected.has(model)}
               onChange={() => toggle(model)}
             />
@@ -248,7 +246,7 @@ function CatalogModelPicker({ models, onChange }) {
           </label>
         ))}
       </div>
-      <span className="block text-[11px] text-muted-foreground">
+      <span className="block text-[11px] leading-relaxed text-muted-foreground">
         将按入口协议和模型映射生成客户端模型名与上游模型名。
       </span>
     </div>
@@ -460,15 +458,16 @@ function EndpointMappingTable({ endpoint, configDoc, saveConfig, addToast }) {
 
       {selected.size > 0 && (
         <div
-          className="mapping-bulk-bar flex flex-wrap items-center gap-2.5 rounded-xl border border-primary/35 bg-primary/10 px-3 py-2 text-xs"
+          className="mapping-bulk-bar flex flex-wrap items-center gap-2.5 rounded-2xl border border-primary/30 bg-primary/[0.08] px-3.5 py-2.5 text-xs"
           role="toolbar"
           aria-label="批量操作"
         >
           <span className="font-semibold text-foreground tabular-nums">已选 {selected.size} 行</span>
           <label className="flex items-center gap-1.5 text-muted-foreground">
             <span>Thinking</span>
-            <select
-              className={COMPACT_SELECT_CLS}
+            <NativeSelect
+              size="sm"
+              wrapperClassName="w-auto min-w-[112px]"
               value=""
               aria-label="批量设置 Thinking"
               onChange={(e) => { if (e.target.value) applyBulk({ thinking: e.target.value }); }}
@@ -477,12 +476,13 @@ function EndpointMappingTable({ endpoint, configDoc, saveConfig, addToast }) {
               {MAPPING_THINKING_OPTIONS.map(([value, label]) => (
                 <option key={value} value={value}>{label}</option>
               ))}
-            </select>
+            </NativeSelect>
           </label>
           <label className="flex items-center gap-1.5 text-muted-foreground">
             <span>上下文</span>
-            <select
-              className={COMPACT_SELECT_CLS}
+            <NativeSelect
+              size="sm"
+              wrapperClassName="w-auto min-w-[116px]"
               value=""
               aria-label="批量设置上下文"
               onChange={(e) => { if (e.target.value) applyBulk({ context: e.target.value }); }}
@@ -491,13 +491,12 @@ function EndpointMappingTable({ endpoint, configDoc, saveConfig, addToast }) {
               {MAPPING_CONTEXT_OPTIONS.map(([value, label]) => (
                 <option key={value} value={value}>{label}</option>
               ))}
-            </select>
+            </NativeSelect>
           </label>
           <Button
             type="button"
             variant="ghost"
-            size="sm"
-            className="h-7 px-2 text-xs"
+            size="xs"
             onClick={() => applyBulk({ to: '' })}
             title="上游模型名留空即与客户端同名"
           >
@@ -506,34 +505,32 @@ function EndpointMappingTable({ endpoint, configDoc, saveConfig, addToast }) {
           <Button
             type="button"
             variant="ghost"
-            size="sm"
-            className="h-7 gap-1 px-2 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+            size="xs"
+            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
             onClick={() => remove(new Set(selected))}
           >
             <Trash2 className="size-3" />
             <span>删除选中</span>
           </Button>
-          <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setSelected(new Set())}>
+          <Button type="button" variant="ghost" size="xs" onClick={() => setSelected(new Set())}>
             取消选择
           </Button>
         </div>
       )}
 
       {draft.length === 0 ? (
-        <div className="rounded-xl border border-dashed px-4 py-8 text-center text-xs text-muted-foreground">
+        <div className="rounded-2xl border border-dashed border-border/80 bg-muted/15 px-4 py-9 text-center text-xs text-muted-foreground">
           当前入口未配置任何模型映射；所有请求原样使用客户端模型名转发。点击「添加一行」或「从已知模型添加」开始。
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-xl border" role="table" aria-label="模型映射列表">
+        <div className="overflow-x-auto rounded-2xl border border-border/80 bg-card shadow-2xs" role="table" aria-label="模型映射列表">
           <div className="min-w-[820px]">
             <div
-              className="mapping-grid-head grid grid-cols-[36px_minmax(180px,1.2fr)_minmax(180px,1.2fr)_165px_125px_100px_40px] items-center gap-2 border-b bg-muted/50 px-3 py-2 text-[11px] font-medium text-muted-foreground"
+              className="mapping-grid-head grid grid-cols-[36px_minmax(180px,1.2fr)_minmax(180px,1.2fr)_172px_132px_100px_40px] items-center gap-2 border-b border-border/75 bg-muted/55 px-3.5 py-2.5 text-[11px] font-semibold text-muted-foreground"
               role="row"
             >
-              <span>
-                <input
-                  type="checkbox"
-                  className="size-3.5 accent-primary"
+              <span className="flex items-center justify-center">
+                <Checkbox
                   aria-label="全选当前可见映射"
                   checked={allVisibleSelected}
                   onChange={(e) => toggleAll(e.target.checked)}
@@ -547,7 +544,7 @@ function EndpointMappingTable({ endpoint, configDoc, saveConfig, addToast }) {
               <span />
             </div>
 
-            <div className="divide-y">
+            <div className="divide-y divide-border/65">
               {visible.map((row) => {
                 const error = rowError(row);
                 return (
@@ -556,16 +553,14 @@ function EndpointMappingTable({ endpoint, configDoc, saveConfig, addToast }) {
                     data-mapping-key={row._key}
                     role="row"
                     className={cn(
-                      'mapping-grid-row grid grid-cols-[36px_minmax(180px,1.2fr)_minmax(180px,1.2fr)_165px_125px_100px_40px] items-center gap-2 px-3 py-2 transition-colors hover:bg-muted/25',
-                      selected.has(row._key) && 'is-selected bg-primary/5',
-                      error && 'is-invalid border-l-2 border-l-status-critical bg-status-critical/5',
+                      'mapping-grid-row grid grid-cols-[36px_minmax(180px,1.2fr)_minmax(180px,1.2fr)_172px_132px_100px_40px] items-center gap-2 px-3.5 py-2 transition-colors hover:bg-muted/30',
+                      selected.has(row._key) && 'is-selected bg-primary/[0.06]',
+                      error && 'is-invalid border-l-2 border-l-status-critical bg-status-critical/[0.06]',
                     )}
                     title={error || undefined}
                   >
-                    <span>
-                      <input
-                        type="checkbox"
-                        className="size-3.5 accent-primary"
+                    <span className="flex items-center justify-center">
+                      <Checkbox
                         aria-label={`选择映射 ${row.from || '(空)'}`}
                         checked={selected.has(row._key)}
                         onChange={(e) => toggle(row._key, e.target.checked)}
@@ -592,8 +587,9 @@ function EndpointMappingTable({ endpoint, configDoc, saveConfig, addToast }) {
                       />
                     </span>
                     <span className="flex items-center gap-1">
-                      <select
-                        className={cn(COMPACT_SELECT_CLS, 'h-8 flex-1')}
+                      <NativeSelect
+                        size="sm"
+                        wrapperClassName="flex-1"
                         aria-label="Thinking"
                         value={row.thinking}
                         onChange={(e) => update(row._key, { thinking: e.target.value })}
@@ -601,10 +597,11 @@ function EndpointMappingTable({ endpoint, configDoc, saveConfig, addToast }) {
                         {MAPPING_THINKING_OPTIONS.map(([value, label]) => (
                           <option key={value} value={value}>{label}</option>
                         ))}
-                      </select>
+                      </NativeSelect>
                       {row.thinking === 'adaptive' && (
-                        <select
-                          className={cn(COMPACT_SELECT_CLS, 'h-8 w-[68px]')}
+                        <NativeSelect
+                          size="sm"
+                          wrapperClassName="w-[74px] shrink-0"
                           aria-label="思考级别"
                           value={row.effort}
                           onChange={(e) => update(row._key, { effort: e.target.value })}
@@ -612,12 +609,12 @@ function EndpointMappingTable({ endpoint, configDoc, saveConfig, addToast }) {
                           {MAPPING_EFFORT_OPTIONS.map((value) => (
                             <option key={value} value={value}>{value === 'auto' ? '自动' : value}</option>
                           ))}
-                        </select>
+                        </NativeSelect>
                       )}
                     </span>
                     <span>
-                      <select
-                        className={cn(COMPACT_SELECT_CLS, 'h-8 w-full')}
+                      <NativeSelect
+                        size="sm"
                         aria-label="上下文"
                         value={row.context}
                         onChange={(e) => update(row._key, { context: e.target.value })}
@@ -625,7 +622,7 @@ function EndpointMappingTable({ endpoint, configDoc, saveConfig, addToast }) {
                         {MAPPING_CONTEXT_OPTIONS.map(([value, label]) => (
                           <option key={value} value={value}>{label}</option>
                         ))}
-                      </select>
+                      </NativeSelect>
                     </span>
                     <span>
                       <Input
@@ -639,7 +636,7 @@ function EndpointMappingTable({ endpoint, configDoc, saveConfig, addToast }) {
                         onChange={(e) => update(row._key, { failoverTimeoutSeconds: e.target.value })}
                       />
                     </span>
-                    <span>
+                    <span className="flex items-center justify-center">
                       <Button
                         type="button"
                         variant="ghost"
@@ -656,7 +653,7 @@ function EndpointMappingTable({ endpoint, configDoc, saveConfig, addToast }) {
                 );
               })}
               {visible.length === 0 && (
-                <div className="px-4 py-6 text-center text-xs text-muted-foreground">
+                <div className="px-4 py-8 text-center text-xs text-muted-foreground">
                   没有匹配「{query}」的映射。
                 </div>
               )}
@@ -1536,16 +1533,15 @@ export function PrimaryProvidersPage() {
             <Label htmlFor="provider-protocol" className="text-xs font-medium text-muted-foreground">
               入口协议
             </Label>
-            <select
+            <NativeSelect
               id="provider-protocol"
-              className={SELECT_CLS}
               defaultValue={protocol}
               onChange={(e) => { protocol = normalizeEndpointProtocol(e.target.value, 'auto'); }}
             >
               {ENDPOINT_PROTOCOL_MODES.map((option) => (
                 <option key={option.value} value={option.value}>{option.label}</option>
               ))}
-            </select>
+            </NativeSelect>
             <span className="block text-[11px] text-muted-foreground">
               自动（四协议）会按入站路径选择对应的原生协议；固定协议用于强制指定上游格式。
             </span>
@@ -1897,65 +1893,62 @@ export function PrimaryProvidersPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="space-y-1">
-          <h1 className="flex items-center gap-2.5 text-2xl font-semibold tracking-tight text-foreground">
-            <Server className="size-5 text-primary" aria-hidden="true" />
-            <span>入口库</span>
-          </h1>
-          <p className="text-xs text-muted-foreground">统一维护上游地址、密钥和原始映射，供多个模型组复用。</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" variant="outline" size="sm" onClick={openRetryEditor} className="gap-1.5">
-            <Wrench className="size-3.5" />
-            <span>编辑重试策略</span>
-          </Button>
-          <Button type="button" size="sm" onClick={() => openEndpointEditor(null)} className="gap-1.5">
-            <Plus className="size-3.5" />
-            <span>添加入口通道</span>
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        icon={Server}
+        title={<span>入口库</span>}
+        description="统一维护上游地址、密钥和原始映射，供多个模型组复用。"
+        actions={(
+          <>
+            <Button type="button" variant="outline" size="sm" onClick={openRetryEditor}>
+              <Wrench className="size-3.5" />
+              <span>编辑重试策略</span>
+            </Button>
+            <Button type="button" size="sm" onClick={() => openEndpointEditor(null)}>
+              <Plus className="size-3.5" />
+              <span>添加入口通道</span>
+            </Button>
+          </>
+        )}
+      />
 
       {/* Top Overview Cards */}
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="stagger-cards grid gap-4 lg:grid-cols-3">
         {/* Explicit Mapping Card */}
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
+        <Card className="flex flex-col justify-between">
+          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 border-b border-border/70">
             <CardTitle className="text-sm font-semibold">入口模型映射与入口概览</CardTitle>
             <StatusBadge text="按入口生效" kind="good" />
           </CardHeader>
-          <CardContent className="space-y-3 text-xs">
+          <CardContent className="space-y-3.5 text-xs">
             <p className="leading-relaxed text-muted-foreground">
               每个入口都必须在“模型映射”中声明客户端模型、上游模型、Thinking 和上下文策略。
-              精确模型名优先于 <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">prefix-*</code> 通配映射；点击入口后即可编辑。
+              精确模型名优先于 <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px]">prefix-*</code> 通配映射；点击入口后即可编辑。
             </p>
-            <span className="block text-[11px] text-muted-foreground">
+            <span className="block text-[11px] leading-relaxed text-muted-foreground">
               模型组决定承接范围与组内入口优先级；这里的优先级用于旧配置和新增默认组。原始映射的模型参数继续继承。
             </span>
-            <div className="grid grid-cols-3 gap-2 border-t pt-3" aria-label="Provider 入口概览">
-              <div className="space-y-0.5">
+            <div className="grid grid-cols-3 gap-2 pt-1" aria-label="Provider 入口概览">
+              <div className="rounded-xl bg-muted/45 px-3 py-2">
                 <span className="block text-[11px] text-muted-foreground">入口总数</span>
-                <strong className="font-mono text-sm font-semibold text-foreground tabular-nums">{endpoints.length}</strong>
+                <strong className="mt-0.5 block font-mono text-sm font-semibold text-foreground tabular-nums">{endpoints.length}</strong>
               </div>
-              <div className="space-y-0.5">
+              <div className="rounded-xl bg-muted/45 px-3 py-2">
                 <span className="block text-[11px] text-muted-foreground">已启用</span>
-                <strong className="font-mono text-sm font-semibold text-status-good tabular-nums">{enabledEndpointCount}</strong>
+                <strong className="mt-0.5 block font-mono text-sm font-semibold text-status-good tabular-nums">{enabledEndpointCount}</strong>
               </div>
-              <div className="space-y-0.5">
+              <div className="rounded-xl bg-muted/45 px-3 py-2">
                 <span className="block text-[11px] text-muted-foreground">未启用</span>
-                <strong className="font-mono text-sm font-semibold text-foreground tabular-nums">
+                <strong className="mt-0.5 block font-mono text-sm font-semibold text-foreground tabular-nums">
                   {Math.max(0, endpoints.length - enabledEndpointCount)}
                 </strong>
               </div>
-              <div className="space-y-0.5">
+              <div className="rounded-xl bg-muted/45 px-3 py-2">
                 <span className="block text-[11px] text-muted-foreground">模型映射</span>
-                <strong className="font-mono text-sm font-semibold text-primary tabular-nums">{mappedModelCount} 条</strong>
+                <strong className="mt-0.5 block font-mono text-sm font-semibold text-primary tabular-nums">{mappedModelCount} 条</strong>
               </div>
-              <div className="col-span-2 space-y-0.5">
+              <div className="col-span-2 rounded-xl bg-muted/45 px-3 py-2">
                 <span className="block text-[11px] text-muted-foreground">目录模型（去重）</span>
-                <strong className="font-mono text-sm font-semibold text-foreground tabular-nums">
+                <strong className="mt-0.5 block font-mono text-sm font-semibold text-foreground tabular-nums">
                   {catalogModelCount ? `${catalogModelCount} 个` : '尚未获取'}
                 </strong>
               </div>
@@ -1965,39 +1958,39 @@ export function PrimaryProvidersPage() {
 
         {/* Global Retry Policy Card */}
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
+          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 border-b border-border/70">
             <CardTitle className="text-sm font-semibold">全局超时与重试参数摘要</CardTitle>
             <StatusBadge text="生效中" kind="good" />
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
-              <div><span className="block text-[11px] text-muted-foreground">首响应截止</span><strong className="font-mono text-foreground tabular-nums">{retry.responseTimeoutSeconds ? `${retry.responseTimeoutSeconds}s` : '由客户端决定'}</strong></div>
-              <div><span className="block text-[11px] text-muted-foreground">流式空闲截止</span><strong className="font-mono text-foreground tabular-nums">{retry.streamIdleTimeoutSeconds ? `${retry.streamIdleTimeoutSeconds}s` : '无限空闲'}</strong></div>
-              <div><span className="block text-[11px] text-muted-foreground">500 失败后切换入口</span><strong className="text-foreground">{(retry.failoverOn500 ?? true) ? '开启' : '关闭'}</strong></div>
-              <div><span className="block text-[11px] text-muted-foreground">入口内流错误重试</span><strong className="font-mono text-foreground tabular-nums">{retry.maxStreamErrorRetries ?? 0} 次</strong></div>
-              <div><span className="block text-[11px] text-muted-foreground">流错误后切换入口</span><strong className="text-foreground">{(retry.failoverOnStreamError ?? false) ? '开启' : '关闭'}</strong></div>
-              <div><span className="block text-[11px] text-muted-foreground">入口内 500 重试</span><strong className="font-mono text-foreground tabular-nums">{retry.max500Retries ?? 0} 次</strong></div>
-              <div><span className="block text-[11px] text-muted-foreground">retry_delay 透传</span><strong className="font-mono text-foreground">{(retry.passThroughRetryDelay ?? true) ? (retry.retryDelaySeconds ? `${retry.retryDelaySeconds}s` : '未配置') : '关闭'}</strong></div>
-              <div><span className="block text-[11px] text-muted-foreground">粘性入口重试</span><strong className="font-mono text-foreground tabular-nums">{retry.sessionStickyRetries ?? 2} 次</strong></div>
-              <div><span className="block text-[11px] text-muted-foreground">会话粘性时长</span><strong className="font-mono text-foreground tabular-nums">{stickyTTLEffective > 0 ? `${stickyTTLEffective}h` : '永不过期'}</strong></div>
-              <div><span className="block text-[11px] text-muted-foreground">故障重试最大轮数</span><strong className="font-mono text-foreground tabular-nums">{retry.maxDeferredRounds ?? retry.crossRoundRetries ?? 3} 轮</strong></div>
-              <div className="col-span-2"><span className="block text-[11px] text-muted-foreground">跨轮最长时长</span><strong className="font-mono text-foreground tabular-nums">{retry.maxRetryDurationSeconds ? `${retry.maxRetryDurationSeconds}s` : '不限时长'}</strong></div>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="rounded-xl bg-muted/40 px-3 py-2"><span className="block text-[11px] text-muted-foreground">首响应截止</span><strong className="mt-0.5 block font-mono text-foreground tabular-nums">{retry.responseTimeoutSeconds ? `${retry.responseTimeoutSeconds}s` : '由客户端决定'}</strong></div>
+              <div className="rounded-xl bg-muted/40 px-3 py-2"><span className="block text-[11px] text-muted-foreground">流式空闲截止</span><strong className="mt-0.5 block font-mono text-foreground tabular-nums">{retry.streamIdleTimeoutSeconds ? `${retry.streamIdleTimeoutSeconds}s` : '无限空闲'}</strong></div>
+              <div className="rounded-xl bg-muted/40 px-3 py-2"><span className="block text-[11px] text-muted-foreground">500 失败后切换入口</span><strong className="mt-0.5 block text-foreground">{(retry.failoverOn500 ?? true) ? '开启' : '关闭'}</strong></div>
+              <div className="rounded-xl bg-muted/40 px-3 py-2"><span className="block text-[11px] text-muted-foreground">入口内流错误重试</span><strong className="mt-0.5 block font-mono text-foreground tabular-nums">{retry.maxStreamErrorRetries ?? 0} 次</strong></div>
+              <div className="rounded-xl bg-muted/40 px-3 py-2"><span className="block text-[11px] text-muted-foreground">流错误后切换入口</span><strong className="mt-0.5 block text-foreground">{(retry.failoverOnStreamError ?? false) ? '开启' : '关闭'}</strong></div>
+              <div className="rounded-xl bg-muted/40 px-3 py-2"><span className="block text-[11px] text-muted-foreground">入口内 500 重试</span><strong className="mt-0.5 block font-mono text-foreground tabular-nums">{retry.max500Retries ?? 0} 次</strong></div>
+              <div className="rounded-xl bg-muted/40 px-3 py-2"><span className="block text-[11px] text-muted-foreground">retry_delay 透传</span><strong className="mt-0.5 block font-mono text-foreground">{(retry.passThroughRetryDelay ?? true) ? (retry.retryDelaySeconds ? `${retry.retryDelaySeconds}s` : '未配置') : '关闭'}</strong></div>
+              <div className="rounded-xl bg-muted/40 px-3 py-2"><span className="block text-[11px] text-muted-foreground">粘性入口重试</span><strong className="mt-0.5 block font-mono text-foreground tabular-nums">{retry.sessionStickyRetries ?? 2} 次</strong></div>
+              <div className="rounded-xl bg-muted/40 px-3 py-2"><span className="block text-[11px] text-muted-foreground">会话粘性时长</span><strong className="mt-0.5 block font-mono text-foreground tabular-nums">{stickyTTLEffective > 0 ? `${stickyTTLEffective}h` : '永不过期'}</strong></div>
+              <div className="rounded-xl bg-muted/40 px-3 py-2"><span className="block text-[11px] text-muted-foreground">故障重试最大轮数</span><strong className="mt-0.5 block font-mono text-foreground tabular-nums">{retry.maxDeferredRounds ?? retry.crossRoundRetries ?? 3} 轮</strong></div>
+              <div className="col-span-2 rounded-xl bg-muted/40 px-3 py-2"><span className="block text-[11px] text-muted-foreground">跨轮最长时长</span><strong className="mt-0.5 block font-mono text-foreground tabular-nums">{retry.maxRetryDurationSeconds ? `${retry.maxRetryDurationSeconds}s` : '不限时长'}</strong></div>
             </div>
           </CardContent>
         </Card>
 
         {/* Auto Catalog Card */}
         <Card className="flex flex-col justify-between">
-          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
+          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 border-b border-border/70">
             <CardTitle className="text-sm font-semibold">自动模型目录</CardTitle>
             <StatusBadge
               text={modelCatalog.autoRefresh === false ? '已停用' : '已启用'}
               kind={modelCatalog.autoRefresh === false ? 'muted' : 'good'}
             />
           </CardHeader>
-          <CardContent className="space-y-3">
+          <CardContent className="flex flex-1 flex-col justify-between gap-4">
             <div className="space-y-2.5 text-xs">
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center justify-between gap-2 rounded-xl bg-muted/40 px-3.5 py-2.5">
                 <span className="text-muted-foreground">Provider 自动刷新</span>
                 <QuickToggle
                   checked={modelCatalog.autoRefresh !== false}
@@ -2006,7 +1999,7 @@ export function PrimaryProvidersPage() {
                   ariaLabel="切换 Provider 模型目录自动刷新"
                 />
               </div>
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center justify-between gap-2 rounded-xl bg-muted/40 px-3.5 py-2.5">
                 <span className="text-muted-foreground">启动时刷新</span>
                 <QuickToggle
                   checked={modelCatalog.refreshOnStartup !== false}
@@ -2015,7 +2008,7 @@ export function PrimaryProvidersPage() {
                   ariaLabel="切换启动时刷新模型目录"
                 />
               </div>
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center justify-between gap-2 rounded-xl bg-muted/40 px-3.5 py-2.5">
                 <span className="text-muted-foreground">公共元数据</span>
                 <QuickToggle
                   checked={modelCatalog.remoteMetadataEnabled !== false}
@@ -2024,7 +2017,7 @@ export function PrimaryProvidersPage() {
                   ariaLabel="切换公共模型元数据刷新"
                 />
               </div>
-              <label className="flex items-center justify-between gap-2">
+              <label className="flex items-center justify-between gap-2 rounded-xl bg-muted/40 px-3.5 py-2">
                 <span className="text-muted-foreground">刷新周期（分钟）</span>
                 <Input
                   className="h-7 w-24 text-right font-mono text-xs tabular-nums"
@@ -2058,15 +2051,15 @@ export function PrimaryProvidersPage() {
       </div>
 
       {/* Endpoints Table */}
-      <Card className="overflow-hidden py-0">
-        <CardHeader className="flex flex-col gap-3 border-b py-4 sm:flex-row sm:items-center sm:justify-between">
+      <Card className="gap-0 overflow-hidden py-0">
+        <CardHeader className="flex flex-col gap-3 border-b border-border/75 py-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="space-y-1">
             <CardTitle className="text-base font-semibold">上游通道入口列表 ({endpoints.length})</CardTitle>
             <CardDescription className="text-xs">
               调度优先按 Priority 数值（小者优先），同级按列表顺序。点击行查看详细映射；拖动整行可调整入口顺序，目标行上/下半区会显示插入位置。
             </CardDescription>
           </div>
-          <div className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+          <div className="flex shrink-0 items-center gap-2 rounded-xl border border-border/80 bg-muted/35 px-3 py-1.5 text-xs text-muted-foreground">
             <label
               htmlFor="provider-sticky-ttl"
               title="同一会话粘在同一入口组的时长；超时后新请求按入口库顺序重新选择。0 表示永不过期。"
@@ -2075,7 +2068,7 @@ export function PrimaryProvidersPage() {
             </label>
             <Input
               id="provider-sticky-ttl"
-              className="h-8 w-20 text-right font-mono text-xs tabular-nums"
+              className="h-7 w-16 bg-card/90 text-right font-mono text-xs tabular-nums"
               type="number"
               min="0"
               step="1"
@@ -2110,9 +2103,9 @@ export function PrimaryProvidersPage() {
             />
           </div>
 
-          <div className="provider-mobile-list space-y-3 p-3 md:hidden" role="list" aria-label="上游 Provider 入口">
+          <div className="provider-mobile-list space-y-3 p-4 md:hidden" role="list" aria-label="上游 Provider 入口">
             {endpoints.length === 0 ? (
-              <div className="py-8 text-center text-xs text-muted-foreground">当前暂无 Provider 入口</div>
+              <div className="py-10 text-center text-xs text-muted-foreground">当前暂无 Provider 入口</div>
             ) : endpoints.map((endpoint, idx) => {
               const models = catalogModels(endpoint);
               const selected = selectedEndpoint?.id === endpoint.id;
@@ -2123,8 +2116,8 @@ export function PrimaryProvidersPage() {
                   key={endpoint.id}
                   className={cn(
                     dragProps.className,
-                    'space-y-3 rounded-xl border bg-card p-3.5 transition-colors',
-                    selected && 'border-primary bg-primary/5',
+                    'space-y-3 rounded-2xl border border-border/80 bg-card p-4 shadow-2xs transition-all',
+                    selected && 'border-primary/50 bg-primary/[0.06]',
                   )}
                   role="listitem"
                 >
@@ -2148,7 +2141,7 @@ export function PrimaryProvidersPage() {
                     />
                   </div>
 
-                  <dl className="grid grid-cols-2 gap-2 text-xs">
+                  <dl className="grid grid-cols-2 gap-2 rounded-xl bg-muted/40 p-3 text-xs">
                     <div>
                       <dt className="text-[11px] text-muted-foreground">优先级</dt>
                       <dd className="font-mono font-semibold text-primary tabular-nums">{endpoint.priority ?? 0}</dd>
@@ -2181,8 +2174,7 @@ export function PrimaryProvidersPage() {
                     <Button
                       type="button"
                       variant={selected ? 'default' : 'outline'}
-                      size="sm"
-                      className="h-8 gap-1.5 text-xs"
+                      size="xs"
                       onClick={() => {
                         selectEndpoint(endpoint.id);
                         window.requestAnimationFrame(() => document.getElementById('provider-endpoint-inspector')?.scrollIntoView({ block: 'start' }));
@@ -2194,8 +2186,7 @@ export function PrimaryProvidersPage() {
                     <Button
                       type="button"
                       variant="outline"
-                      size="sm"
-                      className="h-8 gap-1.5 text-xs"
+                      size="xs"
                       onClick={() => openEndpointEditor(endpoint)}
                     >
                       <Pencil className="size-3.5" />
@@ -2203,17 +2194,16 @@ export function PrimaryProvidersPage() {
                     </Button>
                   </div>
 
-                  <details className="group rounded-lg border bg-muted/20 p-2">
+                  <details className="group rounded-xl border border-border/75 bg-muted/20 p-2.5">
                     <summary className="flex cursor-pointer list-none items-center justify-between text-xs font-medium text-muted-foreground select-none">
                       <span>排序、模型与删除</span>
-                      <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
+                      <ChevronRight className="size-3.5 transition-transform duration-150 group-open:rotate-90" />
                     </summary>
-                    <div className="mt-2 flex flex-wrap gap-1.5">
+                    <div className="mt-2.5 flex flex-wrap gap-1.5">
                       <Button
                         type="button"
                         variant="outline"
-                        size="sm"
-                        className="h-7 gap-1 px-2 text-xs"
+                        size="xs"
                         disabled={idx === 0}
                         onClick={() => handleMoveEndpoint(idx, -1)}
                       >
@@ -2223,8 +2213,7 @@ export function PrimaryProvidersPage() {
                       <Button
                         type="button"
                         variant="outline"
-                        size="sm"
-                        className="h-7 gap-1 px-2 text-xs"
+                        size="xs"
                         disabled={idx === endpoints.length - 1}
                         onClick={() => handleMoveEndpoint(idx, 1)}
                       >
@@ -2234,8 +2223,7 @@ export function PrimaryProvidersPage() {
                       <Button
                         type="button"
                         variant="outline"
-                        size="sm"
-                        className="h-7 gap-1 px-2 text-xs"
+                        size="xs"
                         onClick={() => {
                           if (fetchingModelEndpointIDs.has(endpoint.id)) cancelModelFetch(endpoint.id);
                           else void handleFetchModels(endpoint);
@@ -2247,8 +2235,7 @@ export function PrimaryProvidersPage() {
                       <Button
                         type="button"
                         variant="destructive"
-                        size="sm"
-                        className="h-7 gap-1 px-2 text-xs"
+                        size="xs"
                         onClick={() => handleDeleteEndpoint(endpoint)}
                         aria-label={`删除入口「${endpoint.name || endpoint.id}」`}
                       >
@@ -2267,7 +2254,7 @@ export function PrimaryProvidersPage() {
       {/* Selected Endpoint Inspector & Full Model Mappings */}
       {selectedEndpoint && (
         <Card id="provider-endpoint-inspector">
-          <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0 pb-3">
+          <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0 border-b border-border/75">
             <div className="flex flex-wrap items-center gap-2.5">
               <CardTitle className="text-base font-semibold">入口详情 · {selectedEndpoint.name}</CardTitle>
               <StatusBadge text={selectedEndpoint.enabled ? '已就绪' : '已停用'} kind={selectedEndpoint.enabled ? 'good' : 'muted'} />
@@ -2278,7 +2265,6 @@ export function PrimaryProvidersPage() {
                 type="button"
                 variant="outline"
                 size="sm"
-                className="h-8 gap-1.5 text-xs"
                 onClick={() => {
                   if (fetchingModelEndpointIDs.has(selectedEndpoint.id)) cancelModelFetch(selectedEndpoint.id);
                   else void handleFetchModels(selectedEndpoint);
@@ -2291,7 +2277,6 @@ export function PrimaryProvidersPage() {
                 type="button"
                 variant="outline"
                 size="sm"
-                className="h-8 gap-1.5 text-xs"
                 onClick={() => openEndpointEditor(selectedEndpoint)}
               >
                 <Pencil className="size-3.5" />
@@ -2301,37 +2286,32 @@ export function PrimaryProvidersPage() {
           </CardHeader>
 
           <CardContent className="space-y-5">
-            <div className="grid gap-3 rounded-xl border bg-muted/15 p-3.5 text-xs sm:grid-cols-2 lg:grid-cols-4">
-              <div><span className="block text-[11px] text-muted-foreground">入口 ID</span><span className="break-all font-mono font-medium text-foreground">{selectedEndpoint.id}</span></div>
-              <div><span className="block text-[11px] text-muted-foreground">API 地址</span><span className="break-all font-mono font-medium text-foreground">{selectedEndpoint.baseURL}</span></div>
-              <div><span className="block text-[11px] text-muted-foreground">指定解析 IP</span><span className="font-mono font-medium text-foreground">{selectedEndpoint.resolveIP || '系统 DNS'}</span></div>
-              <div>
+            <div className="grid gap-2.5 text-xs sm:grid-cols-2 lg:grid-cols-4">
+              <div className="rounded-xl bg-muted/45 px-3.5 py-2.5"><span className="block text-[11px] text-muted-foreground">入口 ID</span><span className="mt-0.5 block break-all font-mono font-medium text-foreground">{selectedEndpoint.id}</span></div>
+              <div className="rounded-xl bg-muted/45 px-3.5 py-2.5"><span className="block text-[11px] text-muted-foreground">API 地址</span><span className="mt-0.5 block break-all font-mono font-medium text-foreground">{selectedEndpoint.baseURL}</span></div>
+              <div className="rounded-xl bg-muted/45 px-3.5 py-2.5"><span className="block text-[11px] text-muted-foreground">指定解析 IP</span><span className="mt-0.5 block font-mono font-medium text-foreground">{selectedEndpoint.resolveIP || '系统 DNS'}</span></div>
+              <div className="rounded-xl bg-muted/45 px-3.5 py-2.5">
                 <span className="block text-[11px] text-muted-foreground">API Key</span>
-                <span className={cn('font-mono font-medium', secretStatus?.endpoints?.[selectedEndpoint.id]?.configured ? 'text-status-good' : 'text-status-warning')}>
+                <span className={cn('mt-0.5 block font-mono font-medium', secretStatus?.endpoints?.[selectedEndpoint.id]?.configured ? 'text-status-good' : 'text-status-warning')}>
                   {secretStatus?.endpoints?.[selectedEndpoint.id]?.configured
                     ? `已配置 · 尾号 ${secretStatus.endpoints[selectedEndpoint.id].last4 || '****'}`
                     : '未配置'}
                 </span>
               </div>
-              <div><span className="block text-[11px] text-muted-foreground">入口协议</span><span className="font-mono font-medium text-foreground">{endpointProtocolLabel(selectedEndpoint.protocol)}</span></div>
-              <div><span className="block text-[11px] text-muted-foreground">粘性分组</span><span className="font-mono font-medium text-foreground">{selectedEndpoint.stickyGroup || '独立分组'}</span></div>
-              <div><span className="block text-[11px] text-muted-foreground">连接复用</span><span className="font-mono font-medium text-foreground">{selectedEndpoint.keepAlive ? '开启' : '关闭'}</span></div>
-              <div><span className="block text-[11px] text-muted-foreground">UA</span><span className="text-foreground">{userAgentSummary(selectedEndpoint.userAgent)}</span></div>
+              <div className="rounded-xl bg-muted/45 px-3.5 py-2.5"><span className="block text-[11px] text-muted-foreground">入口协议</span><span className="mt-0.5 block font-mono font-medium text-foreground">{endpointProtocolLabel(selectedEndpoint.protocol)}</span></div>
+              <div className="rounded-xl bg-muted/45 px-3.5 py-2.5"><span className="block text-[11px] text-muted-foreground">粘性分组</span><span className="mt-0.5 block font-mono font-medium text-foreground">{selectedEndpoint.stickyGroup || '独立分组'}</span></div>
+              <div className="rounded-xl bg-muted/45 px-3.5 py-2.5"><span className="block text-[11px] text-muted-foreground">连接复用</span><span className="mt-0.5 block font-mono font-medium text-foreground">{selectedEndpoint.keepAlive ? '开启' : '关闭'}</span></div>
+              <div className="rounded-xl bg-muted/45 px-3.5 py-2.5"><span className="block text-[11px] text-muted-foreground">UA</span><span className="mt-0.5 block text-foreground">{userAgentSummary(selectedEndpoint.userAgent)}</span></div>
             </div>
 
-            <div className="flex flex-col gap-3 rounded-xl border bg-muted/15 p-3.5 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex flex-col gap-3 rounded-2xl border border-border/80 bg-muted/20 p-4 sm:flex-row sm:items-start sm:justify-between">
               <div className="min-w-0 flex-1 space-y-1.5">
                 <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-foreground">
                   <span>模型目录 · {catalogModels(selectedEndpoint).length} 个</span>
                   {selectedEndpoint.catalog?.status && (
                     <Badge
-                      variant="outline"
-                      className={cn(
-                        'text-[10px]',
-                        selectedEndpoint.catalog.status === '获取失败'
-                          ? 'border-status-critical/40 bg-status-critical/10 text-status-critical'
-                          : 'border-status-good/40 bg-status-good/10 text-status-good',
-                      )}
+                      variant={selectedEndpoint.catalog.status === '获取失败' ? 'destructive' : 'success'}
+                      className="text-[10px]"
                     >
                       {selectedEndpoint.catalog.status}
                     </Badge>
@@ -2351,7 +2331,7 @@ export function PrimaryProvidersPage() {
                 {catalogModels(selectedEndpoint).length > 0 && (
                   <div className="flex flex-wrap gap-1.5 pt-1">
                     {catalogModels(selectedEndpoint).map((model) => (
-                      <Badge key={model} variant="outline" className="bg-background font-mono text-[11px] font-normal">
+                      <Badge key={model} variant="outline" className="bg-card font-mono text-[11px] font-normal">
                         {readableCatalogModel(model)}
                       </Badge>
                     ))}
@@ -2362,7 +2342,7 @@ export function PrimaryProvidersPage() {
                 type="button"
                 variant="outline"
                 size="sm"
-                className="h-8 shrink-0 gap-1.5 text-xs"
+                className="shrink-0"
                 disabled={!catalogModels(selectedEndpoint).length}
                 onClick={() => openCatalogMappingEditor(selectedEndpoint)}
               >

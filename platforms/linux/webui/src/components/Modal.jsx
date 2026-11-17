@@ -51,7 +51,7 @@ export function Modal() {
         aria-busy={isBusy || undefined}
         aria-labelledby="modal-title"
         style={{ maxWidth }}
-        className="w-[calc(100%-2rem)] max-h-[88dvh] overflow-y-auto"
+        className="w-[calc(100%-2rem)] max-h-[88dvh] overflow-y-auto p-6"
         onEscapeKeyDown={(event) => {
           if (busyRef.current || contentBusyRef.current) event.preventDefault();
         }}
@@ -59,18 +59,18 @@ export function Modal() {
           if (busyRef.current || contentBusyRef.current) event.preventDefault();
         }}
       >
-        <DialogHeader>
+        <DialogHeader className="border-b border-border/65 pb-3.5">
           <DialogTitle id="modal-title">{title}</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-3 text-sm">
+        <div className="space-y-3.5 pt-1 text-sm">
           <ModalBusyContext.Provider value={updateContentBusy}>
             {content}
           </ModalBusyContext.Provider>
           {error && (
             <p
               role="alert"
-              className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+              className="rounded-xl border border-destructive/30 bg-destructive/10 px-3.5 py-2.5 text-xs leading-relaxed text-destructive"
             >
               {error}
             </p>
@@ -78,11 +78,12 @@ export function Modal() {
         </div>
 
         {actions && actions.length > 0 && (
-          <DialogFooter className="pt-2">
+          <DialogFooter className="border-t border-border/65 pt-3.5">
             {actions.map((act, idx) => (
               <Button
                 key={idx}
                 type="button"
+                size="sm"
                 variant={ACTION_VARIANT[act.kind] || 'outline'}
                 onClick={async () => {
                   if (busyRef.current || contentBusyRef.current) return;

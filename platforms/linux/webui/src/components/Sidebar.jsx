@@ -79,7 +79,7 @@ export function Sidebar() {
 
   return (
     <ShadcnSidebar id="primary-navigation" variant="inset" collapsible="icon" aria-label="应用主导航">
-      <SidebarHeader className="pb-2">
+      <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
             <button
@@ -87,16 +87,16 @@ export function Sidebar() {
               onClick={() => handleSelect('run')}
               aria-label="Sumpter · 运行"
               title="回到运行页"
-              className="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+              className="group/brand flex w-full cursor-pointer items-center gap-3 rounded-xl px-2 py-2 text-left transition-all duration-150 hover:bg-sidebar-accent/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring/50 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-1"
             >
-              <div className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-sidebar-border bg-background/80 p-1">
+              <div className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-sidebar-border/90 bg-card p-1 shadow-2xs transition-transform duration-200 group-hover/brand:scale-[1.03]">
                 <img src={donkeyHead} alt="" className="size-full object-contain" />
               </div>
-              <div className="flex min-w-0 flex-col group-data-[collapsible=icon]:hidden">
-                <span className="truncate text-sm font-semibold tracking-tight text-sidebar-foreground">
+              <div className="flex min-w-0 flex-col gap-0.5 group-data-[collapsible=icon]:hidden">
+                <span className="truncate text-[14px] font-semibold leading-tight tracking-tight text-sidebar-foreground">
                   Sumpter
                 </span>
-                <span className="truncate font-mono text-[10px] tracking-wider text-muted-foreground">
+                <span className="truncate font-mono text-[10px] font-medium tracking-[0.14em] text-muted-foreground">
                   DONKEY TECH
                 </span>
               </div>
@@ -132,7 +132,7 @@ export function Sidebar() {
         ))}
       </SidebarContent>
 
-      <SidebarFooter className="pt-2">
+      <SidebarFooter>
         <SidebarMenu aria-label="帮助与关于">
           {resourceItems.map((item) => {
             const NavIcon = ROUTE_ICONS[item.id] || CircleHelp;
@@ -153,18 +153,27 @@ export function Sidebar() {
           })}
         </SidebarMenu>
 
-        <div className="mt-1 rounded-xl border border-sidebar-border bg-background/60 p-2.5 group-data-[collapsible=icon]:hidden">
-          <div className="flex items-center gap-2">
+        <div className="mt-1 rounded-xl border border-sidebar-border/85 bg-card/75 px-3 py-2.5 shadow-2xs backdrop-blur-xs group-data-[collapsible=icon]:hidden">
+          <div className="flex items-center gap-2.5">
             <span
               className={cn(
                 'size-2 shrink-0 rounded-full',
-                isRunning ? 'bg-status-good animate-pulse' : 'bg-muted-foreground',
+                isRunning
+                  ? 'status-sonar-ring bg-status-good text-status-good'
+                  : 'bg-muted-foreground/70',
               )}
               aria-hidden="true"
             />
-            <div className="min-w-0">
-              <div className="truncate text-xs font-semibold text-sidebar-foreground">
-                {isRunning ? '代理运行中' : '代理已就绪'}
+            <div className="min-w-0 flex-1 space-y-0.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate text-xs font-semibold text-sidebar-foreground">
+                  {isRunning ? '代理运行中' : '代理已就绪'}
+                </span>
+                {status?.version && (
+                  <span className="font-mono text-[10px] text-muted-foreground tabular-nums">
+                    v{status.version}
+                  </span>
+                )}
               </div>
               <div className="truncate font-mono text-[11px] text-muted-foreground tabular-nums">
                 {listenerText}

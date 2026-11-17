@@ -62,7 +62,7 @@ export function HorizontalScroll({
   const controls = (position) => scroll.max > 0 && (
     <div
       className={cn(
-        'flex items-center gap-2 bg-muted/20 px-3 py-1.5 text-[11px] text-muted-foreground',
+        'flex items-center gap-2 border-border/70 bg-muted/20 px-5 py-1.5 text-[11px] text-muted-foreground',
         position === 'top' ? 'border-b' : 'border-t',
       )}
       role="group"
@@ -73,10 +73,10 @@ export function HorizontalScroll({
           {dragToScroll ? '左右拖动表格，或使用滚动条' : tableScrollHint(scroll)}
         </span>
       )}
-      <div className="ml-auto flex flex-1 items-center justify-end gap-1.5 sm:max-w-xs">
+      <div className="ml-auto flex flex-1 items-center justify-end gap-2 sm:max-w-xs">
         <button
           type="button"
-          className="inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded border bg-background text-xs text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md border border-border/80 bg-card/90 text-xs text-foreground shadow-2xs transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
           aria-label={`${ariaLabel}向左滚动`}
           aria-controls={id}
           disabled={scroll.left <= 1}
@@ -100,7 +100,7 @@ export function HorizontalScroll({
         />
         <button
           type="button"
-          className="inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded border bg-background text-xs text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md border border-border/80 bg-card/90 text-xs text-foreground shadow-2xs transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
           aria-label={`${ariaLabel}向右滚动`}
           aria-controls={id}
           disabled={scroll.left >= scroll.max - 1}

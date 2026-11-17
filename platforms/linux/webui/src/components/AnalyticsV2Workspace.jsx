@@ -60,10 +60,10 @@ import { Badge } from './ui/badge.jsx';
 import { Button } from './ui/button.jsx';
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card.jsx';
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from './ui/chart.jsx';
+import { Checkbox } from './ui/checkbox.jsx';
 import { Input } from './ui/input.jsx';
+import { NativeSelect } from './ui/native-select.jsx';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table.jsx';
-
-const SELECT_CLS = 'flex h-9 w-full rounded-md border border-input bg-background/60 px-2.5 text-xs text-foreground shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50';
 
 const SECTIONS = [
   { id: 'overview', label: '概览' },
@@ -262,14 +262,14 @@ function TokenCoreGrid({ tokens, compact = false, cache = null }) {
   ];
 
   return (
-    <div className={cn('grid gap-3', compact ? 'sm:grid-cols-2 lg:grid-cols-4' : 'sm:grid-cols-2 lg:grid-cols-4')}>
-      <div className="col-span-full rounded-lg border border-border/75 bg-muted/20 px-3.5 py-2.5 text-xs">
+    <div className={cn('grid gap-3.5', compact ? 'sm:grid-cols-2 lg:grid-cols-4' : 'sm:grid-cols-2 lg:grid-cols-4')}>
+      <div className="col-span-full rounded-xl bg-muted/45 px-4 py-3 text-xs">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <strong className="font-semibold text-foreground">已确认缓存命中率 {percent(cache?.confirmedHitRate)}</strong>
           <span className="text-muted-foreground">· 结论覆盖率 {percent(cache?.confirmationCoverage)}</span>
         </div>
         {cache && (
-          <small className="mt-1 block text-[11px] text-muted-foreground">
+          <small className="mt-1 block text-[11px] leading-relaxed text-muted-foreground">
             未知 {cache.unknownRequests} · 适用性不明 {cache.applicabilityUnknownRequests} · 不适用 {cache.notApplicableRequests}；命中率只统计已确认命中/未命中的已结束请求。
           </small>
         )}
@@ -279,17 +279,28 @@ function TokenCoreGrid({ tokens, compact = false, cache = null }) {
         <div
           key={card.id}
           data-token-role={card.id}
-          className="rounded-xl border border-border/80 border-t-2 bg-card/85 p-3.5 shadow-xs transition-colors hover:border-border"
-          style={{ borderTopColor: card.accent || 'var(--primary)' }}
+          className="relative overflow-hidden rounded-2xl border border-border/75 bg-card p-4 shadow-2xs transition-[transform,box-shadow,border-color] duration-200 hover:-translate-y-0.5 hover:border-border hover:shadow-sm"
         >
-          <div className="text-xs font-medium text-muted-foreground">{card.label}</div>
-          <strong className="mt-1.5 block font-mono text-lg font-semibold tracking-tight text-foreground tabular-nums">
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute -top-8 -right-8 size-24 rounded-full opacity-[0.12] blur-2xl"
+            style={{ backgroundColor: card.accent || 'var(--primary)' }}
+          />
+          <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+            <span
+              aria-hidden="true"
+              className="size-1.5 shrink-0 rounded-full"
+              style={{ backgroundColor: card.accent || 'var(--primary)' }}
+            />
+            <span>{card.label}</span>
+          </div>
+          <strong className="mt-2 block font-mono text-xl font-semibold tracking-tight text-foreground tabular-nums">
             {optionalNumberWithComma(card.value)}
           </strong>
-          <div className="mt-2 flex flex-wrap items-center justify-between gap-1 text-[11px] text-muted-foreground">
+          <div className="mt-2.5 flex flex-wrap items-center justify-between gap-1.5 text-[11px] text-muted-foreground">
             <small>{card.detail}</small>
             {card.id === 'cache-read' && (
-              <span className="rounded bg-accent-cyan/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-accent-cyan">
+              <span className="rounded-full bg-accent-cyan/12 px-2 py-0.5 font-mono text-[10px] font-medium text-accent-cyan">
                 Token 读占比 {percent(cacheReadRate)}
               </span>
             )}
@@ -391,7 +402,7 @@ function PanelMessage({ error, onRetry, unsupported = false }) {
   if (!error) return null;
   return (
     <div
-      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-status-critical/35 bg-status-critical/10 px-3.5 py-2.5 text-xs text-status-critical"
+      className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-status-critical/30 bg-status-critical/10 px-4 py-3 text-xs text-status-critical"
       role="alert"
     >
       <span>{unsupported ? runtimeV2ErrorMessage(error) : runtimeV2ErrorMessage(error)}</span>
@@ -406,7 +417,7 @@ function PanelMessage({ error, onRetry, unsupported = false }) {
 
 function LoadingLine({ text = '读取中…' }) {
   return (
-    <div className="flex items-center gap-2 py-3 text-xs text-muted-foreground" role="status" aria-live="polite">
+    <div className="flex items-center gap-2.5 py-3 text-xs text-muted-foreground" role="status" aria-live="polite">
       <span className="size-2 animate-pulse rounded-full bg-primary" />
       <span>{text}</span>
     </div>
@@ -419,25 +430,34 @@ function Metric({ label, value, detail, tone = '', accent = 'var(--primary)', pr
     : Math.max(0, Math.min(100, Number(progress)));
   const isWarningTone = tone.includes('warning');
   return (
-    <div
-      className="rounded-xl border border-border/80 border-t-2 bg-card/85 p-3.5 shadow-xs transition-colors hover:border-border"
-      style={{ borderTopColor: accent }}
-    >
-      <span className="block text-xs font-medium text-muted-foreground">{label}</span>
+    <div className="relative overflow-hidden rounded-2xl border border-border/75 bg-card p-4 shadow-2xs transition-[transform,box-shadow,border-color] duration-200 hover:-translate-y-0.5 hover:border-border hover:shadow-sm">
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute -top-8 -right-8 size-24 rounded-full opacity-[0.12] blur-2xl"
+        style={{ backgroundColor: accent }}
+      />
+      <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+        <i
+          aria-hidden="true"
+          className="inline-block size-1.5 shrink-0 rounded-full"
+          style={{ backgroundColor: accent }}
+        />
+        <span>{label}</span>
+      </span>
       <strong
         className={cn(
-          'mt-1.5 block font-mono text-lg font-semibold tracking-tight tabular-nums',
+          'mt-2 block font-mono text-xl font-semibold tracking-tight tabular-nums',
           isWarningTone ? 'text-status-warning' : 'text-foreground',
         )}
       >
         {value}
       </strong>
       {clamped != null && (
-        <span className="mt-2 block h-1.5 w-full overflow-hidden rounded-full bg-muted" aria-hidden="true">
-          <i className="block h-full rounded-full transition-all" style={{ width: `${clamped.toFixed(1)}%`, backgroundColor: accent }} />
+        <span className="mt-2.5 block h-1.5 w-full overflow-hidden rounded-full bg-muted/80" aria-hidden="true">
+          <i className="block h-full rounded-full transition-all duration-300" style={{ width: `${clamped.toFixed(1)}%`, backgroundColor: accent }} />
         </span>
       )}
-      {detail && <small className="mt-1.5 block text-[11px] leading-relaxed text-muted-foreground">{detail}</small>}
+      {detail && <small className="mt-2 block text-[11px] leading-relaxed text-muted-foreground">{detail}</small>}
     </div>
   );
 }
@@ -539,15 +559,15 @@ function TrendChart({ points, metric = 'clientRequests' }) {
   }), [label]);
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3.5">
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs" aria-label="趋势图图例">
         <span className="inline-flex items-center gap-2 font-medium text-foreground">
-          <i className="inline-block h-0.5 w-3.5 rounded-full bg-primary" aria-hidden="true" />
+          <i className="inline-block h-1 w-3.5 rounded-full bg-primary" aria-hidden="true" />
           <span>{label}</span>
         </span>
         <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-muted-foreground">
           {latestValid && (
-            <span className="rounded-md border border-border/70 bg-muted/35 px-2 py-0.5 text-foreground" aria-live="polite">
+            <span className="rounded-lg border border-border/60 bg-muted/45 px-2.5 py-1 text-foreground" aria-live="polite">
               <small className="text-muted-foreground">{latestValid.label}</small>
               <span className="mx-1.5 text-border" aria-hidden="true">·</span>
               <strong>{formatTrendValue(latestValid.value, metric)}</strong>
@@ -562,12 +582,12 @@ function TrendChart({ points, metric = 'clientRequests' }) {
           role="img"
           aria-label={`趋势图：${label}，共 ${numberWithComma(points?.length || 0)} 个时间桶，最近桶 ${formatTrendValue(trendMetricValue(latest, metric), metric)}`}
         >
-          <ChartContainer config={chartConfig} className="aspect-auto h-[230px] w-full">
+          <ChartContainer config={chartConfig} className="aspect-auto h-[236px] w-full">
             <AreaChart data={chartData} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}>
               <defs>
                 <linearGradient id={`fill-${metric}`} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="var(--color-value)" stopOpacity={0.34} />
-                  <stop offset="95%" stopColor="var(--color-value)" stopOpacity={0.02} />
+                  <stop offset="5%" stopColor="var(--color-value)" stopOpacity={0.28} />
+                  <stop offset="95%" stopColor="var(--color-value)" stopOpacity={0.01} />
                 </linearGradient>
               </defs>
               <CartesianGrid vertical={false} strokeDasharray="3 3" />
@@ -581,7 +601,7 @@ function TrendChart({ points, metric = 'clientRequests' }) {
               <YAxis
                 tickLine={false}
                 axisLine={false}
-                width={54}
+                width={56}
                 tickFormatter={(val) => formatTrendValue(val, metric)}
               />
               <ChartTooltip
@@ -615,17 +635,17 @@ function TrendChart({ points, metric = 'clientRequests' }) {
           </ChartContainer>
         </div>
       ) : (
-        <div className="flex h-40 items-center justify-center rounded-lg border border-dashed border-border/80 bg-muted/15 text-xs text-muted-foreground">
+        <div className="flex h-40 items-center justify-center rounded-xl border border-dashed border-border/70 bg-muted/25 text-xs text-muted-foreground">
           当前时间范围暂无时间桶数据
         </div>
       )}
 
-      <details className="group rounded-lg border border-border/75 bg-muted/15">
-        <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs font-medium text-muted-foreground select-none hover:bg-muted/35 hover:text-foreground">
-          <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
+      <details className="group rounded-xl border border-border/55 bg-muted/25 transition-colors open:bg-card/85">
+        <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl px-3.5 py-2.5 text-xs font-medium text-muted-foreground select-none transition-colors hover:bg-muted/45 hover:text-foreground group-open:rounded-b-none">
+          <ChevronRight className="size-3.5 transition-transform duration-200 group-open:rotate-90" />
           <span>显示趋势数据表（键盘和读屏备用）</span>
         </summary>
-        <div className="border-t border-border/60">
+        <div className="border-t border-border/50">
           <HorizontalScroll dragToScroll controlsAtTop ariaLabel="趋势数据表">
             <Table aria-label={`${label}趋势数据表`}>
               <TableHeader>
@@ -740,6 +760,7 @@ function ErrorTable({ page, loading, onPageChange, onPageSizeChange, onSelectEve
         ]}
       />
       <PaginationBar
+        className="rounded-xl border border-border/55 bg-background/60 px-3.5"
         itemNoun="条错误分组"
         emptySummary="当前范围没有错误分组"
         page={page.page}
@@ -784,9 +805,9 @@ function AdvancedDiagnosticsPanel({ analytics, loading, error, onRetry }) {
   );
 
   return (
-    <section className="space-y-4 rounded-xl border border-border/80 bg-muted/15 p-4" aria-labelledby="runtime-v2-advanced-diagnostics-heading">
+    <section className="space-y-4 rounded-2xl border border-border/65 bg-muted/25 p-5" aria-labelledby="runtime-v2-advanced-diagnostics-heading">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
+        <div className="space-y-0.5">
           <h3 id="runtime-v2-advanced-diagnostics-heading" className="text-sm font-semibold text-foreground">
             结构化诊断摘要
           </h3>
@@ -807,7 +828,7 @@ function AdvancedDiagnosticsPanel({ analytics, loading, error, onRetry }) {
       ) : analytics ? (
         <>
           {analytics.codexRequests && (
-            <div className="space-y-1 rounded-lg border border-border/75 bg-card/75 p-3 text-xs">
+            <div className="space-y-1.5 rounded-xl bg-card/90 px-4 py-3 text-xs shadow-2xs ring-1 ring-border/45">
               <strong className="block font-semibold text-foreground">Codex 逻辑请求（独立于连接计数）</strong>
               <span className="block font-mono text-foreground">
                 {Object.entries(analytics.codexRequests.counts).map(([kind, count]) => (
@@ -828,50 +849,50 @@ function AdvancedDiagnosticsPanel({ analytics, loading, error, onRetry }) {
                 `${dimensionValueLabel(row.name || row.value, resolveKind(key))} ${numberWithComma(row.attempts ?? row.count)}`
               )).join(' · ');
               return (
-                <div className="space-y-1 rounded-lg border border-border/75 bg-card/75 p-3" key={key}>
+                <div className="space-y-1 rounded-xl bg-card/90 px-3.5 py-3 shadow-2xs ring-1 ring-border/45 transition-colors hover:ring-border/80" key={key}>
                   <strong className="block text-xs font-medium text-muted-foreground">{label}</strong>
-                  <b className="block font-mono text-base font-semibold text-foreground">{numberWithComma(total)}</b>
+                  <b className="block font-mono text-base font-semibold tracking-tight text-foreground tabular-nums">{numberWithComma(total)}</b>
                   <small className="block truncate text-[11px] text-muted-foreground" title={preview}>
                     {preview || '暂无记录'}
                   </small>
                 </div>
               );
             })}
-            <div className="space-y-1 rounded-lg border border-border/75 bg-card/75 p-3">
+            <div className="space-y-1 rounded-xl bg-card/90 px-3.5 py-3 shadow-2xs ring-1 ring-border/45 transition-colors hover:ring-border/80">
               <strong className="block text-xs font-medium text-muted-foreground">工具调用</strong>
-              <b className="block font-mono text-base font-semibold text-foreground">
+              <b className="block font-mono text-base font-semibold tracking-tight text-foreground tabular-nums">
                 {numberWithComma(diagnosticRows(analytics, 'toolCalls').reduce((sum, row) => sum + safeNumber(row.count), 0))}
               </b>
               <small className="block text-[11px] text-muted-foreground">按工具名称汇总</small>
             </div>
-            <div className="space-y-1 rounded-lg border border-border/75 bg-card/75 p-3">
+            <div className="space-y-1 rounded-xl bg-card/90 px-3.5 py-3 shadow-2xs ring-1 ring-border/45 transition-colors hover:ring-border/80">
               <strong className="block text-xs font-medium text-muted-foreground">Codex 元数据</strong>
-              <b className="block font-mono text-base font-semibold text-foreground">{numberWithComma(analytics.codexMetadataPresent)}</b>
+              <b className="block font-mono text-base font-semibold tracking-tight text-foreground tabular-nums">{numberWithComma(analytics.codexMetadataPresent)}</b>
               <small className="block text-[11px] text-muted-foreground">已记录的客户端事件</small>
             </div>
-            <div className="space-y-1 rounded-lg border border-border/75 bg-card/75 p-3">
+            <div className="space-y-1 rounded-xl bg-card/90 px-3.5 py-3 shadow-2xs ring-1 ring-border/45 transition-colors hover:ring-border/80">
               <strong className="block text-xs font-medium text-muted-foreground">后台功能请求</strong>
-              <b className="block font-mono text-base font-semibold text-foreground">{numberWithComma(analytics.internalFeatureRequests)}</b>
+              <b className="block font-mono text-base font-semibold tracking-tight text-foreground tabular-nums">{numberWithComma(analytics.internalFeatureRequests)}</b>
               <small className="block text-[11px] text-muted-foreground">不计入普通项目维度</small>
             </div>
           </div>
 
-          <details className="group rounded-lg border border-border/75 bg-card/60">
-            <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs font-medium text-foreground select-none hover:bg-muted/35">
-              <ChevronRight className="size-3.5 text-muted-foreground transition-transform group-open:rotate-90" />
+          <details className="group rounded-xl border border-border/55 bg-card/80 transition-colors open:bg-card">
+            <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl px-3.5 py-2.5 text-xs font-medium text-foreground select-none transition-colors hover:bg-muted/45 group-open:rounded-b-none">
+              <ChevronRight className="size-3.5 text-muted-foreground transition-transform duration-200 group-open:rotate-90" />
               <span>查看完整结构化分组</span>
             </summary>
-            <div className="grid gap-3 border-t border-border/60 p-3.5 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid gap-3 border-t border-border/50 p-4 sm:grid-cols-2 lg:grid-cols-4">
               {dimensions.map(([key, label]) => {
                 const rows = diagnosticRows(analytics, key);
                 return (
-                  <div key={key} className="space-y-1.5 rounded-md border border-border/60 bg-background/40 p-2.5 text-xs">
+                  <div key={key} className="space-y-2 rounded-xl bg-muted/45 p-3 text-xs">
                     <strong className="block font-semibold text-foreground">{label}</strong>
                     <ul className="space-y-1">
                       {rows.slice(0, 8).map((row) => (
                         <li key={`${key}-${row.name || row.value}`} className="flex items-center justify-between gap-2 text-[11px]">
                           <span className="truncate text-muted-foreground">{dimensionValueLabel(row.name || row.value, resolveKind(key))}</span>
-                          <b className="font-mono text-foreground">{numberWithComma(row.attempts ?? row.count)}</b>
+                          <b className="font-mono text-foreground tabular-nums">{numberWithComma(row.attempts ?? row.count)}</b>
                         </li>
                       ))}
                     </ul>
@@ -1066,9 +1087,9 @@ function DimensionTable({
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3.5">
       <form
-        className="flex flex-wrap items-center gap-2"
+        className="flex flex-wrap items-center gap-2.5"
         onSubmit={(event) => {
           event.preventDefault();
           if (!loading) onSearchSubmit(searchDraft.trim());
@@ -1081,13 +1102,13 @@ function DimensionTable({
           <Input
             id={`runtime-v2-${kind}-search`}
             type="search"
-            className="h-8 flex-1 text-xs"
+            className="h-8 flex-1 bg-background/90 text-xs"
             value={searchDraft}
             onChange={(event) => setSearchDraft(event.target.value)}
             placeholder="输入名称后按回车"
           />
-          <Button type="submit" variant="secondary" size="xs" disabled={loading}>
-            <Search className="size-3" />
+          <Button type="submit" variant="secondary" size="sm" disabled={loading}>
+            <Search className="size-3.5" />
             <span>搜索</span>
           </Button>
         </div>
@@ -1109,6 +1130,7 @@ function DimensionTable({
       />
 
       <PaginationBar
+        className="rounded-xl border border-border/55 bg-background/60 px-3.5"
         itemNoun={`个${dimensionLabel(kind)}`}
         emptySummary={`当前搜索没有${dimensionLabel(kind)}`}
         page={page.page}
@@ -1169,7 +1191,7 @@ function DimensionBlock({
 
   return (
     <section
-      className="space-y-3 rounded-xl border border-border/80 bg-card/60 p-4"
+      className="space-y-3.5 rounded-2xl border border-border/65 bg-muted/20 p-4 sm:p-5"
       aria-labelledby={`runtime-v2-${mode}-${kind}-heading`}
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1177,7 +1199,9 @@ function DimensionBlock({
           {displayTitle}
         </h3>
         <span className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          <span>{page ? `共 ${numberWithComma(page.totalCount)} 个${dimensionLabel(kind)}` : '读取中…'}</span>
+          <span className="rounded-full bg-background/80 px-2.5 py-0.5 font-mono text-[11px] ring-1 ring-border/50">
+            {page ? `共 ${numberWithComma(page.totalCount)} 个${dimensionLabel(kind)}` : '读取中…'}
+          </span>
           {kind === 'session' && selectedProjectLabel && (
             <Button type="button" variant="ghost" size="xs" onClick={onClearProject}>清除项目选择</Button>
           )}
@@ -1261,21 +1285,21 @@ function StorageTechnicalDetails({ storage }) {
       : storage.hourlyRollupMaxSeq == null ? '已完成' : `完成至 #${count(storage.hourlyRollupMaxSeq)}`;
 
   return (
-    <details className="runtime-v2-storage-technical-details group mt-3 rounded-lg border border-border/75 bg-background/40">
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-xs font-medium text-foreground select-none hover:bg-muted/35">
+    <details className="runtime-v2-storage-technical-details group mt-3 rounded-xl border border-border/55 bg-card/80 transition-colors open:bg-card">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 rounded-xl px-3.5 py-2.5 text-xs font-medium text-foreground select-none transition-colors hover:bg-muted/45 group-open:rounded-b-none">
         <span className="flex items-center gap-1.5">
-          <ChevronRight className="size-3.5 text-muted-foreground transition-transform group-open:rotate-90" />
+          <ChevronRight className="size-3.5 text-muted-foreground transition-transform duration-200 group-open:rotate-90" />
           <span>技术详情</span>
         </span>
         <span className="text-[11px] text-muted-foreground">版本、文件与聚合状态</span>
       </summary>
-      <dl className="grid gap-2.5 border-t border-border/60 p-3 text-xs sm:grid-cols-2 lg:grid-cols-3">
-        <div><dt className="text-[11px] text-muted-foreground">Schema / 投影</dt><dd className="font-mono font-medium">v{storage.schemaVersion ?? '—'} / v{storage.projectionVersion ?? '—'}</dd></div>
-        <div><dt className="text-[11px] text-muted-foreground">数据库文件 / 有效占用</dt><dd className="font-mono font-medium">{databaseBytes == null ? '—' : formatBytes(databaseBytes)} / {effectiveBytes == null ? '—' : formatBytes(effectiveBytes)}</dd></div>
-        <div><dt className="text-[11px] text-muted-foreground">WAL / 空闲页</dt><dd className="font-mono font-medium">{walBytes == null ? '—' : formatBytes(walBytes)} / {storage.freelistBytes == null ? '—' : formatBytes(storage.freelistBytes)}</dd></div>
-        <div><dt className="text-[11px] text-muted-foreground">用户删除</dt><dd className="font-mono font-medium">{count(storage.userDeletedEvents)} 条事件 / {count(storage.userDeletedRequests)} 个请求</dd></div>
-        <div><dt className="text-[11px] text-muted-foreground">小时聚合</dt><dd className="font-mono font-medium">{hourlyRollup}</dd></div>
-        <div><dt className="text-[11px] text-muted-foreground">缺失索引</dt><dd className="font-mono font-medium">{missingIndexes == null ? '—' : missingIndexes.length ? missingIndexes.join(', ') : '无'}</dd></div>
+      <dl className="grid gap-3 border-t border-border/50 p-3.5 text-xs sm:grid-cols-2 lg:grid-cols-3">
+        <div><dt className="text-[11px] text-muted-foreground">Schema / 投影</dt><dd className="mt-0.5 font-mono font-medium">v{storage.schemaVersion ?? '—'} / v{storage.projectionVersion ?? '—'}</dd></div>
+        <div><dt className="text-[11px] text-muted-foreground">数据库文件 / 有效占用</dt><dd className="mt-0.5 font-mono font-medium">{databaseBytes == null ? '—' : formatBytes(databaseBytes)} / {effectiveBytes == null ? '—' : formatBytes(effectiveBytes)}</dd></div>
+        <div><dt className="text-[11px] text-muted-foreground">WAL / 空闲页</dt><dd className="mt-0.5 font-mono font-medium">{walBytes == null ? '—' : formatBytes(walBytes)} / {storage.freelistBytes == null ? '—' : formatBytes(storage.freelistBytes)}</dd></div>
+        <div><dt className="text-[11px] text-muted-foreground">用户删除</dt><dd className="mt-0.5 font-mono font-medium">{count(storage.userDeletedEvents)} 条事件 / {count(storage.userDeletedRequests)} 个请求</dd></div>
+        <div><dt className="text-[11px] text-muted-foreground">小时聚合</dt><dd className="mt-0.5 font-mono font-medium">{hourlyRollup}</dd></div>
+        <div><dt className="text-[11px] text-muted-foreground">缺失索引</dt><dd className="mt-0.5 font-mono font-medium">{missingIndexes == null ? '—' : missingIndexes.length ? missingIndexes.join(', ') : '无'}</dd></div>
       </dl>
     </details>
   );
@@ -1315,19 +1339,19 @@ function StorageManagementCard({ storage, retention, loading, error, onOpen, onR
 
   return (
     <section
-      className="rounded-xl border border-border/80 bg-muted/20 p-4"
+      className="rounded-2xl border border-border/65 bg-muted/25 p-5"
       aria-labelledby="runtime-v2-storage-management-heading"
       data-storage-management
     >
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div className="flex items-start gap-3">
+        <div className="flex items-start gap-3.5">
           <div
-            className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-border/80 bg-background/60 text-primary"
+            className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-primary/20 bg-gradient-to-br from-primary/15 via-primary/8 to-transparent text-primary shadow-2xs"
             aria-hidden="true"
           >
-            <Database className="size-5" />
+            <Database className="size-[18px]" />
           </div>
-          <div className="min-w-0 flex-1 space-y-2">
+          <div className="min-w-0 flex-1 space-y-2.5">
             <div className="flex flex-wrap items-center gap-2">
               <h3 id="runtime-v2-storage-management-heading" className="text-sm font-semibold text-foreground">
                 运行统计存储
@@ -1338,33 +1362,33 @@ function StorageManagementCard({ storage, retention, loading, error, onOpen, onR
               {presentation.detail} · 查看当前占用与事件保留情况；需要调整保留策略或执行清理时打开存储设置。
             </p>
             {storage?.legacyRetentionDetected && (
-              <div className="rounded-lg border border-status-warning/35 bg-status-warning/10 p-2.5 text-xs text-status-warning" role="alert">
+              <div className="rounded-xl border border-status-warning/30 bg-status-warning/10 p-3 text-xs leading-relaxed text-status-warning" role="alert">
                 检测到旧版本的自动清理设置。它们已不再生效，也不会自动迁移；手动清理只删除事件，需使用“重置并新建数据库”移除旧字段。
               </div>
             )}
 
-            <div className="flex flex-wrap gap-3 pt-1" aria-label="数据存储摘要">
+            <div className="flex flex-wrap gap-2.5 pt-1 [&_small]:text-[11px] [&_small]:text-muted-foreground" aria-label="数据存储摘要">
               <span
                 className={cn(
-                  'rounded-lg border px-3 py-1.5',
-                  capacityExceeded ? 'border-status-warning/40 bg-status-warning/10 text-status-warning' : 'border-border/75 bg-card/70',
+                  'rounded-xl border px-3.5 py-2 shadow-2xs',
+                  capacityExceeded ? 'border-status-warning/35 bg-status-warning/10 text-status-warning [&_small]:text-status-warning' : 'border-border/55 bg-card/90',
                 )}
               >
-                <strong className="block font-mono text-sm font-semibold">{effectiveBytes == null ? '—' : formatBytes(effectiveBytes)}</strong>
+                <strong className="block font-mono text-sm font-semibold tabular-nums">{effectiveBytes == null ? '—' : formatBytes(effectiveBytes)}</strong>
                 <small>有效占用</small>
               </span>
-              <span className="rounded-lg border border-border/75 bg-card/70 px-3 py-1.5">
-                <strong className="block font-mono text-sm font-semibold">{retainedEvents == null ? '—' : numberWithComma(retainedEvents)}</strong>
+              <span className="rounded-xl border border-border/55 bg-card/90 px-3.5 py-2 shadow-2xs">
+                <strong className="block font-mono text-sm font-semibold tabular-nums">{retainedEvents == null ? '—' : numberWithComma(retainedEvents)}</strong>
                 <small>保留事件</small>
               </span>
-              <span className="rounded-lg border border-border/75 bg-card/70 px-3 py-1.5">
+              <span className="rounded-xl border border-border/55 bg-card/90 px-3.5 py-2 shadow-2xs">
                 <strong className="block text-sm font-semibold">{retentionLabel}</strong>
-                <small className="text-[11px] text-muted-foreground">{retentionDetail} · 在设置中调整</small>
+                <small>{retentionDetail} · 在设置中调整</small>
               </span>
               {hasPending && (
-                <span className="rounded-lg border border-status-warning/40 bg-status-warning/10 px-3 py-1.5 text-status-warning">
-                  <strong className="block font-mono text-sm font-semibold">{pending == null ? '—' : numberWithComma(pending)}</strong>
-                  <small className="text-[11px]">待写入{pendingBytes == null ? '' : ` · ${formatBytes(pendingBytes)}`}</small>
+                <span className="rounded-xl border border-status-warning/35 bg-status-warning/10 px-3.5 py-2 text-status-warning shadow-2xs [&_small]:text-status-warning">
+                  <strong className="block font-mono text-sm font-semibold tabular-nums">{pending == null ? '—' : numberWithComma(pending)}</strong>
+                  <small>待写入{pendingBytes == null ? '' : ` · ${formatBytes(pendingBytes)}`}</small>
                 </span>
               )}
             </div>
@@ -1390,7 +1414,7 @@ function StorageManagementCard({ storage, retention, loading, error, onOpen, onR
       </div>
 
       {error && (
-        <div className="mt-3 rounded-lg border border-status-critical/35 bg-status-critical/10 px-3 py-2 text-xs text-status-critical" role="alert">
+        <div className="mt-3 rounded-xl border border-status-critical/30 bg-status-critical/10 px-3.5 py-2.5 text-xs text-status-critical" role="alert">
           {runtimeV2ErrorMessage(error)}
         </div>
       )}
@@ -1416,7 +1440,7 @@ function TrendPanel({ trend, legacyAnalytics, loading, error, onRetry }) {
 
   return (
     <Card aria-labelledby="runtime-v2-trends-heading">
-      <CardHeader className="border-b border-border/60 pb-4">
+      <CardHeader className="border-b border-border/50">
         <div className="flex items-center gap-2">
           <TrendingUp className="size-4 text-primary" />
           <CardTitle id="runtime-v2-trends-heading">趋势</CardTitle>
@@ -1431,7 +1455,7 @@ function TrendPanel({ trend, legacyAnalytics, loading, error, onRetry }) {
           <LoadingLine text="正在读取趋势快照…" />
         ) : totals ? (
           <>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               <Metric label="客户端请求" value={numberWithComma(totals.clientRequests)} detail={`完成 ${numberWithComma(completed)} · 成功率 ${percentFromCount(totals.clientSuccesses, completed)}`} accent="var(--primary)" />
               <Metric label="平均完成耗时" value={formatDuration(latencyAverage(duration))} detail="请求完成平均耗时" accent="var(--accent-indigo)" />
               <Metric label="平均首字节" value={formatDuration(latencyAverage(ttfb))} detail="首次响应平均耗时" accent="var(--accent-cyan)" />
@@ -1447,13 +1471,13 @@ function TrendPanel({ trend, legacyAnalytics, loading, error, onRetry }) {
 
             {trend && (
               <div className="flex flex-wrap items-center gap-2">
-                <label className="inline-flex items-center gap-2 text-xs font-medium text-foreground">
+                <label className="inline-flex items-center gap-2.5 text-xs font-medium text-foreground">
                   <span>展示指标</span>
-                  <select className={cn(SELECT_CLS, 'w-auto min-w-[180px]')} value={metric} onChange={(event) => setMetric(event.target.value)}>
+                  <NativeSelect wrapperClassName="w-auto min-w-[190px]" value={metric} onChange={(event) => setMetric(event.target.value)}>
                     {TREND_METRICS.map(([value, label, unit]) => (
                       <option key={value} value={value}>{label}{unit === 'percent' ? '（比例）' : ''}</option>
                     ))}
-                  </select>
+                  </NativeSelect>
                 </label>
               </div>
             )}
@@ -1461,7 +1485,7 @@ function TrendPanel({ trend, legacyAnalytics, loading, error, onRetry }) {
             {trend ? (
               <TrendChart points={trend.points || []} metric={metric} />
             ) : (
-              <div className="rounded-lg border border-dashed border-border/80 bg-muted/15 p-4 text-center text-xs text-muted-foreground">
+              <div className="rounded-xl border border-dashed border-border/70 bg-muted/25 p-5 text-center text-xs text-muted-foreground">
                 当前 daemon 未提供 v3 时间桶，以上为兼容统计摘要；升级后可查看趋势。
               </div>
             )}
@@ -1483,7 +1507,7 @@ function DrilldownContextBar({ selectedProject, selectedSession, onClearProject,
   if (!selectedProject && !selectedSession) return null;
   return (
     <div
-      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/30 bg-primary/10 px-3.5 py-2 text-xs"
+      className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-primary/25 bg-primary/8 px-4 py-2.5 text-xs"
       role="status"
       aria-label="下钻筛选路径"
     >
@@ -1604,7 +1628,7 @@ function OverviewPanel({
 
   return (
     <Card aria-labelledby="runtime-v3-overview-heading">
-      <CardHeader className="border-b border-border/60 pb-4">
+      <CardHeader className="border-b border-border/50">
         <div className="flex items-center gap-2">
           <Layers className="size-4 text-primary" />
           <CardTitle id="runtime-v3-overview-heading">使用概览</CardTitle>
@@ -1623,12 +1647,12 @@ function OverviewPanel({
 
         {totals && (
           <>
-            <div className="space-y-3">
+            <div className="space-y-3.5">
               <div className="flex items-baseline justify-between gap-2">
                 <h3 className="text-sm font-semibold text-foreground">核心指标</h3>
                 <span className="text-xs text-muted-foreground">当前范围</span>
               </div>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+              <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
                 <Metric label="请求" value={numberWithComma(totals.clientRequests)} detail={`已完成 ${numberWithComma(completed)} · 待定 ${numberWithComma(totals.clientUnknownResults)}`} accent="var(--primary)" />
                 <Metric label="成功率" value={percentFromCount(totals.clientSuccesses, completed)} detail={`成功 ${numberWithComma(totals.clientSuccesses)} · 失败 ${numberWithComma(totals.clientFailures)} · 取消 ${numberWithComma(totals.clientCancelled)}`} accent="var(--status-good)" progress={successRatePct} />
                 <Metric label="平均首字节" value={formatDuration(latencyAverage(ttfb))} detail="首次响应平均耗时" accent="var(--accent-cyan)" />
@@ -1639,13 +1663,13 @@ function OverviewPanel({
             </div>
 
             {trend?.points?.length > 0 && (
-              <div className="space-y-3 rounded-xl border border-border/80 bg-muted/15 p-4">
+              <div className="space-y-3.5 rounded-2xl border border-border/65 bg-muted/20 p-4 sm:p-5">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                  <div>
+                  <div className="space-y-0.5">
                     <h3 className="text-sm font-semibold text-foreground">趋势脉搏快览</h3>
                     <span className="text-xs text-muted-foreground">按时间桶实时追踪请求规模、延迟、速率与成本走向</span>
                   </div>
-                  <div className="flex flex-wrap gap-1" role="group" aria-label="概览趋势指标切换">
+                  <div className="flex flex-wrap gap-1.5" role="group" aria-label="概览趋势指标切换">
                     {OVERVIEW_TREND_PILLS.map(([key, label]) => (
                       <Button
                         key={key}
@@ -1664,7 +1688,7 @@ function OverviewPanel({
               </div>
             )}
 
-            <div className="space-y-3">
+            <div className="space-y-3.5">
               <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <h3 className="text-sm font-semibold text-foreground">Token 与缓存</h3>
                 <span className="text-xs text-muted-foreground">缓存读取下方显示缓存读取命中率</span>
@@ -1782,7 +1806,7 @@ function StorageSettingsDialog({ storage, retention, loading, error, onClose, on
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm animate-in fade-in-0 duration-200"
       onClick={(event) => {
         if (event.target === event.currentTarget) onClose?.();
       }}
@@ -1790,13 +1814,13 @@ function StorageSettingsDialog({ storage, retention, loading, error, onClose, on
       <section
         ref={dialogRef}
         tabIndex={-1}
-        className="flex max-h-[88dvh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-2xl outline-none"
+        className="flex max-h-[88dvh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border/70 bg-card text-card-foreground shadow-popover ring-1 ring-foreground/5 outline-none animate-in fade-in-0 zoom-in-95 duration-200"
         role="dialog"
         aria-modal="true"
         aria-labelledby="runtime-v2-storage-dialog-heading"
         aria-describedby="runtime-v2-storage-dialog-description"
       >
-        <header className="flex items-start justify-between gap-4 border-b border-border/60 px-5 py-4">
+        <header className="flex items-start justify-between gap-4 border-b border-border/50 px-5 py-4">
           <div className="space-y-1">
             <h2 id="runtime-v2-storage-dialog-heading" className="text-base font-semibold text-foreground">
               运行统计存储设置
@@ -1823,7 +1847,7 @@ function StorageSettingsDialog({ storage, retention, loading, error, onClose, on
           />
         </div>
 
-        <footer className="flex justify-end border-t border-border/60 px-5 py-3">
+        <footer className="flex justify-end border-t border-border/50 bg-muted/25 px-5 py-3">
           <Button type="button" variant="secondary" size="sm" onClick={onClose}>
             完成
           </Button>
@@ -1916,7 +1940,7 @@ function StoragePanel({ storage, retention, loading, error, onRetry, onUpdateRet
         <LoadingLine text="正在读取存储状态…" />
       ) : storage ? (
         <>
-          <div className="space-y-3 rounded-lg border border-border/80 bg-muted/20 p-4">
+          <div className="space-y-3 rounded-xl border border-border/60 bg-muted/30 p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <strong className="font-semibold text-foreground">自动保留策略</strong>
               <span className="font-mono text-[11px] text-muted-foreground">
@@ -1926,11 +1950,11 @@ function StoragePanel({ storage, retention, loading, error, onRetry, onUpdateRet
               </span>
             </div>
 
-            <form className="flex flex-wrap items-center gap-2" onSubmit={saveRetention}>
-              <label htmlFor="runtime-v2-storage-max-age-days" className="font-medium text-foreground">最大保存天数</label>
+            <form className="flex flex-wrap items-center gap-2 [&_label]:font-medium [&_label]:text-foreground" onSubmit={saveRetention}>
+              <label htmlFor="runtime-v2-storage-max-age-days">最大保存天数</label>
               <Input
                 id="runtime-v2-storage-max-age-days"
-                className="h-8 w-24 font-mono text-xs"
+                className="h-8 w-24 bg-background/90 font-mono text-xs"
                 inputMode="numeric"
                 pattern="[0-9]*"
                 value={maxAgeDaysInput}
@@ -1945,7 +1969,7 @@ function StoragePanel({ storage, retention, loading, error, onRetry, onUpdateRet
               <label htmlFor="runtime-v2-storage-limit-mb">容量上限</label>
               <Input
                 id="runtime-v2-storage-limit-mb"
-                className="h-8 w-24 font-mono text-xs"
+                className="h-8 w-24 bg-background/90 font-mono text-xs"
                 inputMode="numeric"
                 pattern="[0-9]*"
                 value={storageLimitMB}
@@ -1969,17 +1993,17 @@ function StoragePanel({ storage, retention, loading, error, onRetry, onUpdateRet
             </form>
 
             {retentionError && (
-              <div className="rounded-lg border border-status-critical/35 bg-status-critical/10 px-3 py-2 text-status-critical" role="alert">
+              <div className="rounded-xl border border-status-critical/30 bg-status-critical/10 px-3.5 py-2.5 text-status-critical" role="alert">
                 {retentionError}
               </div>
             )}
           </div>
 
           <div
-            className="runtime-v2-storage-dialog-context flex flex-wrap items-center gap-4 rounded-lg border border-border/75 bg-muted/15 px-3.5 py-2.5"
+            className="runtime-v2-storage-dialog-context flex flex-wrap items-center gap-4 rounded-xl bg-muted/45 px-4 py-3"
             aria-label="当前存储上下文"
           >
-            <span>保留事件 <strong className="font-mono">{retainedEvents == null ? '—' : numberWithComma(retainedEvents)}</strong></span>
+            <span>保留事件 <strong className="font-mono text-foreground">{retainedEvents == null ? '—' : numberWithComma(retainedEvents)}</strong></span>
             {pendingEvents != null && pendingEvents > 0 && (
               <span className="text-status-warning">
                 待写入 <strong className="font-mono">{numberWithComma(pendingEvents)}{pendingBytes == null ? '' : ` · ${formatBytes(pendingBytes)}`}</strong>
@@ -1987,8 +2011,8 @@ function StoragePanel({ storage, retention, loading, error, onRetry, onUpdateRet
             )}
           </div>
 
-          <div className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-3 rounded-lg border border-border/80 bg-muted/15 p-3.5">
+          <div className="grid gap-3.5 md:grid-cols-2">
+            <div className="space-y-3 rounded-xl border border-border/60 bg-muted/25 p-4">
               <div className="flex items-center justify-between gap-2">
                 <strong className="font-semibold text-foreground">清理方式</strong>
                 <StatusBadge text={maxAgeDays == null && storageLimitBytes == null ? '仅手动清理' : '自动轮换'} kind="good" />
@@ -1998,21 +2022,21 @@ function StoragePanel({ storage, retention, loading, error, onRetry, onUpdateRet
                   ? '未设置自动条件，记录会持续保留，直到你主动清理统计。'
                   : `按${maxAgeDays == null ? '' : `时间（${maxAgeDays} 天）`}${maxAgeDays != null && storageLimitBytes != null ? '或' : ''}${storageLimitBytes == null ? '' : '容量'}自动轮换最旧的已完成请求；进行中的请求组会继续保留。`}
               </p>
-              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-2.5">
-                <span className="text-[11px] text-muted-foreground">按时间清理已完成统计，进行中的请求组会保留；诊断捕获不受影响。</span>
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/50 pt-3">
+                <span className="text-[11px] leading-relaxed text-muted-foreground">按时间清理已完成统计，进行中的请求组会保留；诊断捕获不受影响。</span>
                 <Button type="button" variant="destructive" size="xs" onClick={onManualCleanup}>
                   按时间清理统计
                 </Button>
               </div>
-              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-2.5">
-                <span className="text-[11px] text-muted-foreground">旧版自动清理字段不会通过手动清理移除；需要彻底切换到当前数据库结构时使用此操作。</span>
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/50 pt-3">
+                <span className="text-[11px] leading-relaxed text-muted-foreground">旧版自动清理字段不会通过手动清理移除；需要彻底切换到当前数据库结构时使用此操作。</span>
                 <Button type="button" variant="destructive" size="xs" onClick={onRecreateDatabase}>
                   重置并新建数据库
                 </Button>
               </div>
             </div>
 
-            <div className="space-y-2 rounded-lg border border-border/80 bg-muted/15 p-3.5 text-muted-foreground">
+            <div className="space-y-2.5 rounded-xl border border-border/60 bg-muted/25 p-4 text-muted-foreground">
               <strong className="block font-semibold text-foreground">数据说明</strong>
               <p className="leading-relaxed">运行记录会保留源事件和会话归属；自动轮换按请求组删除，任何含进行中事件的请求组都会跳过，避免请求链残缺。</p>
               <p className="leading-relaxed">完整诊断捕获独立保存，源请求正文、Headers 和流式 Chunk 不会重复计入统计。</p>
@@ -2160,7 +2184,7 @@ export function PricingPanel({ pricing, config, endpointID = '', loading, error,
   };
 
   return (
-    <div className="space-y-4 rounded-xl border border-border/80 bg-muted/20 p-4">
+    <div className="space-y-4 rounded-2xl border border-border/65 bg-muted/25 p-4 sm:p-5">
       <div className="space-y-0.5">
         <strong className="block text-sm font-semibold text-foreground">
           {endpointID ? `入口模型价格 · ${endpointName}` : '入口模型价格'}
@@ -2179,11 +2203,11 @@ export function PricingPanel({ pricing, config, endpointID = '', loading, error,
         <>
           <label className="inline-flex items-center gap-2 text-xs font-medium text-foreground">
             <span>货币</span>
-            <Input className="h-8 w-20 font-mono text-xs uppercase" value={currency} maxLength={3} onChange={(event) => setCurrency(event.target.value)} />
+            <Input className="h-8 w-20 bg-background/90 font-mono text-xs uppercase" value={currency} maxLength={3} onChange={(event) => setCurrency(event.target.value)} />
           </label>
 
           {configuredModels.length > 0 && (
-            <div className="space-y-2 rounded-lg border border-border/75 bg-card/70 p-3" aria-label="已配置入口模型">
+            <div className="space-y-2.5 rounded-xl border border-border/55 bg-card/90 p-3.5 shadow-2xs" aria-label="已配置入口模型">
               <div className="flex flex-wrap items-baseline justify-between gap-2 text-xs">
                 <strong className="font-semibold text-foreground">当前配置中的模型</strong>
                 <span className="text-muted-foreground">点击模型生成入口专属价格行</span>
@@ -2197,11 +2221,11 @@ export function PricingPanel({ pricing, config, endpointID = '', loading, error,
                       type="button"
                       disabled={exists}
                       onClick={() => addConfiguredModel(model)}
-                      className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-border/80 bg-background/60 px-2.5 py-1 text-[11px] transition-colors hover:border-primary/50 hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border/70 bg-background/80 px-2.5 py-1 text-[11px] shadow-2xs transition-colors hover:border-primary/45 hover:bg-muted/60 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <span className="text-muted-foreground">{model.endpointName}</span>
                       <strong className="font-mono font-semibold text-foreground">{model.modelKey}</strong>
-                      <em className="not-italic text-primary">{exists ? '已添加' : '添加价格'}</em>
+                      <em className="not-italic font-medium text-primary">{exists ? '已添加' : '添加价格'}</em>
                     </button>
                   );
                 })}
@@ -2231,8 +2255,8 @@ export function PricingPanel({ pricing, config, endpointID = '', loading, error,
                       {endpointID && row.endpointID === endpointID ? (
                         <span className="text-xs font-medium" title={endpointName}>{endpointName}</span>
                       ) : (
-                        <select
-                          className={cn(SELECT_CLS, 'h-8')}
+                        <NativeSelect
+                          size="sm"
                           value={row.endpointID || ''}
                           onChange={(event) => update(index, 'endpointID', event.target.value)}
                           aria-label={`第 ${index + 1} 行入口`}
@@ -2241,29 +2265,29 @@ export function PricingPanel({ pricing, config, endpointID = '', loading, error,
                           {(config?.endpoints || []).map((endpoint) => (
                             <option key={endpoint.id} value={endpoint.id}>{endpoint.name || endpoint.id}</option>
                           ))}
-                        </select>
+                        </NativeSelect>
                       )}
                     </TableCell>
                     <TableCell className="min-w-[140px]">
-                      <Input className="h-8 font-mono text-xs" list="runtime-pricing-models" value={row.modelKey} onChange={(event) => update(index, 'modelKey', event.target.value)} placeholder="exact-model" />
+                      <Input className="h-8 bg-background/90 font-mono text-xs" list="runtime-pricing-models" value={row.modelKey} onChange={(event) => update(index, 'modelKey', event.target.value)} placeholder="exact-model" />
                     </TableCell>
                     <TableCell className="min-w-[165px]">
-                      <Input className="h-8 font-mono text-xs" type="datetime-local" value={row.effectiveFrom} onChange={(event) => update(index, 'effectiveFrom', event.target.value)} />
+                      <Input className="h-8 bg-background/90 font-mono text-xs" type="datetime-local" value={row.effectiveFrom} onChange={(event) => update(index, 'effectiveFrom', event.target.value)} />
                     </TableCell>
                     <TableCell className="min-w-[165px]">
-                      <Input className="h-8 font-mono text-xs" type="datetime-local" value={row.effectiveTo} onChange={(event) => update(index, 'effectiveTo', event.target.value)} />
+                      <Input className="h-8 bg-background/90 font-mono text-xs" type="datetime-local" value={row.effectiveTo} onChange={(event) => update(index, 'effectiveTo', event.target.value)} />
                     </TableCell>
                     <TableCell className="min-w-[96px]">
-                      <Input className="h-8 font-mono text-xs" inputMode="decimal" value={row.input} onChange={(event) => update(index, 'input', event.target.value)} placeholder="USD" required aria-label={`第 ${index + 1} 行输入价格`} />
+                      <Input className="h-8 bg-background/90 font-mono text-xs" inputMode="decimal" value={row.input} onChange={(event) => update(index, 'input', event.target.value)} placeholder="USD" required aria-label={`第 ${index + 1} 行输入价格`} />
                     </TableCell>
                     <TableCell className="min-w-[96px]">
-                      <Input className="h-8 font-mono text-xs" inputMode="decimal" value={row.output} onChange={(event) => update(index, 'output', event.target.value)} placeholder="USD" required aria-label={`第 ${index + 1} 行输出价格`} />
+                      <Input className="h-8 bg-background/90 font-mono text-xs" inputMode="decimal" value={row.output} onChange={(event) => update(index, 'output', event.target.value)} placeholder="USD" required aria-label={`第 ${index + 1} 行输出价格`} />
                     </TableCell>
                     <TableCell className="min-w-[96px]">
-                      <Input className="h-8 font-mono text-xs" inputMode="decimal" value={row.cacheRead} onChange={(event) => update(index, 'cacheRead', event.target.value)} placeholder="可空" />
+                      <Input className="h-8 bg-background/90 font-mono text-xs" inputMode="decimal" value={row.cacheRead} onChange={(event) => update(index, 'cacheRead', event.target.value)} placeholder="可空" />
                     </TableCell>
                     <TableCell className="min-w-[96px]">
-                      <Input className="h-8 font-mono text-xs" inputMode="decimal" value={row.cacheCreation} onChange={(event) => update(index, 'cacheCreation', event.target.value)} placeholder="可空" />
+                      <Input className="h-8 bg-background/90 font-mono text-xs" inputMode="decimal" value={row.cacheCreation} onChange={(event) => update(index, 'cacheCreation', event.target.value)} placeholder="可空" />
                     </TableCell>
                     <TableCell>
                       <Button type="button" variant="destructive" size="xs" onClick={() => remove(index)}>移除</Button>
@@ -2326,8 +2350,8 @@ function CostPanel({
 
   return (
     <Card aria-labelledby="runtime-v3-cost-heading">
-      <CardHeader className="flex flex-col gap-3 border-b border-border/60 pb-4 lg:flex-row lg:items-start lg:justify-between">
-        <div>
+      <CardHeader className="flex flex-col gap-3 border-b border-border/50 lg:flex-row lg:items-start lg:justify-between">
+        <div className="space-y-1">
           <CardTitle id="runtime-v3-cost-heading">成本</CardTitle>
           <CardDescription>
             按入口、项目、会话和模型查看估算成本。点击项目或会话行，可继续查看对应模型成本。
@@ -2368,7 +2392,7 @@ function CostPanel({
       </CardHeader>
 
       <CardContent className="space-y-5">
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3.5 sm:grid-cols-3">
           <Metric label="估算成本" value={safeNumber(cost?.pricedRequests) > 0 ? formatMoney(cost.estimatedCostMicros, cost.currency || pricing?.currency || 'USD') : '—'} detail={safeNumber(cost?.pricedRequests) > 0 ? `基于 ${numberWithComma(cost.pricedRequests)} 个已计价请求` : '暂无可计价请求'} accent="var(--status-good)" />
           <Metric label="请求" value={optionalNumberWithComma(totals?.clientRequests)} detail="当前筛选范围" accent="var(--primary)" />
           <Metric label="暂无法计价" value={optionalNumberWithComma(unpricedTotal)} detail={unpricedTotal > 0 ? '缺少价格或完整用量 · 可在右上角补充模型单价' : '所有已完成请求均已匹配单价'} accent="var(--status-warning)" />
@@ -2479,36 +2503,36 @@ function ExportPanel({ addToast, filters = {}, filterKey, pageVisible }) {
     finally { setLoading(false); }
   };
   return (
-    <div className="space-y-3 text-xs">
+    <div className="space-y-3.5 text-xs">
       <PanelMessage error={error} onRetry={loadEstimate} />
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:items-end">
-        <label className="space-y-1">
+        <label className="space-y-1.5">
           <span className="block font-medium text-foreground">范围</span>
-          <select className={SELECT_CLS} value={scope} onChange={(event) => { setScope(event.target.value); setEstimate(null); }}>
+          <NativeSelect value={scope} onChange={(event) => { setScope(event.target.value); setEstimate(null); }}>
             <option value="events">事件</option>
             <option value="projects">项目</option>
             <option value="sessions">会话</option>
-          </select>
+          </NativeSelect>
         </label>
-        <label className="space-y-1">
+        <label className="space-y-1.5">
           <span className="block font-medium text-foreground">格式</span>
-          <select className={SELECT_CLS} value={format} onChange={(event) => { setFormat(event.target.value); setEstimate(null); }}>
+          <NativeSelect value={format} onChange={(event) => { setFormat(event.target.value); setEstimate(null); }}>
             <option value="jsonl">JSONL（逐行）</option>
             <option value="csv">CSV</option>
-          </select>
+          </NativeSelect>
         </label>
-        <label className="space-y-1">
+        <label className="space-y-1.5">
           <span className="block font-medium text-foreground">数据范围</span>
-          <select className={SELECT_CLS} value={privacy} onChange={(event) => { setPrivacy(event.target.value); setConfirmStored(false); setEstimate(null); }}>
+          <NativeSelect value={privacy} onChange={(event) => { setPrivacy(event.target.value); setConfirmStored(false); setEstimate(null); }}>
             <option value="stored">源数据（SQLite 已存字段，默认）</option>
             <option value="redacted">脱敏副本</option>
-          </select>
+          </NativeSelect>
         </label>
         <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" variant="secondary" size="sm" onClick={loadEstimate} disabled={loading}>
+          <Button type="button" variant="secondary" size="sm" className="h-9" onClick={loadEstimate} disabled={loading}>
             {loading ? '估算中…' : '估算导出'}
           </Button>
-          <Button type="button" size="sm" onClick={download} disabled={loading || !estimate}>
+          <Button type="button" size="sm" className="h-9" onClick={download} disabled={loading || !estimate}>
             <Download className="size-3.5" />
             <span>{loading ? '处理中…' : '开始下载'}</span>
           </Button>
@@ -2516,10 +2540,9 @@ function ExportPanel({ addToast, filters = {}, filterKey, pageVisible }) {
       </div>
 
       {privacy === 'stored' && (
-        <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-status-warning/30 bg-status-warning/10 p-2.5 text-status-warning">
-          <input
-            type="checkbox"
-            className="mt-0.5 size-4 shrink-0 accent-primary"
+        <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-status-warning/30 bg-status-warning/10 p-3 leading-relaxed text-status-warning">
+          <Checkbox
+            className="mt-0.5"
             checked={confirmStored}
             onChange={(event) => { setConfirmStored(event.target.checked); setEstimate(null); }}
           />
@@ -2528,7 +2551,7 @@ function ExportPanel({ addToast, filters = {}, filterKey, pageVisible }) {
       )}
 
       {estimate && (
-        <div className="rounded-lg border border-border/75 bg-muted/20 px-3 py-2 font-mono text-foreground" role="status">
+        <div className="rounded-xl bg-muted/45 px-4 py-2.5 font-mono text-foreground" role="status">
           <strong>{numberWithComma(estimate.rowCount)} 行 · 约 {formatBytes(estimate.estimatedBytes)}</strong>
         </div>
       )}
@@ -3174,7 +3197,7 @@ export function AnalyticsWorkspace({
     <section className="space-y-4" aria-label="统计详情">
       <nav aria-label="统计看板">
         <div
-          className="runtime-v2-section-tabs grid w-full grid-cols-4 rounded-xl border border-border/80 bg-muted/45 p-1 sm:inline-flex sm:w-auto"
+          className="runtime-v2-section-tabs grid w-full grid-cols-4 gap-1 rounded-xl border border-border/60 bg-muted/60 p-1 shadow-2xs sm:inline-flex sm:w-auto"
           role="tablist"
           aria-label="数据库分析分面"
         >
@@ -3189,10 +3212,10 @@ export function AnalyticsWorkspace({
               aria-controls={`analytics-panel-${item.id}`}
               tabIndex={section === item.id ? 0 : -1}
               className={cn(
-                'min-w-0 cursor-pointer rounded-lg px-2 py-1.5 text-center text-xs font-medium whitespace-nowrap transition-all sm:flex-initial sm:px-4',
+                'min-w-0 cursor-pointer rounded-lg px-3 py-1.5 text-center text-xs font-medium whitespace-nowrap transition-all duration-200 sm:flex-initial sm:px-4',
                 section === item.id
-                  ? 'bg-background text-foreground shadow-xs font-semibold'
-                  : 'text-muted-foreground hover:text-foreground',
+                  ? 'bg-card text-foreground font-semibold shadow-xs ring-1 ring-border/50'
+                  : 'text-muted-foreground hover:bg-background/45 hover:text-foreground',
               )}
               onClick={() => setSection(item.id)}
               onKeyDown={(event) => {
@@ -3258,7 +3281,7 @@ export function AnalyticsWorkspace({
 
       {section === 'errors' && (
         <Card id="analytics-panel-errors" role="tabpanel" aria-labelledby="analytics-tab-errors">
-          <CardHeader className="border-b border-border/60 pb-4">
+          <CardHeader className="border-b border-border/50">
             <CardTitle>错误与结构化诊断</CardTitle>
             <CardDescription>先看错误分组与样本，再按需展开模型、用途、协议、失败和流终止分组。</CardDescription>
           </CardHeader>
@@ -3308,7 +3331,7 @@ export function AnalyticsWorkspace({
 
       {showExport && (
         <Card id="analytics-panel-export" aria-label="运行统计导出">
-          <CardHeader className="flex flex-row items-start justify-between gap-4 border-b border-border/60 pb-3">
+          <CardHeader className="flex flex-row items-start justify-between gap-4 border-b border-border/50">
             <div className="space-y-0.5">
               <CardTitle>运行统计导出</CardTitle>
               <CardDescription>导出当前筛选下的 SQLite 运行统计字段，不包含诊断正文。</CardDescription>

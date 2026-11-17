@@ -14,6 +14,7 @@ import {
 import { Badge } from '../components/ui/badge.jsx';
 import { Button } from '../components/ui/button.jsx';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card.jsx';
+import { PageHeader } from '../components/ui/page-header.jsx';
 import { useApp } from '../context/AppContext.jsx';
 import { getOnboardingState, ONBOARDING_STATES } from '../utils/onboarding.js';
 
@@ -23,14 +24,14 @@ const issueURL = `${repoURL}/issues`;
 
 function HelpStep({ number, title, children }) {
   return (
-    <div className="flex gap-3">
+    <div className="flex gap-3.5">
       <span
-        className="flex size-6 shrink-0 items-center justify-center rounded-full border border-primary/35 bg-primary/10 font-mono text-xs font-semibold text-primary"
+        className="flex size-7 shrink-0 items-center justify-center rounded-xl border border-primary/30 bg-primary/10 font-mono text-xs font-semibold text-primary shadow-2xs"
         aria-hidden="true"
       >
         {number}
       </span>
-      <div className="space-y-1">
+      <div className="space-y-1 pt-0.5">
         <h3 className="text-sm font-semibold text-foreground">{title}</h3>
         <p className="text-xs leading-relaxed text-muted-foreground">{children}</p>
       </div>
@@ -40,7 +41,7 @@ function HelpStep({ number, title, children }) {
 
 function HelpQuestion({ question, children }) {
   return (
-    <div className="space-y-1 rounded-lg border border-border/75 bg-muted/20 p-3.5">
+    <div className="space-y-1.5 rounded-2xl bg-muted/45 p-4 transition-colors hover:bg-muted/65">
       <h3 className="text-xs font-semibold text-foreground">{question}</h3>
       <p className="text-xs leading-relaxed text-muted-foreground">{children}</p>
     </div>
@@ -97,23 +98,25 @@ export function HelpPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-1">
-        <h1 className="flex items-center gap-2.5 text-xl font-semibold tracking-tight text-foreground">
-          <HelpCircle className="size-5 text-primary" />
-          <span>帮助</span>
-        </h1>
-        <p className="text-xs text-muted-foreground">快速开始、客户端接入、常见问题与安全边界。</p>
-      </div>
+      <PageHeader
+        icon={HelpCircle}
+        title={<span>帮助</span>}
+        description="快速开始、客户端接入、常见问题与安全边界。"
+      />
 
-      <Card data-onboarding-state={onboardingState}>
-        <CardHeader className="pb-2">
+      <Card className="relative overflow-hidden" data-onboarding-state={onboardingState}>
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 top-0 h-20 bg-gradient-to-b from-primary/[0.06] to-transparent"
+        />
+        <CardHeader className="relative z-10 pb-1">
           <div className="flex flex-wrap items-center gap-2">
             <Route className="size-4 text-primary" />
             <CardTitle>当前开箱状态</CardTitle>
             <Badge variant="default">{onboarding.label}</Badge>
           </div>
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent className="relative z-10 space-y-3.5">
           <p className="text-xs leading-relaxed text-muted-foreground">{onboarding.detail}</p>
           <div>
             {onboarding.href ? (
@@ -134,13 +137,13 @@ export function HelpPage() {
       </Card>
 
       <Card>
-        <CardHeader className="pb-2">
+        <CardHeader className="border-b border-border/75">
           <div className="flex items-center gap-2">
             <ShieldCheck className="size-4 text-status-good" />
             <CardTitle>客户端项目归因</CardTitle>
           </div>
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent className="space-y-3.5">
           <p className="text-xs leading-relaxed text-muted-foreground">
             客户端原生标记自动识别。缺少产品标记时，在“安全 → 客户端识别”为独立入站 Token 绑定客户端；项目和会话仍以请求证据为准。
           </p>
@@ -149,7 +152,7 @@ export function HelpPage() {
               <ShieldCheck className="size-3.5" />
               <span>打开安全页配置</span>
             </Button>
-            <Button asChild variant="secondary" size="sm">
+            <Button asChild variant="outline" size="sm">
               <a href={`${docsURL}#5-让统计识别客户端项目和会话`} target="_blank" rel="noreferrer">
                 <BookOpen className="size-3.5" />
                 <span>查看客户端识别说明</span>
@@ -159,9 +162,9 @@ export function HelpPage() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="stagger-cards grid gap-4 lg:grid-cols-2">
         <Card>
-          <CardHeader className="pb-2">
+          <CardHeader className="border-b border-border/75">
             <div className="flex items-center gap-2">
               <Sparkles className="size-4 text-primary" />
               <CardTitle>快速开始</CardTitle>
@@ -172,42 +175,42 @@ export function HelpPage() {
               在 <strong className="font-semibold text-foreground">入口库</strong> 添加地址、密钥和客户端模型映射，再到 <strong className="font-semibold text-foreground">模型组</strong> 选择已添加的模型并绑定入口；启用组和入口后保存。
             </HelpStep>
             <HelpStep number="2" title="确认代理监听">
-              在 <strong className="font-semibold text-foreground">运行</strong> 页确认 daemon 正在运行。容器或进程内监听地址为 <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">{listener}</code>。远程客户端应使用服务器可达地址；Docker 使用 Compose 发布的宿主机端口，不能把 <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">0.0.0.0</code> 当作客户端地址。
+              在 <strong className="font-semibold text-foreground">运行</strong> 页确认 daemon 正在运行。容器或进程内监听地址为 <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px]">{listener}</code>。远程客户端应使用服务器可达地址；Docker 使用 Compose 发布的宿主机端口，不能把 <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px]">0.0.0.0</code> 当作客户端地址。
             </HelpStep>
             <HelpStep number="3" title="连接客户端">
-              Claude Code 使用 <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">ANTHROPIC_BASE_URL</code>；Codex 或其它 OpenAI 客户端使用带 <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">/v1</code> 的 API Base（默认 <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">http://127.0.0.1:57878/v1</code>）。完整协议矩阵见仓库的 <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">USAGE.md</code>。
+              Claude Code 使用 <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px]">ANTHROPIC_BASE_URL</code>；Codex 或其它 OpenAI 客户端使用带 <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px]">/v1</code> 的 API Base（默认 <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px]">http://127.0.0.1:57878/v1</code>）。完整协议矩阵见仓库的 <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px]">USAGE.md</code>。
             </HelpStep>
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader className="pb-2">
+          <CardHeader className="border-b border-border/75">
             <div className="flex items-center gap-2">
               <Server className="size-4 text-accent-cyan" />
               <CardTitle>配置与接入</CardTitle>
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="divide-y divide-border/60 rounded-lg border border-border/75 bg-muted/20">
-              <div className="space-y-1 p-3">
+            <div className="divide-y divide-border/65 rounded-2xl bg-muted/40">
+              <div className="space-y-1 p-3.5">
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                   <span className="text-muted-foreground">配置文件</span>
-                  <code className="font-mono text-[11px] text-foreground">$XDG_CONFIG_HOME/sumpter/config.json</code>
+                  <code className="font-mono text-[11px] font-medium text-foreground">$XDG_CONFIG_HOME/sumpter/config.json</code>
                 </div>
-                <p className="text-[11px] text-muted-foreground">
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
                   普通用户未设 XDG 时用 ~/.config/sumpter/config.json；system 安装用 /var/lib/sumpter/config.json；Docker 用挂载的 /config/config.json。
                 </p>
               </div>
-              <div className="flex flex-wrap items-center justify-between gap-2 p-3 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-2 p-3.5 text-xs">
                 <span className="text-muted-foreground">代理端口</span>
-                <code className="font-mono text-[11px] text-foreground">http://{listener}</code>
+                <code className="font-mono text-[11px] font-medium text-foreground">http://{listener}</code>
               </div>
-              <div className="flex flex-wrap items-center justify-between gap-2 p-3 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-2 p-3.5 text-xs">
                 <span className="text-muted-foreground">配置版本</span>
                 <strong className="font-mono text-xs font-semibold text-foreground">schema v{schemaVersion}</strong>
               </div>
             </div>
-            <p className="flex items-start gap-2 rounded-lg border border-status-warning/35 bg-status-warning/10 p-3 text-xs text-status-warning">
+            <p className="flex items-start gap-2.5 rounded-2xl border border-status-warning/30 bg-status-warning/10 p-3.5 text-xs leading-relaxed text-status-warning">
               <AlertTriangle className="mt-0.5 size-4 shrink-0" />
               <span>不要把 config.json、API key、入站 Token 或诊断原文提交到 Git，也不要粘贴到公开 Issue。</span>
             </p>
@@ -216,7 +219,7 @@ export function HelpPage() {
       </div>
 
       <Card>
-        <CardHeader className="pb-2">
+        <CardHeader className="border-b border-border/75">
           <div className="flex items-center gap-2">
             <Search className="size-4 text-status-warning" />
             <CardTitle>常见问题</CardTitle>
@@ -241,7 +244,7 @@ export function HelpPage() {
       </Card>
 
       <Card>
-        <CardHeader className="pb-2">
+        <CardHeader className="border-b border-border/75">
           <div className="flex items-center gap-2">
             <Terminal className="size-4 text-primary" />
             <CardTitle>pi 客户端与项目归因</CardTitle>
@@ -249,20 +252,20 @@ export function HelpPage() {
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="text-xs leading-relaxed text-muted-foreground">
-            在 pi 所在主机编辑 <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">~/.pi/agent/models.json</code>，为 Sumpter provider 配置 API、Base URL、入站 Token 与已启用的客户端模型名，并添加 <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">{'"headers": { "X-Sumpter-Client": "pi" }'}</code>。
+            在 pi 所在主机编辑 <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px]">~/.pi/agent/models.json</code>，为 Sumpter provider 配置 API、Base URL、入站 Token 与已启用的客户端模型名，并添加 <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px]">{'"headers": { "X-Sumpter-Client": "pi" }'}</code>。
           </p>
           <p className="text-xs leading-relaxed text-muted-foreground">
-            OpenAI Responses / Chat 使用 <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">/v1</code>；Anthropic 使用根地址；Gemini 使用 <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">/v1beta</code>。Token 可通过 <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">"apiKey": "$SUMPTER_API_KEY"</code> 引用环境变量。
+            OpenAI Responses / Chat 使用 <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px]">/v1</code>；Anthropic 使用根地址；Gemini 使用 <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px]">/v1beta</code>。Token 可通过 <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px]">"apiKey": "$SUMPTER_API_KEY"</code> 引用环境变量。
           </p>
           <p className="text-xs leading-relaxed text-muted-foreground">
             客户端身份可通过安全页的 Token 绑定补充。项目仅在原生请求提供工作区时识别；未提供时保持未知。
           </p>
           <div className="flex flex-wrap items-center gap-2 pt-1">
-            <Button type="button" variant="secondary" size="sm" onClick={() => navigate('security')}>
+            <Button type="button" variant="outline" size="sm" onClick={() => navigate('security')}>
               <ShieldCheck className="size-3.5" />
               <span>前往安全页绑定客户端</span>
             </Button>
-            <Button asChild variant="secondary" size="sm">
+            <Button asChild variant="outline" size="sm">
               <a href={`${docsURL}#pi-客户端`} target="_blank" rel="noreferrer">完整 pi 配置说明</a>
             </Button>
           </div>
@@ -270,7 +273,7 @@ export function HelpPage() {
       </Card>
 
       <Card>
-        <CardContent className="flex flex-wrap items-center justify-between gap-4 pt-1">
+        <CardContent className="flex flex-wrap items-center justify-between gap-4">
           <div className="space-y-1">
             <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
               <Link2 className="size-4 text-primary" />
@@ -279,19 +282,19 @@ export function HelpPage() {
             <p className="text-xs text-muted-foreground">仓库根目录的 USAGE.md 是开箱、配置和 Claude Code / Codex 接入的完整指南。</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button asChild variant="secondary" size="sm">
+            <Button asChild variant="outline" size="sm">
               <a href={repoURL} target="_blank" rel="noreferrer">
                 <Activity className="size-3.5" />
                 <span>GitHub 仓库</span>
               </a>
             </Button>
-            <Button asChild variant="secondary" size="sm">
+            <Button asChild variant="outline" size="sm">
               <a href={docsURL} target="_blank" rel="noreferrer">
                 <BookOpen className="size-3.5" />
                 <span>USAGE.md</span>
               </a>
             </Button>
-            <Button asChild variant="secondary" size="sm">
+            <Button asChild variant="outline" size="sm">
               <a href={issueURL} target="_blank" rel="noreferrer">
                 <AlertTriangle className="size-3.5" />
                 <span>提交 Issue</span>

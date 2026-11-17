@@ -27,7 +27,7 @@ export function ClientConnectionDiagnostics() {
 
   return (
     <Card aria-label="客户端连接诊断">
-      <CardHeader className="border-b border-border/60 pb-4">
+      <CardHeader className="border-b border-border/75">
         <div className="flex items-center gap-2">
           <Activity className="size-4 text-primary" />
           <CardTitle>客户端连接诊断</CardTitle>
@@ -38,8 +38,8 @@ export function ClientConnectionDiagnostics() {
         <CardAction>
           <Button
             type="button"
-            variant="secondary"
-            size="sm"
+            variant="outline"
+            size="xs"
             disabled={observation.state === 'loading'}
             onClick={() => setRefresh((value) => value + 1)}
           >
@@ -50,7 +50,7 @@ export function ClientConnectionDiagnostics() {
       </CardHeader>
 
       <CardContent>
-        <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <dl className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
           {clients.map(([kind, label]) => {
             const event = observation.events.find((e) => e.kind === 'client' && e.clientKind === kind);
             const missing = observation.state === 'loading'
@@ -62,18 +62,23 @@ export function ClientConnectionDiagnostics() {
               <div
                 key={kind}
                 className={cn(
-                  'rounded-lg border px-3.5 py-3 transition-colors',
-                  event ? 'border-status-good/35 bg-status-good/5' : 'border-border/75 bg-muted/20',
+                  'rounded-2xl border px-4 py-3 transition-colors',
+                  event
+                    ? 'border-status-good/30 bg-status-good/[0.06]'
+                    : 'border-border/70 bg-muted/35',
                 )}
               >
                 <dt className="flex items-center gap-2 text-xs font-semibold text-foreground">
                   <span
-                    className={cn('size-2 rounded-full', event ? 'bg-status-good' : 'bg-muted-foreground/45')}
+                    className={cn(
+                      'size-2 rounded-full',
+                      event ? 'status-sonar-ring bg-status-good text-status-good' : 'bg-muted-foreground/45',
+                    )}
                     aria-hidden="true"
                   />
                   <span>{label}</span>
                 </dt>
-                <dd className="mt-1.5 font-mono text-[11px] text-muted-foreground">
+                <dd className="mt-1.5 font-mono text-[11px] text-muted-foreground tabular-nums">
                   {event ? `已观察到请求 · ${formatTimestamp(event.timestamp)}` : missing}
                 </dd>
               </div>

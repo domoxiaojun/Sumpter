@@ -49,7 +49,7 @@ export function SidebarProvider({ defaultOpen = true, style, className, children
       <div
         data-slot="sidebar-wrapper"
         style={{
-          '--sidebar-width': '16rem',
+          '--sidebar-width': '16.25rem',
           '--sidebar-width-icon': '3.5rem',
           ...style,
         }}
@@ -71,7 +71,7 @@ export function Sidebar({ side = 'left', variant = 'inset', collapsible = 'icon'
   if (isMobile) {
     return (
       <Sheet open={openMobile} onOpenChange={setOpenMobile}>
-        <SheetContent side={side} className="w-[17rem] bg-sidebar p-0 text-sidebar-foreground">
+        <SheetContent side={side} className="w-[17rem] border-sidebar-border bg-sidebar p-0 text-sidebar-foreground">
           <SheetHeader className="sr-only">
             <SheetTitle>导航菜单</SheetTitle>
             <SheetDescription>切换控制台功能页</SheetDescription>
@@ -94,14 +94,14 @@ export function Sidebar({ side = 'left', variant = 'inset', collapsible = 'icon'
       <div
         data-slot="sidebar-gap"
         className={cn(
-          'relative w-[var(--sidebar-width)] bg-transparent transition-[width] duration-200 ease-linear',
+          'relative w-[var(--sidebar-width)] bg-transparent transition-[width] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)]',
           'group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+1rem)]',
         )}
       />
       <div
         data-slot="sidebar-container"
         className={cn(
-          'fixed inset-y-0 left-0 z-10 hidden h-svh w-[var(--sidebar-width)] transition-[left,right,width] duration-200 ease-linear md:flex',
+          'fixed inset-y-0 left-0 z-10 hidden h-svh w-[var(--sidebar-width)] transition-[left,right,width] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] md:flex',
           variant === 'inset' ? 'p-2.5 pr-0' : 'border-r border-sidebar-border',
           'group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+1rem)]',
           className,
@@ -110,7 +110,7 @@ export function Sidebar({ side = 'left', variant = 'inset', collapsible = 'icon'
       >
         <div
           data-sidebar="sidebar"
-          className="flex h-full w-full flex-col rounded-xl bg-sidebar"
+          className="flex h-full w-full flex-col rounded-2xl bg-sidebar"
         >
           {children}
         </div>
@@ -124,8 +124,8 @@ export function SidebarInset({ className, ...props }) {
     <main
       data-slot="sidebar-inset"
       className={cn(
-        'relative flex w-full flex-1 flex-col bg-background',
-        'md:peer-data-[variant=inset]:m-2.5 md:peer-data-[variant=inset]:rounded-xl md:peer-data-[variant=inset]:border md:peer-data-[variant=inset]:border-border/80 md:peer-data-[variant=inset]:shadow-xs',
+        'ambient-canvas-glow relative flex w-full flex-1 flex-col bg-background',
+        'md:peer-data-[variant=inset]:m-2.5 md:peer-data-[variant=inset]:overflow-clip md:peer-data-[variant=inset]:rounded-2xl md:peer-data-[variant=inset]:border md:peer-data-[variant=inset]:border-border/80 md:peer-data-[variant=inset]:shadow-[0_1px_3px_rgb(0_0_0/0.04)]',
         className,
       )}
       {...props}
@@ -140,7 +140,7 @@ export function SidebarTrigger({ className, onClick, ...props }) {
       data-slot="sidebar-trigger"
       variant="ghost"
       size="icon-sm"
-      className={cn('size-7', className)}
+      className={cn('size-8 rounded-lg', className)}
       onClick={(e) => {
         onClick?.(e);
         toggleSidebar();
@@ -154,15 +154,15 @@ export function SidebarTrigger({ className, onClick, ...props }) {
 }
 
 export function SidebarHeader({ className, ...props }) {
-  return <div data-slot="sidebar-header" className={cn('flex flex-col gap-2 p-2.5', className)} {...props} />;
+  return <div data-slot="sidebar-header" className={cn('flex flex-col gap-2 px-3 pt-3 pb-2', className)} {...props} />;
 }
 
 export function SidebarFooter({ className, ...props }) {
-  return <div data-slot="sidebar-footer" className={cn('mt-auto flex flex-col gap-2 p-2.5', className)} {...props} />;
+  return <div data-slot="sidebar-footer" className={cn('mt-auto flex flex-col gap-2 px-3 pt-2 pb-3', className)} {...props} />;
 }
 
 export function SidebarContent({ className, ...props }) {
-  return <div data-slot="sidebar-content" className={cn('flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-2.5', className)} {...props} />;
+  return <div data-slot="sidebar-content" className={cn('flex min-h-0 flex-1 flex-col gap-4 overflow-auto px-3 py-2', className)} {...props} />;
 }
 
 export function SidebarGroup({ className, ...props }) {
@@ -174,7 +174,7 @@ export function SidebarGroupLabel({ className, ...props }) {
     <div
       data-slot="sidebar-group-label"
       className={cn(
-        'px-2 py-1 text-[11px] font-medium text-muted-foreground/80 transition-opacity duration-200',
+        'px-2.5 py-1 text-[11px] font-semibold tracking-wide text-muted-foreground/80 transition-opacity duration-200',
         'group-data-[collapsible=icon]:opacity-0 group-data-[collapsible=icon]:h-0 group-data-[collapsible=icon]:overflow-hidden group-data-[collapsible=icon]:py-0',
         className,
       )}
@@ -184,7 +184,7 @@ export function SidebarGroupLabel({ className, ...props }) {
 }
 
 export function SidebarMenu({ className, ...props }) {
-  return <ul data-slot="sidebar-menu" className={cn('flex w-full flex-col gap-1', className)} {...props} />;
+  return <ul data-slot="sidebar-menu" className={cn('flex w-full flex-col gap-0.5', className)} {...props} />;
 }
 
 export function SidebarMenuItem({ className, ...props }) {
@@ -200,14 +200,21 @@ export function SidebarMenuButton({ isActive = false, tooltip, className, childr
       data-active={isActive}
       aria-label={tooltip || undefined}
       className={cn(
-        'flex w-full items-center gap-2.5 overflow-hidden rounded-lg px-2.5 py-2 text-left text-[13px] font-medium transition-colors outline-none cursor-pointer',
-        'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring',
-        'data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-accent-foreground data-[active=true]:font-semibold',
-        'group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-2 [&_svg]:size-4 [&_svg]:shrink-0',
+        'relative flex h-9 w-full items-center gap-2.5 overflow-hidden rounded-xl px-2.5 text-left text-[13px] font-medium transition-all duration-150 outline-none cursor-pointer',
+        'text-sidebar-foreground/75 hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring/50',
+        'data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-accent-foreground data-[active=true]:font-semibold data-[active=true]:shadow-[0_1px_2px_rgb(0_0_0/0.05),inset_0_0_0_1px_var(--sidebar-border)]',
+        'data-[active=true]:[&_svg]:text-primary',
+        'group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-2 [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground [&_svg]:transition-colors hover:[&_svg]:text-sidebar-accent-foreground',
         className,
       )}
       {...props}
     >
+      {isActive && (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-r-full bg-primary group-data-[collapsible=icon]:hidden"
+        />
+      )}
       {children}
     </button>
   );

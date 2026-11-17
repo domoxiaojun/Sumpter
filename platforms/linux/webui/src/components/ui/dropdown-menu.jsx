@@ -1,12 +1,48 @@
+import { createContext, useCallback, useContext, useState } from 'react';
 import { DropdownMenu as DropdownMenuPrimitive } from 'radix-ui';
 import { cn } from '../../lib/utils.js';
 
-export function DropdownMenu(props) {
-  return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...props} />;
+const DropdownMenuStateContext = createContext(null);
+
+export function DropdownMenu({ open: openProp, defaultOpen = false, onOpenChange, ...props }) {
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
+  const isControlled = openProp !== undefined;
+  const open = isControlled ? openProp : uncontrolledOpen;
+
+  const handleOpenChange = useCallback((nextOpen) => {
+    if (!isControlled) setUncontrolledOpen(nextOpen);
+    onOpenChange?.(nextOpen);
+  }, [isControlled, onOpenChange]);
+
+  return (
+    <DropdownMenuStateContext.Provider value={{ open, setOpen: handleOpenChange }}>
+      <DropdownMenuPrimitive.Root
+        data-slot="dropdown-menu"
+        open={open}
+        onOpenChange={handleOpenChange}
+        {...props}
+      />
+    </DropdownMenuStateContext.Provider>
+  );
 }
 
-export function DropdownMenuTrigger(props) {
-  return <DropdownMenuPrimitive.Trigger data-slot="dropdown-menu-trigger" {...props} />;
+export function DropdownMenuTrigger({ onClick, disabled, ...props }) {
+  const menuState = useContext(DropdownMenuStateContext);
+  return (
+    <DropdownMenuPrimitive.Trigger
+      data-slot="dropdown-menu-trigger"
+      disabled={disabled}
+      onClick={(event) => {
+        onClick?.(event);
+        // Radix DropdownMenuTrigger 仅监听 pointerdown 与键盘按键；
+        // 读屏器虚拟光标或编程式 .click() 触发的合成 click（detail === 0）在此补齐切换。
+        if (!event.defaultPrevented && !disabled && event.detail === 0 && menuState) {
+          menuState.setOpen(!menuState.open);
+        }
+      }}
+      {...props}
+    />
+  );
 }
 
 export function DropdownMenuContent({ className, sideOffset = 6, align = 'end', ...props }) {
@@ -17,7 +53,7 @@ export function DropdownMenuContent({ className, sideOffset = 6, align = 'end', 
         sideOffset={sideOffset}
         align={align}
         className={cn(
-          'z-50 min-w-[10rem] overflow-hidden rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-xl',
+          'surface-popover z-50 min-w-[11rem] overflow-hidden rounded-xl border border-border/85 bg-popover/95 p-1.5 text-popover-foreground backdrop-blur-md',
           'data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-95 duration-150',
           className,
         )}
@@ -33,9 +69,9 @@ export function DropdownMenuItem({ className, variant = 'default', ...props }) {
       data-slot="dropdown-menu-item"
       data-variant={variant}
       className={cn(
-        'relative flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-xs outline-hidden select-none transition-colors',
+        'relative flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-xs font-medium outline-hidden select-none transition-colors',
         'focus:bg-accent focus:text-accent-foreground data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/15',
-        'data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:size-3.5 [&_svg]:shrink-0',
+        'data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:size-3.5 [&_svg]:shrink-0 [&_svg]:text-muted-foreground',
         className,
       )}
       {...props}
@@ -47,7 +83,7 @@ export function DropdownMenuSeparator({ className, ...props }) {
   return (
     <DropdownMenuPrimitive.Separator
       data-slot="dropdown-menu-separator"
-      className={cn('-mx-1 my-1 h-px bg-border', className)}
+      className={cn('-mx-1 my-1 h-px bg-border/80', className)}
       {...props}
     />
   );

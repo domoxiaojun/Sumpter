@@ -54,7 +54,7 @@ export function DataTable({
   const hasData = Boolean(data && data.length > 0);
 
   const emptyState = (
-    <div className="flex min-h-28 items-center justify-center px-4 py-8 text-center text-xs text-muted-foreground">
+    <div className="flex min-h-32 items-center justify-center px-5 py-10 text-center text-xs text-muted-foreground">
       {emptyText}
     </div>
   );
@@ -101,7 +101,7 @@ export function DataTable({
               );
             })}
           </colgroup>
-          <thead className="sticky top-0 z-10 border-b bg-muted/75 backdrop-blur-sm">
+          <thead className="sticky top-0 z-10 border-b border-border/75 bg-muted/60 backdrop-blur-md">
             <tr>
               {columns.map((col, idx) => {
                 const presentation = columnPresentation(col, adaptive);
@@ -114,7 +114,7 @@ export function DataTable({
                   <th
                     key={col.key || idx}
                     className={cn(
-                      'h-10 px-3.5 align-middle text-[11px] font-medium tracking-wider text-muted-foreground whitespace-nowrap',
+                      'h-10 px-3.5 align-middle text-[11px] font-semibold tracking-wide text-muted-foreground whitespace-nowrap first:pl-5 last:pr-5',
                       col.type ? `data-table-column-${col.type}` : '',
                     )}
                     aria-sort={ariaSort}
@@ -128,9 +128,9 @@ export function DataTable({
                       <button
                         type="button"
                         className={cn(
-                          'data-table-sort-button inline-flex min-h-6 cursor-pointer items-center gap-1 rounded px-1 py-0.5 text-[11px] font-medium transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50',
+                          'data-table-sort-button -mx-1.5 inline-flex min-h-6 cursor-pointer items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50',
                           presentation.align === 'right' && 'ml-auto flex-row-reverse',
-                          activeSort && 'text-foreground font-semibold',
+                          activeSort && 'bg-background/80 text-foreground shadow-2xs',
                         )}
                         disabled={loading}
                         aria-label={`${col.title}，点击按${activeSort && sortDirection === 'asc' ? '降序' : '升序'}排列`}
@@ -140,7 +140,7 @@ export function DataTable({
                         )}
                       >
                         <span>{col.title}</span>
-                        <span aria-hidden="true" className="text-[10px] opacity-75">
+                        <span aria-hidden="true" className={cn('text-[10px]', activeSort ? 'text-primary' : 'opacity-65')}>
                           {activeSort ? (sortDirection === 'desc' ? '↓' : '↑') : '↕'}
                         </span>
                       </button>
@@ -150,7 +150,7 @@ export function DataTable({
               })}
             </tr>
           </thead>
-          <tbody className="divide-y divide-border/70">
+          <tbody className="divide-y divide-border/60">
             {data.map((row, rowIdx) => {
               const key = row[keyField] || rowIdx;
               const isActive = activeRowKey && key === activeRowKey;
@@ -161,8 +161,8 @@ export function DataTable({
                   key={key}
                   {...rowInteractionProps}
                   className={cn(
-                    'transition-colors hover:bg-muted/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
-                    isActive && 'bg-primary/10 hover:bg-primary/15',
+                    'transition-colors duration-150 hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50',
+                    isActive && 'bg-primary/[0.08] shadow-[inset_3px_0_0_var(--primary)] hover:bg-primary/[0.12]',
                     customRowClassName,
                   )}
                   onClick={onRowClick ? () => onRowClick(row) : undefined}
@@ -188,7 +188,7 @@ export function DataTable({
                         key={col.key || colIdx}
                         data-label={col.title || col.key || undefined}
                         className={cn(
-                          'px-3.5 py-2.5 align-middle text-xs',
+                          'px-3.5 py-3 align-middle text-xs first:pl-5 last:pr-5',
                           presentation.align === 'right' && 'text-right font-mono tabular-nums',
                           col.type ? `data-table-cell-${col.type}` : '',
                         )}

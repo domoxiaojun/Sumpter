@@ -58,6 +58,7 @@ import {
 import { Badge } from '../components/ui/badge.jsx';
 import { Button } from '../components/ui/button.jsx';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card.jsx';
+import { PageHeader } from '../components/ui/page-header.jsx';
 import { ToggleGroup, ToggleGroupItem } from '../components/ui/toggle-group.jsx';
 
 function overviewTokenDetail(totals) {
@@ -182,13 +183,13 @@ function RecentEventRequestCell({ event, live = false }) {
   ].filter(Boolean).join(' · ');
 
   return (
-    <span className="flex min-w-0 flex-col gap-0.5 text-left">
+    <span className="flex min-w-0 flex-col gap-1 text-left">
       <span className="flex flex-wrap items-center gap-1.5">
         <span className={cn('font-mono text-xs font-medium text-foreground tabular-nums', live && 'text-primary')}>
           {formatTimestamp(event.timestamp)}
         </span>
         {project && (
-          <Badge variant="outline" className="max-w-[180px] truncate px-1.5 py-0 text-[10px] font-normal" title={project}>
+          <Badge variant="secondary" className="max-w-[180px] truncate px-2 py-0 text-[10px] font-normal" title={project}>
             {project}
           </Badge>
         )}
@@ -198,7 +199,7 @@ function RecentEventRequestCell({ event, live = false }) {
       </span>
       {tools.length > 0 && (
         <span
-          className="telemetry-event-tools inline-flex w-fit max-w-full items-center gap-1 truncate whitespace-nowrap rounded border border-border/70 bg-muted/50 px-1.5 py-0.5 text-[10px] text-foreground/85"
+          className="telemetry-event-tools inline-flex w-fit max-w-full items-center gap-1 truncate whitespace-nowrap rounded-md bg-muted/70 px-1.5 py-0.5 text-[10px] text-foreground/85"
           title={`调用工具：${tools.join('、')}`}
         >
           <Wrench className="size-2.5 shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -217,12 +218,12 @@ function RecentEventRouteCell({ event }) {
   const attempt = Number(eventField(event, 'attemptNumber', 'attempt_number') || 0);
   const hasRetry = attempt > 1 || eventFailover(event);
   return (
-    <span className="flex min-w-0 flex-col gap-0.5 text-left">
+    <span className="flex min-w-0 flex-col gap-1 text-left">
       <span className="flex flex-wrap items-center gap-1.5">
         <strong className="truncate font-mono text-xs font-semibold text-foreground">{logical}</strong>
         {isMapped && (
           <span
-            className="truncate rounded border border-border/70 bg-muted/50 px-1 py-0 font-mono text-[10px] text-muted-foreground"
+            className="truncate rounded-md bg-muted/75 px-1.5 py-0 font-mono text-[10px] text-muted-foreground"
             title={`客户端模型 ${clientModel} → 路由模型 ${logical}`}
           >
             ← {clientModel}
@@ -232,7 +233,7 @@ function RecentEventRouteCell({ event }) {
       <span className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
         <span className="truncate">{eventEndpointName(event)}</span>
         {hasRetry && (
-          <Badge variant="outline" className="border-status-warning/40 bg-status-warning/10 px-1.5 py-0 text-[10px] text-status-warning">
+          <Badge variant="warning" className="px-1.5 py-0 text-[10px]">
             {attempt > 1 ? `重试 #${attempt}` : '故障转移'}
           </Badge>
         )}
@@ -244,7 +245,7 @@ function RecentEventRouteCell({ event }) {
 function RecentEventResultCell({ event }) {
   if (event.kind === 'notify') return <span className="text-xs text-muted-foreground">通知事件</span>;
   return (
-    <span className="flex min-w-0 flex-col gap-0.5 text-left">
+    <span className="flex min-w-0 flex-col gap-1 text-left">
       <span className="flex flex-wrap items-center gap-1.5">
         <RecentEventOutcome event={event} />
         <span className="font-mono text-[11px] text-muted-foreground tabular-nums" title={recentEventStatusDetail(event)}>
@@ -263,7 +264,7 @@ function RecentEventSpeed({ event }) {
   const measurable = eventOutcome(event) === 'succeeded' && Number.isFinite(speed) && speed >= 0;
   return (
     <span
-      className="rounded border border-border/70 bg-muted/40 px-1.5 py-0 font-mono text-[10px] text-muted-foreground tabular-nums"
+      className="rounded-md bg-muted/70 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground tabular-nums"
       title={measurable ? '根据上游有效输出区间估算的速度' : '无法可靠测量输出速度'}
     >
       {measurable ? `${speed.toFixed(1)} tok/s` : '—'}
@@ -285,24 +286,24 @@ function RecentEventDurationCell({ event }) {
   const streamPart = totalMS > 0 ? Math.max(0, 100 - ttfbPart) : 0;
   return (
     <span
-      className="flex flex-col gap-1 font-mono text-xs tabular-nums"
+      className="flex flex-col gap-1.5 font-mono text-xs tabular-nums"
       title={slowTTFB ? '首字节 → 总耗时；首字节超过 5 秒，上游可能排队中' : '首字节 → 总耗时'}
     >
       <span className="flex flex-wrap items-center gap-1.5">
-        <span className={cn(slowTTFB && 'text-status-warning font-semibold', live && 'text-primary font-semibold')}>
+        <span className={cn(slowTTFB && 'font-semibold text-status-warning', live && 'font-semibold text-primary')}>
           {eventDurationText(event)}
         </span>
         <RecentEventSpeed event={event} />
       </span>
       {!live && totalMS > 0 && (
-        <span className="flex h-1 w-28 overflow-hidden rounded-full bg-muted" aria-hidden="true">
+        <span className="flex h-1 w-28 overflow-hidden rounded-full bg-muted/90" aria-hidden="true">
           {ttfbPart > 0 && (
             <i
               className={cn('h-full', slowTTFB ? 'bg-status-warning' : 'bg-accent-cyan')}
               style={{ width: `${ttfbPart}%` }}
             />
           )}
-          {streamPart > 0 && <i className="h-full bg-primary/80" style={{ width: `${streamPart}%` }} />}
+          {streamPart > 0 && <i className="h-full bg-primary/85" style={{ width: `${streamPart}%` }} />}
         </span>
       )}
     </span>
@@ -349,13 +350,13 @@ function PageTelemetryStrip({ events }) {
   const warnPct = completed > 0 ? Math.max(0, 100 - goodPct - failPct) : 0;
   return (
     <div
-      className="grid gap-3 border-y bg-muted/15 px-4 py-3 sm:grid-cols-2 xl:grid-cols-4"
+      className="grid gap-4 border-b border-border/70 bg-muted/20 px-5 py-3.5 sm:grid-cols-2 xl:grid-cols-4 xl:divide-x xl:divide-border/60"
       role="region"
       aria-label="本页事件遥测摘要"
     >
-      <div className="space-y-1">
+      <div className="space-y-1.5 xl:pr-4">
         <div className="flex items-baseline justify-between gap-2 text-xs">
-          <span className="text-muted-foreground">本页请求健康度</span>
+          <span className="font-medium text-muted-foreground">本页请求健康度</span>
           <strong className="font-mono font-semibold text-foreground tabular-nums">{successRate}</strong>
         </div>
         <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-muted" aria-hidden="true">
@@ -369,9 +370,9 @@ function PageTelemetryStrip({ events }) {
         </div>
       </div>
 
-      <div className="space-y-1">
+      <div className="space-y-1.5 xl:px-4">
         <div className="flex items-baseline justify-between gap-2 text-xs">
-          <span className="text-muted-foreground">本页首字节均值</span>
+          <span className="font-medium text-muted-foreground">本页首字节均值</span>
           <strong className="font-mono font-semibold text-foreground tabular-nums">
             {ttfbCount > 0 ? formatDuration(ttfbSum / ttfbCount) : '—'}
           </strong>
@@ -382,22 +383,22 @@ function PageTelemetryStrip({ events }) {
         </div>
       </div>
 
-      <div className="space-y-1">
+      <div className="space-y-1.5 xl:px-4">
         <div className="flex items-baseline justify-between gap-2 text-xs">
-          <span className="text-muted-foreground">本页完成耗时均值</span>
+          <span className="font-medium text-muted-foreground">本页完成耗时均值</span>
           <strong className="font-mono font-semibold text-foreground tabular-nums">
             {durationCount > 0 ? formatDuration(durationSum / durationCount) : '—'}
           </strong>
         </div>
         <div className="flex items-center justify-between text-[11px] text-muted-foreground tabular-nums">
-          <span>紫绿段代表流式生成</span>
+          <span>琥珀段代表流式生成</span>
           <span>{formatNumber(durationCount)} 条已采样</span>
         </div>
       </div>
 
-      <div className="space-y-1">
+      <div className="space-y-1.5 xl:pl-4">
         <div className="flex items-baseline justify-between gap-2 text-xs">
-          <span className="text-muted-foreground">本页 Token 与切换</span>
+          <span className="font-medium text-muted-foreground">本页 Token 与切换</span>
           <strong className="font-mono font-semibold text-foreground tabular-nums">
             {tokenTotal > 0 ? formatTokenCount(tokenTotal) : '—'}
           </strong>
@@ -417,7 +418,7 @@ function RecentEventUsageCell({ event }) {
   const live = eventIsInFlight(event);
   return (
     <span
-      className={cn('flex flex-col gap-0.5 text-left text-xs', !observed && 'text-muted-foreground')}
+      className={cn('flex flex-col gap-1 text-left text-xs', !observed && 'text-muted-foreground')}
       title={
         live
           ? '仅显示上游已报告的用量，可能滞后；请求完成后以最终用量为准。'
@@ -429,7 +430,7 @@ function RecentEventUsageCell({ event }) {
         <span>{live && !observed ? '上游尚未返回' : eventCacheLabel(event)}</span>
         {(!live || observed) && <CacheHitRate event={event} />}
         {live && observed && (
-          <small className="rounded bg-primary/15 px-1 py-0 text-[10px] font-medium text-primary">暂计</small>
+          <small className="rounded-md bg-primary/15 px-1.5 py-0 text-[10px] font-medium text-primary">暂计</small>
         )}
       </span>
     </span>
@@ -459,48 +460,50 @@ function LiveEventList({ events, selectedEventID, onSelect }) {
   if (!events?.length) return null;
   return (
     <section
-      className="telemetry-live-group relative overflow-hidden border-b bg-primary/5"
+      className="telemetry-live-group relative overflow-hidden border-b border-border/75 bg-primary/[0.04]"
       aria-label={`${formatNumber(events.length)} 个进行中请求`}
     >
       <LiveSurfaceLight />
-      {/* 标题与「上游暂计」并进列头行:计数落在「请求」列,暂计提示落在「Token 用量」列。 */}
-      <div className="relative z-10 grid grid-cols-[220px_180px_104px_156px_220px_minmax(220px,1fr)] items-center border-b bg-background/50 px-3.5 py-2 text-[11px] font-medium text-muted-foreground backdrop-blur-xs">
-        <span className="telemetry-live-heading-cell inline-flex items-center gap-1.5 font-semibold text-foreground">
-          <i className="size-1.5 rounded-full bg-primary" aria-hidden="true" />
-          进行中 · {formatNumber(events.length)}
-        </span>
-        <span aria-hidden="true">模型 / 路由</span>
-        <span aria-hidden="true">结果</span>
-        <span aria-hidden="true">首字节 → 总耗时</span>
-        <span aria-hidden="true">
-          Token 用量 <small className="ml-1 text-[10px] font-normal text-primary" title="仅显示上游已报告的用量，可能滞后；请求完成后以最终用量为准。">上游暂计</small>
-        </span>
-        <span aria-hidden="true">事件状态</span>
-      </div>
-      <div className="relative z-10 max-h-[360px] divide-y overflow-y-auto" role="list" aria-label="进行中请求列表">
-        {events.map((event) => {
-          const selected = selectedEventID === event.id;
-          return (
-            <div key={event.id} role="listitem">
-              <button
-                type="button"
-                className={cn(
-                  'runtime-row-enter grid w-full min-w-[960px] cursor-pointer grid-cols-[220px_180px_104px_156px_220px_minmax(220px,1fr)] items-center px-3.5 py-2.5 text-left transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary',
-                  selected && 'bg-primary/15',
-                )}
-                aria-pressed={selected}
-                onClick={() => onSelect(event.id)}
-              >
-                <RecentEventRequestCell event={event} live />
-                <RecentEventRouteCell event={event} />
-                <RecentEventResultCell event={event} />
-                <RecentEventDurationCell event={event} />
-                <RecentEventUsageCell event={event} />
-                <RecentEventMessageCell event={event} live />
-              </button>
-            </div>
-          );
-        })}
+      {/* 标题与「上游暂计」并进列头行:计数落在「请求」列,暂计提示落在「Token 用量」列,每列边距与下方 DataTable 严格一致。 */}
+      <div className="relative z-10 overflow-x-auto">
+        <div className="grid min-w-[1100px] grid-cols-[220px_180px_104px_156px_220px_minmax(220px,1fr)] items-center border-b border-border/70 bg-background/60 text-[11px] font-semibold tracking-wide text-muted-foreground backdrop-blur-xs">
+          <span className="telemetry-live-heading-cell inline-flex h-10 items-center gap-1.5 pl-5 pr-3.5 font-semibold text-foreground">
+            <i className="size-1.5 rounded-full bg-primary" aria-hidden="true" />
+            进行中 · {formatNumber(events.length)}
+          </span>
+          <span className="px-3.5" aria-hidden="true">模型 / 路由</span>
+          <span className="px-3.5" aria-hidden="true">结果</span>
+          <span className="px-3.5" aria-hidden="true">首字节 → 总耗时</span>
+          <span className="px-3.5" aria-hidden="true">
+            Token 用量 <small className="ml-1 text-[10px] font-normal text-primary" title="仅显示上游已报告的用量，可能滞后；请求完成后以最终用量为准。">上游暂计</small>
+          </span>
+          <span className="pl-3.5 pr-5" aria-hidden="true">事件状态</span>
+        </div>
+        <div className="max-h-[360px] divide-y divide-border/60 overflow-y-auto" role="list" aria-label="进行中请求列表">
+          {events.map((event) => {
+            const selected = selectedEventID === event.id;
+            return (
+              <div key={event.id} role="listitem">
+                <button
+                  type="button"
+                  className={cn(
+                    'runtime-row-enter grid w-full min-w-[1100px] cursor-pointer grid-cols-[220px_180px_104px_156px_220px_minmax(220px,1fr)] items-center text-left transition-colors hover:bg-primary/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/50',
+                    selected && 'bg-primary/[0.12] shadow-[inset_3px_0_0_var(--primary)]',
+                  )}
+                  aria-pressed={selected}
+                  onClick={() => onSelect(event.id)}
+                >
+                  <span className="py-3 pl-5 pr-3.5"><RecentEventRequestCell event={event} live /></span>
+                  <span className="px-3.5 py-3"><RecentEventRouteCell event={event} /></span>
+                  <span className="px-3.5 py-3"><RecentEventResultCell event={event} /></span>
+                  <span className="px-3.5 py-3"><RecentEventDurationCell event={event} /></span>
+                  <span className="px-3.5 py-3"><RecentEventUsageCell event={event} /></span>
+                  <span className="py-3 pl-3.5 pr-5"><RecentEventMessageCell event={event} live /></span>
+                </button>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </section>
   );
@@ -510,7 +513,7 @@ function MobileEventList({ events, selectedEventID, onSelect, loading, live = fa
   if (!events?.length) {
     if (live) return null;
     return (
-      <div className="p-4 text-center text-xs text-muted-foreground">
+      <div className="px-5 py-10 text-center text-xs text-muted-foreground">
         {loading ? '正在读取事件历史…' : '当前筛选条件下暂无请求事件'}
       </div>
     );
@@ -518,7 +521,7 @@ function MobileEventList({ events, selectedEventID, onSelect, loading, live = fa
 
   return (
     <div
-      className={cn('relative space-y-2 p-3', live && 'overflow-hidden border-b bg-primary/5')}
+      className={cn('relative space-y-2.5 p-4', live && 'overflow-hidden border-b border-border/75 bg-primary/[0.04]')}
       data-live={live}
       role="list"
       aria-label={live ? '进行中请求列表' : '请求事件列表'}
@@ -533,8 +536,8 @@ function MobileEventList({ events, selectedEventID, onSelect, loading, live = fa
           <article key={event.id} role="listitem" className="relative z-10">
             <div
               className={cn(
-                'cursor-pointer space-y-2 rounded-xl border bg-card p-3 transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                selected && 'border-primary bg-primary/10',
+                'cursor-pointer space-y-2.5 rounded-2xl border border-border/80 bg-card p-3.5 shadow-2xs transition-all hover:border-border hover:bg-accent/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50',
+                selected && 'border-primary/50 bg-primary/[0.08]',
               )}
               role="button"
               tabIndex={0}
@@ -574,19 +577,19 @@ function MobileEventList({ events, selectedEventID, onSelect, loading, live = fa
                 <span>{recentEventStatusDetail(event)}</span>
                 {event.kind !== 'notify' && <RecentEventUsageCell event={event} />}
               </div>
-              <div className="space-y-1 text-[11px] text-muted-foreground">
+              <div className="space-y-1.5 text-[11px] text-muted-foreground">
                 <span className="telemetry-mobile-request-summary block truncate" title={recentEventRequestSummary(event)}>
                   {recentEventRequestSummary(event) || projectContext.label}
                 </span>
                 {friendly && (
                   <p
                     className={cn(
-                      'rounded-md border px-2 py-1 text-[11px]',
+                      'rounded-xl border px-2.5 py-1.5 text-[11px] leading-relaxed',
                       outcome === 'failed'
-                        ? 'border-status-critical/35 bg-status-critical/10 text-status-critical'
+                        ? 'border-status-critical/30 bg-status-critical/10 text-status-critical'
                         : eventFailover(event)
-                          ? 'border-status-warning/35 bg-status-warning/10 text-status-warning'
-                          : 'border-border/60 bg-muted/30 text-foreground/90',
+                          ? 'border-status-warning/30 bg-status-warning/10 text-status-warning'
+                          : 'border-border/65 bg-muted/40 text-foreground/90',
                     )}
                   >
                     <span className="mr-1 font-medium text-muted-foreground">事件状态</span>
@@ -850,35 +853,28 @@ export function RunPage() {
 
   return (
     <div className="space-y-6">
-      {/* Page Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="space-y-1">
-          <h1 className="flex flex-wrap items-center gap-2.5 text-2xl font-semibold tracking-tight text-foreground">
-            <Play className="size-5 text-primary" aria-hidden="true" />
-            <span>运行</span>
-            <StatusBadge status={status} />
-          </h1>
-          <p className="text-xs text-muted-foreground">启动状态、监听地址、统计和最近事件。</p>
-        </div>
-        <div className="flex items-center gap-2">
+      <PageHeader
+        icon={Activity}
+        title={<span>运行</span>}
+        badge={<StatusBadge status={status} />}
+        description="启动状态、监听地址、统计和最近事件。"
+        actions={(
           <Button
             type="button"
             variant={isRunning ? 'destructive' : 'default'}
             size="sm"
             onClick={toggleProxy}
-            className="gap-1.5"
           >
             {isRunning ? <Square className="size-3.5" /> : <Play className="size-3.5" />}
             <span>{isRunning ? '停止运行' : '启动运行'}</span>
           </Button>
-        </div>
-      </div>
+        )}
+      />
 
-      {/* Last Error Banner if present */}
       {status?.lastError && (
         <div
           role="alert"
-          className="flex items-center gap-2.5 rounded-xl border border-status-critical/40 bg-status-critical/10 px-4 py-3 text-xs text-status-critical"
+          className="flex items-center gap-3 rounded-2xl border border-status-critical/35 bg-status-critical/10 px-4 py-3.5 text-xs text-status-critical"
         >
           <AlertTriangle className="size-4 shrink-0" aria-hidden="true" />
           <div>
@@ -888,33 +884,37 @@ export function RunPage() {
       )}
 
       {/* Hero Status & Listener Summary */}
-      <Card className="run-hero-grid-single">
-        <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3 space-y-0 pb-3">
+      <Card className="run-hero-grid-single relative overflow-hidden">
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-primary/[0.05] to-transparent"
+        />
+        <CardHeader className="relative z-10 flex flex-row flex-wrap items-center justify-between gap-3 space-y-0 pb-1">
           <div className="space-y-1">
-            <div className="font-mono text-[11px] font-medium uppercase tracking-wider text-primary">
+            <div className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-primary">
               服务监听状态
             </div>
             <CardDescription className="text-sm font-medium text-foreground">
               {status?.health?.headline || (isRunning ? '代理服务正常响应客户端请求' : '服务当前处于休眠停止状态')}
             </CardDescription>
           </div>
-          <Badge variant="outline" className="font-mono text-xs tabular-nums">
+          <Badge variant="outline" className="bg-background/80 font-mono text-xs tabular-nums">
             v{status?.version || '0.2.0'} · {status?.generation || '-'}
           </Badge>
         </CardHeader>
-        <CardContent>
-          <dl className="grid gap-3 border-t pt-4 sm:grid-cols-2 lg:grid-cols-5">
-            <div className="space-y-1 sm:col-span-2 lg:col-span-1">
+        <CardContent className="relative z-10">
+          <dl className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-5">
+            <div className="space-y-1.5 rounded-xl bg-muted/45 px-3.5 py-3 sm:col-span-2 lg:col-span-1">
               <dt className="text-[11px] font-medium text-muted-foreground">HTTP 监听地址</dt>
-              <dd className="flex items-center gap-1.5">
+              <dd className="flex flex-wrap items-center gap-1.5">
                 <span className="font-mono text-xs font-semibold text-foreground tabular-nums">
                   {status?.listener ? `${status.listener.host}:${status.listener.port}` : '127.0.0.1:57878'}
                 </span>
                 <Button
                   type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-6 gap-1 px-1.5 text-[11px]"
+                  variant="outline"
+                  size="xs"
+                  className="h-6 gap-1 rounded-md px-2 text-[11px]"
                   onClick={() => copyText(`http://${status?.listener?.host || '127.0.0.1'}:${status?.listener?.port || 57878}`, '监听地址')}
                   title="复制监听地址"
                 >
@@ -923,17 +923,17 @@ export function RunPage() {
                 </Button>
               </dd>
               {status?.listener?.httpsPort != null && (
-                <div className="pt-1">
+                <div className="border-t border-border/60 pt-2">
                   <dt className="text-[11px] font-medium text-muted-foreground">HTTPS 监听地址</dt>
-                  <dd className="mt-0.5 flex items-center gap-1.5">
+                  <dd className="mt-1 flex items-center gap-1.5">
                     <span className="font-mono text-xs font-semibold text-foreground tabular-nums">
                       {status.listener.host}:{status.listener.httpsPort}
                     </span>
                     <Button
                       type="button"
-                      variant="ghost"
+                      variant="outline"
                       size="icon-sm"
-                      className="size-6"
+                      className="size-6 rounded-md"
                       title="复制 HTTPS 地址"
                       aria-label="复制 HTTPS 地址"
                       onClick={() => copyText(`https://${status.listener.host.includes(':') ? `[${status.listener.host}]` : status.listener.host}:${status.listener.httpsPort}`, 'HTTPS 地址')}
@@ -944,11 +944,11 @@ export function RunPage() {
                 </div>
               )}
             </div>
-            <div className="space-y-1">
+            <div className="space-y-1.5 rounded-xl bg-muted/45 px-3.5 py-3">
               <dt className="text-[11px] font-medium text-muted-foreground">配置版本</dt>
               <dd className="font-mono text-xs font-semibold text-foreground">v{config?.schemaVersion || 7}</dd>
             </div>
-            <div className="space-y-1">
+            <div className="space-y-1.5 rounded-xl bg-muted/45 px-3.5 py-3">
               <dt className="text-[11px] font-medium text-muted-foreground">认证状态</dt>
               <dd
                 className={cn(
@@ -961,13 +961,13 @@ export function RunPage() {
                   : '未启用 · 本机免密'}
               </dd>
             </div>
-            <div className="space-y-1">
+            <div className="space-y-1.5 rounded-xl bg-muted/45 px-3.5 py-3">
               <dt className="text-[11px] font-medium text-muted-foreground">运行时长</dt>
-              <dd className="font-mono text-xs font-medium text-foreground tabular-nums">
+              <dd className="font-mono text-xs font-semibold text-foreground tabular-nums">
                 {status?.uptimeSeconds ? formatDuration(status.uptimeSeconds * 1000) : '-'}
               </dd>
             </div>
-            <div className="space-y-1">
+            <div className="space-y-1.5 rounded-xl bg-muted/45 px-3.5 py-3">
               <dt className="text-[11px] font-medium text-muted-foreground">调度策略</dt>
               <dd className="text-xs font-medium text-foreground">优先级 + 会话粘性绑定</dd>
             </div>
@@ -976,7 +976,7 @@ export function RunPage() {
       </Card>
 
       {/* Today's usage cards and current routing inventory (strict order preserved) */}
-      <div className="run-metric-grid grid gap-3 sm:grid-cols-2 lg:grid-cols-5" aria-label="今天用量与当前入口">
+      <div className="run-metric-grid stagger-cards grid gap-3.5 sm:grid-cols-2 lg:grid-cols-5" aria-label="今天用量与当前入口">
         <MetricCard
           label="输入 Token"
           value={overview?.status === 'ready' && overview.observed > 0 && overview.input != null ? formatTokenCount(overview.input) : '—'}
@@ -989,7 +989,7 @@ export function RunPage() {
           value={overview?.status === 'ready' && overview.observed > 0 && overview.output != null ? formatTokenCount(overview.output) : '—'}
           detail={overviewTokenDetail(overview)}
           icon="file-up"
-          accent="var(--status-warning)"
+          accent="var(--accent-indigo)"
         />
         <MetricCard
           label="可调度入口"
@@ -1010,13 +1010,13 @@ export function RunPage() {
           value={overviewCount(overview?.upstreamAttempts)}
           detail={`今天 · 含重试 · 故障转移 ${overviewCount(overview?.failovers)}`}
           icon="network"
-          accent="var(--accent-indigo)"
+          accent="var(--accent-purple)"
         />
       </div>
 
       {/* Real-time Streaming Telemetry Event Log */}
-      <Card className="run-events-panel overflow-hidden py-0">
-        <CardHeader className="flex flex-col gap-3 border-b py-4 lg:flex-row lg:items-center lg:justify-between">
+      <Card className="run-events-panel gap-0 overflow-hidden py-0">
+        <CardHeader className="flex flex-col gap-3.5 border-b border-border/75 py-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="space-y-1">
             <CardTitle className="flex items-center gap-2 text-base font-semibold">
               <Activity className="size-4 text-primary" aria-hidden="true" />
@@ -1075,7 +1075,7 @@ export function RunPage() {
               type="button"
               variant="outline"
               size="sm"
-              className="h-8 gap-1.5 text-xs"
+              className="h-8 gap-1.5 rounded-xl text-xs"
               onClick={() => setEventSort((current) => (current === 'desc' ? 'asc' : 'desc'))}
               aria-label={`切换当前页事件时间排序，当前为${eventSort === 'desc' ? '最新优先' : '最早优先'}`}
               title="按当前页事件时间稳定排序"
@@ -1092,10 +1092,10 @@ export function RunPage() {
           {eventHistory.error && (
             <div
               role="alert"
-              className="flex flex-wrap items-center justify-between gap-2 border-b bg-status-critical/10 px-4 py-2.5 text-xs text-status-critical"
+              className="flex flex-wrap items-center justify-between gap-2 border-b border-border/75 bg-status-critical/10 px-5 py-2.5 text-xs text-status-critical"
             >
               <span>读取事件历史失败：{eventHistory.error}</span>
-              <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={eventHistory.retry}>
+              <Button type="button" variant="outline" size="xs" onClick={eventHistory.retry}>
                 重试
               </Button>
             </div>
@@ -1130,7 +1130,7 @@ export function RunPage() {
                     <LiveEventList events={liveEvents} selectedEventID={selectedEvent?.id} onSelect={toggleSelectEvent} />
                   </div>
                   <div className="telemetry-live-mobile md:hidden">
-                    <div className="flex items-center justify-between border-b bg-primary/10 px-4 py-2 text-xs font-medium">
+                    <div className="flex items-center justify-between border-b border-border/75 bg-primary/10 px-4 py-2.5 text-xs font-medium">
                       <span className="inline-flex items-center gap-1.5 text-foreground">
                         <i className="size-1.5 rounded-full bg-primary animate-pulse" aria-hidden="true" />
                         进行中 · {formatNumber(liveEvents.length)}
@@ -1155,7 +1155,7 @@ export function RunPage() {
                     data={visibleEvents}
                     keyField="id"
                     ariaLabel={eventHistory.mode === 'page' ? 'SQLite 持久事件分页列表' : '最近请求事件列表'}
-                    tableMinWidth="960px"
+                    tableMinWidth="1100px"
                     sortKey="timestamp"
                     sortDirection={eventSort}
                     onSortChange={(_key, direction) => setEventSort(direction)}
@@ -1176,17 +1176,18 @@ export function RunPage() {
 
               {!selectedEvent && (visibleEvents.length > 0 || liveEvents.length > 0) && (
                 <div
-                  className="border-t bg-muted/15 px-4 py-2 text-center text-[11px] text-muted-foreground"
+                  className="border-t border-border/70 bg-muted/15 px-5 py-2.5 text-center text-[11px] text-muted-foreground"
                   role="status"
                 >
-                  选择一条事件查看请求链路与诊断详情
+                  点击任意一行事件查看完整请求链路与结构化诊断详情
                 </div>
               )}
 
               {eventHistory.mode === 'page' && visibleEvents.length >= 15 && eventHistory.totalPages > 1 ? (
-                <div className="border-t">
+                <div className="border-t border-border/70">
                   <PaginationBar
                     compact
+                    className="border-b-0"
                     page={eventHistory.page}
                     pageSize={eventHistory.pageSize}
                     totalCount={eventHistory.totalCount}
@@ -1204,7 +1205,7 @@ export function RunPage() {
           </div>
 
           {eventHistory.mode === 'legacy' ? (
-            <div className="border-t bg-muted/20 px-4 py-2 text-xs text-muted-foreground" role="status">
+            <div className="border-t border-border/70 bg-muted/20 px-5 py-2.5 text-xs text-muted-foreground" role="status">
               当前 daemon 尚未提供全量快照分页，暂时显示最近事件；升级 daemon 后可选择每页 10 / 25 / 50 / 100 / 200 条。
             </div>
           ) : null}

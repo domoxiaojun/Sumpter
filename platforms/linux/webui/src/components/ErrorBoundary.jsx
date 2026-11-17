@@ -33,32 +33,36 @@ export class ErrorBoundary extends Component {
         data-slot="error-boundary"
         data-error-kind={chunk ? 'chunk' : 'render'}
         className={cn(
-          'flex flex-col items-center justify-center gap-3 px-4 text-center',
-          fullScreen ? 'min-h-dvh bg-background text-foreground' : 'min-h-[40vh]',
+          'flex flex-col items-center justify-center px-4 text-center',
+          fullScreen ? 'ambient-canvas-glow min-h-dvh bg-background text-foreground' : 'min-h-[45vh]',
         )}
       >
-        <TriangleAlert className="size-6 text-destructive" aria-hidden="true" />
-        <h2 className="text-base font-semibold">{chunk ? '控制台已更新，需要刷新页面' : '页面显示出错'}</h2>
-        <p className="max-w-md text-sm text-muted-foreground">
-          {chunk
-            ? '当前标签页加载的是旧版本界面，所需资源已被新版本替换。刷新后即可继续，已保存的配置不受影响。'
-            : '界面渲染时发生异常，代理服务本身不受影响。可以重试，或刷新页面后再操作。'}
-        </p>
-        {!chunk && errorSummary(error) && (
-          <pre className="max-w-full overflow-x-auto rounded-md border border-border bg-muted/50 px-3 py-2 text-left font-mono text-xs whitespace-pre-wrap text-muted-foreground">
-            {errorSummary(error)}
-          </pre>
-        )}
-        <div className="flex flex-wrap justify-center gap-2">
-          {!chunk && (
-            <Button variant="outline" size="sm" onClick={() => this.setState({ error: null })}>
-              重试
-            </Button>
+        <div className="surface-card flex w-full max-w-md flex-col items-center gap-3.5 rounded-2xl border border-border/85 bg-card p-6">
+          <div className="flex size-11 items-center justify-center rounded-2xl border border-destructive/25 bg-destructive/10 text-destructive">
+            <TriangleAlert className="size-5" aria-hidden="true" />
+          </div>
+          <h2 className="text-base font-semibold tracking-tight">{chunk ? '控制台已更新，需要刷新页面' : '页面显示出错'}</h2>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {chunk
+              ? '当前标签页加载的是旧版本界面，所需资源已被新版本替换。刷新后即可继续，已保存的配置不受影响。'
+              : '界面渲染时发生异常，代理服务本身不受影响。可以重试，或刷新页面后再操作。'}
+          </p>
+          {!chunk && errorSummary(error) && (
+            <pre className="max-w-full overflow-x-auto rounded-xl border border-border/80 bg-muted/45 px-3.5 py-2.5 text-left font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
+              {errorSummary(error)}
+            </pre>
           )}
-          <Button size="sm" onClick={() => window.location.reload()}>
-            <RefreshCw aria-hidden="true" />
-            刷新页面
-          </Button>
+          <div className="flex flex-wrap justify-center gap-2 pt-1">
+            {!chunk && (
+              <Button variant="outline" size="sm" onClick={() => this.setState({ error: null })}>
+                重试
+              </Button>
+            )}
+            <Button size="sm" onClick={() => window.location.reload()}>
+              <RefreshCw className="size-3.5" aria-hidden="true" />
+              刷新页面
+            </Button>
+          </div>
         </div>
       </div>
     );

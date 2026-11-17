@@ -4,8 +4,10 @@ import { ClientConnectionDiagnostics } from '../components/ClientConnectionDiagn
 import { StatusBadge } from '../components/StatusBadge.jsx';
 import { Button } from '../components/ui/button.jsx';
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card.jsx';
+import { Checkbox } from '../components/ui/checkbox.jsx';
 import { Input } from '../components/ui/input.jsx';
-import { Label } from '../components/ui/label.jsx';
+import { NativeSelect } from '../components/ui/native-select.jsx';
+import { PageHeader } from '../components/ui/page-header.jsx';
 import { useAppControls } from '../context/AppContext.jsx';
 import { cn } from '../lib/utils.js';
 import { api } from '../services/api.js';
@@ -19,8 +21,6 @@ import {
   formatWebSocketTrace,
   projectSourceLabel,
 } from '../utils/helpers.js';
-
-const SELECT_CLS = 'flex h-9 w-full rounded-md border border-input bg-background/60 px-2.5 text-xs text-foreground shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50';
 
 // 原始 Body/Chunks 可能接近整个捕获容量。详情页首屏不应该为每个折叠块
 // 都创建一份字符串或 DOM；只有用户明确展开某一块时才计算和挂载内容。
@@ -46,13 +46,16 @@ function RawBlock({ title, value, valueFactory }) {
   };
 
   return (
-    <details className="group rounded-lg border border-border/80 bg-muted/20" onToggle={loadValue}>
-      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs font-medium text-foreground select-none hover:bg-muted/40">
-        <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-90" />
+    <details
+      className="group rounded-xl border border-border/55 bg-muted/35 transition-colors open:bg-card open:shadow-2xs"
+      onToggle={loadValue}
+    >
+      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl px-3.5 py-2.5 text-xs font-medium text-foreground select-none transition-colors hover:bg-muted/55 group-open:rounded-b-none">
+        <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 group-open:rotate-90" />
         <span className="truncate font-mono">{title}</span>
       </summary>
       {renderedValue !== null && (
-        <pre className="max-h-96 overflow-auto border-t border-border/60 bg-background/60 p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all text-foreground">
+        <pre className="max-h-96 overflow-auto rounded-b-xl border-t border-border/50 bg-background/85 p-3.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all text-foreground">
           {renderedValue}
         </pre>
       )}
@@ -483,25 +486,23 @@ export function DiagnosticsPage() {
   const captureProject = clientDeclaredProject(captureDetail);
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-1">
-        <h1 className="flex items-center gap-2.5 text-xl font-semibold tracking-tight text-foreground">
-          <Wrench className="size-5 text-primary" />
-          <span>诊断</span>
-        </h1>
-        <p className="text-xs text-muted-foreground">配置路径、最近请求和诊断捕获。</p>
-      </div>
+    <div className="stagger-cards space-y-6">
+      <PageHeader
+        icon={Wrench}
+        title={<span>诊断</span>}
+        description="配置路径、最近请求和诊断捕获。"
+      />
 
       <ClientConnectionDiagnostics />
 
       <Card>
-        <CardHeader className="flex flex-col gap-3 border-b border-border/60 pb-4 lg:flex-row lg:items-start lg:justify-between">
+        <CardHeader className="flex flex-col gap-3 border-b border-border/50 lg:flex-row lg:items-start lg:justify-between">
           <div className="space-y-1">
             <div className="flex items-center gap-2">
               <Activity className="size-4 text-primary" />
               <CardTitle>完整诊断捕获</CardTitle>
             </div>
-            <CardDescription className="max-w-3xl">
+            <CardDescription className="max-w-3xl leading-relaxed">
               手动开始后保留实际收到的入站/出站 Headers、Body、上游响应和客户端输出。原始捕获文件不会被改写；页面默认按需读取源数据索引和单条正文，脱敏只作为主动导出选项。
             </CardDescription>
           </div>
@@ -509,7 +510,7 @@ export function DiagnosticsPage() {
             {captureLoading ? <StatusBadge text="读取索引中" kind="muted" /> : capture ? (
               <>
                 <StatusBadge text={captureStatus[0]} kind={captureStatus[1]} />
-                <label htmlFor="diagnostic-capacity-mb" className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                <label htmlFor="diagnostic-capacity-mb" className="inline-flex items-center gap-1.5 rounded-lg bg-muted/45 px-2.5 py-1 text-xs font-medium text-muted-foreground">
                   <span>容量</span>
                   <Input
                     id="diagnostic-capacity-mb"
@@ -517,7 +518,7 @@ export function DiagnosticsPage() {
                     min="1"
                     step="1"
                     inputMode="numeric"
-                    className="h-8 w-24 font-mono text-xs"
+                    className="h-7 w-20 bg-background/90 font-mono text-xs"
                     value={captureCapacityMB}
                     disabled={captureBusy || capture.enabled}
                     onChange={(event) => {
@@ -547,10 +548,10 @@ export function DiagnosticsPage() {
 
         <CardContent className="space-y-4">
           {captureError && !capture ? (
-            <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-status-warning/35 bg-status-warning/10 p-3.5 text-xs text-status-warning">
+            <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-status-warning/30 bg-status-warning/10 p-4 text-xs text-status-warning">
               <div className="flex items-start gap-2.5">
                 <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-                <div>
+                <div className="space-y-0.5">
                   <strong className="block font-semibold">完整诊断捕获暂不可用</strong>
                   <div>{captureError}</div>
                 </div>
@@ -562,19 +563,19 @@ export function DiagnosticsPage() {
           ) : capture ? (
             <>
               {captureError && (
-                <div role="alert" className="flex items-center gap-2 rounded-lg border border-status-warning/35 bg-status-warning/10 px-3 py-2 text-xs text-status-warning">
+                <div role="alert" className="flex items-center gap-2 rounded-xl border border-status-warning/30 bg-status-warning/10 px-3.5 py-2.5 text-xs text-status-warning">
                   <AlertTriangle className="size-4 shrink-0" />
                   <span>{captureError}；保留上一次索引，页面会自动重试。</span>
                 </div>
               )}
 
-              <div className="space-y-2 rounded-lg border border-border/75 bg-muted/20 p-3.5">
+              <div className="space-y-2.5 rounded-xl bg-muted/45 px-4 py-3.5">
                 <div className="flex flex-wrap items-center justify-between gap-2 font-mono text-xs text-muted-foreground">
                   <span>
                     {formatBytes(capture.capturedBytes)} / {formatBytes(capture.maxBytes)} · 显示最近 {capture.records.length} / 共 {capture.recordCount} 条索引
                     {capture.indexTruncated ? '（仅显示最近 200 条）' : ''}
                   </span>
-                  <span className="font-semibold text-foreground">{capturePercent.toFixed(1)}%</span>
+                  <span className="font-semibold text-foreground tabular-nums">{capturePercent.toFixed(1)}%</span>
                 </div>
                 <div
                   role="progressbar"
@@ -582,7 +583,7 @@ export function DiagnosticsPage() {
                   aria-valuemin="0"
                   aria-valuemax="100"
                   aria-valuenow={Math.round(capturePercent)}
-                  className="h-2 w-full overflow-hidden rounded-full bg-muted"
+                  className="h-2 w-full overflow-hidden rounded-full bg-background/85 ring-1 ring-border/40"
                 >
                   <div
                     className={cn(
@@ -602,9 +603,10 @@ export function DiagnosticsPage() {
 
               {capture.records.length ? (
                 <div className="space-y-4">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <select
-                      className={cn(SELECT_CLS, 'min-w-[260px] flex-1 font-mono')}
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <NativeSelect
+                      wrapperClassName="min-w-[260px] flex-1"
+                      className="font-mono"
                       value={selectedCaptureIndex?.requestID || ''}
                       onChange={(event) => setSelectedCaptureID(event.target.value)}
                       aria-label="选择诊断捕获请求"
@@ -615,7 +617,7 @@ export function DiagnosticsPage() {
                           {formatTimestamp(record.timestamp, { date: true })} · {record.clientModel || '未知模型'} · {record.statusCode ?? '进行中'} · {record.requestID}
                         </option>
                       ))}
-                    </select>
+                    </NativeSelect>
                     <Button
                       type="button"
                       variant="secondary"
@@ -628,11 +630,11 @@ export function DiagnosticsPage() {
                       <span>复制源数据 JSON</span>
                     </Button>
                   </div>
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-[11px] leading-relaxed text-muted-foreground">
                     单条导出仅针对当前选中；索引每 5 秒自动刷新，切换记录不会读取大正文，完整 Headers、Body 与 Chunk 需显式加载
                   </p>
 
-                  <div className="space-y-3 rounded-lg border border-border/80 bg-muted/15 p-4" aria-label="诊断导出向导">
+                  <div className="space-y-3.5 rounded-2xl border border-border/60 bg-muted/30 p-4" aria-label="诊断导出向导">
                     <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                       <strong className="font-semibold text-foreground">导出向导</strong>
                       <span className="font-mono text-[11px] text-muted-foreground">
@@ -643,24 +645,23 @@ export function DiagnosticsPage() {
                     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5 lg:items-end">
                       <label className="space-y-1.5">
                         <span className="block text-xs font-medium text-foreground">范围</span>
-                        <select className={SELECT_CLS} value={captureExportScope} onChange={(event) => setCaptureExportScope(event.target.value)}>
+                        <NativeSelect value={captureExportScope} onChange={(event) => setCaptureExportScope(event.target.value)}>
                           <option value="selected">当前选中请求</option>
                           <option value="all">全部捕获（服务端流式）</option>
-                        </select>
+                        </NativeSelect>
                       </label>
 
                       <label className="space-y-1.5">
                         <span className="block text-xs font-medium text-foreground">格式</span>
-                        <select className={SELECT_CLS} value={captureExportFormat} onChange={(event) => setCaptureExportFormat(event.target.value)}>
+                        <NativeSelect value={captureExportFormat} onChange={(event) => setCaptureExportFormat(event.target.value)}>
                           <option value="jsonl">JSONL（逐条）</option>
                           <option value="json">JSON</option>
-                        </select>
+                        </NativeSelect>
                       </label>
 
                       <label className="space-y-1.5">
                         <span className="block text-xs font-medium text-foreground">数据</span>
-                        <select
-                          className={SELECT_CLS}
+                        <NativeSelect
                           value={captureExportPrivacy}
                           onChange={(event) => {
                             setCaptureExportPrivacy(event.target.value);
@@ -669,7 +670,7 @@ export function DiagnosticsPage() {
                         >
                           <option value="raw">源数据（默认）</option>
                           <option value="redacted">脱敏副本</option>
-                        </select>
+                        </NativeSelect>
                       </label>
 
                       {captureExportPrivacy === 'redacted' && (
@@ -691,7 +692,7 @@ export function DiagnosticsPage() {
                         <Button
                           type="button"
                           size="sm"
-                          className="w-full"
+                          className="h-9 w-full"
                           disabled={captureExportBusy || (captureExportScope !== 'all' && !selectedCaptureID)}
                           onClick={startCaptureExport}
                         >
@@ -708,10 +709,9 @@ export function DiagnosticsPage() {
                     )}
 
                     {captureExportPrivacy === 'raw' && (
-                      <label className="flex cursor-pointer items-start gap-2 rounded-md border border-status-warning/30 bg-status-warning/10 p-2.5 text-xs text-status-warning">
-                        <input
-                          type="checkbox"
-                          className="mt-0.5 size-4 shrink-0 accent-primary"
+                      <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-status-warning/30 bg-status-warning/10 p-3 text-xs leading-relaxed text-status-warning">
+                        <Checkbox
+                          className="mt-0.5"
                           checked={captureExportConfirmRaw}
                           onChange={(event) => setCaptureExportConfirmRaw(event.target.checked)}
                         />
@@ -723,7 +723,7 @@ export function DiagnosticsPage() {
                   {captureDetailLoading ? (
                     <p className="text-xs text-muted-foreground">正在读取选中请求详情…</p>
                   ) : captureDetailError ? (
-                    <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-status-warning/35 bg-status-warning/10 p-3 text-xs text-status-warning">
+                    <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-status-warning/30 bg-status-warning/10 p-3.5 text-xs text-status-warning">
                       <span>{captureDetailError}</span>
                       <Button type="button" variant="secondary" size="xs" onClick={loadCaptureDetail}>
                         重试读取
@@ -731,16 +731,16 @@ export function DiagnosticsPage() {
                     </div>
                   ) : captureDetailMatchesSelection ? (
                     <div className="space-y-3">
-                      <div className="grid gap-2.5 rounded-lg border border-border/75 bg-muted/20 p-3.5 text-xs sm:grid-cols-2 lg:grid-cols-3">
-                        <div><span className="text-muted-foreground">请求：</span><strong className="font-mono">{captureDetail.method} {captureDetail.path}</strong></div>
-                        <div><span className="text-muted-foreground">模型：</span><strong className="font-mono">{captureDetail.clientModel || '-'} → {captureDetail.effectiveModel || '-'}</strong></div>
-                        <div><span className="text-muted-foreground">结果：</span><strong className="font-mono">{captureDetail.statusCode ?? '进行中'} / {captureDetail.outcome || '-'}</strong></div>
-                        <div><span className="text-muted-foreground">用途：</span><strong>{captureDetail.requestPurpose || '-'}</strong></div>
-                        <div><span className="text-muted-foreground">耗时：</span><strong className="font-mono">{captureDetail.completedAtMS == null ? '进行中' : `${captureDetail.completedAtMS} ms`}</strong></div>
-                        {captureDetail.websocketTrace && <div className="font-mono">{formatWebSocketTrace(captureDetail.websocketTrace)}</div>}
+                      <div className="grid gap-2.5 rounded-xl bg-muted/45 p-4 text-xs sm:grid-cols-2 lg:grid-cols-3">
+                        <div><span className="text-muted-foreground">请求：</span><strong className="font-mono text-foreground">{captureDetail.method} {captureDetail.path}</strong></div>
+                        <div><span className="text-muted-foreground">模型：</span><strong className="font-mono text-foreground">{captureDetail.clientModel || '-'} → {captureDetail.effectiveModel || '-'}</strong></div>
+                        <div><span className="text-muted-foreground">结果：</span><strong className="font-mono text-foreground">{captureDetail.statusCode ?? '进行中'} / {captureDetail.outcome || '-'}</strong></div>
+                        <div><span className="text-muted-foreground">用途：</span><strong className="text-foreground">{captureDetail.requestPurpose || '-'}</strong></div>
+                        <div><span className="text-muted-foreground">耗时：</span><strong className="font-mono text-foreground">{captureDetail.completedAtMS == null ? '进行中' : `${captureDetail.completedAtMS} ms`}</strong></div>
+                        {captureDetail.websocketTrace && <div className="font-mono text-foreground">{formatWebSocketTrace(captureDetail.websocketTrace)}</div>}
                         <div className="sm:col-span-2 lg:col-span-3">
                           <span className="text-muted-foreground">项目：</span>
-                          <strong>{captureProject ? `${captureProject.label} · ${projectSourceLabel('client_declared')}` : '未声明（Codex 工作区见入站 Body 的 client_metadata）'}</strong>
+                          <strong className="text-foreground">{captureProject ? `${captureProject.label} · ${projectSourceLabel('client_declared')}` : '未声明（Codex 工作区见入站 Body 的 client_metadata）'}</strong>
                         </div>
                       </div>
 
@@ -757,14 +757,14 @@ export function DiagnosticsPage() {
                       />
 
                       {(captureDetail.attempts || []).map((attempt, index) => (
-                        <details key={attempt.id || index} className="group rounded-lg border border-border/80 bg-muted/15">
-                          <summary className="flex cursor-pointer list-none items-center gap-2 px-3.5 py-2.5 text-xs font-semibold text-foreground select-none hover:bg-muted/35">
-                            <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-90" />
+                        <details key={attempt.id || index} className="group rounded-xl border border-border/55 bg-muted/25 transition-colors open:bg-card/85">
+                          <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl px-4 py-3 text-xs font-semibold text-foreground select-none transition-colors hover:bg-muted/45 group-open:rounded-b-none">
+                            <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 group-open:rotate-90" />
                             <span className="font-mono">
                               上游尝试 #{index + 1} · {attempt.endpointName || attempt.endpointID || '-'} · {attempt.responseStatus ?? attempt.error ?? '等待响应'}
                             </span>
                           </summary>
-                          <div className="space-y-2 border-t border-border/60 p-3">
+                          <div className="space-y-2.5 border-t border-border/50 p-3.5">
                             <RawBlock title={`${attempt.outboundMethod || '请求'} ${attempt.outboundURL || ''} Headers`} valueFactory={() => headersText(attempt.outboundHeaders)} />
                             <RawBlock
                               title={`出站原始 Body · ${attempt.outboundBodyBytes || 0} bytes`}
@@ -794,7 +794,7 @@ export function DiagnosticsPage() {
                       </p>
                     </div>
                   ) : selectedCaptureIndex ? (
-                    <div className="space-y-2.5 rounded-lg border border-border/80 bg-muted/20 p-4">
+                    <div className="space-y-3 rounded-2xl border border-border/60 bg-muted/35 p-4">
                       <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                         <strong className="font-mono text-foreground">{selectedCaptureIndex.method || '请求'} {selectedCaptureIndex.path || ''}</strong>
                         <span className="font-mono text-muted-foreground">{selectedCaptureIndex.requestID}</span>
@@ -802,7 +802,7 @@ export function DiagnosticsPage() {
                       <p className="text-xs text-foreground">
                         {selectedCaptureIndex.clientModel || '未知模型'} · {selectedCaptureIndex.statusCode ?? '进行中'} · {selectedCaptureIndex.attemptCount ?? 0} 次上游尝试 · {selectedCaptureIndex.clientChunkCount ?? 0} 个客户端 Chunk
                       </p>
-                      <p className="text-xs text-muted-foreground">
+                      <p className="text-xs leading-relaxed text-muted-foreground">
                         正文、Headers 与流式 Chunk 尚未读取；这样选择和自动刷新索引不会卡住页面。
                       </p>
                       <Button type="button" size="sm" onClick={loadCaptureDetail}>
@@ -828,15 +828,15 @@ export function DiagnosticsPage() {
 
       {/* Diagnostics Grid */}
       <Card>
-        <CardHeader className="border-b border-border/60 pb-4">
+        <CardHeader className="border-b border-border/50">
           <CardTitle>运行环境状态矩阵</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           {diagnosticsError && (
-            <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-status-warning/35 bg-status-warning/10 p-3.5 text-xs text-status-warning">
+            <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-status-warning/30 bg-status-warning/10 p-4 text-xs text-status-warning">
               <div className="flex items-start gap-2.5">
                 <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-                <div>
+                <div className="space-y-0.5">
                   <strong className="block font-semibold">环境诊断暂不可用</strong>
                   <div>{diagnosticsError}</div>
                 </div>
@@ -848,42 +848,42 @@ export function DiagnosticsPage() {
           )}
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <div className="rounded-lg border border-border/75 bg-muted/20 p-3">
-              <span className="block text-[11px] text-muted-foreground">Daemon 版本</span>
-              <strong className="mt-1 block font-mono text-sm font-semibold text-foreground">{diag?.version || '0.2.0'}</strong>
+            <div className="rounded-xl bg-muted/45 px-4 py-3.5 transition-colors hover:bg-muted/65">
+              <span className="block text-[11px] font-medium text-muted-foreground">Daemon 版本</span>
+              <strong className="mt-1.5 block font-mono text-sm font-semibold tracking-tight text-foreground">{diag?.version || '0.2.0'}</strong>
             </div>
-            <div className="rounded-lg border border-border/75 bg-muted/20 p-3">
-              <span className="block text-[11px] text-muted-foreground">配置代数 (Generation)</span>
-              <strong className="mt-1 block font-mono text-sm font-semibold text-foreground">{diag?.generation || '-'}</strong>
+            <div className="rounded-xl bg-muted/45 px-4 py-3.5 transition-colors hover:bg-muted/65">
+              <span className="block text-[11px] font-medium text-muted-foreground">配置代数 (Generation)</span>
+              <strong className="mt-1.5 block font-mono text-sm font-semibold tracking-tight text-foreground">{diag?.generation || '-'}</strong>
             </div>
-            <div className="rounded-lg border border-border/75 bg-muted/20 p-3">
-              <span className="block text-[11px] text-muted-foreground">运行时长</span>
-              <strong className="mt-1 block font-mono text-sm font-semibold text-foreground">{diag?.uptimeSeconds ? formatDuration(diag.uptimeSeconds * 1000) : '-'}</strong>
+            <div className="rounded-xl bg-muted/45 px-4 py-3.5 transition-colors hover:bg-muted/65">
+              <span className="block text-[11px] font-medium text-muted-foreground">运行时长</span>
+              <strong className="mt-1.5 block font-mono text-sm font-semibold tracking-tight text-foreground">{diag?.uptimeSeconds ? formatDuration(diag.uptimeSeconds * 1000) : '-'}</strong>
             </div>
-            <div className="rounded-lg border border-border/75 bg-muted/20 p-3">
-              <span className="block text-[11px] text-muted-foreground">Admin 管理监听</span>
-              <strong className="mt-1 block font-mono text-sm font-semibold text-foreground">{formatListenerAddress(diag?.adminListener, '127.0.0.1:57879')}</strong>
+            <div className="rounded-xl bg-muted/45 px-4 py-3.5 transition-colors hover:bg-muted/65">
+              <span className="block text-[11px] font-medium text-muted-foreground">Admin 管理监听</span>
+              <strong className="mt-1.5 block font-mono text-sm font-semibold tracking-tight text-foreground">{formatListenerAddress(diag?.adminListener, '127.0.0.1:57879')}</strong>
             </div>
-            <div className="rounded-lg border border-border/75 bg-muted/20 p-3">
-              <span className="block text-[11px] text-muted-foreground">代理转发监听</span>
-              <strong className="mt-1 block font-mono text-sm font-semibold text-foreground">{formatListenerAddress(diag?.proxyListener, '127.0.0.1:57878')}</strong>
+            <div className="rounded-xl bg-muted/45 px-4 py-3.5 transition-colors hover:bg-muted/65">
+              <span className="block text-[11px] font-medium text-muted-foreground">代理转发监听</span>
+              <strong className="mt-1.5 block font-mono text-sm font-semibold tracking-tight text-foreground">{formatListenerAddress(diag?.proxyListener, '127.0.0.1:57878')}</strong>
             </div>
-            <div className="rounded-lg border border-border/75 bg-muted/20 p-3">
-              <span className="block text-[11px] text-muted-foreground">统计文件可写性</span>
-              <div className="mt-1">
+            <div className="rounded-xl bg-muted/45 px-4 py-3.5 transition-colors hover:bg-muted/65">
+              <span className="block text-[11px] font-medium text-muted-foreground">统计文件可写性</span>
+              <div className="mt-1.5">
                 <StatusBadge text={diag?.statsWritable ? '可正常写入' : '不可写'} kind={diag?.statsWritable ? 'good' : 'critical'} />
               </div>
             </div>
           </div>
 
-          <div className="grid gap-2.5 sm:grid-cols-2">
-            <div className="rounded-lg border border-border/75 bg-muted/20 p-3 text-xs">
-              <span className="block text-[11px] text-muted-foreground">配置文件路径</span>
-              <code className="mt-1 block font-mono break-all text-foreground">{diag?.configPath || '~/.config/sumpter/config.json'}</code>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded-xl bg-muted/40 px-4 py-3 text-xs">
+              <span className="block text-[11px] font-medium text-muted-foreground">配置文件路径</span>
+              <code className="mt-1.5 block font-mono break-all text-foreground">{diag?.configPath || '~/.config/sumpter/config.json'}</code>
             </div>
-            <div className="rounded-lg border border-border/75 bg-muted/20 p-3 text-xs">
-              <span className="block text-[11px] text-muted-foreground">WebUI 静态根目录</span>
-              <code className="mt-1 block font-mono break-all text-foreground">{diag?.webRoot || '~/.local/share/sumpter/web'}</code>
+            <div className="rounded-xl bg-muted/40 px-4 py-3 text-xs">
+              <span className="block text-[11px] font-medium text-muted-foreground">WebUI 静态根目录</span>
+              <code className="mt-1.5 block font-mono break-all text-foreground">{diag?.webRoot || '~/.local/share/sumpter/web'}</code>
             </div>
           </div>
         </CardContent>
@@ -891,16 +891,16 @@ export function DiagnosticsPage() {
 
       {/* Warnings & Risks Panel */}
       <Card>
-        <CardHeader className="border-b border-border/60 pb-4">
+        <CardHeader className="border-b border-border/50">
           <CardTitle>系统健康与配置风险检查</CardTitle>
         </CardHeader>
         <CardContent>
           {diag?.warnings?.length > 0 ? (
-            <div className="space-y-2">
+            <div className="space-y-2.5">
               {diag.warnings.map((w, idx) => (
                 <div
                   key={idx}
-                  className="flex items-start gap-2.5 rounded-lg border border-status-warning/35 bg-status-warning/10 p-3 text-xs text-status-warning"
+                  className="flex items-start gap-2.5 rounded-xl border border-status-warning/30 bg-status-warning/10 p-3.5 text-xs leading-relaxed text-status-warning"
                 >
                   <AlertTriangle className="mt-0.5 size-4 shrink-0" />
                   <span>{typeof w === 'string' ? w : w.message}</span>
@@ -908,7 +908,7 @@ export function DiagnosticsPage() {
               ))}
             </div>
           ) : (
-            <div className="flex items-center gap-2 rounded-lg border border-status-good/30 bg-status-good/10 p-3 text-xs text-status-good">
+            <div className="flex items-center gap-2.5 rounded-xl border border-status-good/25 bg-status-good/10 px-4 py-3 text-xs text-status-good">
               <CheckCircle2 className="size-4 shrink-0" />
               <span>服务端自检未发现任何配置风险或异常警告。</span>
             </div>
@@ -918,7 +918,7 @@ export function DiagnosticsPage() {
 
       {/* systemd Journal Guide */}
       <Card>
-        <CardHeader className="border-b border-border/60 pb-4">
+        <CardHeader className="border-b border-border/50">
           <div className="flex items-center gap-2">
             <Activity className="size-4 text-primary" />
             <CardTitle>systemd 守护进程服务日志</CardTitle>
@@ -934,7 +934,7 @@ export function DiagnosticsPage() {
           </CardAction>
         </CardHeader>
         <CardContent>
-          <pre className="overflow-x-auto rounded-lg border border-border/75 bg-muted/30 px-3.5 py-2.5 font-mono text-xs text-foreground">
+          <pre className="overflow-x-auto rounded-xl border border-border/55 bg-muted/45 px-4 py-3 font-mono text-xs text-foreground">
             {journalCmd}
           </pre>
         </CardContent>

@@ -16,7 +16,7 @@ export function TableHeader({ className, ...props }) {
   return (
     <thead
       data-slot="table-header"
-      className={cn('[&_tr]:border-b border-border bg-muted/40', className)}
+      className={cn('[&_tr]:border-b border-border/80 bg-muted/45', className)}
       {...props}
     />
   );
@@ -37,7 +37,7 @@ export function TableRow({ className, ...props }) {
     <tr
       data-slot="table-row"
       className={cn(
-        'border-b border-border transition-colors hover:bg-muted/45',
+        'border-b border-border/65 transition-colors hover:bg-muted/40',
         className,
       )}
       {...props}
@@ -50,7 +50,7 @@ export function TableHead({ className, ...props }) {
     <th
       data-slot="table-head"
       className={cn(
-        'h-10 px-4 text-left align-middle text-[11px] font-semibold uppercase tracking-wider text-muted-foreground whitespace-nowrap',
+        'h-10 px-4 text-left align-middle text-[11px] font-semibold tracking-wide text-muted-foreground whitespace-nowrap first:pl-5 last:pr-5',
         className,
       )}
       {...props}
@@ -62,7 +62,7 @@ export function TableCell({ className, ...props }) {
   return (
     <td
       data-slot="table-cell"
-      className={cn('px-4 py-3 align-middle text-sm', className)}
+      className={cn('px-4 py-2.5 align-middle text-xs first:pl-5 last:pr-5', className)}
       {...props}
     />
   );

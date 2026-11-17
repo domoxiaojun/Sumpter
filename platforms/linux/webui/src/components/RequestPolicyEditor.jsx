@@ -5,8 +5,7 @@ import { DEFAULT_LIMITS, requestPolicy, validateRequestPolicy } from '../utils/r
 import { Button } from './ui/button.jsx';
 import { Input } from './ui/input.jsx';
 import { Label } from './ui/label.jsx';
-
-const SELECT_CLS = 'h-9 w-full rounded-md border border-input bg-background px-2.5 text-xs text-foreground shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50';
+import { NativeSelect } from './ui/native-select.jsx';
 
 export function RequestPolicyEditor() {
   const { config, configDoc, saveConfig, closeModal, addToast } = useAppControls();
@@ -38,7 +37,7 @@ export function RequestPolicyEditor() {
 
   const numberField = (label, value, onChange, min, max) => (
     <label className="flex flex-col gap-1.5 text-xs">
-      <span className="font-medium text-muted-foreground">{label}</span>
+      <span className="font-medium text-foreground/85">{label}</span>
       <Input
         type="number"
         min={min}
@@ -87,10 +86,10 @@ export function RequestPolicyEditor() {
           适用于所有客户端的 HTTP/SSE 请求。并发名额保持到上游响应结束；重试也计入每分钟额度。WebSocket 不按连接数等同为请求数。
         </p>
 
-        <section className="space-y-3 rounded-xl border bg-muted/15 p-3.5">
+        <section className="space-y-3 rounded-2xl border border-border/80 bg-muted/25 p-4">
           <div className="space-y-0.5">
             <h3 className="text-sm font-semibold text-foreground">HTTP 入站保护</h3>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
               安全额度必须为正整数。入站总预算至少等于原始体与解压上限之和；读体期限不限制正常响应或 SSE 长流。
             </p>
           </div>
@@ -105,10 +104,10 @@ export function RequestPolicyEditor() {
           </div>
         </section>
 
-        <section className="space-y-3 rounded-xl border bg-muted/15 p-3.5">
+        <section className="space-y-3 rounded-2xl border border-border/80 bg-muted/25 p-4">
           <div className="space-y-0.5">
             <h3 className="text-sm font-semibold text-foreground">WebSocket 保护</h3>
-            <p className="text-[11px] text-muted-foreground">保存后新请求和连接生效，降低共享额度不强杀已有工作。</p>
+            <p className="text-[11px] leading-relaxed text-muted-foreground">保存后新请求和连接生效，降低共享额度不强杀已有工作。</p>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             {numberField('单帧上限（MiB）', draft.websocket.maxFrameMib, (v) => change((next) => { next.websocket.maxFrameMib = v; }), 1, 1024)}
@@ -118,14 +117,13 @@ export function RequestPolicyEditor() {
           </div>
         </section>
 
-        <section className="space-y-3 rounded-xl border bg-muted/15 p-3.5">
+        <section className="space-y-3 rounded-2xl border border-border/80 bg-muted/25 p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-semibold text-foreground">全局请求限制</h3>
             <Button
               type="button"
               variant="outline"
-              size="sm"
-              className="h-7 px-2.5 text-xs"
+              size="xs"
               onClick={() => change((next) => {
                 next.maxTotalAttempts = 6;
                 next.global = { ...next.global, maxConcurrent: 8, maxQueued: 16, queueTimeoutSeconds: 15 };
@@ -139,15 +137,15 @@ export function RequestPolicyEditor() {
             {numberField('一次请求最多尝试（0 = 沿用原有重试限制）', draft.maxTotalAttempts, (v) => change((next) => { next.maxTotalAttempts = v; }), 0, 10000)}
             {numberField('代理响应等待上限（秒，0 = 不限）', draft.responseWaitTimeoutSeconds, (v) => change((next) => { next.responseWaitTimeoutSeconds = v; }), 0, 86400)}
           </div>
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
             涵盖排队、所有入口尝试、退避与缓冲；超时返回 504。0 保持原策略；已开始交付的长回答不受影响。
           </p>
         </section>
 
-        <section className="space-y-3 rounded-xl border bg-muted/15 p-3.5">
+        <section className="space-y-3 rounded-2xl border border-border/80 bg-muted/25 p-4">
           <div className="space-y-0.5">
             <h3 className="text-sm font-semibold text-foreground">连续无响应保护</h3>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
               同一会话、同一正文连续连接失败或首响应超时后停止向该入口重发；收到 HTTP 响应即清零。
             </p>
           </div>
@@ -157,23 +155,22 @@ export function RequestPolicyEditor() {
           </div>
         </section>
 
-        <section className="space-y-3 rounded-xl border bg-muted/15 p-3.5">
+        <section className="space-y-3 rounded-2xl border border-border/80 bg-muted/25 p-4">
           <div className="space-y-0.5">
             <h3 className="text-sm font-semibold text-foreground">Responses 流保护</h3>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
               仅在流错误重试开启时生效；前奏模式提交输出后不再透明重放，达到额度恢复透传。
             </p>
           </div>
           <label className="flex flex-col gap-1.5 text-xs">
-            <span className="font-medium text-muted-foreground">流式策略</span>
-            <select
-              className={SELECT_CLS}
+            <span className="font-medium text-foreground/85">流式策略</span>
+            <NativeSelect
               value={draft.streamProtection}
               onChange={(e) => change((next) => { next.streamProtection = e.target.value; })}
             >
               <option value="complete">完整缓冲：支持中途断流恢复</option>
               <option value="prelude">前奏保护：更早开始输出</option>
-            </select>
+            </NativeSelect>
           </label>
           <div className="grid gap-3 sm:grid-cols-2">
             {numberField('单流缓冲（MiB）', draft.streamBufferMib, (v) => change((next) => { next.streamBufferMib = v; }), 1, 256)}
@@ -183,17 +180,16 @@ export function RequestPolicyEditor() {
           </div>
         </section>
 
-        <section className="space-y-3 rounded-xl border bg-muted/15 p-3.5">
+        <section className="space-y-3 rounded-2xl border border-border/80 bg-muted/25 p-4">
           <div className="space-y-0.5">
             <h3 className="text-sm font-semibold text-foreground">入口限制与兼容声明</h3>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
               明确不支持时跳过该入口，全部候选不支持则拒绝请求；不会静默删除工具或改写正文。
             </p>
           </div>
           <label className="flex flex-col gap-1.5 text-xs">
-            <Label className="text-xs font-medium text-muted-foreground">入口</Label>
-            <select
-              className={SELECT_CLS}
+            <Label className="text-xs font-medium text-foreground/85">入口</Label>
+            <NativeSelect
               value={endpointID}
               onChange={(e) => setEndpointID(e.target.value)}
             >
@@ -201,14 +197,14 @@ export function RequestPolicyEditor() {
               {config.endpoints.map((e) => (
                 <option value={e.id} key={e.id}>{e.name || e.id}</option>
               ))}
-            </select>
+            </NativeSelect>
           </label>
           {endpointID && (
             <div className="space-y-3 pt-1">
               {limitsGrid(endpoint.limits, (k, v) => change((next) => { ensureEndpoint(next).limits[k] = v; }))}
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="flex flex-col gap-1.5 text-xs">
-                  <span className="font-medium text-muted-foreground">上游模型（精确 ID 或 *）</span>
+                  <span className="font-medium text-foreground/85">上游模型（精确 ID 或 *）</span>
                   <Input
                     className="h-9 font-mono text-xs"
                     value={model}
@@ -216,9 +212,8 @@ export function RequestPolicyEditor() {
                   />
                 </label>
                 <label className="flex flex-col gap-1.5 text-xs">
-                  <span className="font-medium text-muted-foreground">兼容声明适用协议</span>
-                  <select
-                    className={SELECT_CLS}
+                  <span className="font-medium text-foreground/85">兼容声明适用协议</span>
+                  <NativeSelect
                     value={protocol}
                     onChange={(e) => setProtocol(e.target.value)}
                   >
@@ -227,7 +222,7 @@ export function RequestPolicyEditor() {
                     <option value="openai">Chat Completions</option>
                     <option value="openai-responses">Responses</option>
                     <option value="gemini">Gemini</option>
-                  </select>
+                  </NativeSelect>
                 </label>
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
@@ -238,9 +233,8 @@ export function RequestPolicyEditor() {
                   ['structuredOutput', '结构化输出'],
                 ].map(([key, label]) => (
                   <label className="flex flex-col gap-1.5 text-xs" key={key}>
-                    <span className="font-medium text-muted-foreground">{label}</span>
-                    <select
-                      className={SELECT_CLS}
+                    <span className="font-medium text-foreground/85">{label}</span>
+                    <NativeSelect
                       disabled={!model.trim()}
                       value={profiles[model.trim()]?.[key] == null ? 'unknown' : String(profiles[model.trim()][key])}
                       onChange={(e) => change((next) => {
@@ -252,7 +246,7 @@ export function RequestPolicyEditor() {
                       <option value="unknown">未知 / 保持原样</option>
                       <option value="true">支持</option>
                       <option value="false">不支持</option>
-                    </select>
+                    </NativeSelect>
                   </label>
                 ))}
               </div>
@@ -260,11 +254,11 @@ export function RequestPolicyEditor() {
           )}
         </section>
 
-        <div className="flex justify-end gap-2 pt-2">
-          <Button type="button" variant="outline" onClick={closeModal}>
+        <div className="flex justify-end gap-2 border-t border-border/65 pt-3.5">
+          <Button type="button" variant="outline" size="sm" onClick={closeModal}>
             取消
           </Button>
-          <Button type="submit" disabled={saving}>
+          <Button type="submit" size="sm" disabled={saving}>
             {saving ? '保存中…' : '保存请求策略'}
           </Button>
         </div>

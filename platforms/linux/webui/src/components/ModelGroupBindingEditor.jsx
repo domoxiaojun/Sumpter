@@ -4,9 +4,9 @@ import { cn } from '../lib/utils.js';
 import { endpointGroupModels, modelMatches } from '../utils/modelGroups.js';
 import { Badge } from './ui/badge.jsx';
 import { Button } from './ui/button.jsx';
+import { Checkbox } from './ui/checkbox.jsx';
 import { Input } from './ui/input.jsx';
-
-const SELECT_CLS = 'h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50';
+import { NativeSelect } from './ui/native-select.jsx';
 
 // Each model owns its selection and optional overrides in one row.
 export function ModelGroupBindingEditor({ binding, models, endpoint, edit, followsLibrary = false, remove }) {
@@ -42,7 +42,7 @@ export function ModelGroupBindingEditor({ binding, models, endpoint, edit, follo
     : `已选 ${available.filter(selected).length} · 可选 ${available.length}`;
 
   return (
-    <div className="space-y-4 border-t bg-muted/10 p-4">
+    <div className="space-y-4 border-t border-border/70 bg-muted/15 p-4 sm:p-5">
       <div className="flex flex-wrap items-center gap-4">
         {/* 组内启用开关在折叠头部,不折叠也能切;这里只留展开后才需要的设置。 */}
         <label className="flex items-center gap-2 text-xs">
@@ -66,8 +66,9 @@ export function ModelGroupBindingEditor({ binding, models, endpoint, edit, follo
         </label>
         <label className="flex items-center gap-2 text-xs">
           <span className="font-medium text-muted-foreground">承接范围</span>
-          <select
-            className={SELECT_CLS}
+          <NativeSelect
+            size="sm"
+            wrapperClassName="w-auto min-w-[132px]"
             value={all ? 'all' : 'selected'}
             onChange={(e) => edit((value) => {
               value.models = e.target.value === 'all' ? null : available;
@@ -76,28 +77,28 @@ export function ModelGroupBindingEditor({ binding, models, endpoint, edit, follo
           >
             <option value="selected">指定模型</option>
             <option value="all">全部可用模型</option>
-          </select>
+          </NativeSelect>
         </label>
       </div>
 
       {endpoint?.enabled === false && (
-        <p className="rounded-lg border border-status-warning/35 bg-status-warning/10 px-3 py-2 text-xs text-status-warning">
+        <p className="rounded-xl border border-status-warning/30 bg-status-warning/10 px-3.5 py-2.5 text-xs text-status-warning">
           入口库已停用，此处设置保留，启用入口后才会参与调度。
         </p>
       )}
       {all ? (
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
           仅承接本入口已添加的组内模型；新增可用模型会自动纳入，移除入口模型后立即停止承接新请求。
         </p>
       ) : (
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
           指定模型是手动白名单；入口新增模型不会自动加入承接范围。
         </p>
       )}
 
-      <section className="space-y-3 rounded-xl border bg-card p-3.5" aria-label="模型与覆盖">
+      <section className="space-y-3 rounded-2xl border border-border/80 bg-card p-4 shadow-2xs" aria-label="模型与覆盖">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
+          <div className="space-y-0.5">
             <div className="flex items-center gap-2 text-xs">
               <strong className="font-semibold text-foreground">模型与覆盖</strong>
               <span className="text-muted-foreground tabular-nums">{summary}</span>
@@ -108,8 +109,7 @@ export function ModelGroupBindingEditor({ binding, models, endpoint, edit, follo
             <Button
               type="button"
               variant="ghost"
-              size="sm"
-              className="h-7 px-2 text-xs"
+              size="xs"
               onClick={() => edit((value) => { value.models = available; prune(value); })}
             >
               全选可用
@@ -117,8 +117,7 @@ export function ModelGroupBindingEditor({ binding, models, endpoint, edit, follo
             <Button
               type="button"
               variant="ghost"
-              size="sm"
-              className="h-7 px-2 text-xs"
+              size="xs"
               onClick={() => edit((value) => { value.models = []; value.overrides = []; })}
             >
               清空
@@ -136,8 +135,8 @@ export function ModelGroupBindingEditor({ binding, models, endpoint, edit, follo
           />
         )}
 
-        <div className="divide-y rounded-lg border">
-          <div className="hidden grid-cols-[minmax(0,1fr)_minmax(0,180px)_110px_36px] gap-2 bg-muted/40 px-3 py-1.5 text-[11px] font-medium text-muted-foreground md:grid" aria-hidden="true">
+        <div className="divide-y divide-border/65 overflow-hidden rounded-xl border border-border/80">
+          <div className="hidden grid-cols-[minmax(0,1fr)_minmax(0,180px)_110px_36px] gap-2 bg-muted/50 px-3.5 py-2 text-[11px] font-semibold text-muted-foreground md:grid" aria-hidden="true">
             <span>模型</span>
             <span>上游模型名称</span>
             <span>优先级</span>
@@ -150,12 +149,10 @@ export function ModelGroupBindingEditor({ binding, models, endpoint, edit, follo
             return (
               <div
                 key={name}
-                className="grid gap-2 px-3 py-2 text-xs md:grid-cols-[minmax(0,1fr)_minmax(0,180px)_110px_36px] md:items-center"
+                className="grid gap-2 px-3.5 py-2.5 text-xs transition-colors hover:bg-muted/25 md:grid-cols-[minmax(0,1fr)_minmax(0,180px)_110px_36px] md:items-center"
               >
-                <label className="flex cursor-pointer items-center gap-2 min-w-0">
-                  <input
-                    type="checkbox"
-                    className="size-3.5 accent-primary"
+                <label className="flex min-w-0 cursor-pointer items-center gap-2.5">
+                  <Checkbox
                     checked={checked}
                     disabled={all || covered}
                     onChange={(e) => edit((value) => {
@@ -172,7 +169,7 @@ export function ModelGroupBindingEditor({ binding, models, endpoint, edit, follo
                     ) : !available.includes(name) ? (
                       <small className="text-[10px] text-status-warning">未在此入口添加</small>
                     ) : item ? (
-                      <small className="rounded bg-primary/10 px-1 py-0 text-[10px] text-primary">已设置覆盖</small>
+                      <small className="rounded-md bg-primary/12 px-1.5 py-0.5 text-[10px] font-medium text-primary">已设置覆盖</small>
                     ) : null}
                   </span>
                 </label>
@@ -208,7 +205,6 @@ export function ModelGroupBindingEditor({ binding, models, endpoint, edit, follo
                       type="button"
                       variant="ghost"
                       size="icon-sm"
-                      className="size-7"
                       aria-label={`${name} 恢复继承`}
                       title="恢复继承"
                       disabled={!item}
@@ -224,7 +220,7 @@ export function ModelGroupBindingEditor({ binding, models, endpoint, edit, follo
             );
           })}
           {!visible.length && (
-            <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+            <p className="px-4 py-8 text-center text-xs text-muted-foreground">
               {rows.length ? '没有匹配的模型。' : '暂无可选模型，请先在入口库添加模型并纳入当前组。'}
             </p>
           )}
@@ -241,8 +237,7 @@ export function ModelGroupBindingEditor({ binding, models, endpoint, edit, follo
               <Button
                 type="button"
                 variant="ghost"
-                size="sm"
-                className="h-7 px-2 text-xs"
+                size="xs"
                 onClick={() => edit((value) => {
                   value.models = available.filter(selected);
                   prune(value);
@@ -256,8 +251,8 @@ export function ModelGroupBindingEditor({ binding, models, endpoint, edit, follo
         <Button
           type="button"
           variant="ghost"
-          size="sm"
-          className="h-7 gap-1 px-2 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+          size="xs"
+          className="text-destructive hover:bg-destructive/10 hover:text-destructive"
           onClick={remove}
         >
           <Trash2 className="size-3.5" />

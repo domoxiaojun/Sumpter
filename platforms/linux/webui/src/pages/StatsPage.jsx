@@ -1,14 +1,23 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { BarChart3, ChevronRight, Download, Filter, RefreshCw, Trash2, X } from 'lucide-react';
+import { BarChart3, ChevronRight, Download, Filter, RefreshCw, RotateCcw, Trash2 } from 'lucide-react';
 import { AnalyticsWorkspace } from '../components/AnalyticsWorkspace.jsx';
 import { EventInspector } from '../components/EventInspector.jsx';
 import { Badge } from '../components/ui/badge.jsx';
 import { Button } from '../components/ui/button.jsx';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card.jsx';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '../components/ui/dialog.jsx';
 import { Input } from '../components/ui/input.jsx';
 import { Label } from '../components/ui/label.jsx';
+import { NativeSelect } from '../components/ui/native-select.jsx';
+import { PageHeader } from '../components/ui/page-header.jsx';
 import { useApp, useRuntimePagePreference } from '../context/AppContext.jsx';
-import { useDialogFocus } from '../hooks/useDialogFocus.js';
 import { cn } from '../lib/utils.js';
 import { api } from '../services/api.js';
 import { copyWithToast } from '../utils/clipboard.js';
@@ -31,8 +40,6 @@ const RANGE_OPTIONS = [
   ['30d', '30 天'],
   ['all', '全部'],
 ];
-
-const SELECT_CLS = 'flex h-9 w-full rounded-md border border-input bg-background/60 px-2.5 text-xs text-foreground shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50';
 
 function projectLabel(value) {
   if (value === 'unidentified_project') return '未识别项目';
@@ -68,7 +75,6 @@ function RuntimeCleanupDialog({ open, onClose, onCompleted, addToast }) {
   const [preview, setPreview] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const dialogRef = useDialogFocus(open, { onClose, canClose: () => !loading });
 
   useEffect(() => {
     if (open) {
@@ -79,7 +85,6 @@ function RuntimeCleanupDialog({ open, onClose, onCompleted, addToast }) {
     }
   }, [open]);
 
-  if (!open) return null;
   const olderThan = cleanupCutoff(selection, customDate);
   const canPreview = olderThan != null && !loading;
   const runPreview = async () => {
@@ -118,40 +123,34 @@ function RuntimeCleanupDialog({ open, onClose, onCompleted, addToast }) {
   ].join('-');
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
-      onClick={(event) => {
-        if (event.target === event.currentTarget && !loading) onClose?.();
+    <Dialog
+      open={Boolean(open)}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen && !loading) onClose?.();
       }}
     >
-      <section
-        ref={dialogRef}
-        tabIndex={-1}
-        className="w-full max-w-lg rounded-xl border border-border bg-card text-card-foreground shadow-2xl outline-none"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="runtime-cleanup-heading"
+      <DialogContent
+        showCloseButton={!loading}
         aria-busy={loading || undefined}
+        className="sm:max-w-lg"
+        onEscapeKeyDown={(event) => {
+          if (loading) event.preventDefault();
+        }}
+        onInteractOutside={(event) => {
+          if (loading) event.preventDefault();
+        }}
       >
-        <header className="flex items-start justify-between gap-4 border-b border-border/60 px-5 py-4">
-          <div className="space-y-1">
-            <h2 id="runtime-cleanup-heading" className="text-base font-semibold text-foreground">
-              按时间清理运行统计
-            </h2>
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              只删除已完成且整组早于截止时间的请求；进行中的请求组会完整保留。
-            </p>
-          </div>
-          <Button type="button" variant="ghost" size="icon-sm" onClick={onClose} disabled={loading} aria-label="关闭清理窗口">
-            <X className="size-4" />
-          </Button>
-        </header>
+        <DialogHeader className="border-b border-border/70 pb-3.5">
+          <DialogTitle id="runtime-cleanup-heading">按时间清理运行统计</DialogTitle>
+          <DialogDescription>
+            只删除已完成且整组早于截止时间的请求；进行中的请求组会完整保留。
+          </DialogDescription>
+        </DialogHeader>
 
-        <div className="space-y-4 px-5 py-4 text-xs">
+        <div className="space-y-4 text-xs">
           <label className="block space-y-1.5">
             <span className="font-medium text-foreground">清理范围</span>
-            <select
-              className={SELECT_CLS}
+            <NativeSelect
               value={selection}
               onChange={(event) => {
                 setSelection(event.target.value);
@@ -165,7 +164,7 @@ function RuntimeCleanupDialog({ open, onClose, onCompleted, addToast }) {
               <option value="90">早于 90 天</option>
               <option value="custom">自定义日期</option>
               <option value="all">全部已完成记录</option>
-            </select>
+            </NativeSelect>
           </label>
 
           {selection === 'custom' && (
@@ -190,13 +189,13 @@ function RuntimeCleanupDialog({ open, onClose, onCompleted, addToast }) {
           </p>
 
           {selection === 'all' && (
-            <div className="rounded-lg border border-status-warning/35 bg-status-warning/10 p-3 text-status-warning" role="note">
+            <div className="rounded-xl border border-status-warning/30 bg-status-warning/10 p-3 text-status-warning" role="note">
               “全部”也不会删除进行中的请求；如需移除旧版字段或回收数据库文件，请单独使用“重置并新建数据库”。
             </div>
           )}
 
           {preview && (
-            <div className="rounded-lg border border-primary/30 bg-primary/10 p-3" role="status">
+            <div className="rounded-xl border border-primary/30 bg-primary/10 p-3.5" role="status">
               <strong className="block font-semibold text-foreground">
                 预计删除 {formatNumber(preview.deletableEvents)} 条事件
               </strong>
@@ -207,14 +206,14 @@ function RuntimeCleanupDialog({ open, onClose, onCompleted, addToast }) {
           )}
 
           {error && (
-            <div className="rounded-lg border border-status-critical/35 bg-status-critical/10 p-3 text-status-critical" role="alert">
+            <div className="rounded-xl border border-status-critical/30 bg-status-critical/10 p-3 text-status-critical" role="alert">
               {error}
             </div>
           )}
         </div>
 
-        <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-border/60 px-5 py-3.5">
-          <Button type="button" variant="secondary" size="sm" onClick={onClose} disabled={loading}>
+        <DialogFooter className="border-t border-border/70 pt-3.5">
+          <Button type="button" variant="outline" size="sm" onClick={onClose} disabled={loading}>
             取消
           </Button>
           {!preview ? (
@@ -232,9 +231,9 @@ function RuntimeCleanupDialog({ open, onClose, onCompleted, addToast }) {
               {loading ? '清理中…' : `确认清理 ${formatNumber(preview.deletableEvents)} 条`}
             </Button>
           )}
-        </footer>
-      </section>
-    </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -530,39 +529,37 @@ export function StatsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="space-y-1">
-          <h1 className="flex items-center gap-2.5 text-xl font-semibold tracking-tight text-foreground">
-            <BarChart3 className="size-5 text-primary" />
-            <span>统计</span>
-          </h1>
-          <p className="text-xs text-muted-foreground">请求统计与运行健康</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => loadRuntimeAnalytics(analyticsRange, filters).catch((error) => addToast(error.message, 'error'))}
-          >
-            <RefreshCw className={cn('size-3.5', analyticsLoading && 'animate-spin')} />
-            <span>刷新</span>
-          </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => setOpenExportSignal((value) => value + 1)}
-          >
-            <Download className="size-3.5" />
-            <span>导出</span>
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        icon={BarChart3}
+        title={<span>统计</span>}
+        description="按请求用途、入口、项目、会话与模型查看成功率、延迟与成本。"
+        actions={(
+          <>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => loadRuntimeAnalytics(analyticsRange, filters).catch((error) => addToast(error.message, 'error'))}
+            >
+              <RefreshCw className={cn('size-3.5', analyticsLoading && 'animate-spin')} />
+              <span>刷新</span>
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setOpenExportSignal((value) => value + 1)}
+            >
+              <Download className="size-3.5" />
+              <span>导出</span>
+            </Button>
+          </>
+        )}
+      />
 
       {runtime?.startupIssue && (
         <div
-          className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-status-critical/40 bg-status-critical/10 p-4 text-xs text-status-critical"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-status-critical/35 bg-status-critical/10 p-4 text-xs text-status-critical"
           role="alert"
         >
           <div className="space-y-0.5">
@@ -576,53 +573,99 @@ export function StatsPage() {
         </div>
       )}
 
-      <Card aria-labelledby="analytics-v3-filter-heading">
-        <CardHeader className="border-b border-border/60 pb-4">
-          <div className="flex items-center gap-2">
-            <Filter className="size-4 text-primary" />
-            <CardTitle id="analytics-v3-filter-heading">范围与筛选</CardTitle>
-            {activeFilterCount > 0 && <Badge variant="default">{activeFilterCount} 项筛选</Badge>}
+      <Card className="gap-4 py-4" aria-labelledby="analytics-v3-filter-heading">
+        <CardHeader className="flex flex-col gap-3 border-b border-border/70 pb-3.5 lg:flex-row lg:items-center lg:justify-between">
+          <div className="space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <Filter className="size-4 text-primary" />
+              <CardTitle id="analytics-v3-filter-heading">范围与筛选</CardTitle>
+              {activeFilterCount > 0 && <Badge variant="default">{activeFilterCount} 项筛选</Badge>}
+            </div>
+            <CardDescription>按所选时间范围展示数据；常用条件直接选择，其他条件在高级筛选中展开。</CardDescription>
           </div>
-          <CardDescription>按所选时间范围展示数据；常用条件直接选择，其他条件在高级筛选中展开。</CardDescription>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <div
+              className={cn(
+                'inline-flex items-center gap-1.5 rounded-full border border-border/75 bg-muted/50 px-3 py-1 text-xs',
+                analyticsError ? 'border-status-warning/35 bg-status-warning/10 font-medium text-status-warning' : 'text-muted-foreground',
+              )}
+              role={analyticsError ? 'alert' : 'status'}
+              aria-live="polite"
+            >
+              {analyticsLoading && <span className="size-1.5 rounded-full bg-primary animate-pulse" aria-hidden="true" />}
+              <span>
+                {analyticsError
+                  ? `统计刷新失败：${analyticsError}${analyticsStale ? '；当前保留上一份结果。' : ''}`
+                  : analyticsLoading ? '正在更新统计…' : activeFilterCount ? `已应用 ${activeFilterCount} 项筛选` : '显示全部项目'}
+              </span>
+            </div>
+
+            {activeFilterCount > 0 && (
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                onClick={clearAllFilters}
+              >
+                <RotateCcw className="size-3" />
+                <span>清除筛选</span>
+              </Button>
+            )}
+          </div>
         </CardHeader>
 
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-3.5">
           <div
             id="analytics-v3-filter-grid"
-            className="analytics-v3-filter-grid grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5"
+            className="analytics-v3-filter-grid grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7"
           >
-            <fieldset className="space-y-1.5 sm:col-span-2 lg:col-span-4 xl:col-span-5" aria-label="统计时间范围">
-              <legend className="text-xs font-medium text-foreground/90">时间</legend>
-              <div className="flex flex-wrap items-center gap-1.5">
-                {RANGE_OPTIONS.map(([value, label]) => (
-                  <Button
-                    key={value}
+            <fieldset className="space-y-2 sm:col-span-2 lg:col-span-4 xl:col-span-7" aria-label="统计时间范围">
+              <legend className="sr-only">时间</legend>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-medium text-muted-foreground">时间范围</span>
+                <div className="inline-flex flex-wrap items-center gap-0.5 rounded-xl border border-border/75 bg-muted/65 p-1">
+                  {RANGE_OPTIONS.map(([value, label]) => {
+                    const active = analyticsRange === value && !customDateEditor;
+                    return (
+                      <button
+                        key={value}
+                        type="button"
+                        aria-pressed={analyticsRange === value}
+                        onClick={() => {
+                          setCustomDateEditor(false);
+                          setCustomDateError('');
+                          loadRuntimeAnalytics(value, filters).catch(() => null);
+                        }}
+                        className={cn(
+                          'cursor-pointer rounded-lg px-3 py-1 text-xs font-medium transition-all duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring/40',
+                          active
+                            ? 'bg-card font-semibold text-foreground shadow-xs'
+                            : 'text-muted-foreground hover:text-foreground',
+                        )}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                  <button
                     type="button"
-                    size="xs"
-                    variant={analyticsRange === value && !customDateEditor ? 'default' : 'secondary'}
-                    aria-pressed={analyticsRange === value}
-                    onClick={() => {
-                      setCustomDateEditor(false);
-                      setCustomDateError('');
-                      loadRuntimeAnalytics(value, filters).catch(() => null);
-                    }}
+                    aria-pressed={customDateEditor}
+                    onClick={() => setCustomDateEditor(true)}
+                    className={cn(
+                      'cursor-pointer rounded-lg px-3 py-1 text-xs font-medium transition-all duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring/40',
+                      customDateEditor
+                        ? 'bg-card font-semibold text-foreground shadow-xs'
+                        : 'text-muted-foreground hover:text-foreground',
+                    )}
                   >
-                    {label}
-                  </Button>
-                ))}
-                <Button
-                  type="button"
-                  size="xs"
-                  variant={customDateEditor ? 'default' : 'secondary'}
-                  aria-pressed={customDateEditor}
-                  onClick={() => setCustomDateEditor(true)}
-                >
-                  自定义
-                </Button>
+                    自定义
+                  </button>
+                </div>
               </div>
               {customDateEditor && (
-                <div className="mt-2 flex flex-wrap items-end gap-2.5 rounded-lg border border-border/75 bg-muted/20 p-3">
-                  <Label className="space-y-1">
+                <div className="mt-2 flex flex-wrap items-end gap-3 rounded-2xl border border-border/80 bg-muted/25 p-3.5">
+                  <Label className="space-y-1.5">
                     <span className="block">开始日期</span>
                     <Input
                       type="date"
@@ -635,7 +678,7 @@ export function StatsPage() {
                       }}
                     />
                   </Label>
-                  <Label className="space-y-1">
+                  <Label className="space-y-1.5">
                     <span className="block">结束日期</span>
                     <Input
                       type="date"
@@ -673,39 +716,39 @@ export function StatsPage() {
             </fieldset>
 
             <label className="space-y-1">
-              <span className="block text-xs font-medium text-foreground/90">入口</span>
-              <select className={SELECT_CLS} value={filters.endpointID || ''} onChange={(event) => updateFilter('endpointID', event.target.value)}>
+              <span className="block text-[11px] font-medium text-muted-foreground">入口</span>
+              <NativeSelect size="sm" value={filters.endpointID || ''} onChange={(event) => updateFilter('endpointID', event.target.value)}>
                 <option value="">全部</option>
                 {facets.endpoints.map((item) => (
                   <option key={item.value} value={item.value}>{item.label} · {formatNumber(item.count)}</option>
                 ))}
-              </select>
+              </NativeSelect>
             </label>
 
             <label className="space-y-1">
-              <span className="block text-xs font-medium text-foreground/90">项目</span>
-              <select className={SELECT_CLS} value={filters.project || ''} onChange={(event) => updateFilter('project', event.target.value)}>
+              <span className="block text-[11px] font-medium text-muted-foreground">项目</span>
+              <NativeSelect size="sm" value={filters.project || ''} onChange={(event) => updateFilter('project', event.target.value)}>
                 <option value="">全部</option>
                 {facets.projects.map((item) => (
                   <option key={item.value} value={item.value}>{projectLabel(item.value)} · {formatNumber(item.count)}</option>
                 ))}
-              </select>
+              </NativeSelect>
             </label>
 
             <label className="space-y-1">
-              <span className="block text-xs font-medium text-foreground/90">会话</span>
-              <select className={SELECT_CLS} value={filters.sessionID || ''} onChange={(event) => updateFilter('sessionID', event.target.value)}>
+              <span className="block text-[11px] font-medium text-muted-foreground">会话</span>
+              <NativeSelect size="sm" value={filters.sessionID || ''} onChange={(event) => updateFilter('sessionID', event.target.value)}>
                 <option value="">全部</option>
                 {facets.sessions.map((item) => (
                   <option key={item.value} value={item.value}>{sessionLabel(item.value)} · {formatNumber(item.count)}</option>
                 ))}
-              </select>
+              </NativeSelect>
             </label>
 
             <label className="space-y-1">
-              <span className="block text-xs font-medium text-foreground/90">入站 Token</span>
-              <select
-                className={SELECT_CLS}
+              <span className="block text-[11px] font-medium text-muted-foreground">入站 Token</span>
+              <NativeSelect
+                size="sm"
                 aria-label="入站 Token"
                 value={filters.inboundTokenID || ''}
                 onChange={(e) => updateFilter('inboundTokenID', e.target.value)}
@@ -714,59 +757,46 @@ export function StatsPage() {
                 {facets.inboundTokens.map((item) => (
                   <option key={item.value} value={item.value}>{item.label} · {formatNumber(item.count)}</option>
                 ))}
-              </select>
+              </NativeSelect>
             </label>
 
             <label className="space-y-1">
-              <span className="block text-xs font-medium text-foreground/90">客户端</span>
-              <select className={SELECT_CLS} value={filters.clientKind || ''} onChange={(event) => updateFilter('clientKind', event.target.value)}>
+              <span className="block text-[11px] font-medium text-muted-foreground">客户端</span>
+              <NativeSelect size="sm" value={filters.clientKind || ''} onChange={(event) => updateFilter('clientKind', event.target.value)}>
                 <option value="">全部</option>
                 {facets.clientKinds.map((item) => (
                   <option key={item.value} value={item.value}>{clientKindLabel(item.value)} · {formatNumber(item.count)}</option>
                 ))}
-              </select>
+              </NativeSelect>
             </label>
 
             <label className="space-y-1">
-              <span className="block text-xs font-medium text-foreground/90">模型</span>
-              <select className={SELECT_CLS} value={filters.model || ''} onChange={(event) => updateFilter('model', event.target.value)}>
+              <span className="block text-[11px] font-medium text-muted-foreground">模型</span>
+              <NativeSelect size="sm" value={filters.model || ''} onChange={(event) => updateFilter('model', event.target.value)}>
                 <option value="">全部</option>
                 {facets.models.map((item) => (
                   <option key={item.value} value={item.value}>{facetOptionLabel(item, 'model')}</option>
                 ))}
-              </select>
+              </NativeSelect>
             </label>
 
             <label className="space-y-1">
-              <span className="block text-xs font-medium text-foreground/90">最终结果</span>
-              <select className={SELECT_CLS} value={filters.outcome || ''} onChange={(event) => updateFilter('outcome', event.target.value)}>
+              <span className="block text-[11px] font-medium text-muted-foreground">最终结果</span>
+              <NativeSelect size="sm" value={filters.outcome || ''} onChange={(event) => updateFilter('outcome', event.target.value)}>
                 <option value="">全部</option>
                 <option value="succeeded">成功</option>
                 <option value="failed">失败</option>
                 <option value="cancelled">已取消</option>
-              </select>
+              </NativeSelect>
             </label>
-
-            <div className="flex items-end">
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                className="w-full sm:w-auto"
-                disabled={!activeFilterCount}
-                onClick={clearAllFilters}
-              >
-                清除筛选
-              </Button>
-            </div>
           </div>
 
-          <details className="analytics-v3-advanced-filters group rounded-lg border border-border/80 bg-muted/15">
-            <summary className="flex cursor-pointer list-none items-center gap-2 px-3.5 py-2.5 text-xs font-medium text-foreground select-none hover:bg-muted/35">
-              <ChevronRight className="size-3.5 text-muted-foreground transition-transform group-open:rotate-90" />
+          <details className="analytics-v3-advanced-filters group overflow-hidden rounded-xl border border-border/80 bg-muted/20">
+            <summary className="flex cursor-pointer list-none items-center gap-2 px-3.5 py-2.5 text-xs font-medium text-foreground select-none transition-colors hover:bg-muted/40">
+              <ChevronRight className="size-3.5 text-muted-foreground transition-transform duration-150 group-open:rotate-90" />
               <span>高级筛选{advancedFilterLabels.length > 0 ? ` · 已选 ${advancedFilterLabels.length} 项` : ' · 代理、用途与失败诊断'}</span>
             </summary>
-            <div className="grid gap-3 border-t border-border/60 p-3.5 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
+            <div className="grid gap-3 border-t border-border/65 p-3.5 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
               {[
                 ['requestKind', '请求类型', 'requestKinds'],
                 ['clientVariant', '客户端形态', 'clientVariants'],
@@ -777,8 +807,8 @@ export function StatsPage() {
                 ['rootTurnID', '根回合', 'rootTurns'],
               ].map(([key, label, facetKey]) => (
                 <label key={key} className="space-y-1">
-                  <span className="block text-xs font-medium text-foreground/90">{label}</span>
-                  <select className={SELECT_CLS} value={filters[key] || ''} onChange={(event) => updateFilter(key, event.target.value)}>
+                  <span className="block text-[11px] font-medium text-muted-foreground">{label}</span>
+                  <NativeSelect size="sm" value={filters[key] || ''} onChange={(event) => updateFilter(key, event.target.value)}>
                     <option value="">全部</option>
                     {(facets[facetKey] || []).map((item) => (
                       <option key={item.value} value={item.value}>
@@ -791,38 +821,38 @@ export function StatsPage() {
                               : item.value} · {formatNumber(item.count)}
                       </option>
                     ))}
-                  </select>
+                  </NativeSelect>
                 </label>
               ))}
 
               <label className="space-y-1">
-                <span className="block text-xs font-medium text-foreground/90">用途</span>
-                <select className={SELECT_CLS} value={filters.requestPurpose || ''} onChange={(event) => updateFilter('requestPurpose', event.target.value)}>
+                <span className="block text-[11px] font-medium text-muted-foreground">用途</span>
+                <NativeSelect size="sm" value={filters.requestPurpose || ''} onChange={(event) => updateFilter('requestPurpose', event.target.value)}>
                   <option value="">全部</option>
                   {facets.requestPurposes.map((item) => (
                     <option key={item.value} value={item.value}>{facetOptionLabel(item, 'purpose')}</option>
                   ))}
-                </select>
+                </NativeSelect>
               </label>
 
               <label className="space-y-1">
-                <span className="block text-xs font-medium text-foreground/90">失败类型</span>
-                <select className={SELECT_CLS} value={filters.failureKind || ''} onChange={(event) => updateFilter('failureKind', event.target.value)}>
+                <span className="block text-[11px] font-medium text-muted-foreground">失败类型</span>
+                <NativeSelect size="sm" value={filters.failureKind || ''} onChange={(event) => updateFilter('failureKind', event.target.value)}>
                   <option value="">全部</option>
                   {facets.failureKinds.map((item) => (
                     <option key={item.value} value={item.value}>{facetOptionLabel(item, 'failureKind')}</option>
                   ))}
-                </select>
+                </NativeSelect>
               </label>
 
               <label className="space-y-1">
-                <span className="block text-xs font-medium text-foreground/90">失败阶段</span>
-                <select className={SELECT_CLS} value={filters.failurePhase || ''} onChange={(event) => updateFilter('failurePhase', event.target.value)}>
+                <span className="block text-[11px] font-medium text-muted-foreground">失败阶段</span>
+                <NativeSelect size="sm" value={filters.failurePhase || ''} onChange={(event) => updateFilter('failurePhase', event.target.value)}>
                   <option value="">全部</option>
                   {facets.failurePhases.map((item) => (
                     <option key={item.value} value={item.value}>{facetOptionLabel(item, 'failurePhase')}</option>
                   ))}
-                </select>
+                </NativeSelect>
               </label>
             </div>
           </details>
@@ -830,16 +860,6 @@ export function StatsPage() {
           {advancedFilterLabels.length > 0 && (
             <p className="font-mono text-xs text-primary">{advancedFilterLabels.join(' · ')}</p>
           )}
-
-          <div
-            className={cn('text-xs', analyticsError ? 'text-status-warning font-medium' : 'text-muted-foreground')}
-            role={analyticsError ? 'alert' : 'status'}
-            aria-live="polite"
-          >
-            {analyticsError
-              ? `统计刷新失败：${analyticsError}${analyticsStale ? '；当前保留上一份结果。' : ''}`
-              : analyticsLoading ? '正在更新统计…' : activeFilterCount ? `已应用 ${activeFilterCount} 项筛选` : '显示全部项目'}
-          </div>
         </CardContent>
       </Card>
 
@@ -874,17 +894,19 @@ export function StatsPage() {
       />
 
       {selectedEventID && (
-        <Card id="analytics-request-drilldown" aria-labelledby="analytics-v3-event-heading">
-          <CardHeader className="flex flex-row items-center justify-between border-b border-border/60 pb-3">
+        <Card id="analytics-request-drilldown" className="gap-0 overflow-hidden py-0" aria-labelledby="analytics-v3-event-heading">
+          <CardHeader className="flex flex-row items-center justify-between border-b border-border/75 py-4">
             <CardTitle id="analytics-v3-event-heading">请求详情</CardTitle>
-            <Button type="button" variant="ghost" size="sm" onClick={() => setSelectedEventID(null)}>
+            <Button type="button" variant="outline" size="xs" onClick={() => setSelectedEventID(null)}>
               关闭
             </Button>
           </CardHeader>
-          <CardContent className="pt-4">
+          <div>
             {eventDetailError ? (
-              <div className="rounded-lg border border-status-critical/35 bg-status-critical/10 p-3 text-xs text-status-critical" role="alert">
-                {eventDetailError}
+              <div className="p-5">
+                <div className="rounded-xl border border-status-critical/30 bg-status-critical/10 p-3.5 text-xs text-status-critical" role="alert">
+                  {eventDetailError}
+                </div>
               </div>
             ) : selectedEvent ? (
               <EventInspector
@@ -896,9 +918,9 @@ export function StatsPage() {
                 onCopy={(text, label) => copyWithToast(text, label, addToast)}
               />
             ) : (
-              <div className="text-xs text-muted-foreground" role="status">正在按需读取单条详情…</div>
+              <div className="px-5 py-8 text-center text-xs text-muted-foreground" role="status">正在按需读取单条详情…</div>
             )}
-          </CardContent>
+          </div>
         </Card>
       )}
     </div>

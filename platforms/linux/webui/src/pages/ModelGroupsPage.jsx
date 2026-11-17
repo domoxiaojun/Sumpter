@@ -1,19 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, Check, ChevronRight, Layers, Plus, Search, Server, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, Check, ChevronRight, GripVertical, Layers, Plus, Search, Server, Trash2 } from 'lucide-react';
 import { cn } from '../lib/utils.js';
 import { useAppControls } from '../context/AppContext.jsx';
 import { ModelGroupBindingEditor } from '../components/ModelGroupBindingEditor.jsx';
+import { QuickToggle } from '../components/QuickToggle.jsx';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges.js';
 import { clone } from '../utils/helpers.js';
 import { endpointGroupModels, groupModels, modelCatalogCategories, modelMatches, newModelGroup, pruneGroupReferences } from '../utils/modelGroups.js';
 import { Badge } from '../components/ui/badge.jsx';
 import { Button } from '../components/ui/button.jsx';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card.jsx';
+import { Checkbox } from '../components/ui/checkbox.jsx';
 import { Input } from '../components/ui/input.jsx';
 import { InputGroup, InputGroupAddon, InputGroupInput } from '../components/ui/input-group.jsx';
+import { NativeSelect } from '../components/ui/native-select.jsx';
+import { PageHeader } from '../components/ui/page-header.jsx';
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs.jsx';
-
-const SELECT_CLS = 'h-9 rounded-md border border-input bg-background px-2.5 text-xs text-foreground shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50';
 
 function CategoryPicker({ categories, selected, onChange }) {
   const [query, setQuery] = useState('');
@@ -32,7 +34,7 @@ function CategoryPicker({ categories, selected, onChange }) {
   const update = (models) => onChange([...new Set(models)]);
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3.5">
       <div className="flex items-center gap-2">
         <InputGroup className="flex-1">
           <InputGroupAddon>
@@ -40,7 +42,7 @@ function CategoryPicker({ categories, selected, onChange }) {
           </InputGroupAddon>
           <InputGroupInput
             aria-label="搜索模型"
-            placeholder="搜索模型"
+            placeholder="搜索模型名称…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -64,14 +66,19 @@ function CategoryPicker({ categories, selected, onChange }) {
                 aria-pressed={isActive}
                 onClick={() => setActiveID(category.id)}
                 className={cn(
-                  'flex cursor-pointer items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left text-xs transition-colors',
+                  'flex cursor-pointer items-center justify-between gap-2 rounded-xl border px-3.5 py-2.5 text-left text-xs transition-all duration-150',
                   isActive
-                    ? 'border-primary/60 bg-primary/10 text-foreground font-semibold'
-                    : 'bg-card hover:bg-muted/50 text-muted-foreground',
+                    ? 'border-primary/45 bg-primary/[0.08] font-semibold text-foreground shadow-2xs'
+                    : 'border-border/80 bg-card text-muted-foreground hover:border-border hover:bg-accent/50 hover:text-foreground',
                 )}
               >
                 <span className="truncate">{category.title}</span>
-                <small className="font-mono text-[11px] tabular-nums">
+                <small
+                  className={cn(
+                    'rounded-full px-2 py-0.5 font-mono text-[10px] tabular-nums',
+                    isActive ? 'bg-primary/15 text-primary' : 'bg-muted text-muted-foreground',
+                  )}
+                >
                   {selectedCount}/{category.models.length}
                 </small>
               </button>
@@ -81,7 +88,7 @@ function CategoryPicker({ categories, selected, onChange }) {
       )}
 
       {displayed.map((category) => (
-        <section className="space-y-2 rounded-xl border bg-muted/15 p-3.5" key={category.id}>
+        <section className="space-y-3 rounded-2xl border border-border/80 bg-muted/20 p-4" key={category.id}>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-baseline gap-2 text-xs">
               <strong className="font-semibold text-foreground">{category.title} 系列</strong>
@@ -91,8 +98,7 @@ function CategoryPicker({ categories, selected, onChange }) {
               <Button
                 type="button"
                 variant="ghost"
-                size="sm"
-                className="h-7 px-2 text-xs"
+                size="xs"
                 onClick={() => update([...selected, ...category.models])}
               >
                 全选
@@ -100,30 +106,27 @@ function CategoryPicker({ categories, selected, onChange }) {
               <Button
                 type="button"
                 variant="ghost"
-                size="sm"
-                className="h-7 px-2 text-xs"
+                size="xs"
                 onClick={() => update(selected.filter((model) => !category.models.includes(model)))}
               >
                 清空
               </Button>
             </div>
           </div>
-          <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {category.models.map((model) => {
               const checked = selected.includes(model);
               return (
                 <label
                   key={model}
                   className={cn(
-                    'flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 text-xs transition-colors',
+                    'flex cursor-pointer items-center gap-2.5 rounded-xl border px-3 py-2 text-xs transition-all duration-150',
                     checked
-                      ? 'border-primary/50 bg-primary/10 text-foreground'
-                      : 'border-border/70 bg-background hover:bg-muted/40 text-muted-foreground',
+                      ? 'border-primary/40 bg-primary/[0.08] text-foreground shadow-2xs'
+                      : 'border-border/75 bg-card/90 text-muted-foreground hover:border-border hover:bg-card hover:text-foreground',
                   )}
                 >
-                  <input
-                    type="checkbox"
-                    className="size-3.5 shrink-0 accent-primary"
+                  <Checkbox
                     checked={checked}
                     onChange={(e) => update(e.target.checked ? [...selected, model] : selected.filter((item) => item !== model))}
                   />
@@ -136,7 +139,7 @@ function CategoryPicker({ categories, selected, onChange }) {
       ))}
 
       {!displayed.length && (
-        <p className="rounded-xl border border-dashed px-4 py-8 text-center text-xs text-muted-foreground">
+        <p className="rounded-2xl border border-dashed border-border/80 bg-muted/15 px-4 py-10 text-center text-xs text-muted-foreground">
           {search ? '没有匹配的模型，试试其他关键词。' : '暂无可选模型，请先在入口库添加模型，并确认当前组的模型范围。'}
         </p>
       )}
@@ -224,76 +227,73 @@ export function ModelGroupsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="space-y-1">
-          <h1 className="flex items-center gap-2.5 text-2xl font-semibold tracking-tight text-foreground">
-            <Layers className="size-5 text-primary" aria-hidden="true" />
-            <span>模型组</span>
-          </h1>
-          <p className="text-xs text-muted-foreground">
-            按组优先级 → 入口优先级调度；同级入口可按顺序、随机方式选择并保持会话粘性。
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={saving}
-            onClick={() => {
-              try {
-                const group = newModelGroup(catalog);
-                change((list) => list.push(group));
-                setSelected(group.id);
-                setEditorTab('models');
-                addToast('已新建模型组，保存后才会写入配置', 'success');
-              } catch (error) {
-                addToast(`新建失败：${error.message || '未知错误'}`, 'error');
-              }
-            }}
-          >
-            <Plus className="size-3.5" />
-            <span>新建模型组</span>
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            disabled={saving || (!isDirty && config?.modelGroups != null)}
-            onClick={save}
-          >
-            {saving ? '保存中…' : '保存更改'}
-          </Button>
-          {isDirty && (
+      <PageHeader
+        icon={Layers}
+        title={<span>模型组</span>}
+        badge={isDirty ? <Badge variant="warning">未保存更改</Badge> : null}
+        description="按组优先级 → 入口优先级调度；同级入口可按顺序、随机方式选择并保持会话粘性。"
+        actions={(
+          <>
             <Button
               type="button"
-              variant="ghost"
+              variant="outline"
               size="sm"
               disabled={saving}
               onClick={() => {
-                dirty.current = false;
-                setDirty(false);
-                draftSource.current = configDoc;
-                setGroups(groupModels(config));
+                try {
+                  const group = newModelGroup(catalog);
+                  change((list) => list.push(group));
+                  setSelected(group.id);
+                  setEditorTab('models');
+                  addToast('已新建模型组，保存后才会写入配置', 'success');
+                } catch (error) {
+                  addToast(`新建失败：${error.message || '未知错误'}`, 'error');
+                }
               }}
             >
-              撤销更改
+              <Plus className="size-3.5" />
+              <span>新建模型组</span>
             </Button>
-          )}
-        </div>
-      </div>
+            {isDirty && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={saving}
+                onClick={() => {
+                  dirty.current = false;
+                  setDirty(false);
+                  draftSource.current = configDoc;
+                  setGroups(groupModels(config));
+                }}
+              >
+                撤销更改
+              </Button>
+            )}
+            <Button
+              type="button"
+              size="sm"
+              disabled={saving || (!isDirty && config?.modelGroups != null)}
+              onClick={save}
+            >
+              {saving ? '保存中…' : '保存更改'}
+            </Button>
+          </>
+        )}
+      />
 
       {groups.length === 0 && (
         <Card>
-          <CardContent className="py-8 text-center text-xs text-muted-foreground">
+          <CardContent className="py-10 text-center text-xs text-muted-foreground">
             尚无模型组。新建组后选择模型，再从入口库添加入口。
           </CardContent>
         </Card>
       )}
 
       {current && (
-        <div className="grid gap-5 lg:grid-cols-[300px_minmax(0,1fr)]">
+        <div className="grid gap-5 lg:grid-cols-[310px_minmax(0,1fr)] lg:items-start">
           <div className="space-y-4">
-            <nav className="space-y-1.5" aria-label="模型组列表">
+            <nav className="space-y-2" aria-label="模型组列表">
               {groups.map((g, index) => {
                 const active = current?.id === g.id;
                 return (
@@ -317,10 +317,10 @@ export function ModelGroupsPage() {
                       drag.current = null;
                     }}
                     className={cn(
-                      'rounded-xl border transition-colors',
+                      'rounded-2xl border transition-all duration-150',
                       active
-                        ? 'border-primary/50 bg-primary/10 shadow-xs'
-                        : 'bg-card hover:bg-muted/40',
+                        ? 'border-primary/45 bg-card shadow-[var(--shadow-card),inset_3px_0_0_var(--primary)]'
+                        : 'border-border/80 bg-card/85 hover:border-border hover:bg-card',
                     )}
                   >
                     <button
@@ -328,15 +328,18 @@ export function ModelGroupsPage() {
                       disabled={saving}
                       onClick={() => setSelected(g.id)}
                       aria-pressed={active}
-                      className="flex w-full cursor-pointer items-center justify-between gap-2 px-3.5 py-2.5 text-left"
+                      className="flex w-full cursor-pointer items-center justify-between gap-2.5 px-4 py-3 text-left"
                     >
-                      <span className="min-w-0">
-                        <strong className="block truncate text-xs font-semibold text-foreground">
-                          {g.name || '未命名模型组'}
-                        </strong>
-                        <small className="block truncate text-[11px] text-muted-foreground tabular-nums">
-                          {g.models.length} 模型 · {g.bindings.length} 入口{g.enabled ? '' : ' · 停用'}
-                        </small>
+                      <span className="flex min-w-0 items-center gap-2.5">
+                        <GripVertical className="size-3.5 shrink-0 text-muted-foreground/60" aria-hidden="true" />
+                        <span className="min-w-0 space-y-0.5">
+                          <strong className="block truncate text-xs font-semibold text-foreground">
+                            {g.name || '未命名模型组'}
+                          </strong>
+                          <small className="block truncate text-[11px] text-muted-foreground tabular-nums">
+                            {g.models.length} 模型 · {g.bindings.length} 入口{g.enabled ? '' : ' · 已停用'}
+                          </small>
+                        </span>
                       </span>
                       {active && <Check className="size-4 shrink-0 text-primary" />}
                     </button>
@@ -346,36 +349,35 @@ export function ModelGroupsPage() {
             </nav>
 
             <Card>
-              <CardHeader className="pb-2">
+              <CardHeader className="border-b border-border/70 pb-3.5">
                 <CardTitle className="text-xs font-semibold">当前模型组设置</CardTitle>
               </CardHeader>
               <CardContent>
-                <fieldset disabled={saving} className="space-y-3" aria-label="当前模型组设置">
-                  <label className="flex flex-col gap-1 text-xs">
-                    <span className="font-medium text-muted-foreground">组名称</span>
+                <fieldset disabled={saving} className="space-y-3.5" aria-label="当前模型组设置">
+                  <label className="flex flex-col gap-1.5 text-xs">
+                    <span className="font-medium text-foreground/85">组名称</span>
                     <Input
-                      className="h-8 text-xs"
+                      className="h-9 text-xs"
                       value={current.name}
                       onChange={(e) => updateGroup(current.id, (draft) => { draft.name = e.target.value; })}
                     />
                   </label>
-                  <label className="flex flex-col gap-1 text-xs">
-                    <span className="font-medium text-muted-foreground">优先级</span>
+                  <label className="flex flex-col gap-1.5 text-xs">
+                    <span className="font-medium text-foreground/85">优先级</span>
                     <Input
                       type="number"
                       min="0"
                       step="1"
                       aria-label="组优先级"
                       title="数字越小越优先；同级按顶部排列顺序。"
-                      className="h-8 font-mono text-xs tabular-nums"
+                      className="h-9 font-mono text-xs tabular-nums"
                       value={current.priority}
                       onChange={(e) => updateGroup(current.id, (draft) => { draft.priority = Number(e.target.value); })}
                     />
                   </label>
-                  <label className="flex flex-col gap-1 text-xs">
-                    <span className="font-medium text-muted-foreground">调度策略</span>
-                    <select
-                      className={SELECT_CLS}
+                  <label className="flex flex-col gap-1.5 text-xs">
+                    <span className="font-medium text-foreground/85">调度策略</span>
+                    <NativeSelect
                       aria-label="模型组调度策略"
                       title="只影响当前模型组内同优先级入口"
                       value={current.schedulingStrategy || 'priority'}
@@ -384,20 +386,19 @@ export function ModelGroupsPage() {
                       <option value="priority">优先级顺序</option>
                       <option value="randomSticky">同优先级随机并保持会话粘性</option>
                       <option value="roundRobinSticky">同优先级按顺序轮询并保持会话粘性</option>
-                    </select>
+                    </NativeSelect>
                   </label>
-                  <label className="flex cursor-pointer items-center gap-2 pt-1 text-xs font-medium text-foreground">
-                    <input
-                      type="checkbox"
-                      className="size-3.5 accent-primary"
+                  <div className="flex items-center justify-between rounded-xl bg-muted/40 px-3 py-2.5">
+                    <span className="text-xs font-medium text-foreground">启用该组</span>
+                    <QuickToggle
                       checked={current.enabled}
-                      onChange={(e) => updateGroup(current.id, (draft) => { draft.enabled = e.target.checked; })}
+                      onChange={(val) => updateGroup(current.id, (draft) => { draft.enabled = val; })}
+                      ariaLabel="启用该模型组"
                     />
-                    启用该组
-                  </label>
+                  </div>
 
                   <details
-                    className="rounded-lg border bg-muted/20"
+                    className="group rounded-xl border border-border/80 bg-muted/20"
                     key={current.id}
                     onKeyDown={(event) => {
                       if (event.key === 'Escape') {
@@ -406,16 +407,15 @@ export function ModelGroupsPage() {
                       }
                     }}
                   >
-                    <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2 text-xs font-medium text-muted-foreground select-none hover:text-foreground">
-                      <span>组操作</span>
-                      <ChevronRight className="size-3.5" />
+                    <summary className="flex cursor-pointer list-none items-center justify-between px-3.5 py-2.5 text-xs font-medium text-muted-foreground select-none hover:text-foreground">
+                      <span>组排序与删除</span>
+                      <ChevronRight className="size-3.5 transition-transform duration-150 group-open:rotate-90" />
                     </summary>
-                    <div className="flex flex-wrap gap-1.5 border-t p-2">
+                    <div className="flex flex-wrap gap-1.5 border-t border-border/65 p-2.5">
                       <Button
                         type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 gap-1 px-2 text-xs"
+                        variant="outline"
+                        size="xs"
                         disabled={saving || groups.indexOf(current) === 0}
                         onClick={(event) => {
                           event.currentTarget.closest('details').open = false;
@@ -426,9 +426,8 @@ export function ModelGroupsPage() {
                       </Button>
                       <Button
                         type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 gap-1 px-2 text-xs"
+                        variant="outline"
+                        size="xs"
                         disabled={saving || groups.indexOf(current) === groups.length - 1}
                         onClick={(event) => {
                           event.currentTarget.closest('details').open = false;
@@ -440,8 +439,8 @@ export function ModelGroupsPage() {
                       <Button
                         type="button"
                         variant="ghost"
-                        size="sm"
-                        className="h-7 gap-1 px-2 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        size="xs"
+                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                         disabled={saving}
                         onClick={(event) => {
                           event.currentTarget.closest('details').open = false;
@@ -458,23 +457,23 @@ export function ModelGroupsPage() {
           </div>
 
           <Card key={current.id} className="min-w-0">
-            <CardContent className="p-4 md:p-5">
+            <CardContent className="px-5">
               <fieldset disabled={saving} className="space-y-4">
                 <Tabs value={editorTab} onValueChange={setEditorTab}>
                   <TabsList aria-label="模型组编辑层级">
                     <TabsTrigger value="models" className="gap-1.5 text-xs">
                       <span>模型选择</span>
-                      <Badge variant="outline" className="px-1.5 py-0 font-mono text-[10px]">{current.models.length}</Badge>
+                      <Badge variant="secondary" className="px-1.5 py-0 font-mono text-[10px]">{current.models.length}</Badge>
                     </TabsTrigger>
                     <TabsTrigger value="bindings" className="gap-1.5 text-xs">
                       <span>入口绑定</span>
-                      <Badge variant="outline" className="px-1.5 py-0 font-mono text-[10px]">{current.bindings.length}</Badge>
+                      <Badge variant="secondary" className="px-1.5 py-0 font-mono text-[10px]">{current.bindings.length}</Badge>
                     </TabsTrigger>
                   </TabsList>
                 </Tabs>
 
                 {editorTab === 'models' && (
-                  <div className="space-y-3">
+                  <div className="space-y-3.5">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <strong className="text-xs font-semibold text-foreground tabular-nums">
                         已选 {current.models.length - unlistedModels.length} 个模型
@@ -482,9 +481,8 @@ export function ModelGroupsPage() {
                       <div className="flex items-center gap-1.5">
                         <Button
                           type="button"
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 px-2 text-xs"
+                          variant="outline"
+                          size="xs"
                           onClick={() => updateGroup(current.id, (g) => {
                             g.models = [...new Set([...g.models, ...catalog])];
                           })}
@@ -494,8 +492,7 @@ export function ModelGroupsPage() {
                         <Button
                           type="button"
                           variant="ghost"
-                          size="sm"
-                          className="h-7 px-2 text-xs"
+                          size="xs"
                           onClick={() => updateGroup(current.id, (g) => {
                             g.models = [];
                             pruneGroupReferences({ endpoints, modelGroups: [g] });
@@ -505,7 +502,7 @@ export function ModelGroupsPage() {
                         </Button>
                       </div>
                     </div>
-                    <p className="text-[11px] text-muted-foreground">
+                    <p className="text-[11px] leading-relaxed text-muted-foreground">
                       新组默认勾选入口库已添加的模型；已绑定入口新增模型时自动勾选，仍可手动取消。
                     </p>
                     <CategoryPicker
@@ -517,15 +514,14 @@ export function ModelGroupsPage() {
                       })}
                     />
                     {!!unlistedModels.length && (
-                      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-status-warning/35 bg-status-warning/10 px-3 py-2 text-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-status-warning/30 bg-status-warning/10 px-3.5 py-2.5 text-xs">
                         <p className="text-status-warning">
                           {unlistedModels.length} 项历史选择未在入口库添加，已从列表隐藏。
                         </p>
                         <Button
                           type="button"
                           variant="ghost"
-                          size="sm"
-                          className="h-7 px-2 text-xs"
+                          size="xs"
                           onClick={() => updateGroup(current.id, (g) => {
                             g.models = g.models.filter((model) => catalog.includes(model));
                             pruneGroupReferences({ endpoints, modelGroups: [g] });
@@ -544,18 +540,19 @@ export function ModelGroupsPage() {
                 )}
 
                 {editorTab === 'bindings' && (
-                  <section className="space-y-3">
+                  <section className="space-y-3.5">
                     {current.id === 'default' && (
-                      <p className="rounded-lg border bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground" role="note">
+                      <p className="rounded-xl border border-border/75 bg-muted/35 px-3.5 py-2.5 text-[11px] leading-relaxed text-muted-foreground" role="note">
                         默认组已绑定入口的顺序与优先级跟随入口库，请到入口库调整。新入口不会自动加入任何模型组，请在此手动添加；新绑定默认承接全部可用模型。
                       </p>
                     )}
 
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <label className="flex items-center gap-2 text-xs">
-                        <span className="font-medium text-muted-foreground">从入口库添加</span>
-                        <select
-                          className={SELECT_CLS}
+                        <span className="shrink-0 font-medium text-muted-foreground">从入口库添加</span>
+                        <NativeSelect
+                          size="sm"
+                          wrapperClassName="w-auto min-w-[180px]"
                           value=""
                           onChange={(e) => {
                             const id = e.target.value;
@@ -578,13 +575,13 @@ export function ModelGroupsPage() {
                                 {e.name || e.id}{e.enabled === false ? '（入口已停用）' : ''}
                               </option>
                             ))}
-                        </select>
+                        </NativeSelect>
                       </label>
                       <span className="text-[11px] text-muted-foreground">点击入口整行展开编辑</span>
                     </div>
 
                     {!current.bindings.length && (
-                      <p className="rounded-xl border border-dashed px-4 py-8 text-center text-xs text-muted-foreground">
+                      <p className="rounded-2xl border border-dashed border-border/80 bg-muted/15 px-4 py-10 text-center text-xs text-muted-foreground">
                         添加入口后，可从该入口支持的模型中选择承接范围。
                       </p>
                     )}
@@ -600,7 +597,7 @@ export function ModelGroupsPage() {
 
                         return (
                           <details
-                            className="group overflow-hidden rounded-xl border bg-card"
+                            className="group overflow-hidden rounded-2xl border border-border/80 bg-card shadow-2xs"
                             key={b.endpointID}
                             draggable={!saving && current.id !== 'default'}
                             onDragStart={(event) => {
@@ -621,9 +618,11 @@ export function ModelGroupsPage() {
                               drag.current = null;
                             }}
                           >
-                            <summary className="model-group-binding-summary flex cursor-pointer list-none flex-wrap items-center gap-3 px-3.5 py-2.5 text-xs select-none hover:bg-muted/35">
-                              <Server className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                              <span className="min-w-0 flex-1">
+                            <summary className="model-group-binding-summary flex cursor-pointer list-none flex-wrap items-center gap-3 px-4 py-3 text-xs select-none transition-colors hover:bg-muted/35">
+                              <span className="flex size-8 shrink-0 items-center justify-center rounded-xl border border-border/75 bg-muted/40 text-primary" aria-hidden="true">
+                                <Server className="size-4" />
+                              </span>
+                              <span className="min-w-0 flex-1 space-y-0.5">
                                 <strong className="block truncate text-xs font-semibold text-foreground">
                                   {endpoint?.name || b.endpointID}
                                 </strong>
@@ -633,18 +632,29 @@ export function ModelGroupsPage() {
                               </span>
                               <span className={cn(endpoint?.enabled === false && 'text-status-warning')}>
                                 <label
-                                  className="binding-state-toggle inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium"
+                                  className="binding-state-toggle relative inline-flex cursor-pointer items-center gap-2 rounded-full border border-border/80 bg-background/85 px-2.5 py-1 text-[11px] font-medium shadow-2xs transition-colors hover:bg-accent/60"
                                   title={endpoint?.enabled === false ? '入口库已停用，启用入口后才会参与调度' : '在此组中启用或停用该入口'}
                                   onClick={(event) => event.stopPropagation()}
                                 >
                                   <input
                                     type="checkbox"
-                                    className="size-3.5 accent-primary"
+                                    className="peer sr-only"
                                     aria-label={`在此组中启用 ${endpoint?.name || b.endpointID}`}
                                     checked={b.enabled}
                                     disabled={saving || endpoint?.enabled === false}
                                     onChange={(event) => edit((value) => { value.enabled = event.target.checked; })}
                                   />
+                                  <span
+                                    aria-hidden="true"
+                                    className="relative inline-flex h-4 w-7 shrink-0 items-center rounded-full bg-input/90 transition-colors peer-checked:bg-primary peer-disabled:opacity-50"
+                                  >
+                                    <span
+                                      className={cn(
+                                        'size-3 rounded-full bg-white shadow-xs transition-transform duration-150',
+                                        b.enabled ? 'translate-x-3.5' : 'translate-x-0.5',
+                                      )}
+                                    />
+                                  </span>
                                   <span>{endpoint?.enabled === false ? '入口库已停用' : b.enabled ? '组内启用' : '组内停用'}</span>
                                 </label>
                               </span>
@@ -654,7 +664,7 @@ export function ModelGroupsPage() {
                                     type="button"
                                     variant="ghost"
                                     size="icon-sm"
-                                    className="size-6 text-xs"
+                                    className="size-7 text-xs"
                                     aria-label="入口上移"
                                     disabled={!index}
                                     onClick={() => updateGroup(current.id, (g) => move(g.bindings, index, index - 1))}
@@ -665,7 +675,7 @@ export function ModelGroupsPage() {
                                     type="button"
                                     variant="ghost"
                                     size="icon-sm"
-                                    className="size-6 text-xs"
+                                    className="size-7 text-xs"
                                     aria-label="入口下移"
                                     disabled={index === current.bindings.length - 1}
                                     onClick={() => updateGroup(current.id, (g) => move(g.bindings, index, index + 1))}
@@ -674,7 +684,7 @@ export function ModelGroupsPage() {
                                   </Button>
                                 </div>
                               )}
-                              <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-90" />
+                              <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 group-open:rotate-90" />
                             </summary>
 
                             <ModelGroupBindingEditor

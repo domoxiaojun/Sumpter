@@ -346,9 +346,9 @@ struct SumpterTableSurfaceModifier: ViewModifier {
             // scrollbar from disappearing before users discover it.
             .scrollIndicators(.visible, axes: .horizontal)
             .background(palette.inset)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .stroke(palette.borderSubtle, lineWidth: 0.8)
             }
             // A live SSE update must not animate every row/column change.

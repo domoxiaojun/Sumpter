@@ -6,8 +6,9 @@ export function Input({ className, type = 'text', ...props }) {
       type={type}
       data-slot="input"
       className={cn(
-        'flex h-9 w-full rounded-md border border-input bg-background/60 px-3 py-1 text-sm text-foreground shadow-xs transition-colors',
-        'placeholder:text-muted-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:border-ring',
+        'flex h-9 w-full rounded-lg border border-input bg-background/85 px-3 py-1.5 text-sm text-foreground shadow-2xs transition-[color,background-color,border-color,box-shadow] outline-none',
+        'placeholder:text-muted-foreground/65 hover:border-foreground/20 focus-visible:border-ring focus-visible:bg-background focus-visible:ring-[3px] focus-visible:ring-ring/25',
+        'aria-invalid:border-status-critical aria-invalid:ring-status-critical/20',
         'disabled:cursor-not-allowed disabled:opacity-50',
         className,
       )}

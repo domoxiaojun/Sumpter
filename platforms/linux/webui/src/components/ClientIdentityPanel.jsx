@@ -17,10 +17,9 @@ import { Button } from './ui/button.jsx';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from './ui/card.jsx';
 import { Input } from './ui/input.jsx';
 import { Label } from './ui/label.jsx';
+import { NativeSelect } from './ui/native-select.jsx';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table.jsx';
-
-const SELECT_CLS = 'flex h-9 w-full rounded-md border border-input bg-background/60 px-2.5 text-sm text-foreground shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50';
-const TEXTAREA_CLS = 'flex min-h-[72px] w-full rounded-md border border-input bg-background/60 px-3 py-2 font-mono text-xs text-foreground shadow-xs placeholder:text-muted-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50';
+import { Textarea } from './ui/textarea.jsx';
 
 export function ClientIdentityPanel() {
   const { configDoc, saveConfig, addToast } = useAppControls();
@@ -80,7 +79,7 @@ export function ClientIdentityPanel() {
 
   return (
     <Card aria-labelledby="client-identity-title">
-      <CardHeader className="border-b border-border/60 pb-4">
+      <CardHeader className="border-b border-border/75">
         <div className="flex items-center gap-2">
           <Fingerprint className="size-4 text-primary" />
           <CardTitle id="client-identity-title">客户端识别</CardTitle>
@@ -108,17 +107,19 @@ export function ClientIdentityPanel() {
             return (
               <fieldset
                 key={token.id}
-                className="space-y-3 rounded-lg border border-border/80 bg-muted/20 p-4 disabled:opacity-60"
+                aria-label={`${token.name}${!token.enabled ? '（已停用）' : ''}`}
+                className="space-y-3.5 rounded-2xl border border-border/80 bg-muted/25 p-4 disabled:opacity-60"
                 disabled={busy}
               >
-                <legend className="px-1.5 text-xs font-semibold text-foreground">
-                  {token.name}{!token.enabled && '（已停用）'}
-                </legend>
-
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <Badge variant={bound ? 'default' : 'secondary'}>
-                    {bound ? '仅补足请求中缺少的身份' : '自动识别 · 无人工绑定'}
-                  </Badge>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <strong className="text-xs font-semibold text-foreground">
+                      {token.name}{!token.enabled && '（已停用）'}
+                    </strong>
+                    <Badge variant={bound ? 'default' : 'secondary'}>
+                      {bound ? '仅补足请求中缺少的身份' : '自动识别 · 无人工绑定'}
+                    </Badge>
+                  </div>
                   {bound && (
                     <Button type="button" variant="ghost" size="xs" onClick={() => patch(token.id, 'client', '')}>
                       <RotateCcw className="size-3" />
@@ -143,9 +144,8 @@ export function ClientIdentityPanel() {
                   </div>
                   <div className="space-y-1.5">
                     <Label htmlFor={`client-identity-variant-select-${token.id}`}>客户端形态（可选）</Label>
-                    <select
+                    <NativeSelect
                       id={`client-identity-variant-select-${token.id}`}
-                      className={SELECT_CLS}
                       value={binding.variant || ''}
                       disabled={!bound}
                       aria-describedby={`client-identity-variant-${token.id}`}
@@ -155,19 +155,19 @@ export function ClientIdentityPanel() {
                       {CLIENT_VARIANTS.map((variant) => (
                         <option key={variant} value={variant}>{variant}</option>
                       ))}
-                    </select>
+                    </NativeSelect>
                     <p id={`client-identity-variant-${token.id}`} className="text-[11px] leading-relaxed text-muted-foreground">
                       {bound ? '例如 cli / desktop；仅作身份记录，不选择上游入口。' : '填写客户端标识后可选；这不是代理上游入口。'}
                     </p>
                   </div>
                 </div>
 
-                <details className="group rounded-md border border-border/70 bg-background/40">
-                  <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs font-medium text-foreground/90 select-none hover:bg-muted/40">
-                    <ChevronRight className="size-3.5 text-muted-foreground transition-transform group-open:rotate-90" />
+                <details className="group overflow-hidden rounded-xl border border-border/75 bg-card/70">
+                  <summary className="flex cursor-pointer list-none items-center gap-2 px-3.5 py-2.5 text-xs font-medium text-foreground/90 select-none transition-colors hover:bg-muted/40">
+                    <ChevronRight className="size-3.5 text-muted-foreground transition-transform duration-150 group-open:rotate-90" />
                     <span>受信中继设置{binding.relaySource ? '（已配置）' : '（普通客户端无需设置）'}</span>
                   </summary>
-                  <div className="space-y-1.5 border-t border-border/60 p-3">
+                  <div className="space-y-1.5 border-t border-border/65 p-3.5">
                     <Label htmlFor={`client-identity-relay-input-${token.id}`}>受信中继来源（可选）</Label>
                     <Input
                       id={`client-identity-relay-input-${token.id}`}
@@ -189,23 +189,23 @@ export function ClientIdentityPanel() {
           })}
 
           {!tokens.length && (
-            <p className="rounded-lg border border-dashed border-border/80 bg-muted/15 px-4 py-4 text-xs text-muted-foreground">
+            <p className="rounded-2xl border border-dashed border-border/80 bg-muted/15 px-4 py-6 text-center text-xs text-muted-foreground">
               尚未配置入站 Token。客户端仍按请求中的原生标记识别；需要兜底绑定时，先在上方添加独立 Token。
             </p>
           )}
         </div>
 
-        <details className="group rounded-lg border border-border/80 bg-muted/15">
-          <summary className="flex cursor-pointer list-none items-center gap-2 px-3.5 py-2.5 text-xs font-semibold text-foreground select-none hover:bg-muted/35">
-            <ChevronRight className="size-3.5 text-muted-foreground transition-transform group-open:rotate-90" />
+        <details className="group overflow-hidden rounded-2xl border border-border/80 bg-muted/20">
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-xs font-semibold text-foreground select-none transition-colors hover:bg-muted/40">
+            <ChevronRight className="size-3.5 text-muted-foreground transition-transform duration-150 group-open:rotate-90" />
             <span>高级设置：统计映射、UA 别名与中继目标</span>
           </summary>
-          <div className="space-y-3 border-t border-border/60 p-3.5">
+          <div className="space-y-3.5 border-t border-border/65 p-4">
             <div className="space-y-1.5">
               <Label htmlFor="client-identity-reporting-aliases">统计归属映射</Label>
-              <textarea
+              <Textarea
                 id="client-identity-reporting-aliases"
-                className={TEXTAREA_CLS}
+                className="font-mono"
                 rows={3}
                 value={aliases}
                 disabled={busy}
@@ -221,9 +221,9 @@ export function ClientIdentityPanel() {
 
             <div className="space-y-1.5">
               <Label htmlFor="client-identity-ua-aliases">产品 UA 精确别名</Label>
-              <textarea
+              <Textarea
                 id="client-identity-ua-aliases"
-                className={TEXTAREA_CLS}
+                className="font-mono"
                 rows={3}
                 value={uaAliases}
                 disabled={busy}
@@ -239,9 +239,9 @@ export function ClientIdentityPanel() {
 
             <div className="space-y-1.5">
               <Label htmlFor="client-identity-relay-endpoints">中继目标</Label>
-              <textarea
+              <Textarea
                 id="client-identity-relay-endpoints"
-                className={TEXTAREA_CLS}
+                className="font-mono"
                 rows={2}
                 value={relays}
                 disabled={busy}
@@ -257,12 +257,12 @@ export function ClientIdentityPanel() {
           </div>
         </details>
 
-        <details className="group rounded-lg border border-border/80 bg-muted/15">
-          <summary className="flex cursor-pointer list-none items-center gap-2 px-3.5 py-2.5 text-xs font-semibold text-foreground select-none hover:bg-muted/35">
-            <ChevronRight className="size-3.5 text-muted-foreground transition-transform group-open:rotate-90" />
+        <details className="group overflow-hidden rounded-2xl border border-border/80 bg-muted/20">
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-xs font-semibold text-foreground select-none transition-colors hover:bg-muted/40">
+            <ChevronRight className="size-3.5 text-muted-foreground transition-transform duration-150 group-open:rotate-90" />
             <span>原生识别能力目录</span>
           </summary>
-          <div className="border-t border-border/60">
+          <div className="border-t border-border/65 bg-card/60">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -287,13 +287,13 @@ export function ClientIdentityPanel() {
         </details>
 
         {error && (
-          <p className="rounded-lg border border-status-critical/35 bg-status-critical/10 px-3 py-2 text-xs font-medium text-status-critical" role="alert">
+          <p className="rounded-xl border border-status-critical/30 bg-status-critical/10 px-3.5 py-2.5 text-xs font-medium text-status-critical" role="alert">
             {error}
           </p>
         )}
       </CardContent>
 
-      <CardFooter className="flex flex-wrap items-center gap-2 border-t border-border/60 pt-4">
+      <CardFooter className="flex flex-wrap items-center gap-2 border-t border-border/75">
         <Button type="button" size="sm" disabled={!dirty || busy} onClick={save}>
           <Save className="size-3.5" />
           <span>{busy ? '保存中…' : '保存客户端识别'}</span>
@@ -304,7 +304,7 @@ export function ClientIdentityPanel() {
             <span>重新载入并放弃修改</span>
           </Button>
         )}
-        {dirty && <span className="text-xs font-medium text-status-warning">有未保存的修改</span>}
+        {dirty && <Badge variant="warning">有未保存的修改</Badge>}
       </CardFooter>
     </Card>
   );

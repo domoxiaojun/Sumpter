@@ -3,23 +3,23 @@ import { Badge } from './ui/badge.jsx';
 
 const TONE_MAP = {
   good: {
-    pill: 'border-status-good/30 bg-status-good/10 text-status-good',
-    dot: 'bg-status-good animate-pulse',
+    pill: 'border-status-good/25 bg-status-good/10 text-status-good',
+    dot: 'status-sonar-ring bg-status-good text-status-good',
   },
   warning: {
-    pill: 'border-status-warning/35 bg-status-warning/10 text-status-warning',
+    pill: 'border-status-warning/28 bg-status-warning/10 text-status-warning',
     dot: 'bg-status-warning animate-pulse',
   },
   critical: {
-    pill: 'border-status-critical/35 bg-status-critical/10 text-status-critical',
+    pill: 'border-status-critical/28 bg-status-critical/10 text-status-critical',
     dot: 'bg-status-critical',
   },
   live: {
-    pill: 'border-primary/35 bg-primary/10 text-primary',
-    dot: 'bg-primary animate-pulse',
+    pill: 'border-primary/28 bg-primary/10 text-primary',
+    dot: 'status-sonar-ring bg-primary text-primary',
   },
   muted: {
-    pill: 'border-border bg-muted/60 text-muted-foreground',
+    pill: 'border-border/80 bg-muted/65 text-muted-foreground',
     dot: 'bg-muted-foreground/70',
   },
 };

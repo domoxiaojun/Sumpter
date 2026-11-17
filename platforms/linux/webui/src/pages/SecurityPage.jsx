@@ -7,6 +7,7 @@ import { Button } from '../components/ui/button.jsx';
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card.jsx';
 import { Input } from '../components/ui/input.jsx';
 import { Label } from '../components/ui/label.jsx';
+import { PageHeader } from '../components/ui/page-header.jsx';
 import { useAppControls } from '../context/AppContext.jsx';
 import { usePendingActions } from '../hooks/usePendingActions.js';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges.js';
@@ -192,44 +193,38 @@ export function SecurityPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-1">
-        <h1 className="flex items-center gap-2.5 text-xl font-semibold tracking-tight text-foreground">
-          <ShieldCheck className="size-5 text-status-good" />
-          <span>安全</span>
-        </h1>
-        <p className="text-xs text-muted-foreground">管理客户端访问凭据、监听与控制台登录。</p>
-      </div>
+      <PageHeader
+        icon={ShieldCheck}
+        iconClassName="border-status-good/25 from-status-good/15 via-status-good/8 to-transparent text-status-good"
+        title={<span>安全</span>}
+        description="管理客户端访问凭据、监听与控制台登录。"
+      />
 
       <InboundTokensPanel />
       <ClientIdentityPanel />
 
-      <details className="group rounded-xl border border-border bg-card text-card-foreground shadow-sm">
-        <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-5 py-4 text-sm font-semibold text-foreground select-none hover:bg-muted/25">
-          <span className="flex items-center gap-2">
-            <ChevronRight className="size-4 text-muted-foreground transition-transform group-open:rotate-90" />
+      <details className="surface-card group overflow-hidden rounded-2xl border border-border/85 bg-card text-card-foreground">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-5 py-4 text-sm font-semibold text-foreground select-none transition-colors hover:bg-muted/30">
+          <span className="flex items-center gap-2.5">
+            <ChevronRight className="size-4 text-muted-foreground transition-transform duration-150 group-open:rotate-90" />
+            <KeyRound className="size-4 text-primary" />
             <span>控制台登录凭据</span>
           </span>
           <span className="text-xs font-normal text-muted-foreground">修改管理员用户名或密码</span>
         </summary>
-        <div className="space-y-4 border-t border-border/60 p-5">
-          <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-            <KeyRound className="size-4 text-primary" />
-            <span>Admin 控制台登录凭据</span>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="security-admin-user">管理员用户名</Label>
-            <Input
-              disabled={Boolean(pending.admin)}
-              id="security-admin-user"
-              autoComplete="username"
-              type="text"
-              value={adminUser}
-              onChange={(e) => setAdminUser(e.target.value)}
-            />
-          </div>
-
+        <div className="space-y-4 border-t border-border/70 p-5">
           <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="security-admin-user">管理员用户名</Label>
+              <Input
+                disabled={Boolean(pending.admin)}
+                id="security-admin-user"
+                autoComplete="username"
+                type="text"
+                value={adminUser}
+                onChange={(e) => setAdminUser(e.target.value)}
+              />
+            </div>
             <div className="space-y-1.5">
               <Label htmlFor="security-current-password">当前密码</Label>
               <Input
@@ -242,6 +237,9 @@ export function SecurityPage() {
                 onChange={(e) => setCurrentPass(e.target.value)}
               />
             </div>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="security-new-password">新密码 (至少12位)</Label>
               <Input
@@ -254,19 +252,18 @@ export function SecurityPage() {
                 onChange={(e) => setNewPass(e.target.value)}
               />
             </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="security-confirm-password">确认新密码</Label>
-            <Input
-              disabled={Boolean(pending.admin)}
-              id="security-confirm-password"
-              autoComplete="new-password"
-              type="password"
-              placeholder="再次输入新密码"
-              value={confirmPass}
-              onChange={(e) => setConfirmPass(e.target.value)}
-            />
+            <div className="space-y-1.5">
+              <Label htmlFor="security-confirm-password">确认新密码</Label>
+              <Input
+                disabled={Boolean(pending.admin)}
+                id="security-confirm-password"
+                autoComplete="new-password"
+                type="password"
+                placeholder="再次输入新密码"
+                value={confirmPass}
+                onChange={(e) => setConfirmPass(e.target.value)}
+              />
+            </div>
           </div>
 
           <div>
@@ -286,7 +283,7 @@ export function SecurityPage() {
 
       {/* Proxy Listener Configuration */}
       <Card>
-        <CardHeader className="border-b border-border/60 pb-4">
+        <CardHeader className="border-b border-border/75">
           <div className="flex items-center gap-2">
             <Activity className="size-4 text-primary" />
             <CardTitle>代理监听网络与 IP 白名单 (CIDR)</CardTitle>
@@ -301,6 +298,7 @@ export function SecurityPage() {
               <Input
                 disabled={Boolean(pending.config)}
                 id="security-listener-host"
+                className="font-mono text-xs"
                 type="text"
                 value={host}
                 onChange={(e) => setHost(e.target.value)}
@@ -312,6 +310,7 @@ export function SecurityPage() {
               <Input
                 disabled={Boolean(pending.config)}
                 id="security-listener-port"
+                className="font-mono text-xs tabular-nums"
                 type="number"
                 value={port}
                 onChange={(e) => setPort(e.target.value)}
@@ -322,6 +321,7 @@ export function SecurityPage() {
               <Input
                 disabled={Boolean(pending.config)}
                 id="security-allowed-cidrs"
+                className="font-mono text-xs"
                 type="text"
                 value={cidrs}
                 onChange={(e) => setCidrs(e.target.value)}
@@ -330,7 +330,7 @@ export function SecurityPage() {
             </div>
           </div>
 
-          <div className="space-y-3 rounded-lg border border-border/70 bg-muted/20 p-3.5">
+          <div className="space-y-3 rounded-2xl border border-border/80 bg-muted/25 p-4">
             <QuickToggle
               label="启用 HTTPS / WSS"
               checked={tlsEnabled}
@@ -343,6 +343,7 @@ export function SecurityPage() {
                   <Label htmlFor="security-https-port">HTTPS 端口</Label>
                   <Input
                     id="security-https-port"
+                    className="font-mono text-xs tabular-nums"
                     type="number"
                     value={httpsPort}
                     disabled={Boolean(pending.config)}
@@ -354,6 +355,7 @@ export function SecurityPage() {
                   <Label htmlFor="security-tls-cert">证书链 PEM</Label>
                   <Input
                     id="security-tls-cert"
+                    className="font-mono text-xs"
                     value={certificatePath}
                     disabled={Boolean(pending.config)}
                     onChange={(event) => setCertificatePath(event.target.value)}
@@ -364,6 +366,7 @@ export function SecurityPage() {
                   <Label htmlFor="security-tls-key">私钥 PEM</Label>
                   <Input
                     id="security-tls-key"
+                    className="font-mono text-xs"
                     value={privateKeyPath}
                     disabled={Boolean(pending.config)}
                     onChange={(event) => setPrivateKeyPath(event.target.value)}
@@ -382,14 +385,15 @@ export function SecurityPage() {
             <Input
               disabled={Boolean(pending.config)}
               id="security-trusted-proxies"
+              className="font-mono text-xs"
               type="text"
               value={trustedProxies}
               onChange={(e) => setTrustedProxies(e.target.value)}
               placeholder="如: 172.18.0.5, 10.0.0.0/8"
             />
             <p className="text-xs leading-relaxed text-muted-foreground">
-              事件的请求源 IP 按 <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">X-Real-IP</code>、<code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">X-Forwarded-For</code>、连接对端的顺序取第一个合法值，不需要先登记代理。
-              这里填多层代理中的已知代理，<code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">X-Forwarded-For</code> 链会跳过它们；不影响入站认证与上面的 CIDR 白名单。
+              事件的请求源 IP 按 <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px]">X-Real-IP</code>、<code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px]">X-Forwarded-For</code>、连接对端的顺序取第一个合法值，不需要先登记代理。
+              这里填多层代理中的已知代理，<code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px]">X-Forwarded-For</code> 链会跳过它们；不影响入站认证与上面的 CIDR 白名单。
             </p>
           </div>
 
@@ -410,7 +414,7 @@ export function SecurityPage() {
 
       {/* systemd Autostart Panel */}
       <Card>
-        <CardHeader className="border-b border-border/60 pb-4">
+        <CardHeader className="border-b border-border/75">
           <div className="flex items-center gap-2">
             <Wrench className="size-4 text-primary" />
             <CardTitle>systemd 自启动管理</CardTitle>
@@ -418,8 +422,8 @@ export function SecurityPage() {
           <CardAction>
             <Button
               type="button"
-              variant="ghost"
-              size="sm"
+              variant="outline"
+              size="xs"
               onClick={fetchAutostart}
               disabled={Boolean(pending.autostart)}
             >
@@ -431,16 +435,16 @@ export function SecurityPage() {
 
         <CardContent className="space-y-3">
           {autostartError && (
-            <p role="alert" className="rounded-lg border border-status-critical/35 bg-status-critical/10 px-3 py-2 text-xs text-status-critical">
+            <p role="alert" className="rounded-xl border border-status-critical/30 bg-status-critical/10 px-3.5 py-2.5 text-xs text-status-critical">
               {autostartError}；请点击刷新状态重试。
             </p>
           )}
           <div
-            className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-border/70 bg-muted/20 px-4 py-3"
+            className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-border/80 bg-muted/25 px-4 py-3.5"
             aria-busy={Boolean(pending.autostart)}
           >
             <div className="space-y-0.5">
-              <strong className="block text-sm font-medium text-foreground">
+              <strong className="block text-xs font-semibold text-foreground">
                 {autostart?.scope === 'system' ? 'systemd 系统级服务自启动' : 'systemd user 用户级服务开机自启动'}
               </strong>
               <span className="block font-mono text-xs text-muted-foreground">

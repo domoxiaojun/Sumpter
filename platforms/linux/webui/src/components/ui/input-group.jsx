@@ -8,8 +8,8 @@ export function InputGroup({ className, ...props }) {
       data-slot="input-group"
       role="group"
       className={cn(
-        'group/input-group relative flex h-9 w-full items-center rounded-md border border-input bg-card/70 shadow-xs transition-[color,box-shadow] outline-none',
-        'has-[[data-slot=input-group-input]:focus-visible]:border-ring has-[[data-slot=input-group-input]:focus-visible]:ring-[3px] has-[[data-slot=input-group-input]:focus-visible]:ring-ring/40',
+        'group/input-group relative flex h-9 w-full items-center rounded-lg border border-input bg-background/85 shadow-2xs transition-[color,background-color,border-color,box-shadow] outline-none hover:border-foreground/20',
+        'has-[[data-slot=input-group-input]:focus-visible]:border-ring has-[[data-slot=input-group-input]:focus-visible]:bg-background has-[[data-slot=input-group-input]:focus-visible]:ring-[3px] has-[[data-slot=input-group-input]:focus-visible]:ring-ring/25',
         className,
       )}
       {...props}
@@ -48,7 +48,7 @@ export function InputGroupInput({ className, ...props }) {
     <Input
       data-slot="input-group-input"
       className={cn(
-        'h-full flex-1 rounded-none border-0 bg-transparent px-1 shadow-none focus-visible:ring-0 focus-visible:border-0',
+        'h-full flex-1 rounded-none border-0 bg-transparent px-1.5 shadow-none hover:border-0 focus-visible:ring-0 focus-visible:border-0 focus-visible:bg-transparent',
         className,
       )}
       {...props}

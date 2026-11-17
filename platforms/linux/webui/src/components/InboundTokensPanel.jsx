@@ -6,6 +6,7 @@ import { useUnsavedChanges } from '../hooks/useUnsavedChanges.js';
 import { api } from '../services/api.js';
 import { copyTextToClipboard } from '../utils/clipboard.js';
 import { buildInboundTokenWrite, inboundTokenDraft, randomToken } from '../utils/inboundTokens.js';
+import { QuickToggle } from './QuickToggle.jsx';
 import { StatusBadge } from './StatusBadge.jsx';
 import { Badge } from './ui/badge.jsx';
 import { Button } from './ui/button.jsx';
@@ -135,7 +136,7 @@ export function InboundTokensPanel() {
 
   return (
     <Card aria-labelledby="inbound-tokens-title">
-      <CardHeader className="border-b border-border/60 pb-4">
+      <CardHeader className="border-b border-border/75">
         <div className="flex items-center gap-2">
           <KeyRound className="size-4 text-primary" />
           <CardTitle id="inbound-tokens-title">入站 API Token</CardTitle>
@@ -156,7 +157,7 @@ export function InboundTokensPanel() {
         </CardAction>
       </CardHeader>
 
-      <CardContent className="space-y-3">
+      <CardContent className="space-y-3.5">
         <div className="space-y-3">
           {entries.map((entry, index) => {
             const status = entry.id === 'legacy'
@@ -168,7 +169,7 @@ export function InboundTokensPanel() {
 
             return (
               <article
-                className="space-y-3 rounded-lg border border-border/80 bg-muted/25 p-4 transition-colors hover:border-border"
+                className="space-y-3.5 rounded-2xl border border-border/80 bg-muted/25 p-4 transition-colors hover:border-border"
                 key={entry.id}
                 aria-label={label}
               >
@@ -178,16 +179,13 @@ export function InboundTokensPanel() {
                     <StatusBadge kind={entry.enabled ? 'good' : 'muted'} text={entry.enabled ? '已启用' : '已停用'} />
                     {!status?.configured && <Badge variant="warning">待保存</Badge>}
                   </div>
-                  <label className="inline-flex cursor-pointer items-center gap-2 text-xs font-medium text-foreground select-none">
-                    <input
-                      type="checkbox"
-                      className="size-4 cursor-pointer rounded border-input accent-primary"
-                      checked={entry.enabled}
-                      disabled={busy}
-                      onChange={(event) => change(entry.id, { enabled: event.target.checked })}
-                    />
-                    <span>启用</span>
-                  </label>
+                  <QuickToggle
+                    checked={entry.enabled}
+                    disabled={busy}
+                    label="启用"
+                    ariaLabel={`启用 ${label}`}
+                    onChange={(checked) => change(entry.id, { enabled: checked })}
+                  />
                 </div>
 
                 <div className="grid gap-3 md:grid-cols-2">
@@ -220,14 +218,14 @@ export function InboundTokensPanel() {
                   </div>
                 </div>
 
-                <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-3">
                   <span className="text-xs text-muted-foreground">
                     {entry.token !== null ? '新凭据将在保存后生效' : '改名不会更换凭据或拆分历史统计'}
                   </span>
                   <div className="flex flex-wrap items-center gap-1.5">
                     <Button
                       type="button"
-                      variant="secondary"
+                      variant="outline"
                       size="xs"
                       disabled={busy}
                       onClick={() => (visible[entry.id] ? hideCredential(entry.id) : useCredential(entry, 'show'))}
@@ -237,7 +235,7 @@ export function InboundTokensPanel() {
                     </Button>
                     <Button
                       type="button"
-                      variant="secondary"
+                      variant="outline"
                       size="xs"
                       disabled={busy}
                       onClick={() => useCredential(entry, 'copy')}
@@ -247,7 +245,7 @@ export function InboundTokensPanel() {
                     </Button>
                     <Button
                       type="button"
-                      variant="secondary"
+                      variant="outline"
                       size="xs"
                       disabled={busy || isEditing}
                       onClick={() => useCredential(entry, 'edit')}
@@ -257,7 +255,7 @@ export function InboundTokensPanel() {
                     </Button>
                     <Button
                       type="button"
-                      variant="secondary"
+                      variant="outline"
                       size="xs"
                       disabled={busy}
                       onClick={() => change(entry.id, { token: randomToken() })}
@@ -287,30 +285,30 @@ export function InboundTokensPanel() {
         </div>
 
         {!entries.length && (
-          <p className="rounded-lg border border-dashed border-border/80 bg-muted/15 px-4 py-5 text-center text-xs text-muted-foreground">
+          <p className="rounded-2xl border border-dashed border-border/80 bg-muted/15 px-4 py-8 text-center text-xs text-muted-foreground">
             暂无入站 Token，点击“新增 Token”开始配置。
           </p>
         )}
 
-        <p className="text-xs text-muted-foreground">
+        <p className="text-xs leading-relaxed text-muted-foreground">
           明文默认隐藏，点击显示后 60 秒自动隐藏。全部停用会拒绝请求；删除保留历史统计。
         </p>
 
         {error && (
-          <p className="rounded-lg border border-status-critical/35 bg-status-critical/10 px-3 py-2 text-xs font-medium text-status-critical" role="alert">
+          <p className="rounded-xl border border-status-critical/30 bg-status-critical/10 px-3.5 py-2.5 text-xs font-medium text-status-critical" role="alert">
             {error}
           </p>
         )}
       </CardContent>
 
-      <CardFooter className="flex flex-wrap items-center gap-2 border-t border-border/60 pt-4">
+      <CardFooter className="flex flex-wrap items-center gap-2 border-t border-border/75">
         <Button type="button" size="sm" disabled={busy || !dirty} aria-busy={Boolean(pending.save)} onClick={save}>
           <Save className="size-3.5" />
           <span>{pending.save ? '保存中…' : '保存修改'}</span>
         </Button>
         <Button
           type="button"
-          variant="secondary"
+          variant="outline"
           size="sm"
           disabled={busy}
           onClick={() => {
@@ -320,7 +318,7 @@ export function InboundTokensPanel() {
           <RotateCcw className="size-3.5" />
           <span>重新载入</span>
         </Button>
-        {dirty && <span className="text-xs font-medium text-status-warning">有未保存的修改</span>}
+        {dirty && <Badge variant="warning">有未保存的修改</Badge>}
       </CardFooter>
     </Card>
   );

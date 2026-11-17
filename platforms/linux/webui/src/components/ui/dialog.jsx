@@ -23,7 +23,7 @@ export function DialogOverlay({ className, ...props }) {
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
       className={cn(
-        'fixed inset-0 z-50 bg-black/65 backdrop-blur-xs data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 duration-200',
+        'fixed inset-0 z-50 bg-black/50 backdrop-blur-[3px] data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 duration-200',
         className,
       )}
       {...props}
@@ -38,7 +38,7 @@ export function DialogContent({ className, children, showCloseButton = true, ...
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          'fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl border border-border bg-card p-6 text-card-foreground shadow-2xl outline-none sm:max-w-lg',
+          'surface-popover fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-2xl border border-border/85 bg-card p-6 text-card-foreground outline-none sm:max-w-lg',
           'data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-95 duration-200',
           className,
         )}
@@ -48,7 +48,7 @@ export function DialogContent({ className, children, showCloseButton = true, ...
         {showCloseButton && (
           <DialogPrimitive.Close
             data-slot="dialog-close"
-            className="absolute top-4 right-4 rounded-md p-1.5 text-muted-foreground opacity-75 transition-all hover:bg-muted hover:text-foreground hover:opacity-100 cursor-pointer focus-visible:ring-[3px] focus-visible:ring-ring/40 outline-none"
+            className="absolute top-4 right-4 inline-flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-all hover:bg-accent hover:text-foreground cursor-pointer focus-visible:ring-[3px] focus-visible:ring-ring/30 outline-none"
             aria-label="关闭弹窗"
           >
             <X className="size-4" />
@@ -63,7 +63,7 @@ export function DialogHeader({ className, ...props }) {
   return (
     <div
       data-slot="dialog-header"
-      className={cn('flex flex-col gap-1.5 text-left', className)}
+      className={cn('flex flex-col gap-1.5 pr-6 text-left', className)}
       {...props}
     />
   );
@@ -83,7 +83,7 @@ export function DialogTitle({ className, ...props }) {
   return (
     <DialogPrimitive.Title
       data-slot="dialog-title"
-      className={cn('text-base font-semibold leading-none tracking-tight', className)}
+      className={cn('text-base font-semibold leading-snug tracking-tight text-foreground', className)}
       {...props}
     />
   );

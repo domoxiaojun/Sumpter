@@ -7,8 +7,7 @@ import { isBuiltinRule, routeCatalogKey, routeModelChoices, saveFeatureRule } fr
 import { Button } from './ui/button.jsx';
 import { Input } from './ui/input.jsx';
 import { Label } from './ui/label.jsx';
-
-const SELECT_CLS = 'h-9 w-full rounded-md border border-input bg-background px-2.5 text-xs text-foreground shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50';
+import { NativeSelect } from './ui/native-select.jsx';
 
 const effortOptions = [
   ['', '跟随原请求'],
@@ -140,7 +139,7 @@ export function FeatureRuleEditor({ rule, catalogLoader }) {
 
   const textField = (field, label, placeholder = '') => (
     <label className="flex flex-col gap-1.5 text-xs">
-      <span className="font-medium text-muted-foreground">{label}</span>
+      <span className="font-medium text-foreground/85">{label}</span>
       <Input
         className="h-9 text-xs"
         value={draft[field]}
@@ -152,23 +151,23 @@ export function FeatureRuleEditor({ rule, catalogLoader }) {
 
   return (
     <form className="space-y-4" onSubmit={submit}>
-      <fieldset disabled={saving} className="space-y-3.5">
+      <fieldset disabled={saving} className="space-y-4">
         {builtin ? (
-          <details className="group rounded-xl border bg-muted/20 p-3">
-            <summary className="flex cursor-pointer list-none items-center gap-1.5 text-xs font-semibold text-foreground select-none">
-              <ChevronRight className="size-3.5 text-muted-foreground transition-transform group-open:rotate-90" />
+          <details className="group rounded-2xl border border-border/80 bg-muted/30 p-3.5">
+            <summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-semibold text-foreground select-none">
+              <ChevronRight className="size-3.5 text-muted-foreground transition-transform duration-150 group-open:rotate-90" />
               <span>内建识别条件 · {rule.name || rule.id}</span>
             </summary>
-            <p className="mt-2 text-[11px] text-muted-foreground">
+            <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
               内建规则的名称和匹配条件由代理协议固定，只能调整启停与分流目标。
             </p>
-            <dl className="mt-2 grid gap-2 sm:grid-cols-2">
+            <dl className="mt-2.5 grid gap-2 sm:grid-cols-2">
               {Object.entries(rule.match || {})
                 .filter(([, value]) => value)
                 .map(([key, value]) => (
-                  <div key={key} className="rounded-lg border bg-background px-2.5 py-1.5 text-xs">
+                  <div key={key} className="rounded-xl bg-card/85 px-3 py-2 text-xs shadow-2xs">
                     <dt className="text-[10px] text-muted-foreground">{key}</dt>
-                    <dd className="font-mono text-xs text-foreground">{String(value)}</dd>
+                    <dd className="mt-0.5 font-mono text-xs font-medium text-foreground">{String(value)}</dd>
                   </div>
                 ))}
             </dl>
@@ -176,24 +175,23 @@ export function FeatureRuleEditor({ rule, catalogLoader }) {
         ) : (
           <>
             {textField('name', '规则名称 *', '如：WebSearch 搜索分流')}
-            <details className="group rounded-xl border bg-muted/15 p-3" open={!rule}>
-              <summary className="flex cursor-pointer list-none items-center gap-1.5 text-xs font-semibold text-foreground select-none">
-                <ChevronRight className="size-3.5 text-muted-foreground transition-transform group-open:rotate-90" />
+            <details className="group rounded-2xl border border-border/80 bg-muted/25 p-3.5" open={!rule}>
+              <summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-semibold text-foreground select-none">
+                <ChevronRight className="size-3.5 text-muted-foreground transition-transform duration-150 group-open:rotate-90" />
                 <span>触发匹配条件</span>
               </summary>
-              <div className="mt-3 space-y-3">
+              <div className="mt-3.5 space-y-3">
                 <div className="grid gap-3 sm:grid-cols-2">
                   <label className="flex flex-col gap-1.5 text-xs">
-                    <span className="font-medium text-muted-foreground">请求用途 (Request Kind)</span>
-                    <select
-                      className={SELECT_CLS}
+                    <span className="font-medium text-foreground/85">请求用途 (Request Kind)</span>
+                    <NativeSelect
                       value={draft.requestKind}
                       onChange={(event) => edit('requestKind', event.target.value)}
                     >
                       <option value="websearch">WebSearch (搜索)</option>
                       <option value="webfetch">WebFetch (网页抓取)</option>
                       <option value="classifier">安全分类器 (Classifier)</option>
-                    </select>
+                    </NativeSelect>
                   </label>
                   {textField('toolTypePrefix', '工具调用前缀 (可选)', '如：web_search 或 web_fetch')}
                 </div>
@@ -206,9 +204,8 @@ export function FeatureRuleEditor({ rule, catalogLoader }) {
         )}
 
         <label className="flex flex-col gap-1.5 text-xs">
-          <span className="font-medium text-muted-foreground">固定入口通道（可选）</span>
-          <select
-            className={SELECT_CLS}
+          <span className="font-medium text-foreground/85">固定入口通道（可选）</span>
+          <NativeSelect
             value={draft.endpointID}
             onChange={(event) => {
               const endpointID = event.target.value;
@@ -224,7 +221,7 @@ export function FeatureRuleEditor({ rule, catalogLoader }) {
                 {item.name || item.id}{item.enabled === false ? '（已停用）' : ''}
               </option>
             ))}
-          </select>
+          </NativeSelect>
         </label>
         {endpoint?.enabled === false && (
           <p className="text-[11px] text-status-warning">此入口已停用，启用后才能承接请求。</p>
@@ -232,7 +229,7 @@ export function FeatureRuleEditor({ rule, catalogLoader }) {
 
         <div className="space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <Label htmlFor="route-target-model" className="text-xs font-medium text-muted-foreground">
+            <Label htmlFor="route-target-model" className="text-xs font-medium text-foreground/85">
               目标承接模型 *
             </Label>
             <div className="flex items-center gap-2">
@@ -243,8 +240,7 @@ export function FeatureRuleEditor({ rule, catalogLoader }) {
                 <Button
                   type="button"
                   variant="ghost"
-                  size="sm"
-                  className="h-7 px-2 text-xs"
+                  size="xs"
                   onClick={fetchAgain}
                   disabled={loadingModels}
                 >
@@ -255,7 +251,7 @@ export function FeatureRuleEditor({ rule, catalogLoader }) {
           </div>
 
           {activeModels?.error && (
-            <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive" role="alert">
+            <p className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive" role="alert">
               {activeModels.error} {models.length ? '仍可从已有模型中选择。' : '请重试或先在入口库配置模型。'}
             </p>
           )}
@@ -270,9 +266,8 @@ export function FeatureRuleEditor({ rule, catalogLoader }) {
             />
           )}
 
-          <select
+          <NativeSelect
             id="route-target-model"
-            className={SELECT_CLS}
             value={selectedModel}
             required
             onChange={(event) => edit('model', event.target.value)}
@@ -291,7 +286,7 @@ export function FeatureRuleEditor({ rule, catalogLoader }) {
             {visibleModels.map((model) => (
               <option key={model} value={model}>{model}</option>
             ))}
-          </select>
+          </NativeSelect>
 
           {!loadingModels && draft.model && !selectedModel && (
             <p className="text-xs text-destructive" role="alert">
@@ -308,7 +303,7 @@ export function FeatureRuleEditor({ rule, catalogLoader }) {
               显示前 80 项，共 {matchingModels.length} 项；输入关键词可缩小范围。
             </p>
           )}
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
             {endpoint
               ? '仅显示此入口的模型目录与已配置模型；切换入口后请重新选择。'
               : '显示已启用入口的已配置模型；指定入口后可获取该入口的模型列表。'}
@@ -317,9 +312,8 @@ export function FeatureRuleEditor({ rule, catalogLoader }) {
 
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="flex flex-col gap-1.5 text-xs">
-            <span className="font-medium text-muted-foreground">目标协议（可选）</span>
-            <select
-              className={SELECT_CLS}
+            <span className="font-medium text-foreground/85">目标协议（可选）</span>
+            <NativeSelect
               value={draft.protocol}
               onChange={(event) => edit('protocol', event.target.value)}
             >
@@ -327,38 +321,38 @@ export function FeatureRuleEditor({ rule, catalogLoader }) {
               <option value="anthropic">Anthropic Messages</option>
               <option value="openai">OpenAI Chat Completions</option>
               <option value="openai-responses">OpenAI Responses</option>
-            </select>
+            </NativeSelect>
           </label>
           <label className="flex flex-col gap-1.5 text-xs">
-            <span className="font-medium text-muted-foreground">Effort 覆盖</span>
-            <select
-              className={SELECT_CLS}
+            <span className="font-medium text-foreground/85">Effort 覆盖</span>
+            <NativeSelect
               value={draft.effort}
               onChange={(event) => edit('effort', event.target.value)}
             >
               {effortOptions.map(([value, label]) => (
                 <option key={value} value={value}>{label}</option>
               ))}
-            </select>
+            </NativeSelect>
           </label>
         </div>
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
           仅在命中这条 Claude Code 路由时覆盖；跟随原请求不会改写客户端 effort。
         </p>
       </fieldset>
 
       {saveError && (
-        <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive" role="alert">
+        <p className="rounded-xl border border-destructive/30 bg-destructive/10 px-3.5 py-2.5 text-xs text-destructive" role="alert">
           {saveError}
         </p>
       )}
 
-      <div className="flex justify-end gap-2 pt-2">
-        <Button type="button" variant="outline" disabled={saving} onClick={closeModal}>
+      <div className="flex justify-end gap-2 border-t border-border/65 pt-3.5">
+        <Button type="button" variant="outline" size="sm" disabled={saving} onClick={closeModal}>
           取消
         </Button>
         <Button
           type="submit"
+          size="sm"
           disabled={saving || !draft.name.trim() || !selectedModel}
           aria-busy={saving}
         >

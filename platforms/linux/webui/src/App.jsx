@@ -20,6 +20,17 @@ const DiagnosticsPage = lazy(() => import('./pages/DiagnosticsPage.jsx').then((m
 const HelpPage = lazy(() => import('./pages/HelpPage.jsx').then((module) => ({ default: module.HelpPage })));
 const AboutPage = lazy(() => import('./pages/AboutPage.jsx').then((module) => ({ default: module.AboutPage })));
 
+function LoadingPill({ label }) {
+  return (
+    <div className="flex min-h-[45vh] items-center justify-center">
+      <div className="surface-card inline-flex items-center gap-2.5 rounded-full border border-border/80 bg-card/90 px-4 py-2 text-xs font-medium text-muted-foreground backdrop-blur-sm">
+        <span className="status-sonar-ring size-2 rounded-full bg-primary text-primary" aria-hidden="true" />
+        <span>{label}</span>
+      </div>
+    </div>
+  );
+}
+
 export function AppContent() {
   const { currentRoute, runtimePagesRetained, isLoading, auth, authLoading, theme } = useAppControls();
 
@@ -35,9 +46,9 @@ export function AppContent() {
 
   if (authLoading) {
     return (
-      <div className="flex min-h-dvh items-center justify-center bg-background">
+      <div className="ambient-canvas-glow flex min-h-dvh items-center justify-center bg-background">
         <span
-          className="size-2.5 rounded-full bg-primary animate-pulse"
+          className="status-sonar-ring size-2.5 rounded-full bg-primary text-primary"
           role="status"
           aria-label="正在检查登录状态"
         />
@@ -48,12 +59,7 @@ export function AppContent() {
 
   const renderPage = () => {
     if (isLoading) {
-      return (
-        <div className="flex min-h-[50vh] items-center justify-center gap-2.5 text-sm text-muted-foreground">
-          <span className="size-2 rounded-full bg-primary animate-pulse" aria-hidden="true" />
-          <span>正在连接代理控制平面...</span>
-        </div>
-      );
+      return <LoadingPill label="正在连接代理控制平面…" />;
     }
 
     if (!runtimePagesRetained && ['run', 'statistics'].includes(currentRoute)) return null;
@@ -89,27 +95,22 @@ export function AppContent() {
         <Sidebar />
         <SidebarInset className="min-w-0">
           <Topbar />
-          <main
-            className="flex-1 p-4 outline-none md:p-6"
+          <div
+            className="flex-1 px-4 py-5 outline-none sm:px-6 sm:py-6 lg:px-7"
             data-route={currentRoute}
             id="page"
             tabIndex="-1"
           >
             <div className="mx-auto w-full max-w-[1440px]">
               <ErrorBoundary resetKey={currentRoute}>
-                <Suspense
-                  fallback={
-                    <div className="flex min-h-[40vh] items-center justify-center gap-2.5 text-sm text-muted-foreground">
-                      <span className="size-2 rounded-full bg-primary animate-pulse" aria-hidden="true" />
-                      <span>正在加载页面…</span>
-                    </div>
-                  }
-                >
-                  {renderPage()}
+                <Suspense fallback={<LoadingPill label="正在加载页面…" />}>
+                  <div key={currentRoute} className="page-stage-enter">
+                    {renderPage()}
+                  </div>
                 </Suspense>
               </ErrorBoundary>
             </div>
-          </main>
+          </div>
         </SidebarInset>
         <CommandPalette />
         <Modal />
