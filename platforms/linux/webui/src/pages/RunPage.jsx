@@ -272,6 +272,17 @@ function RecentEventSpeed({ event }) {
   );
 }
 
+function LiveEventDurationText({ event }) {
+  const [, setTick] = useState(0);
+  const live = eventIsInFlight(event);
+  useEffect(() => {
+    if (!live) return undefined;
+    const timer = window.setInterval(() => setTick((value) => value + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [event.id, live]);
+  return <>{eventDurationText(event)}</>;
+}
+
 function RecentEventDurationCell({ event }) {
   if (event.kind === 'notify') return <span className="font-mono text-xs text-muted-foreground">—</span>;
   const live = eventIsInFlight(event);
@@ -291,7 +302,7 @@ function RecentEventDurationCell({ event }) {
     >
       <span className="flex flex-wrap items-center gap-1.5">
         <span className={cn(slowTTFB && 'font-semibold text-status-warning', live && 'font-semibold text-primary')}>
-          {eventDurationText(event)}
+          <LiveEventDurationText event={event} />
         </span>
         <RecentEventSpeed event={event} />
       </span>
@@ -561,7 +572,7 @@ function MobileEventList({ events, selectedEventID, onSelect, loading, live = fa
                   )}
                   title={eventDisplayTiming(event).ttfbMS >= 5000 ? '首字节 → 总耗时；首字节超过 5 秒，上游可能排队中' : '首字节 → 总耗时'}
                 >
-                  <span>{eventDurationText(event)}</span>
+                  <LiveEventDurationText event={event} />
                   <RecentEventSpeed event={event} />
                 </span>
               </div>
@@ -627,7 +638,6 @@ export function RunPage() {
   const refreshEnabled = useRef(autoRefresh);
   refreshEnabled.current = autoRefresh;
   const [eventPageDirection, setEventPageDirection] = useState('none');
-  const [, setDurationTick] = useState(0);
 
   const isRunning = Boolean(status?.running);
   const recentEvents = runtime?.recentEvents || [];
@@ -689,12 +699,6 @@ export function RunPage() {
       window.clearInterval(timer);
     };
   }, [pageVisible, autoRefresh, runRefreshInterval, runtime?.resetGeneration, localDay]);
-
-  useEffect(() => {
-    if (!pageVisible || !recentEvents.some((event) => eventIsInFlight(event))) return undefined;
-    const timer = window.setInterval(() => setDurationTick((value) => value + 1), 1000);
-    return () => window.clearInterval(timer);
-  }, [recentEvents, pageVisible]);
 
   const liveEvents = useMemo(() => (
     orderRuntimeEvents(eventHistory.liveEvents || [], eventSort)

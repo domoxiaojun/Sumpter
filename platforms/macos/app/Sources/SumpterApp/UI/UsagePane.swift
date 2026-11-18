@@ -1270,6 +1270,7 @@ struct UsagePane: View {
                 storageOverviewPanel
                 Divider()
                 drilldownContextBar
+                runtimeDimensionPicker
                 overviewDimensionTables
             }
         }
@@ -1361,11 +1362,34 @@ struct UsagePane: View {
     /// 让模型表显示该范围内的分别用量。
     @ViewBuilder
     private var overviewDimensionTables: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            runtimeOverviewDimensionTable(kind: "endpoint", title: "入口使用情况", page: model.runtimeEndpointsPage, sortOrder: $runtimeEndpointTableSort)
-            runtimeOverviewDimensionTable(kind: "project", title: "项目使用情况", page: model.runtimeProjectsPage, sortOrder: $runtimeProjectTableSort)
-            runtimeOverviewDimensionTable(kind: "session", title: "会话使用情况", page: model.runtimeSessionsPage, sortOrder: $runtimeSessionTableSort)
-            runtimeOverviewDimensionTable(kind: "model", title: "模型使用情况", page: model.runtimeModelsPage, sortOrder: $runtimeModelTableSort)
+        runtimeFocusedDimensionTable(mode: .usage)
+    }
+
+    private var runtimeDimensionPicker: some View {
+        Picker("统计维度", selection: Binding(
+            get: { model.runtimeDimensionFocus },
+            set: { model.setRuntimeDimensionFocus($0) }
+        )) {
+            Text("入口").tag("endpoint")
+            Text("项目").tag("project")
+            Text("会话").tag("session")
+            Text("模型").tag("model")
+        }
+        .pickerStyle(.segmented)
+        .accessibilityLabel("统计维度")
+    }
+
+    @ViewBuilder
+    private func runtimeFocusedDimensionTable(mode: RuntimeDimensionTableMode) -> some View {
+        switch model.runtimeDimensionFocus {
+        case "project":
+            runtimeOverviewDimensionTable(kind: "project", title: mode == .cost ? "项目成本" : "项目使用情况", page: model.runtimeProjectsPage, sortOrder: $runtimeProjectTableSort, mode: mode)
+        case "session":
+            runtimeOverviewDimensionTable(kind: "session", title: mode == .cost ? "会话成本" : "会话使用情况", page: model.runtimeSessionsPage, sortOrder: $runtimeSessionTableSort, mode: mode)
+        case "model":
+            runtimeOverviewDimensionTable(kind: "model", title: mode == .cost ? "模型成本" : "模型使用情况", page: model.runtimeModelsPage, sortOrder: $runtimeModelTableSort, mode: mode)
+        default:
+            runtimeOverviewDimensionTable(kind: "endpoint", title: mode == .cost ? "入口成本" : "入口使用情况", page: model.runtimeEndpointsPage, sortOrder: $runtimeEndpointTableSort, mode: mode)
         }
     }
 
@@ -1734,10 +1758,8 @@ struct UsagePane: View {
                 costSummary
                 Divider()
                 drilldownContextBar
-                runtimeOverviewDimensionTable(kind: "endpoint", title: "入口成本", page: model.runtimeEndpointsPage, sortOrder: $runtimeEndpointTableSort, mode: .cost)
-                runtimeOverviewDimensionTable(kind: "project", title: "项目成本", page: model.runtimeProjectsPage, sortOrder: $runtimeProjectTableSort, mode: .cost)
-                runtimeOverviewDimensionTable(kind: "session", title: "会话成本", page: model.runtimeSessionsPage, sortOrder: $runtimeSessionTableSort, mode: .cost)
-                runtimeOverviewDimensionTable(kind: "model", title: "模型成本", page: model.runtimeModelsPage, sortOrder: $runtimeModelTableSort, mode: .cost)
+                runtimeDimensionPicker
+                runtimeFocusedDimensionTable(mode: .cost)
             }
         }
     }

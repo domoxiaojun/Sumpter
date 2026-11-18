@@ -1,6 +1,7 @@
 //! Runtime query dimensions domain.
 
 use crate::database::params_from_iter;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::csv_values;
 
@@ -45,6 +46,11 @@ pub fn dimension_page_on(
     }
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
     require_projection(&transaction)?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_secs_f64() - sumpter_core::events::APPLE_EPOCH_OFFSET_SECS)
+        .unwrap_or(0.0);
+    let query_table = super::access_path::event_query_table(&filters, false, now);
     let snapshot = history_snapshot(
         &transaction,
         request.snapshot_seq,
@@ -220,7 +226,7 @@ pub fn dimension_page_on(
     let group_columns = key_expression;
     let total_count = transaction.query_row(
         &format!(
-            "SELECT COUNT(*) FROM (SELECT 1 FROM runtime_events{where_sql} \
+            "SELECT COUNT(*) FROM (SELECT 1 FROM {query_table}{where_sql} \
              GROUP BY {group_columns})"
         ),
         params_from_iter(builder.values.iter()),
@@ -349,7 +355,7 @@ pub fn dimension_page_on(
                       SUM(CASE WHEN {output_speed_predicate} THEN output_tokens ELSE 0 END) AS output_generation_tokens,
                       SUM(CASE WHEN {output_speed_predicate} THEN output_span_ms ELSE 0 END) AS output_generation_ms,
                       SUM(CASE WHEN {output_speed_predicate} THEN 1 ELSE 0 END) AS output_speed_requests
-               FROM runtime_events{where_sql}
+             FROM {query_table}{where_sql}
               GROUP BY {group_columns}
              )
              SELECT aggregated.key, {name_expression} AS name, aggregated.source,
@@ -448,7 +454,14 @@ pub fn dimension_page_on(
     } else {
         let prices = load_price_catalog(&transaction)?;
         let keys = rows.iter().map(|row| row.key.as_str()).collect::<Vec<_>>();
-        dimension_costs(&transaction, &builder, key_expression, &prices, &keys)?
+        dimension_costs(
+            &transaction,
+            &builder,
+            query_table,
+            key_expression,
+            &prices,
+            &keys,
+        )?
     };
     for row in &mut rows {
         row.cost = dimension_cost_map
@@ -486,6 +499,7 @@ pub fn dimension_page_on(
 fn dimension_costs(
     transaction: &Transaction<'_>,
     base: &SqlFilter,
+    query_table: &str,
     key_expression: &str,
     prices: &PriceCatalog,
     keys: &[&str],
@@ -500,7 +514,7 @@ fn dimension_costs(
                 effective_model,input_tokens,output_tokens,cache_read_input_tokens,\
                 cache_creation_input_tokens,uncached_input_tokens,processed_input_tokens,\
                 processed_total_tokens,reasoning_tokens,token_accounting_semantics,\
-                token_accounting_quality,upstream_model FROM runtime_events{}",
+                token_accounting_quality,upstream_model FROM {query_table}{}",
         base.where_sql()
     );
     let mut statement = transaction.prepare(&sql)?;

@@ -1584,6 +1584,8 @@ function OverviewPanel({
   onManualCleanup,
   onRecreateDatabase,
   usagePages,
+  dimensionFocus,
+  onDimensionFocusChange,
   usageLoading,
   usageErrors,
   usageCallbacks,
@@ -1603,7 +1605,6 @@ function OverviewPanel({
   onClearSession,
 }) {
   const [overviewMetric, setOverviewMetric] = useState('clientRequests');
-  const [dimensionFocus, setDimensionFocus] = useState('all');
   const effectiveStorage = storage
     ? {
         ...storage,
@@ -1747,7 +1748,7 @@ function OverviewPanel({
                     size="xs"
                     variant={dimensionFocus === id ? 'default' : 'secondary'}
                     aria-pressed={dimensionFocus === id}
-                    onClick={() => setDimensionFocus(id)}
+                    onClick={() => onDimensionFocusChange?.(id)}
                   >
                     <span>{label}</span>
                     {totalCount != null && <small className="font-mono opacity-80">{numberWithComma(totalCount)}</small>}
@@ -2402,6 +2403,8 @@ function CostPanel({
   trend,
   legacyAnalytics,
   costPages,
+  dimensionFocus,
+  onDimensionFocusChange,
   costLoading,
   costErrors,
   costCallbacks,
@@ -2415,7 +2418,6 @@ function CostPanel({
   onClearSession,
 }) {
   const [showPricing, setShowPricing] = useState(false);
-  const [dimensionFocus, setDimensionFocus] = useState('all');
   const totals = trend?.totals || legacyTrendTotals(legacyAnalytics);
   const cost = totals?.cost || {};
   const unpricedTotal = safeNumber(cost?.unpricedRequests) + safeNumber(cost?.unknownAccountingRequests);
@@ -2445,7 +2447,7 @@ function CostPanel({
                 size="xs"
                 variant={dimensionFocus === id ? 'default' : 'secondary'}
                 aria-pressed={dimensionFocus === id}
-                onClick={() => setDimensionFocus(id)}
+                onClick={() => onDimensionFocusChange?.(id)}
               >
                 <span>{label}</span>
               </Button>
@@ -2655,6 +2657,7 @@ export function AnalyticsWorkspace({
 }) {
   const { pageVisible, runtimePagePreferences } = useAppControls();
   const [section, setSection] = useRuntimePagePreference('stats.board', 'overview');
+  const [dimensionFocus, setDimensionFocus] = useRuntimePagePreference('stats.dimensionFocus', 'endpoint');
   const sectionTabRefs = useRef([]);
   const range = analyticsRange || 'today';
   const [trend, setTrend] = useState(null);
@@ -2715,6 +2718,10 @@ export function AnalyticsWorkspace({
   const lastAnalyticsRefreshSignal = useRef(0);
   const pendingBoardRefreshRef = useRef(false);
   const previousQueryKeyRef = useRef(activeQueryKey);
+
+  const dimensionKindsForFocus = useCallback((focus = dimensionFocus) => (
+    focus === 'all' ? ['endpoint', 'project', 'session', 'model'] : [focus]
+  ), [dimensionFocus]);
 
   const loadTrends = useCallback(async (nextRange = range) => {
     if (document.hidden) return;
@@ -2947,9 +2954,9 @@ export function AnalyticsWorkspace({
     setDiagnosticsError(null);
     setDimensionError({ endpoint: null, project: null, session: null, model: null });
     if (section === 'overview' || section === 'trends' || section === 'tokens') loadTrends(range);
-    if (section === 'overview') loadDimensions(['endpoint', 'project', 'session', 'model']);
+    if (section === 'overview') loadDimensions(dimensionKindsForFocus());
     if (section === 'errors') { loadErrors(1, errors?.pageSize || pageSize, null); loadDiagnostics(); }
-    if (section === 'tokens') loadDimensions(['endpoint', 'project', 'session', 'model']);
+    if (section === 'tokens') loadDimensions(dimensionKindsForFocus());
   }, [activeQueryKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -3011,12 +3018,12 @@ export function AnalyticsWorkspace({
     if (busy) { pendingBoardRefreshRef.current = true; return; }
     pendingBoardRefreshRef.current = false;
     if (section === 'overview' || section === 'trends' || section === 'tokens') loadTrends(range);
-    if (section === 'overview') refreshDimensions(['endpoint', 'project', 'session', 'model']);
+    if (section === 'overview') refreshDimensions(dimensionKindsForFocus());
     if (section === 'errors') {
       if (!errorsRequestRef.current.pending && (errors?.page || 1) === 1) loadErrors(1, errors?.pageSize || pageSize, null);
       loadDiagnostics();
     }
-    if (section === 'tokens') refreshDimensions(['endpoint', 'project', 'session', 'model']);
+    if (section === 'tokens') refreshDimensions(dimensionKindsForFocus());
     if (section === 'overview' && showStorageSettings) loadStorage({ includeRetention: true });
   }, [analyticsRefreshSignal, trendLoading, errorsLoading, diagnosticsLoading, dimensionLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -3028,13 +3035,14 @@ export function AnalyticsWorkspace({
     if (!pageVisible) return undefined;
     const live = statisticsRangeIsLive(range, analyticsFilters);
     if ((section === 'overview' || section === 'trends' || section === 'tokens') && (!trend || live)) loadTrends();
-    if (section === 'overview' && (!dimensions.endpoint || live)) {
-      if (dimensions.endpoint) refreshDimensions(); else loadDimensions();
+    const focusedKind = dimensionFocus === 'all' ? 'endpoint' : dimensionFocus;
+    if (section === 'overview' && (!dimensions[focusedKind] || live)) {
+      if (dimensions[focusedKind]) refreshDimensions(dimensionKindsForFocus()); else loadDimensions(dimensionKindsForFocus());
     }
     if (section === 'errors' && (!errors || (live && errors.page === 1))) loadErrors();
     if (section === 'errors' && !diagnostics) loadDiagnostics();
-    if (section === 'tokens' && (!dimensions.endpoint || live)) {
-      if (dimensions.endpoint) refreshDimensions(); else loadDimensions();
+    if (section === 'tokens' && (!dimensions[focusedKind] || live)) {
+      if (dimensions[focusedKind]) refreshDimensions(dimensionKindsForFocus()); else loadDimensions(dimensionKindsForFocus());
     }
     if (section === 'overview' && !storage) loadStorage();
     if (section === 'tokens' && !pricing) loadStorage({ includeStorage: false, includePricing: true });
@@ -3048,6 +3056,12 @@ export function AnalyticsWorkspace({
       }
     };
   }, [section, pageVisible]);
+
+  useEffect(() => {
+    if (!pageVisible || !['overview', 'tokens'].includes(section)) return;
+    const missing = dimensionKindsForFocus().filter((kind) => !dimensions[kind]);
+    if (missing.length > 0) loadDimensions(missing);
+  }, [dimensionFocus]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     // Load the independent capacity-reminder setting only when storage
@@ -3119,7 +3133,7 @@ export function AnalyticsWorkspace({
       addToast?.('模型价格表已更新', 'success');
       await Promise.allSettled([
         loadTrends(range),
-        refreshDimensions(['endpoint', 'project', 'session', 'model']),
+        refreshDimensions(dimensionKindsForFocus()),
       ]);
     } catch (error) {
       setStorageError(error);
@@ -3142,7 +3156,7 @@ export function AnalyticsWorkspace({
       if (result?.changed) {
         await Promise.allSettled([
           loadTrends(range),
-          refreshDimensions(['endpoint', 'project', 'session', 'model']),
+          refreshDimensions(dimensionKindsForFocus()),
         ]);
       }
     } catch (error) {
@@ -3272,6 +3286,7 @@ export function AnalyticsWorkspace({
     setSelectedSession(null);
     onSessionSelectionChange?.(null);
     setSelectedProject(next);
+    setDimensionFocus('session');
     onProjectSelectionChange?.(next);
   }, [onProjectSelectionChange, onSessionSelectionChange]);
 
@@ -3280,6 +3295,7 @@ export function AnalyticsWorkspace({
     if (!key) return;
     const next = { key, name: String(row?.name || key) };
     setSelectedSession(next);
+    setDimensionFocus('model');
     onSessionSelectionChange?.(next);
   }, [onSessionSelectionChange]);
 
@@ -3288,11 +3304,13 @@ export function AnalyticsWorkspace({
     setSelectedSession(null);
     onSessionSelectionChange?.(null);
     setSelectedProject(null);
+    setDimensionFocus('project');
     onProjectSelectionChange?.(null);
   }, [onProjectSelectionChange, onSessionSelectionChange]);
 
   const clearSelectedSession = useCallback(() => {
     setSelectedSession(null);
+    setDimensionFocus('session');
     onSessionSelectionChange?.(null);
   }, [onSessionSelectionChange]);
 
@@ -3355,6 +3373,8 @@ export function AnalyticsWorkspace({
             onManualCleanup={onManualCleanup}
             onRecreateDatabase={onRecreateDatabase}
             usagePages={dimensions}
+            dimensionFocus={dimensionFocus}
+            onDimensionFocusChange={setDimensionFocus}
             usageLoading={dimensionLoading}
             usageErrors={dimensionError}
             usageCallbacks={dimensionCallbacks}
@@ -3419,6 +3439,8 @@ export function AnalyticsWorkspace({
             trend={trend}
             legacyAnalytics={legacyAnalytics}
             costPages={dimensions}
+            dimensionFocus={dimensionFocus}
+            onDimensionFocusChange={setDimensionFocus}
             costLoading={dimensionLoading}
             costErrors={dimensionError}
             costCallbacks={dimensionCallbacks}

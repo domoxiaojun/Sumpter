@@ -284,6 +284,14 @@ pub(super) fn replace_pricing_database(
             update.expected_revision
         ));
     }
+    if pricing_update_matches_database(&transaction, &update)? {
+        transaction.commit().map_err(|error| error.to_string())?;
+        return Ok(RuntimePricingMutation {
+            revision,
+            currency: update.currency.trim().to_owned(),
+            price_count: update.prices.len(),
+        });
+    }
     let next_revision = revision.saturating_add(1);
     super::models::save_pricing(&transaction, &update, next_revision)
         .map_err(|error| error.to_string())?;
@@ -302,6 +310,85 @@ pub(super) fn replace_pricing_database(
     })
 }
 
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct PricingRowSnapshot {
+    model_key: String,
+    effective_from: u64,
+    effective_to: Option<u64>,
+    input_per_million_micros: Option<i64>,
+    output_per_million_micros: Option<i64>,
+    cache_read_per_million_micros: Option<i64>,
+    cache_creation_per_million_micros: Option<i64>,
+    tiers_json: String,
+}
+
+fn pricing_update_matches_database(
+    connection: &Connection,
+    update: &RuntimePricingUpdate,
+) -> Result<bool, String> {
+    let currency: String = connection
+        .query_row(
+            "SELECT currency FROM runtime_pricing_meta WHERE id=1",
+            crate::database::params![],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if currency != update.currency.trim() {
+        return Ok(false);
+    }
+    let mut expected = update
+        .prices
+        .iter()
+        .map(|price| {
+            let model_key = price
+                .endpoint_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|endpoint| format!("{endpoint}\u{1f}{}", price.model_key.trim()))
+                .unwrap_or_else(|| price.model_key.trim().to_owned());
+            Ok(PricingRowSnapshot {
+                model_key,
+                effective_from: price.effective_from.to_bits(),
+                effective_to: price.effective_to.map(f64::to_bits),
+                input_per_million_micros: price.input_per_million_micros,
+                output_per_million_micros: price.output_per_million_micros,
+                cache_read_per_million_micros: price.cache_read_per_million_micros,
+                cache_creation_per_million_micros: price.cache_creation_per_million_micros,
+                tiers_json: crate::pricing_matcher::serialize_tiers_json(&price.tiers)?
+                    .unwrap_or_default(),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    expected.sort();
+
+    let mut actual = connection
+        .prepare(
+            "SELECT model_key,effective_from,effective_to,input_per_million_micros,
+                    output_per_million_micros,cache_read_per_million_micros,
+                    cache_creation_per_million_micros,tiers_json
+             FROM runtime_model_prices ORDER BY model_key,effective_from",
+        )
+        .map_err(|error| error.to_string())?
+        .query_map(crate::database::params![], |row| {
+            Ok(PricingRowSnapshot {
+                model_key: row.get(0)?,
+                effective_from: row.get::<_, f64>(1)?.to_bits(),
+                effective_to: row.get::<_, Option<f64>>(2)?.map(f64::to_bits),
+                input_per_million_micros: row.get(3)?,
+                output_per_million_micros: row.get(4)?,
+                cache_read_per_million_micros: row.get(5)?,
+                cache_creation_per_million_micros: row.get(6)?,
+                tiers_json: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
+            })
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    actual.sort();
+    Ok(expected == actual)
+}
+
 pub(super) fn invalidate_hourly_rollups_for_pricing_change(
     transaction: &Connection,
 ) -> Result<(), String> {
@@ -313,25 +400,19 @@ pub(super) fn invalidate_hourly_rollups_for_pricing_change(
         .map_err(|error| error.to_string())?;
     transaction
         .execute(
-            "INSERT OR IGNORE INTO runtime_hourly_rollup_dirty(bucket_start)
-             SELECT DISTINCT (CAST(timestamp AS INTEGER) / 3600) * 3600
-             FROM runtime_events WHERE is_in_flight=0 AND kind IN ('client','upstream')",
+            "DELETE FROM runtime_hourly_rollup_dirty",
             crate::database::params![],
         )
         .map_err(|error| error.to_string())?;
-    let dirty = transaction
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM runtime_hourly_rollup_dirty LIMIT 1)",
-            crate::database::params![],
-            |row| row.get::<_, bool>(0),
-        )
+    // Discover historical buckets incrementally in the worker.  A single
+    // SELECT DISTINCT over the full event table here would hold the pricing
+    // mutation transaction for the entire history and create the CPU spike
+    // that this path is intended to avoid.
+    set_meta(transaction, "hourly_rollup_rebuild_requested", 1)
         .map_err(|error| error.to_string())?;
-    set_meta(
-        transaction,
-        "hourly_rollup_complete",
-        if dirty { 0 } else { 1 },
-    )
-    .map_err(|error| error.to_string())?;
+    set_meta(transaction, "hourly_rollup_rebuild_cursor", i64::MIN)
+        .map_err(|error| error.to_string())?;
+    set_meta(transaction, "hourly_rollup_complete", 0).map_err(|error| error.to_string())?;
     set_meta(transaction, "hourly_rollup_max_seq", 0).map_err(|error| error.to_string())?;
     set_meta(transaction, "hourly_rollup_failed", 0).map_err(|error| error.to_string())?;
     Ok(())

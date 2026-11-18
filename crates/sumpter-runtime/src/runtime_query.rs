@@ -8,6 +8,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use crate::database::types::Value as SqlValue;
@@ -1638,6 +1639,17 @@ struct PriceCatalog {
     book: crate::pricing_matcher::PriceBook,
 }
 
+#[derive(Clone)]
+struct OfficialPriceCache {
+    digest: String,
+    entries: Vec<(String, crate::pricing_matcher::ResolvedRateEntry)>,
+}
+
+fn official_price_cache() -> &'static Mutex<Option<OfficialPriceCache>> {
+    static CACHE: OnceLock<Mutex<Option<OfficialPriceCache>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
+
 impl PriceCatalog {
     #[cfg(test)]
     fn resolve(
@@ -1976,12 +1988,12 @@ fn load_price_catalog(transaction: &Transaction<'_>) -> QueryResult<PriceCatalog
 
     let mut catalog = PriceCatalog::default();
     if has_official_meta {
-        if let Some((revision, currency, source, updated_at, count, tiered_count, last_error)) =
+        if let Some((revision, currency, source, updated_at, count, tiered_count, last_error, _digest)) =
             transaction
                 .query_row(
                     "SELECT revision,currency,COALESCE(official_source,''),official_updated_at,\
                             COALESCE(official_model_count,0),COALESCE(official_tiered_model_count,0),\
-                            official_sync_error \
+                            official_sync_error,COALESCE(official_digest,'') \
                      FROM runtime_pricing_meta WHERE id=1",
                     crate::database::params![],
                     |row| {
@@ -1993,6 +2005,7 @@ fn load_price_catalog(transaction: &Transaction<'_>) -> QueryResult<PriceCatalog
                             row.get::<_, i64>(4)?,
                             row.get::<_, i64>(5)?,
                             row.get::<_, Option<String>>(6)?,
+                            row.get::<_, String>(7)?,
                         ))
                     },
                 )
@@ -2087,7 +2100,31 @@ fn load_price_catalog(transaction: &Transaction<'_>) -> QueryResult<PriceCatalog
         crate::database::params![],
         |row| row.get(0),
     )?;
+    let official_digest = if has_official_meta {
+        transaction
+            .query_row(
+                "SELECT COALESCE(official_digest,'') FROM runtime_pricing_meta WHERE id=1",
+                crate::database::params![],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
     if has_official_table {
+        if !official_digest.is_empty()
+            && let Some(cached) = official_price_cache()
+                .lock()
+                .ok()
+                .and_then(|cache| cache.clone())
+                .filter(|cache| cache.digest == official_digest)
+        {
+            for (model_key, entry) in cached.entries {
+                catalog.book.insert_official(&model_key, entry);
+            }
+            return Ok(catalog);
+        }
         let mut official_stmt = transaction.prepare(
             "SELECT model_key,input_per_million_micros,output_per_million_micros,\
                     cache_read_per_million_micros,cache_creation_per_million_micros,tiers_json \
@@ -2110,8 +2147,20 @@ fn load_price_catalog(transaction: &Transaction<'_>) -> QueryResult<PriceCatalog
                 },
             ))
         })?;
+        let mut entries = Vec::new();
         for row in official_rows {
             let (model_key, entry) = row?;
+            entries.push((model_key, entry));
+        }
+        if !official_digest.is_empty()
+            && let Ok(mut cache) = official_price_cache().lock()
+        {
+            *cache = Some(OfficialPriceCache {
+                digest: official_digest,
+                entries: entries.clone(),
+            });
+        }
+        for (model_key, entry) in entries {
             catalog.book.insert_official(&model_key, entry);
         }
     }

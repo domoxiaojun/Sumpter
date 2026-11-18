@@ -1263,6 +1263,24 @@ pub(super) fn run_projection_maintenance(
             return Ok(true);
         }
     }
+    if meta_i64(connection, "hourly_rollup_rebuild_requested")?.unwrap_or(0) != 0 {
+        let cursor = meta_i64(connection, "hourly_rollup_rebuild_cursor")?.unwrap_or(i64::MIN);
+        let next_bucket = connection.query_row(
+            "SELECT MIN((CAST(timestamp AS INTEGER) / 3600) * 3600)
+                 FROM runtime_events
+                 WHERE is_in_flight=0 AND kind IN ('client','upstream')
+                   AND ((CAST(timestamp AS INTEGER) / 3600) * 3600) > ?1",
+            crate::database::params![cursor],
+            |row| row.get::<_, Option<i64>>(0),
+        )?;
+        if let Some(bucket_start) = next_bucket {
+            mark_hourly_rollup_bucket(connection, bucket_start)?;
+            set_meta(connection, "hourly_rollup_rebuild_cursor", bucket_start)?;
+            return Ok(true);
+        }
+        set_meta(connection, "hourly_rollup_rebuild_requested", 0)?;
+        return Ok(true);
+    }
     let dirty_bucket = connection
         .query_row(
             "SELECT bucket_start FROM runtime_hourly_rollup_dirty ORDER BY bucket_start ASC LIMIT 1", crate::database::params![],

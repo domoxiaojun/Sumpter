@@ -1519,6 +1519,26 @@ fn official_pricing_seeds_tiered_rates_recomputes_on_sync_and_respects_manual_ov
     .unwrap();
     assert_eq!(overridden.totals.cost.estimated_cost_micros, 370_000);
 
+    let unchanged = store
+        .replace_pricing(RuntimePricingUpdate {
+            expected_revision: 3,
+            currency: "USD".into(),
+            prices: vec![RuntimeModelPriceInput {
+                endpoint_id: Some("ep-main".into()),
+                model_key: "claude-sonnet-4-6".into(),
+                effective_from: 0.0,
+                effective_to: None,
+                input_per_million_micros: Some(1_000_000),
+                output_per_million_micros: Some(1_000_000),
+                cache_read_per_million_micros: Some(0),
+                cache_creation_per_million_micros: Some(0),
+                tiers: Vec::new(),
+            }],
+        })
+        .unwrap();
+    assert_eq!(unchanged.revision, 3);
+    assert_eq!(unchanged.price_count, 1);
+
     drop(store);
     remove_test_dir(&dir);
 }

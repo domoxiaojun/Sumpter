@@ -22,6 +22,15 @@ extension AppModel {
         }
     }
 
+    func setRuntimeDimensionFocus(_ focus: String) {
+        guard ["endpoint", "project", "session", "model"].contains(focus) else { return }
+        guard runtimeDimensionFocus != focus else { return }
+        runtimeDimensionFocus = focus
+        guard statisticsPageVisible, ["overview", "tokens"].contains(statisticsBoard) else { return }
+        runtimeDimensionTask?.cancel()
+        loadRuntimeFocusedDimension()
+    }
+
     /// 进入统计页或自动刷新设置变化时调用；短时间内复用刚取得的快照。
     func refreshStatisticsIfNeeded(force: Bool = false) {
         guard statisticsPageVisible else { return }
@@ -115,23 +124,26 @@ extension AppModel {
     }
 
     func setRuntimeLocalProject(_ projectID: String, projectName: String? = nil) {
+        runtimeDimensionFocus = "session"
         runtimeLocalProjectID = projectID
         runtimeLocalProjectName = projectName ?? runtimeProjectsPage?.rows.first(where: { $0.key == projectID })?.name ?? projectID
         runtimeLocalSessionID = ""
         runtimeLocalSessionName = ""
-        loadRuntimeDimensionsForBoard()
+        loadRuntimeSessions(page: 1)
     }
 
     func clearRuntimeLocalProject() {
         guard !runtimeLocalProjectID.isEmpty || !runtimeLocalProjectName.isEmpty else { return }
         resetRuntimeLocalProjectState()
         resetRuntimeLocalSessionState()
+        runtimeDimensionFocus = "project"
         if statisticsVisible, ["overview", "tokens"].contains(statisticsBoard) {
-            loadRuntimeDimensionsForBoard()
+            loadRuntimeFocusedDimension()
         }
     }
 
     func setRuntimeLocalSession(_ sessionID: String, sessionName: String? = nil) {
+        runtimeDimensionFocus = "model"
         runtimeLocalSessionID = sessionID
         runtimeLocalSessionName = sessionName ?? runtimeSessionsPage?.rows.first(where: { $0.key == sessionID })?.name ?? sessionID
         loadRuntimeModels(page: 1)
@@ -140,8 +152,9 @@ extension AppModel {
     func clearRuntimeLocalSession() {
         guard !runtimeLocalSessionID.isEmpty || !runtimeLocalSessionName.isEmpty else { return }
         resetRuntimeLocalSessionState()
+        runtimeDimensionFocus = "session"
         if statisticsVisible, ["overview", "tokens"].contains(statisticsBoard) {
-            loadRuntimeModels(page: 1)
+            loadRuntimeSessions(page: 1)
         }
     }
 
@@ -741,16 +754,16 @@ extension AppModel {
         guard statisticsPageVisible, runtimeHistoryPage != nil else { return }
         switch board {
         case "overview":
-            if force || runtimeEndpointsPage == nil || runtimeProjectsPage == nil || runtimeSessionsPage == nil || runtimeModelsPage == nil {
-                loadRuntimeDimensionsForBoard()
+            if force || runtimeFocusedDimensionPage == nil {
+                loadRuntimeFocusedDimension()
             }
         case "errors":
             if force || runtimeErrorPage == nil {
                 loadRuntimeV2ErrorPage(page: 1)
             }
         case "tokens":
-            if force || runtimeEndpointsPage == nil || runtimeProjectsPage == nil || runtimeSessionsPage == nil || runtimeModelsPage == nil {
-                loadRuntimeDimensionsForBoard()
+            if force || runtimeFocusedDimensionPage == nil {
+                loadRuntimeFocusedDimension()
             }
         default:
             break
@@ -1077,6 +1090,26 @@ extension AppModel {
     }
 
     enum RuntimeDimension { case endpoint, project, session, model }
+
+    var runtimeFocusedDimensionPage: AdminWire.RuntimeDimensionPage? {
+        switch runtimeDimensionFocus {
+        case "project": return runtimeProjectsPage
+        case "session": return runtimeSessionsPage
+        case "model": return runtimeModelsPage
+        default: return runtimeEndpointsPage
+        }
+    }
+
+    func loadRuntimeFocusedDimension() {
+        let kind: RuntimeDimension
+        switch runtimeDimensionFocus {
+        case "project": kind = .project
+        case "session": kind = .session
+        case "model": kind = .model
+        default: kind = .endpoint
+        }
+        loadRuntimeDimension(kind: kind, page: 1)
+    }
 
     func loadRuntimeDimension(kind: RuntimeDimension, page: Int) {
         guard let admin, let anchor = runtimeHistoryPage else {

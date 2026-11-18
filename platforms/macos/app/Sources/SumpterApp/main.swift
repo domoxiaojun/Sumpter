@@ -339,6 +339,7 @@ final class AppModel: ObservableObject {
     @Published var runtimeSessionsPage: AdminWire.RuntimeDimensionPage?
     @Published var runtimeEndpointsPage: AdminWire.RuntimeDimensionPage?
     @Published var runtimeModelsPage: AdminWire.RuntimeDimensionPage?
+    @Published var runtimeDimensionFocus = "endpoint"
     @Published var runtimeDimensionsLoading = false
     @Published var runtimeV2Error: String?
     @Published var runtimeV2Loading = false
