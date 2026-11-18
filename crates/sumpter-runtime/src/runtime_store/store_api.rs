@@ -355,6 +355,34 @@ impl RuntimeStore {
                                     });
                             if let Err(error) = &result {
                                 worker_inner.state.lock().unwrap().last_error = Some(error.clone());
+                            } else {
+                                projection_maintenance = true;
+                            }
+                            let _ = reply.send(result);
+                        }
+                        Command::SyncOfficialPricing { update, reply } => {
+                            let Some(worker_inner) = worker_ref.upgrade() else {
+                                let _ = reply.send(Err("runtime store closed".into()));
+                                break;
+                            };
+                            let result =
+                                commit_pending(&worker_inner, &mut connection, &mut pending)
+                                    .map_err(|error| error.to_string())
+                                    .and_then(|_| {
+                                        super::maintenance::sync_official_pricing_database(
+                                            &mut connection,
+                                            update,
+                                        )
+                                    });
+                            match &result {
+                                Err(error) => {
+                                    worker_inner.state.lock().unwrap().last_error =
+                                        Some(error.clone());
+                                }
+                                Ok(mutation) if mutation.changed => {
+                                    projection_maintenance = true;
+                                }
+                                Ok(_) => {}
                             }
                             let _ = reply.send(result);
                         }
@@ -553,6 +581,21 @@ impl RuntimeStore {
         self.inner
             .sender
             .send(Command::ReplacePricing {
+                update,
+                reply: sender,
+            })
+            .map_err(|error| error.to_string())?;
+        receiver.recv().map_err(|error| error.to_string())?
+    }
+
+    pub fn sync_official_pricing(
+        &self,
+        update: crate::pricing_matcher::OfficialPricingSyncUpdate,
+    ) -> Result<crate::pricing_matcher::OfficialPricingSyncMutation, String> {
+        let (sender, receiver) = mpsc::channel();
+        self.inner
+            .sender
+            .send(Command::SyncOfficialPricing {
                 update,
                 reply: sender,
             })

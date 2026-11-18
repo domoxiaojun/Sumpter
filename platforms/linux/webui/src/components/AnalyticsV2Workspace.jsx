@@ -2072,7 +2072,32 @@ function configuredEndpointModels(config) {
   return rows.sort((left, right) => (`${left.endpointName}/${left.modelKey}`).localeCompare(`${right.endpointName}/${right.modelKey}`, 'zh-CN'));
 }
 
-export function PricingPanel({ pricing, config, endpointID = '', loading, error, onRetry, onSave }) {
+function officialSourceLabel(source) {
+  switch (String(source || '').trim()) {
+    case 'builtin':
+      return '内置官方快照';
+    case 'models.dev+litellm':
+      return 'models.dev + LiteLLM';
+    case 'models.dev':
+      return 'models.dev';
+    case 'litellm':
+      return 'LiteLLM';
+    default:
+      return source || '内置官方快照';
+  }
+}
+
+export function PricingPanel({
+  pricing,
+  config,
+  endpointID = '',
+  loading,
+  syncingOfficial = false,
+  error,
+  onRetry,
+  onSave,
+  onSyncOfficial,
+}) {
   const [currency, setCurrency] = useState('USD');
   const [prices, setPrices] = useState([]);
   const [validationError, setValidationError] = useState(null);
@@ -2098,6 +2123,7 @@ export function PricingPanel({ pricing, config, endpointID = '', loading, error,
       output: runtimePriceInput(price.outputPerMillionMicros),
       cacheRead: runtimePriceInput(price.cacheReadPerMillionMicros),
       cacheCreation: runtimePriceInput(price.cacheCreationPerMillionMicros),
+      tiers: Array.isArray(price.tiers) ? price.tiers : [],
     })));
   }, [pricing]);
 
@@ -2157,6 +2183,7 @@ export function PricingPanel({ pricing, config, endpointID = '', loading, error,
       outputPerMillionMicros: runtimePriceMicros(row.output),
       cacheReadPerMillionMicros: runtimePriceMicros(row.cacheRead),
       cacheCreationPerMillionMicros: runtimePriceMicros(row.cacheCreation),
+      tiers: Array.isArray(row.tiers) ? row.tiers : [],
     }));
     const invalidRow = payload.findIndex((row, index) => {
       const source = prices[index];
@@ -2187,12 +2214,56 @@ export function PricingPanel({ pricing, config, endpointID = '', loading, error,
     <div className="space-y-4 rounded-2xl border border-border/65 bg-muted/25 p-4 sm:p-5">
       <div className="space-y-0.5">
         <strong className="block text-sm font-semibold text-foreground">
-          {endpointID ? `入口模型价格 · ${endpointName}` : '入口模型价格'}
+          {endpointID ? `入口模型价格 · ${endpointName}` : '模型成本与官方标价'}
         </strong>
         <small className="block text-xs text-muted-foreground">
-          {endpointID ? '当前入口优先使用专属价格；没有专属价格时回退到全局价格。' : '优先按“入口 + 生效模型”匹配；没有入口专属价格时回退到全局模型价格。'}
+          {endpointID
+            ? '当前入口优先使用专属覆盖价格；未配置时自动回退到全局覆盖价或官方最新 API 标价（含长上下文阶梯价）。'
+            : '未配置手动规则时，自动剥离 models/、openai/ 等前缀并按最高匹配度的官方最新 API 标价（含 >200k 等长上下文阶梯价）重算；下方仅需维护需要覆盖的专属或全局价格。'}
         </small>
       </div>
+
+      {pricing?.officialCatalog && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/60 bg-card/90 p-3.5 shadow-2xs" aria-label="官方API标价状态">
+          <div className="space-y-1 text-xs">
+            <div className="flex flex-wrap items-center gap-2">
+              <strong className="font-semibold text-foreground">官方 API 标价基准</strong>
+              <span className="rounded-md bg-primary/10 px-2 py-0.5 font-mono text-[11px] font-medium text-primary">
+                {officialSourceLabel(pricing.officialCatalog.source)}
+              </span>
+              <span className="text-muted-foreground">
+                自动同步：{pricing.officialCatalog.enabled !== false ? '已启用' : '已停用'}
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+              <span>已加载 {numberWithComma(pricing.officialCatalog.modelCount || 0)} 个官方模型</span>
+              {safeNumber(pricing.officialCatalog.tieredModelCount) > 0 && (
+                <span>含 {numberWithComma(pricing.officialCatalog.tieredModelCount)} 个长上下文阶梯价模型</span>
+              )}
+              {pricing.officialCatalog.updatedAt != null && (
+                <span>更新于 {formatTimestamp(pricing.officialCatalog.updatedAt)}</span>
+              )}
+            </div>
+            {pricing.officialCatalog.lastError && (
+              <div className="text-[11px] text-amber-600 dark:text-amber-400">
+                最近同步异常：{pricing.officialCatalog.lastError}
+              </div>
+            )}
+          </div>
+          {onSyncOfficial && (
+            <Button
+              type="button"
+              variant="outline"
+              size="xs"
+              disabled={syncingOfficial}
+              onClick={onSyncOfficial}
+            >
+              <RefreshCw className={cn('size-3', syncingOfficial && 'animate-spin')} />
+              <span>{syncingOfficial ? '正在同步…' : '同步官方价格'}</span>
+            </Button>
+          )}
+        </div>
+      )}
 
       <PanelMessage error={validationError} />
       <PanelMessage error={error} onRetry={onRetry} />
@@ -2323,9 +2394,11 @@ function CostPanel({
   pricing,
   config,
   pricingLoading,
+  pricingSyncing,
   pricingError,
   onRetryPricing,
   onSavePricing,
+  onSyncOfficialPricing,
   trend,
   legacyAnalytics,
   costPages,
@@ -2403,9 +2476,11 @@ function CostPanel({
             pricing={pricing}
             config={config}
             loading={pricingLoading}
+            syncingOfficial={pricingSyncing}
             error={pricingError}
             onRetry={onRetryPricing}
             onSave={onSavePricing}
+            onSyncOfficial={onSyncOfficialPricing}
           />
         )}
 
@@ -2608,6 +2683,7 @@ export function AnalyticsWorkspace({
   const [storage, setStorage] = useState(null);
   const [retention, setRetention] = useState(null);
   const [pricing, setPricing] = useState(null);
+  const [pricingSyncing, setPricingSyncing] = useState(false);
   const [storageLoading, setStorageLoading] = useState(false);
   const [storageError, setStorageError] = useState(null);
   const [showExport, setShowExport] = useState(false);
@@ -3038,8 +3114,8 @@ export function AnalyticsWorkspace({
   const savePricing = async (payload) => {
     setStorageError(null);
     try {
-      const value = await api.updateRuntimePricing(payload);
-      setPricing(value);
+      await api.updateRuntimePricing(payload);
+      await loadStorage({ includeStorage: false, includePricing: true });
       addToast?.('模型价格表已更新', 'success');
       await Promise.allSettled([
         loadTrends(range),
@@ -3048,6 +3124,33 @@ export function AnalyticsWorkspace({
     } catch (error) {
       setStorageError(error);
       addToast?.(`价格表更新失败：${error.message}`, 'error');
+    }
+  };
+
+  const syncOfficialPricing = async () => {
+    setStorageError(null);
+    setPricingSyncing(true);
+    try {
+      const result = await api.syncRuntimePricing();
+      await loadStorage({ includeStorage: false, includePricing: true });
+      addToast?.(
+        result?.changed
+          ? `已同步并重算 ${result.modelCount || 0} 个官方模型最新标价`
+          : `官方价格已是最新（共 ${result?.modelCount || 0} 个模型）`,
+        'success',
+      );
+      if (result?.changed) {
+        await Promise.allSettled([
+          loadTrends(range),
+          refreshDimensions(['endpoint', 'project', 'session', 'model']),
+        ]);
+      }
+    } catch (error) {
+      setStorageError(error);
+      await loadStorage({ includeStorage: false, includePricing: true });
+      addToast?.(`同步官方价格失败：${error.message}`, 'error');
+    } finally {
+      setPricingSyncing(false);
     }
   };
 
@@ -3308,9 +3411,11 @@ export function AnalyticsWorkspace({
             pricing={pricing}
             config={config}
             pricingLoading={storageLoading}
+            pricingSyncing={pricingSyncing}
             pricingError={storageError}
             onRetryPricing={() => loadStorage({ includeStorage: false, includePricing: true })}
             onSavePricing={savePricing}
+            onSyncOfficialPricing={syncOfficialPricing}
             trend={trend}
             legacyAnalytics={legacyAnalytics}
             costPages={dimensions}

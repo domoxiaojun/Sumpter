@@ -66,9 +66,9 @@ pub(crate) use runtime_routes::{
     export_runtime_session, proxy_start, proxy_stop, recreate_runtime, require_json, reset_runtime,
     runtime_analytics, runtime_cleanup, runtime_cleanup_preview, runtime_dimensions,
     runtime_errors, runtime_event_detail, runtime_events, runtime_export, runtime_export_estimate,
-    runtime_facets, runtime_pricing, runtime_pricing_update, runtime_projects,
-    runtime_request_chain, runtime_retention, runtime_retention_update, runtime_sessions,
-    runtime_storage, runtime_summary, runtime_trends, status,
+    runtime_facets, runtime_pricing, runtime_pricing_sync, runtime_pricing_update,
+    runtime_projects, runtime_request_chain, runtime_retention, runtime_retention_update,
+    runtime_sessions, runtime_storage, runtime_summary, runtime_trends, status,
 };
 
 pub const DEFAULT_ADMIN_HOST: &str = "127.0.0.1";
@@ -636,6 +636,7 @@ pub fn admin_router(state: AdminState) -> Router {
             "/runtime/pricing",
             get(runtime_pricing).put(runtime_pricing_update),
         )
+        .route("/runtime/pricing/sync", post(runtime_pricing_sync))
         .route("/runtime/export/estimate", get(runtime_export_estimate))
         .route("/runtime/export", get(runtime_export))
         .route(
@@ -1998,6 +1999,69 @@ mod tests {
         assert_eq!(retention_update["maxAgeDays"], 30);
         assert_eq!(retention_update["storageLimitBytes"], 8_388_608);
         assert!(retention_update.get("maxEvents").is_none());
+
+        let initial_pricing = client
+            .get(format!("http://{address}/admin/api/runtime/pricing"))
+            .header(header::COOKIE, &cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(initial_pricing.status(), StatusCode::OK);
+        let initial_pricing: Value =
+            serde_json::from_slice(&initial_pricing.bytes().await.unwrap()).unwrap();
+        assert_eq!(initial_pricing["officialCatalog"]["source"], "builtin");
+        assert!(
+            initial_pricing["officialCatalog"]["modelCount"]
+                .as_u64()
+                .unwrap_or(0)
+                >= 30
+        );
+
+        let pricing_update = client
+            .put(format!("http://{address}/admin/api/runtime/pricing"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::COOKIE, &cookie)
+            .header("x-sumpter-csrf", &csrf)
+            .body(
+                serde_json::to_vec(&json!({
+                    "expectedRevision": 1,
+                    "currency": "USD",
+                    "prices": [{
+                        "endpointID": "ep-linux",
+                        "modelKey": "gpt-5.4",
+                        "effectiveFrom": 0.0,
+                        "inputPerMillionMicros": 2_000_000,
+                        "outputPerMillionMicros": 10_000_000,
+                        "tiers": [{
+                            "aboveInputTokens": 272_000,
+                            "inputPerMillionMicros": 4_000_000,
+                            "outputPerMillionMicros": 15_000_000
+                        }]
+                    }]
+                }))
+                .unwrap(),
+            )
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(pricing_update.status(), StatusCode::OK);
+        let pricing_readback: Value = serde_json::from_slice(
+            &client
+                .get(format!("http://{address}/admin/api/runtime/pricing"))
+                .header(header::COOKIE, &cookie)
+                .send()
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(pricing_readback["prices"][0]["endpointID"], "ep-linux");
+        assert_eq!(
+            pricing_readback["prices"][0]["tiers"][0]["aboveInputTokens"],
+            272_000
+        );
 
         let estimate = client
             .get(format!(

@@ -27,6 +27,7 @@ pub(super) fn setup_connection(connection: &mut Connection) -> crate::database::
     crate::entities::create_schema(connection)?;
     ensure_output_generation_columns(connection)?;
     ensure_upstream_timing_columns(connection)?;
+    ensure_pricing_columns(connection)?;
     // Additive nullable observations: no historical classification/backfill.
     let attribution_columns = connection
         .prepare("PRAGMA table_info(runtime_events)")?
@@ -117,10 +118,13 @@ pub(super) fn setup_connection(connection: &mut Connection) -> crate::database::
          VALUES(1,1,'USD',?1) ON CONFLICT(id) DO NOTHING",
         params![now()],
     )?;
+    let official_pricing_seeded =
+        ensure_builtin_official_pricing(connection, retained_event_count > 0)?;
     if previous_version < SCHEMA_VERSION
         || !hourly_rollup_meta_exists
         || !output_generation_ready
         || upstream_timing_backfilled
+        || official_pricing_seeded
     {
         // Rollup columns and threshold semantics changed in v3. Rebuild all
         // retained buckets from projection columns; never read payload_json
@@ -223,6 +227,98 @@ fn ensure_upstream_timing_columns(connection: &Connection) -> crate::database::R
         }
     }
     Ok(())
+}
+
+fn ensure_pricing_columns(connection: &Connection) -> crate::database::Result<()> {
+    let price_columns = connection
+        .prepare("PRAGMA table_info(runtime_model_prices)")?
+        .query_map(crate::database::params![], |row| row.get::<_, String>(1))?
+        .collect::<Result<HashSet<_>, _>>()?;
+    if !price_columns.contains("tiers_json") {
+        connection.execute_batch("ALTER TABLE runtime_model_prices ADD COLUMN tiers_json TEXT")?;
+    }
+    let meta_columns = connection
+        .prepare("PRAGMA table_info(runtime_pricing_meta)")?
+        .query_map(crate::database::params![], |row| row.get::<_, String>(1))?
+        .collect::<Result<HashSet<_>, _>>()?;
+    for (name, ddl) in [
+        (
+            "official_source",
+            "ALTER TABLE runtime_pricing_meta ADD COLUMN official_source TEXT",
+        ),
+        (
+            "official_updated_at",
+            "ALTER TABLE runtime_pricing_meta ADD COLUMN official_updated_at REAL",
+        ),
+        (
+            "official_model_count",
+            "ALTER TABLE runtime_pricing_meta ADD COLUMN official_model_count INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "official_tiered_model_count",
+            "ALTER TABLE runtime_pricing_meta ADD COLUMN official_tiered_model_count INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "official_sync_error",
+            "ALTER TABLE runtime_pricing_meta ADD COLUMN official_sync_error TEXT",
+        ),
+        (
+            "official_digest",
+            "ALTER TABLE runtime_pricing_meta ADD COLUMN official_digest TEXT",
+        ),
+        (
+            "official_snapshot_version",
+            "ALTER TABLE runtime_pricing_meta ADD COLUMN official_snapshot_version INTEGER NOT NULL DEFAULT 0",
+        ),
+    ] {
+        if !meta_columns.contains(name) {
+            connection.execute_batch(ddl)?;
+        }
+    }
+    Ok(())
+}
+
+fn ensure_builtin_official_pricing(
+    connection: &mut Connection,
+    has_retained_events: bool,
+) -> crate::database::Result<bool> {
+    let (builtin_version, builtin_models, builtin_digest) =
+        crate::pricing_matcher::builtin_official_snapshot();
+    let existing_count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM runtime_official_model_prices",
+        crate::database::params![],
+        |row| row.get(0),
+    )?;
+    let (revision, source, snapshot_version): (i64, Option<String>, i64) = connection.query_row(
+        "SELECT revision,official_source,COALESCE(official_snapshot_version,0)
+         FROM runtime_pricing_meta WHERE id=1",
+        crate::database::params![],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    let should_seed = existing_count == 0
+        || (source.as_deref().unwrap_or("builtin") == "builtin"
+            && snapshot_version < *builtin_version);
+    if !should_seed {
+        return Ok(false);
+    }
+    let next_revision = if has_retained_events {
+        revision.saturating_add(1)
+    } else {
+        revision
+    };
+    let apple_now = now() - sumpter_core::events::APPLE_EPOCH_OFFSET_SECS;
+    let transaction = connection.transaction()?;
+    super::models::save_official_pricing(
+        &transaction,
+        "builtin",
+        builtin_models,
+        builtin_digest,
+        next_revision,
+        apple_now,
+        Some(*builtin_version),
+    )?;
+    transaction.commit()?;
+    Ok(has_retained_events)
 }
 
 /// Repair client rows written before upstream timing was persisted. The
@@ -452,6 +548,7 @@ pub(super) struct HourlyRollupAccumulator {
     output_generation_requests: i64,
 }
 
+#[cfg(test)]
 #[derive(Clone)]
 pub(super) struct RollupPrice {
     pub(super) endpoint_id: Option<String>,
@@ -459,9 +556,6 @@ pub(super) struct RollupPrice {
     pub(super) effective_from: f64,
     pub(super) effective_to: Option<f64>,
     pub(super) input_per_million_micros: Option<i64>,
-    pub(super) output_per_million_micros: Option<i64>,
-    pub(super) cache_read_per_million_micros: Option<i64>,
-    pub(super) cache_creation_per_million_micros: Option<i64>,
 }
 
 const SCOPED_PRICE_SEPARATOR: char = '\u{1f}';
@@ -477,7 +571,7 @@ pub(super) fn split_rollup_price_key(value: String) -> (Option<String>, String) 
 
 pub(super) fn load_rollup_prices(
     transaction: &crate::database::Transaction<'_>,
-) -> crate::database::Result<(Option<i64>, Vec<RollupPrice>)> {
+) -> crate::database::Result<(Option<i64>, crate::pricing_matcher::PriceBook)> {
     let revision = transaction
         .query_row(
             "SELECT revision FROM runtime_pricing_meta WHERE id=1",
@@ -485,30 +579,65 @@ pub(super) fn load_rollup_prices(
             |row| row.get::<_, i64>(0),
         )
         .optional()?;
+    let mut book = crate::pricing_matcher::PriceBook::default();
     let mut statement = transaction.prepare(
         "SELECT model_key,effective_from,effective_to,input_per_million_micros,
                 output_per_million_micros,cache_read_per_million_micros,
-                cache_creation_per_million_micros
+                cache_creation_per_million_micros,tiers_json
          FROM runtime_model_prices ORDER BY model_key,effective_from DESC,id DESC",
     )?;
-    let prices = statement
-        .query_map(crate::database::params![], |row| {
-            let (endpoint_id, model_key) = split_rollup_price_key(row.get(0)?);
-            Ok(RollupPrice {
+    let manual_rows = statement.query_map(crate::database::params![], |row| {
+        let (endpoint_id, model_key) = split_rollup_price_key(row.get(0)?);
+        let tiers_raw: Option<String> = row.get(7)?;
+        Ok((
+            model_key,
+            crate::pricing_matcher::ResolvedRateEntry {
                 endpoint_id,
-                model_key,
                 effective_from: row.get(1)?,
                 effective_to: row.get(2)?,
                 input_per_million_micros: row.get(3)?,
                 output_per_million_micros: row.get(4)?,
                 cache_read_per_million_micros: row.get(5)?,
                 cache_creation_per_million_micros: row.get(6)?,
-            })
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok((revision, prices))
+                tiers: crate::pricing_matcher::parse_tiers_json(tiers_raw.as_deref()),
+            },
+        ))
+    })?;
+    for row in manual_rows {
+        let (model_key, entry) = row?;
+        book.insert_manual(&model_key, entry);
+    }
+
+    let mut official_stmt = transaction.prepare(
+        "SELECT model_key,input_per_million_micros,output_per_million_micros,
+                cache_read_per_million_micros,cache_creation_per_million_micros,tiers_json
+         FROM runtime_official_model_prices ORDER BY model_key ASC",
+    )?;
+    let official_rows = official_stmt.query_map(crate::database::params![], |row| {
+        let model_key: String = row.get(0)?;
+        let tiers_raw: Option<String> = row.get(5)?;
+        Ok((
+            model_key,
+            crate::pricing_matcher::ResolvedRateEntry {
+                endpoint_id: None,
+                effective_from: f64::NEG_INFINITY,
+                effective_to: None,
+                input_per_million_micros: row.get(1)?,
+                output_per_million_micros: row.get(2)?,
+                cache_read_per_million_micros: row.get(3)?,
+                cache_creation_per_million_micros: row.get(4)?,
+                tiers: crate::pricing_matcher::parse_tiers_json(tiers_raw.as_deref()),
+            },
+        ))
+    })?;
+    for row in official_rows {
+        let (model_key, entry) = row?;
+        book.insert_official(&model_key, entry);
+    }
+    Ok((revision, book))
 }
 
+#[cfg(test)]
 pub(super) fn resolve_rollup_price<'a>(
     prices: &'a [RollupPrice],
     endpoint_id: Option<&str>,
@@ -545,13 +674,15 @@ pub(super) fn add_rollup_cost(
     timestamp: f64,
     endpoint_id: Option<&str>,
     effective_model: Option<&str>,
+    upstream_model: Option<&str>,
     uncached_input: Option<i64>,
     cache_read: Option<i64>,
     cache_creation: Option<i64>,
     output: Option<i64>,
+    processed_input: Option<i64>,
     semantics: Option<&str>,
     quality: Option<&str>,
-    prices: &[RollupPrice],
+    prices: &crate::pricing_matcher::PriceBook,
 ) {
     if request_purpose == Some("token_count") {
         return;
@@ -573,33 +704,25 @@ pub(super) fn add_rollup_cost(
         accumulator.cost_unknown_requests = accumulator.cost_unknown_requests.saturating_add(1);
         return;
     };
-    let Some(model) = effective_model else {
+    if effective_model.is_none() && upstream_model.is_none() {
         accumulator.cost_unpriced_requests = accumulator.cost_unpriced_requests.saturating_add(1);
         return;
-    };
-    let Some(price) = resolve_rollup_price(prices, endpoint_id, model, timestamp) else {
-        accumulator.cost_unpriced_requests = accumulator.cost_unpriced_requests.saturating_add(1);
-        return;
-    };
-    let components = [
-        (uncached_input, price.input_per_million_micros),
-        (cache_read, price.cache_read_per_million_micros),
-        (cache_creation, price.cache_creation_per_million_micros),
-        (output, price.output_per_million_micros),
-    ];
-    let mut request_numerator = 0_i128;
-    for (tokens, rate) in components {
-        if tokens == 0 {
-            continue;
-        }
-        let Some(rate) = rate else {
-            accumulator.cost_unpriced_requests =
-                accumulator.cost_unpriced_requests.saturating_add(1);
-            return;
-        };
-        request_numerator =
-            request_numerator.saturating_add((tokens as i128).saturating_mul(rate as i128));
     }
+    let Some(price) = prices.resolve(endpoint_id, effective_model, upstream_model, timestamp)
+    else {
+        accumulator.cost_unpriced_requests = accumulator.cost_unpriced_requests.saturating_add(1);
+        return;
+    };
+    let Some(request_numerator) = price.compute_numerator(
+        uncached_input,
+        cache_read,
+        cache_creation,
+        output,
+        processed_input,
+    ) else {
+        accumulator.cost_unpriced_requests = accumulator.cost_unpriced_requests.saturating_add(1);
+        return;
+    };
     accumulator.cost_numerator = accumulator.cost_numerator.saturating_add(request_numerator);
     accumulator.cost_priced_requests = accumulator.cost_priced_requests.saturating_add(1);
 }
@@ -625,7 +748,7 @@ pub(super) fn rebuild_hourly_rollup_bucket(
                     input_tokens,output_tokens,cache_read_input_tokens,
                     cache_creation_input_tokens,reasoning_tokens,uncached_input_tokens,
                     processed_input_tokens,processed_total_tokens,
-                    token_accounting_semantics,token_accounting_quality,endpoint_id,timestamp,effective_model,output_span_ms
+                    token_accounting_semantics,token_accounting_quality,endpoint_id,timestamp,effective_model,output_span_ms,upstream_model
              FROM runtime_events
              WHERE projection_version=?1 AND is_in_flight=0 AND kind IN ('client','upstream')
                AND timestamp>=?2 AND timestamp<?3
@@ -740,16 +863,19 @@ pub(super) fn rebuild_hourly_rollup_bucket(
             let endpoint_id = row.get::<_, Option<String>>(20)?;
             let event_timestamp = row.get::<_, f64>(21)?;
             let effective_model = row.get::<_, Option<String>>(22)?;
+            let upstream_model = row.get::<_, Option<String>>(24)?;
             add_rollup_cost(
                 &mut accumulator,
                 request_purpose.as_deref(),
                 event_timestamp,
                 endpoint_id.as_deref(),
                 effective_model.as_deref(),
+                upstream_model.as_deref(),
                 uncached,
                 cache_read,
                 cache_creation,
                 output,
+                processed_input,
                 semantics.as_deref(),
                 quality.as_deref(),
                 &prices,

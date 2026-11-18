@@ -111,24 +111,30 @@ pub(super) fn save_pricing(
     let models = update
         .prices
         .iter()
-        .map(|price| prices::ActiveModel {
-            model_key: Set(price
-                .endpoint_id
-                .as_deref()
-                .filter(|value| !value.trim().is_empty())
-                .map(|endpoint| format!("{endpoint}\u{1f}{}", price.model_key.trim()))
-                .unwrap_or_else(|| price.model_key.trim().to_owned())),
-            effective_from: Set(price.effective_from),
-            effective_to: Set(price.effective_to),
-            input_per_million_micros: Set(price.input_per_million_micros),
-            output_per_million_micros: Set(price.output_per_million_micros),
-            cache_read_per_million_micros: Set(price.cache_read_per_million_micros),
-            cache_creation_per_million_micros: Set(price.cache_creation_per_million_micros),
-            created_at: Set(updated_at),
-            updated_at: Set(updated_at),
-            ..Default::default()
+        .map(|price| {
+            let tiers_json = crate::pricing_matcher::serialize_tiers_json(&price.tiers)
+                .map_err(crate::database::Error::InvalidParameterName)?;
+            Ok(prices::ActiveModel {
+                model_key: Set(price
+                    .endpoint_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|endpoint| format!("{endpoint}\u{1f}{}", price.model_key.trim()))
+                    .unwrap_or_else(|| price.model_key.trim().to_owned())),
+                effective_from: Set(price.effective_from),
+                effective_to: Set(price.effective_to),
+                input_per_million_micros: Set(price.input_per_million_micros),
+                output_per_million_micros: Set(price.output_per_million_micros),
+                cache_read_per_million_micros: Set(price.cache_read_per_million_micros),
+                cache_creation_per_million_micros: Set(price.cache_creation_per_million_micros),
+                tiers_json: Set(tiers_json),
+                created_at: Set(updated_at),
+                updated_at: Set(updated_at),
+                ..Default::default()
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<crate::database::Result<Vec<_>>>()?;
     let metadata = meta::ActiveModel {
         revision: Set(revision),
         currency: Set(update.currency.trim().to_owned()),
@@ -140,6 +146,69 @@ pub(super) fn save_pricing(
         // Keep bulk inserts below SQLite's parameter limit for large catalogs.
         for chunk in models.chunks(128) {
             prices::Entity::insert_many(chunk.iter().cloned())
+                .exec_without_returning(db.as_ref())
+                .await?;
+        }
+        meta::Entity::update_many()
+            .set(metadata)
+            .filter(meta::Column::Id.eq(1_i64))
+            .exec(db.as_ref())
+            .await?;
+        Ok(())
+    })
+}
+
+pub(super) fn save_official_pricing(
+    connection: &crate::database::Connection,
+    source: &str,
+    prices: &[crate::pricing_matcher::OfficialModelPriceInput],
+    digest: &str,
+    revision: i64,
+    updated_at: f64,
+    snapshot_version: Option<i64>,
+) -> crate::database::Result<()> {
+    use crate::entities::{
+        runtime_official_model_prices as official_prices, runtime_pricing_meta as meta,
+    };
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+    let model_count = prices.len() as i64;
+    let tiered_count = prices.iter().filter(|item| !item.tiers.is_empty()).count() as i64;
+    let models = prices
+        .iter()
+        .map(|price| {
+            let tiers_json = crate::pricing_matcher::serialize_tiers_json(&price.tiers)
+                .map_err(crate::database::Error::InvalidParameterName)?;
+            Ok(official_prices::ActiveModel {
+                model_key: Set(price.model_key.clone()),
+                provider: Set(price.provider.clone()),
+                input_per_million_micros: Set(price.input_per_million_micros),
+                output_per_million_micros: Set(price.output_per_million_micros),
+                cache_read_per_million_micros: Set(price.cache_read_per_million_micros),
+                cache_creation_per_million_micros: Set(price.cache_creation_per_million_micros),
+                tiers_json: Set(tiers_json),
+                updated_at: Set(updated_at),
+            })
+        })
+        .collect::<crate::database::Result<Vec<_>>>()?;
+    let mut metadata = meta::ActiveModel {
+        revision: Set(revision),
+        official_source: Set(Some(source.trim().to_owned())),
+        official_updated_at: Set(Some(updated_at)),
+        official_model_count: Set(model_count),
+        official_tiered_model_count: Set(tiered_count),
+        official_sync_error: Set(None),
+        official_digest: Set(Some(digest.to_owned())),
+        ..Default::default()
+    };
+    if let Some(version) = snapshot_version {
+        metadata.official_snapshot_version = Set(version);
+    }
+    connection.orm(move |db| async move {
+        official_prices::Entity::delete_many()
+            .exec(db.as_ref())
+            .await?;
+        for chunk in models.chunks(96) {
+            official_prices::Entity::insert_many(chunk.iter().cloned())
                 .exec_without_returning(db.as_ref())
                 .await?;
         }

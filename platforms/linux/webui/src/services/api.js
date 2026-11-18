@@ -487,6 +487,12 @@ class ApiService {
       body: JSON.stringify(payload || {}),
     });
   }
+  syncRuntimePricing(options = {}) {
+    return this.request('/runtime/pricing/sync', {
+      ...options,
+      method: 'POST',
+    });
+  }
   estimateRuntimeExport({ scope = 'events', format = 'jsonl', privacy = 'stored', confirmStored = false, snapshotSeq, snapshotChangeSeq, historyGeneration, filters = {} } = {}, options = {}) {
     const query = new URLSearchParams({ scope, format, privacy });
     if (confirmStored) query.set('confirmStored', 'true');

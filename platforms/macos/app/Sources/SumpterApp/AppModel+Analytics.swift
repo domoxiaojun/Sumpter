@@ -1238,6 +1238,40 @@ extension AppModel {
         }
     }
 
+    func syncOfficialRuntimePricing() {
+        guard !runtimePricingSyncBusy, let admin else { return }
+        runtimePricingSyncBusy = true
+        let connectionGeneration = adminConnectionGeneration
+        Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if connectionGeneration == self.adminConnectionGeneration {
+                    self.runtimePricingSyncBusy = false
+                }
+            }
+            do {
+                let result = try await admin.syncRuntimePricing()
+                let pricing = try await admin.runtimePricing()
+                guard connectionGeneration == self.adminConnectionGeneration else { return }
+                self.runtimePricing = pricing
+                if result.changed {
+                    self.flash("已同步并重算 \(result.modelCount) 个官方模型标价")
+                    self.refreshRuntimeV2(resetSnapshot: true)
+                } else {
+                    self.flash("官方价格已是最新（共 \(result.modelCount) 个模型）")
+                }
+            } catch {
+                if let pricing = try? await admin.runtimePricing(),
+                   connectionGeneration == self.adminConnectionGeneration {
+                    self.runtimePricing = pricing
+                }
+                guard connectionGeneration == self.adminConnectionGeneration else { return }
+                self.runtimeV2Error = "官方价格同步失败：\(error)"
+                self.flash("官方价格同步失败")
+            }
+        }
+    }
+
     func estimateRuntimeExport(
         scope: String = "events",
         format: String = "jsonl",

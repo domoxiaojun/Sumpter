@@ -65,8 +65,9 @@ GET    /admin/api/runtime/sessions               会话聚合
 GET    /admin/api/runtime/storage                SQLite 状态
 GET    /admin/api/runtime/retention              保留策略
 PUT    /admin/api/runtime/retention              设置 maxAgeDays / storageLimitBytes
-GET    /admin/api/runtime/pricing                成本估算单价
-PUT    /admin/api/runtime/pricing                设置成本估算单价
+GET    /admin/api/runtime/pricing                成本估算单价与官方标价同步状态
+PUT    /admin/api/runtime/pricing                设置手动覆盖单价（支持长上下文阶梯 tiers）
+POST   /admin/api/runtime/pricing/sync           立即从公共开源端点同步官方最新标价
 POST   /admin/api/runtime/cleanup/preview        预览按时间清理
 POST   /admin/api/runtime/cleanup                执行按时间清理
 POST   /admin/api/runtime/reset                  清空运行统计

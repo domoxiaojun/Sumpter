@@ -762,6 +762,7 @@ pub(crate) async fn runtime_pricing(State(state): State<AdminState>) -> Response
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RuntimeModelPricePayload {
+    #[serde(default, alias = "endpointID")]
     endpoint_id: Option<String>,
     model_key: String,
     effective_from: f64,
@@ -770,6 +771,8 @@ pub(crate) struct RuntimeModelPricePayload {
     output_per_million_micros: Option<i64>,
     cache_read_per_million_micros: Option<i64>,
     cache_creation_per_million_micros: Option<i64>,
+    #[serde(default)]
+    tiers: Vec<sumpter_engine::runtime::ModelPriceTier>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -800,6 +803,7 @@ pub(crate) async fn runtime_pricing_update(
             output_per_million_micros: price.output_per_million_micros,
             cache_read_per_million_micros: price.cache_read_per_million_micros,
             cache_creation_per_million_micros: price.cache_creation_per_million_micros,
+            tiers: price.tiers,
         })
         .collect();
     match state
@@ -822,6 +826,22 @@ pub(crate) async fn runtime_pricing_update(
         Err(message) => api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "runtime_pricing_failed",
+            &message,
+        ),
+    }
+}
+
+pub(crate) async fn runtime_pricing_sync(State(state): State<AdminState>) -> Response {
+    match state
+        .inner
+        .engine
+        .runtime_sync_official_pricing_async()
+        .await
+    {
+        Ok(value) => json_ok(&value),
+        Err(message) => api_error(
+            StatusCode::BAD_GATEWAY,
+            "official_pricing_sync_failed",
             &message,
         ),
     }

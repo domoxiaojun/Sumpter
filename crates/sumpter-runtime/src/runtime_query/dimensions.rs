@@ -500,7 +500,7 @@ fn dimension_costs(
                 effective_model,input_tokens,output_tokens,cache_read_input_tokens,\
                 cache_creation_input_tokens,uncached_input_tokens,processed_input_tokens,\
                 processed_total_tokens,reasoning_tokens,token_accounting_semantics,\
-                token_accounting_quality FROM runtime_events{}",
+                token_accounting_quality,upstream_model FROM runtime_events{}",
         base.where_sql()
     );
     let mut statement = transaction.prepare(&sql)?;
@@ -519,6 +519,7 @@ fn dimension_costs(
             request_purpose: row.get(2)?,
             endpoint_id: row.get(3)?,
             effective_model: row.get(4)?,
+            upstream_model: row.get(15)?,
             usage_present: 1,
             input_tokens: row.get(5)?,
             output_tokens: row.get(6)?,

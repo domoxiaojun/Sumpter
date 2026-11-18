@@ -1155,9 +1155,6 @@ fn hourly_rollup_price_prefers_endpoint_rule_and_falls_back_to_global() {
         effective_from: 0.0,
         effective_to: None,
         input_per_million_micros: Some(input_rate),
-        output_per_million_micros: None,
-        cache_read_per_million_micros: None,
-        cache_creation_per_million_micros: None,
     };
     let prices = vec![make_price(None, 1), make_price(Some("endpoint-a"), 9)];
     assert_eq!(
@@ -1235,6 +1232,7 @@ fn retention_and_pricing_mutations_are_serialized_by_the_worker() {
                 output_per_million_micros: Some(2_000_000),
                 cache_read_per_million_micros: Some(100_000),
                 cache_creation_per_million_micros: None,
+                tiers: Vec::new(),
             }],
         })
         .unwrap();
@@ -1285,6 +1283,7 @@ fn retention_and_pricing_mutations_are_serialized_by_the_worker() {
                     output_per_million_micros: Some(1),
                     cache_read_per_million_micros: None,
                     cache_creation_per_million_micros: None,
+                    tiers: Vec::new(),
                 },
                 RuntimeModelPriceInput {
                     endpoint_id: Some("endpoint-a".into()),
@@ -1295,12 +1294,231 @@ fn retention_and_pricing_mutations_are_serialized_by_the_worker() {
                     output_per_million_micros: Some(1),
                     cache_read_per_million_micros: None,
                     cache_creation_per_million_micros: None,
+                    tiers: Vec::new(),
                 },
             ],
         })
         .unwrap_err();
     assert!(overlap.contains("区间不能重叠"));
     drop(connection);
+    drop(store);
+    remove_test_dir(&dir);
+}
+
+#[test]
+fn official_pricing_seeds_tiered_rates_recomputes_on_sync_and_respects_manual_override() {
+    use crate::pricing_matcher::{
+        ModelPriceTier, OfficialModelPriceInput, OfficialPricingSyncUpdate,
+    };
+    use crate::runtime_query::{
+        DimensionKind, DimensionQuery, RuntimeFilter, TrendGranularity, TrendQuery, dimension_page,
+        pricing, trends,
+    };
+
+    let dir = test_dir("official-pricing-sync-and-tiers");
+    let path = dir.join("runtime.sqlite3");
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    let ts = 3_600.0;
+
+    let wait_rollups = || {
+        for _ in 0..300 {
+            let connection = Connection::open(&path).unwrap();
+            if meta_i64(&connection, "hourly_rollup_complete").unwrap() == Some(1)
+                && meta_i64(&connection, "projection_indexes_ready").unwrap() == Some(1)
+            {
+                break;
+            }
+            drop(connection);
+            thread::sleep(Duration::from_millis(10));
+        }
+    };
+
+    // Event 1: Standard context (100k uncached input, 0 cache, 10k output) on prefixed snapshot model
+    // `anthropic/claude-sonnet-4.6-20260514` -> matches builtin `claude-sonnet-4-6` ($3/$15 per 1M).
+    // Expected cost = 0.1 * $3.00 + 0.01 * $15.00 = $0.30 + $0.15 = $0.45 = 450,000 micros.
+    let mut standard_ev = event(
+        "ev-std",
+        KIND_CLIENT,
+        200,
+        RuntimeEventPhase::Completed,
+        Some(RuntimeEventOutcome::Succeeded),
+        ts + 10.0,
+    );
+    standard_ev.request_id = Some("req-std".into());
+    standard_ev.endpoint_id = Some("ep-main".into());
+    standard_ev.effective_model = Some("anthropic/claude-sonnet-4.6-20260514".into());
+    standard_ev.upstream_model = Some("opaque-relay-alias".into());
+    standard_ev.target_format = Some(ProviderProtocol::Anthropic);
+    standard_ev.stream_trace = serde_json::from_value(json!({
+        "usage": {
+            "inputTokens": 100_000,
+            "outputTokens": 10_000,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0
+        }
+    }))
+    .ok();
+    store
+        .enqueue(standard_ev, RuntimeCounters::default())
+        .unwrap();
+
+    // Event 2: Long context >200k (250k uncached input, 0 cache, 10k output) on same model.
+    // Builtin >200k tier for `claude-sonnet-4-6` is $6/$22.50 per 1M.
+    // Expected cost = 0.25 * $6.00 + 0.01 * $22.50 = $1.50 + $0.225 = $1.725 = 1,725,000 micros.
+    let mut long_ev = event(
+        "ev-long",
+        KIND_CLIENT,
+        200,
+        RuntimeEventPhase::Completed,
+        Some(RuntimeEventOutcome::Succeeded),
+        ts + 20.0,
+    );
+    long_ev.request_id = Some("req-long".into());
+    long_ev.endpoint_id = Some("ep-main".into());
+    long_ev.effective_model = Some("anthropic/claude-sonnet-4.6-20260514".into());
+    long_ev.target_format = Some(ProviderProtocol::Anthropic);
+    long_ev.stream_trace = serde_json::from_value(json!({
+        "usage": {
+            "inputTokens": 250_000,
+            "outputTokens": 10_000,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0
+        }
+    }))
+    .ok();
+    store.enqueue(long_ev, RuntimeCounters::default()).unwrap();
+    store.flush().unwrap();
+    wait_rollups();
+
+    let initial_pricing = pricing(&path).unwrap();
+    assert_eq!(initial_pricing.revision, 1);
+    assert!(initial_pricing.prices.is_empty());
+    assert_eq!(initial_pricing.official_catalog.source, "builtin");
+    assert!(initial_pricing.official_catalog.model_count >= 30);
+
+    let trend_res = trends(
+        &path,
+        &TrendQuery {
+            from: 0.0,
+            to: 7_200.0,
+            granularity: TrendGranularity::Hour,
+            snapshot_seq: None,
+            snapshot_change_seq: None,
+            history_generation: None,
+            filter: RuntimeFilter::default(),
+        },
+    )
+    .unwrap();
+    assert!(trend_res.rollup_used);
+    assert_eq!(trend_res.totals.cost.priced_requests, 2);
+    assert_eq!(trend_res.totals.cost.estimated_cost_micros, 2_175_000);
+
+    let dim_res = dimension_page(&path, DimensionKind::Model, &DimensionQuery::default()).unwrap();
+    assert_eq!(dim_res.rows[0].cost.estimated_cost_micros, 2_175_000);
+
+    // Plan A: Sync updated official pricing ($2 / $10 base, $4 / $15 >200k) -> recomputes all historical events!
+    // Expected new cost = (0.1 * $2 + 0.01 * $10) + (0.25 * $4 + 0.01 * $15)
+    //                   = ($0.20 + $0.10) + ($1.00 + $0.15) = $0.30 + $1.15 = $1.45 = 1,450,000 micros.
+    let sync_mut = store
+        .sync_official_pricing(OfficialPricingSyncUpdate {
+            source: "models.dev".into(),
+            prices: vec![OfficialModelPriceInput {
+                model_key: "claude-sonnet-4-6".into(),
+                provider: Some("anthropic".into()),
+                input_per_million_micros: Some(2_000_000),
+                output_per_million_micros: Some(10_000_000),
+                cache_read_per_million_micros: Some(200_000),
+                cache_creation_per_million_micros: Some(2_500_000),
+                tiers: vec![ModelPriceTier {
+                    above_input_tokens: 200_000,
+                    input_per_million_micros: Some(4_000_000),
+                    output_per_million_micros: Some(15_000_000),
+                    cache_read_per_million_micros: Some(400_000),
+                    cache_creation_per_million_micros: Some(5_000_000),
+                }],
+            }],
+            sync_error: None,
+        })
+        .unwrap();
+    assert!(sync_mut.changed);
+    assert_eq!(sync_mut.revision, 2);
+
+    // Idempotent sync with identical prices does not advance revision.
+    let noop_mut = store
+        .sync_official_pricing(OfficialPricingSyncUpdate {
+            source: "models.dev".into(),
+            prices: vec![OfficialModelPriceInput {
+                model_key: "claude-sonnet-4-6".into(),
+                provider: Some("anthropic".into()),
+                input_per_million_micros: Some(2_000_000),
+                output_per_million_micros: Some(10_000_000),
+                cache_read_per_million_micros: Some(200_000),
+                cache_creation_per_million_micros: Some(2_500_000),
+                tiers: vec![ModelPriceTier {
+                    above_input_tokens: 200_000,
+                    input_per_million_micros: Some(4_000_000),
+                    output_per_million_micros: Some(15_000_000),
+                    cache_read_per_million_micros: Some(400_000),
+                    cache_creation_per_million_micros: Some(5_000_000),
+                }],
+            }],
+            sync_error: None,
+        })
+        .unwrap();
+    assert!(!noop_mut.changed);
+    assert_eq!(noop_mut.revision, 2);
+
+    wait_rollups();
+    let recomputed = trends(
+        &path,
+        &TrendQuery {
+            from: 0.0,
+            to: 7_200.0,
+            granularity: TrendGranularity::Hour,
+            snapshot_seq: None,
+            snapshot_change_seq: None,
+            history_generation: None,
+            filter: RuntimeFilter::default(),
+        },
+    )
+    .unwrap();
+    assert_eq!(recomputed.totals.cost.estimated_cost_micros, 1_450_000);
+
+    // Manual override on endpoint `ep-main` ($1 / $1 flat) takes precedence over official catalog!
+    // Total input = 350k ($0.35), total output = 20k ($0.02) => 370,000 micros.
+    store
+        .replace_pricing(RuntimePricingUpdate {
+            expected_revision: 2,
+            currency: "USD".into(),
+            prices: vec![RuntimeModelPriceInput {
+                endpoint_id: Some("ep-main".into()),
+                model_key: "claude-sonnet-4-6".into(),
+                effective_from: 0.0,
+                effective_to: None,
+                input_per_million_micros: Some(1_000_000),
+                output_per_million_micros: Some(1_000_000),
+                cache_read_per_million_micros: Some(0),
+                cache_creation_per_million_micros: Some(0),
+                tiers: Vec::new(),
+            }],
+        })
+        .unwrap();
+    wait_rollups();
+    let overridden = trends(
+        &path,
+        &TrendQuery {
+            from: 0.0,
+            to: 7_200.0,
+            granularity: TrendGranularity::Hour,
+            snapshot_seq: None,
+            snapshot_change_seq: None,
+            history_generation: None,
+            filter: RuntimeFilter::default(),
+        },
+    )
+    .unwrap();
+    assert_eq!(overridden.totals.cost.estimated_cost_micros, 370_000);
+
     drop(store);
     remove_test_dir(&dir);
 }

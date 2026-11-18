@@ -670,8 +670,10 @@ function EndpointMappingTable({ endpoint, configDoc, saveConfig, addToast }) {
 }
 
 function EndpointPricingEditor({ endpoint, config, onSaved }) {
+  const { addToast } = useAppControls();
   const [pricing, setPricing] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState(null);
 
   const loadPricing = async () => {
@@ -708,15 +710,37 @@ function EndpointPricingEditor({ endpoint, config, onSaved }) {
     }
   };
 
+  const syncOfficialPricing = async () => {
+    setSyncing(true);
+    setError(null);
+    try {
+      const result = await api.syncRuntimePricing();
+      await loadPricing();
+      addToast?.(
+        result?.changed
+          ? `已同步并重算 ${result.modelCount || 0} 个官方模型最新标价`
+          : `官方价格已是最新（共 ${result?.modelCount || 0} 个模型）`,
+        'success',
+      );
+    } catch (nextError) {
+      setError(nextError);
+      await loadPricing();
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   return (
     <PricingPanel
       pricing={pricing}
       config={config}
       endpointID={endpoint?.id || ''}
       loading={loading}
+      syncingOfficial={syncing}
       error={error}
       onRetry={loadPricing}
       onSave={savePricing}
+      onSyncOfficial={syncOfficialPricing}
     />
   );
 }

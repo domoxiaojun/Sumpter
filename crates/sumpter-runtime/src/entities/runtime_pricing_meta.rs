@@ -12,6 +12,17 @@ pub struct Model {
     pub currency: String,
     #[sea_orm(column_type = "Double")]
     pub updated_at: f64,
+    pub official_source: Option<String>,
+    #[sea_orm(column_type = "Double")]
+    pub official_updated_at: Option<f64>,
+    #[sea_orm(column_type = "Integer", default_value = 0)]
+    pub official_model_count: i64,
+    #[sea_orm(column_type = "Integer", default_value = 0)]
+    pub official_tiered_model_count: i64,
+    pub official_sync_error: Option<String>,
+    pub official_digest: Option<String>,
+    #[sea_orm(column_type = "Integer", default_value = 0)]
+    pub official_snapshot_version: i64,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

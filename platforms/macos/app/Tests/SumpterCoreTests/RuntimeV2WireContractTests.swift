@@ -154,4 +154,39 @@ final class RuntimeV2WireContractTests: XCTestCase {
         XCTAssertEqual(object["projectID"] as? String, "sha256-project")
         XCTAssertEqual(object["project"] as? String, "Project Alpha")
     }
+
+    func testRuntimePricingDecodesOfficialCatalogAndTiers() throws {
+        let data = Data(#"""
+        {
+          "apiVersion": 3,
+          "revision": 2,
+          "currency": "USD",
+          "officialCatalog": {
+            "enabled": true,
+            "source": "models.dev+litellm",
+            "modelCount": 120,
+            "tieredModelCount": 12,
+            "updatedAt": 785140000.0
+          },
+          "prices": [{
+            "id": 1,
+            "endpointID": "ep-1",
+            "modelKey": "claude-sonnet-4-6",
+            "effectiveFrom": 0.0,
+            "inputPerMillionMicros": 3000000,
+            "outputPerMillionMicros": 15000000,
+            "tiers": [{
+              "aboveInputTokens": 200000,
+              "inputPerMillionMicros": 6000000,
+              "outputPerMillionMicros": 22500000
+            }]
+          }]
+        }
+        """#.utf8)
+        let pricing = try JSONDecoder().decode(AdminWire.RuntimePricing.self, from: data)
+        XCTAssertEqual(pricing.officialCatalog?.source, "models.dev+litellm")
+        XCTAssertEqual(pricing.officialCatalog?.modelCount, 120)
+        XCTAssertEqual(pricing.prices.first?.endpointID, "ep-1")
+        XCTAssertEqual(pricing.prices.first?.tiers?.first?.aboveInputTokens, 200_000)
+    }
 }

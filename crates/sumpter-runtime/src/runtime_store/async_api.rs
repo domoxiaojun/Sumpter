@@ -39,6 +39,13 @@ impl RuntimeStore {
         let store = self.clone();
         crate::query_executor::run_mutation(move || store.replace_pricing(update)).await?
     }
+    pub async fn sync_official_pricing_async(
+        &self,
+        update: crate::pricing_matcher::OfficialPricingSyncUpdate,
+    ) -> Result<crate::pricing_matcher::OfficialPricingSyncMutation, String> {
+        let store = self.clone();
+        crate::query_executor::run_mutation(move || store.sync_official_pricing(update)).await?
+    }
     pub async fn cleanup_before_preview_async(
         &self,
         older_than: f64,

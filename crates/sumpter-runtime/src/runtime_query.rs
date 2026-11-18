@@ -5,7 +5,7 @@
 //! schema upgrades and projection backfill; Admin can keep its compatibility
 //! endpoints while opting individual v2 routes into these bounded queries.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -1329,6 +1329,7 @@ struct TrendRow {
     request_purpose: Option<String>,
     endpoint_id: Option<String>,
     effective_model: Option<String>,
+    upstream_model: Option<String>,
     usage_present: i64,
     input_tokens: Option<i64>,
     output_tokens: Option<i64>,
@@ -1614,6 +1615,8 @@ pub struct ModelPrice {
     pub output_per_million_micros: Option<i64>,
     pub cache_read_per_million_micros: Option<i64>,
     pub cache_creation_per_million_micros: Option<i64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tiers: Vec<crate::pricing_matcher::ModelPriceTier>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1623,6 +1626,7 @@ pub struct Pricing {
     pub revision: i64,
     pub currency: String,
     pub prices: Vec<ModelPrice>,
+    pub official_catalog: crate::pricing_matcher::OfficialPricingCatalogStatus,
 }
 
 #[derive(Default)]
@@ -1630,9 +1634,12 @@ struct PriceCatalog {
     revision: Option<i64>,
     currency: Option<String>,
     by_model: HashMap<String, Vec<ModelPrice>>,
+    official_catalog: crate::pricing_matcher::OfficialPricingCatalogStatus,
+    book: crate::pricing_matcher::PriceBook,
 }
 
 impl PriceCatalog {
+    #[cfg(test)]
     fn resolve(
         &self,
         endpoint_id: Option<&str>,
@@ -1690,32 +1697,29 @@ impl CostAccumulator {
             self.unknown_accounting_requests = self.unknown_accounting_requests.saturating_add(1);
             return;
         };
-        let Some(model) = row.effective_model.as_deref() else {
+        if row.effective_model.is_none() && row.upstream_model.is_none() {
             self.unpriced_requests = self.unpriced_requests.saturating_add(1);
             return;
-        };
-        let Some(price) = prices.resolve(row.endpoint_id.as_deref(), model, row.timestamp) else {
-            self.unpriced_requests = self.unpriced_requests.saturating_add(1);
-            return;
-        };
-        let components = [
-            (uncached_input, price.input_per_million_micros),
-            (cache_read, price.cache_read_per_million_micros),
-            (cache_creation, price.cache_creation_per_million_micros),
-            (output, price.output_per_million_micros),
-        ];
-        let mut request_numerator = 0_i128;
-        for (tokens, rate) in components {
-            if tokens == 0 {
-                continue;
-            }
-            let Some(rate) = rate else {
-                self.unpriced_requests = self.unpriced_requests.saturating_add(1);
-                return;
-            };
-            request_numerator =
-                request_numerator.saturating_add((tokens as i128).saturating_mul(rate as i128));
         }
+        let Some(price) = prices.book.resolve(
+            row.endpoint_id.as_deref(),
+            row.effective_model.as_deref(),
+            row.upstream_model.as_deref(),
+            row.timestamp,
+        ) else {
+            self.unpriced_requests = self.unpriced_requests.saturating_add(1);
+            return;
+        };
+        let Some(request_numerator) = price.compute_numerator(
+            uncached_input,
+            cache_read,
+            cache_creation,
+            output,
+            row.processed_input_tokens,
+        ) else {
+            self.unpriced_requests = self.unpriced_requests.saturating_add(1);
+            return;
+        };
         self.cost_numerator = self.cost_numerator.saturating_add(request_numerator);
         self.priced_requests = self.priced_requests.saturating_add(1);
     }
@@ -1964,25 +1968,78 @@ fn round_cost_numerator(numerator: i128) -> i64 {
 }
 
 fn load_price_catalog(transaction: &Transaction<'_>) -> QueryResult<PriceCatalog> {
-    let meta = transaction
+    let meta_columns = transaction
+        .prepare("PRAGMA table_info(runtime_pricing_meta)")?
+        .query_map(crate::database::params![], |row| row.get::<_, String>(1))?
+        .collect::<Result<HashSet<_>, _>>()?;
+    let has_official_meta = meta_columns.contains("official_source");
+
+    let mut catalog = PriceCatalog::default();
+    if has_official_meta {
+        if let Some((revision, currency, source, updated_at, count, tiered_count, last_error)) =
+            transaction
+                .query_row(
+                    "SELECT revision,currency,COALESCE(official_source,''),official_updated_at,\
+                            COALESCE(official_model_count,0),COALESCE(official_tiered_model_count,0),\
+                            official_sync_error \
+                     FROM runtime_pricing_meta WHERE id=1",
+                    crate::database::params![],
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, Option<f64>>(3)?,
+                            row.get::<_, i64>(4)?,
+                            row.get::<_, i64>(5)?,
+                            row.get::<_, Option<String>>(6)?,
+                        ))
+                    },
+                )
+                .optional()?
+        {
+            catalog.revision = Some(revision);
+            catalog.currency = Some(currency);
+            catalog.official_catalog = crate::pricing_matcher::OfficialPricingCatalogStatus {
+                enabled: true,
+                source,
+                model_count: count.max(0) as usize,
+                tiered_model_count: tiered_count.max(0) as usize,
+                updated_at,
+                last_error,
+            };
+        }
+    } else if let Some((revision, currency)) = transaction
         .query_row(
             "SELECT revision,currency FROM runtime_pricing_meta WHERE id=1",
             crate::database::params![],
             |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
         )
-        .optional()?;
-    let mut catalog = PriceCatalog {
-        revision: meta.as_ref().map(|value| value.0),
-        currency: meta.map(|value| value.1),
-        by_model: HashMap::new(),
-    };
-    let mut statement = transaction.prepare(
+        .optional()?
+    {
+        catalog.revision = Some(revision);
+        catalog.currency = Some(currency);
+    }
+
+    let price_columns = transaction
+        .prepare("PRAGMA table_info(runtime_model_prices)")?
+        .query_map(crate::database::params![], |row| row.get::<_, String>(1))?
+        .collect::<Result<HashSet<_>, _>>()?;
+    let has_tiers_column = price_columns.contains("tiers_json");
+    let manual_sql = if has_tiers_column {
         "SELECT id,model_key,effective_from,effective_to,input_per_million_micros,\
                 output_per_million_micros,cache_read_per_million_micros,\
-                cache_creation_per_million_micros \
-         FROM runtime_model_prices ORDER BY model_key,effective_from DESC,id DESC",
-    )?;
+                cache_creation_per_million_micros,tiers_json \
+         FROM runtime_model_prices ORDER BY model_key,effective_from DESC,id DESC"
+    } else {
+        "SELECT id,model_key,effective_from,effective_to,input_per_million_micros,\
+                output_per_million_micros,cache_read_per_million_micros,\
+                cache_creation_per_million_micros,NULL \
+         FROM runtime_model_prices ORDER BY model_key,effective_from DESC,id DESC"
+    };
+    let mut statement = transaction.prepare(manual_sql)?;
     let rows = statement.query_map(crate::database::params![], |row| {
+        let tiers_raw: Option<String> = row.get(8)?;
         Ok(ModelPrice {
             id: row.get(0)?,
             endpoint_id: None,
@@ -1993,6 +2050,7 @@ fn load_price_catalog(transaction: &Transaction<'_>) -> QueryResult<PriceCatalog
             output_per_million_micros: row.get(5)?,
             cache_read_per_million_micros: row.get(6)?,
             cache_creation_per_million_micros: row.get(7)?,
+            tiers: crate::pricing_matcher::parse_tiers_json(tiers_raw.as_deref()),
         })
     })?;
     for row in rows {
@@ -2001,6 +2059,19 @@ fn load_price_catalog(transaction: &Transaction<'_>) -> QueryResult<PriceCatalog
             price.endpoint_id = Some(endpoint_id);
             price.model_key = model_key;
         }
+        catalog.book.insert_manual(
+            &price.model_key,
+            crate::pricing_matcher::ResolvedRateEntry {
+                endpoint_id: price.endpoint_id.clone(),
+                effective_from: price.effective_from,
+                effective_to: price.effective_to,
+                input_per_million_micros: price.input_per_million_micros,
+                output_per_million_micros: price.output_per_million_micros,
+                cache_read_per_million_micros: price.cache_read_per_million_micros,
+                cache_creation_per_million_micros: price.cache_creation_per_million_micros,
+                tiers: price.tiers.clone(),
+            },
+        );
         catalog
             .by_model
             .entry(stored_price_key(
@@ -2009,6 +2080,40 @@ fn load_price_catalog(transaction: &Transaction<'_>) -> QueryResult<PriceCatalog
             ))
             .or_default()
             .push(price);
+    }
+
+    let has_official_table: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_official_model_prices')",
+        crate::database::params![],
+        |row| row.get(0),
+    )?;
+    if has_official_table {
+        let mut official_stmt = transaction.prepare(
+            "SELECT model_key,input_per_million_micros,output_per_million_micros,\
+                    cache_read_per_million_micros,cache_creation_per_million_micros,tiers_json \
+             FROM runtime_official_model_prices ORDER BY model_key ASC",
+        )?;
+        let official_rows = official_stmt.query_map(crate::database::params![], |row| {
+            let model_key: String = row.get(0)?;
+            let tiers_raw: Option<String> = row.get(5)?;
+            Ok((
+                model_key,
+                crate::pricing_matcher::ResolvedRateEntry {
+                    endpoint_id: None,
+                    effective_from: f64::NEG_INFINITY,
+                    effective_to: None,
+                    input_per_million_micros: row.get(1)?,
+                    output_per_million_micros: row.get(2)?,
+                    cache_read_per_million_micros: row.get(3)?,
+                    cache_creation_per_million_micros: row.get(4)?,
+                    tiers: crate::pricing_matcher::parse_tiers_json(tiers_raw.as_deref()),
+                },
+            ))
+        })?;
+        for row in official_rows {
+            let (model_key, entry) = row?;
+            catalog.book.insert_official(&model_key, entry);
+        }
     }
     Ok(catalog)
 }
@@ -2048,6 +2153,7 @@ pub fn pricing_on(connection: &mut Connection) -> QueryResult<Pricing> {
         revision: catalog.revision.unwrap_or(0),
         currency: catalog.currency.unwrap_or_else(|| "USD".into()),
         prices,
+        official_catalog: catalog.official_catalog,
     };
     transaction.commit()?;
     Ok(result)

@@ -6,6 +6,7 @@ pub(crate) mod runtime_hourly_rollup_dirty;
 pub(crate) mod runtime_hourly_rollups;
 pub(crate) mod runtime_meta;
 pub(crate) mod runtime_model_prices;
+pub(crate) mod runtime_official_model_prices;
 pub(crate) mod runtime_pricing_meta;
 pub(crate) mod runtime_retention;
 pub(crate) mod runtime_storage_metrics;
@@ -46,6 +47,17 @@ pub(crate) fn create_schema(
             prices.check(Expr::col(column).is_null().or(Expr::col(column).gte(0)));
         }
         tables.push(prices);
+        use runtime_official_model_prices::Column as OfficialPrice;
+        let mut official_prices = schema.create_table_from_entity(runtime_official_model_prices::Entity);
+        for column in [
+            OfficialPrice::InputPerMillionMicros,
+            OfficialPrice::OutputPerMillionMicros,
+            OfficialPrice::CacheReadPerMillionMicros,
+            OfficialPrice::CacheCreationPerMillionMicros,
+        ] {
+            official_prices.check(Expr::col(column).is_null().or(Expr::col(column).gte(0)));
+        }
+        tables.push(official_prices);
         for mut table in tables {
             db.execute(backend.build(table.if_not_exists())).await?;
         }

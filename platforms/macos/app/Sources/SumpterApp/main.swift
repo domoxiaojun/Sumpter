@@ -385,6 +385,7 @@ final class AppModel: ObservableObject {
     @Published var runtimeStorageProbe: AdminWire.RuntimeStorageProbe?
     @Published var runtimeRetention: AdminWire.RuntimeRetention?
     @Published var runtimePricing: AdminWire.RuntimePricing?
+    @Published var runtimePricingSyncBusy = false
     @Published var runtimeExportEstimate: AdminWire.RuntimeExportEstimate?
     @Published var runtimeExportEstimateError: String?
     @Published var runtimeExportBusy = false

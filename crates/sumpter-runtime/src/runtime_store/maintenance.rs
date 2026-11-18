@@ -241,6 +241,7 @@ pub(super) fn validate_pricing_update(update: &RuntimePricingUpdate) -> Result<(
                 return Err("价格不能为负数".into());
             }
         }
+        crate::pricing_matcher::validate_price_tiers(&price.tiers)?;
         let storage_key = price
             .endpoint_id
             .as_deref()
@@ -292,6 +293,18 @@ pub(super) fn replace_pricing_database(
     // rows, mark every retained terminal-event bucket dirty, and let the
     // normal worker rebuild it before a rollup-backed trend is considered
     // complete.  The original event projections remain untouched.
+    invalidate_hourly_rollups_for_pricing_change(&transaction)?;
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(RuntimePricingMutation {
+        revision: next_revision,
+        currency,
+        price_count: update.prices.len(),
+    })
+}
+
+pub(super) fn invalidate_hourly_rollups_for_pricing_change(
+    transaction: &Connection,
+) -> Result<(), String> {
     transaction
         .execute(
             "DELETE FROM runtime_hourly_rollups",
@@ -314,18 +327,127 @@ pub(super) fn replace_pricing_database(
         )
         .map_err(|error| error.to_string())?;
     set_meta(
-        &transaction,
+        transaction,
         "hourly_rollup_complete",
         if dirty { 0 } else { 1 },
     )
     .map_err(|error| error.to_string())?;
-    set_meta(&transaction, "hourly_rollup_max_seq", 0).map_err(|error| error.to_string())?;
-    set_meta(&transaction, "hourly_rollup_failed", 0).map_err(|error| error.to_string())?;
+    set_meta(transaction, "hourly_rollup_max_seq", 0).map_err(|error| error.to_string())?;
+    set_meta(transaction, "hourly_rollup_failed", 0).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+pub(super) fn sync_official_pricing_database(
+    connection: &mut Connection,
+    update: crate::pricing_matcher::OfficialPricingSyncUpdate,
+) -> Result<crate::pricing_matcher::OfficialPricingSyncMutation, String> {
+    let apple_now = now() - sumpter_core::events::APPLE_EPOCH_OFFSET_SECS;
+    if update.prices.is_empty() {
+        let Some(sync_error) = update
+            .sync_error
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return Err("官方模型价格列表不能为空".into());
+        };
+        connection
+            .execute(
+                "UPDATE runtime_pricing_meta SET official_sync_error=?1 WHERE id=1",
+                params![sync_error],
+            )
+            .map_err(|error| error.to_string())?;
+        let (revision, source, model_count, tiered_count, updated_at) = connection
+            .query_row(
+                "SELECT revision,COALESCE(official_source,'builtin'),COALESCE(official_model_count,0),
+                        COALESCE(official_tiered_model_count,0),COALESCE(official_updated_at,?1)
+                 FROM runtime_pricing_meta WHERE id=1",
+                params![apple_now],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, f64>(4)?,
+                    ))
+                },
+            )
+            .map_err(|error| error.to_string())?;
+        return Ok(crate::pricing_matcher::OfficialPricingSyncMutation {
+            revision,
+            changed: false,
+            source,
+            model_count: model_count.max(0) as usize,
+            tiered_model_count: tiered_count.max(0) as usize,
+            updated_at,
+        });
+    }
+
+    let source = update.source.trim();
+    if source.is_empty() {
+        return Err("官方价格来源 source 不能为空".into());
+    }
+    let normalized = crate::pricing_matcher::normalize_official_prices(&update.prices)?;
+    if normalized.is_empty() {
+        return Err("未解析到有效的官方模型价格".into());
+    }
+    let digest = crate::pricing_matcher::official_prices_digest(&normalized);
+    let tiered_model_count = normalized
+        .iter()
+        .filter(|item| !item.tiers.is_empty())
+        .count();
+
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    let (revision, current_digest): (i64, Option<String>) = transaction
+        .query_row(
+            "SELECT revision,official_digest FROM runtime_pricing_meta WHERE id=1",
+            crate::database::params![],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|error| error.to_string())?;
+    if current_digest.as_deref() == Some(digest.as_str()) {
+        transaction
+            .execute(
+                "UPDATE runtime_pricing_meta
+                 SET official_source=?1,official_updated_at=?2,official_sync_error=NULL
+                 WHERE id=1",
+                params![source, apple_now],
+            )
+            .map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+        return Ok(crate::pricing_matcher::OfficialPricingSyncMutation {
+            revision,
+            changed: false,
+            source: source.to_owned(),
+            model_count: normalized.len(),
+            tiered_model_count,
+            updated_at: apple_now,
+        });
+    }
+
+    let next_revision = revision.saturating_add(1);
+    super::models::save_official_pricing(
+        &transaction,
+        source,
+        &normalized,
+        &digest,
+        next_revision,
+        apple_now,
+        None,
+    )
+    .map_err(|error| error.to_string())?;
+    invalidate_hourly_rollups_for_pricing_change(&transaction)?;
     transaction.commit().map_err(|error| error.to_string())?;
-    Ok(RuntimePricingMutation {
+    Ok(crate::pricing_matcher::OfficialPricingSyncMutation {
         revision: next_revision,
-        currency,
-        price_count: update.prices.len(),
+        changed: true,
+        source: source.to_owned(),
+        model_count: normalized.len(),
+        tiered_model_count,
+        updated_at: apple_now,
     })
 }
 
@@ -583,6 +705,7 @@ pub(super) fn rebuild_schema(connection: &mut Connection) -> crate::database::Re
          DROP TABLE IF EXISTS runtime_storage_metrics;
          DROP TABLE IF EXISTS runtime_hourly_rollup_dirty;
          DROP TABLE IF EXISTS runtime_hourly_rollups;
+         DROP TABLE IF EXISTS runtime_official_model_prices;
          DROP TABLE IF EXISTS runtime_model_prices;
          DROP TABLE IF EXISTS runtime_pricing_meta;
          DROP TABLE IF EXISTS runtime_retention;

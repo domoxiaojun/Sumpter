@@ -677,6 +677,7 @@ fn scoped_price_prefers_endpoint_and_falls_back_to_global() {
         revision: Some(1),
         currency: Some("USD".into()),
         by_model: HashMap::new(),
+        ..PriceCatalog::default()
     };
     let global = ModelPrice {
         id: 1,
@@ -688,6 +689,7 @@ fn scoped_price_prefers_endpoint_and_falls_back_to_global() {
         output_per_million_micros: Some(10),
         cache_read_per_million_micros: None,
         cache_creation_per_million_micros: None,
+        tiers: Vec::new(),
     };
     let scoped = ModelPrice {
         id: 2,
@@ -699,6 +701,7 @@ fn scoped_price_prefers_endpoint_and_falls_back_to_global() {
         output_per_million_micros: Some(20),
         cache_read_per_million_micros: None,
         cache_creation_per_million_micros: None,
+        tiers: Vec::new(),
     };
     catalog
         .by_model
@@ -1255,6 +1258,7 @@ fn cache_request_rate_requires_explicit_cache_field() {
         request_purpose: Some("completion".into()),
         endpoint_id: None,
         effective_model: Some("gpt-test".into()),
+        upstream_model: None,
         usage_present: 1,
         input_tokens: Some(100),
         output_tokens: Some(1),

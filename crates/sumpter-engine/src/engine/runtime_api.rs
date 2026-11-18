@@ -351,6 +351,25 @@ impl Engine {
         serde_json::to_value(mutation).map_err(|error| error.to_string())
     }
 
+    pub fn runtime_sync_official_pricing(
+        &self,
+        update: sumpter_runtime::OfficialPricingSyncUpdate,
+    ) -> Result<sumpter_runtime::OfficialPricingSyncMutation, String> {
+        let _runtime_write = self.inner.runtime_write.lock().unwrap();
+        let store = self.inner.runtime_store.get().ok_or_else(|| {
+            self.last_error()
+                .unwrap_or_else(|| "runtime.sqlite3 不可用，无法同步官方价格表".into())
+        })?;
+        let mutation = store.sync_official_pricing(update)?;
+        if mutation.changed {
+            let _ = self.inner.notices.send(EngineNotice::ModelMetadataUpdated {
+                catalog: "official_pricing".into(),
+                revision: mutation.revision.max(0) as u64,
+            });
+        }
+        Ok(mutation)
+    }
+
     pub fn runtime_event(&self, id: &str) -> Result<Option<Value>, String> {
         if let Some(store) = self.inner.runtime_store.get() {
             return store.event(id).map(|change| {

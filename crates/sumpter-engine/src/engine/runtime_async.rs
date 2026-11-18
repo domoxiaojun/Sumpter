@@ -74,15 +74,18 @@ impl Engine {
     }
     pub async fn runtime_pricing_async(&self) -> Result<Value, RuntimeQueryError> {
         let path = self.runtime_query_path()?.to_path_buf();
-
-        let aliases = self
-            .config()
-            .listener
-            .client_identity
-            .reporting_aliases
-            .clone();
+        let config = self.config();
+        let aliases = config.listener.client_identity.reporting_aliases.clone();
+        let auto_sync_enabled = config.model_catalog.remote_metadata_enabled;
         let value = runtime_query::asynchronous::pricing(path).await?;
-        Self::identity_query_value_with_aliases(value, &aliases)
+        let mut decorated = Self::identity_query_value_with_aliases(value, &aliases)?;
+        if let Some(official) = decorated
+            .get_mut("officialCatalog")
+            .and_then(Value::as_object_mut)
+        {
+            official.insert("enabled".into(), Value::Bool(auto_sync_enabled));
+        }
+        Ok(decorated)
     }
     pub async fn runtime_export_estimate_async(
         &self,
@@ -197,6 +200,44 @@ impl Engine {
             engine.runtime_replace_pricing(update)
         })
         .await?
+    }
+    pub async fn runtime_sync_official_pricing_async(&self) -> Result<Value, String> {
+        match crate::official_pricing_sync::fetch_official_pricing_catalog().await {
+            Ok((source, models)) => {
+                if let Some(dir) = self.config_dir() {
+                    let _ = crate::official_pricing_sync::save_cached_official_pricing(
+                        &dir, &source, &models,
+                    );
+                }
+                let engine = self.clone();
+                let mutation = sumpter_runtime::query_executor::run_mutation(move || {
+                    engine.runtime_sync_official_pricing(
+                        sumpter_runtime::OfficialPricingSyncUpdate {
+                            source,
+                            prices: models,
+                            sync_error: None,
+                        },
+                    )
+                })
+                .await??;
+                serde_json::to_value(mutation).map_err(|error| error.to_string())
+            }
+            Err(error) => {
+                let engine = self.clone();
+                let recorded_error = error.clone();
+                let _ = sumpter_runtime::query_executor::run_mutation(move || {
+                    engine.runtime_sync_official_pricing(
+                        sumpter_runtime::OfficialPricingSyncUpdate {
+                            source: String::new(),
+                            prices: Vec::new(),
+                            sync_error: Some(recorded_error),
+                        },
+                    )
+                })
+                .await;
+                Err(error)
+            }
+        }
     }
     pub async fn runtime_cleanup_preview_async(&self, older_than: f64) -> Result<Value, String> {
         let engine = self.clone();

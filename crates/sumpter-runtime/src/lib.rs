@@ -3,6 +3,7 @@
 //! This crate is intentionally platform-neutral.  The public types and wire
 //! serialization are shared by the Linux daemon and the macOS sidecar.
 
+pub mod pricing_matcher;
 pub mod query_executor;
 pub mod runtime_query;
 pub mod runtime_store;
@@ -12,5 +13,6 @@ mod database;
 mod entities;
 mod storage_metrics;
 
+pub use pricing_matcher::*;
 pub use runtime_query::*;
 pub use runtime_store::*;

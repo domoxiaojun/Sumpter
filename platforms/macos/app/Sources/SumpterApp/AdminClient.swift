@@ -486,6 +486,12 @@ public struct AdminClient: Sendable {
         return try await send(value, as: AdminWire.RuntimePricingMutation.self)
     }
 
+    public func syncRuntimePricing() async throws -> AdminWire.OfficialPricingSyncMutation {
+        var value = request("/admin/runtime/pricing/sync", method: "POST")
+        value.timeoutInterval = 30
+        return try await send(value, as: AdminWire.OfficialPricingSyncMutation.self)
+    }
+
     public func runtimeExportEstimate(
         scope: String = "events",
         format: String = "jsonl",
@@ -1297,6 +1303,23 @@ public enum AdminWire {
         public let legacyRetentionDetected: Bool?
     }
 
+    public struct RuntimeModelPriceTier: Codable, Equatable, Sendable {
+        public var aboveInputTokens: Int
+        public var inputPerMillionMicros: Int?
+        public var outputPerMillionMicros: Int?
+        public var cacheReadPerMillionMicros: Int?
+        public var cacheCreationPerMillionMicros: Int?
+
+        fileprivate var dictionary: [String: Any] {
+            var value: [String: Any] = ["aboveInputTokens": aboveInputTokens]
+            value["inputPerMillionMicros"] = inputPerMillionMicros ?? NSNull()
+            value["outputPerMillionMicros"] = outputPerMillionMicros ?? NSNull()
+            value["cacheReadPerMillionMicros"] = cacheReadPerMillionMicros ?? NSNull()
+            value["cacheCreationPerMillionMicros"] = cacheCreationPerMillionMicros ?? NSNull()
+            return value
+        }
+    }
+
     public struct RuntimeModelPrice: Codable, Equatable, Identifiable, Sendable {
         public var id: Int
         public var endpointID: String?
@@ -1307,6 +1330,25 @@ public enum AdminWire {
         public var outputPerMillionMicros: Int?
         public var cacheReadPerMillionMicros: Int?
         public var cacheCreationPerMillionMicros: Int?
+        public var tiers: [RuntimeModelPriceTier]? = nil
+    }
+
+    public struct RuntimeOfficialPricingCatalog: Decodable, Equatable, Sendable {
+        public let enabled: Bool
+        public let source: String
+        public let modelCount: Int
+        public let tieredModelCount: Int?
+        public let updatedAt: Double?
+        public let lastError: String?
+    }
+
+    public struct OfficialPricingSyncMutation: Decodable, Equatable, Sendable {
+        public let revision: Int
+        public let changed: Bool
+        public let source: String
+        public let modelCount: Int
+        public let tieredModelCount: Int?
+        public let updatedAt: Double
     }
 
     public struct RuntimePricing: Decodable, Equatable, Sendable {
@@ -1314,6 +1356,7 @@ public enum AdminWire {
         public let revision: Int
         public let currency: String
         public let prices: [RuntimeModelPrice]
+        public let officialCatalog: RuntimeOfficialPricingCatalog?
     }
 
     /// PUT `/admin/runtime/pricing` acknowledgement. The full price list is
@@ -1358,6 +1401,9 @@ public enum AdminWire {
                     value["outputPerMillionMicros"] = price.outputPerMillionMicros ?? NSNull()
                     value["cacheReadPerMillionMicros"] = price.cacheReadPerMillionMicros ?? NSNull()
                     value["cacheCreationPerMillionMicros"] = price.cacheCreationPerMillionMicros ?? NSNull()
+                    if let tiers = price.tiers, !tiers.isEmpty {
+                        value["tiers"] = tiers.map(\.dictionary)
+                    }
                     return value
                 },
             ]

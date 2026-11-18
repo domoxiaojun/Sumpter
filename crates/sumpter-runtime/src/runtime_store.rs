@@ -26,6 +26,10 @@ use sumpter_core::events::{
 };
 use sumpter_core::routing::{RESOURCE_ROUTING_MODEL, RequestPurpose, RouteMode};
 
+use crate::pricing_matcher::{
+    ModelPriceTier, OfficialPricingSyncMutation, OfficialPricingSyncUpdate,
+};
+
 pub(crate) const SCHEMA_VERSION: i64 = 5;
 // Attribution projections are recomputed from the retained event payload so
 // newly recognized Codex/Claude client identities also repair existing rows.
@@ -890,6 +894,10 @@ enum Command {
         update: RuntimePricingUpdate,
         reply: mpsc::Sender<Result<RuntimePricingMutation, String>>,
     },
+    SyncOfficialPricing {
+        update: OfficialPricingSyncUpdate,
+        reply: mpsc::Sender<Result<OfficialPricingSyncMutation, String>>,
+    },
     Flush(mpsc::Sender<Result<(), String>>),
     Shutdown,
 }
@@ -940,7 +948,7 @@ pub struct RuntimeRetentionMutation {
     pub storage_limit_bytes: Option<i64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RuntimeModelPriceInput {
     pub endpoint_id: Option<String>,
     pub model_key: String,
@@ -950,6 +958,7 @@ pub struct RuntimeModelPriceInput {
     pub output_per_million_micros: Option<i64>,
     pub cache_read_per_million_micros: Option<i64>,
     pub cache_creation_per_million_micros: Option<i64>,
+    pub tiers: Vec<ModelPriceTier>,
 }
 
 #[derive(Debug, Clone)]

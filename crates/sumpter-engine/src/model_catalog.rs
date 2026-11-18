@@ -797,6 +797,16 @@ impl ModelCatalogScheduler {
             current.remote_metadata.models_revision =
                 revision_for(&dir, "models.json").unwrap_or(1);
         }
+        if let Some(dir) = engine.config_dir()
+            && let Some(cached) = crate::official_pricing_sync::load_cached_official_pricing(&dir)
+        {
+            let _ =
+                engine.runtime_sync_official_pricing(sumpter_runtime::OfficialPricingSyncUpdate {
+                    source: cached.source,
+                    prices: cached.models,
+                    sync_error: None,
+                });
+        }
         Self { engine, status }
     }
 
@@ -844,7 +854,11 @@ impl ModelCatalogScheduler {
         }
 
         let metadata = if config.model_catalog.remote_metadata_enabled {
-            Some(refresh_remote_metadata(self.engine.config_dir()).await)
+            let (meta_status, _pricing_sync) = tokio::join!(
+                refresh_remote_metadata(self.engine.config_dir()),
+                self.engine.runtime_sync_official_pricing_async(),
+            );
+            Some(meta_status)
         } else {
             None
         };

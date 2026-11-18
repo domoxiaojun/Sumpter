@@ -19,6 +19,7 @@ pub struct Model {
     pub cache_read_per_million_micros: Option<i64>,
     #[sea_orm(column_type = "Integer")]
     pub cache_creation_per_million_micros: Option<i64>,
+    pub tiers_json: Option<String>,
     #[sea_orm(column_type = "Double")]
     pub created_at: f64,
     #[sea_orm(column_type = "Double")]

@@ -64,11 +64,11 @@ struct RuntimePricingEditor: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(scopedEndpointName.map { "成本价格 · \($0)" } ?? "成本价格")
+                    Text(scopedEndpointName.map { "成本价格 · \($0)" } ?? "模型成本与官方标价")
                         .font(.title2.weight(.semibold))
                     Text(scopedEndpointName == nil
-                        ? "按入口 + 精确模型 key 维护每百万 Token 的价格；未配置入口专属价格时使用全局回退。"
-                        : "维护此入口的模型价格；未配置专属价格时继续使用全局回退。")
+                        ? "未配置手动规则时，自动剥离 models/、openai/ 等前缀并按最高匹配度的官方最新 API 标价（含 >200k 等长上下文阶梯价）重算；下方仅需维护需要覆盖的专属或全局价格。"
+                        : "维护此入口的专属覆盖价格；未配置时自动回退到全局覆盖价或官方最新 API 标价。")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -81,10 +81,14 @@ struct RuntimePricingEditor: View {
                     .onChange(of: currency) { _, _ in dirty = true }
             }
 
+            if let official = model.runtimePricing?.officialCatalog {
+                officialCatalogBanner(official)
+            }
+
             HStack(spacing: 8) {
-                Text("价格表")
+                Text("手动覆盖价格表")
                     .font(.headline)
-                Text("共 \(visibleRows.count) 个模型")
+                Text("共 \(visibleRows.count) 条规则")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
@@ -111,7 +115,7 @@ struct RuntimePricingEditor: View {
             }
 
             if visibleRows.isEmpty {
-                EmptyStateView(title: "尚未配置模型价格", systemImage: "yensign.circle")
+                EmptyStateView(title: "尚未配置自定义覆盖价格（默认自动按官方最新标价核算）", systemImage: "yensign.circle")
                     .frame(maxWidth: .infinity, minHeight: 150)
             } else {
                 ScrollView {
@@ -176,10 +180,79 @@ struct RuntimePricingEditor: View {
             }
         }
         .onChange(of: model.runtimeV2Error) { _, error in
-            guard let error, error.contains("价格表更新失败") else { return }
+            guard let error, error.contains("价格") else { return }
             savingRevision = nil
             validationMessage = error
         }
+    }
+
+    private func officialSourceLabel(_ source: String) -> String {
+        switch source.trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "builtin":
+            return "内置官方快照"
+        case "models.dev+litellm":
+            return "models.dev + LiteLLM"
+        case "models.dev":
+            return "models.dev"
+        case "litellm":
+            return "LiteLLM"
+        default:
+            return source.isEmpty ? "内置官方快照" : source
+        }
+    }
+
+    private func officialCatalogBanner(_ official: AdminWire.RuntimeOfficialPricingCatalog) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text("官方 API 标价基准")
+                        .font(.subheadline.weight(.semibold))
+                    Text(officialSourceLabel(official.source))
+                        .font(.caption.monospaced())
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
+                    Text("自动同步：\(official.enabled ? "已启用" : "已停用")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                HStack(spacing: 12) {
+                    Text("已加载 \(official.modelCount) 个官方模型")
+                    if let tiered = official.tieredModelCount, tiered > 0 {
+                        Text("含 \(tiered) 个长上下文阶梯价模型")
+                    }
+                    if let updatedAt = official.updatedAt {
+                        Text("更新于 \(RuntimeEventDisplay.dateTime(Date(timeIntervalSinceReferenceDate: updatedAt)))")
+                    }
+                }
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                if let lastError = official.lastError, !lastError.isEmpty {
+                    Text("最近同步异常：\(lastError)")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .lineLimit(2)
+                }
+            }
+            Spacer(minLength: 0)
+            Button {
+                validationMessage = nil
+                model.syncOfficialRuntimePricing()
+            } label: {
+                if model.runtimePricingSyncBusy {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("正在同步…")
+                    }
+                } else {
+                    Label("同步官方价格", systemImage: "arrow.triangle.2.circlepath")
+                }
+            }
+            .disabled(model.runtimePricingSyncBusy)
+            .frame(minHeight: 36)
+        }
+        .padding(12)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private func pricingRow(_ row: AdminWire.RuntimeModelPrice) -> some View {

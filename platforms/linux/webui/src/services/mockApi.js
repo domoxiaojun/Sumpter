@@ -104,6 +104,13 @@ export function createMockApi({ fromWireConfig, normalizeCatalog }) {
           apiVersion: 3,
           revision: 1,
           currency: 'USD',
+          officialCatalog: {
+            enabled: true,
+            source: 'models.dev+litellm',
+            modelCount: 168,
+            tieredModelCount: 14,
+            updatedAt: (Date.now() / 1000) - 978_307_200,
+          },
           prices: [
             {
               id: 1,
@@ -954,12 +961,36 @@ export function createMockApi({ fromWireConfig, normalizeCatalog }) {
         };
       }
       if (path === '/runtime/pricing' && method === 'GET') return clone(this.mockState.runtimePricing);
+      if (path === '/runtime/pricing/sync' && method === 'POST') {
+        const updatedAt = (Date.now() / 1000) - 978_307_200;
+        this.mockState.runtimePricing = {
+          ...this.mockState.runtimePricing,
+          officialCatalog: {
+            ...(this.mockState.runtimePricing.officialCatalog || {}),
+            enabled: true,
+            source: 'models.dev+litellm',
+            modelCount: 168,
+            tieredModelCount: 14,
+            updatedAt,
+            lastError: null,
+          },
+        };
+        return {
+          revision: this.mockState.runtimePricing.revision,
+          changed: false,
+          source: 'models.dev+litellm',
+          modelCount: 168,
+          tieredModelCount: 14,
+          updatedAt,
+        };
+      }
       if (path === '/runtime/pricing' && method === 'PUT') {
         const body = JSON.parse(options.body || '{}');
         if (Number(body.expectedRevision) !== Number(this.mockState.runtimePricing.revision)) {
           const error = new Error('价格版本已更新'); error.status = 409; error.code = 'runtime_revision_conflict'; throw error;
         }
         this.mockState.runtimePricing = {
+          ...this.mockState.runtimePricing,
           apiVersion: 3,
           revision: this.mockState.runtimePricing.revision + 1,
           currency: body.currency,

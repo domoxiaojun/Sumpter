@@ -11,6 +11,7 @@ mod http_headers;
 pub mod inbound_tls;
 pub(crate) mod ingress;
 pub mod model_catalog;
+pub mod official_pricing_sync;
 pub mod outbound;
 pub mod replay;
 pub mod request_build;

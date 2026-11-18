@@ -78,6 +78,7 @@ pub fn admin_router(engine: Engine) -> Router {
             "/admin/runtime/pricing",
             get(runtime_pricing).put(runtime_pricing_update),
         )
+        .route("/admin/runtime/pricing/sync", post(runtime_pricing_sync))
         .route(
             "/admin/runtime/export/estimate",
             get(runtime_export_estimate),
@@ -1031,6 +1032,7 @@ async fn runtime_pricing(State(engine): State<Engine>) -> Response {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RuntimeModelPricePayload {
+    #[serde(default, alias = "endpointID")]
     endpoint_id: Option<String>,
     model_key: String,
     effective_from: f64,
@@ -1039,6 +1041,8 @@ struct RuntimeModelPricePayload {
     output_per_million_micros: Option<i64>,
     cache_read_per_million_micros: Option<i64>,
     cache_creation_per_million_micros: Option<i64>,
+    #[serde(default)]
+    tiers: Vec<sumpter_engine::runtime::ModelPriceTier>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1069,6 +1073,7 @@ async fn runtime_pricing_update(
             output_per_million_micros: price.output_per_million_micros,
             cache_read_per_million_micros: price.cache_read_per_million_micros,
             cache_creation_per_million_micros: price.cache_creation_per_million_micros,
+            tiers: price.tiers,
         })
         .collect();
     match engine
@@ -1089,6 +1094,17 @@ async fn runtime_pricing_update(
         Err(message) => error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "runtime_pricing_failed",
+            &message,
+        ),
+    }
+}
+
+async fn runtime_pricing_sync(State(engine): State<Engine>) -> Response {
+    match engine.runtime_sync_official_pricing_async().await {
+        Ok(value) => json_ok(&value),
+        Err(message) => error(
+            StatusCode::BAD_GATEWAY,
+            "official_pricing_sync_failed",
             &message,
         ),
     }
@@ -2409,6 +2425,16 @@ mod tests {
                 assert_eq!(storage["payloadBytes"], 0);
                 assert!(storage["minSeq"].is_null());
                 assert!(storage["earliestTimestamp"].is_null());
+            } else if path == "/admin/runtime/pricing" {
+                let pricing: Value =
+                    serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
+                assert_eq!(pricing["officialCatalog"]["source"], "builtin");
+                assert!(
+                    pricing["officialCatalog"]["modelCount"]
+                        .as_u64()
+                        .unwrap_or(0)
+                        >= 30
+                );
             }
         }
 
@@ -2462,7 +2488,18 @@ mod tests {
                 serde_json::to_vec(&json!({
                     "expectedRevision": 1,
                     "currency": "USD",
-                    "prices": []
+                    "prices": [{
+                        "endpointID": "ep-custom",
+                        "modelKey": "claude-sonnet-4-6",
+                        "effectiveFrom": 0.0,
+                        "inputPerMillionMicros": 2_500_000,
+                        "outputPerMillionMicros": 12_000_000,
+                        "tiers": [{
+                            "aboveInputTokens": 200_000,
+                            "inputPerMillionMicros": 5_000_000,
+                            "outputPerMillionMicros": 18_000_000
+                        }]
+                    }]
                 }))
                 .unwrap(),
             )
@@ -2473,6 +2510,23 @@ mod tests {
         let pricing_update: Value =
             serde_json::from_slice(&pricing_update.bytes().await.unwrap()).unwrap();
         assert_eq!(pricing_update["revision"], 2);
+        let pricing_readback: Value = serde_json::from_slice(
+            &client
+                .get(format!("{base}/admin/runtime/pricing"))
+                .header("x-control-token", "runtime-control-token")
+                .send()
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(pricing_readback["prices"][0]["endpointID"], "ep-custom");
+        assert_eq!(
+            pricing_readback["prices"][0]["tiers"][0]["aboveInputTokens"],
+            200_000
+        );
 
         let missing_chain = client
             .get(format!("{base}/admin/runtime/request-chain"))
