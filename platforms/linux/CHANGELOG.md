@@ -4,6 +4,18 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本。
 
+## [0.4.87] - 2026-11-18
+
+### 新增特性
+
+- 为 Linux WebUI 与 macOS SwiftUI 双端新增主题选择器：完整保留原纯黑白（现代钴蓝）浅/深双色与跟随系统模式，并引入 [Catppuccin Palette](https://catppuccin.com/palette/) 全部四种官方风味（`Latte`、`Frappé`、`Macchiato`、`Mocha`）及八种官方强调色（`Mauve`、`Blue`、`Sapphire`、`Teal`、`Green`、`Peach`、`Pink`、`Lavender`）切换与持久化记忆。
+- 双端交互保持一致：在经典黑白主题下点选 Catppuccin 强调色时，自动匹配当前明暗极性切入 `Latte` 或 `Mocha`；暗色 Catppuccin 风味下的高亮实心按钮均配以 Crust 深色文字保证对比度。
+- WebUI 新增 `themeCatalog.js` 纯函数模块与静态色卡预览类名，同步联动登录页和实时请求组 `MeshGradient` 环境光效及 `theme-color` 元数据，全程零内联样式与脚本、严格满足 Admin CSP，并重新构建同步 `platforms/linux/web/` 静态产物。
+
+### 验证与边界
+
+- 共享 Rust 核心、配置与数据库 schema 不变；本机已通过文档契约、发布元数据校验、247 项 WebUI 单元/契约测试、Chrome Admin CSP 冒烟与主题选择器交互回归、macOS App 编译与 270 XCTest + 10 Swift Testing、Rust 1.88 workspace 全检及 Docker 部署契约测试。跨平台发行包、macOS 签名公证与容器镜像由 GitHub Actions `Release` 工作流生成与发布，发布不代表本机或生产实例已经升级。
+
 ## [0.4.86] - 2026-11-18
 
 ### 优化与调整
