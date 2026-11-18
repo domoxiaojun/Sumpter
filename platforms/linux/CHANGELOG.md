@@ -4,6 +4,18 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本。
 
+## [0.4.86] - 2026-11-18
+
+### 优化与调整
+
+- 将 Linux WebUI 与 macOS SwiftUI 双端调色板统一升级为纯正无偏色中性黑白灰底色（亮色净白与浅锌灰，暗色曜石黑与丝绒碳灰），移除原带暖棕或偏蓝灰底色，显著提升黑/白界面下的通透感与对比度。
+- 将双端品牌主色调整为清爽现代钴蓝（Apple / Linear 风格），主按钮与暗色危险按钮均采用高亮纯白文字，彻底区隔品牌交互、实时流指示与警告/错误状态语义。
+- 同步更新登录页与实时请求组边缘的 `MeshGradient` 环境光效以及 `index.html` 系统主题色元数据，并重建同步 `platforms/linux/web/` 静态产物。
+
+### 验证与边界
+
+- 共享 Rust 核心、配置与数据库 schema 不变；本机已通过文档契约、Rust 1.88 workspace、macOS App、243 项 WebUI 单元/契约测试、Chrome Admin CSP 冒烟回归及 Docker 部署契约验证，跨平台发行包与容器镜像由 GitHub Actions `Release` 工作流构建发布，发布不代表本机或生产实例已经升级。
+
 ## [0.4.85] - 2026-11-18
 
 ### 变更与重构
