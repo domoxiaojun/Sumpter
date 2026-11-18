@@ -56,6 +56,7 @@ pub fn evaluate(config: &AppConfig) -> Vec<String> {
 /// 只在「该模型没有任何 Anthropic 入口可落」时提示:混合配置下 native 入口优先,
 /// 翻译面只在 native 全不可用时才会被用到,不值得为此报警。
 fn append_lossy_translation_warnings(config: &AppConfig, risks: &mut Vec<String>) {
+    let mut grouped_models: Vec<(String, Vec<String>)> = Vec::new();
     for model in config.accepted_models() {
         let mut has_anthropic = false;
         let mut translated_targets: Vec<&str> = Vec::new();
@@ -77,11 +78,15 @@ fn append_lossy_translation_warnings(config: &AppConfig, risks: &mut Vec<String>
         if has_anthropic || translated_targets.is_empty() {
             continue;
         }
+        push_group(&mut grouped_models, translated_targets.join(" / "), model);
+    }
+    for (protocols, models) in grouped_models {
         risks.push(format!(
-            "{model} 只能落到 {} 协议入口：Claude 客户端的请求会经协议转换转发，\
+            "{} 只能落到 {} 协议入口：Claude 客户端的请求会经协议转换转发，\
              历史推理内容不会回放，服务端工具、文件引用与目标协议没有等价参数的项\
              会被明确拒绝。",
-            translated_targets.join(" / ")
+            models.join(", "),
+            protocols
         ));
     }
 }
@@ -124,7 +129,7 @@ fn append_endpoint_warnings(endpoint: &Endpoint, risks: &mut Vec<String>) {
 /// 分成独立组，因此仍提示用户确认是否漏填共享组。
 fn append_shared_resource_warnings(endpoints: &[Endpoint], risks: &mut Vec<String>) {
     let mut base_owners: Vec<(String, Vec<String>)> = Vec::new();
-    let mut key_tail_owners: Vec<(String, Vec<String>)> = Vec::new();
+    let mut key_tail_owners: Vec<((String, String), Vec<String>)> = Vec::new();
     let mut sticky_priorities: Vec<(String, i64, String)> = Vec::new();
     for endpoint in endpoints {
         let id = if endpoint.id.is_empty() {
@@ -145,12 +150,18 @@ fn append_shared_resource_warnings(endpoints: &[Endpoint], risks: &mut Vec<Strin
                 sticky_priorities.push((group.to_string(), endpoint.priority, id.clone()));
             }
         }
-        if endpoint.api_key.chars().count() >= 4 {
+        // 不同 API 地址复用同一 key 属于自建多实例等合理用法，只对同地址同尾号报警。
+        let normalized_base = endpoint
+            .base_url
+            .trim()
+            .trim_end_matches('/')
+            .to_lowercase();
+        if !normalized_base.is_empty() && endpoint.api_key.chars().count() >= 4 {
             let tail: String = {
                 let chars: Vec<char> = endpoint.api_key.chars().collect();
                 chars[chars.len() - 4..].iter().collect()
             };
-            push_group(&mut key_tail_owners, tail, id);
+            push_group(&mut key_tail_owners, (normalized_base, tail), id);
         }
     }
     for (base, owners) in base_owners.iter().filter(|(_, o)| o.len() > 1) {
@@ -160,7 +171,7 @@ fn append_shared_resource_warnings(endpoints: &[Endpoint], risks: &mut Vec<Strin
             owners.join(", ")
         ));
     }
-    for (tail, owners) in key_tail_owners.iter().filter(|(_, o)| o.len() > 1) {
+    for ((_, tail), owners) in key_tail_owners.iter().filter(|(_, o)| o.len() > 1) {
         risks.push(format!(
             "多个 Provider 入口 key 尾号相同 ...{}：{}。",
             tail,
@@ -228,7 +239,7 @@ fn append_duplicate_warnings(values: &[&str], name: &str, risks: &mut Vec<String
     }
 }
 
-fn push_group(groups: &mut Vec<(String, Vec<String>)>, key: String, value: String) {
+fn push_group<K: PartialEq>(groups: &mut Vec<(K, Vec<String>)>, key: K, value: String) {
     match groups.iter_mut().find(|(k, _)| *k == key) {
         Some((_, list)) => list.push(value),
         None => groups.push((key, vec![value])),
@@ -311,8 +322,30 @@ mod tests {
         assert!(
             risks
                 .iter()
-                .any(|risk| risk.contains("只能落到 openai 协议入口")),
+                .any(|risk| risk.contains("claude-opus-* 只能落到 openai 协议入口")),
             "{risks:?}"
+        );
+
+        // 同一目标协议组合的多个模型应合并为单条提示，避免刷屏。
+        c.endpoints[0].mappings.push(ModelMapping {
+            client_pattern: "claude-sonnet-*".into(),
+            context: ContextMode::OneMillion,
+            failover_timeout_seconds: None,
+            thinking: ThinkingMode::Adaptive,
+            effort: None,
+            upstream_model: String::new(),
+            capabilities: Vec::new(),
+        });
+        let risks = evaluate(&c);
+        let translation_warnings: Vec<_> = risks
+            .iter()
+            .filter(|risk| risk.contains("只能落到"))
+            .collect();
+        assert_eq!(translation_warnings.len(), 1, "{risks:?}");
+        assert!(
+            translation_warnings[0]
+                .contains("claude-opus-*, claude-sonnet-* 只能落到 openai 协议入口"),
+            "{translation_warnings:?}"
         );
 
         // 只要还有一个 Anthropic(或 Auto)入口能承接,native 优先,不提示。
@@ -362,17 +395,25 @@ mod tests {
         c.endpoints = vec![e1.clone(), e2.clone()];
         assert!(!evaluate(&c).iter().any(|r| r.contains("共用 API 地址")));
 
-        // key 尾号相同仍要警告(与粘性分组无关)。
+        // 同地址下 key 尾号相同仍要警告(与粘性分组无关)。
         let mut k1 = endpoint("k1", "sk-abcd1234");
         let mut k2 = endpoint("k2", "sk-zzzz1234");
+        k1.base_url = "https://same.example.com".into();
+        k2.base_url = "https://same.example.com/".into();
         k1.sticky_group = Some("g1".into());
         k2.sticky_group = Some("g2".into());
-        c.endpoints = vec![k1, k2];
+        c.endpoints = vec![k1.clone(), k2.clone()];
         assert!(
             evaluate(&c)
                 .iter()
                 .any(|r| r.contains("key 尾号相同 ...1234"))
         );
+
+        // 不同 API 地址复用相同 key 属于自建多实例等场景，不报警。
+        k1.base_url = "https://k1.example.com".into();
+        k2.base_url = "https://k2.example.com".into();
+        c.endpoints = vec![k1, k2];
+        assert!(!evaluate(&c).iter().any(|r| r.contains("key 尾号相同")));
     }
 
     #[test]

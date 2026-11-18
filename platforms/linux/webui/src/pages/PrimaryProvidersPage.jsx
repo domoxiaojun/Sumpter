@@ -1601,7 +1601,7 @@ export function PrimaryProvidersPage() {
                 onChange={(e) => { stickyGroup = e.target.value; }}
               />
               <span className="block text-[11px] text-muted-foreground">
-                同一分组共享会话粘性；当前分组故障后再故障转移到其他分组。
+                同一中转站多账号填相同分组可共享会话粘性（组内优先级须一致）；或填各自入口 ID 作为独立分组，均可消除共用 API 地址提示。
               </span>
             </div>
           </div>
@@ -1779,6 +1779,11 @@ export function PrimaryProvidersPage() {
             <small className="truncate text-[10px] text-muted-foreground" title={userAgentSummary(row.userAgent)}>
               UA：{userAgentSummary(row.userAgent)}
             </small>
+            {row.stickyGroup && (
+              <small className="truncate font-mono text-[10px] text-muted-foreground" title={`粘性分组：${row.stickyGroup}`}>
+                粘性分组：{row.stickyGroup}
+              </small>
+            )}
           </span>
         </span>
       ),
@@ -2191,6 +2196,10 @@ export function PrimaryProvidersPage() {
                       <dd className={endpoint.catalog?.status === '获取失败' ? 'text-status-critical' : undefined}>
                         {endpoint.catalog?.status || '未获取'}{models.length ? ` · ${models.length} 个` : ''}
                       </dd>
+                    </div>
+                    <div className="col-span-2">
+                      <dt className="text-[11px] text-muted-foreground">粘性分组</dt>
+                      <dd className="truncate font-mono">{endpoint.stickyGroup || '独立分组'}</dd>
                     </div>
                   </dl>
 

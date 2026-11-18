@@ -983,6 +983,36 @@ test('v7 flat endpoints preserve provider order, mappings, and endpoint fields',
   assert.equal('pools' in roundTrip, false);
 });
 
+test('stickyGroup trims surrounding whitespace and omits empty or null values on wire round-trip', () => {
+  const ui = fromWireConfig({
+    config: {
+      schemaVersion: 7,
+      endpoints: [
+        { id: 'padded', stickyGroup: '  anyrouter  ' },
+        { id: 'blank', stickyGroup: '   ' },
+        { id: 'cleared', stickyGroup: null },
+      ],
+    },
+  });
+  assert.equal(ui.config.endpoints[0].stickyGroup, 'anyrouter');
+  assert.equal(ui.config.endpoints[1].stickyGroup, undefined);
+  assert.equal('stickyGroup' in ui.config.endpoints[1], false);
+  assert.equal('stickyGroup' in ui.config.endpoints[2], false);
+
+  const wire = toWireConfig({
+    schemaVersion: 7,
+    endpoints: [
+      { id: 'padded', stickyGroup: '  shared-team  ' },
+      { id: 'blank', stickyGroup: '   ' },
+      { id: 'cleared', stickyGroup: null },
+    ],
+  });
+  assert.equal(wire.endpoints[0].stickyGroup, 'shared-team');
+  assert.equal(wire.endpoints[1].stickyGroup, undefined);
+  assert.equal('stickyGroup' in wire.endpoints[1], false);
+  assert.equal('stickyGroup' in wire.endpoints[2], false);
+});
+
 test('legacy fixed IP aliases are ignored and never written back', () => {
   const legacy = fromWireConfig({ config: {
     schemaVersion: 7,

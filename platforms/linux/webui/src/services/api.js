@@ -96,6 +96,12 @@ function normalizeOptionalNumber(value) {
   return Number.isFinite(number) ? number : undefined;
 }
 
+function normalizeEndpointStickyGroup(endpoint) {
+  const stickyGroup = typeof endpoint.stickyGroup === 'string' ? endpoint.stickyGroup.trim() : '';
+  if (stickyGroup) endpoint.stickyGroup = stickyGroup;
+  else delete endpoint.stickyGroup;
+}
+
 function normalizeCatalog(value) {
   const source = value && typeof value === 'object' ? value : {};
   const models = Array.isArray(source.models)
@@ -196,6 +202,7 @@ export function fromWireConfig(document) {
         throw new TypeError(`入口 ${endpoint.id || '(unknown)'} 的 resolveIP 不是合法 IPv4/IPv6 地址`);
       }
       if (!endpoint.resolveIP) delete endpoint.resolveIP;
+      normalizeEndpointStickyGroup(endpoint);
       endpoint.protocol = normalizeEndpointProtocol(endpoint.protocol, schemaVersion < 4 ? 'anthropic' : 'auto');
       const normalizedUserAgent = normalizeUserAgentSettings(endpoint.userAgent);
       if (Object.keys(normalizedUserAgent).length > 0) endpoint.userAgent = normalizedUserAgent;
@@ -228,6 +235,7 @@ export function toWireConfig(document) {
         throw new TypeError(`入口 ${endpoint.id || '(unknown)'} 的 resolveIP 不是合法 IPv4/IPv6 地址`);
       }
       if (!endpoint.resolveIP) delete endpoint.resolveIP;
+      normalizeEndpointStickyGroup(endpoint);
       const endpointCapabilities = [...new Set(
         (Array.isArray(endpoint.capabilities) ? endpoint.capabilities : [])
           .map((capability) => String(capability).trim().toLowerCase())
