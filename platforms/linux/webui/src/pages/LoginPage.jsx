@@ -66,8 +66,8 @@ export function LoginPage() {
   };
 
   const shaderColors = theme === 'dark'
-    ? ['#c26227', '#2b3554', '#182032', '#d97c38']
-    : ['#f5b482', '#cbd5e1', '#f8fafc', '#ea8f53'];
+    ? ['#2563eb', '#18181b', '#09090b', '#0ea5e9']
+    : ['#93c5fd', '#f4f4f5', '#ffffff', '#bae6fd'];
 
   return (
     <main className="ambient-canvas-glow relative flex min-h-dvh items-center justify-center bg-background p-4 sm:p-6">

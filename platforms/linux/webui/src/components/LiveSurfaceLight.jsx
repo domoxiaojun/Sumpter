@@ -15,8 +15,8 @@ export function LiveSurfaceLight() {
   // Keep the colors clear; the edge mask and a single opacity layer control
   // intensity without turning the whole request surface into a gray wash.
   const colors = light
-    ? ['#f09d5e', '#d97a38', '#94a3b8', '#e6b180']
-    : ['#d97430', '#b85d22', '#475569', '#e5924d'];
+    ? ['#60a5fa', '#2563eb', '#a1a1aa', '#38bdf8']
+    : ['#3b82f6', '#1d4ed8', '#3f3f46', '#0ea5e9'];
   return (
     <span className="telemetry-live-light" aria-hidden="true">
       <MeshGradient
