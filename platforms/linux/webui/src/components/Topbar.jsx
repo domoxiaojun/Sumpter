@@ -1,6 +1,7 @@
-import { ChevronDown, LogOut, Moon, Search, ShieldCheck, Sun } from 'lucide-react';
+import { ChevronDown, LogOut, Search, ShieldCheck } from 'lucide-react';
 import { useAppControls } from '../context/AppContext.jsx';
 import { cn } from '../lib/utils.js';
+import { ThemePicker } from './ThemePicker.jsx';
 import { Button } from './ui/button.jsx';
 import {
   DropdownMenu,
@@ -29,7 +30,7 @@ const ROUTE_LABELS = {
 
 export function Topbar() {
   const {
-    currentRoute, navigate, theme, toggleTheme, setIsCommandOpen, streamConnected,
+    currentRoute, navigate, setIsCommandOpen, streamConnected,
     autoRefresh, setAutoRefresh, refreshIntervalOptions,
     runRefreshInterval, setRunRefreshInterval,
     statisticsRefreshInterval, setStatisticsRefreshInterval,
@@ -129,17 +130,7 @@ export function Topbar() {
             </Select>
           </div>
 
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            className="size-8 rounded-xl border-border/80 bg-card/70 shadow-none"
-            onClick={toggleTheme}
-            title={theme === 'dark' ? '切换为亮色主题' : '切换为暗色主题'}
-            aria-label="切换主题"
-          >
-            {theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
-          </Button>
+          <ThemePicker />
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -148,6 +139,7 @@ export function Topbar() {
                 variant="outline"
                 size="sm"
                 className="h-8 gap-2 rounded-xl border-border/80 bg-card/70 pl-1.5 pr-2.5 shadow-none"
+                aria-label="管理员菜单"
               >
                 <span className="flex size-5 items-center justify-center rounded-full bg-primary/15 font-mono text-[11px] font-semibold text-primary">
                   {username.slice(0, 1).toUpperCase()}

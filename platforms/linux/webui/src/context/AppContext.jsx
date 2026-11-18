@@ -7,6 +7,14 @@ import { fetchRuntimeChanges, mergeRuntimeListItems, reconcileRuntimeRefresh, ru
 import { clone } from '../utils/helpers.js';
 import { configDraftWrite, requireDraftGeneration } from '../utils/configDraft.js';
 import { createNavigationGuard } from '../utils/navigationGuard.js';
+import {
+  isCatppuccinDarkMode,
+  nextModeForAccentSelection,
+  nextThemeModeOnToggle,
+  normalizeCatppuccinAccent,
+  normalizeThemeMode,
+  resolveThemeState,
+} from '../utils/themeCatalog.js';
 
 const AppContext = createContext(null);
 const RuntimeContext = createContext(null);
@@ -74,13 +82,34 @@ export function AppProvider({ children }) {
   });
 
   // Theme State
-  const [theme, setTheme] = useState(() => {
+  const [themeMode, setThemeModeState] = useState(() => {
     try {
-      return localStorage.getItem('sumpter-theme') || 'dark';
+      return normalizeThemeMode(localStorage.getItem('sumpter-theme'));
     } catch {
       return 'dark';
     }
   });
+  const [catppuccinAccent, setCatppuccinAccentState] = useState(() => {
+    try {
+      return normalizeCatppuccinAccent(localStorage.getItem('sumpter-catppuccin-accent'));
+    } catch {
+      return 'mauve';
+    }
+  });
+  const [systemPrefersDark, setSystemPrefersDark] = useState(() => (
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia('(prefers-color-scheme: dark)').matches
+      : true
+  ));
+  const lastCatppuccinDarkRef = useRef(
+    isCatppuccinDarkMode(themeMode) ? themeMode : 'catppuccin-mocha',
+  );
+  const themeState = useMemo(
+    () => resolveThemeState(themeMode, catppuccinAccent, systemPrefersDark),
+    [themeMode, catppuccinAccent, systemPrefersDark],
+  );
+  const theme = themeState.scheme;
+  const resolvedPalette = themeState.palette;
 
   // Core Data State
   const [configDoc, setConfigDoc] = useState(null);
@@ -257,15 +286,45 @@ export function AppProvider({ children }) {
   const registerNavigationGuard = useCallback(read => leaveGuardRef.current.register(read), []);
   const canLeavePage = useCallback(() => leaveGuardRef.current.canLeave(), []);
 
+  // Sync System Color Scheme Preference
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const onChange = (event) => setSystemPrefersDark(event.matches);
+    setSystemPrefersDark(mq.matches);
+    if (typeof mq.addEventListener === 'function') {
+      mq.addEventListener('change', onChange);
+      return () => mq.removeEventListener('change', onChange);
+    }
+    mq.addListener(onChange);
+    return () => mq.removeListener(onChange);
+  }, []);
+
   // Sync Theme to DOM
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
+    const root = document.documentElement;
+    root.setAttribute('data-theme', theme);
+    root.setAttribute('data-palette', resolvedPalette);
+    root.setAttribute('data-accent', catppuccinAccent);
+    root.classList.toggle('dark', theme === 'dark');
+
+    const darkMeta = document.querySelector('meta[name="theme-color"][media="(prefers-color-scheme: dark)"]');
+    const lightMeta = document.querySelector('meta[name="theme-color"][media="(prefers-color-scheme: light)"]');
+    if (themeMode === 'system') {
+      if (darkMeta) darkMeta.setAttribute('content', '#0b0b0d');
+      if (lightMeta) lightMeta.setAttribute('content', '#fafafa');
+    } else {
+      if (darkMeta) darkMeta.setAttribute('content', themeState.themeColorHex);
+      if (lightMeta) lightMeta.setAttribute('content', themeState.themeColorHex);
+    }
+
     try {
-      localStorage.setItem('sumpter-theme', theme);
+      localStorage.setItem('sumpter-theme', themeMode);
+      localStorage.setItem('sumpter-catppuccin-accent', catppuccinAccent);
     } catch {
       // Theme still applies for this session when storage is unavailable.
     }
-  }, [theme]);
+  }, [theme, themeMode, resolvedPalette, catppuccinAccent, themeState.themeColorHex]);
 
   // Sync Hash to Route
   useEffect(() => {
@@ -957,6 +1016,41 @@ export function AppProvider({ children }) {
     setConfigDoc(null); setStatus(null); setRuntime(null); setRuntimeEventDetail(null); setDiagnostics(null);
   }, []);
 
+  const setThemeMode = useCallback((next) => {
+    setThemeModeState((prev) => {
+      const candidate = typeof next === 'function' ? next(prev) : next;
+      const normalized = normalizeThemeMode(candidate);
+      if (isCatppuccinDarkMode(normalized)) {
+        lastCatppuccinDarkRef.current = normalized;
+      }
+      return normalized;
+    });
+  }, []);
+
+  const selectCatppuccinAccent = useCallback((nextAccent) => {
+    const normalizedAccent = normalizeCatppuccinAccent(nextAccent);
+    setCatppuccinAccentState(normalizedAccent);
+    setThemeModeState((prevMode) => {
+      const currentScheme = resolveThemeState(prevMode, normalizedAccent, systemPrefersDark).scheme;
+      const nextMode = nextModeForAccentSelection(prevMode, currentScheme);
+      if (isCatppuccinDarkMode(nextMode)) {
+        lastCatppuccinDarkRef.current = nextMode;
+      }
+      return nextMode;
+    });
+  }, [systemPrefersDark]);
+
+  const toggleTheme = useCallback(() => {
+    setThemeModeState((prev) => {
+      const currentScheme = resolveThemeState(prev, catppuccinAccent, systemPrefersDark).scheme;
+      const nextMode = nextThemeModeOnToggle(prev, currentScheme, lastCatppuccinDarkRef.current);
+      if (isCatppuccinDarkMode(nextMode)) {
+        lastCatppuccinDarkRef.current = nextMode;
+      }
+      return nextMode;
+    });
+  }, [catppuccinAccent, systemPrefersDark]);
+
   const value = useMemo(() => ({
     currentRoute,
     pageVisible,
@@ -966,7 +1060,12 @@ export function AppProvider({ children }) {
     registerNavigationGuard,
     canLeavePage,
     theme,
-    toggleTheme: () => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark')),
+    themeMode,
+    setThemeMode,
+    resolvedPalette,
+    catppuccinAccent,
+    selectCatppuccinAccent,
+    toggleTheme,
     configDoc,
     config: configDoc?.config,
     secretStatus: configDoc?.secretStatus,
@@ -998,7 +1097,7 @@ export function AppProvider({ children }) {
     refreshCore,
     toggleProxy,
     saveConfig,
-  }), [currentRoute, pageVisible, runtimePagesRetained, navigate, theme, configDoc, status, diagnostics, autostart, isLoading, lastError, auth, authLoading, login, logout, autoRefresh, setAutoRefresh, refreshIntervalOptions, runRefreshInterval, setRunRefreshInterval, statisticsRefreshInterval, setStatisticsRefreshInterval, streamConnected, toasts, addToast, removeToast, isCommandOpen, setIsCommandOpen, activeModal, refreshCore, toggleProxy, saveConfig]);
+  }), [currentRoute, pageVisible, runtimePagesRetained, navigate, theme, themeMode, setThemeMode, resolvedPalette, catppuccinAccent, selectCatppuccinAccent, toggleTheme, configDoc, status, diagnostics, autostart, isLoading, lastError, auth, authLoading, login, logout, autoRefresh, setAutoRefresh, refreshIntervalOptions, runRefreshInterval, setRunRefreshInterval, statisticsRefreshInterval, setStatisticsRefreshInterval, streamConnected, toasts, addToast, removeToast, isCommandOpen, setIsCommandOpen, activeModal, refreshCore, toggleProxy, saveConfig]);
 
   const runtimeValue = useMemo(() => ({
     runtime,

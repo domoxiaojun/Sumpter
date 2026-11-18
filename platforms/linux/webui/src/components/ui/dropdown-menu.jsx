@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useState } from 'react';
+import { Check } from 'lucide-react';
 import { DropdownMenu as DropdownMenuPrimitive } from 'radix-ui';
 import { cn } from '../../lib/utils.js';
 
@@ -76,6 +77,42 @@ export function DropdownMenuItem({ className, variant = 'default', ...props }) {
       )}
       {...props}
     />
+  );
+}
+
+export function DropdownMenuLabel({ className, ...props }) {
+  return (
+    <DropdownMenuPrimitive.Label
+      data-slot="dropdown-menu-label"
+      className={cn('px-2.5 py-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground select-none', className)}
+      {...props}
+    />
+  );
+}
+
+export function DropdownMenuRadioGroup({ ...props }) {
+  return <DropdownMenuPrimitive.RadioGroup data-slot="dropdown-menu-radio-group" {...props} />;
+}
+
+export function DropdownMenuRadioItem({ className, children, ...props }) {
+  return (
+    <DropdownMenuPrimitive.RadioItem
+      data-slot="dropdown-menu-radio-item"
+      className={cn(
+        'relative flex cursor-pointer items-center gap-2 rounded-lg py-1.5 pr-2.5 pl-7 text-xs font-medium outline-hidden select-none transition-colors',
+        'focus:bg-accent focus:text-accent-foreground data-[state=checked]:text-foreground',
+        'data-disabled:pointer-events-none data-disabled:opacity-50',
+        className,
+      )}
+      {...props}
+    >
+      <span className="pointer-events-none absolute left-2 flex size-3.5 items-center justify-center">
+        <DropdownMenuPrimitive.ItemIndicator>
+          <Check className="size-3.5 text-primary" />
+        </DropdownMenuPrimitive.ItemIndicator>
+      </span>
+      {children}
+    </DropdownMenuPrimitive.RadioItem>
   );
 }
 

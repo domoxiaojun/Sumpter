@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { MeshGradient } from '@paper-design/shaders-react';
-import { ArrowRight, Lock, Moon, Sun } from 'lucide-react';
+import { ArrowRight, Lock } from 'lucide-react';
 import { useAppControls } from '../context/AppContext.jsx';
 import donkeyHead from '../assets/donkey-logo.png';
+import { ThemePicker } from '../components/ThemePicker.jsx';
+import { resolveLoginShaderColors } from '../utils/themeCatalog.js';
 import { Button } from '../components/ui/button.jsx';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card.jsx';
 import { Input } from '../components/ui/input.jsx';
@@ -18,7 +20,7 @@ function supportsWebGL2() {
 }
 
 export function LoginPage() {
-  const { login, theme, toggleTheme } = useAppControls();
+  const { login, resolvedPalette, catppuccinAccent } = useAppControls();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -65,9 +67,7 @@ export function LoginPage() {
     }
   };
 
-  const shaderColors = theme === 'dark'
-    ? ['#2563eb', '#18181b', '#09090b', '#0ea5e9']
-    : ['#93c5fd', '#f4f4f5', '#ffffff', '#bae6fd'];
+  const shaderColors = resolveLoginShaderColors(resolvedPalette, catppuccinAccent);
 
   return (
     <main className="ambient-canvas-glow relative flex min-h-dvh items-center justify-center bg-background p-4 sm:p-6">
@@ -87,17 +87,7 @@ export function LoginPage() {
         </span>
       )}
 
-      <Button
-        type="button"
-        variant="outline"
-        size="icon"
-        className="fixed right-5 top-5 z-10 rounded-xl bg-card/80 backdrop-blur-md"
-        onClick={toggleTheme}
-        title={theme === 'dark' ? '切换为亮色主题' : '切换为暗色主题'}
-        aria-label="切换主题"
-      >
-        {theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
-      </Button>
+      <ThemePicker triggerClassName="fixed right-5 top-5 z-10 rounded-xl bg-card/80 backdrop-blur-md" />
 
       <Card
         className="page-stage-enter surface-popover relative z-10 w-full max-w-[400px] border-border/80 bg-card/92 py-6 backdrop-blur-xl"

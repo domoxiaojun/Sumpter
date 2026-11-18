@@ -1,22 +1,32 @@
 import { useEffect, useState } from 'react';
 import { MeshGradient } from '@paper-design/shaders-react';
+import { resolveLiveSurfaceColors } from '../utils/themeCatalog.js';
+
+function readDomTheme() {
+  const { palette, theme, accent } = document.documentElement.dataset;
+  return {
+    palette: palette || (theme === 'light' ? 'default-light' : 'default-dark'),
+    accent: accent || 'mauve',
+  };
+}
 
 export function LiveSurfaceLight() {
-  const [light, setLight] = useState(() => document.documentElement.dataset.theme === 'light');
+  const [domTheme, setDomTheme] = useState(readDomTheme);
   const [reduced, setReduced] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   useEffect(() => {
-    const theme = new MutationObserver(() => setLight(document.documentElement.dataset.theme === 'light'));
+    const observer = new MutationObserver(() => setDomTheme(readDomTheme()));
     const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
     const updateMotion = () => setReduced(motion.matches);
-    theme.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme', 'data-palette', 'data-accent'],
+    });
     motion.addEventListener('change', updateMotion);
-    return () => { theme.disconnect(); motion.removeEventListener('change', updateMotion); };
+    return () => { observer.disconnect(); motion.removeEventListener('change', updateMotion); };
   }, []);
   // Keep the colors clear; the edge mask and a single opacity layer control
   // intensity without turning the whole request surface into a gray wash.
-  const colors = light
-    ? ['#60a5fa', '#2563eb', '#a1a1aa', '#38bdf8']
-    : ['#3b82f6', '#1d4ed8', '#3f3f46', '#0ea5e9'];
+  const colors = resolveLiveSurfaceColors(domTheme.palette, domTheme.accent);
   return (
     <span className="telemetry-live-light" aria-hidden="true">
       <MeshGradient

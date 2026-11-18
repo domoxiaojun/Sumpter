@@ -11,6 +11,7 @@ struct SettingsRootView: View {
     @State private var wideColumnVisibility: NavigationSplitViewVisibility = .all
     @Environment(\.colorScheme) private var systemColorScheme
     @AppStorage("sumpterAppearanceMode") private var appearanceModeRaw = SumpterAppearanceMode.system.rawValue
+    @AppStorage("sumpterCatppuccinAccent") private var catppuccinAccentRaw = SumpterCatppuccinAccent.mauve.rawValue
 
     init(model: AppModel, windowVisibility: SumpterWindowVisibility = SumpterWindowVisibility()) {
         self.model = model
@@ -22,19 +23,51 @@ struct SettingsRootView: View {
         SumpterAppearanceMode(rawValue: appearanceModeRaw) ?? .system
     }
 
+    private var catppuccinAccent: SumpterCatppuccinAccent {
+        SumpterCatppuccinAccent(rawValue: catppuccinAccentRaw) ?? .mauve
+    }
+
     private var resolvedColorScheme: ColorScheme {
         switch appearanceMode {
         case .system:
             systemColorScheme
-        case .light:
+        case .light, .catppuccinLatte:
             .light
-        case .dark:
+        case .dark, .catppuccinFrappe, .catppuccinMacchiato, .catppuccinMocha:
             .dark
         }
     }
 
     private var palette: SumpterTheme.Palette {
-        SumpterTheme.palette(for: resolvedColorScheme)
+        SumpterTheme.palette(
+            mode: appearanceMode,
+            systemScheme: systemColorScheme,
+            accent: catppuccinAccent
+        )
+    }
+
+    private var appearanceButtonTitle: String {
+        if appearanceMode.isCatppuccin {
+            return "外观：\(appearanceMode.shortTitle) · \(catppuccinAccent.shortTitle)"
+        }
+        return "外观：\(appearanceMode.title)"
+    }
+
+    private var catppuccinAccentBinding: Binding<String> {
+        Binding(
+            get: { catppuccinAccent.rawValue },
+            set: { newValue in
+                guard SumpterCatppuccinAccent(rawValue: newValue) != nil else { return }
+                catppuccinAccentRaw = newValue
+                let nextMode = SumpterAppearanceMode.modeAfterSelectingCatppuccinAccent(
+                    currentMode: appearanceMode,
+                    resolvedScheme: resolvedColorScheme
+                )
+                if nextMode != appearanceMode {
+                    appearanceModeRaw = nextMode.rawValue
+                }
+            }
+        )
     }
 
     var body: some View {
@@ -89,15 +122,38 @@ struct SettingsRootView: View {
             ToolbarItem(placement: .automatic) {
                 Menu {
                     Picker("主题", selection: $appearanceModeRaw) {
-                        ForEach(SumpterAppearanceMode.allCases) { mode in
-                            Label(mode.title, systemImage: mode.icon)
-                                .tag(mode.rawValue)
+                        Section("经典黑白（钴蓝）") {
+                            ForEach(SumpterAppearanceMode.classicCases) { mode in
+                                Label(mode.title, systemImage: mode.icon)
+                                    .tag(mode.rawValue)
+                            }
+                        }
+                        Section("Catppuccin 调色板") {
+                            ForEach(SumpterAppearanceMode.catppuccinCases) { mode in
+                                Label(mode.title, systemImage: mode.icon)
+                                    .tag(mode.rawValue)
+                            }
                         }
                     }
+                    .pickerStyle(.inline)
+
+                    Divider()
+
+                    Menu {
+                        Picker("强调色", selection: catppuccinAccentBinding) {
+                            ForEach(SumpterCatppuccinAccent.allCases) { accent in
+                                Text(accent.title)
+                                    .tag(accent.rawValue)
+                            }
+                        }
+                        .pickerStyle(.inline)
+                    } label: {
+                        Label("Catppuccin 强调色：\(catppuccinAccent.shortTitle)", systemImage: "paintpalette")
+                    }
                 } label: {
-                    Label("外观：\(appearanceMode.title)", systemImage: appearanceMode.icon)
+                    Label(appearanceButtonTitle, systemImage: appearanceMode.icon)
                 }
-                .help("切换与 Linux WebUI 一致的浅色/深色语义主题")
+                .help("切换经典黑白或 Catppuccin 调色板与强调色")
             }
         }
         // Keep the sidebar/detail split usable in a narrow window. Wide tables

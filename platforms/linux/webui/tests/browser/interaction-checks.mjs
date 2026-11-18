@@ -37,10 +37,28 @@ export async function runInteractionChecks({ open, click, focus, press, fill, ev
   await closedDialog();
   await released('编辑弹窗');
 
-  await click('button[aria-haspopup="menu"]');
+  await click('button[aria-label="管理员菜单"]');
   check(await waitFor(locked), '用户菜单在 Admin CSP 下锁住背景');
   await press('Escape');
   await released('用户菜单');
+
+  await click('button[aria-label="选择界面主题"]');
+  check(await waitFor(locked), '主题选择器在 Admin CSP 下锁住背景');
+  await click('[data-theme-option="catppuccin-mocha"]');
+  check(await waitFor(`document.documentElement.dataset.palette === 'catppuccin-mocha' && document.documentElement.dataset.theme === 'dark'`), '主题选择器可切换为 Catppuccin Mocha');
+  await released('主题选择器（切换风味后）');
+
+  await click('button[aria-label="选择界面主题"]');
+  await waitFor(`Boolean(document.querySelector('button[role="radio"][aria-label="强调色：晴空蓝 (Blue)"]'))`);
+  await click('button[role="radio"][aria-label="强调色：晴空蓝 (Blue)"]');
+  check(await waitFor(`document.documentElement.dataset.palette === 'catppuccin-mocha' && document.documentElement.dataset.accent === 'blue'`), '主题选择器保持 Mocha 并切换 Catppuccin 强调色');
+  await click('[data-theme-option="catppuccin-latte"]');
+  check(await waitFor(`document.documentElement.dataset.palette === 'catppuccin-latte' && document.documentElement.dataset.theme === 'light'`), '主题选择器可切回 Catppuccin Latte 浅色');
+  await click('button[aria-label="选择界面主题"]');
+  await waitFor(`Boolean(document.querySelector('[data-theme-option="dark"]'))`);
+  await click('[data-theme-option="dark"]');
+  check(await waitFor(`document.documentElement.dataset.palette === 'default-dark' && document.documentElement.dataset.theme === 'dark'`), '主题选择器可恢复原曜石深色');
+  await released('主题选择器');
 
   await click('[role="combobox"][aria-label="运行刷新间隔"]');
   check(await waitFor(locked), '刷新间隔选择器在 Admin CSP 下锁住背景');

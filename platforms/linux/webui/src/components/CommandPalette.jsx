@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { useAppControls } from '../context/AppContext.jsx';
 import { cn } from '../lib/utils.js';
+import { isCatppuccinMode } from '../utils/themeCatalog.js';
 import { Badge } from './ui/badge.jsx';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog.jsx';
 import { InputGroup, InputGroupAddon, InputGroupInput } from './ui/input-group.jsx';
@@ -26,7 +27,7 @@ import { Kbd } from './ui/kbd.jsx';
 
 export function CommandPalette() {
   const {
-    isCommandOpen, setIsCommandOpen, navigate, theme, toggleTheme,
+    isCommandOpen, setIsCommandOpen, navigate, theme, themeMode, toggleTheme,
     toggleProxy, refreshCore, status,
   } = useAppControls();
   const [query, setQuery] = useState('');
@@ -47,8 +48,14 @@ export function CommandPalette() {
     { id: 'nav-about', title: '转到：关于', category: '页面跳转', IconComp: Info, action: () => navigate('about') },
     { id: 'act-toggle-proxy', title: status?.running ? '停止代理服务' : '启动代理服务', category: '控制操作', IconComp: status?.running ? Square : Play, action: toggleProxy },
     { id: 'act-refresh', title: '刷新系统与配置数据', category: '控制操作', IconComp: RefreshCw, action: refreshCore },
-    { id: 'act-theme', title: '切换深色/浅色主题', category: '外观设置', IconComp: theme === 'dark' ? Sun : Moon, action: toggleTheme },
-  ], [navigate, toggleProxy, refreshCore, toggleTheme, status, theme]);
+    {
+      id: 'act-theme',
+      title: isCatppuccinMode(themeMode) ? '切换深色/浅色主题（Catppuccin）' : '切换深色/浅色主题',
+      category: '外观设置',
+      IconComp: theme === 'dark' ? Sun : Moon,
+      action: toggleTheme,
+    },
+  ], [navigate, toggleProxy, refreshCore, toggleTheme, status, theme, themeMode]);
 
   const filtered = useMemo(() => {
     if (!query.trim()) return commands;
