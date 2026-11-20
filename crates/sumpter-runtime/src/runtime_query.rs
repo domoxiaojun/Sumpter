@@ -1692,23 +1692,18 @@ impl CostAccumulator {
             row.token_accounting_semantics.as_deref(),
             Some("subset" | "independent")
         ) && row.token_accounting_quality.as_deref() == Some("complete");
-        let Some((uncached_input, cache_read, cache_creation, output)) = accounting_known
-            .then_some((
-                row.uncached_input_tokens,
-                row.cache_read_input_tokens,
-                row.cache_creation_input_tokens,
-                row.output_tokens,
-            ))
+        let Some((uncached_input, output)) = accounting_known
+            .then_some((row.uncached_input_tokens, row.output_tokens))
             .and_then(|values| match values {
-                (Some(uncached), Some(read), Some(creation), Some(output)) => {
-                    Some((uncached.max(0), read.max(0), creation.max(0), output.max(0)))
-                }
+                (Some(uncached), Some(output)) => Some((uncached.max(0), output.max(0))),
                 _ => None,
             })
         else {
             self.unknown_accounting_requests = self.unknown_accounting_requests.saturating_add(1);
             return;
         };
+        let cache_read = row.cache_read_input_tokens.unwrap_or(0).max(0);
+        let cache_creation = row.cache_creation_input_tokens.unwrap_or(0).max(0);
         if row.effective_model.is_none() && row.upstream_model.is_none() {
             self.unpriced_requests = self.unpriced_requests.saturating_add(1);
             return;

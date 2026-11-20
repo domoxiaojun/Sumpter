@@ -769,12 +769,10 @@ pub(super) fn add_rollup_cost(
     }
     let accounting_known =
         matches!(semantics, Some("subset" | "independent")) && quality == Some("complete");
-    let Some((uncached_input, cache_read, cache_creation, output)) = accounting_known
-        .then_some((uncached_input, cache_read, cache_creation, output))
+    let Some((uncached_input, output)) = accounting_known
+        .then_some((uncached_input, output))
         .and_then(|values| match values {
-            (Some(uncached), Some(read), Some(creation), Some(output)) => {
-                Some((uncached.max(0), read.max(0), creation.max(0), output.max(0)))
-            }
+            (Some(uncached), Some(output)) => Some((uncached.max(0), output.max(0))),
             _ => None,
         })
     else {
@@ -784,6 +782,11 @@ pub(super) fn add_rollup_cost(
         accumulator.cost_unknown_requests = accumulator.cost_unknown_requests.saturating_add(1);
         return;
     };
+    accumulator.cost_accounting_complete_requests = accumulator
+        .cost_accounting_complete_requests
+        .saturating_add(1);
+    let cache_read = cache_read.unwrap_or(0).max(0);
+    let cache_creation = cache_creation.unwrap_or(0).max(0);
     if effective_model.is_none() && upstream_model.is_none() {
         accumulator.cost_unpriced_requests = accumulator.cost_unpriced_requests.saturating_add(1);
         return;
@@ -1038,21 +1041,6 @@ pub(super) fn rebuild_hourly_rollup_bucket(
             } else {
                 accumulator.cache_unknown_requests =
                     accumulator.cache_unknown_requests.saturating_add(1);
-            }
-            let cost_complete = accounting_known
-                && quality.as_deref() == Some("complete")
-                && uncached.is_some()
-                && cache_read.is_some()
-                && cache_creation.is_some()
-                && output.is_some();
-            if cost_complete {
-                accumulator.cost_accounting_complete_requests = accumulator
-                    .cost_accounting_complete_requests
-                    .saturating_add(1);
-            } else {
-                accumulator.cost_unknown_accounting_requests = accumulator
-                    .cost_unknown_accounting_requests
-                    .saturating_add(1);
             }
         }
     }

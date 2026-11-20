@@ -1800,6 +1800,280 @@ fn gemini_4_hydrogen_xhigh_auto_prices_upgrades_synced_db_and_supports_wildcards
 }
 
 #[test]
+fn omitted_cache_fields_price_accurately_across_rollups_and_dimensions_without_double_counting() {
+    use crate::runtime_query::{
+        DimensionKind, DimensionQuery, RuntimeFilter, TrendGranularity, TrendQuery, dimension_page,
+        trends,
+    };
+
+    let dir = test_dir("omitted-cache-fields-cost");
+    let path = dir.join("runtime.sqlite3");
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    let ts = 3_600.0;
+
+    let wait_rollups = || {
+        for _ in 0..300 {
+            let connection = Connection::open(&path).unwrap();
+            if meta_i64(&connection, "hourly_rollup_complete").unwrap() == Some(1)
+                && meta_i64(&connection, "projection_indexes_ready").unwrap() == Some(1)
+            {
+                break;
+            }
+            drop(connection);
+            thread::sleep(Duration::from_millis(10));
+        }
+    };
+
+    // 1. Gemini `gemini-4-neon-xhigh`: omits both cacheReadInputTokens & cacheCreationInputTokens.
+    //    $3.00/1M input * 0.1M + $15.00/1M output * 0.01M = $0.45 = 450,000 micros.
+    let mut ev_neon = event(
+        "ev-neon-nocache",
+        KIND_CLIENT,
+        200,
+        RuntimeEventPhase::Completed,
+        Some(RuntimeEventOutcome::Succeeded),
+        ts + 10.0,
+    );
+    ev_neon.request_id = Some("req-neon".into());
+    ev_neon.endpoint_id = Some("ep-gemini".into());
+    ev_neon.effective_model = Some("gemini-4-neon-xhigh".into());
+    ev_neon.target_format = Some(ProviderProtocol::Gemini);
+    ev_neon.stream_trace = serde_json::from_value(json!({
+        "usage": {
+            "inputTokens": 100_000,
+            "outputTokens": 10_000
+        }
+    }))
+    .ok();
+    store.enqueue(ev_neon, RuntimeCounters::default()).unwrap();
+
+    // 2. Gemini `gemini-4-hydrogen-xhigh`: reports cacheReadInputTokens, omits cacheCreationInputTokens.
+    //    subset semantics: 60k uncached ($0.09) + 40k cache read ($0.003) + 10k output ($0.075)
+    //    = $0.168 = 168,000 micros.
+    let mut ev_hydrogen = event(
+        "ev-h4-cache-read",
+        KIND_CLIENT,
+        200,
+        RuntimeEventPhase::Completed,
+        Some(RuntimeEventOutcome::Succeeded),
+        ts + 20.0,
+    );
+    ev_hydrogen.request_id = Some("req-h4".into());
+    ev_hydrogen.endpoint_id = Some("ep-gemini".into());
+    ev_hydrogen.effective_model = Some("gemini-4-hydrogen-xhigh".into());
+    ev_hydrogen.target_format = Some(ProviderProtocol::Gemini);
+    ev_hydrogen.stream_trace = serde_json::from_value(json!({
+        "usage": {
+            "inputTokens": 100_000,
+            "outputTokens": 10_000,
+            "cacheReadInputTokens": 40_000
+        }
+    }))
+    .ok();
+    store
+        .enqueue(ev_hydrogen, RuntimeCounters::default())
+        .unwrap();
+
+    // 3. OpenAI `gpt-5.4-xhigh`: omits cache fields (under 272k tier).
+    //    $2.50/1M input * 0.1M + $15.00/1M output * 0.01M = $0.40 = 400,000 micros.
+    let mut ev_openai = event(
+        "ev-gpt54-nocache",
+        KIND_CLIENT,
+        200,
+        RuntimeEventPhase::Completed,
+        Some(RuntimeEventOutcome::Succeeded),
+        ts + 30.0,
+    );
+    ev_openai.request_id = Some("req-gpt".into());
+    ev_openai.endpoint_id = Some("ep-openai".into());
+    ev_openai.effective_model = Some("gpt-5.4-xhigh".into());
+    ev_openai.target_format = Some(ProviderProtocol::OpenAIResponses);
+    ev_openai.stream_trace = serde_json::from_value(json!({
+        "usage": {
+            "inputTokens": 100_000,
+            "outputTokens": 10_000
+        }
+    }))
+    .ok();
+    store
+        .enqueue(ev_openai, RuntimeCounters::default())
+        .unwrap();
+
+    // 4. Anthropic `claude-sonnet-4-6`: omits cache fields (under 200k tier).
+    //    $3.00/1M input * 0.1M + $15.00/1M output * 0.01M = $0.45 = 450,000 micros.
+    let mut ev_claude = event(
+        "ev-claude-nocache",
+        KIND_CLIENT,
+        200,
+        RuntimeEventPhase::Completed,
+        Some(RuntimeEventOutcome::Succeeded),
+        ts + 40.0,
+    );
+    ev_claude.request_id = Some("req-claude".into());
+    ev_claude.endpoint_id = Some("ep-anthropic".into());
+    ev_claude.effective_model = Some("claude-sonnet-4-6".into());
+    ev_claude.target_format = Some(ProviderProtocol::Anthropic);
+    ev_claude.stream_trace = serde_json::from_value(json!({
+        "usage": {
+            "inputTokens": 100_000,
+            "outputTokens": 10_000
+        }
+    }))
+    .ok();
+    store
+        .enqueue(ev_claude, RuntimeCounters::default())
+        .unwrap();
+
+    // 5. Partial usage (missing outputTokens -> quality = "partial") -> unknown_accounting_requests.
+    let mut ev_partial = event(
+        "ev-partial",
+        KIND_CLIENT,
+        200,
+        RuntimeEventPhase::Completed,
+        Some(RuntimeEventOutcome::Succeeded),
+        ts + 50.0,
+    );
+    ev_partial.request_id = Some("req-partial".into());
+    ev_partial.endpoint_id = Some("ep-gemini".into());
+    ev_partial.effective_model = Some("gemini-4-neon-xhigh".into());
+    ev_partial.target_format = Some(ProviderProtocol::Gemini);
+    ev_partial.stream_trace = serde_json::from_value(json!({
+        "usage": {
+            "inputTokens": 50_000
+        }
+    }))
+    .ok();
+    store
+        .enqueue(ev_partial, RuntimeCounters::default())
+        .unwrap();
+
+    // 6. Failed request without usage -> unknown_accounting_requests (must not double count).
+    let mut ev_failed = event(
+        "ev-failed-no-usage",
+        KIND_CLIENT,
+        502,
+        RuntimeEventPhase::Completed,
+        Some(RuntimeEventOutcome::Failed),
+        ts + 60.0,
+    );
+    ev_failed.request_id = Some("req-failed".into());
+    ev_failed.endpoint_id = Some("ep-gemini".into());
+    ev_failed.effective_model = Some("gemini-4-neon-xhigh".into());
+    ev_failed.target_format = Some(ProviderProtocol::Gemini);
+    store
+        .enqueue(ev_failed, RuntimeCounters::default())
+        .unwrap();
+
+    store.flush().unwrap();
+    wait_rollups();
+
+    let trend_res = trends(
+        &path,
+        &TrendQuery {
+            from: 0.0,
+            to: 7_200.0,
+            granularity: TrendGranularity::Hour,
+            snapshot_seq: None,
+            snapshot_change_seq: None,
+            history_generation: None,
+            filter: RuntimeFilter::default(),
+        },
+    )
+    .unwrap();
+    assert!(trend_res.rollup_used);
+    assert_eq!(trend_res.totals.cost.priced_requests, 4);
+    assert_eq!(trend_res.totals.cost.unpriced_requests, 0);
+    assert_eq!(trend_res.totals.cost.unknown_accounting_requests, 2);
+    assert_eq!(trend_res.totals.cost.estimated_cost_micros, 1_468_000);
+    assert_eq!(trend_res.totals.tokens.cache_read_reported_requests, 1);
+
+    let dim_res = dimension_page(&path, DimensionKind::Model, &DimensionQuery::default()).unwrap();
+    let total_dim_priced: i64 = dim_res.rows.iter().map(|r| r.cost.priced_requests).sum();
+    let total_dim_unpriced: i64 = dim_res.rows.iter().map(|r| r.cost.unpriced_requests).sum();
+    let total_dim_unknown: i64 = dim_res
+        .rows
+        .iter()
+        .map(|r| r.cost.unknown_accounting_requests)
+        .sum();
+    let total_dim_cost: i64 = dim_res
+        .rows
+        .iter()
+        .map(|r| r.cost.estimated_cost_micros)
+        .sum();
+    assert_eq!(total_dim_priced, 4);
+    assert_eq!(total_dim_unpriced, 0);
+    assert_eq!(total_dim_unknown, 2);
+    assert_eq!(total_dim_cost, 1_468_000);
+
+    let neon_row = dim_res
+        .rows
+        .iter()
+        .find(|r| r.key == "gemini-4-neon-xhigh")
+        .unwrap();
+    assert_eq!(neon_row.requests, 3);
+    assert_eq!(neon_row.cost.priced_requests, 1);
+    assert_eq!(neon_row.cost.unpriced_requests, 0);
+    assert_eq!(neon_row.cost.unknown_accounting_requests, 2);
+    assert_eq!(neon_row.cost.estimated_cost_micros, 450_000);
+
+    let hydrogen_row = dim_res
+        .rows
+        .iter()
+        .find(|r| r.key == "gemini-4-hydrogen-xhigh")
+        .unwrap();
+    assert_eq!(hydrogen_row.cost.priced_requests, 1);
+    assert_eq!(hydrogen_row.cost.estimated_cost_micros, 168_000);
+
+    // Simulate restarting a DB that ran on PRICING_MATCHER_VERSION == 2 with stale zeroed rollups.
+    drop(store);
+    {
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute(
+                "UPDATE runtime_meta SET value='2' WHERE key='pricing_matcher_rollup'",
+                crate::database::params![],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE runtime_hourly_rollups
+                 SET cost_numerator=0, cost_priced_requests=0, cost_unknown_accounting_requests=6, cost_unknown_requests=6",
+                crate::database::params![],
+            )
+            .unwrap();
+    }
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    wait_rollups();
+    {
+        let connection = Connection::open(&path).unwrap();
+        assert_eq!(
+            meta_i64(&connection, "pricing_matcher_rollup").unwrap(),
+            Some(crate::pricing_matcher::PRICING_MATCHER_VERSION)
+        );
+    }
+    let rebuilt_trends = trends(
+        &path,
+        &TrendQuery {
+            from: 0.0,
+            to: 7_200.0,
+            granularity: TrendGranularity::Hour,
+            snapshot_seq: None,
+            snapshot_change_seq: None,
+            history_generation: None,
+            filter: RuntimeFilter::default(),
+        },
+    )
+    .unwrap();
+    assert!(rebuilt_trends.rollup_used);
+    assert_eq!(rebuilt_trends.totals.cost.priced_requests, 4);
+    assert_eq!(rebuilt_trends.totals.cost.unknown_accounting_requests, 2);
+    assert_eq!(rebuilt_trends.totals.cost.estimated_cost_micros, 1_468_000);
+
+    drop(store);
+    remove_test_dir(&dir);
+}
+
+#[test]
 fn storage_limit_rotates_oldest_completed_request_groups_and_preserves_in_flight() {
     let dir = test_dir("storage-limit-rotation");
     let path = dir.join("runtime.sqlite3");

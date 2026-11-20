@@ -8,9 +8,10 @@ use sha2::{Digest, Sha256};
 
 pub const MAX_PRICE_TIERS_PER_MODEL: usize = 8;
 pub const MAX_OFFICIAL_PRICE_MODELS: usize = 10_000;
-/// Bump whenever candidate key normalization or matching precedence changes so
-/// existing SQLite rollups are rebuilt automatically on startup.
-pub const PRICING_MATCHER_VERSION: i64 = 2;
+/// Bump whenever candidate key normalization, matching precedence, or cost
+/// accounting completeness semantics change so existing SQLite rollups are
+/// rebuilt automatically on startup.
+pub const PRICING_MATCHER_VERSION: i64 = 3;
 
 const BUILTIN_OFFICIAL_SNAPSHOT_JSON: &str = include_str!("official_pricing_snapshot.json");
 
