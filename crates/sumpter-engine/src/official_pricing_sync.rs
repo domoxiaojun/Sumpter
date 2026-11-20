@@ -34,10 +34,11 @@ pub fn load_cached_official_pricing(dir: &ConfigDir) -> Option<CachedOfficialPri
         return None;
     }
     let mut cached: CachedOfficialPricing = serde_json::from_slice(&bytes).ok()?;
-    cached.models = normalize_official_prices(&cached.models).ok()?;
-    if cached.models.is_empty() || cached.source.trim().is_empty() {
+    let parsed = normalize_official_prices(&cached.models).ok()?;
+    if parsed.is_empty() || cached.source.trim().is_empty() {
         return None;
     }
+    cached.models = merge_official_catalogs(&builtin_official_snapshot().1, &[], &parsed).ok()?;
     Some(cached)
 }
 
@@ -205,7 +206,8 @@ pub fn merge_official_catalogs(
 
 /// Parse `https://models.dev/api.json`.
 /// Prioritizes first-party official providers so third-party resellers/routers never override
-/// official vendor list prices.
+/// official vendor list prices, while using official Vertex catalogs only as fallback when
+/// first-party/secondary feeds omit a newly released model.
 pub fn parse_models_dev_catalog(value: &Value) -> Result<Vec<OfficialModelPriceInput>, String> {
     let root = value
         .as_object()
@@ -213,6 +215,7 @@ pub fn parse_models_dev_catalog(value: &Value) -> Result<Vec<OfficialModelPriceI
 
     let mut first_party = BTreeMap::<String, OfficialModelPriceInput>::new();
     let mut fallback_party = BTreeMap::<String, OfficialModelPriceInput>::new();
+    let mut cloud_fallback = BTreeMap::<String, OfficialModelPriceInput>::new();
 
     for (provider_id, provider_val) in root {
         let provider_key = provider_id.trim().to_ascii_lowercase();
@@ -220,6 +223,7 @@ pub fn parse_models_dev_catalog(value: &Value) -> Result<Vec<OfficialModelPriceI
         if tier == ProviderPriority::Excluded {
             continue;
         }
+        let canonical_provider = canonical_models_dev_provider(&provider_key);
         let Some(models_obj) = provider_val.get("models").and_then(Value::as_object) else {
             continue;
         };
@@ -239,7 +243,10 @@ pub fn parse_models_dev_catalog(value: &Value) -> Result<Vec<OfficialModelPriceI
             if bare_key.is_empty() || bare_key.len() > 256 {
                 continue;
             }
-            let Some(entry) = parse_models_dev_cost(&bare_key, &provider_key, cost_obj) else {
+            if tier == ProviderPriority::OfficialCloudFallback && bare_key.contains('@') {
+                continue;
+            }
+            let Some(entry) = parse_models_dev_cost(&bare_key, canonical_provider, cost_obj) else {
                 continue;
             };
             match tier {
@@ -248,6 +255,9 @@ pub fn parse_models_dev_catalog(value: &Value) -> Result<Vec<OfficialModelPriceI
                 }
                 ProviderPriority::Secondary => {
                     fallback_party.entry(bare_key).or_insert(entry);
+                }
+                ProviderPriority::OfficialCloudFallback => {
+                    cloud_fallback.entry(bare_key).or_insert(entry);
                 }
                 ProviderPriority::Excluded => {}
             }
@@ -260,6 +270,12 @@ pub fn parse_models_dev_catalog(value: &Value) -> Result<Vec<OfficialModelPriceI
         }
         first_party.entry(key).or_insert(entry);
     }
+    for (key, entry) in cloud_fallback {
+        if first_party.len() >= MAX_OFFICIAL_PRICE_MODELS {
+            break;
+        }
+        first_party.entry(key).or_insert(entry);
+    }
     normalize_official_prices(&first_party.into_values().collect::<Vec<_>>())
 }
 
@@ -267,6 +283,7 @@ pub fn parse_models_dev_catalog(value: &Value) -> Result<Vec<OfficialModelPriceI
 enum ProviderPriority {
     FirstParty,
     Secondary,
+    OfficialCloudFallback,
     Excluded,
 }
 
@@ -275,13 +292,12 @@ fn classify_models_dev_provider(provider: &str) -> ProviderPriority {
         "openai" | "anthropic" | "google" | "deepseek" | "xai" | "mistral" | "cohere"
         | "moonshotai" | "moonshot" | "alibaba" | "qwen" | "zai" | "zhipu" | "zhipuai"
         | "minimax" | "perplexity" => ProviderPriority::FirstParty,
+        "google-vertex" | "google-vertex-anthropic" => ProviderPriority::OfficialCloudFallback,
         // Exclude aggregators, cloud resellers, and subscription wrappers that alter list prices.
         "openrouter"
         | "togetherai"
         | "fireworks-ai"
         | "amazon-bedrock"
-        | "google-vertex"
-        | "google-vertex-anthropic"
         | "azure"
         | "github-models"
         | "github-copilot"
@@ -291,6 +307,14 @@ fn classify_models_dev_provider(provider: &str) -> ProviderPriority {
         | "requesty"
         | "poe" => ProviderPriority::Excluded,
         _ => ProviderPriority::Secondary,
+    }
+}
+
+fn canonical_models_dev_provider(provider: &str) -> &str {
+    match provider {
+        "google-vertex" => "google",
+        "google-vertex-anthropic" => "anthropic",
+        other => other,
     }
 }
 
@@ -401,6 +425,7 @@ pub fn parse_litellm_prices(value: &Value) -> Result<Vec<OfficialModelPriceInput
         .as_object()
         .ok_or_else(|| "顶层必须是对象".to_string())?;
     let mut entries = BTreeMap::<String, OfficialModelPriceInput>::new();
+    let mut cloud_fallback = BTreeMap::<String, OfficialModelPriceInput>::new();
 
     for (raw_key, raw_val) in root {
         if raw_key == "sample_spec" {
@@ -415,7 +440,9 @@ pub fn parse_litellm_prices(value: &Value) -> Result<Vec<OfficialModelPriceInput
             .unwrap_or("")
             .trim()
             .to_ascii_lowercase();
-        if !is_first_party_litellm_provider(&provider) {
+        let is_first_party = is_first_party_litellm_provider(&provider);
+        let is_cloud_fallback = !is_first_party && is_cloud_fallback_litellm_provider(&provider);
+        if !is_first_party && !is_cloud_fallback {
             continue;
         }
         if let Some(mode) = obj.get("mode").and_then(Value::as_str)
@@ -425,6 +452,9 @@ pub fn parse_litellm_prices(value: &Value) -> Result<Vec<OfficialModelPriceInput
         }
         let bare_key = strip_vendor_prefix(raw_key);
         if bare_key.is_empty() || bare_key.len() > 256 || bare_key.contains(':') {
+            continue;
+        }
+        if is_cloud_fallback && bare_key.contains('@') {
             continue;
         }
         let Some(input) = usd_per_token_to_million_micros(obj.get("input_cost_per_token")) else {
@@ -482,24 +512,38 @@ pub fn parse_litellm_prices(value: &Value) -> Result<Vec<OfficialModelPriceInput
         }
         let tiers = validate_price_tiers(&tiers).unwrap_or_default();
 
-        // Prefer bare unprefixed entry when both `gpt-5` and `openai/gpt-5` exist in LiteLLM.
-        let is_unprefixed = !raw_key.contains('/');
-        if (is_unprefixed || !entries.contains_key(&bare_key))
-            && (entries.len() < MAX_OFFICIAL_PRICE_MODELS || entries.contains_key(&bare_key))
-        {
-            entries.insert(
-                bare_key.clone(),
-                OfficialModelPriceInput {
-                    model_key: bare_key,
-                    provider: Some(normalized_provider.to_owned()),
-                    input_per_million_micros: Some(input),
-                    output_per_million_micros: Some(output),
-                    cache_read_per_million_micros: cache_read,
-                    cache_creation_per_million_micros: cache_creation,
-                    tiers,
-                },
-            );
+        let record = OfficialModelPriceInput {
+            model_key: bare_key.clone(),
+            provider: Some(normalized_provider.to_owned()),
+            input_per_million_micros: Some(input),
+            output_per_million_micros: Some(output),
+            cache_read_per_million_micros: cache_read,
+            cache_creation_per_million_micros: cache_creation,
+            tiers,
+        };
+
+        if is_first_party {
+            // Prefer bare unprefixed entry when both `gpt-5` and `openai/gpt-5` exist in LiteLLM.
+            let is_unprefixed = !raw_key.contains('/');
+            if (is_unprefixed || !entries.contains_key(&bare_key))
+                && (entries.len() < MAX_OFFICIAL_PRICE_MODELS || entries.contains_key(&bare_key))
+            {
+                entries.insert(bare_key, record);
+            }
+        } else {
+            // Prefer global `vertex_ai/model` over regional paths like `vertex_ai/us/model`.
+            let is_global_vertex = raw_key.matches('/').count() <= 1;
+            if is_global_vertex || !cloud_fallback.contains_key(&bare_key) {
+                cloud_fallback.insert(bare_key, record);
+            }
         }
+    }
+
+    for (key, entry) in cloud_fallback {
+        if entries.len() >= MAX_OFFICIAL_PRICE_MODELS && !entries.contains_key(&key) {
+            continue;
+        }
+        entries.entry(key).or_insert(entry);
     }
 
     normalize_official_prices(&entries.into_values().collect::<Vec<_>>())
@@ -525,11 +569,18 @@ fn is_first_party_litellm_provider(provider: &str) -> bool {
     )
 }
 
+fn is_cloud_fallback_litellm_provider(provider: &str) -> bool {
+    matches!(
+        provider,
+        "vertex_ai" | "vertex_ai-language-models" | "vertex_ai-anthropic_models"
+    )
+}
+
 fn canonical_provider_name(provider: &str) -> &'static str {
     match provider {
         "openai" | "text-completion-openai" => "openai",
-        "anthropic" => "anthropic",
-        "gemini" => "google",
+        "anthropic" | "vertex_ai-anthropic_models" => "anthropic",
+        "gemini" | "vertex_ai" | "vertex_ai-language-models" => "google",
         "deepseek" => "deepseek",
         "xai" => "xai",
         "mistral" | "codestral" => "mistral",
@@ -692,5 +743,173 @@ mod tests {
         assert_eq!(gemini.tiers.len(), 1);
         assert_eq!(gemini.tiers[0].above_input_tokens, 200_000);
         assert_eq!(gemini.tiers[0].input_per_million_micros, Some(2_500_000));
+    }
+
+    #[test]
+    fn models_dev_uses_google_vertex_only_as_fallback_for_missing_models() {
+        let payload = json!({
+            "google": {
+                "models": {
+                    "gemini-2.5-pro": {
+                        "id": "gemini-2.5-pro",
+                        "cost": { "input": 1.25, "output": 10.0, "cache_read": 0.125 }
+                    }
+                }
+            },
+            "google-vertex": {
+                "models": {
+                    "gemini-2.5-pro": {
+                        "id": "gemini-2.5-pro",
+                        "cost": { "input": 9.99, "output": 99.0 }
+                    },
+                    "gemini-4-hydrogen": {
+                        "id": "gemini-4-hydrogen",
+                        "cost": { "input": 1.5, "output": 7.5, "cache_read": 0.075 }
+                    },
+                    "gemini-4-hydrogen@20261112": {
+                        "id": "gemini-4-hydrogen@20261112",
+                        "cost": { "input": 8.0, "output": 8.0 }
+                    }
+                }
+            },
+            "google-vertex-anthropic": {
+                "models": {
+                    "claude-opus-4-7": {
+                        "id": "claude-opus-4-7",
+                        "cost": { "input": 5.0, "output": 25.0, "cache_read": 0.5 }
+                    }
+                }
+            }
+        });
+        let parsed = parse_models_dev_catalog(&payload).unwrap();
+        assert_eq!(parsed.len(), 3);
+
+        let pro = parsed
+            .iter()
+            .find(|item| item.model_key == "gemini-2.5-pro")
+            .unwrap();
+        assert_eq!(pro.input_per_million_micros, Some(1_250_000));
+
+        let hydrogen = parsed
+            .iter()
+            .find(|item| item.model_key == "gemini-4-hydrogen")
+            .unwrap();
+        assert_eq!(hydrogen.provider.as_deref(), Some("google"));
+        assert_eq!(hydrogen.input_per_million_micros, Some(1_500_000));
+
+        let opus = parsed
+            .iter()
+            .find(|item| item.model_key == "claude-opus-4-7")
+            .unwrap();
+        assert_eq!(opus.provider.as_deref(), Some("anthropic"));
+        assert_eq!(opus.cache_creation_per_million_micros, Some(6_250_000));
+    }
+
+    #[test]
+    fn litellm_uses_vertex_ai_only_as_fallback_and_prefers_global_entries() {
+        let payload = json!({
+            "gemini/gemini-2.5-pro": {
+                "litellm_provider": "gemini",
+                "mode": "chat",
+                "input_cost_per_token": 0.00000125,
+                "output_cost_per_token": 0.00001
+            },
+            "vertex_ai/gemini-2.5-pro": {
+                "litellm_provider": "vertex_ai-language-models",
+                "mode": "chat",
+                "input_cost_per_token": 0.000099,
+                "output_cost_per_token": 0.000099
+            },
+            "vertex_ai/us/gemini-4-hydrogen": {
+                "litellm_provider": "vertex_ai-language-models",
+                "mode": "chat",
+                "input_cost_per_token": 0.00000165,
+                "output_cost_per_token": 0.00000825
+            },
+            "vertex_ai/gemini-4-hydrogen": {
+                "litellm_provider": "vertex_ai-language-models",
+                "mode": "chat",
+                "input_cost_per_token": 0.0000015,
+                "output_cost_per_token": 0.0000075
+            },
+            "vertex_ai/gemini-4-hydrogen@20261112": {
+                "litellm_provider": "vertex_ai-language-models",
+                "mode": "chat",
+                "input_cost_per_token": 0.00008,
+                "output_cost_per_token": 0.00008
+            },
+            "vertex_ai/claude-opus-4-8": {
+                "litellm_provider": "vertex_ai-anthropic_models",
+                "mode": "chat",
+                "input_cost_per_token": 0.000005,
+                "output_cost_per_token": 0.000025
+            }
+        });
+        let parsed = parse_litellm_prices(&payload).unwrap();
+        assert_eq!(parsed.len(), 3);
+
+        let pro = parsed
+            .iter()
+            .find(|item| item.model_key == "gemini-2.5-pro")
+            .unwrap();
+        assert_eq!(pro.input_per_million_micros, Some(1_250_000));
+
+        let hydrogen = parsed
+            .iter()
+            .find(|item| item.model_key == "gemini-4-hydrogen")
+            .unwrap();
+        assert_eq!(hydrogen.provider.as_deref(), Some("google"));
+        assert_eq!(hydrogen.input_per_million_micros, Some(1_500_000));
+
+        let opus = parsed
+            .iter()
+            .find(|item| item.model_key == "claude-opus-4-8")
+            .unwrap();
+        assert_eq!(opus.provider.as_deref(), Some("anthropic"));
+        assert_eq!(opus.cache_creation_per_million_micros, Some(6_250_000));
+    }
+
+    #[test]
+    fn load_cached_official_pricing_preserves_updates_and_supplements_builtin_models() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sumpter-pricing-cache-{unique}"));
+        let dir = ConfigDir::new(root.clone());
+
+        save_cached_official_pricing(
+            &dir,
+            "models.dev",
+            &[OfficialModelPriceInput {
+                model_key: "claude-sonnet-4-6".into(),
+                provider: Some("anthropic".into()),
+                input_per_million_micros: Some(2_750_000),
+                output_per_million_micros: Some(13_500_000),
+                cache_read_per_million_micros: Some(275_000),
+                cache_creation_per_million_micros: Some(3_437_500),
+                tiers: Vec::new(),
+            }],
+        )
+        .unwrap();
+
+        let loaded = load_cached_official_pricing(&dir).expect("load merged cache");
+        assert_eq!(loaded.source, "models.dev");
+
+        let sonnet = loaded
+            .models
+            .iter()
+            .find(|item| item.model_key == "claude-sonnet-4-6")
+            .unwrap();
+        assert_eq!(sonnet.input_per_million_micros, Some(2_750_000));
+
+        let hydrogen = loaded
+            .models
+            .iter()
+            .find(|item| item.model_key == "gemini-4-hydrogen")
+            .expect("builtin snapshot model should be supplemented");
+        assert_eq!(hydrogen.input_per_million_micros, Some(1_500_000));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

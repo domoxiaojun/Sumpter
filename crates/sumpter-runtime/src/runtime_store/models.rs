@@ -158,22 +158,12 @@ pub(super) fn save_pricing(
     })
 }
 
-pub(super) fn save_official_pricing(
-    connection: &crate::database::Connection,
-    source: &str,
+fn official_price_active_models(
     prices: &[crate::pricing_matcher::OfficialModelPriceInput],
-    digest: &str,
-    revision: i64,
     updated_at: f64,
-    snapshot_version: Option<i64>,
-) -> crate::database::Result<()> {
-    use crate::entities::{
-        runtime_official_model_prices as official_prices, runtime_pricing_meta as meta,
-    };
-    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
-    let model_count = prices.len() as i64;
-    let tiered_count = prices.iter().filter(|item| !item.tiers.is_empty()).count() as i64;
-    let models = prices
+) -> crate::database::Result<Vec<crate::entities::runtime_official_model_prices::ActiveModel>> {
+    use crate::entities::runtime_official_model_prices as official_prices;
+    prices
         .iter()
         .map(|price| {
             let tiers_json = crate::pricing_matcher::serialize_tiers_json(&price.tiers)
@@ -189,7 +179,25 @@ pub(super) fn save_official_pricing(
                 updated_at: Set(updated_at),
             })
         })
-        .collect::<crate::database::Result<Vec<_>>>()?;
+        .collect()
+}
+
+pub(super) fn save_official_pricing(
+    connection: &crate::database::Connection,
+    source: &str,
+    prices: &[crate::pricing_matcher::OfficialModelPriceInput],
+    digest: &str,
+    revision: i64,
+    updated_at: f64,
+    snapshot_version: Option<i64>,
+) -> crate::database::Result<()> {
+    use crate::entities::{
+        runtime_official_model_prices as official_prices, runtime_pricing_meta as meta,
+    };
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+    let model_count = prices.len() as i64;
+    let tiered_count = prices.iter().filter(|item| !item.tiers.is_empty()).count() as i64;
+    let models = official_price_active_models(prices, updated_at)?;
     let mut metadata = meta::ActiveModel {
         revision: Set(revision),
         official_source: Set(Some(source.trim().to_owned())),
@@ -207,6 +215,45 @@ pub(super) fn save_official_pricing(
         official_prices::Entity::delete_many()
             .exec(db.as_ref())
             .await?;
+        for chunk in models.chunks(96) {
+            official_prices::Entity::insert_many(chunk.iter().cloned())
+                .exec_without_returning(db.as_ref())
+                .await?;
+        }
+        meta::Entity::update_many()
+            .set(metadata)
+            .filter(meta::Column::Id.eq(1_i64))
+            .exec(db.as_ref())
+            .await?;
+        Ok(())
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn supplement_official_pricing_rows(
+    connection: &crate::database::Connection,
+    missing_prices: &[crate::pricing_matcher::OfficialModelPriceInput],
+    digest: &str,
+    model_count: i64,
+    tiered_count: i64,
+    revision: i64,
+    updated_at: f64,
+    snapshot_version: i64,
+) -> crate::database::Result<()> {
+    use crate::entities::{
+        runtime_official_model_prices as official_prices, runtime_pricing_meta as meta,
+    };
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+    let models = official_price_active_models(missing_prices, updated_at)?;
+    let metadata = meta::ActiveModel {
+        revision: Set(revision),
+        official_model_count: Set(model_count),
+        official_tiered_model_count: Set(tiered_count),
+        official_digest: Set(Some(digest.to_owned())),
+        official_snapshot_version: Set(snapshot_version),
+        ..Default::default()
+    };
+    connection.orm(move |db| async move {
         for chunk in models.chunks(96) {
             official_prices::Entity::insert_many(chunk.iter().cloned())
                 .exec_without_returning(db.as_ref())

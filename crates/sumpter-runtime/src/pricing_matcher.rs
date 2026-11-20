@@ -8,6 +8,9 @@ use sha2::{Digest, Sha256};
 
 pub const MAX_PRICE_TIERS_PER_MODEL: usize = 8;
 pub const MAX_OFFICIAL_PRICE_MODELS: usize = 10_000;
+/// Bump whenever candidate key normalization or matching precedence changes so
+/// existing SQLite rollups are rebuilt automatically on startup.
+pub const PRICING_MATCHER_VERSION: i64 = 2;
 
 const BUILTIN_OFFICIAL_SNAPSHOT_JSON: &str = include_str!("official_pricing_snapshot.json");
 
@@ -277,29 +280,96 @@ pub fn candidate_lookup_keys(raw_model: &str) -> Vec<String> {
 }
 
 fn normalize_tag_and_at_suffix(model: &str) -> String {
-    let mut value = model.to_owned();
-    // Strip Bedrock `:0` revision or channel tag suffixes like `:latest` / `:default`.
-    if let Some((head, tail)) = value.rsplit_once(':')
-        && !head.is_empty()
-        && (tail.chars().all(|ch| ch.is_ascii_digit())
-            || matches!(
-                tail,
-                "latest" | "default" | "beta" | "preview" | "stable" | "exacto"
-            ))
-    {
-        value = head.to_owned();
-    }
-    // Convert Vertex AI `@20250929` or `@default` into hyphenated or bare form.
-    if let Some((head, tail)) = value.rsplit_once('@')
-        && !head.is_empty()
-    {
-        if tail == "default" || tail == "latest" {
-            value = head.to_owned();
-        } else {
-            value = format!("{head}-{tail}");
+    let mut value = model.trim().to_owned();
+    for _ in 0..8 {
+        let before = value.clone();
+
+        // 1. Strip one trailing `[...]` annotation (e.g. `[1m]`, `[200k]`) without nested `]`.
+        if value.ends_with(']')
+            && let Some(open) = value.rfind('[')
+        {
+            let inner = &value[open + 1..value.len() - 1];
+            let head = value[..open].trim();
+            if !inner.contains(']') && !head.is_empty() {
+                value = head.to_owned();
+            }
+        }
+
+        // 2. Strip trailing `(effort)` suffix when the parenthesized token is a known effort level.
+        if value.ends_with(')')
+            && let Some(open) = value.rfind('(')
+        {
+            let inner = value[open + 1..value.len() - 1].trim();
+            let head = value[..open].trim();
+            if !head.is_empty() && is_reasoning_effort_token(inner) {
+                value = head.to_owned();
+            }
+        }
+
+        // 3. Strip Bedrock `:0` revision or channel/effort/thinking/context tags like `:latest`,
+        //    `:xhigh`, `:thinking`, `:1m`. Never strip billing-altering tags like `:free` or `:online`.
+        if let Some((head, tail)) = value.rsplit_once(':') {
+            let head = head.trim();
+            let tail = tail.trim();
+            if !head.is_empty()
+                && !tail.is_empty()
+                && (tail.chars().all(|ch| ch.is_ascii_digit())
+                    || matches!(
+                        tail,
+                        "latest"
+                            | "default"
+                            | "beta"
+                            | "preview"
+                            | "stable"
+                            | "exacto"
+                            | "none"
+                            | "auto"
+                            | "minimal"
+                            | "low"
+                            | "medium"
+                            | "high"
+                            | "xhigh"
+                            | "max"
+                            | "ultra"
+                            | "thinking"
+                            | "nothinking"
+                            | "nonthinking"
+                            | "reasoning"
+                            | "1m"
+                            | "200k"
+                            | "256k"
+                            | "512k"
+                    ))
+            {
+                value = head.to_owned();
+            }
+        }
+
+        // 4. Convert Vertex AI `@20250929` or `@default` into hyphenated or bare form.
+        if let Some((head, tail)) = value.rsplit_once('@') {
+            let head = head.trim();
+            let tail = tail.trim();
+            if !head.is_empty() && !tail.is_empty() {
+                if tail == "default" || tail == "latest" {
+                    value = head.to_owned();
+                } else {
+                    value = format!("{head}-{tail}");
+                }
+            }
+        }
+
+        if value == before {
+            break;
         }
     }
     value
+}
+
+fn is_reasoning_effort_token(token: &str) -> bool {
+    matches!(
+        token,
+        "none" | "auto" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
+    )
 }
 
 fn strip_one_non_tier_suffix(model: &str) -> Option<String> {
@@ -321,15 +391,77 @@ fn strip_one_non_tier_suffix(model: &str) -> Option<String> {
             return Some(parts[..n - 2].join("-"));
         }
     }
-    // 3. Check single trailing hyphen segment.
+    // 3. Check 2-segment thinking/reasoning/effort suffixes (e.g. `-no-thinking`, `-thinking-high`, `-thinking-16k`).
+    if parts.len() >= 3 {
+        let n = parts.len();
+        let p2 = parts[n - 2];
+        let p1 = parts[n - 1];
+        let is_two_seg_suffix = (matches!(p2, "no" | "non") && p1 == "thinking")
+            || (matches!(p2, "thinking" | "reasoning" | "effort") && is_reasoning_effort_token(p1))
+            || (matches!(p2, "thinking" | "reasoning") && is_k_budget_token(p1));
+        if is_two_seg_suffix {
+            let head = parts[..n - 2].join("-");
+            if !head.is_empty() {
+                return Some(head);
+            }
+        }
+    }
+    // 4. Check single trailing hyphen segment.
     let (head, tail) = model.rsplit_once('-')?;
     if head.is_empty() {
         return None;
     }
-    if is_safe_single_version_token(tail) {
+    if is_safe_single_version_token(tail) || can_strip_effort_max_or_ultra(head, tail) {
         return Some(head.to_owned());
     }
     None
+}
+
+fn is_k_budget_token(token: &str) -> bool {
+    token
+        .strip_suffix('k')
+        .is_some_and(|digits| !digits.is_empty() && digits.chars().all(|ch| ch.is_ascii_digit()))
+}
+
+fn can_strip_effort_max_or_ultra(head: &str, tail: &str) -> bool {
+    if !matches!(tail, "max" | "ultra") {
+        return false;
+    }
+    let model_head = head.rsplit('/').next().unwrap_or(head);
+    let mut segment_count = 0usize;
+    let mut has_known_subfamily = false;
+    for seg in model_head.split('-') {
+        if seg.is_empty() {
+            continue;
+        }
+        segment_count += 1;
+        if matches!(
+            seg,
+            "opus"
+                | "sonnet"
+                | "haiku"
+                | "fable"
+                | "pro"
+                | "flash"
+                | "lite"
+                | "mini"
+                | "nano"
+                | "hydrogen"
+                | "neon"
+                | "carbon"
+                | "argon"
+                | "sol"
+                | "terra"
+                | "luna"
+                | "astra"
+                | "codex"
+                | "chat"
+                | "reasoner"
+        ) {
+            has_known_subfamily = true;
+        }
+    }
+    segment_count >= 2 && has_known_subfamily
 }
 
 fn is_year_4(token: &str) -> bool {
@@ -365,6 +497,21 @@ fn is_safe_single_version_token(token: &str) -> bool {
             | "default"
             | "legacy"
             | "customtools"
+            | "xhigh"
+            | "high"
+            | "medium"
+            | "low"
+            | "minimal"
+            | "none"
+            | "auto"
+            | "thinking"
+            | "nothinking"
+            | "nonthinking"
+            | "reasoning"
+            | "1m"
+            | "200k"
+            | "256k"
+            | "512k"
     ) {
         return true;
     }
@@ -528,20 +675,41 @@ pub(crate) struct ResolvedRateEntry {
 
 /// Fast indexed resolver shared by rollup rebuilds and analytics queries.
 /// Priority order:
-/// 1. Manual endpoint-scoped rule (`endpoint_id == Some(ep)`) matching `effective_model` (then `upstream_model`)
-/// 2. Manual global rule (`endpoint_id == None`) matching `effective_model` (then `upstream_model`)
-/// 3. Official synced/builtin catalog matching `upstream_model` first (actual billed upstream model),
+/// 1. Manual endpoint-scoped exact rule (`endpoint_id == Some(ep)`) matching `effective_model` (then `upstream_model`)
+/// 2. Manual endpoint-scoped wildcard rule (`prefix-*`) matching longest prefix first
+/// 3. Manual global exact rule (`endpoint_id == None`) matching `effective_model` (then `upstream_model`)
+/// 4. Manual global wildcard rule (`prefix-*`) matching longest prefix first
+/// 5. Official synced/builtin catalog matching `upstream_model` first (actual billed upstream model),
 ///    falling back to `effective_model` when `upstream_model` is absent or an opaque alias.
 #[derive(Default)]
 pub(crate) struct PriceBook {
     manual_scoped: HashMap<String, Vec<ResolvedRateEntry>>,
+    manual_scoped_wildcards: HashMap<String, Vec<(String, ResolvedRateEntry)>>,
     manual_global: HashMap<String, Vec<ResolvedRateEntry>>,
+    manual_global_wildcards: Vec<(String, ResolvedRateEntry)>,
     official: HashMap<String, ResolvedRateEntry>,
 }
 
 impl PriceBook {
     pub(crate) fn insert_manual(&mut self, model_key: &str, entry: ResolvedRateEntry) {
-        for alias in index_aliases(model_key) {
+        let trimmed = model_key.trim();
+        if let Some(raw_prefix) = trimmed.strip_suffix('*') {
+            if raw_prefix.trim().is_empty() {
+                return;
+            }
+            for prefix in index_wildcard_prefixes(raw_prefix) {
+                if let Some(endpoint) = entry.endpoint_id.as_deref().filter(|id| !id.is_empty()) {
+                    self.manual_scoped_wildcards
+                        .entry(endpoint.to_owned())
+                        .or_default()
+                        .push((prefix, entry.clone()));
+                } else {
+                    self.manual_global_wildcards.push((prefix, entry.clone()));
+                }
+            }
+            return;
+        }
+        for alias in index_aliases(trimmed) {
             if let Some(endpoint) = entry.endpoint_id.as_deref().filter(|id| !id.is_empty()) {
                 let key = format!("{endpoint}\u{1f}{alias}");
                 self.manual_scoped
@@ -584,6 +752,11 @@ impl PriceBook {
                     }
                 }
             }
+            if let Some(wildcards) = self.manual_scoped_wildcards.get(endpoint)
+                && let Some(hit) = resolve_wildcard(wildcards, manual_models, timestamp)
+            {
+                return Some(hit);
+            }
         }
         for candidate_model in manual_models.into_iter().flatten() {
             for key in candidate_lookup_keys(candidate_model) {
@@ -595,6 +768,10 @@ impl PriceBook {
                     return Some(hit);
                 }
             }
+        }
+        if let Some(hit) = resolve_wildcard(&self.manual_global_wildcards, manual_models, timestamp)
+        {
+            return Some(hit);
         }
         // Official baseline catalog: prefer actual upstream billed model when known,
         // falling back to effective_model when upstream_model is an opaque relay alias.
@@ -608,6 +785,36 @@ impl PriceBook {
         }
         None
     }
+}
+
+fn resolve_wildcard<'a>(
+    wildcards: &'a [(String, ResolvedRateEntry)],
+    models: [Option<&str>; 2],
+    timestamp: f64,
+) -> Option<&'a ResolvedRateEntry> {
+    if wildcards.is_empty() {
+        return None;
+    }
+    for candidate_model in models.into_iter().flatten() {
+        let keys = candidate_lookup_keys(candidate_model);
+        let mut best: Option<((usize, usize), &'a ResolvedRateEntry)> = None;
+        for (prefix, entry) in wildcards {
+            if !matches_effective_window(entry, timestamp) {
+                continue;
+            }
+            if keys.iter().any(|key| key.starts_with(prefix.as_str())) {
+                let leaf_len = prefix.rsplit('/').next().unwrap_or(prefix).len();
+                let score = (leaf_len, prefix.len());
+                if best.is_none_or(|(best_score, _)| score > best_score) {
+                    best = Some((score, entry));
+                }
+            }
+        }
+        if let Some((_, entry)) = best {
+            return Some(entry);
+        }
+    }
+    None
 }
 
 fn matches_effective_window(entry: &ResolvedRateEntry, timestamp: f64) -> bool {
@@ -640,6 +847,32 @@ fn index_aliases(model_key: &str) -> Vec<String> {
         }
     }
     aliases
+}
+
+/// Preserve trailing hyphens/slashes on wildcard prefixes while normalizing case and digit dots.
+fn index_wildcard_prefixes(raw_prefix: &str) -> Vec<String> {
+    let lowered = raw_prefix.trim_start().to_ascii_lowercase();
+    if lowered.trim().is_empty() {
+        return Vec::new();
+    }
+    let mut prefixes = Vec::with_capacity(4);
+    prefixes.push(lowered.clone());
+    let digit_norm = canonical_digit_separators(&lowered);
+    if digit_norm != lowered {
+        prefixes.push(digit_norm);
+    }
+    if let Some((_vendor, bare)) = lowered.rsplit_once('/')
+        && !bare.trim().is_empty()
+    {
+        if !prefixes.iter().any(|existing| existing == bare) {
+            prefixes.push(bare.to_owned());
+        }
+        let bare_norm = canonical_digit_separators(bare);
+        if !prefixes.iter().any(|existing| existing == &bare_norm) {
+            prefixes.push(bare_norm);
+        }
+    }
+    prefixes
 }
 
 #[cfg(test)]
@@ -714,9 +947,175 @@ mod tests {
     }
 
     #[test]
+    fn candidate_keys_strip_effort_thinking_and_context_without_corrupting_tiers() {
+        for (input, expected_base) in [
+            ("gemini-4-hydrogen-xhigh", "gemini-4-hydrogen"),
+            ("models/gemini-4-hydrogen-xhigh", "gemini-4-hydrogen"),
+            ("gemini-4-hydrogen-high", "gemini-4-hydrogen"),
+            ("gemini-4-hydrogen-medium", "gemini-4-hydrogen"),
+            ("gemini-4-hydrogen-low", "gemini-4-hydrogen"),
+            ("gemini-4-hydrogen-minimal", "gemini-4-hydrogen"),
+            ("gemini-4-hydrogen-none", "gemini-4-hydrogen"),
+            ("gemini-4-hydrogen-auto", "gemini-4-hydrogen"),
+            ("gemini-4-hydrogen-thinking", "gemini-4-hydrogen"),
+            ("gemini-4-hydrogen-nothinking", "gemini-4-hydrogen"),
+            ("gemini-4-hydrogen-nonthinking", "gemini-4-hydrogen"),
+            ("gemini-4-hydrogen-reasoning", "gemini-4-hydrogen"),
+            ("gemini-4-hydrogen-no-thinking", "gemini-4-hydrogen"),
+            ("gemini-4-hydrogen-non-thinking", "gemini-4-hydrogen"),
+            ("gemini-4-hydrogen-thinking-high", "gemini-4-hydrogen"),
+            ("gemini-4-hydrogen-effort-xhigh", "gemini-4-hydrogen"),
+            ("gemini-4-hydrogen-thinking-16k", "gemini-4-hydrogen"),
+            ("gemini-4-hydrogen-1m", "gemini-4-hydrogen"),
+            ("gemini-4-hydrogen(xhigh)[1m]", "gemini-4-hydrogen"),
+            ("gemini-4-hydrogen (XHIGH) [200k]", "gemini-4-hydrogen"),
+            ("gemini-4-hydrogen:xhigh", "gemini-4-hydrogen"),
+            ("gemini-4-hydrogen:thinking[1m]", "gemini-4-hydrogen"),
+            ("gemini-4-hydrogen@20261112:thinking", "gemini-4-hydrogen"),
+            ("gemini-4-hydrogen-max", "gemini-4-hydrogen"),
+            ("claude-opus-4-6-max", "claude-opus-4-6"),
+            ("gpt-5.6-sol-ultra", "gpt-5.6-sol"),
+        ] {
+            let keys = candidate_lookup_keys(input);
+            assert!(
+                keys.contains(&expected_base.to_string()),
+                "expected `{input}` candidates {keys:?} to contain `{expected_base}`"
+            );
+        }
+
+        // Protected `-max` / `-ultra` / `:free` / tier suffixes must NOT strip!
+        for (input, forbidden) in [
+            ("qwen-max", "qwen"),
+            ("qwen3-max", "qwen3"),
+            ("qwen-2.5-max", "qwen-2.5"),
+            ("gemini-1.0-ultra", "gemini-1.0"),
+            ("gemini-ultra", "gemini"),
+            ("nova-ultra", "nova"),
+            ("sonar-ultra", "sonar"),
+            ("gemini-4-argon:free", "gemini-4-argon"),
+            ("gemini-4-argon:free[1m]", "gemini-4-argon"),
+            ("gpt-3.5-turbo-16k", "gpt-3.5-turbo"),
+            ("gemini-4-hydrogen", "gemini-4"),
+            ("gemini-4-neon", "gemini-4"),
+            ("gpt-6-astra", "gpt-6"),
+        ] {
+            let keys = candidate_lookup_keys(input);
+            assert!(
+                !keys.contains(&forbidden.to_string()),
+                "candidates for `{input}` unexpectedly stripped to `{forbidden}`: {keys:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn manual_wildcard_rules_respect_precedence_longest_prefix_and_time_window() {
+        let rate = |input_micros: i64, from: f64, to: Option<f64>| ResolvedRateEntry {
+            endpoint_id: None,
+            effective_from: from,
+            effective_to: to,
+            input_per_million_micros: Some(input_micros),
+            output_per_million_micros: Some(input_micros * 2),
+            cache_read_per_million_micros: Some(0),
+            cache_creation_per_million_micros: Some(0),
+            tiers: Vec::new(),
+        };
+
+        let mut book = PriceBook::default();
+        book.insert_official(
+            "gemini-4-hydrogen",
+            rate(1_500_000, f64::NEG_INFINITY, None),
+        );
+        book.insert_manual("my-relay-*", rate(5_000_000, 0.0, None));
+        book.insert_manual("my-relay-gemini-*", rate(3_000_000, 0.0, Some(200.0)));
+        book.insert_manual("my-relay-gemini-*", rate(3_500_000, 200.0, None));
+        book.insert_manual("anthropic/claude-*", rate(9_000_000, 0.0, None));
+        book.insert_manual("claude-sonnet-*", rate(4_000_000, 0.0, None));
+
+        let mut ep_short = rate(2_000_000, 0.0, None);
+        ep_short.endpoint_id = Some("ep-scoped".into());
+        book.insert_manual("my-relay-gemini-*", ep_short);
+
+        let mut ep_exact = rate(1_000_000, 0.0, None);
+        ep_exact.endpoint_id = Some("ep-scoped".into());
+        book.insert_manual("my-relay-gemini-exact", ep_exact);
+
+        // 1. Exact scoped rule wins over scoped wildcard.
+        assert_eq!(
+            book.resolve(
+                Some("ep-scoped"),
+                Some("my-relay-gemini-exact-xhigh"),
+                None,
+                100.0,
+            )
+            .unwrap()
+            .input_per_million_micros,
+            Some(1_000_000)
+        );
+        // 2. Scoped wildcard wins over global wildcard.
+        assert_eq!(
+            book.resolve(
+                Some("ep-scoped"),
+                Some("my-relay-gemini-exp-xhigh"),
+                None,
+                100.0,
+            )
+            .unwrap()
+            .input_per_million_micros,
+            Some(2_000_000)
+        );
+        // 3. Longest global wildcard wins over shorter wildcard, respecting time windows.
+        assert_eq!(
+            book.resolve(
+                Some("ep-other"),
+                Some("my-relay-gemini-exp-xhigh"),
+                None,
+                100.0,
+            )
+            .unwrap()
+            .input_per_million_micros,
+            Some(3_000_000)
+        );
+        assert_eq!(
+            book.resolve(
+                Some("ep-other"),
+                Some("my-relay-gemini-exp-xhigh"),
+                None,
+                250.0,
+            )
+            .unwrap()
+            .input_per_million_micros,
+            Some(3_500_000)
+        );
+        // 4. More specific leaf prefix beats shorter leaf prefix with vendor namespace.
+        assert_eq!(
+            book.resolve(
+                Some("ep-other"),
+                Some("anthropic/claude-sonnet-4-6-xhigh"),
+                None,
+                100.0,
+            )
+            .unwrap()
+            .input_per_million_micros,
+            Some(4_000_000)
+        );
+        // 5. Official catalog still resolves when no manual rule matches.
+        assert_eq!(
+            book.resolve(
+                Some("ep-other"),
+                Some("gemini-4-hydrogen-xhigh"),
+                None,
+                100.0
+            )
+            .unwrap()
+            .input_per_million_micros,
+            Some(1_500_000)
+        );
+    }
+
+    #[test]
     fn builtin_snapshot_parses_and_resolves_prefixed_models() {
         let (version, models, digest) = builtin_official_snapshot();
-        assert_eq!(*version, 1);
+        assert_eq!(*version, 2);
         assert!(!models.is_empty());
         assert_eq!(digest.len(), 64);
 
@@ -746,5 +1145,24 @@ mod tests {
             .expect("resolve prefixed gemini model");
         assert_eq!(hit.input_per_million_micros, Some(1_250_000));
         assert_eq!(hit.tiers.len(), 1);
+
+        for (model, expected_input) in [
+            ("gemini-4-hydrogen-xhigh", 1_500_000),
+            ("models/gemini-4-hydrogen-xhigh", 1_500_000),
+            ("gemini-4-hydrogen(xhigh)[1m]", 1_500_000),
+            ("claude-opus-4-6-thinking-high", 5_000_000),
+            ("gpt-5.4-xhigh", 2_500_000),
+            ("gpt-6.1-sol-xhigh", 2_000_000),
+            ("gpt-5.1-codex-max", 1_250_000),
+        ] {
+            let resolved = book
+                .resolve(Some("ep-1"), Some(model), None, 100.0)
+                .unwrap_or_else(|| panic!("expected builtin snapshot to resolve `{model}`"));
+            assert_eq!(
+                resolved.input_per_million_micros,
+                Some(expected_input),
+                "unexpected input rate for `{model}`"
+            );
+        }
     }
 }

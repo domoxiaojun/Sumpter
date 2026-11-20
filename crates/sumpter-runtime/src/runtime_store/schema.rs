@@ -56,6 +56,8 @@ pub(super) fn setup_connection(connection: &mut Connection) -> crate::database::
     // Schema stays at 5. Add the nullable observed span in place and rebuild
     // derived hourly buckets once. Older events have no measured output span.
     let output_generation_ready = meta_i64(connection, "output_generation_rollup")? == Some(2);
+    let pricing_matcher_ready = meta_i64(connection, "pricing_matcher_rollup")?
+        == Some(crate::pricing_matcher::PRICING_MATCHER_VERSION);
     let unprojected_exists = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM runtime_events
                        WHERE projection_version>=0 AND projection_version<>?1 LIMIT 1)",
@@ -123,6 +125,7 @@ pub(super) fn setup_connection(connection: &mut Connection) -> crate::database::
     if previous_version < SCHEMA_VERSION
         || !hourly_rollup_meta_exists
         || !output_generation_ready
+        || !pricing_matcher_ready
         || upstream_timing_backfilled
         || official_pricing_seeded
     {
@@ -153,6 +156,11 @@ pub(super) fn setup_connection(connection: &mut Connection) -> crate::database::
     }
     set_meta(connection, "schema_version", SCHEMA_VERSION)?;
     set_meta(connection, "output_generation_rollup", 2)?;
+    set_meta(
+        connection,
+        "pricing_matcher_rollup",
+        crate::pricing_matcher::PRICING_MATCHER_VERSION,
+    )?;
     set_meta(connection, "projection_version", PROJECTION_VERSION)?;
     if !unprojected_exists {
         set_meta(connection, "projection_backfill_complete", 1)?;
@@ -295,30 +303,102 @@ fn ensure_builtin_official_pricing(
         crate::database::params![],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )?;
-    let should_seed = existing_count == 0
-        || (source.as_deref().unwrap_or("builtin") == "builtin"
-            && snapshot_version < *builtin_version);
-    if !should_seed {
-        return Ok(false);
+    let is_builtin_source = source.as_deref().unwrap_or("builtin") == "builtin";
+    let should_seed =
+        existing_count == 0 || (is_builtin_source && snapshot_version < *builtin_version);
+    if should_seed {
+        let next_revision = if has_retained_events {
+            revision.saturating_add(1)
+        } else {
+            revision
+        };
+        let apple_now = now() - sumpter_core::events::APPLE_EPOCH_OFFSET_SECS;
+        let transaction = connection.transaction()?;
+        super::models::save_official_pricing(
+            &transaction,
+            "builtin",
+            builtin_models,
+            builtin_digest,
+            next_revision,
+            apple_now,
+            Some(*builtin_version),
+        )?;
+        transaction.commit()?;
+        return Ok(has_retained_events);
     }
-    let next_revision = if has_retained_events {
-        revision.saturating_add(1)
-    } else {
-        revision
-    };
-    let apple_now = now() - sumpter_core::events::APPLE_EPOCH_OFFSET_SECS;
-    let transaction = connection.transaction()?;
-    super::models::save_official_pricing(
-        &transaction,
-        "builtin",
-        builtin_models,
-        builtin_digest,
-        next_revision,
-        apple_now,
-        Some(*builtin_version),
-    )?;
-    transaction.commit()?;
-    Ok(has_retained_events)
+
+    if existing_count > 0 && !is_builtin_source && snapshot_version < *builtin_version {
+        let transaction = connection.transaction()?;
+        let mut existing_models = Vec::new();
+        {
+            let mut stmt = transaction.prepare(
+                "SELECT model_key,provider,input_per_million_micros,output_per_million_micros,
+                        cache_read_per_million_micros,cache_creation_per_million_micros,tiers_json
+                 FROM runtime_official_model_prices ORDER BY model_key ASC",
+            )?;
+            let rows = stmt.query_map(crate::database::params![], |row| {
+                let tiers_raw: Option<String> = row.get(6)?;
+                Ok(crate::pricing_matcher::OfficialModelPriceInput {
+                    model_key: row.get(0)?,
+                    provider: row.get(1)?,
+                    input_per_million_micros: row.get(2)?,
+                    output_per_million_micros: row.get(3)?,
+                    cache_read_per_million_micros: row.get(4)?,
+                    cache_creation_per_million_micros: row.get(5)?,
+                    tiers: crate::pricing_matcher::parse_tiers_json(tiers_raw.as_deref()),
+                })
+            })?;
+            for row in rows {
+                existing_models.push(row?);
+            }
+        }
+        let existing_keys: HashSet<String> = existing_models
+            .iter()
+            .map(|item| item.model_key.trim().to_ascii_lowercase())
+            .collect();
+        let missing: Vec<crate::pricing_matcher::OfficialModelPriceInput> = builtin_models
+            .iter()
+            .filter(|item| !existing_keys.contains(&item.model_key))
+            .cloned()
+            .collect();
+        if missing.is_empty() {
+            transaction.execute(
+                "UPDATE runtime_pricing_meta SET official_snapshot_version=?1 WHERE id=1",
+                params![*builtin_version],
+            )?;
+            transaction.commit()?;
+            return Ok(false);
+        }
+        let mut combined = existing_models;
+        combined.extend(missing.iter().cloned());
+        combined.sort_by(|left, right| left.model_key.cmp(&right.model_key));
+        let new_digest = crate::pricing_matcher::official_prices_digest(&combined);
+        let model_count = combined.len() as i64;
+        let tiered_count = combined
+            .iter()
+            .filter(|item| !item.tiers.is_empty())
+            .count() as i64;
+        let next_revision = if has_retained_events {
+            revision.saturating_add(1)
+        } else {
+            revision
+        };
+        let apple_now = now() - sumpter_core::events::APPLE_EPOCH_OFFSET_SECS;
+        super::models::supplement_official_pricing_rows(
+            &transaction,
+            &missing,
+            &new_digest,
+            model_count,
+            tiered_count,
+            next_revision,
+            apple_now,
+            *builtin_version,
+        )?;
+        transaction.commit()?;
+        return Ok(has_retained_events);
+    }
+
+    Ok(false)
 }
 
 /// Repair client rows written before upstream timing was persisted. The

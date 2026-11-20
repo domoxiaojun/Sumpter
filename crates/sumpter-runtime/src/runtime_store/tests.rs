@@ -1544,6 +1544,262 @@ fn official_pricing_seeds_tiered_rates_recomputes_on_sync_and_respects_manual_ov
 }
 
 #[test]
+fn gemini_4_hydrogen_xhigh_auto_prices_upgrades_synced_db_and_supports_wildcards() {
+    use crate::runtime_query::{
+        DimensionKind, DimensionQuery, RuntimeFilter, TrendGranularity, TrendQuery, dimension_page,
+        pricing, trends,
+    };
+
+    let dir = test_dir("gemini-4-hydrogen-xhigh-upgrade");
+    let path = dir.join("runtime.sqlite3");
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    let ts = 3_600.0;
+
+    let wait_rollups = || {
+        for _ in 0..300 {
+            let connection = Connection::open(&path).unwrap();
+            if meta_i64(&connection, "hourly_rollup_complete").unwrap() == Some(1)
+                && meta_i64(&connection, "projection_indexes_ready").unwrap() == Some(1)
+            {
+                break;
+            }
+            drop(connection);
+            thread::sleep(Duration::from_millis(10));
+        }
+    };
+
+    // 1. Ingest `gemini-4-hydrogen-xhigh` and `gemini-4-hydrogen(xhigh)[1m]` without any manual rule.
+    // Builtin `gemini-4-hydrogen` rate: $1.50/1M input, $7.50/1M output, $0.075/1M cache read.
+    // Request A: 1,000,000 uncached input + 100,000 output = $1.50 + $0.75 = $2.25 = 2,250,000 micros.
+    let mut ev_xhigh = event(
+        "ev-h4-xhigh",
+        KIND_CLIENT,
+        200,
+        RuntimeEventPhase::Completed,
+        Some(RuntimeEventOutcome::Succeeded),
+        ts + 10.0,
+    );
+    ev_xhigh.request_id = Some("req-h4-xhigh".into());
+    ev_xhigh.endpoint_id = Some("ep-main".into());
+    ev_xhigh.effective_model = Some("gemini-4-hydrogen-xhigh".into());
+    ev_xhigh.target_format = Some(ProviderProtocol::Gemini);
+    ev_xhigh.stream_trace = serde_json::from_value(json!({
+        "usage": {
+            "inputTokens": 1_000_000,
+            "outputTokens": 100_000,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0
+        }
+    }))
+    .ok();
+    store.enqueue(ev_xhigh, RuntimeCounters::default()).unwrap();
+
+    // Request B: 1,000,000 cache read + 100,000 output on `gemini-4-hydrogen(xhigh)[1m]`
+    // = $0.075 + $0.75 = $0.825 = 825,000 micros.
+    let mut ev_paren = event(
+        "ev-h4-paren",
+        KIND_CLIENT,
+        200,
+        RuntimeEventPhase::Completed,
+        Some(RuntimeEventOutcome::Succeeded),
+        ts + 20.0,
+    );
+    ev_paren.request_id = Some("req-h4-paren".into());
+    ev_paren.endpoint_id = Some("ep-main".into());
+    ev_paren.effective_model = Some("gemini-4-hydrogen(xhigh)[1m]".into());
+    ev_paren.target_format = Some(ProviderProtocol::Gemini);
+    ev_paren.stream_trace = serde_json::from_value(json!({
+        "usage": {
+            "inputTokens": 1_000_000,
+            "outputTokens": 100_000,
+            "cacheReadInputTokens": 1_000_000,
+            "cacheCreationInputTokens": 0
+        }
+    }))
+    .ok();
+    store.enqueue(ev_paren, RuntimeCounters::default()).unwrap();
+    store.flush().unwrap();
+    wait_rollups();
+
+    let trend_res = trends(
+        &path,
+        &TrendQuery {
+            from: 0.0,
+            to: 7_200.0,
+            granularity: TrendGranularity::Hour,
+            snapshot_seq: None,
+            snapshot_change_seq: None,
+            history_generation: None,
+            filter: RuntimeFilter::default(),
+        },
+    )
+    .unwrap();
+    assert_eq!(trend_res.totals.cost.priced_requests, 2);
+    assert_eq!(trend_res.totals.cost.unpriced_requests, 0);
+    assert_eq!(trend_res.totals.cost.estimated_cost_micros, 3_075_000);
+
+    let dim_res = dimension_page(&path, DimensionKind::Model, &DimensionQuery::default()).unwrap();
+    assert_eq!(
+        dim_res
+            .rows
+            .iter()
+            .map(|row| row.cost.estimated_cost_micros)
+            .sum::<i64>(),
+        3_075_000
+    );
+
+    // 2. Simulate upgrading an older synced DB:
+    //    - remove `pricing_matcher_rollup` meta
+    //    - downgrade `official_snapshot_version` to 1 and mark `official_source = 'models.dev'`
+    //    - delete `gemini-4-hydrogen` from `runtime_official_model_prices`
+    //    - customize `claude-sonnet-4-6` in `runtime_official_model_prices` ($2.50 / $12.50)
+    //    - wipe `cost_numerator` on `runtime_hourly_rollups` to prove upgrade triggers full rebuild
+    drop(store);
+    {
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute(
+                "DELETE FROM runtime_meta WHERE key='pricing_matcher_rollup'",
+                crate::database::params![],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE runtime_pricing_meta SET official_source='models.dev', official_snapshot_version=1 WHERE id=1",
+                crate::database::params![],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "DELETE FROM runtime_official_model_prices WHERE model_key='gemini-4-hydrogen'",
+                crate::database::params![],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE runtime_official_model_prices
+                 SET input_per_million_micros=2500000, output_per_million_micros=12500000
+                 WHERE model_key='claude-sonnet-4-6'",
+                crate::database::params![],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE runtime_hourly_rollups SET cost_numerator=0, cost_priced_requests=0, cost_unpriced_requests=2",
+                crate::database::params![],
+            )
+            .unwrap();
+    }
+
+    let (store, _) = RuntimeStore::new(&path).unwrap();
+    wait_rollups();
+
+    // Synced `claude-sonnet-4-6` rate must be preserved while missing `gemini-4-hydrogen` is supplemented.
+    {
+        let connection = Connection::open(&path).unwrap();
+        let sonnet_input: i64 = connection
+            .query_row(
+                "SELECT input_per_million_micros FROM runtime_official_model_prices WHERE model_key='claude-sonnet-4-6'",
+                crate::database::params![],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(sonnet_input, 2_500_000);
+        let snapshot_ver: i64 = connection
+            .query_row(
+                "SELECT official_snapshot_version FROM runtime_pricing_meta WHERE id=1",
+                crate::database::params![],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(snapshot_ver, 2);
+    }
+
+    let upgraded_trends = trends(
+        &path,
+        &TrendQuery {
+            from: 0.0,
+            to: 7_200.0,
+            granularity: TrendGranularity::Hour,
+            snapshot_seq: None,
+            snapshot_change_seq: None,
+            history_generation: None,
+            filter: RuntimeFilter::default(),
+        },
+    )
+    .unwrap();
+    assert_eq!(upgraded_trends.totals.cost.priced_requests, 2);
+    assert_eq!(upgraded_trends.totals.cost.unpriced_requests, 0);
+    assert_eq!(upgraded_trends.totals.cost.estimated_cost_micros, 3_075_000);
+
+    // 3. Manual wildcard rule `my-relay-gemini-*` prices custom relay models & recomputes history.
+    let mut ev_relay = event(
+        "ev-relay",
+        KIND_CLIENT,
+        200,
+        RuntimeEventPhase::Completed,
+        Some(RuntimeEventOutcome::Succeeded),
+        ts + 30.0,
+    );
+    ev_relay.request_id = Some("req-relay".into());
+    ev_relay.endpoint_id = Some("ep-main".into());
+    ev_relay.effective_model = Some("my-relay-gemini-exp-xhigh".into());
+    ev_relay.target_format = Some(ProviderProtocol::Gemini);
+    ev_relay.stream_trace = serde_json::from_value(json!({
+        "usage": {
+            "inputTokens": 1_000_000,
+            "outputTokens": 0,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0
+        }
+    }))
+    .ok();
+    store.enqueue(ev_relay, RuntimeCounters::default()).unwrap();
+    store.flush().unwrap();
+    wait_rollups();
+
+    let current_pricing = pricing(&path).unwrap();
+    store
+        .replace_pricing(RuntimePricingUpdate {
+            expected_revision: current_pricing.revision,
+            currency: "USD".into(),
+            prices: vec![RuntimeModelPriceInput {
+                endpoint_id: None,
+                model_key: "my-relay-gemini-*".into(),
+                effective_from: 0.0,
+                effective_to: None,
+                input_per_million_micros: Some(2_000_000),
+                output_per_million_micros: Some(10_000_000),
+                cache_read_per_million_micros: Some(0),
+                cache_creation_per_million_micros: Some(0),
+                tiers: Vec::new(),
+            }],
+        })
+        .unwrap();
+    wait_rollups();
+
+    let wildcard_trends = trends(
+        &path,
+        &TrendQuery {
+            from: 0.0,
+            to: 7_200.0,
+            granularity: TrendGranularity::Hour,
+            snapshot_seq: None,
+            snapshot_change_seq: None,
+            history_generation: None,
+            filter: RuntimeFilter::default(),
+        },
+    )
+    .unwrap();
+    assert_eq!(wildcard_trends.totals.cost.priced_requests, 3);
+    assert_eq!(wildcard_trends.totals.cost.unpriced_requests, 0);
+    assert_eq!(wildcard_trends.totals.cost.estimated_cost_micros, 5_075_000);
+
+    drop(store);
+    remove_test_dir(&dir);
+}
+
+#[test]
 fn storage_limit_rotates_oldest_completed_request_groups_and_preserves_in_flight() {
     let dir = test_dir("storage-limit-rotation");
     let path = dir.join("runtime.sqlite3");

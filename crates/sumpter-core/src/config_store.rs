@@ -228,8 +228,15 @@ impl ConfigDir {
         self.model_catalog_dir().join(name)
     }
 
+    fn is_supported_model_catalog_file(name: &str) -> bool {
+        matches!(
+            name,
+            "models.json" | "codex_client_models.json" | "official_pricing.json"
+        )
+    }
+
     pub fn save_model_catalog(&self, name: &str, data: &[u8]) -> io::Result<PersistOutcome> {
-        if !matches!(name, "models.json" | "codex_client_models.json") {
+        if !Self::is_supported_model_catalog_file(name) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "不支持的模型目录文件名",
@@ -241,7 +248,7 @@ impl ConfigDir {
     }
 
     pub fn load_model_catalog(&self, name: &str) -> io::Result<Vec<u8>> {
-        if !matches!(name, "models.json" | "codex_client_models.json") {
+        if !Self::is_supported_model_catalog_file(name) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "不支持的模型目录文件名",
@@ -1967,5 +1974,22 @@ mod tests {
         )
         .unwrap();
         assert!(dir.load_resource_bindings().is_err());
+    }
+
+    #[test]
+    fn model_catalog_allows_official_pricing_cache_and_rejects_unlisted_names() {
+        let dir = temp_dir("model-catalog-allowlist");
+        let payload = br#"{"source":"models.dev","models":[]}"#;
+        let _ = dir
+            .save_model_catalog("official_pricing.json", payload)
+            .unwrap();
+        assert_eq!(
+            dir.load_model_catalog("official_pricing.json").unwrap(),
+            payload
+        );
+        for invalid in ["../escape.json", "unknown.json", ""] {
+            assert!(dir.save_model_catalog(invalid, payload).is_err());
+            assert!(dir.load_model_catalog(invalid).is_err());
+        }
     }
 }

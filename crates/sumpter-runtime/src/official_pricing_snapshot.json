@@ -1,7 +1,107 @@
 {
-  "snapshotVersion": 1,
+  "snapshotVersion": 2,
   "currency": "USD",
   "models": [
+    {
+      "modelKey": "gpt-6-astra",
+      "provider": "openai",
+      "inputPerMillionMicros": 10000000,
+      "outputPerMillionMicros": 50000000,
+      "cacheReadPerMillionMicros": 1000000,
+      "cacheCreationPerMillionMicros": 12500000,
+      "tiers": [
+        {
+          "aboveInputTokens": 272000,
+          "inputPerMillionMicros": 20000000,
+          "outputPerMillionMicros": 75000000,
+          "cacheReadPerMillionMicros": 2000000,
+          "cacheCreationPerMillionMicros": 25000000
+        }
+      ]
+    },
+    {
+      "modelKey": "gpt-6.1-sol",
+      "provider": "openai",
+      "inputPerMillionMicros": 2000000,
+      "outputPerMillionMicros": 10000000,
+      "cacheReadPerMillionMicros": 100000,
+      "cacheCreationPerMillionMicros": 2500000,
+      "tiers": [
+        {
+          "aboveInputTokens": 272000,
+          "inputPerMillionMicros": 4000000,
+          "outputPerMillionMicros": 15000000,
+          "cacheReadPerMillionMicros": 200000,
+          "cacheCreationPerMillionMicros": 5000000
+        }
+      ]
+    },
+    {
+      "modelKey": "gpt-6-sol",
+      "provider": "openai",
+      "inputPerMillionMicros": 2000000,
+      "outputPerMillionMicros": 10000000,
+      "cacheReadPerMillionMicros": 200000,
+      "cacheCreationPerMillionMicros": 2500000,
+      "tiers": [
+        {
+          "aboveInputTokens": 272000,
+          "inputPerMillionMicros": 4000000,
+          "outputPerMillionMicros": 15000000,
+          "cacheReadPerMillionMicros": 400000,
+          "cacheCreationPerMillionMicros": 5000000
+        }
+      ]
+    },
+    {
+      "modelKey": "gpt-6-luna",
+      "provider": "openai",
+      "inputPerMillionMicros": 100000,
+      "outputPerMillionMicros": 500000,
+      "cacheReadPerMillionMicros": 10000,
+      "cacheCreationPerMillionMicros": 62500
+    },
+    {
+      "modelKey": "gpt-5.6-sol",
+      "provider": "openai",
+      "inputPerMillionMicros": 4000000,
+      "outputPerMillionMicros": 20000000,
+      "cacheReadPerMillionMicros": 400000,
+      "cacheCreationPerMillionMicros": 0,
+      "tiers": [
+        {
+          "aboveInputTokens": 272000,
+          "inputPerMillionMicros": 8000000,
+          "outputPerMillionMicros": 30000000,
+          "cacheReadPerMillionMicros": 800000,
+          "cacheCreationPerMillionMicros": 0
+        }
+      ]
+    },
+    {
+      "modelKey": "gpt-5.6-terra",
+      "provider": "openai",
+      "inputPerMillionMicros": 2000000,
+      "outputPerMillionMicros": 12000000,
+      "cacheReadPerMillionMicros": 200000,
+      "cacheCreationPerMillionMicros": 0
+    },
+    {
+      "modelKey": "gpt-5.6-luna",
+      "provider": "openai",
+      "inputPerMillionMicros": 200000,
+      "outputPerMillionMicros": 1200000,
+      "cacheReadPerMillionMicros": 20000,
+      "cacheCreationPerMillionMicros": 0
+    },
+    {
+      "modelKey": "gpt-5.5",
+      "provider": "openai",
+      "inputPerMillionMicros": 5000000,
+      "outputPerMillionMicros": 30000000,
+      "cacheReadPerMillionMicros": 500000,
+      "cacheCreationPerMillionMicros": 0
+    },
     {
       "modelKey": "gpt-5.4",
       "provider": "openai",
@@ -196,6 +296,63 @@
       "cacheCreationPerMillionMicros": 0
     },
     {
+      "modelKey": "claude-opus-5-5",
+      "provider": "anthropic",
+      "inputPerMillionMicros": 4000000,
+      "outputPerMillionMicros": 20000000,
+      "cacheReadPerMillionMicros": 200000,
+      "cacheCreationPerMillionMicros": 5000000
+    },
+    {
+      "modelKey": "claude-sonnet-5-5",
+      "provider": "anthropic",
+      "inputPerMillionMicros": 2000000,
+      "outputPerMillionMicros": 10000000,
+      "cacheReadPerMillionMicros": 200000,
+      "cacheCreationPerMillionMicros": 2500000
+    },
+    {
+      "modelKey": "claude-sonnet-5",
+      "provider": "anthropic",
+      "inputPerMillionMicros": 2000000,
+      "outputPerMillionMicros": 10000000,
+      "cacheReadPerMillionMicros": 200000,
+      "cacheCreationPerMillionMicros": 2500000
+    },
+    {
+      "modelKey": "claude-haiku-5-5",
+      "provider": "anthropic",
+      "inputPerMillionMicros": 100000,
+      "outputPerMillionMicros": 500000,
+      "cacheReadPerMillionMicros": 10000,
+      "cacheCreationPerMillionMicros": 125000,
+      "tiers": [
+        {
+          "aboveInputTokens": 100000,
+          "inputPerMillionMicros": 500000,
+          "outputPerMillionMicros": 2500000,
+          "cacheReadPerMillionMicros": 50000,
+          "cacheCreationPerMillionMicros": 625000
+        }
+      ]
+    },
+    {
+      "modelKey": "claude-opus-4-8",
+      "provider": "anthropic",
+      "inputPerMillionMicros": 5000000,
+      "outputPerMillionMicros": 25000000,
+      "cacheReadPerMillionMicros": 500000,
+      "cacheCreationPerMillionMicros": 6250000
+    },
+    {
+      "modelKey": "claude-opus-4-7",
+      "provider": "anthropic",
+      "inputPerMillionMicros": 5000000,
+      "outputPerMillionMicros": 25000000,
+      "cacheReadPerMillionMicros": 500000,
+      "cacheCreationPerMillionMicros": 6250000
+    },
+    {
       "modelKey": "claude-opus-4-6",
       "provider": "anthropic",
       "inputPerMillionMicros": 5000000,
@@ -327,6 +484,54 @@
       "outputPerMillionMicros": 4000000,
       "cacheReadPerMillionMicros": 80000,
       "cacheCreationPerMillionMicros": 1000000
+    },
+    {
+      "modelKey": "gemini-4-hydrogen",
+      "provider": "google",
+      "inputPerMillionMicros": 1500000,
+      "outputPerMillionMicros": 7500000,
+      "cacheReadPerMillionMicros": 75000,
+      "cacheCreationPerMillionMicros": 0
+    },
+    {
+      "modelKey": "gemini-4-neon",
+      "provider": "google",
+      "inputPerMillionMicros": 3000000,
+      "outputPerMillionMicros": 15000000,
+      "cacheReadPerMillionMicros": 150000,
+      "cacheCreationPerMillionMicros": 0
+    },
+    {
+      "modelKey": "gemini-4-carbon",
+      "provider": "google",
+      "inputPerMillionMicros": 4000000,
+      "outputPerMillionMicros": 20000000,
+      "cacheReadPerMillionMicros": 200000,
+      "cacheCreationPerMillionMicros": 0
+    },
+    {
+      "modelKey": "gemini-4-argon",
+      "provider": "google",
+      "inputPerMillionMicros": 4000000,
+      "outputPerMillionMicros": 20000000,
+      "cacheReadPerMillionMicros": 200000,
+      "cacheCreationPerMillionMicros": 0
+    },
+    {
+      "modelKey": "gemini-3.8-flash",
+      "provider": "google",
+      "inputPerMillionMicros": 750000,
+      "outputPerMillionMicros": 3750000,
+      "cacheReadPerMillionMicros": 75000,
+      "cacheCreationPerMillionMicros": 0
+    },
+    {
+      "modelKey": "gemini-3.6-flash",
+      "provider": "google",
+      "inputPerMillionMicros": 750000,
+      "outputPerMillionMicros": 3750000,
+      "cacheReadPerMillionMicros": 75000,
+      "cacheCreationPerMillionMicros": 0
     },
     {
       "modelKey": "gemini-3.1-pro",
