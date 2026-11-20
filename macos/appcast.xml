@@ -3,13 +3,13 @@
     <channel>
         <title>Sumpter</title>
         <item>
-            <title>0.4.88</title>
-            <pubDate>Wed, 18 Nov 2026 11:04:30 +0000</pubDate>
-            <sparkle:version>100</sparkle:version>
-            <sparkle:shortVersionString>0.4.88</sparkle:shortVersionString>
+            <title>0.4.89</title>
+            <pubDate>Fri, 20 Nov 2026 07:49:19 +0000</pubDate>
+            <sparkle:version>101</sparkle:version>
+            <sparkle:shortVersionString>0.4.89</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/domoxiaojun/Sumpter/releases/download/v0.4.88/sumpter-macos-0.4.88.zip" length="15356462" type="application/octet-stream" sparkle:edSignature="ZtSBYKo1UgyNZzr2cWaHfy0ik3Yguo9/CGxm2WWFcZGCONic0c7VjS2gHAshSsMAfeRaHmp2VF5E/QSOIe+hAA=="/>
+            <enclosure url="https://github.com/domoxiaojun/Sumpter/releases/download/v0.4.89/sumpter-macos-0.4.89.zip" length="15390013" type="application/octet-stream" sparkle:edSignature="pAl9XwTZP4DOOLf9J5x6SJeRAAvi1ul2rO79LCYHkLY1XHmxHT2EL2qvaRSRLKw8FDX1vB1k94MNcnEW95/aDQ=="/>
         </item>
     </channel>
 </rss>
