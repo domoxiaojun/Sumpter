@@ -4,6 +4,17 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本。
 
+## [0.4.90] - 2026-11-20
+
+### 问题修复
+
+- 修复真实 Gemini、OpenAI 及无缓存 Anthropic 请求因省略 `cache_creation_input_tokens` 或 `cache_read_input_tokens`（数据库列为 `NULL`）在成本计算阶段被误判为「缺少完整用量」导致全部显示「暂无法计价」的问题；在协议语义已知且输入/输出用量完整时将缺失的可选缓存字段按 `0` 参与计费（同时保持缓存命中率统计口径不变）。
+- 修复小时级 Rollup 构建时 `cost_unknown_accounting_requests` 与 `cost_accounting_complete_requests` 重复计数的问题，并将 `PRICING_MATCHER_VERSION` 升级至 `3`，重启升级后自动重建历史小时级 Rollup。
+
+### 验证与边界
+
+- 配置 schema v7 与运行统计 SQLite `SCHEMA_VERSION = 5` 保持原地兼容；本机已通过 Rust workspace 编译、全量测试与 `sumpter-runtime` clippy、文档与发布元数据契约检查及 WebUI 构建验证。跨平台发行包、macOS 签名公证与容器镜像由 GitHub Actions `Release` 工作流构建与发布。
+
 ## [0.4.89] - 2026-11-20
 
 ### 新增特性
