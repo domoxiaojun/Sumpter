@@ -4,6 +4,21 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本。
 
+## [0.4.89] - 2026-11-20
+
+### 新增特性
+
+- 模型定价自动匹配增强：支持自动剥离推理强度（`-xhigh`/`-high`/`-medium`/`-low`/`-minimal`、受保护 `-max`/`-ultra`）、思考模式（`-thinking`/`-nothinking`/`-no-thinking`/`-thinking-<effort|Nk>`）与上下文标注（`-1m`/`[1m]`/`(effort)`/`:thinking`/`:xhigh`）等修饰后缀，同时保留模型档位词与 `:free`/`:online` 计费保护；手动价格表新增 `prefix-*` 前缀通配规则（按最长叶前缀与生效时间窗匹配）。
+- 官方价格目录与自动升级重算：内置官方标价快照升级至 v2（补充 Gemini 4 `hydrogen`/`neon`/`carbon`/`argon`、Gemini 3.8/3.6 Flash、Claude 4.7/4.8/5/5.5、GPT-5.5/5.6/6/6.1 等 2026 主流官方标价）；同步解析支持官方 Vertex 渠道（`google-vertex` / `vertex_ai*`）低优先级兜底补缺；老库升级时自动增量补全缺失内置模型、刷新官方目录摘要缓存并重建历史小时级 Rollup。
+
+### 问题修复
+
+- 修复 `ConfigDir` 模型目录文件名白名单遗漏 `official_pricing.json` 导致官方价格磁盘缓存无法持久化与加载的问题，加载旧缓存时自动合并内置快照防止新模型被覆盖。
+
+### 验证与边界
+
+- 配置 schema v7 与运行统计 SQLite `SCHEMA_VERSION = 5` 保持原地兼容；本机已通过 Rust workspace 编译与全量测试、文档与发布元数据契约检查及 WebUI 构建验证。跨平台发行包、macOS 签名公证与容器镜像由 GitHub Actions `Release` 工作流构建与发布。
+
 ## [0.4.88] - 2026-11-18
 
 ### 新增特性
